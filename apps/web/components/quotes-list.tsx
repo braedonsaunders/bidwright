@@ -1,17 +1,21 @@
 "use client";
 
-import { Fragment, useEffect, useState, useMemo } from "react";
+import { Fragment, useEffect, useState, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { motion } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import {
+  AlertCircle,
   ArrowUpDown,
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
   FileText,
   Folder,
   FolderOpen,
@@ -31,14 +35,15 @@ import {
   createCustomer,
   createProject,
   getCustomers,
+  getProjectsWithFilters,
   listRateBookAssignments,
   promoteProject,
   type Customer,
   type ProjectListItem,
   type ProjectQuoteEntry,
   type ProjectQuoteSummary,
-  type OrgUser,
-  type OrgDepartment,
+  type ProjectsResponse,
+  type QuotesSortKey,
 } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 import {
@@ -52,17 +57,6 @@ import {
 import { getClientDisplayName } from "@/lib/client-display";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 
-type SortKey =
-  | "quoteNumber"
-  | "kind"
-  | "title"
-  | "client"
-  | "estimator"
-  | "status"
-  | "subtotal"
-  | "margin"
-  | "updated";
-
 type SortDir = "asc" | "desc";
 
 const STATUS_OPTIONS = [
@@ -75,6 +69,11 @@ const STATUS_OPTIONS = [
   { value: "Closed", labelKey: "Closed", tone: "default" },
   { value: "Other", labelKey: "Other", tone: "default" },
 ] as const;
+
+const DEFAULT_PAGE_SIZE = 25;
+const PAGE_SIZE_OPTIONS = [25, 50, 100];
+const DEFAULT_SORT_KEY: QuotesSortKey = "updated";
+const DEFAULT_SORT_DIR: SortDir = "desc";
 
 type QuoteStatusValue = (typeof STATUS_OPTIONS)[number]["value"];
 
@@ -93,36 +92,60 @@ function getQuoteKind(project: ProjectListItem): "snap" | "full" {
 
 function getEstimatorLabelForQuote(
   quote: ProjectQuoteSummary | null | undefined,
-  userMap: Map<string, OrgUser>,
-  departmentMap: Map<string, OrgDepartment>,
   unassignedLabel = "Unassigned",
 ) {
   if (!quote) return unassignedLabel;
-  return (
-    (quote.userId && userMap.get(quote.userId)?.name) ||
-    quote.userName ||
-    (quote.departmentId && departmentMap.get(quote.departmentId)?.name) ||
-    unassignedLabel
-  );
+  return quote.userName || quote.departmentName || unassignedLabel;
 }
 
-// Each row shown in the quotes list is one of three kinds. Standalone projects
-// render as flat quote rows (current look); container projects render as a
-// parent row with their quotes nested underneath when expanded.
-type StandaloneRow = {
-  kind: "standalone";
-  project: ProjectListItem;
-  entry: ProjectQuoteEntry;
+type QuotesQueryParams = {
+  page: number;
+  pageSize: number;
+  search: string;
+  status: string[];
+  clientNames: string[];
+  userIds: string[];
+  departmentIds: string[];
+  sortKey: QuotesSortKey;
+  sortDir: SortDir;
 };
-type ContainerRow = {
-  kind: "container";
-  project: ProjectListItem;
-  matching: ProjectQuoteEntry[]; // children that pass the filters
-  totalQuotes: number; // unfiltered quote count, for the "X quotes" label
-  aggregateSubtotal: number;
-  latestUpdate: string;
-};
-type Row = StandaloneRow | ContainerRow;
+
+function useQuotesQuery() {
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const params = useMemo<QuotesQueryParams>(() => ({
+    page: Math.max(1, parseInt(searchParams.get("page") || "1", 10) || 1),
+    pageSize: Math.max(1, parseInt(searchParams.get("size") || String(DEFAULT_PAGE_SIZE), 10) || DEFAULT_PAGE_SIZE),
+    search: searchParams.get("q") || "",
+    status: searchParams.getAll("status"),
+    clientNames: searchParams.getAll("clients"),
+    userIds: searchParams.getAll("users"),
+    departmentIds: searchParams.getAll("depts"),
+    sortKey: (searchParams.get("sort") as QuotesSortKey) || DEFAULT_SORT_KEY,
+    sortDir: (searchParams.get("dir") as SortDir) || DEFAULT_SORT_DIR,
+  }), [searchParams]);
+
+  const update = useCallback((next: Partial<QuotesQueryParams>, opts?: { resetPage?: boolean }) => {
+    const merged = { ...params, ...next };
+    if (opts?.resetPage) merged.page = 1;
+    const sp = new URLSearchParams();
+    if (merged.page !== 1) sp.set("page", String(merged.page));
+    if (merged.pageSize !== DEFAULT_PAGE_SIZE) sp.set("size", String(merged.pageSize));
+    if (merged.search) sp.set("q", merged.search);
+    for (const v of merged.status) sp.append("status", v);
+    for (const v of merged.clientNames) sp.append("clients", v);
+    for (const v of merged.userIds) sp.append("users", v);
+    for (const v of merged.departmentIds) sp.append("depts", v);
+    if (merged.sortKey !== DEFAULT_SORT_KEY) sp.set("sort", merged.sortKey);
+    if (merged.sortDir !== DEFAULT_SORT_DIR) sp.set("dir", merged.sortDir);
+    const qs = sp.toString();
+    router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+  }, [params, router, pathname]);
+
+  return { params, update, rawSearchString: searchParams.toString() };
+}
 
 /* ─── Filter Dropdown ─── */
 
@@ -151,10 +174,6 @@ function FilterDropdown({
     );
   };
 
-  const selectedLabels = options
-    .filter((o) => selected.includes(o.value))
-    .map((o) => o.label);
-
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
@@ -178,7 +197,7 @@ function FilterDropdown({
       </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
-          className="z-50 min-w-[180px] rounded-lg border border-line bg-panel shadow-xl py-1"
+          className="z-50 min-w-[180px] max-h-[320px] overflow-y-auto rounded-lg border border-line bg-panel shadow-xl py-1"
           sideOffset={4}
           align="start"
         >
@@ -230,7 +249,25 @@ function FilterDropdown({
   );
 }
 
-/* ─── Row action menu (three-dot) ─── */
+/* ─── Skeleton ─── */
+
+function TableSkeleton({ rows, cols }: { rows: number; cols: number }) {
+  return (
+    <tbody>
+      {Array.from({ length: rows }).map((_, i) => (
+        <tr key={i} className="border-b border-line last:border-0">
+          {Array.from({ length: cols }).map((_, j) => (
+            <td key={j} className="px-4 py-2.5">
+              <div className="h-3 w-full max-w-[80%] animate-pulse rounded bg-fg/5" />
+            </td>
+          ))}
+        </tr>
+      ))}
+    </tbody>
+  );
+}
+
+/* ─── Row action menu ─── */
 
 function RowActionMenu({
   open,
@@ -268,25 +305,41 @@ function RowActionMenu({
 
 /* ─── Main Component ─── */
 
-export function QuotesList({ projects, users = [], departments = [] }: {
-  projects: ProjectListItem[];
-  users?: OrgUser[];
-  departments?: OrgDepartment[];
-}) {
+export function QuotesList() {
   const t = useTranslations("Quotes");
   const router = useRouter();
   const { user: currentUser } = useAuth();
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string[]>([]);
-  const [clientFilter, setClientFilter] = useState<string[]>([]);
-  const [userFilter, setUserFilter] = useState<string[]>(() => {
-    // Default: estimators see only their own quotes
-    if (currentUser?.role === "estimator" && currentUser.id) return [currentUser.id];
-    return [];
-  });
-  const [departmentFilter, setDepartmentFilter] = useState<string[]>([]);
-  const [sortKey, setSortKey] = useState<SortKey>("updated");
-  const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const { params, update, rawSearchString } = useQuotesQuery();
+
+  // Local search input state (debounced before pushing to URL)
+  const [searchInput, setSearchInput] = useState(params.search);
+  useEffect(() => {
+    setSearchInput(params.search);
+  }, [params.search]);
+  useEffect(() => {
+    if (searchInput === params.search) return;
+    const timer = setTimeout(() => {
+      update({ search: searchInput }, { resetPage: true });
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchInput, params.search, update]);
+
+  // Estimator default: on first mount with no URL state, scope to own quotes
+  const initialMountHandled = useRef(false);
+  useEffect(() => {
+    if (initialMountHandled.current) return;
+    if (!currentUser) return;
+    initialMountHandled.current = true;
+    if (
+      rawSearchString === "" &&
+      currentUser.role === "estimator" &&
+      currentUser.id
+    ) {
+      update({ userIds: [currentUser.id] });
+    }
+  }, [currentUser, rawSearchString, update]);
+
+  // ── Modal/quick-add state ────────────────────────────────────────────────
   const [newQuoteMenuOpen, setNewQuoteMenuOpen] = useState(false);
   const [manualCreationMode, setManualCreationMode] = useState<"quote" | "snap">("quote");
   const [manualModalOpen, setManualModalOpen] = useState(false);
@@ -301,8 +354,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddName, setQuickAddName] = useState("");
   const [quickAddSaving, setQuickAddSaving] = useState(false);
-  // Container projects expand on click. Initial state: collapsed by default
-  // so the table doesn't overwhelm — users opt-in to seeing children.
+  // Container projects expand on click; collapsed by default.
   const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
   // Promote-shadow-into-container modal state.
   const [promoteFor, setPromoteFor] = useState<{ project: ProjectListItem; quoteTitle: string } | null>(null);
@@ -327,35 +379,96 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     };
   }, [manualModalOpen]);
 
-  // Build a flat list of every (project, quote) pair across the org. Container
-  // projects contribute one entry per quote; standalone projects contribute one.
-  const allEntries = useMemo(() => {
-    const out: Array<{ project: ProjectListItem; entry: ProjectQuoteEntry }> = [];
-    for (const p of projects) {
-      const list = p.quotes && p.quotes.length > 0
-        ? p.quotes
-        : p.quote
-          ? [{ quote: p.quote, latestRevision: p.latestRevision }]
-          : [];
-      for (const entry of list) {
-        out.push({ project: p, entry });
-      }
+  // ── Server fetch ─────────────────────────────────────────────────────────
+  const [data, setData] = useState<ProjectsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [reloadTick, setReloadTick] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    getProjectsWithFilters({
+      page: params.page,
+      pageSize: params.pageSize,
+      search: params.search || undefined,
+      status: params.status.length ? params.status : undefined,
+      userIds: params.userIds.length ? params.userIds : undefined,
+      departmentIds: params.departmentIds.length ? params.departmentIds : undefined,
+      clientNames: params.clientNames.length ? params.clientNames : undefined,
+      sortKey: params.sortKey,
+      sortDir: params.sortDir,
+    })
+      .then((res) => {
+        if (cancelled) return;
+        setData(res);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setError(err instanceof Error ? err.message : t("loadError"));
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    params.page,
+    params.pageSize,
+    params.search,
+    params.sortKey,
+    params.sortDir,
+    params.status.join(","),
+    params.userIds.join(","),
+    params.departmentIds.join(","),
+    params.clientNames.join(","),
+    reloadTick,
+    t,
+  ]);
+
+  // After page-bounds shift (e.g. delete leaves empty page), redirect to page 1
+  useEffect(() => {
+    if (!data?.pagination) return;
+    if (params.page > data.pagination.totalPages) {
+      update({ page: 1 });
     }
-    return out;
-  }, [projects]);
+  }, [data, params.page, update]);
 
-  // Container projects with quotes — these render as expandable parent rows.
-  // Real projects with 0 quotes are managed from the projects list page, not here.
-  const containerProjects = useMemo(() => {
-    return projects.filter((p) => p.isStandalone === false && (p.quotes?.length ?? 0) > 0);
-  }, [projects]);
+  const projects = data?.projects ?? [];
+  const users = data?.users ?? [];
+  const departments = data?.departments ?? [];
+  const pagination = data?.pagination;
+  const total = pagination?.total ?? 0;
+  const totalPages = pagination?.totalPages ?? 1;
+  const isInitialLoading = loading && !data;
+  const isRevalidating = loading && !!data;
 
-  const standaloneEntries = useMemo(() => {
-    return allEntries.filter(({ project }) => project.isStandalone !== false);
-  }, [allEntries]);
+  const clientOptions = useMemo(() => {
+    if (data?.clientOptions && data.clientOptions.length > 0) return data.clientOptions;
+    // Fallback: derive from current page
+    const set = new Map<string, string>();
+    for (const p of projects) {
+      const name = getClientDisplayName(p, p.quote);
+      if (name && name !== "—") set.set(name, name);
+    }
+    return [...set.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [data, projects]);
 
-  // Available existing container projects (for the "Add to existing project"
-  // picker in the new-quote modal). Only shown if any exist.
+  const userOptions = useMemo(
+    () => users.map((u) => ({ value: u.id, label: u.name || u.email })),
+    [users],
+  );
+  const departmentOptions = useMemo(
+    () => departments.map((d) => ({ value: d.id, label: d.name })),
+    [departments],
+  );
+
+  // Existing container projects (for the "Add to existing project" picker).
   const existingContainerOptions = useMemo(() => {
     return projects
       .filter((p) => p.isStandalone === false)
@@ -367,46 +480,21 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       .sort((a, b) => a.label.localeCompare(b.label));
   }, [projects]);
 
-  // Derive unique filter options from data
-  const clientOptions = useMemo(() => {
-    const clients = new Map<string, string>();
-    for (const { project, entry } of allEntries) {
-      const clientLabel = getClientDisplayName(project, entry.quote);
-      if (clientLabel && clientLabel !== "—") clients.set(clientLabel, clientLabel);
-    }
-    return [...clients.entries()]
-      .map(([value, label]) => ({ value, label }))
-      .sort((a, b) => a.label.localeCompare(b.label));
-  }, [allEntries]);
-
-  const userMap = useMemo(() => {
-    const m = new Map<string, OrgUser>();
-    for (const u of users) m.set(u.id, u);
-    return m;
-  }, [users]);
-
-  const userOptions = useMemo(() => {
-    return users.map((u) => ({ value: u.id, label: u.name || u.email }));
-  }, [users]);
-
-  const departmentOptions = useMemo(() => {
-    return departments.map((d) => ({ value: d.id, label: d.name }));
-  }, [departments]);
-
-  const departmentMap = useMemo(() => {
-    const m = new Map<string, OrgDepartment>();
-    for (const d of departments) m.set(d.id, d);
-    return m;
-  }, [departments]);
-
-  const hasActiveFilters = statusFilter.length > 0 || clientFilter.length > 0 || userFilter.length > 0 || departmentFilter.length > 0;
+  const hasActiveFilters =
+    params.status.length > 0 ||
+    params.clientNames.length > 0 ||
+    params.userIds.length > 0 ||
+    params.departmentIds.length > 0;
 
   function clearAllFilters() {
-    setStatusFilter([]);
-    setClientFilter([]);
-    setUserFilter([]);
-    setDepartmentFilter([]);
-    setSearch("");
+    update({
+      status: [],
+      clientNames: [],
+      userIds: [],
+      departmentIds: [],
+      search: "",
+    }, { resetPage: true });
+    setSearchInput("");
   }
 
   function openManualQuoteModal(mode: "quote" | "snap" = "quote", parentProjectId: string | null = null) {
@@ -464,11 +552,11 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       await promoteProject(promoteFor.project.id, { name });
       setPromoteFor(null);
       setPromoteSaving(false);
-      // Reload to pick up the new isStandalone state.
-      router.refresh();
-    } catch (error) {
+      // Force a refetch so the row re-renders as a container.
+      setReloadTick((n) => n + 1);
+    } catch (err) {
       setPromoteSaving(false);
-      setPromoteError(error instanceof Error ? error.message : t("promote.error"));
+      setPromoteError(err instanceof Error ? err.message : t("promote.error"));
     }
   }
 
@@ -486,8 +574,8 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       setManualCustomerId(created.id);
       setQuickAddName("");
       setQuickAddOpen(false);
-    } catch (error) {
-      setManualError(error instanceof Error ? error.message : t("manual.failedClient"));
+    } catch (err) {
+      setManualError(err instanceof Error ? err.message : t("manual.failedClient"));
     } finally {
       setQuickAddSaving(false);
     }
@@ -518,7 +606,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
         }
       }
 
-      // Path 1: Add the new quote to an existing container project.
+      // Path 1: add this quote to an existing container project.
       if (manualParentProjectId) {
         const result = await addQuoteToProject(manualParentProjectId, {
           title,
@@ -529,7 +617,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
         return;
       }
 
-      // Path 2: Create a standalone (shadow) project that wraps this single quote.
+      // Path 2: create a standalone (shadow) project that wraps this quote.
       const clientName = selectedCustomer?.name || t("manual.unassignedClient");
       const location = manualLocation.trim() || "TBD";
       const result = await createProject({
@@ -540,146 +628,25 @@ export function QuotesList({ projects, users = [], departments = [] }: {
         creationMode: isSnap ? "snap" : "manual",
         packageName: isSnap ? `${title} Snap` : `${title} Manual Quote`,
         summary: isSnap ? "Snap quote created for quick small-work pricing." : undefined,
-        // Explicit (defaults match server side, but be clear about intent).
         isStandalone: true,
       });
 
       router.push(`/projects/${result.project.id}?tab=estimate&subtab=worksheets`);
-    } catch (error) {
+    } catch (err) {
       setManualSaving(false);
-      setManualError(error instanceof Error ? error.message : t("manual.createError"));
+      setManualError(err instanceof Error ? err.message : t("manual.createError"));
     }
   }
 
-  const handleSort = (key: SortKey) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+  function handleSort(key: QuotesSortKey) {
+    if (params.sortKey === key) {
+      update({ sortDir: params.sortDir === "asc" ? "desc" : "asc" }, { resetPage: true });
     } else {
-      setSortKey(key);
-      setSortDir("asc");
+      update({ sortKey: key, sortDir: "asc" }, { resetPage: true });
     }
-  };
+  }
 
-  const matchesFilters = useMemo(() => {
-    const trimmed = search.trim().toLowerCase();
-    return (project: ProjectListItem, entry: ProjectQuoteEntry): boolean => {
-      const q = entry.quote;
-      if (statusFilter.length > 0 && !statusFilter.includes(q.status)) return false;
-      if (clientFilter.length > 0 && !clientFilter.includes(getClientDisplayName(project, q))) return false;
-      if (userFilter.length > 0 && !(q.userId && userFilter.includes(q.userId))) return false;
-      if (departmentFilter.length > 0 && !(q.departmentId && departmentFilter.includes(q.departmentId))) return false;
-      if (trimmed) {
-        if (
-          !q.quoteNumber.toLowerCase().includes(trimmed) &&
-          !q.title.toLowerCase().includes(trimmed) &&
-          !getClientDisplayName(project, q).toLowerCase().includes(trimmed) &&
-          !project.name.toLowerCase().includes(trimmed) &&
-          !(project.location || "").toLowerCase().includes(trimmed)
-        ) return false;
-      }
-      return true;
-    };
-  }, [search, statusFilter, clientFilter, userFilter, departmentFilter]);
-
-  // Sort comparator that operates on a (project, entry) pair. Used for both
-  // sorting child quotes within a container and sorting top-level rows
-  // (containers use their first matching child for the value).
-  const compareEntries = useMemo(() => {
-    return (
-      a: { project: ProjectListItem; entry: ProjectQuoteEntry },
-      b: { project: ProjectListItem; entry: ProjectQuoteEntry },
-    ) => {
-      let cmp = 0;
-      switch (sortKey) {
-        case "quoteNumber":
-          cmp = a.entry.quote.quoteNumber.localeCompare(b.entry.quote.quoteNumber); break;
-        case "kind":
-          cmp = getQuoteKind(a.project).localeCompare(getQuoteKind(b.project)); break;
-        case "title":
-          cmp = a.entry.quote.title.localeCompare(b.entry.quote.title); break;
-        case "client":
-          cmp = getClientDisplayName(a.project, a.entry.quote).localeCompare(getClientDisplayName(b.project, b.entry.quote)); break;
-        case "estimator": {
-          const aName = getEstimatorLabelForQuote(a.entry.quote, userMap, departmentMap, unassignedLabel);
-          const bName = getEstimatorLabelForQuote(b.entry.quote, userMap, departmentMap, unassignedLabel);
-          cmp = aName.localeCompare(bName); break;
-        }
-        case "status":
-          cmp = a.entry.quote.status.localeCompare(b.entry.quote.status); break;
-        case "subtotal":
-          cmp = (a.entry.latestRevision?.subtotal ?? 0) - (b.entry.latestRevision?.subtotal ?? 0); break;
-        case "margin":
-          cmp = (a.entry.latestRevision?.estimatedMargin ?? 0) - (b.entry.latestRevision?.estimatedMargin ?? 0); break;
-        case "updated": {
-          const aT = new Date(a.entry.quote.updatedAt || a.project.updatedAt).getTime();
-          const bT = new Date(b.entry.quote.updatedAt || b.project.updatedAt).getTime();
-          cmp = aT - bT; break;
-        }
-      }
-      return sortDir === "asc" ? cmp : -cmp;
-    };
-  }, [sortKey, sortDir, userMap, departmentMap, unassignedLabel]);
-
-  // Build the top-level row list: standalone quotes + container projects with
-  // at least one matching child. Children inside a container are pre-sorted.
-  const { rows, matchedQuoteCount, totalQuoteCount } = useMemo(() => {
-    // Standalone rows: one per matching standalone entry.
-    const standaloneRows: StandaloneRow[] = standaloneEntries
-      .filter(({ project, entry }) => matchesFilters(project, entry))
-      .map(({ project, entry }) => ({ kind: "standalone", project, entry }));
-
-    // Container rows: one per container project that has any matching child.
-    const containerRows: ContainerRow[] = [];
-    for (const project of containerProjects) {
-      const allChildren = project.quotes ?? [];
-      const matching = allChildren.filter((entry) => matchesFilters(project, entry));
-      if (matching.length === 0) continue;
-      const sortedChildren = [...matching].sort((a, b) =>
-        compareEntries({ project, entry: a }, { project, entry: b }),
-      );
-      const aggregateSubtotal = sortedChildren.reduce(
-        (sum, c) => sum + (c.latestRevision?.subtotal ?? 0),
-        0,
-      );
-      const latestUpdate = sortedChildren
-        .map((c) => c.quote.updatedAt || project.updatedAt)
-        .sort()
-        .reverse()[0] || project.updatedAt;
-      containerRows.push({
-        kind: "container",
-        project,
-        matching: sortedChildren,
-        totalQuotes: allChildren.length,
-        aggregateSubtotal,
-        latestUpdate,
-      });
-    }
-
-    // Sort the merged list. Containers compare via their first (already-sorted)
-    // matching child — except the "subtotal" sort key, which uses the aggregate.
-    const merged: Row[] = [...standaloneRows, ...containerRows];
-    merged.sort((a, b) => {
-      const aPair = a.kind === "standalone"
-        ? { project: a.project, entry: a.entry }
-        : { project: a.project, entry: a.matching[0] };
-      const bPair = b.kind === "standalone"
-        ? { project: b.project, entry: b.entry }
-        : { project: b.project, entry: b.matching[0] };
-      if (sortKey === "subtotal") {
-        const aSub = a.kind === "container" ? a.aggregateSubtotal : (a.entry.latestRevision?.subtotal ?? 0);
-        const bSub = b.kind === "container" ? b.aggregateSubtotal : (b.entry.latestRevision?.subtotal ?? 0);
-        return sortDir === "asc" ? aSub - bSub : bSub - aSub;
-      }
-      return compareEntries(aPair, bPair);
-    });
-
-    const matchedQuotes =
-      standaloneRows.length +
-      containerRows.reduce((sum, r) => sum + r.matching.length, 0);
-    return { rows: merged, matchedQuoteCount: matchedQuotes, totalQuoteCount: allEntries.length };
-  }, [standaloneEntries, containerProjects, matchesFilters, compareEntries, sortKey, sortDir, allEntries.length]);
-
-  const headers: { key: SortKey; label: string; className?: string }[] = [
+  const headers: { key: QuotesSortKey; label: string; className?: string }[] = [
     { key: "quoteNumber", label: t("table.quoteNumber"), className: "w-32" },
     { key: "kind", label: t("table.kind"), className: "w-20" },
     { key: "title", label: t("table.title") },
@@ -690,12 +657,16 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     { key: "margin", label: t("table.margin"), className: "w-20 text-right" },
     { key: "updated", label: t("table.updated"), className: "w-28" },
   ];
+  const columnCount = headers.length + 1; // +1 for trailing actions cell
   const manualIsSnap = manualCreationMode === "snap";
 
+  const fromIndex = total === 0 ? 0 : (params.page - 1) * params.pageSize + 1;
+  const toIndex = Math.min(total, params.page * params.pageSize);
+
   return (
-    <div className="space-y-5">
+    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
       {/* Header */}
-      <FadeIn>
+      <FadeIn className="shrink-0">
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
@@ -760,9 +731,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             <div>
               <h2 className="text-sm font-semibold text-fg">{manualIsSnap ? t("manual.snapTitle") : t("manual.quoteTitle")}</h2>
               <p className="mt-0.5 text-xs text-fg/50">
-                {manualIsSnap
-                  ? t("manual.snapDescription")
-                  : t("manual.quoteDescription")}
+                {manualIsSnap ? t("manual.snapDescription") : t("manual.quoteDescription")}
               </p>
             </div>
             <button
@@ -804,25 +773,10 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                       autoFocus
                       disabled={quickAddSaving}
                     />
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="accent"
-                      onClick={handleQuickAddCustomer}
-                      disabled={quickAddSaving || !quickAddName.trim()}
-                    >
+                    <Button type="button" size="sm" variant="accent" onClick={handleQuickAddCustomer} disabled={quickAddSaving || !quickAddName.trim()}>
                       {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                     </Button>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setQuickAddOpen(false);
-                        setQuickAddName("");
-                      }}
-                      disabled={quickAddSaving}
-                    >
+                    <Button type="button" size="sm" variant="ghost" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }} disabled={quickAddSaving}>
                       <X className="h-3 w-3" />
                     </Button>
                   </div>
@@ -834,25 +788,14 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                         onSelect={setManualCustomerId}
                         options={manualCustomerOptions
                           .filter((c) => c.active)
-                          .map((c) => ({
-                            id: c.id,
-                            label: c.name,
-                            secondary: c.shortName || undefined,
-                          }))}
+                          .map((c) => ({ id: c.id, label: c.name, secondary: c.shortName || undefined }))}
                         placeholder={t("manual.selectClient")}
                         searchPlaceholder={t("manual.searchClients")}
                         disabled={manualSaving}
                         triggerClassName="h-9 rounded-lg px-3 text-sm bg-bg/50"
                       />
                     </div>
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setQuickAddOpen(true)}
-                      disabled={manualSaving}
-                      title={t("manual.addClient")}
-                    >
+                    <Button type="button" size="sm" variant="ghost" onClick={() => setQuickAddOpen(true)} disabled={manualSaving} title={t("manual.addClient")}>
                       <Plus className="h-3 w-3" />
                     </Button>
                   </div>
@@ -888,10 +831,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                       {t("manual.parentProject")}
                       <button
                         type="button"
-                        onClick={() => {
-                          setManualParentPickerOpen(false);
-                          setManualParentProjectId(null);
-                        }}
+                        onClick={() => { setManualParentPickerOpen(false); setManualParentProjectId(null); }}
                         disabled={manualSaving}
                         className="text-[11px] text-fg/40 hover:text-fg/70"
                       >
@@ -986,7 +926,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       </ModalBackdrop>
 
       {/* View tabs: switch between flat quote list and projects list */}
-      <FadeIn delay={0.05}>
+      <FadeIn delay={0.05} className="shrink-0">
         <div className="flex items-center gap-1 border-b border-line">
           <span className="border-b-2 border-accent px-3 py-2 text-xs font-medium text-fg">
             {t("tabs.quotes")}
@@ -1001,33 +941,32 @@ export function QuotesList({ projects, users = [], departments = [] }: {
       </FadeIn>
 
       {/* Filter bar */}
-      <FadeIn delay={0.1}>
+      <FadeIn delay={0.1} className="shrink-0">
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Search */}
           <div className="relative flex-1 min-w-[280px] max-w-lg">
             <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
             <Input
               className="h-8 pl-9 text-xs"
               placeholder={t("filters.searchPlaceholder")}
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
             />
-            {search && (
+            {searchInput && (
               <button
-                onClick={() => setSearch("")}
+                onClick={() => setSearchInput("")}
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg/30 hover:text-fg/60 transition-colors"
+                aria-label={t("filters.clear")}
               >
                 <X className="h-3 w-3" />
               </button>
             )}
           </div>
 
-          {/* Status filter */}
           <FilterDropdown
             label={t("filters.status")}
             options={STATUS_OPTIONS.map((s) => ({ value: s.value, label: t(`status.${s.labelKey}`) }))}
-            selected={statusFilter}
-            onChange={setStatusFilter}
+            selected={params.status}
+            onChange={(v) => update({ status: v }, { resetPage: true })}
             clearLabel={t("filters.clear")}
             renderOption={(opt) => (
               <span className="flex items-center gap-2">
@@ -1036,39 +975,35 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             )}
           />
 
-          {/* Client filter */}
           {clientOptions.length > 0 && (
             <FilterDropdown
               label={t("filters.client")}
               options={clientOptions}
-              selected={clientFilter}
-              onChange={setClientFilter}
+              selected={params.clientNames}
+              onChange={(v) => update({ clientNames: v }, { resetPage: true })}
               clearLabel={t("filters.clear")}
             />
           )}
 
-          {/* Estimator filter */}
           <FilterDropdown
             label={t("filters.estimator")}
             options={userOptions}
-            selected={userFilter}
-            onChange={setUserFilter}
+            selected={params.userIds}
+            onChange={(v) => update({ userIds: v }, { resetPage: true })}
             clearLabel={t("filters.clear")}
           />
 
-          {/* Department filter */}
           {departmentOptions.length > 0 && (
             <FilterDropdown
               label={t("filters.department")}
               options={departmentOptions}
-              selected={departmentFilter}
-              onChange={setDepartmentFilter}
+              selected={params.departmentIds}
+              onChange={(v) => update({ departmentIds: v }, { resetPage: true })}
               clearLabel={t("filters.clear")}
             />
           )}
 
-          {/* Clear all */}
-          {(hasActiveFilters || search) && (
+          {(hasActiveFilters || params.search) && (
             <button
               onClick={clearAllFilters}
               className="inline-flex items-center gap-1 rounded-lg px-2 h-8 text-xs text-fg/40 hover:text-fg/70 transition-colors"
@@ -1077,21 +1012,24 @@ export function QuotesList({ projects, users = [], departments = [] }: {
             </button>
           )}
 
-          {/* Result count */}
-          <span className="ml-auto text-[11px] text-fg/30 tabular-nums shrink-0">
-            {matchedQuoteCount === totalQuoteCount
-              ? t("filters.resultCount", { count: matchedQuoteCount })
-              : t("filters.filteredResultCount", { filtered: matchedQuoteCount, total: totalQuoteCount })}
+          <span className="ml-auto inline-flex items-center gap-2 text-[11px] text-fg/30 tabular-nums shrink-0">
+            {isRevalidating && <Loader2 className="h-3 w-3 animate-spin" />}
+            {!isInitialLoading && total > 0 && (
+              <span>{t("pagination.range", { from: fromIndex, to: toIndex, total })}</span>
+            )}
+            {!isInitialLoading && total === 0 && !isRevalidating && (
+              <span>{t("filters.resultCount", { count: 0 })}</span>
+            )}
           </span>
         </div>
       </FadeIn>
 
       {/* Table */}
-      <FadeIn delay={0.15}>
-        <Card>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
+      <FadeIn delay={0.15} className="min-h-0 flex-1">
+        <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
+          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
+            <table className={cn("w-full text-sm", isRevalidating && "opacity-60 transition-opacity")}>
+              <thead className="sticky top-0 z-10 bg-panel">
                 <tr className="border-b border-line">
                   {headers.map((h) => (
                     <th
@@ -1101,11 +1039,12 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                         h.className
                       )}
                       onClick={() => handleSort(h.key)}
+                      aria-sort={params.sortKey === h.key ? (params.sortDir === "asc" ? "ascending" : "descending") : "none"}
                     >
                       <span className="inline-flex items-center gap-1">
                         {h.label}
                         <ArrowUpDown
-                          className={cn("h-3 w-3", sortKey === h.key ? "text-accent" : "text-fg/15")}
+                          className={cn("h-3 w-3", params.sortKey === h.key ? "text-accent" : "text-fg/15")}
                         />
                       </span>
                     </th>
@@ -1113,162 +1052,59 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                   <th className="w-8 px-2 py-2.5" aria-label="Actions" />
                 </tr>
               </thead>
-              <tbody>
-                {rows.length === 0 && (
+              {isInitialLoading ? (
+                <TableSkeleton rows={Math.min(params.pageSize, 8)} cols={columnCount} />
+              ) : error ? (
+                <tbody>
                   <tr>
-                    <td colSpan={headers.length + 1} className="px-5 py-12 text-center text-sm text-fg/40">
-                      <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                      {hasActiveFilters || search ? t("emptyFiltered") : t("empty")}
+                    <td colSpan={columnCount} className="px-5 py-12 text-center text-sm">
+                      <div className="mx-auto flex max-w-md flex-col items-center gap-3 text-fg/60">
+                        <AlertCircle className="h-8 w-8 text-danger/70" />
+                        <div>
+                          <p className="font-medium text-fg/80">{t("loadErrorTitle")}</p>
+                          <p className="mt-1 text-xs text-fg/50">{error}</p>
+                        </div>
+                        <Button variant="ghost" size="sm" onClick={() => setReloadTick((n) => n + 1)}>
+                          {t("retry")}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
-                )}
-                {rows.map((row, i) => {
-                  if (row.kind === "standalone") {
-                    const project = row.project;
-                    const entry = row.entry;
-                    const quoteKind = getQuoteKind(project);
-                    const rowKey = `q:${entry.quote.id}`;
-                    return (
-                      <motion.tr
-                        key={rowKey}
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
-                        className="group border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
-                      >
-                        <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
-                          <Link href={`/projects/${project.id}`} className="hover:underline">
-                            {entry.quote.quoteNumber}
-                          </Link>
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <Badge tone={quoteKind === "snap" ? "info" : "default"} className="gap-1">
-                            {quoteKind === "snap" && <Zap className="h-3 w-3" />}
-                            {quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-fg/80">
-                          <Link href={`/projects/${project.id}`} className="hover:underline">
-                            {entry.quote.title || project.name}
-                          </Link>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-fg/60">
-                          {getClientDisplayName(project, entry.quote)}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-fg/60">
-                          {getEstimatorLabelForQuote(entry.quote, userMap, departmentMap, unassignedLabel)}
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <Badge tone={statusTone(entry.quote.status) as any}>
-                            {t(`status.${statusLabelKey(entry.quote.status)}`)}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                          {formatMoney(entry.latestRevision?.subtotal ?? 0)}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
-                          {formatPercent(entry.latestRevision?.estimatedMargin ?? 0)}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-fg/50">
-                          {formatDate(entry.quote.updatedAt || project.updatedAt)}
-                        </td>
-                        <td className="w-8 px-2 py-2.5 text-right">
-                          <RowActionMenu
-                            open={openRowMenu === rowKey}
-                            onOpenChange={(open) => setOpenRowMenu(open ? rowKey : null)}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => openPromoteModal(project, entry)}
-                              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
-                            >
-                              <FolderPlus className="h-3.5 w-3.5 text-accent" />
-                              {t("actions.groupIntoProject")}
-                            </button>
-                          </RowActionMenu>
-                        </td>
-                      </motion.tr>
-                    );
-                  }
+                </tbody>
+              ) : (
+                <tbody>
+                  {projects.length === 0 ? (
+                    <tr>
+                      <td colSpan={columnCount} className="px-5 py-12 text-center text-sm text-fg/40">
+                        <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
+                        {hasActiveFilters || params.search ? t("emptyFiltered") : t("empty")}
+                      </td>
+                    </tr>
+                  ) : (
+                    projects.map((project, i) => {
+                      const allEntries = project.quotes && project.quotes.length > 0
+                        ? project.quotes
+                        : project.quote
+                          ? [{ quote: project.quote, latestRevision: project.latestRevision }]
+                          : [];
+                      const isContainer = project.isStandalone === false && allEntries.length > 0;
+                      const childKind = getQuoteKind(project);
 
-                  // Container row + (when expanded) its matching children.
-                  const project = row.project;
-                  const expanded = expandedProjectIds.has(project.id);
-                  const childKind = getQuoteKind(project);
-                  return (
-                    <Fragment key={`p:${project.id}`}>
-                      <motion.tr
-                        initial={{ opacity: 0, y: 4 }}
-                        animate={{ opacity: 1, y: 0 }}
-                        transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
-                        className="border-b border-line last:border-0 cursor-pointer bg-panel2/30 hover:bg-panel2/60 transition-colors"
-                        onClick={() => toggleExpand(project.id)}
-                      >
-                        <td className="px-4 py-2.5 text-xs font-medium text-fg/70 whitespace-nowrap">
-                          <span className="inline-flex items-center gap-1.5">
-                            <ChevronRight
-                              className={cn("h-3.5 w-3.5 text-fg/50 transition-transform", expanded && "rotate-90")}
-                            />
-                            {expanded ? <FolderOpen className="h-3.5 w-3.5 text-accent" /> : <Folder className="h-3.5 w-3.5 text-accent" />}
-                          </span>
-                        </td>
-                        <td className="px-4 py-2.5">
-                          <Badge tone="default" className="text-[10px]">
-                            {t("group.quotesCount", { count: row.totalQuotes })}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-2.5 text-xs font-medium text-fg/85" colSpan={2}>
-                          <Link
-                            href={`/projects/${project.id}`}
-                            onClick={(e) => e.stopPropagation()}
-                            className="hover:underline"
-                          >
-                            {project.name}
-                          </Link>
-                          {project.clientName ? (
-                            <span className="ml-2 text-fg/40">· {project.clientName}</span>
-                          ) : null}
-                        </td>
-                        <td className="px-4 py-2.5 text-xs text-fg/40" colSpan={2}>
-                          {/* estimator + status: not aggregated for containers */}
-                        </td>
-                        <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                          {formatMoney(row.aggregateSubtotal)}
-                        </td>
-                        <td className="px-4 py-2.5" />
-                        <td className="px-4 py-2.5 text-xs text-fg/50">
-                          {formatDate(row.latestUpdate)}
-                        </td>
-                        <td className="w-8 px-2 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-                          <RowActionMenu
-                            open={openRowMenu === `p:${project.id}`}
-                            onOpenChange={(open) => setOpenRowMenu(open ? `p:${project.id}` : null)}
-                          >
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setOpenRowMenu(null);
-                                openManualQuoteModal("quote", project.id);
-                              }}
-                              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
-                            >
-                              <Plus className="h-3.5 w-3.5 text-accent" />
-                              {t("actions.addQuote")}
-                            </button>
-                          </RowActionMenu>
-                        </td>
-                      </motion.tr>
-                      {expanded && row.matching.map((entry) => {
-                        const childKey = `q:${entry.quote.id}`;
+                      // Standalone (or projects with a single quote when isStandalone unknown)
+                      // render as a flat row identical to the legacy view.
+                      if (!isContainer) {
+                        const entry = allEntries[0];
+                        if (!entry) return null;
+                        const rowKey = `q:${entry.quote.id}`;
                         return (
                           <motion.tr
-                            key={childKey}
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            transition={{ duration: 0.15 }}
-                            className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
+                            key={rowKey}
+                            initial={{ opacity: 0, y: 4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
+                            className="group border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
                           >
-                            <td className="px-4 py-2.5 pl-10 text-xs font-medium text-accent whitespace-nowrap">
+                            <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
                               <Link href={`/projects/${project.id}`} className="hover:underline">
                                 {entry.quote.quoteNumber}
                               </Link>
@@ -1288,7 +1124,7 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                               {getClientDisplayName(project, entry.quote)}
                             </td>
                             <td className="px-4 py-2.5 text-xs text-fg/60">
-                              {getEstimatorLabelForQuote(entry.quote, userMap, departmentMap, unassignedLabel)}
+                              {getEstimatorLabelForQuote(entry.quote, unassignedLabel)}
                             </td>
                             <td className="px-4 py-2.5">
                               <Badge tone={statusTone(entry.quote.status) as any}>
@@ -1304,16 +1140,219 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                             <td className="px-4 py-2.5 text-xs text-fg/50">
                               {formatDate(entry.quote.updatedAt || project.updatedAt)}
                             </td>
-                            <td className="w-8 px-2 py-2.5 text-right" />
+                            <td className="w-8 px-2 py-2.5 text-right">
+                              <RowActionMenu
+                                open={openRowMenu === rowKey}
+                                onOpenChange={(open) => setOpenRowMenu(open ? rowKey : null)}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => openPromoteModal(project, entry)}
+                                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
+                                >
+                                  <FolderPlus className="h-3.5 w-3.5 text-accent" />
+                                  {t("actions.groupIntoProject")}
+                                </button>
+                              </RowActionMenu>
+                            </td>
                           </motion.tr>
                         );
-                      })}
-                    </Fragment>
-                  );
-                })}
-              </tbody>
+                      }
+
+                      // Container row: parent + (when expanded) all its quotes.
+                      const expanded = expandedProjectIds.has(project.id);
+                      const aggregateSubtotal = allEntries.reduce(
+                        (sum, e) => sum + (e.latestRevision?.subtotal ?? 0),
+                        0,
+                      );
+                      const latestUpdate = allEntries
+                        .map((e) => e.quote.updatedAt || project.updatedAt)
+                        .sort()
+                        .reverse()[0] || project.updatedAt;
+                      return (
+                        <Fragment key={`p:${project.id}`}>
+                          <motion.tr
+                            initial={{ opacity: 0, y: 4 }}
+                            animate={{ opacity: 1, y: 0 }}
+                            transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
+                            className="border-b border-line last:border-0 cursor-pointer bg-panel2/30 hover:bg-panel2/60 transition-colors"
+                            onClick={() => toggleExpand(project.id)}
+                          >
+                            <td className="px-4 py-2.5 text-xs font-medium text-fg/70 whitespace-nowrap">
+                              <span className="inline-flex items-center gap-1.5">
+                                <ChevronRight
+                                  className={cn("h-3.5 w-3.5 text-fg/50 transition-transform", expanded && "rotate-90")}
+                                />
+                                {expanded ? <FolderOpen className="h-3.5 w-3.5 text-accent" /> : <Folder className="h-3.5 w-3.5 text-accent" />}
+                              </span>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <Badge tone="default" className="text-[10px]">
+                                {t("group.quotesCount", { count: allEntries.length })}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs font-medium text-fg/85" colSpan={2}>
+                              <Link
+                                href={`/projects/${project.id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="hover:underline"
+                              >
+                                {project.name}
+                              </Link>
+                              {project.clientName ? (
+                                <span className="ml-2 text-fg/40">· {project.clientName}</span>
+                              ) : null}
+                            </td>
+                            <td className="px-4 py-2.5" colSpan={2}>
+                              {/* estimator + status: not aggregated for containers */}
+                            </td>
+                            <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
+                              {formatMoney(aggregateSubtotal)}
+                            </td>
+                            <td className="px-4 py-2.5" />
+                            <td className="px-4 py-2.5 text-xs text-fg/50">
+                              {formatDate(latestUpdate)}
+                            </td>
+                            <td className="w-8 px-2 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                              <RowActionMenu
+                                open={openRowMenu === `p:${project.id}`}
+                                onOpenChange={(open) => setOpenRowMenu(open ? `p:${project.id}` : null)}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenRowMenu(null);
+                                    openManualQuoteModal("quote", project.id);
+                                  }}
+                                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
+                                >
+                                  <Plus className="h-3.5 w-3.5 text-accent" />
+                                  {t("actions.addQuote")}
+                                </button>
+                              </RowActionMenu>
+                            </td>
+                          </motion.tr>
+                          {expanded && allEntries.map((entry) => {
+                            const childKey = `q:${entry.quote.id}`;
+                            return (
+                              <motion.tr
+                                key={childKey}
+                                initial={{ opacity: 0 }}
+                                animate={{ opacity: 1 }}
+                                transition={{ duration: 0.15 }}
+                                className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
+                              >
+                                <td className="px-4 py-2.5 pl-10 text-xs font-medium text-accent whitespace-nowrap">
+                                  <Link href={`/projects/${project.id}`} className="hover:underline">
+                                    {entry.quote.quoteNumber}
+                                  </Link>
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <Badge tone={childKind === "snap" ? "info" : "default"} className="gap-1">
+                                    {childKind === "snap" && <Zap className="h-3 w-3" />}
+                                    {childKind === "snap" ? t("kind.snap") : t("kind.full")}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-2.5 text-xs text-fg/80">
+                                  <Link href={`/projects/${project.id}`} className="hover:underline">
+                                    {entry.quote.title || project.name}
+                                  </Link>
+                                </td>
+                                <td className="px-4 py-2.5 text-xs text-fg/60">
+                                  {getClientDisplayName(project, entry.quote)}
+                                </td>
+                                <td className="px-4 py-2.5 text-xs text-fg/60">
+                                  {getEstimatorLabelForQuote(entry.quote, unassignedLabel)}
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <Badge tone={statusTone(entry.quote.status) as any}>
+                                    {t(`status.${statusLabelKey(entry.quote.status)}`)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
+                                  {formatMoney(entry.latestRevision?.subtotal ?? 0)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
+                                  {formatPercent(entry.latestRevision?.estimatedMargin ?? 0)}
+                                </td>
+                                <td className="px-4 py-2.5 text-xs text-fg/50">
+                                  {formatDate(entry.quote.updatedAt || project.updatedAt)}
+                                </td>
+                                <td className="w-8 px-2 py-2.5 text-right" />
+                              </motion.tr>
+                            );
+                          })}
+                        </Fragment>
+                      );
+                    })
+                  )}
+                </tbody>
+              )}
             </table>
           </div>
+
+          {/* Pagination footer */}
+          {!isInitialLoading && !error && total > 0 && (
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-2.5">
+              <div className="flex items-center gap-2 text-[11px] text-fg/50">
+                <label className="flex items-center gap-1.5">
+                  <span>{t("pagination.rowsPerPage")}</span>
+                  <select
+                    value={params.pageSize}
+                    onChange={(e) => update({ pageSize: parseInt(e.target.value, 10) }, { resetPage: true })}
+                    className="rounded-md border border-line bg-bg px-1.5 py-0.5 text-xs text-fg/80 focus:border-accent focus:outline-none"
+                  >
+                    {PAGE_SIZE_OPTIONS.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </label>
+                <span className="text-fg/30">·</span>
+                <span className="tabular-nums">{t("pagination.range", { from: fromIndex, to: toIndex, total })}</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => update({ page: 1 })}
+                  disabled={params.page <= 1}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.first")}
+                >
+                  <ChevronsLeft className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => update({ page: params.page - 1 })}
+                  disabled={params.page <= 1}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.previous")}
+                >
+                  <ChevronLeft className="h-3.5 w-3.5" />
+                </button>
+                <span className="px-2 text-[11px] tabular-nums text-fg/60">
+                  {t("pagination.pageOf", { page: params.page, totalPages })}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => update({ page: params.page + 1 })}
+                  disabled={params.page >= totalPages}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.next")}
+                >
+                  <ChevronRight className="h-3.5 w-3.5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => update({ page: totalPages })}
+                  disabled={params.page >= totalPages}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
+                  aria-label={t("pagination.last")}
+                >
+                  <ChevronsRight className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            </div>
+          )}
         </Card>
       </FadeIn>
     </div>

@@ -311,6 +311,18 @@
     "tabs": {
       "quotes": "All quotes",
       "projects": "Projects"
+    },
+    "loadErrorTitle": "Impossible de charger les soumissions",
+    "loadError": "Échec du chargement des soumissions",
+    "retry": "Réessayer",
+    "pagination": {
+      "range": "{from}–{to} sur {total}",
+      "rowsPerPage": "Lignes par page",
+      "pageOf": "Page {page} sur {totalPages}",
+      "first": "Première page",
+      "previous": "Page précédente",
+      "next": "Page suivante",
+      "last": "Dernière page"
     }
   },
   "Performance": {

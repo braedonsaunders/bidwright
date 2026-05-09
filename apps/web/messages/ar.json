@@ -311,6 +311,18 @@
     "tabs": {
       "quotes": "All quotes",
       "projects": "Projects"
+    },
+    "loadErrorTitle": "تعذر تحميل العروض",
+    "loadError": "فشل تحميل العروض",
+    "retry": "إعادة المحاولة",
+    "pagination": {
+      "range": "{from}–{to} من {total}",
+      "rowsPerPage": "صفوف لكل صفحة",
+      "pageOf": "صفحة {page} من {totalPages}",
+      "first": "الصفحة الأولى",
+      "previous": "الصفحة السابقة",
+      "next": "الصفحة التالية",
+      "last": "الصفحة الأخيرة"
     }
   },
   "Performance": {

@@ -311,6 +311,18 @@
     "tabs": {
       "quotes": "All quotes",
       "projects": "Projects"
+    },
+    "loadErrorTitle": "見積を読み込めませんでした",
+    "loadError": "見積の読み込みに失敗しました",
+    "retry": "再試行",
+    "pagination": {
+      "range": "{total} 件中 {from}–{to}",
+      "rowsPerPage": "1ページの行数",
+      "pageOf": "{page} / {totalPages} ページ",
+      "first": "最初のページ",
+      "previous": "前のページ",
+      "next": "次のページ",
+      "last": "最後のページ"
     }
   },
   "Performance": {

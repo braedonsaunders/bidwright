@@ -279,6 +279,18 @@
     "tabs": {
       "quotes": "All quotes",
       "projects": "Projects"
+    },
+    "loadErrorTitle": "Could not load quotes",
+    "loadError": "Failed to load quotes",
+    "retry": "Retry",
+    "pagination": {
+      "range": "{from}–{to} of {total}",
+      "rowsPerPage": "Rows per page",
+      "pageOf": "Page {page} of {totalPages}",
+      "first": "First page",
+      "previous": "Previous page",
+      "next": "Next page",
+      "last": "Last page"
     }
   },
   "Projects": {

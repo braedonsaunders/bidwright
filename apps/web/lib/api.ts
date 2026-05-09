@@ -1439,10 +1439,42 @@ export interface OrgDepartment {
   name: string;
 }
 
+export interface PaginationMeta {
+  page: number;
+  pageSize: number;
+  total: number;
+  totalPages: number;
+}
+
 export interface ProjectsResponse {
   projects: ProjectListItem[];
   users: OrgUser[];
   departments: OrgDepartment[];
+  clientOptions?: Array<{ value: string; label: string }>;
+  pagination?: PaginationMeta;
+}
+
+export type QuotesSortKey =
+  | "quoteNumber"
+  | "kind"
+  | "title"
+  | "client"
+  | "estimator"
+  | "status"
+  | "subtotal"
+  | "margin"
+  | "updated";
+
+export interface ProjectsListParams {
+  page?: number;
+  pageSize?: number;
+  search?: string;
+  status?: string[];
+  userIds?: string[];
+  departmentIds?: string[];
+  clientNames?: string[];
+  sortKey?: QuotesSortKey;
+  sortDir?: "asc" | "desc";
 }
 
 export interface CreateProjectInput {
@@ -1525,8 +1557,25 @@ export async function getProjects(): Promise<ProjectListItem[]> {
   return Array.isArray(res) ? res : res.projects;
 }
 
-export async function getProjectsWithFilters(): Promise<ProjectsResponse> {
-  const res = await apiRequest<ProjectListItem[] | ProjectsResponse>("/projects");
+export async function getProjectsWithFilters(params?: ProjectsListParams): Promise<ProjectsResponse> {
+  const qs = new URLSearchParams();
+  const appendAll = (key: string, values?: string[]) => {
+    if (!values || values.length === 0) return;
+    for (const v of values) qs.append(key, v);
+  };
+  if (params) {
+    if (params.page !== undefined) qs.set("page", String(params.page));
+    if (params.pageSize !== undefined) qs.set("pageSize", String(params.pageSize));
+    if (params.search) qs.set("search", params.search);
+    appendAll("status", params.status);
+    appendAll("userIds", params.userIds);
+    appendAll("departmentIds", params.departmentIds);
+    appendAll("clientNames", params.clientNames);
+    if (params.sortKey) qs.set("sortKey", params.sortKey);
+    if (params.sortDir) qs.set("sortDir", params.sortDir);
+  }
+  const path = qs.toString() ? `/projects?${qs.toString()}` : "/projects";
+  const res = await apiRequest<ProjectListItem[] | ProjectsResponse>(path);
   if (Array.isArray(res)) return { projects: res, users: [], departments: [] };
   return res;
 }
