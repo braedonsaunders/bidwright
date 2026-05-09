@@ -83,14 +83,28 @@ function toJsonLines(values: unknown[]) {
   return values.map(toJsonLine).join("\n") + (values.length > 0 ? "\n" : "");
 }
 
-function searchValue(value: unknown, max = 900): string {
+function searchValue(value: unknown, max = 240): string {
   if (value == null) return "";
-  const raw = typeof value === "string"
-    ? value
-    : typeof value === "number" || typeof value === "boolean"
-      ? String(value)
-      : JSON.stringify(value, jsonReplacer);
-  return raw.replace(/\s+/g, " ").trim().slice(0, max);
+  if (typeof value === "string") {
+    return value.replace(/\s+/g, " ").trim().slice(0, max);
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  // Drop nested JSON blobs from search-line records. The library-snapshot
+  // search files (used by rg/searchLibraryCorpus) used to inline things
+  // like columns=[{...},...], tags=[...], scope={...} verbose objects up
+  // to 900 chars per field. With thousands of records and aggressive rg
+  // queries that produced 50KB+ raw text dumps that ate the agent's
+  // context window before any worksheet items could be created. The
+  // structural id/name/description/category fields stay searchable;
+  // anything that requires the full nested metadata can be fetched via
+  // the targeted MCP tools (queryDatasets, getLaborUnit, etc.) using the
+  // returned id.
+  if (Array.isArray(value)) {
+    return `[len=${value.length}]`;
+  }
+  return "[obj]";
 }
 
 function searchLine(kind: string, fields: Record<string, unknown>) {

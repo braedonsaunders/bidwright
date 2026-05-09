@@ -895,12 +895,15 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
   const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
   const rowDollar = Math.max(cost * Math.max(quantity, 1), price * Math.max(quantity, 1), cost, price);
 
-  // #1: Labour rows must have laborUnitId OR structured sourceRefs
+  // #1: Labour rows must have laborUnitId OR structured sourceRefs.
+  // Validator messages are deliberately short — repeated rejections used to
+  // print 500-700 chars of full rule text per call which ate the agent's
+  // context window after a handful of misses.
   if (entityType === "labour" || entityType === "labor") {
     const hasLaborUnit = !!input.laborUnitId;
     const hasStructuredRef = structuredRefs > 0;
     if (!hasLaborUnit && !hasStructuredRef && !hasAssumptionIds) {
-      return "Labour rows require either laborUnitId (from listLaborUnits/listLaborUnitTree/getLaborUnit) OR evidenceBasis.pricing.sourceRefs containing at least one structured citation (e.g., 'ds-<id>', 'lu-<id>', 'doc-<id>:p<page>', 'kb-<id>:p<page>'), OR evidenceBasis.pricing.assumptionIds linked to a saved assumption documenting that the library was searched and no usable analog exists. Free-text sourceNotes alone is not enough.";
+      return "Labour row needs laborUnitId, evidenceBasis.pricing.sourceRefs with structured cite (ds-/lu-/doc-/kb-), or assumptionIds.";
     }
   }
 
@@ -911,7 +914,7 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
     const hasStructuredRef = structuredRefs > 0;
     const hasComposition = compositionCount > 0;
     if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition) {
-      return "Material/Subcontractor/Equipment/Allowance rows require either a structured pricing link (costResourceId, effectiveCostId, or itemId from searchLineItemCandidates/recommendCostSource), OR evidenceBasis.pricing.sourceRefs with at least one structured citation (vendor invoice/quote, dataset row, knowledge-book page, catalog SKU, document+page reference), OR evidenceBasis.pricing.assumptionIds linked to a saved assumption documenting the search-attempt and that vendor finalization is required, OR resourceComposition.resources populated with cited components. Free-text sourceNotes alone is not enough.";
+      return "Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with structured cite; or assumptionIds; or resourceComposition.resources.";
     }
 
     // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence
@@ -919,7 +922,7 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
     if ((isLumpSum || rowDollar >= compositeMaterialThreshold()) && !hasStructuredLink) {
       const hasComponentEvidence = compositionCount >= 2 || structuredRefs >= 2;
       if (!hasComponentEvidence) {
-        return `Composite Material/Subcontractor rows priced at $${compositeMaterialThreshold().toLocaleString()}+ or with uom=LS need component-level evidence: either a single structured pricing link (costResourceId/effectiveCostId/itemId) OR resourceComposition.resources with 2+ cited components OR 2+ structured entries in evidenceBasis.pricing.sourceRefs (one per cost component such as pipe, fittings, flanges, fasteners, supports, etc., each citing a vendor/dataset/catalog reference). Adders/multipliers (e.g. "+30%") in description must be backed by a citation in sourceRefs, not invented.`;
+        return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs, or 2+ resourceComposition.resources.`;
       }
     }
   }
@@ -1479,9 +1482,9 @@ export function registerQuoteTools(server: McpServer) {
         orgSchedules = (orgData.schedules || orgData || [])
           .filter((s: any) => !input.category || normalizedText(s.category) === normalizedText(input.category))
           .filter((s: any) => !input.q || [s.name, s.description, s.category, ...(s.items || []).slice(0, 10).map((item: any) => item.name)].some((value) => matchesText(value, input.q)))
-          .map((s: any) => summarizeRateSchedule(s, { includeSampleItems: true }));
+          .map((s: any) => summarizeRateSchedule(s, { includeSampleItems: false }));
       } catch {}
-      const orgSchedulePage = pageSlice(orgSchedules, { limit: Math.min(input.limit, 25), offset: input.offset }, 50);
+      const orgSchedulePage = pageSlice(orgSchedules, { limit: Math.min(input.limit, 10), offset: input.offset }, 25);
 
       const rateScheduleCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
       const catalogCats = entityCategories.filter((c: any) => c.itemSource === "catalog");
@@ -1511,8 +1514,9 @@ export function registerQuoteTools(server: McpServer) {
         instructions += `Categories [${freeformCats.map((c: any) => c.name).join(", ")}] use freeform input — set cost and quantity directly.`;
       }
 
-      instructions += `\n\nCANONICAL COST SOURCE WORKFLOW: Before creating a priced line item, search the runtime first-party library corpora with rg/searchLibraryCorpus, then call searchLineItemCandidates/recommendEstimateBasis with the scope phrase and preferred category for structured IDs. The search tools use the same indexed search surface as the worksheet line-level library picker and return candidates only; the estimating agent decides relevance, authority, exact/similar/context/manual basis, and final rationale. For rate-schedule rows, prefer createRateScheduleWorksheetItem with the selected rateScheduleItemId, tierUnits, and evidenceBasis; it derives category/name and keeps the payload smaller. For non-rate rows, preserve itemId/costResourceId/effectiveCostId/laborUnitId plus sourceEvidence and resourceComposition when calling createWorksheetItem. Use listLaborUnitTree/listLaborUnits for compact labour productivity candidates, getLaborUnit for focused details on one shortlisted unit, and previewAssembly for assembly-backed scope. If you choose a labor-unit analog, explain why the operation/unit/context is defensible and record the limitation in sourceNotes. Use WebSearch/WebFetch alongside internal sources for high-value, volatile, regional, unfamiliar, or vendor-specific items. Create freeform priced rows only when no first-party structured candidate is usable, or when current web/vendor evidence is materially better than stale internal data; write both the internal search and web/vendor basis in sourceNotes.`;
-      instructions += `\n\nLINE EVIDENCE BASIS: When drawings exist, createWorksheetItem requires evidenceBasis. Prefer the two-axis form: evidenceBasis.quantity.type explains where the quantity/hours/duration/count came from, while evidenceBasis.pricing.type explains where unit cost/rate/productivity/allowance came from. If quantity comes from a drawing/table/takeoff, set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and put claim IDs in evidenceBasis.quantity.drawingClaimIds. If the price comes from a material quote, labour manual, rate item, vendor quote, equipment/subcontract source, allowance model, indirect model, document quantity, assumption, or mixed basis, put that under evidenceBasis.pricing with refs/rationale. Do not hide a drawing-derived quantity behind material_quote/vendor_quote/knowledge_labor; split the quantity and pricing bases.`;
+      // Canonical cost-source workflow + line-evidence-basis are already in the
+      // startup prompt; re-injecting them on every getItemConfig call burned
+      // ~3KB per call of the agent's context for no incremental signal.
 
       // If no categories configured, provide default guidance
       if (entityCategories.length === 0) {

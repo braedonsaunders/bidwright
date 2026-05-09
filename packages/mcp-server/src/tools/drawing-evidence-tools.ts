@@ -10,7 +10,14 @@ import { apiGet, apiPatch, apiPost, getProjectId } from "../api-client.js";
 const ENGINE_VERSION = 3;
 const DEFAULT_RENDER_DPIS = [72, 150];
 const DEFAULT_ATLAS_DPI = 150;
-const DEFAULT_INSPECTION_DPI = 300;
+// Default inspection DPI was 300 — at that resolution a typical region crop
+// renders into a 4-megapixel JPEG, and the resulting base64 image content
+// block plus the structured text result around it can run hundreds of
+// kilobytes per call. With three or four parallel inspections the agent
+// blew past Claude's context window before any worksheet items were
+// created. 150 still resolves table text and dimension callouts; agents
+// can override per-call up to 300 when they truly need the higher fidelity.
+const DEFAULT_INSPECTION_DPI = 150;
 const CAD_EVIDENCE_EXTENSIONS = new Set(["dwg", "dxf"]);
 const MODEL_EVIDENCE_EXTENSIONS = new Set(["ifc", "rvt", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "nwd", "nwf", "nwc"]);
 const ATLAS_ARTIFACT_DIR = ".bidwright/drawing-evidence";

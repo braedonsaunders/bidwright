@@ -765,26 +765,19 @@ function enrichLaborUnits(payload: unknown, q?: string): EnrichedLaborUnit[] {
 
 function compactLaborUnit(unit: Record<string, unknown>, q?: string): CompactLaborUnit {
   const basis = laborUnitBasis(unit, q);
-  const metadata = asObject(unit.metadata);
-  const searchMatch = asObject(metadata.searchMatch);
   const outputUom = stringValue(unit.outputUom);
   const hoursNormal = numberValue(unit.hoursNormal);
-  const compactSearch = Object.keys(searchMatch).length > 0
-    ? {
-        score: numberValue(searchMatch.score),
-        coverage: numberValue(searchMatch.coverage),
-        matchedTerms: compactUnknownValue(searchMatch.matchedTerms, { maxArray: 10, maxString: 80 }),
-        matchedPhrases: compactUnknownValue(searchMatch.matchedPhrases, { maxArray: 8, maxString: 120 }),
-        anchorMatches: compactUnknownValue(searchMatch.anchorMatches, { maxArray: 8, maxString: 120 }),
-      }
-    : undefined;
+  // Aggressively compact for list responses: drop search-match diagnostics,
+  // sourceRef, tags, libraryId, basis metadata/description/notes. The agent
+  // can fetch any of those via getLaborUnit once it shortlists a candidate.
+  // Previous shape was ~2-3KB per unit; with default limit=25 that produced
+  // 60-90KB tool results that ate the agent's context window after a few
+  // searches. The structural id is preserved so the agent can still plumb a
+  // laborUnitId back into createWorksheetItem.
   return {
     id: stringValue(unit.id),
-    libraryId: stringValue(unit.libraryId),
-    catalogItemId: stringValue(unit.catalogItemId),
     code: stringValue(unit.code),
-    name: compactText(unit.name, 160),
-    description: compactText(unit.description, 280),
+    name: compactText(unit.name, 120),
     discipline: stringValue(unit.discipline),
     category: stringValue(unit.category),
     className: stringValue(unit.className),
@@ -793,14 +786,12 @@ function compactLaborUnit(unit: Record<string, unknown>, q?: string): CompactLab
     hoursNormal,
     hoursPerOutput: hoursNormal !== undefined && outputUom ? `${hoursNormal} HR/${outputUom}` : undefined,
     entityCategoryType: stringValue(unit.entityCategoryType),
-    tags: compactUnknownValue(unit.tags, { maxArray: 8, maxString: 80 }),
-    sourceRef: compactUnknownValue(unit.sourceRef, { depth: 2, maxString: 120, maxArray: 4, maxKeys: 8 }),
-    search: compactSearch,
     basis: {
-      ...basis,
-      description: compactText(basis.description, 220),
-      notes: compactText(basis.notes, 220),
-      metadata: basis.metadata ? asObject(compactUnknownValue(basis.metadata, { depth: 1, maxString: 140, maxArray: 5, maxKeys: 8 })) : undefined,
+      kind: basis.kind,
+      label: compactText(basis.label, 140) ?? basis.label,
+      matchType: basis.matchType,
+      sourceQuality: basis.sourceQuality,
+      confidence: basis.confidence,
     },
     matchType: basis.matchType,
     sourceQuality: basis.sourceQuality,
@@ -1358,7 +1349,7 @@ export function registerResourceTools(server: McpServer) {
 
   server.tool(
     "listLaborUnits",
-    "List compact labor-productivity candidate units from the labor-unit libraries. Use this when a labour row needs hours/unit, a productivity analog, or a laborUnitId. Search results are deliberately compact and include diagnostics so the agent can refine deliberately; call getLaborUnit for focused details on one candidate.",
+    "List compact labor-productivity candidate units from the labor-unit libraries. Use this when a labour row needs hours/unit, a productivity analog, or a laborUnitId. Returns compact rows (id, code, name, taxonomy, hoursNormal/outputUom, basis kind/match-type) for shortlisting; call getLaborUnit for full sourceRef/metadata once a candidate looks defensible.",
     {
       q: z.string().optional(),
       provider: z.string().optional(),
@@ -1366,7 +1357,7 @@ export function registerResourceTools(server: McpServer) {
       className: z.string().optional(),
       subClassName: z.string().optional(),
       libraryId: z.string().optional(),
-      limit: z.coerce.number().int().positive().max(100).default(25),
+      limit: z.coerce.number().int().positive().max(50).default(10),
       offset: z.coerce.number().int().min(0).optional(),
     },
     async (input) => {
