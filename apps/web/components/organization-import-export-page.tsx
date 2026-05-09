@@ -602,8 +602,8 @@ export function OrganizationImportExportPage({
       setCounts({
         projects: projects.status === "fulfilled" ? projects.value.length : 0,
         customers: customers.status === "fulfilled" ? customers.value.length : 0,
-        catalogs: catalogs.status === "fulfilled" ? catalogs.value.length : 0,
-        rateSchedules: schedules.status === "fulfilled" ? schedules.value.length : 0,
+        catalogs: catalogs.status === "fulfilled" ? catalogs.value.reduce((sum, c) => sum + (c.itemCount ?? c.items?.length ?? 0), 0) : 0,
+        rateSchedules: schedules.status === "fulfilled" ? schedules.value.reduce((sum, s) => sum + (s.items?.length ?? 0), 0) : 0,
         entityCategories: categories.status === "fulfilled" ? categories.value.length : 0,
         conditionLibrary: conditions.status === "fulfilled" ? conditions.value.length : 0,
         factors: factors.status === "fulfilled" ? factors.value.length : 0,
