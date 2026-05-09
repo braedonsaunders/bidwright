@@ -13,6 +13,7 @@
     "db:push": "prisma db push",
     "db:migrate": "prisma migrate deploy",
     "db:seed": "tsx src/seed.ts",
+    "db:seed:personas": "tsx src/seed-personas.ts",
     "db:reset": "tsx src/reset.ts"
   },
   "dependencies": {
