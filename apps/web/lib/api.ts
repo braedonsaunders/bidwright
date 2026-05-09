@@ -3322,7 +3322,7 @@ export async function deleteCatalog(catalogId: string) {
   });
 }
 
-export async function listLaborUnitLibraries(scope: "organization" | "all" = "all") {
+export async function listLaborUnitLibraries(scope: "organization" | "all" = "organization") {
   const params = new URLSearchParams({ scope });
   return apiRequest<LaborUnitLibraryRecord[]>(`/api/labor-units/libraries?${params.toString()}`);
 }
@@ -4530,13 +4530,17 @@ export interface DwgTakeoffMetadata {
   }>;
 }
 
-export async function getDwgTakeoffMetadata(projectId: string, documentId: string, refresh = false) {
-  const qs = refresh ? "?refresh=1" : "";
-  return apiRequest<DwgTakeoffMetadata>(`/api/takeoff/${projectId}/documents/${documentId}/dwg-metadata${qs}`);
+export async function getDwgTakeoffMetadata(projectId: string, documentId: string, refresh = false, sourceKind?: "source_document" | "file_node") {
+  const params = new URLSearchParams();
+  if (refresh) params.set("refresh", "1");
+  if (sourceKind) params.set("sourceKind", sourceKind);
+  const qs = params.toString();
+  return apiRequest<DwgTakeoffMetadata>(`/api/takeoff/${projectId}/documents/${documentId}/dwg-metadata${qs ? `?${qs}` : ""}`);
 }
 
-export async function processDwgTakeoffMetadata(projectId: string, documentId: string) {
-  return apiRequest<DwgTakeoffMetadata>(`/api/takeoff/${projectId}/documents/${documentId}/process-dwg`, {
+export async function processDwgTakeoffMetadata(projectId: string, documentId: string, sourceKind?: "source_document" | "file_node") {
+  const qs = sourceKind ? `?sourceKind=${sourceKind}` : "";
+  return apiRequest<DwgTakeoffMetadata>(`/api/takeoff/${projectId}/documents/${documentId}/process-dwg${qs}`, {
     method: "POST",
   });
 }

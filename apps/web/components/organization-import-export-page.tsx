@@ -610,7 +610,7 @@ export function OrganizationImportExportPage({
         listEstimateFactorLibraryEntries(),
         listKnowledgeBooks(),
         listKnowledgeDocuments(),
-        listLaborUnitLibraries("all"),
+        listLaborUnitLibraries(),
         getCostIntelligenceSummary(),
       ]);
       setCounts({

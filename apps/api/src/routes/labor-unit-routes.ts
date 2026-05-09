@@ -44,7 +44,7 @@ export async function laborUnitRoutes(app: FastifyInstance): Promise<void> {
   app.get("/api/labor-units/libraries", async (request, reply) => {
     const query = request.query as { scope?: "organization" | "all" };
     try {
-      return await request.store!.listLaborUnitLibraries(query.scope ?? "all");
+      return await request.store!.listLaborUnitLibraries(query.scope ?? "organization");
     } catch (err: any) {
       reply.code(statusForError(err?.message ?? ""));
       return { error: err?.message ?? "Failed to list labor unit catalogs" };

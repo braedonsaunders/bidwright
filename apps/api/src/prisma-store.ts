@@ -12311,7 +12311,7 @@ export class PrismaApiStore {
   // ── Labor Unit Libraries ────────────────────────────────────────────────
 
   async listLaborUnitLibraries(
-    scope: "organization" | "all" = "all",
+    scope: "organization" | "all" = "organization",
   ): Promise<LaborUnitLibrary[]> {
     const where =
       scope === "organization"

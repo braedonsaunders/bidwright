@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import {
@@ -27,9 +27,10 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ProjectListItem, UserOrganization } from "@/lib/api";
-import { searchTools, listMyOrganizations, switchOrganization } from "@/lib/api";
+import { listMyOrganizations, switchOrganization, getCustomers } from "@/lib/api";
+import type { Customer } from "@/lib/api";
 import { formatCompactMoney } from "@/lib/format";
-import { Badge, Input } from "@/components/ui";
+import { Input } from "@/components/ui";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
 
@@ -54,14 +55,13 @@ const THEME_OPTIONS: Array<{ value: ThemePreference; labelKey: ThemePreference; 
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "bidwright-sidebar-collapsed";
 
-function statusTone(status: string) {
-  if (!status) return "default" as const;
-  switch (status.toLowerCase()) {
-    case "estimate": case "closed": return "success" as const;
-    case "review": return "warning" as const;
-    default: return "default" as const;
-  }
-}
+type SearchResult = {
+  type: "project" | "quote" | "client";
+  id: string;
+  label: string;
+  sublabel?: string;
+  href: string;
+};
 
 function useTheme() {
   const [theme, setTheme] = useState<ThemePreference>("system");
@@ -110,6 +110,7 @@ export function AppShell({
 }) {
   const t = useTranslations("AppShell");
   const pathname = usePathname();
+  const router = useRouter();
   const { theme, resolvedTheme, setTheme } = useTheme();
   const {
     user: authUser,
@@ -125,21 +126,63 @@ export function AppShell({
   const [myOrgs, setMyOrgs] = useState<UserOrganization[]>([]);
   const [orgsLoaded, setOrgsLoaded] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<Array<{ id: string; name: string; description: string; pluginId: string }>>([]);
   const [searchOpen, setSearchOpen] = useState(false);
+  const [searchActiveIndex, setSearchActiveIndex] = useState(-1);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [sidebarPreferenceLoaded, setSidebarPreferenceLoaded] = useState(false);
-  const [quoteSearch, setQuoteSearch] = useState("");
   const searchRef = useRef<HTMLDivElement>(null);
 
   // Self-fetch projects so sidebar always has data regardless of page
   const [selfProjects, setSelfProjects] = useState<ProjectListItem[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   useEffect(() => {
     import("@/lib/api").then(({ getProjects }) =>
       getProjects().then(setSelfProjects).catch(() => {})
     );
+    getCustomers().then(setCustomers).catch(() => {});
   }, []);
   const projects = projectsProp && projectsProp.length > 0 ? projectsProp : selfProjects;
+
+  const searchResults = useCallback((): SearchResult[] => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return [];
+    const results: SearchResult[] = [];
+    for (const p of projects) {
+      if (
+        p.name.toLowerCase().includes(q) ||
+        p.clientName?.toLowerCase().includes(q) ||
+        p.location?.toLowerCase().includes(q)
+      ) {
+        results.push({ type: "project", id: p.id, label: p.name, sublabel: p.clientName, href: `/projects/${p.id}` });
+      }
+      if (p.quote) {
+        if (
+          p.quote.quoteNumber.toLowerCase().includes(q) ||
+          (p.quote.title || "").toLowerCase().includes(q) ||
+          p.quote.status.toLowerCase().includes(q)
+        ) {
+          results.push({
+            type: "quote",
+            id: p.quote.id,
+            label: p.quote.title || p.quote.quoteNumber,
+            sublabel: `${p.quote.quoteNumber} · ${p.name}`,
+            href: `/quotes/${p.quote.id}`,
+          });
+        }
+      }
+    }
+    for (const c of customers) {
+      if (
+        c.name.toLowerCase().includes(q) ||
+        c.shortName?.toLowerCase().includes(q) ||
+        c.email?.toLowerCase().includes(q) ||
+        c.addressCity?.toLowerCase().includes(q)
+      ) {
+        results.push({ type: "client", id: c.id, label: c.name, sublabel: c.email || undefined, href: `/clients/${c.id}` });
+      }
+    }
+    return results.slice(0, 12);
+  }, [searchQuery, projects, customers]);
 
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
   const themeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[2];
@@ -172,30 +215,6 @@ export function AppShell({
     setThemeMenuOpen(false);
     setUserMenuOpen(false);
   }, [sidebarCollapsed]);
-
-  // Filter sidebar projects by search query
-  const filteredProjects = searchQuery.trim()
-    ? projects.filter((p) =>
-        p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        p.clientName?.toLowerCase().includes(searchQuery.toLowerCase())
-      )
-    : projects;
-
-  const handleSearchSubmit = useCallback(async (query: string) => {
-    if (!query.trim()) {
-      setSearchResults([]);
-      setSearchOpen(false);
-      return;
-    }
-    try {
-      const results = await searchTools(query);
-      setSearchResults(results);
-      setSearchOpen(true);
-    } catch {
-      setSearchResults([]);
-      setSearchOpen(false);
-    }
-  }, []);
 
   // Close dropdowns when clicking outside
   useEffect(() => {
@@ -340,7 +359,7 @@ export function AppShell({
 
         {sidebarCollapsed ? (
           <div className="px-2 pt-3">
-            <SidebarTooltip label={t("searchTools")}>
+            <SidebarTooltip label={t("searchPlaceholder")}>
               <button
                 type="button"
                 onClick={() => {
@@ -348,64 +367,99 @@ export function AppShell({
                   window.requestAnimationFrame(() => document.getElementById("app-shell-search")?.focus());
                 }}
                 className="flex h-10 w-full items-center justify-center rounded-lg text-fg/45 transition-colors hover:bg-panel2 hover:text-fg"
-                aria-label={t("searchTools")}
+                aria-label={t("searchPlaceholder")}
               >
                 <Search className="h-4 w-4" />
               </button>
             </SidebarTooltip>
           </div>
-        ) : (
-          <div ref={searchRef} className="px-3 pt-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-              <Input
-                id="app-shell-search"
-                className="h-8 pl-8 text-xs"
-                placeholder={t("searchPlaceholder")}
-                value={searchQuery}
-                onChange={(e) => {
-                  setSearchQuery(e.target.value);
-                  if (!e.target.value.trim()) {
-                    setSearchResults([]);
-                    setSearchOpen(false);
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    handleSearchSubmit(searchQuery);
-                  }
-                  if (e.key === "Escape") {
-                    setSearchOpen(false);
-                  }
-                }}
-              />
-              {searchOpen && searchResults.length > 0 && (
-                <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
-                  <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                    {t("toolsCount", { count: searchResults.length })}
+        ) : (() => {
+          const results = searchResults();
+          return (
+            <div ref={searchRef} className="px-3 pt-3">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
+                <Input
+                  id="app-shell-search"
+                  className="h-8 pl-8 text-xs"
+                  placeholder={t("searchPlaceholder")}
+                  value={searchQuery}
+                  onFocus={() => { if (searchQuery.trim()) setSearchOpen(true); }}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setSearchActiveIndex(-1);
+                    setSearchOpen(e.target.value.trim().length > 0);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape") {
+                      setSearchOpen(false);
+                      return;
+                    }
+                    if (results.length > 0) {
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setSearchActiveIndex((i) => (i + 1) % results.length);
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setSearchActiveIndex((i) => (i <= 0 ? results.length - 1 : i - 1));
+                      } else if (e.key === "Enter" && searchActiveIndex >= 0 && searchActiveIndex < results.length) {
+                        e.preventDefault();
+                        router.push(results[searchActiveIndex].href);
+                        setSearchOpen(false);
+                        setSearchQuery("");
+                      }
+                    }
+                  }}
+                />
+                {searchOpen && results.length > 0 && (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-1 max-h-72 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg">
+                    {(() => {
+                      const grouped = [
+                        { type: "project" as const, items: results.filter((r) => r.type === "project") },
+                        { type: "quote" as const, items: results.filter((r) => r.type === "quote") },
+                        { type: "client" as const, items: results.filter((r) => r.type === "client") },
+                      ].filter((g) => g.items.length > 0);
+                      let flatIndex = 0;
+                      return grouped.map((group) => (
+                        <div key={group.type}>
+                          <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30 border-t border-line/50 first:border-t-0">
+                            {t(`nav.${group.type === "project" ? "dashboard" : group.type === "quote" ? "quotes" : "clients"}`)}
+                          </div>
+                          {group.items.map((result) => {
+                            const idx = flatIndex++;
+                            const active = idx === searchActiveIndex;
+                            return (
+                              <Link
+                                key={`${result.type}-${result.id}`}
+                                href={result.href}
+                                className={cn(
+                                  "flex items-center gap-2 border-t border-line/50 px-3 py-2 text-xs transition-colors",
+                                  active ? "bg-accent/10 text-accent" : "text-fg/60 hover:bg-panel2 hover:text-fg",
+                                )}
+                                onClick={() => { setSearchOpen(false); setSearchQuery(""); }}
+                                onMouseEnter={() => setSearchActiveIndex(idx)}
+                              >
+                                <span className="min-w-0 flex-1 truncate font-medium">{result.label}</span>
+                                {result.sublabel && (
+                                  <span className="shrink-0 truncate text-[10px] text-fg/30">{result.sublabel}</span>
+                                )}
+                              </Link>
+                            );
+                          })}
+                        </div>
+                      ));
+                    })()}
                   </div>
-                  {searchResults.map((result) => (
-                    <div
-                      key={result.id}
-                      className="flex cursor-pointer flex-col gap-0.5 border-t border-line/50 px-3 py-2 text-xs hover:bg-panel2"
-                      onClick={() => setSearchOpen(false)}
-                    >
-                      <span className="font-medium text-fg/80">{result.name}</span>
-                      {result.description && (
-                        <span className="truncate text-[11px] text-fg/40">{result.description}</span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-              {searchOpen && searchResults.length === 0 && searchQuery.trim() && (
-                <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-line bg-panel px-3 py-3 text-xs text-fg/40 shadow-lg">
-                  {t("noToolsFound", { query: searchQuery })}
-                </div>
-              )}
+                )}
+                {searchOpen && results.length === 0 && searchQuery.trim() && (
+                  <div className="absolute left-0 right-0 top-full z-50 mt-1 rounded-lg border border-line bg-panel px-3 py-3 text-xs text-fg/40 shadow-lg">
+                    {t("noResults", { query: searchQuery })}
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         <nav className={cn("flex flex-1 flex-col overflow-hidden py-3", sidebarCollapsed ? "px-2" : "px-3")}>
           <div className="space-y-0.5 shrink-0">
@@ -437,71 +491,6 @@ export function AppShell({
             })}
           </div>
 
-          {!sidebarCollapsed && (() => {
-            const allQuotes = projects.flatMap((p) =>
-              p.quote ? [{ ...p.quote, projectName: p.name }] : []
-            );
-            const filteredQuotes = quoteSearch.trim()
-              ? allQuotes.filter((q) =>
-                  (q.title || "").toLowerCase().includes(quoteSearch.toLowerCase()) ||
-                  q.quoteNumber.toLowerCase().includes(quoteSearch.toLowerCase()) ||
-                  q.projectName.toLowerCase().includes(quoteSearch.toLowerCase())
-                )
-              : allQuotes;
-            return allQuotes.length > 0 && (
-              <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-                <div className="shrink-0 px-3 pb-1 pt-4">
-                  <span className="text-[11px] font-medium uppercase tracking-wider text-fg/30">
-                    {t("quotes")}
-                  </span>
-                </div>
-                {allQuotes.length > 5 && (
-                  <div className="shrink-0 px-3 pb-1.5">
-                    <div className="relative">
-                      <Search className="pointer-events-none absolute left-2 top-1/2 h-3 w-3 -translate-y-1/2 text-fg/25" />
-                      <input
-                        type="text"
-                        className="h-6 w-full rounded-md border border-line bg-panel2 pl-6 pr-2 text-[11px] text-fg placeholder:text-fg/30 focus:outline-none focus:ring-1 focus:ring-accent/30"
-                        placeholder="Filter quotes..."
-                        value={quoteSearch}
-                        onChange={(e) => setQuoteSearch(e.target.value)}
-                      />
-                    </div>
-                  </div>
-                )}
-                <div className="flex-1 overflow-y-auto min-h-0">
-                  {filteredQuotes.length === 0 && quoteSearch.trim() && (
-                    <div className="px-3 py-2 text-[11px] text-fg/30">No matching quotes</div>
-                  )}
-                  {filteredQuotes.map((quote) => {
-                    const isActive = pathname.startsWith(`/quotes/${quote.id}`);
-                    return (
-                      <Link
-                        key={quote.id}
-                        href={`/quotes/${quote.id}`}
-                        className={cn(
-                          "flex items-center justify-between gap-2 rounded-lg px-3 py-2 text-[13px] transition-colors",
-                          isActive
-                            ? "bg-accent/10 text-accent font-medium"
-                            : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
-                        )}
-                      >
-                        <div className="min-w-0 flex-1">
-                          <span className="block truncate">{quote.title || quote.quoteNumber}</span>
-                          {allQuotes.length > 1 && (
-                            <span className="block truncate text-[10px] text-fg/30">{quote.projectName}</span>
-                          )}
-                        </div>
-                        <Badge tone={statusTone(quote.status)} className="shrink-0">
-                          {quote.status}
-                        </Badge>
-                      </Link>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })()}
         </nav>
 
         {!sidebarCollapsed && projects.length > 0 && (
@@ -586,7 +575,27 @@ export function AppShell({
         )}
 
         {!sidebarCollapsed && (
-          <div className="relative border-t border-line px-4 py-3">
+          <div className="relative border-t border-line px-4 py-3 space-y-2">
+            <div className="flex items-center gap-1 rounded-lg bg-panel2/50 p-1">
+              {THEME_OPTIONS.map((option) => {
+                const Icon = option.icon;
+                const selected = theme === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={cn(
+                      "flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors",
+                      selected ? "bg-panel text-fg shadow-sm" : "text-fg/40 hover:text-fg/70",
+                    )}
+                    onClick={() => setTheme(option.value)}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    <span>{t(`theme.${option.labelKey}`)}</span>
+                  </button>
+                );
+              })}
+            </div>
             <button
               type="button"
               onClick={() => setUserMenuOpen((v) => !v)}
