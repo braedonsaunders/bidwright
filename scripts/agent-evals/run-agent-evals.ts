@@ -857,19 +857,48 @@ class ApiClient {
       body = JSON.stringify(options.body);
     }
 
-    const response = await fetch(`${this.apiUrl}${route}`, {
-      method: options.method || "GET",
-      headers,
-      body,
-    });
-    this.captureCookies(response.headers);
-    const text = await response.text();
-    const data = parseJson(text) as T;
-    if (!response.ok) {
-      const message = getErrorMessage(data) || text || `${response.status} ${response.statusText}`;
-      throw new Error(`${options.method || "GET"} ${route} failed: ${message}`);
+    // Transient network errors against localhost (eg. tsx-watch restarting the
+    // dev API mid-poll) used to kill the entire harness run with "fetch failed"
+    // even though the agent itself was healthy. Retry idempotent GET/HEAD a
+    // small number of times with backoff. POST/PUT/PATCH/DELETE are NOT
+    // retried automatically — those may have side effects.
+    const isIdempotent = (options.method || "GET").toUpperCase() === "GET"
+      || (options.method || "").toUpperCase() === "HEAD";
+    const maxAttempts = isIdempotent ? 5 : 1;
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      try {
+        const response = await fetch(`${this.apiUrl}${route}`, {
+          method: options.method || "GET",
+          headers,
+          body,
+        });
+        this.captureCookies(response.headers);
+        const text = await response.text();
+        const data = parseJson(text) as T;
+        if (!response.ok) {
+          // Retry 5xx for idempotent calls (server briefly unhealthy), surface
+          // 4xx immediately (real client error).
+          if (isIdempotent && response.status >= 500 && attempt < maxAttempts) {
+            await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+            continue;
+          }
+          const message = getErrorMessage(data) || text || `${response.status} ${response.statusText}`;
+          throw new Error(`${options.method || "GET"} ${route} failed: ${message}`);
+        }
+        return { status: response.status, data, text };
+      } catch (err) {
+        lastError = err;
+        // node fetch surfaces network/connection errors as TypeError("fetch failed").
+        const isNetworkErr = err instanceof TypeError;
+        if (isIdempotent && isNetworkErr && attempt < maxAttempts) {
+          await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+          continue;
+        }
+        throw err;
+      }
     }
-    return { status: response.status, data, text };
+    throw lastError;
   }
 
   private captureCookies(headers: Headers) {

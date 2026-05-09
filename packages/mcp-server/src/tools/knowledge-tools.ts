@@ -207,11 +207,24 @@ async function searchLibraryCorpusFiles(input: {
       linesScanned += 1;
       const score = corpusLineScore(line, input.query, terms);
       if (score <= 0) continue;
+      // Compact the line text aggressively before keeping it. Library corpus
+      // records like "[dataset] id=... | name=... | description=... | columns=[{...}]"
+      // can run several KB each because the columns/scope/tags JSON blobs are
+      // inlined; with a default limit of 25 matches that was producing 50KB+
+      // tool results and chewing through Claude's context window after just a
+      // few searches. Strip the heavier secondary fields and clamp each entry
+      // to roughly one screen of text. The agent can drill into a specific
+      // dataset/labor-unit/cost-resource via the structured tools using the
+      // returned id, which is preserved.
+      const compactLine = line
+        .replace(/ \| columns=\[[^\]]*\]/g, " | columns=[trimmed]")
+        .replace(/ \| scope=\{[^}]*\}/g, "")
+        .replace(/ \| tags=\[[^\]]*\]/g, "");
       matches.push({
         file: `${LIBRARY_SNAPSHOT_ROOT}/${file.relativePath}`,
         lineNumber,
         score,
-        text: line.length > 1800 ? `${line.slice(0, 1800)}...[truncated]` : line,
+        text: compactLine.length > 500 ? `${compactLine.slice(0, 500)}...[truncated]` : compactLine,
       });
       if (matches.length > maxKeep) {
         matches.sort((left, right) => right.score - left.score || left.file.localeCompare(right.file) || left.lineNumber - right.lineNumber);
@@ -333,7 +346,7 @@ export function registerKnowledgeTools(server: McpServer) {
       query: z.string().optional().describe("Search query, phrase, code, vendor, item, operation, or unit."),
       q: z.string().optional().describe("Alias for query."),
       scope: z.enum(["all", "knowledge", "datasets", "cost", "catalogs", "rates", "labor", "assemblies"]).default("all"),
-      limit: z.coerce.number().int().positive().max(100).default(25),
+      limit: z.coerce.number().int().positive().max(50).default(10),
     },
     async (input) => {
       const query = resolveQuery(input);
