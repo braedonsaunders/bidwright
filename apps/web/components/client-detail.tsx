@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
   BookOpen,
@@ -871,10 +871,17 @@ export function ClientDetail({
         )}
       </div>
 
+      <AnimatePresence>
       {editOpen && (
         <div className="fixed inset-0 z-[200]">
           <div className="absolute inset-0 bg-black/60" onClick={() => !editSaving && setEditOpen(false)} />
-          <div className="absolute inset-y-0 right-0 flex max-w-full">
+          <motion.div
+            initial={{ x: "100%" }}
+            animate={{ x: 0 }}
+            exit={{ x: "100%" }}
+            transition={{ type: "spring", damping: 30, stiffness: 300 }}
+            className="absolute inset-y-0 right-0 flex max-w-full"
+          >
             <div className="w-screen max-w-lg">
               <form onSubmit={handleProfileSubmit} className="flex h-full flex-col border-l border-line bg-panel shadow-2xl">
                 <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
@@ -956,9 +963,10 @@ export function ClientDetail({
                 </div>
               </form>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
+      </AnimatePresence>
     </div>
   );
 }
