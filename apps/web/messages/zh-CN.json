@@ -22,10 +22,7 @@
     "superAdmin": "超级管理员",
     "personal": "个人",
     "adminPanel": "管理面板",
-    "searchTools": "搜索工具",
-    "searchPlaceholder": "搜索...",
-    "toolsCount": "工具（{count}）",
-    "noToolsFound": "未找到与“{query}”匹配的工具",
+    "searchPlaceholder": "搜索项目、报价、客户...",
     "quotes": "报价",
     "quotesCount": "报价（{count}）",
     "activeProject": "当前项目",
@@ -36,7 +33,8 @@
     "profile": "个人资料",
     "signOut": "退出登录",
     "expandSidebar": "展开侧边栏",
-    "collapseSidebar": "折叠侧边栏"
+    "collapseSidebar": "折叠侧边栏",
+    "noResults": "未找到\"{query}\"的结果"
   },
   "Settings": {
     "title": "设置",
