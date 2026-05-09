@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { Fragment, useEffect, useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
@@ -11,8 +11,13 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronRight,
   FileText,
+  Folder,
+  FolderOpen,
+  FolderPlus,
   Loader2,
+  MoreHorizontal,
   PencilLine,
   Plus,
   Search,
@@ -22,12 +27,16 @@ import {
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent, formatDate } from "@/lib/format";
 import {
+  addQuoteToProject,
   createCustomer,
   createProject,
   getCustomers,
   listRateBookAssignments,
+  promoteProject,
   type Customer,
   type ProjectListItem,
+  type ProjectQuoteEntry,
+  type ProjectQuoteSummary,
   type OrgUser,
   type OrgDepartment,
 } from "@/lib/api";
@@ -82,13 +91,12 @@ function getQuoteKind(project: ProjectListItem): "snap" | "full" {
   return state?.quoteMode === "snap" && state.snapUpgraded !== true ? "snap" : "full";
 }
 
-function getEstimatorLabel(
-  project: ProjectListItem,
+function getEstimatorLabelForQuote(
+  quote: ProjectQuoteSummary | null | undefined,
   userMap: Map<string, OrgUser>,
   departmentMap: Map<string, OrgDepartment>,
   unassignedLabel = "Unassigned",
 ) {
-  const quote = project.quote;
   if (!quote) return unassignedLabel;
   return (
     (quote.userId && userMap.get(quote.userId)?.name) ||
@@ -97,6 +105,24 @@ function getEstimatorLabel(
     unassignedLabel
   );
 }
+
+// Each row shown in the quotes list is one of three kinds. Standalone projects
+// render as flat quote rows (current look); container projects render as a
+// parent row with their quotes nested underneath when expanded.
+type StandaloneRow = {
+  kind: "standalone";
+  project: ProjectListItem;
+  entry: ProjectQuoteEntry;
+};
+type ContainerRow = {
+  kind: "container";
+  project: ProjectListItem;
+  matching: ProjectQuoteEntry[]; // children that pass the filters
+  totalQuotes: number; // unfiltered quote count, for the "X quotes" label
+  aggregateSubtotal: number;
+  latestUpdate: string;
+};
+type Row = StandaloneRow | ContainerRow;
 
 /* ─── Filter Dropdown ─── */
 
@@ -204,6 +230,42 @@ function FilterDropdown({
   );
 }
 
+/* ─── Row action menu (three-dot) ─── */
+
+function RowActionMenu({
+  open,
+  onOpenChange,
+  children,
+}: {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <Popover.Root open={open} onOpenChange={onOpenChange}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          className="rounded-md p-1 text-fg/30 transition-colors hover:bg-panel2 hover:text-fg/70"
+          aria-label="Row actions"
+        >
+          <MoreHorizontal className="h-3.5 w-3.5" />
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          className="z-50 w-48 rounded-lg border border-line bg-panel p-1 shadow-xl"
+          sideOffset={4}
+          align="end"
+        >
+          {children}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
 /* ─── Main Component ─── */
 
 export function QuotesList({ projects, users = [], departments = [] }: {
@@ -232,11 +294,23 @@ export function QuotesList({ projects, users = [], departments = [] }: {
   const [manualCustomerId, setManualCustomerId] = useState("");
   const [manualCustomerOptions, setManualCustomerOptions] = useState<Customer[]>([]);
   const [manualLocation, setManualLocation] = useState("");
+  const [manualParentProjectId, setManualParentProjectId] = useState<string | null>(null);
+  const [manualParentPickerOpen, setManualParentPickerOpen] = useState(false);
   const [manualError, setManualError] = useState("");
   const [manualSaving, setManualSaving] = useState(false);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
   const [quickAddName, setQuickAddName] = useState("");
   const [quickAddSaving, setQuickAddSaving] = useState(false);
+  // Container projects expand on click. Initial state: collapsed by default
+  // so the table doesn't overwhelm — users opt-in to seeing children.
+  const [expandedProjectIds, setExpandedProjectIds] = useState<Set<string>>(new Set());
+  // Promote-shadow-into-container modal state.
+  const [promoteFor, setPromoteFor] = useState<{ project: ProjectListItem; quoteTitle: string } | null>(null);
+  const [promoteName, setPromoteName] = useState("");
+  const [promoteError, setPromoteError] = useState("");
+  const [promoteSaving, setPromoteSaving] = useState(false);
+  // Per-row action menu visibility (one open at a time).
+  const [openRowMenu, setOpenRowMenu] = useState<string | null>(null);
   const unassignedLabel = t("unassigned");
 
   useEffect(() => {
@@ -253,23 +327,57 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     };
   }, [manualModalOpen]);
 
-  // Only include projects that have a quote
-  const projectsWithQuotes = useMemo(
-    () => projects.filter((p): p is ProjectListItem & { quote: NonNullable<ProjectListItem["quote"]> } => p.quote != null),
-    [projects],
-  );
+  // Build a flat list of every (project, quote) pair across the org. Container
+  // projects contribute one entry per quote; standalone projects contribute one.
+  const allEntries = useMemo(() => {
+    const out: Array<{ project: ProjectListItem; entry: ProjectQuoteEntry }> = [];
+    for (const p of projects) {
+      const list = p.quotes && p.quotes.length > 0
+        ? p.quotes
+        : p.quote
+          ? [{ quote: p.quote, latestRevision: p.latestRevision }]
+          : [];
+      for (const entry of list) {
+        out.push({ project: p, entry });
+      }
+    }
+    return out;
+  }, [projects]);
+
+  // Container projects with quotes — these render as expandable parent rows.
+  // Real projects with 0 quotes are managed from the projects list page, not here.
+  const containerProjects = useMemo(() => {
+    return projects.filter((p) => p.isStandalone === false && (p.quotes?.length ?? 0) > 0);
+  }, [projects]);
+
+  const standaloneEntries = useMemo(() => {
+    return allEntries.filter(({ project }) => project.isStandalone !== false);
+  }, [allEntries]);
+
+  // Available existing container projects (for the "Add to existing project"
+  // picker in the new-quote modal). Only shown if any exist.
+  const existingContainerOptions = useMemo(() => {
+    return projects
+      .filter((p) => p.isStandalone === false)
+      .map((p) => ({
+        id: p.id,
+        label: p.name,
+        secondary: p.clientName || undefined,
+      }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }, [projects]);
 
   // Derive unique filter options from data
   const clientOptions = useMemo(() => {
     const clients = new Map<string, string>();
-    for (const p of projectsWithQuotes) {
-      const clientLabel = getClientDisplayName(p, p.quote);
+    for (const { project, entry } of allEntries) {
+      const clientLabel = getClientDisplayName(project, entry.quote);
       if (clientLabel && clientLabel !== "—") clients.set(clientLabel, clientLabel);
     }
     return [...clients.entries()]
       .map(([value, label]) => ({ value, label }))
       .sort((a, b) => a.label.localeCompare(b.label));
-  }, [projectsWithQuotes]);
+  }, [allEntries]);
 
   const userMap = useMemo(() => {
     const m = new Map<string, OrgUser>();
@@ -301,10 +409,12 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     setSearch("");
   }
 
-  function openManualQuoteModal(mode: "quote" | "snap" = "quote") {
+  function openManualQuoteModal(mode: "quote" | "snap" = "quote", parentProjectId: string | null = null) {
     setManualCreationMode(mode);
     setNewQuoteMenuOpen(false);
     setManualError("");
+    setManualParentProjectId(parentProjectId);
+    setManualParentPickerOpen(parentProjectId != null);
     setManualModalOpen(true);
   }
 
@@ -314,6 +424,52 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     setManualError("");
     setQuickAddOpen(false);
     setQuickAddName("");
+    setManualParentProjectId(null);
+    setManualParentPickerOpen(false);
+  }
+
+  function toggleExpand(projectId: string) {
+    setExpandedProjectIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(projectId)) next.delete(projectId);
+      else next.add(projectId);
+      return next;
+    });
+  }
+
+  function openPromoteModal(project: ProjectListItem, entry: ProjectQuoteEntry) {
+    setPromoteFor({ project, quoteTitle: entry.quote.title || entry.quote.quoteNumber });
+    setPromoteName(project.name);
+    setPromoteError("");
+    setOpenRowMenu(null);
+  }
+
+  function closePromoteModal() {
+    if (promoteSaving) return;
+    setPromoteFor(null);
+    setPromoteError("");
+  }
+
+  async function handlePromoteSubmit(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!promoteFor) return;
+    const name = promoteName.trim();
+    if (!name) {
+      setPromoteError(t("promote.nameRequired"));
+      return;
+    }
+    setPromoteSaving(true);
+    setPromoteError("");
+    try {
+      await promoteProject(promoteFor.project.id, { name });
+      setPromoteFor(null);
+      setPromoteSaving(false);
+      // Reload to pick up the new isStandalone state.
+      router.refresh();
+    } catch (error) {
+      setPromoteSaving(false);
+      setPromoteError(error instanceof Error ? error.message : t("promote.error"));
+    }
   }
 
   async function handleQuickAddCustomer() {
@@ -361,6 +517,19 @@ export function QuotesList({ projects, users = [], departments = [] }: {
           return;
         }
       }
+
+      // Path 1: Add the new quote to an existing container project.
+      if (manualParentProjectId) {
+        const result = await addQuoteToProject(manualParentProjectId, {
+          title,
+          customerId: selectedCustomer?.id ?? null,
+          creationMode: isSnap ? "snap" : "manual",
+        });
+        router.push(`/projects/${result.project.id}?tab=estimate&subtab=worksheets`);
+        return;
+      }
+
+      // Path 2: Create a standalone (shadow) project that wraps this single quote.
       const clientName = selectedCustomer?.name || t("manual.unassignedClient");
       const location = manualLocation.trim() || "TBD";
       const result = await createProject({
@@ -371,6 +540,8 @@ export function QuotesList({ projects, users = [], departments = [] }: {
         creationMode: isSnap ? "snap" : "manual",
         packageName: isSnap ? `${title} Snap` : `${title} Manual Quote`,
         summary: isSnap ? "Snap quote created for quick small-work pricing." : undefined,
+        // Explicit (defaults match server side, but be clear about intent).
+        isStandalone: true,
       });
 
       router.push(`/projects/${result.project.id}?tab=estimate&subtab=worksheets`);
@@ -389,76 +560,124 @@ export function QuotesList({ projects, users = [], departments = [] }: {
     }
   };
 
-  const filtered = useMemo(() => {
-    let list = [...projectsWithQuotes];
+  const matchesFilters = useMemo(() => {
+    const trimmed = search.trim().toLowerCase();
+    return (project: ProjectListItem, entry: ProjectQuoteEntry): boolean => {
+      const q = entry.quote;
+      if (statusFilter.length > 0 && !statusFilter.includes(q.status)) return false;
+      if (clientFilter.length > 0 && !clientFilter.includes(getClientDisplayName(project, q))) return false;
+      if (userFilter.length > 0 && !(q.userId && userFilter.includes(q.userId))) return false;
+      if (departmentFilter.length > 0 && !(q.departmentId && departmentFilter.includes(q.departmentId))) return false;
+      if (trimmed) {
+        if (
+          !q.quoteNumber.toLowerCase().includes(trimmed) &&
+          !q.title.toLowerCase().includes(trimmed) &&
+          !getClientDisplayName(project, q).toLowerCase().includes(trimmed) &&
+          !project.name.toLowerCase().includes(trimmed) &&
+          !(project.location || "").toLowerCase().includes(trimmed)
+        ) return false;
+      }
+      return true;
+    };
+  }, [search, statusFilter, clientFilter, userFilter, departmentFilter]);
 
-    if (statusFilter.length > 0) {
-      list = list.filter((p) => statusFilter.includes(p.quote.status));
-    }
-
-    if (clientFilter.length > 0) {
-      list = list.filter((p) => clientFilter.includes(getClientDisplayName(p, p.quote)));
-    }
-
-    if (userFilter.length > 0) {
-      list = list.filter((p) => p.quote.userId && userFilter.includes(p.quote.userId));
-    }
-
-    if (departmentFilter.length > 0) {
-      list = list.filter((p) => p.quote.departmentId && departmentFilter.includes(p.quote.departmentId));
-    }
-
-    if (search.trim()) {
-      const q = search.toLowerCase();
-      list = list.filter(
-        (p) =>
-          p.quote.quoteNumber.toLowerCase().includes(q) ||
-          p.quote.title.toLowerCase().includes(q) ||
-          getClientDisplayName(p, p.quote).toLowerCase().includes(q) ||
-          p.name.toLowerCase().includes(q) ||
-          (p.location || "").toLowerCase().includes(q)
-      );
-    }
-
-    list.sort((a, b) => {
+  // Sort comparator that operates on a (project, entry) pair. Used for both
+  // sorting child quotes within a container and sorting top-level rows
+  // (containers use their first matching child for the value).
+  const compareEntries = useMemo(() => {
+    return (
+      a: { project: ProjectListItem; entry: ProjectQuoteEntry },
+      b: { project: ProjectListItem; entry: ProjectQuoteEntry },
+    ) => {
       let cmp = 0;
       switch (sortKey) {
         case "quoteNumber":
-          cmp = a.quote.quoteNumber.localeCompare(b.quote.quoteNumber);
-          break;
+          cmp = a.entry.quote.quoteNumber.localeCompare(b.entry.quote.quoteNumber); break;
         case "kind":
-          cmp = getQuoteKind(a).localeCompare(getQuoteKind(b));
-          break;
+          cmp = getQuoteKind(a.project).localeCompare(getQuoteKind(b.project)); break;
         case "title":
-          cmp = a.quote.title.localeCompare(b.quote.title);
-          break;
+          cmp = a.entry.quote.title.localeCompare(b.entry.quote.title); break;
         case "client":
-          cmp = getClientDisplayName(a, a.quote).localeCompare(getClientDisplayName(b, b.quote));
-          break;
+          cmp = getClientDisplayName(a.project, a.entry.quote).localeCompare(getClientDisplayName(b.project, b.entry.quote)); break;
         case "estimator": {
-          const aName = getEstimatorLabel(a, userMap, departmentMap, unassignedLabel);
-          const bName = getEstimatorLabel(b, userMap, departmentMap, unassignedLabel);
-          cmp = aName.localeCompare(bName);
-          break;
+          const aName = getEstimatorLabelForQuote(a.entry.quote, userMap, departmentMap, unassignedLabel);
+          const bName = getEstimatorLabelForQuote(b.entry.quote, userMap, departmentMap, unassignedLabel);
+          cmp = aName.localeCompare(bName); break;
         }
         case "status":
-          cmp = a.quote.status.localeCompare(b.quote.status);
-          break;
+          cmp = a.entry.quote.status.localeCompare(b.entry.quote.status); break;
         case "subtotal":
-          cmp = (a.latestRevision?.subtotal ?? 0) - (b.latestRevision?.subtotal ?? 0);
-          break;
+          cmp = (a.entry.latestRevision?.subtotal ?? 0) - (b.entry.latestRevision?.subtotal ?? 0); break;
         case "margin":
-          cmp = (a.latestRevision?.estimatedMargin ?? 0) - (b.latestRevision?.estimatedMargin ?? 0);
-          break;
-        case "updated":
-          cmp = new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
-          break;
+          cmp = (a.entry.latestRevision?.estimatedMargin ?? 0) - (b.entry.latestRevision?.estimatedMargin ?? 0); break;
+        case "updated": {
+          const aT = new Date(a.entry.quote.updatedAt || a.project.updatedAt).getTime();
+          const bT = new Date(b.entry.quote.updatedAt || b.project.updatedAt).getTime();
+          cmp = aT - bT; break;
+        }
       }
       return sortDir === "asc" ? cmp : -cmp;
+    };
+  }, [sortKey, sortDir, userMap, departmentMap, unassignedLabel]);
+
+  // Build the top-level row list: standalone quotes + container projects with
+  // at least one matching child. Children inside a container are pre-sorted.
+  const { rows, matchedQuoteCount, totalQuoteCount } = useMemo(() => {
+    // Standalone rows: one per matching standalone entry.
+    const standaloneRows: StandaloneRow[] = standaloneEntries
+      .filter(({ project, entry }) => matchesFilters(project, entry))
+      .map(({ project, entry }) => ({ kind: "standalone", project, entry }));
+
+    // Container rows: one per container project that has any matching child.
+    const containerRows: ContainerRow[] = [];
+    for (const project of containerProjects) {
+      const allChildren = project.quotes ?? [];
+      const matching = allChildren.filter((entry) => matchesFilters(project, entry));
+      if (matching.length === 0) continue;
+      const sortedChildren = [...matching].sort((a, b) =>
+        compareEntries({ project, entry: a }, { project, entry: b }),
+      );
+      const aggregateSubtotal = sortedChildren.reduce(
+        (sum, c) => sum + (c.latestRevision?.subtotal ?? 0),
+        0,
+      );
+      const latestUpdate = sortedChildren
+        .map((c) => c.quote.updatedAt || project.updatedAt)
+        .sort()
+        .reverse()[0] || project.updatedAt;
+      containerRows.push({
+        kind: "container",
+        project,
+        matching: sortedChildren,
+        totalQuotes: allChildren.length,
+        aggregateSubtotal,
+        latestUpdate,
+      });
+    }
+
+    // Sort the merged list. Containers compare via their first (already-sorted)
+    // matching child — except the "subtotal" sort key, which uses the aggregate.
+    const merged: Row[] = [...standaloneRows, ...containerRows];
+    merged.sort((a, b) => {
+      const aPair = a.kind === "standalone"
+        ? { project: a.project, entry: a.entry }
+        : { project: a.project, entry: a.matching[0] };
+      const bPair = b.kind === "standalone"
+        ? { project: b.project, entry: b.entry }
+        : { project: b.project, entry: b.matching[0] };
+      if (sortKey === "subtotal") {
+        const aSub = a.kind === "container" ? a.aggregateSubtotal : (a.entry.latestRevision?.subtotal ?? 0);
+        const bSub = b.kind === "container" ? b.aggregateSubtotal : (b.entry.latestRevision?.subtotal ?? 0);
+        return sortDir === "asc" ? aSub - bSub : bSub - aSub;
+      }
+      return compareEntries(aPair, bPair);
     });
 
-    return list;
-  }, [projectsWithQuotes, search, statusFilter, clientFilter, userFilter, departmentFilter, sortKey, sortDir, userMap, departmentMap, unassignedLabel]);
+    const matchedQuotes =
+      standaloneRows.length +
+      containerRows.reduce((sum, r) => sum + r.matching.length, 0);
+    return { rows: merged, matchedQuoteCount: matchedQuotes, totalQuoteCount: allEntries.length };
+  }, [standaloneEntries, containerProjects, matchesFilters, compareEntries, sortKey, sortDir, allEntries.length]);
 
   const headers: { key: SortKey; label: string; className?: string }[] = [
     { key: "quoteNumber", label: t("table.quoteNumber"), className: "w-32" },
@@ -645,10 +864,57 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                   value={manualLocation}
                   onChange={(event) => setManualLocation(event.target.value)}
                   placeholder={t("manual.locationPlaceholder")}
-                  disabled={manualSaving}
+                  disabled={manualSaving || manualParentProjectId != null}
                 />
               </label>
             </div>
+
+            {/* Optional: add this quote to an existing container project. */}
+            {existingContainerOptions.length > 0 && (
+              <div className="space-y-1.5">
+                {!manualParentPickerOpen ? (
+                  <button
+                    type="button"
+                    onClick={() => setManualParentPickerOpen(true)}
+                    disabled={manualSaving}
+                    className="inline-flex items-center gap-1.5 text-[11px] text-fg/50 hover:text-fg/80 transition-colors"
+                  >
+                    <Folder className="h-3 w-3" />
+                    {t("manual.addToProject")}
+                  </button>
+                ) : (
+                  <div className="space-y-1.5">
+                    <span className="flex items-center justify-between text-xs font-medium text-fg/65">
+                      {t("manual.parentProject")}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setManualParentPickerOpen(false);
+                          setManualParentProjectId(null);
+                        }}
+                        disabled={manualSaving}
+                        className="text-[11px] text-fg/40 hover:text-fg/70"
+                      >
+                        {t("manual.standaloneQuote")}
+                      </button>
+                    </span>
+                    <SearchablePicker
+                      value={manualParentProjectId}
+                      onSelect={setManualParentProjectId}
+                      options={existingContainerOptions}
+                      placeholder={t("manual.selectProject")}
+                      searchPlaceholder={t("manual.searchProjects")}
+                      disabled={manualSaving}
+                      triggerClassName="h-9 rounded-lg px-3 text-sm bg-bg/50"
+                    />
+                    {manualParentProjectId && (
+                      <p className="text-[11px] text-fg/40">{t("manual.parentProjectHint")}</p>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
+
             {manualError && (
               <div className="rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">
                 {manualError}
@@ -666,6 +932,73 @@ export function QuotesList({ projects, users = [], departments = [] }: {
           </div>
         </form>
       </ModalBackdrop>
+
+      {/* Promote (group into project) modal */}
+      <ModalBackdrop open={promoteFor != null} onClose={closePromoteModal} size="sm">
+        {promoteFor && (
+          <form onSubmit={handlePromoteSubmit} className="rounded-xl border border-line bg-panel shadow-2xl">
+            <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
+              <div>
+                <h2 className="text-sm font-semibold text-fg">{t("promote.title")}</h2>
+                <p className="mt-0.5 text-xs text-fg/50">
+                  {t("promote.description", { quote: promoteFor.quoteTitle })}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={closePromoteModal}
+                className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                aria-label={t("manual.close")}
+                disabled={promoteSaving}
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="space-y-3 px-5 py-4">
+              <label className="block space-y-1.5">
+                <span className="text-xs font-medium text-fg/65">{t("promote.nameLabel")}</span>
+                <Input
+                  autoFocus
+                  value={promoteName}
+                  onChange={(event) => setPromoteName(event.target.value)}
+                  placeholder={t("promote.namePlaceholder")}
+                  disabled={promoteSaving}
+                />
+              </label>
+              <p className="text-[11px] text-fg/45">{t("promote.hint")}</p>
+              {promoteError && (
+                <div className="rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">
+                  {promoteError}
+                </div>
+              )}
+            </div>
+            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
+              <Button type="button" variant="ghost" size="sm" onClick={closePromoteModal} disabled={promoteSaving}>
+                {t("manual.cancel")}
+              </Button>
+              <Button type="submit" variant="accent" size="sm" disabled={promoteSaving}>
+                {promoteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="h-3.5 w-3.5" />}
+                {t("promote.submit")}
+              </Button>
+            </div>
+          </form>
+        )}
+      </ModalBackdrop>
+
+      {/* View tabs: switch between flat quote list and projects list */}
+      <FadeIn delay={0.05}>
+        <div className="flex items-center gap-1 border-b border-line">
+          <span className="border-b-2 border-accent px-3 py-2 text-xs font-medium text-fg">
+            {t("tabs.quotes")}
+          </span>
+          <Link
+            href="/projects"
+            className="border-b-2 border-transparent px-3 py-2 text-xs font-medium text-fg/45 transition-colors hover:text-fg/80"
+          >
+            {t("tabs.projects")}
+          </Link>
+        </div>
+      </FadeIn>
 
       {/* Filter bar */}
       <FadeIn delay={0.1}>
@@ -746,9 +1079,9 @@ export function QuotesList({ projects, users = [], departments = [] }: {
 
           {/* Result count */}
           <span className="ml-auto text-[11px] text-fg/30 tabular-nums shrink-0">
-            {filtered.length === projectsWithQuotes.length
-              ? t("filters.resultCount", { count: filtered.length })
-              : t("filters.filteredResultCount", { filtered: filtered.length, total: projectsWithQuotes.length })}
+            {matchedQuoteCount === totalQuoteCount
+              ? t("filters.resultCount", { count: matchedQuoteCount })
+              : t("filters.filteredResultCount", { filtered: matchedQuoteCount, total: totalQuoteCount })}
           </span>
         </div>
       </FadeIn>
@@ -777,64 +1110,205 @@ export function QuotesList({ projects, users = [], departments = [] }: {
                       </span>
                     </th>
                   ))}
+                  <th className="w-8 px-2 py-2.5" aria-label="Actions" />
                 </tr>
               </thead>
               <tbody>
-                {filtered.length === 0 && (
+                {rows.length === 0 && (
                   <tr>
-                    <td colSpan={headers.length} className="px-5 py-12 text-center text-sm text-fg/40">
+                    <td colSpan={headers.length + 1} className="px-5 py-12 text-center text-sm text-fg/40">
                       <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
                       {hasActiveFilters || search ? t("emptyFiltered") : t("empty")}
                     </td>
                   </tr>
                 )}
-                {filtered.map((project, i) => {
-                  const quoteKind = getQuoteKind(project);
+                {rows.map((row, i) => {
+                  if (row.kind === "standalone") {
+                    const project = row.project;
+                    const entry = row.entry;
+                    const quoteKind = getQuoteKind(project);
+                    const rowKey = `q:${entry.quote.id}`;
+                    return (
+                      <motion.tr
+                        key={rowKey}
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
+                        className="group border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
+                      >
+                        <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
+                          <Link href={`/projects/${project.id}`} className="hover:underline">
+                            {entry.quote.quoteNumber}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <Badge tone={quoteKind === "snap" ? "info" : "default"} className="gap-1">
+                            {quoteKind === "snap" && <Zap className="h-3 w-3" />}
+                            {quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-fg/80">
+                          <Link href={`/projects/${project.id}`} className="hover:underline">
+                            {entry.quote.title || project.name}
+                          </Link>
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-fg/60">
+                          {getClientDisplayName(project, entry.quote)}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-fg/60">
+                          {getEstimatorLabelForQuote(entry.quote, userMap, departmentMap, unassignedLabel)}
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <Badge tone={statusTone(entry.quote.status) as any}>
+                            {t(`status.${statusLabelKey(entry.quote.status)}`)}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
+                          {formatMoney(entry.latestRevision?.subtotal ?? 0)}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
+                          {formatPercent(entry.latestRevision?.estimatedMargin ?? 0)}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-fg/50">
+                          {formatDate(entry.quote.updatedAt || project.updatedAt)}
+                        </td>
+                        <td className="w-8 px-2 py-2.5 text-right">
+                          <RowActionMenu
+                            open={openRowMenu === rowKey}
+                            onOpenChange={(open) => setOpenRowMenu(open ? rowKey : null)}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => openPromoteModal(project, entry)}
+                              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
+                            >
+                              <FolderPlus className="h-3.5 w-3.5 text-accent" />
+                              {t("actions.groupIntoProject")}
+                            </button>
+                          </RowActionMenu>
+                        </td>
+                      </motion.tr>
+                    );
+                  }
+
+                  // Container row + (when expanded) its matching children.
+                  const project = row.project;
+                  const expanded = expandedProjectIds.has(project.id);
+                  const childKind = getQuoteKind(project);
                   return (
-                    <motion.tr
-                      key={project.id}
-                      initial={{ opacity: 0, y: 4 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
-                      className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
-                    >
-                      <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
-                        <Link href={`/projects/${project.id}`} className="hover:underline">
-                          {project.quote.quoteNumber}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <Badge tone={quoteKind === "snap" ? "info" : "default"} className="gap-1">
-                          {quoteKind === "snap" && <Zap className="h-3 w-3" />}
-                          {quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/80">
-                        <Link href={`/projects/${project.id}`} className="hover:underline">
-                          {project.quote.title || project.name}
-                        </Link>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/60">
-                        {getClientDisplayName(project, project.quote)}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/60">
-                        {getEstimatorLabel(project, userMap, departmentMap, unassignedLabel)}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <Badge tone={statusTone(project.quote.status) as any}>
-                          {t(`status.${statusLabelKey(project.quote.status)}`)}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                        {formatMoney(project.latestRevision?.subtotal ?? 0)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
-                        {formatPercent(project.latestRevision?.estimatedMargin ?? 0)}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-fg/50">
-                        {formatDate(project.updatedAt)}
-                      </td>
-                    </motion.tr>
+                    <Fragment key={`p:${project.id}`}>
+                      <motion.tr
+                        initial={{ opacity: 0, y: 4 }}
+                        animate={{ opacity: 1, y: 0 }}
+                        transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
+                        className="border-b border-line last:border-0 cursor-pointer bg-panel2/30 hover:bg-panel2/60 transition-colors"
+                        onClick={() => toggleExpand(project.id)}
+                      >
+                        <td className="px-4 py-2.5 text-xs font-medium text-fg/70 whitespace-nowrap">
+                          <span className="inline-flex items-center gap-1.5">
+                            <ChevronRight
+                              className={cn("h-3.5 w-3.5 text-fg/50 transition-transform", expanded && "rotate-90")}
+                            />
+                            {expanded ? <FolderOpen className="h-3.5 w-3.5 text-accent" /> : <Folder className="h-3.5 w-3.5 text-accent" />}
+                          </span>
+                        </td>
+                        <td className="px-4 py-2.5">
+                          <Badge tone="default" className="text-[10px]">
+                            {t("group.quotesCount", { count: row.totalQuotes })}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-2.5 text-xs font-medium text-fg/85" colSpan={2}>
+                          <Link
+                            href={`/projects/${project.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="hover:underline"
+                          >
+                            {project.name}
+                          </Link>
+                          {project.clientName ? (
+                            <span className="ml-2 text-fg/40">· {project.clientName}</span>
+                          ) : null}
+                        </td>
+                        <td className="px-4 py-2.5 text-xs text-fg/40" colSpan={2}>
+                          {/* estimator + status: not aggregated for containers */}
+                        </td>
+                        <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
+                          {formatMoney(row.aggregateSubtotal)}
+                        </td>
+                        <td className="px-4 py-2.5" />
+                        <td className="px-4 py-2.5 text-xs text-fg/50">
+                          {formatDate(row.latestUpdate)}
+                        </td>
+                        <td className="w-8 px-2 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                          <RowActionMenu
+                            open={openRowMenu === `p:${project.id}`}
+                            onOpenChange={(open) => setOpenRowMenu(open ? `p:${project.id}` : null)}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setOpenRowMenu(null);
+                                openManualQuoteModal("quote", project.id);
+                              }}
+                              className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
+                            >
+                              <Plus className="h-3.5 w-3.5 text-accent" />
+                              {t("actions.addQuote")}
+                            </button>
+                          </RowActionMenu>
+                        </td>
+                      </motion.tr>
+                      {expanded && row.matching.map((entry) => {
+                        const childKey = `q:${entry.quote.id}`;
+                        return (
+                          <motion.tr
+                            key={childKey}
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            transition={{ duration: 0.15 }}
+                            className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
+                          >
+                            <td className="px-4 py-2.5 pl-10 text-xs font-medium text-accent whitespace-nowrap">
+                              <Link href={`/projects/${project.id}`} className="hover:underline">
+                                {entry.quote.quoteNumber}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <Badge tone={childKind === "snap" ? "info" : "default"} className="gap-1">
+                                {childKind === "snap" && <Zap className="h-3 w-3" />}
+                                {childKind === "snap" ? t("kind.snap") : t("kind.full")}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-fg/80">
+                              <Link href={`/projects/${project.id}`} className="hover:underline">
+                                {entry.quote.title || project.name}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-fg/60">
+                              {getClientDisplayName(project, entry.quote)}
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-fg/60">
+                              {getEstimatorLabelForQuote(entry.quote, userMap, departmentMap, unassignedLabel)}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <Badge tone={statusTone(entry.quote.status) as any}>
+                                {t(`status.${statusLabelKey(entry.quote.status)}`)}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
+                              {formatMoney(entry.latestRevision?.subtotal ?? 0)}
+                            </td>
+                            <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
+                              {formatPercent(entry.latestRevision?.estimatedMargin ?? 0)}
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-fg/50">
+                              {formatDate(entry.quote.updatedAt || project.updatedAt)}
+                            </td>
+                            <td className="w-8 px-2 py-2.5 text-right" />
+                          </motion.tr>
+                        );
+                      })}
+                    </Fragment>
                   );
                 })}
               </tbody>

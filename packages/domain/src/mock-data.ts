@@ -18,6 +18,7 @@ export const mockStore: BidwrightStore = {
       ingestionStatus: "review",
       summary:
         "Deep bid package with specs, RFQ, coordinated drawings, addenda, and a large estimating reference library. The current estimate is grounded in source citations and reviewed AI output.",
+      isStandalone: true,
       createdAt: "2026-03-21T14:30:00.000Z",
       updatedAt: "2026-03-22T11:45:00.000Z",
     },

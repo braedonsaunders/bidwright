@@ -17,6 +17,7 @@ export interface Project {
   packageUploadedAt: string;
   ingestionStatus: ProjectIngestionStatus;
   summary: string;
+  isStandalone: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -244,7 +244,13 @@
       "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} 手動見積",
       "snapSummary": "小規模作業の迅速な価格設定用に Snap 見積を作成しました。",
-      "createError": "見積を作成できませんでした。"
+      "createError": "見積を作成できませんでした。",
+      "addToProject": "Add to project (optional)",
+      "parentProject": "Project",
+      "selectProject": "Select project...",
+      "searchProjects": "Search projects...",
+      "parentProjectHint": "This quote will be added to the selected project.",
+      "standaloneQuote": "Standalone quote"
     },
     "filters": {
       "searchPlaceholder": "見積番号、タイトル、顧客、プロジェクト、場所で検索...",
@@ -284,7 +290,28 @@
     },
     "unassigned": "未割り当て",
     "emptyFiltered": "フィルターに一致する見積はありません",
-    "empty": "見積が見つかりません"
+    "empty": "見積が見つかりません",
+    "promote": {
+      "title": "Group into project",
+      "description": "Convert \"{quote}\" into a project that can hold multiple quotes.",
+      "nameLabel": "Project name",
+      "namePlaceholder": "e.g. Acme Refinery 2026",
+      "nameRequired": "Project name is required.",
+      "hint": "The current quote becomes the first quote in the project. You can add more quotes from the project's actions menu.",
+      "submit": "Group",
+      "error": "Could not group into project."
+    },
+    "group": {
+      "quotesCount": "{count} {count, plural, one {quote} other {quotes}}"
+    },
+    "actions": {
+      "groupIntoProject": "Group into project",
+      "addQuote": "Add quote"
+    },
+    "tabs": {
+      "quotes": "All quotes",
+      "projects": "Projects"
+    }
   },
   "Performance": {
     "eyebrow": "パフォーマンス",
@@ -723,6 +750,46 @@
         "rows": "{count} 行",
         "aria": "労務単位のページサイズ"
       }
+    }
+  },
+  "Projects": {
+    "title": "Projects",
+    "subtitle": "Container projects that group multiple quotes",
+    "newProjectButton": "New Project",
+    "create": {
+      "title": "New project",
+      "description": "Create a project to group multiple quotes (e.g. phased work, multi-package bids).",
+      "nameLabel": "Project name",
+      "namePlaceholder": "e.g. Acme Refinery 2026",
+      "client": "Client",
+      "selectClient": "Select client...",
+      "searchClients": "Search clients...",
+      "newClientName": "New client name",
+      "location": "Location",
+      "locationPlaceholder": "TBD",
+      "cancel": "Cancel",
+      "submit": "Create Project",
+      "nameRequired": "Project name is required.",
+      "unassignedClient": "Unassigned Client",
+      "failedClient": "Failed to create client.",
+      "error": "Could not create project."
+    },
+    "filters": {
+      "searchPlaceholder": "Search by name, client, location...",
+      "resultCount": "{count} {count, plural, one {project} other {projects}}"
+    },
+    "table": {
+      "name": "Project",
+      "client": "Client",
+      "quotes": "Quotes",
+      "subtotal": "Subtotal",
+      "updated": "Updated"
+    },
+    "emptyFiltered": "No projects match your search",
+    "empty": "No projects yet — create one to group multiple quotes",
+    "tabs": {
+      "quotes": "All quotes",
+      "projects": "Projects"
     }
   }
 }

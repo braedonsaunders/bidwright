@@ -5,6 +5,35 @@ export * from "./api/integrations";
 
 import { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
 
+export interface ProjectQuoteSummary {
+  id: string;
+  quoteNumber: string;
+  title: string;
+  status: string;
+  currentRevisionId: string;
+  customerId?: string | null;
+  customerName?: string | null;
+  customerString?: string;
+  userId?: string | null;
+  userName?: string | null;
+  departmentId?: string | null;
+  departmentName?: string | null;
+  updatedAt?: string;
+}
+
+export interface ProjectQuoteRevisionSummary {
+  id: string;
+  revisionNumber: number;
+  subtotal: number;
+  estimatedProfit: number;
+  estimatedMargin: number;
+}
+
+export interface ProjectQuoteEntry {
+  quote: ProjectQuoteSummary;
+  latestRevision: ProjectQuoteRevisionSummary | null;
+}
+
 export interface ProjectListItem {
   id: string;
   name: string;
@@ -15,29 +44,19 @@ export interface ProjectListItem {
   packageUploadedAt: string;
   ingestionStatus: string;
   summary: string;
+  // True for "shadow" projects (auto-created to hold a single quote, hidden
+  // from the projects list). False for explicit container projects that
+  // group 2+ quotes. Defaults to true if missing (older API responses).
+  isStandalone?: boolean;
   createdAt: string;
   updatedAt: string;
-  quote: {
-    id: string;
-    quoteNumber: string;
-    title: string;
-    status: string;
-    currentRevisionId: string;
-    customerId?: string | null;
-    customerName?: string | null;
-    customerString?: string;
-    userId?: string | null;
-    userName?: string | null;
-    departmentId?: string | null;
-    departmentName?: string | null;
-  } | null;
-  latestRevision: {
-    id: string;
-    revisionNumber: number;
-    subtotal: number;
-    estimatedProfit: number;
-    estimatedMargin: number;
-  } | null;
+  // The most recently updated quote — kept for back-compat with code that
+  // expected a single-quote shape. Use `quotes` for the full list.
+  quote: ProjectQuoteSummary | null;
+  latestRevision: ProjectQuoteRevisionSummary | null;
+  // All quotes in the project. Populated by the list endpoint; may be empty
+  // for container projects with no quotes yet.
+  quotes?: ProjectQuoteEntry[];
   workspaceState?: WorkspaceStateRecord | null;
 }
 
@@ -1433,8 +1452,9 @@ export interface CreateProjectInput {
   location: string;
   packageName?: string;
   scope?: string;
-  creationMode?: "manual" | "intake" | "snap";
+  creationMode?: "manual" | "intake" | "snap" | "container";
   summary?: string;
+  isStandalone?: boolean;
 }
 
 export interface CreateProjectResult {
@@ -1446,6 +1466,33 @@ export interface CreateProjectResult {
 
 export async function createProject(input: CreateProjectInput): Promise<CreateProjectResult> {
   return apiRequest<CreateProjectResult>("/projects", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+// Flip a shadow project into a real container project. Optionally rename it.
+export async function promoteProject(projectId: string, input: { name?: string } = {}): Promise<{ ok: boolean }> {
+  return apiRequest<{ ok: boolean }>(`/projects/${projectId}/promote`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export interface AddQuoteToProjectInput {
+  title: string;
+  customerId?: string | null;
+  creationMode?: "manual" | "snap";
+}
+
+// Add a new quote to an existing container project.
+export async function addQuoteToProject(
+  projectId: string,
+  input: AddQuoteToProjectInput,
+): Promise<CreateProjectResult> {
+  return apiRequest<CreateProjectResult>(`/projects/${projectId}/quotes`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

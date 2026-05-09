@@ -132,8 +132,19 @@ const createProjectSchema = z.object({
   location: z.string().min(1),
   packageName: z.string().min(1).optional(),
   scope: z.string().optional(),
-  creationMode: z.enum(["manual", "intake", "snap"]).optional(),
-  summary: z.string().optional()
+  creationMode: z.enum(["manual", "intake", "snap", "container"]).optional(),
+  summary: z.string().optional(),
+  isStandalone: z.boolean().optional()
+});
+
+const promoteProjectSchema = z.object({
+  name: z.string().min(1).optional()
+});
+
+const createQuoteForProjectSchema = z.object({
+  title: z.string().min(1),
+  customerId: z.string().nullable().optional(),
+  creationMode: z.enum(["manual", "snap"]).optional()
 });
 
 const workspacePatchSchema = z.record(z.unknown());
@@ -2100,6 +2111,42 @@ export function buildServer() {
     } catch (err) {
       return reply.code(500).send({ message: err instanceof Error ? err.message : "Update failed" });
     }
+  });
+
+  // POST /projects/:projectId/promote — flip a shadow project into a real
+  // container project. Optionally rename it (e.g. when a user "Groups into
+  // project" from a single quote, the shadow project's name was just the
+  // quote title and they often want a friendlier project name).
+  app.post("/projects/:projectId/promote", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = promoteProjectSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid promote payload", issues: parsed.error.flatten() });
+    }
+    const scoped = await request.store!.getProject(projectId);
+    if (!scoped) return reply.code(404).send({ message: "Project not found" });
+
+    const data: Record<string, unknown> = { isStandalone: false, updatedAt: new Date() };
+    if (parsed.data.name) data.name = parsed.data.name;
+    await prisma.project.update({ where: { id: projectId }, data });
+    return { ok: true };
+  });
+
+  // POST /projects/:projectId/quotes — add a brand-new quote (with its own
+  // revision + workspace state) to an existing container project. Used by the
+  // "Add to existing project" picker in the quote creation modal.
+  app.post("/projects/:projectId/quotes", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createQuoteForProjectSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid quote payload", issues: parsed.error.flatten() });
+    }
+    const scoped = await request.store!.getProject(projectId);
+    if (!scoped) return reply.code(404).send({ message: "Project not found" });
+
+    const result = await request.store!.createQuoteInProject(projectId, parsed.data);
+    reply.code(201);
+    return result;
   });
 
   app.get("/projects/:projectId/workspace", async (request, reply) => {

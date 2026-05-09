@@ -156,6 +156,10 @@ model Project {
   ingestionStatus   String       @default("queued")
   scope             String       @default("")
   summary           String       @default("")
+  // True for "shadow" projects auto-created to hold a single quote (hidden from
+  // the projects list and rendered as a flat row in the quotes list).
+  // False for explicitly-created container projects that group 2+ quotes.
+  isStandalone      Boolean      @default(true)
   createdAt         DateTime     @default(now())
   updatedAt         DateTime     @updatedAt
 

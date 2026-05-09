@@ -178,6 +178,7 @@ export function mapProject(p: any): Project {
     packageUploadedAt: p.packageUploadedAt,
     ingestionStatus: p.ingestionStatus as Project["ingestionStatus"],
     summary: p.summary,
+    isStandalone: p.isStandalone ?? true,
     createdAt: toISO(p.createdAt),
     updatedAt: toISO(p.updatedAt),
   };

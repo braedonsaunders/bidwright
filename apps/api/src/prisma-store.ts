@@ -599,8 +599,17 @@ export interface CreateProjectInput {
   location: string;
   packageName?: string;
   scope?: string;
-  creationMode?: "manual" | "intake" | "snap";
+  creationMode?: "manual" | "intake" | "snap" | "container";
   summary?: string;
+  // Default true (shadow). Pass false for an explicit container project that
+  // groups multiple quotes. Container creation skips the auto-quote.
+  isStandalone?: boolean;
+}
+
+export interface CreateQuoteInProjectInput {
+  title: string;
+  customerId?: string | null;
+  creationMode?: "manual" | "snap";
 }
 
 export interface RegisterPackageInput {
@@ -5523,22 +5532,12 @@ export class PrismaApiStore {
     const quoteUserMap = new Map(quoteUsers.map((user) => [user.id, user]));
     const quoteSuperAdminMap = new Map(quoteSuperAdmins.map((user) => [user.id, user]));
 
-    return projects.map((p) => {
-      const mapped = mapProject(p);
-      const quote = quotes.find((q) => q.projectId === p.id);
-      const revision = quote
-        ? revisions.find((r) => r.id === quote.currentRevisionId) ??
-          revisions.filter((r) => r.quoteId === quote.id).sort((a, b) => b.revisionNumber - a.revisionNumber)[0]
-        : undefined;
-
+    const buildQuoteEntry = (quote: typeof quotes[number]) => {
+      const revision =
+        revisions.find((r) => r.id === quote.currentRevisionId) ??
+        revisions.filter((r) => r.quoteId === quote.id).sort((a, b) => b.revisionNumber - a.revisionNumber)[0];
       return {
-        ...mapped,
-        packageCount: packages.filter((pkg) => pkg.projectId === p.id).length,
-        jobCount: jobs.filter((j) => j.projectId === p.id).length,
-        workspaceState: workspaceStates.find((ws) => ws.projectId === p.id)
-          ? mapWorkspaceState(workspaceStates.find((ws) => ws.projectId === p.id))
-          : null,
-        quote: quote ? {
+        quote: {
           id: quote.id,
           quoteNumber: quote.quoteNumber,
           title: quote.title,
@@ -5553,7 +5552,8 @@ export class PrismaApiStore {
             : null,
           departmentId: quote.departmentId || null,
           departmentName: (quote as any).department?.name || null,
-        } : null,
+          updatedAt: quote.updatedAt.toISOString(),
+        },
         latestRevision: revision ? {
           id: revision.id,
           revisionNumber: revision.revisionNumber,
@@ -5561,6 +5561,30 @@ export class PrismaApiStore {
           estimatedProfit: revision.estimatedProfit,
           estimatedMargin: revision.estimatedMargin,
         } : null,
+      };
+    };
+
+    return projects.map((p) => {
+      const mapped = mapProject(p);
+      const projectQuotes = quotes
+        .filter((q) => q.projectId === p.id)
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      const entries = projectQuotes.map(buildQuoteEntry);
+      // `quote` / `latestRevision` keep their existing single-value shape for
+      // back-compat: they point at the most recently updated quote in the
+      // project. Container projects also expose the full list via `quotes`.
+      const primary = entries[0] ?? null;
+
+      return {
+        ...mapped,
+        packageCount: packages.filter((pkg) => pkg.projectId === p.id).length,
+        jobCount: jobs.filter((j) => j.projectId === p.id).length,
+        workspaceState: workspaceStates.find((ws) => ws.projectId === p.id)
+          ? mapWorkspaceState(workspaceStates.find((ws) => ws.projectId === p.id))
+          : null,
+        quote: primary?.quote ?? null,
+        latestRevision: primary?.latestRevision ?? null,
+        quotes: entries,
       };
     });
   }
@@ -8301,8 +8325,12 @@ export class PrismaApiStore {
     const projectId = createId("project");
     const isManualProject = input.creationMode === "manual";
     const isSnapProject = input.creationMode === "snap";
+    const isContainerProject = input.creationMode === "container";
     const isBlankProject = isManualProject || isSnapProject;
     const packageName = input.packageName ?? input.name;
+    // Default behaviour: shadow project. Container projects are explicitly
+    // multi-quote, so they're never standalone (and skip the auto-quote).
+    const isStandalone = isContainerProject ? false : (input.isStandalone ?? true);
 
     // Fetch org settings to inherit defaultMarkup
     const orgSettings = await this.db.organizationSettings.findUnique({
@@ -8326,17 +8354,30 @@ export class PrismaApiStore {
           location: input.location,
           packageName,
           packageUploadedAt: nowISO,
-          ingestionStatus: isBlankProject ? "review" : "queued",
+          ingestionStatus: isBlankProject ? "review" : (isContainerProject ? "ready" : "queued"),
           scope: input.scope ?? "",
           summary: input.summary ?? (isSnapProject
             ? "Snap quote created for quick small-work pricing."
             : isManualProject
               ? "Manual quote created from scratch."
-              : defaultProjectSummary(packageName, customerSelection.clientName)),
+              : isContainerProject
+                ? `Container project for ${customerSelection.clientName}.`
+                : defaultProjectSummary(packageName, customerSelection.clientName)),
+          isStandalone,
           createdAt: now,
           updatedAt: now,
         },
       });
+
+      // Container projects start empty — quotes are added explicitly afterward.
+      if (isContainerProject) {
+        return {
+          project: mapProject(project),
+          quote: null,
+          revision: null,
+          workspaceState: null,
+        };
+      }
 
       const quoteId = createId("quote");
       const revisionId = createId("revision");
@@ -8436,6 +8477,97 @@ export class PrismaApiStore {
         quote: quote ? mapQuote(quote) : null,
         revision: revision ? mapRevision(revision) : null,
         workspaceState: wsRecord,
+      };
+    });
+    if (created.quote) {
+      await this.importAssignedRateSchedulesToRevision(projectId);
+    }
+    return created;
+  }
+
+  // Add a new quote (with its own revision + workspace state) to an existing
+  // container project. Mirrors the auto-quote step of `createProject`.
+  async createQuoteInProject(projectId: string, input: CreateQuoteInProjectInput) {
+    const now = new Date();
+    const nowISO = now.toISOString();
+    const isSnap = input.creationMode === "snap";
+
+    const orgSettings = await this.db.organizationSettings.findUnique({
+      where: { organizationId: this.organizationId },
+    });
+    const orgDefaults = (orgSettings?.defaults as any) ?? {};
+    const defaultMarkup = typeof orgDefaults.defaultMarkup === "number" ? orgDefaults.defaultMarkup / 100 : 0.2;
+
+    const created = await this.db.$transaction(async (tx) => {
+      const project = await tx.project.findFirst({
+        where: { id: projectId, organizationId: this.organizationId },
+      });
+      if (!project) throw new Error(`Project ${projectId} not found`);
+
+      const customerSelection = await this.resolveCustomerSelection(tx, {
+        customerId: input.customerId,
+        fallbackClientName: project.clientName,
+      });
+
+      const quoteId = createId("quote");
+      const revisionId = createId("revision");
+      const worksheetId = createId("worksheet");
+
+      await tx.quote.create({
+        data: {
+          id: quoteId,
+          projectId,
+          quoteNumber: makeQuoteNumber(),
+          title: input.title,
+          customerId: customerSelection.customerId,
+          customerString: customerSelection.customerString,
+          status: "draft",
+          currentRevisionId: revisionId,
+          customerExistingNew: customerSelection.customerExistingNew,
+          userId: this._userId,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      await tx.quoteRevision.create({
+        data: {
+          id: revisionId,
+          quoteId,
+          revisionNumber: 0,
+          title: input.title,
+          description: isSnap
+            ? `Quick scope for ${customerSelection.clientName}`
+            : `Estimate for ${customerSelection.clientName}`,
+          notes: isSnap
+            ? "Small quick quote. Keep it to ten lines or upgrade to a full quote if the scope grows."
+            : "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
+          breakoutStyle: isSnap ? "grand_total" : "phase_detail",
+          type: "Firm",
+          status: "Open",
+          defaultMarkup,
+          createdAt: now,
+          updatedAt: now,
+        },
+      });
+
+      if (isSnap) {
+        await tx.worksheet.create({
+          data: { id: worksheetId, revisionId, name: "Snap", order: 1 },
+        });
+      }
+
+      const quote = await tx.quote.findFirst({ where: { id: quoteId }, include: { customer: true } });
+      const revision = await tx.quoteRevision.findFirst({ where: { id: revisionId } });
+
+      // Touch the project's updatedAt so the quotes-list re-sorts it to the top.
+      await tx.project.update({ where: { id: projectId }, data: { updatedAt: now } });
+
+      return {
+        project: mapProject({ ...project, updatedAt: now }),
+        quote: quote ? mapQuote(quote) : null,
+        revision: revision ? mapRevision(revision) : null,
+        workspaceState: null,
       };
     });
     await this.importAssignedRateSchedulesToRevision(projectId);
