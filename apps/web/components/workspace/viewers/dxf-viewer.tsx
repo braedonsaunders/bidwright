@@ -105,7 +105,7 @@ export function DxfViewer({ url, fileName }: DxfViewerProps) {
       setError(null);
 
       try {
-        const response = await fetch(url);
+        const response = await fetch(url, { credentials: "include" });
         if (!response.ok) throw new Error(`Failed to fetch file: ${response.statusText}`);
 
         const text = await response.text();

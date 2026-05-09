@@ -322,7 +322,7 @@ export function ZipViewer({ url, fileName, projectId, sourceKind, sourceId }: Zi
           return;
         }
 
-        const response = await fetch(url);
+        const response = await fetch(url, { credentials: "include" });
         if (!response.ok) throw new Error(`Failed to fetch archive: ${response.statusText}`);
 
         const data = await response.arrayBuffer();

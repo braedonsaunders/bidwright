@@ -877,42 +877,44 @@ export function SettingsPage({
   const autodeskReady = autodeskCredentialsConfigured && autodeskActivitiesConfigured;
 
   return (
-    <div className="space-y-5">
-      <FadeIn>
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
-            <p className="text-xs text-fg/50">{t("subtitle")}</p>
+    <div className={cn("gap-5", activeGroup === "importExport" ? "flex h-full flex-col" : "space-y-5")}>
+      <div className={cn(activeGroup === "importExport" && "shrink-0")}>
+        <FadeIn>
+          <div className="flex items-center justify-between">
+            <div>
+              <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
+              <p className="text-xs text-fg/50">{t("subtitle")}</p>
+            </div>
           </div>
-        </div>
-      </FadeIn>
+        </FadeIn>
 
-      {/* Horizontal tab bar */}
-      <FadeIn delay={0.05}>
-        <div className="flex items-center gap-1 border-b border-line pb-px">
-          {GROUPS.map((group) => {
-            const Icon = group.icon;
-            return (
-              <button
-                key={group.key}
-                onClick={() => setActiveGroup(group.key)}
-                className={cn(
-                  "flex items-center gap-2 rounded-t-lg px-4 py-2 text-xs transition-colors -mb-px border-b-2",
-                  activeGroup === group.key
-                    ? "border-accent text-accent font-medium"
-                    : "border-transparent text-fg/50 hover:text-fg/80 hover:border-line"
-                )}
-              >
-                <Icon className="h-3.5 w-3.5" />
-                {t(`groups.${group.key}`)}
-              </button>
+        {/* Horizontal tab bar */}
+        <FadeIn delay={0.05}>
+          <div className="flex items-center gap-1 border-b border-line pb-px mt-5">
+            {GROUPS.map((group) => {
+              const Icon = group.icon;
+              return (
+                <button
+                  key={group.key}
+                  onClick={() => setActiveGroup(group.key)}
+                  className={cn(
+                    "flex items-center gap-2 rounded-t-lg px-4 py-2 text-xs transition-colors -mb-px border-b-2",
+                    activeGroup === group.key
+                      ? "border-accent text-accent font-medium"
+                      : "border-transparent text-fg/50 hover:text-fg/80 hover:border-line"
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {t(`groups.${group.key}`)}
+                </button>
             );
           })}
         </div>
       </FadeIn>
+      </div>
 
       {/* Tab content */}
-      <FadeIn delay={0.1} className="space-y-5">
+      <FadeIn delay={0.1} className={cn("space-y-5", activeGroup === "importExport" && "min-h-0 flex-1 overflow-hidden")}>
           {activeGroup === "organization" && (
             <div className="flex items-center gap-1 shrink-0">
               {ORG_SUBTABS.map((tab) => {

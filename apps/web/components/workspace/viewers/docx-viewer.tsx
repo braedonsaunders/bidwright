@@ -23,7 +23,12 @@ export function DocxViewer({ url, fileName }: DocxViewerProps) {
       setError(null);
 
       try {
-        const response = await fetch(url);
+        const ext = fileName.split(".").pop()?.toLowerCase();
+        if (ext === "doc") {
+          throw new Error("Legacy .doc files are not supported for preview. Please download the file to view it.");
+        }
+
+        const response = await fetch(url, { credentials: "include" });
         if (!response.ok) throw new Error(`Failed to fetch document: ${response.statusText}`);
 
         const data = await response.arrayBuffer();

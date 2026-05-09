@@ -883,7 +883,7 @@ function TextPreview({ url, extractedText }: { url: string | null; extractedText
     setLoading(true);
     setError(null);
 
-    fetch(url)
+    fetch(url, { credentials: "include" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status}`);
         const text = await res.text();
@@ -953,7 +953,7 @@ function SpreadsheetPreview({ url, extractedText, fileName }: { url: string | nu
     setLoading(true);
     setError(null);
 
-    fetch(url)
+    fetch(url, { credentials: "include" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`${res.status}`);
         const text = await res.text();

@@ -83,7 +83,7 @@ export function EmailViewer({ url, fileName, projectId, sourceKind, sourceId }: 
           throw new Error("Outlook .msg preview requires a stored project file.");
         }
 
-        const response = await fetch(url);
+        const response = await fetch(url, { credentials: "include" });
         if (!response.ok) throw new Error(`Failed to fetch email: ${response.statusText}`);
 
         const data = await response.arrayBuffer();

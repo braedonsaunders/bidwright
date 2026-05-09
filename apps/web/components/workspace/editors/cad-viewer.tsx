@@ -335,7 +335,7 @@ export function CadViewer({ fileUrl, fileName, className }: CadViewerProps) {
 
         // 2. Fetch the file
         setLoadingText("Downloading model...");
-        const resp = await fetch(fileUrl);
+        const resp = await fetch(fileUrl, { credentials: "include" });
         if (!resp.ok) throw new Error(`Failed to fetch: ${resp.status}`);
         const data = await resp.arrayBuffer();
         if (cancelled) { sceneCtx.dispose(); return; }
