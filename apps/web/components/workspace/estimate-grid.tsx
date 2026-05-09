@@ -2193,6 +2193,9 @@ export function EstimateGrid({
   // Tab menu
   const [tabMenu, setTabMenu] = useState<{ wsId: string; x: number; y: number } | null>(null);
 
+  // Shortcuts help
+  const [showShortcuts, setShowShortcuts] = useState(false);
+
   // Modals
   const [showNewWsModal, setShowNewWsModal] = useState(false);
   const [newWsName, setNewWsName] = useState("");
@@ -3737,6 +3740,7 @@ export function EstimateGrid({
           return;
       }
       // Printable single char → enter edit mode and let the input replace value
+      if (e.key === "?") return;
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
         const row = visibleRows.find((r) => r.id === selectedCell.rowId);
         if (!row) return;
@@ -4347,6 +4351,116 @@ export function EstimateGrid({
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
   }, [addNewItem, editingCell, entityDropdownRowId, isPending, workspace.worksheets]);
+
+  // ─── Extended keyboard shortcuts ───
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const target = e.target;
+      if (target instanceof HTMLElement) {
+        const tagName = target.tagName;
+        if (
+          tagName === "INPUT" ||
+          tagName === "TEXTAREA" ||
+          tagName === "SELECT" ||
+          target.isContentEditable ||
+          target.closest("[role='dialog']")
+        ) {
+          if (e.key === "Escape") {
+            setShowShortcuts(false);
+          }
+          return;
+        }
+        if (gridWidthRef.current && target !== document.body && !gridWidthRef.current.contains(target)) return;
+      } else if (target instanceof Element && gridWidthRef.current && !gridWidthRef.current.contains(target)) {
+        return;
+      }
+
+      if (e.key === "?") {
+        e.preventDefault();
+        setShowShortcuts((prev) => !prev);
+        return;
+      }
+
+      if (showShortcuts) {
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setShowShortcuts(false);
+        }
+        return;
+      }
+
+      if (editingCell || entityDropdownRowId || isPending) return;
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "Enter") {
+        e.preventDefault();
+        if (selectedRowId && !isTemporaryWorksheetItemId(selectedRowId)) {
+          insertLineBelow(selectedRowId);
+        }
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "d") {
+        e.preventDefault();
+        if (selectedRowId && !isTemporaryWorksheetItemId(selectedRowId)) {
+          duplicateRow(selectedRowId);
+        }
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "a") {
+        e.preventDefault();
+        if (!selectionMode) toggleSelectionMode();
+        toggleSelectAll();
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "c") {
+        e.preventDefault();
+        if (selectedRowId) {
+          copyRowToClipboard(selectedRowId);
+        }
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.key === "e") {
+        e.preventDefault();
+        exportTableAsCsv();
+        return;
+      }
+
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === "N") {
+        e.preventDefault();
+        setNewWsFolderId(null);
+        setNewWsName("");
+        setShowNewWsModal(true);
+        return;
+      }
+
+      if ((e.key === "Delete" || e.key === "Backspace") && selectedRowId && !selectedCell) {
+        if (!isTemporaryWorksheetItemId(selectedRowId)) {
+          e.preventDefault();
+          deleteRow(selectedRowId);
+        }
+        return;
+      }
+
+      if (e.key === " " && selectedCell && !editingCell) {
+        e.preventDefault();
+        if (selectedCell.rowId && !isTemporaryWorksheetItemId(selectedCell.rowId)) {
+          if (!selectionMode) toggleSelectionMode();
+          toggleSelectRow(selectedCell.rowId);
+        }
+        return;
+      }
+    };
+
+    document.addEventListener("keydown", handler);
+    return () => document.removeEventListener("keydown", handler);
+  }, [
+    editingCell, entityDropdownRowId, isPending, selectedRowId, selectedCell,
+    selectionMode, showShortcuts, insertLineBelow, duplicateRow, copyRowToClipboard,
+    exportTableAsCsv, deleteRow, toggleSelectRow, toggleSelectAll, toggleSelectionMode,
+  ]);
 
   function deleteRow(itemId: string) {
     removeItem(itemId);
@@ -6835,6 +6949,18 @@ export function EstimateGrid({
             >
               <Download className="h-3 w-3" />
             </Button>
+
+            <div className="mx-0.5 h-4 w-px bg-line" />
+
+            <Button
+              size="xs"
+              variant="ghost"
+              className="rounded-md"
+              onClick={() => setShowShortcuts(true)}
+              title="Keyboard shortcuts (?)"
+            >
+              <span className="text-[11px] font-semibold text-fg/40">?</span>
+            </Button>
           </div>
 	        </div>
 
@@ -8344,6 +8470,136 @@ export function EstimateGrid({
           />
         )}
       </AnimatePresence>
+
+      {/* ─── Keyboard Shortcuts Overlay ─── */}
+      {showShortcuts && (
+        <ModalBackdrop open={showShortcuts} onClose={() => setShowShortcuts(false)}>
+          <div className="w-full rounded-xl border border-line bg-panel shadow-2xl overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3 border-b border-line bg-panel2/30">
+              <h3 className="text-sm font-semibold text-fg">Keyboard Shortcuts</h3>
+              <button
+                onClick={() => setShowShortcuts(false)}
+                className="p-1 rounded-md text-fg/40 hover:text-fg/70 hover:bg-panel2/60 transition-colors"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-x-8 gap-y-6 p-5 max-h-[70vh] overflow-y-auto">
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/35 mb-2">Navigation</div>
+                <div className="space-y-1.5">
+                  {[
+                    [["↑", "↓", "←", "→"], "Move between cells"],
+                    [["Tab"], "Move right"],
+                    [["⇧", "Tab"], "Move left"],
+                    [["Esc"], "Deselect cell"],
+                  ].map(([keys, label], i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-fg/60">{label}</span>
+                      <span className="flex gap-0.5">{(keys as string[]).map((k) => (
+                        <kbd key={k} className="inline-flex h-5 min-w-[20px] items-center justify-center rounded border border-line bg-panel2/50 px-1.5 text-[10px] font-medium text-fg/50">{k}</kbd>
+                      ))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/35 mb-2">Editing</div>
+                <div className="space-y-1.5">
+                  {[
+                    [["Enter"], "Edit cell"],
+                    [["F2"], "Edit cell"],
+                    [["Esc"], "Cancel edit"],
+                    [["Tab"], "Commit & move right"],
+                  ].map(([keys, label], i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-fg/60">{label}</span>
+                      <span className="flex gap-0.5">{(keys as string[]).map((k) => (
+                        <kbd key={k} className="inline-flex h-5 min-w-[20px] items-center justify-center rounded border border-line bg-panel2/50 px-1.5 text-[10px] font-medium text-fg/50">{k}</kbd>
+                      ))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/35 mb-2">Rows</div>
+                <div className="space-y-1.5">
+                  {[
+                    [["⌘", "⏎"], "Add new line item"],
+                    [["⌘", "⇧", "⏎"], "Insert line below"],
+                    [["⌘", "D"], "Duplicate row"],
+                    [["Del"], "Delete row"],
+                  ].map(([keys, label], i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-fg/60">{label}</span>
+                      <span className="flex gap-0.5">{(keys as string[]).map((k) => (
+                        <kbd key={k} className="inline-flex h-5 min-w-[20px] items-center justify-center rounded border border-line bg-panel2/50 px-1.5 text-[10px] font-medium text-fg/50">{k}</kbd>
+                      ))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/35 mb-2">Selection</div>
+                <div className="space-y-1.5">
+                  {[
+                    [["Space"], "Toggle row select"],
+                    [["⌘", "A"], "Select all rows"],
+                  ].map(([keys, label], i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-fg/60">{label}</span>
+                      <span className="flex gap-0.5">{(keys as string[]).map((k) => (
+                        <kbd key={k} className="inline-flex h-5 min-w-[20px] items-center justify-center rounded border border-line bg-panel2/50 px-1.5 text-[10px] font-medium text-fg/50">{k}</kbd>
+                      ))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/35 mb-2">Actions</div>
+                <div className="space-y-1.5">
+                  {[
+                    [["⌘", "C"], "Copy row to clipboard"],
+                    [["⌘", "E"], "Export as CSV"],
+                    [["⌘", "⇧", "N"], "New worksheet"],
+                  ].map(([keys, label], i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-fg/60">{label}</span>
+                      <span className="flex gap-0.5">{(keys as string[]).map((k) => (
+                        <kbd key={k} className="inline-flex h-5 min-w-[20px] items-center justify-center rounded border border-line bg-panel2/50 px-1.5 text-[10px] font-medium text-fg/50">{k}</kbd>
+                      ))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/35 mb-2">General</div>
+                <div className="space-y-1.5">
+                  {[
+                    [["?"], "Show this panel"],
+                    [["⌘", "K"], "Search workspace"],
+                  ].map(([keys, label], i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-fg/60">{label}</span>
+                      <span className="flex gap-0.5">{(keys as string[]).map((k) => (
+                        <kbd key={k} className="inline-flex h-5 min-w-[20px] items-center justify-center rounded border border-line bg-panel2/50 px-1.5 text-[10px] font-medium text-fg/50">{k}</kbd>
+                      ))}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-2.5 border-t border-line bg-panel2/20 text-[10px] text-fg/25 text-center">
+              Press <kbd className="inline-flex h-4 min-w-[16px] items-center justify-center rounded border border-line bg-panel2/50 px-1 text-[10px] font-medium text-fg/40">?</kbd> or <kbd className="inline-flex h-4 min-w-[16px] items-center justify-center rounded border border-line bg-panel2/50 px-1 text-[10px] font-medium text-fg/40">Esc</kbd> to close
+            </div>
+          </div>
+        </ModalBackdrop>
+      )}
     </div>
   );
 }

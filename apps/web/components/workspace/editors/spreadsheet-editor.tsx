@@ -9,6 +9,7 @@ import { Button } from "@/components/ui";
 
 interface SpreadsheetEditorProps {
   fileName: string;
+  initialData?: Sheet[];
   onSave?: (blob: Blob) => void;
   onClose?: () => void;
 }
@@ -57,10 +58,11 @@ async function sheetsToXlsx(sheets: Sheet[]): Promise<Blob> {
 
 export function SpreadsheetEditor({
   fileName,
+  initialData,
   onSave,
   onClose,
 }: SpreadsheetEditorProps) {
-  const sheetDataRef = useRef<Sheet[]>(defaultSheets);
+  const sheetDataRef = useRef<Sheet[]>(initialData ?? defaultSheets);
 
   const handleSave = async () => {
     if (!onSave) return;
@@ -87,7 +89,7 @@ export function SpreadsheetEditor({
         </div>
       </div>
       <div className="flex-1 min-h-0">
-        <Workbook data={defaultSheets} onChange={(d: Sheet[]) => { sheetDataRef.current = d; }} />
+        <Workbook data={initialData ?? defaultSheets} onChange={(d: Sheet[]) => { sheetDataRef.current = d; }} />
       </div>
     </div>
   );

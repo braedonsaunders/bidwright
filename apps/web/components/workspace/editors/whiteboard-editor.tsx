@@ -7,18 +7,28 @@ import "@excalidraw/excalidraw/index.css";
 
 interface WhiteboardEditorProps {
   fileName: string;
+  initialData?: string;
   onSave?: (data: string) => void;
   onClose?: () => void;
 }
 
 export function WhiteboardEditor({
   fileName,
+  initialData,
   onSave,
   onClose,
 }: WhiteboardEditorProps) {
   const [mounted, setMounted] = useState(false);
   const excalidrawRef = useRef<any>(null);
   const [ExcalidrawComponent, setExcalidrawComponent] = useState<any>(null);
+  const initialDataRef = useRef<any>(null);
+
+  if (initialData && !initialDataRef.current) {
+    try {
+      const parsed = JSON.parse(initialData);
+      initialDataRef.current = { elements: parsed.elements ?? [], appState: parsed.appState ?? {} };
+    } catch {}
+  }
 
   useEffect(() => {
     setMounted(true);
@@ -65,6 +75,7 @@ export function WhiteboardEditor({
         {mounted && ExcalidrawComponent ? (
           <ExcalidrawComponent
             theme="dark"
+            initialData={initialDataRef.current}
             excalidrawAPI={(api: any) => {
               excalidrawRef.current = api;
             }}

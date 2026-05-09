@@ -2085,7 +2085,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       {error && <div className="rounded-lg border border-danger/20 bg-danger/5 px-3 py-2 text-xs text-danger">{error}</div>}
 
       {/* ─── Tab Content ─── */}
-      <div className="flex h-full min-h-0 flex-1 flex-col">
+      <div className="relative flex h-full min-h-0 flex-1 flex-col">
         {isSnap ? (
           <SnapQuoteSheet
             workspace={workspace}
@@ -2099,145 +2099,148 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
             isPending={isPending}
           />
         ) : (
-        <AnimatePresence mode="wait">
-          {tab === "setup" && (
-            <motion.div key="setup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <SetupTab workspace={workspace} revDraft={revDraft} setRevDraft={setRevDraft} isPending={isPending} onApply={apply} onError={setError} highlightField={searchHighlight && "field" in searchHighlight ? searchHighlight.field : undefined} />
-            </motion.div>
-          )}
+        <>
+          {/* ─── Estimate section (always mounted for takeoff state persistence) ─── */}
+          <div className={cn("flex-1 min-h-0 flex flex-col gap-3", tab !== "estimate" && "hidden")}>
+            <div className="flex items-center gap-1 shrink-0">
+              {estimateSubTabs.map((st) => {
+                const isActive = estimateSubTab === st;
+                return (
+                  <button
+                    key={st}
+                    onClick={() => handleEstimateSubTabChange(st)}
+                    className={cn(
+                      "relative px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
+                      isActive ? "text-fg" : "text-fg/40 hover:text-fg/60",
+                    )}
+                  >
+                    {isActive && (
+                      <motion.span
+                        layoutId="estimate-subtab-bg"
+                        className="absolute inset-0 rounded-md bg-panel2"
+                        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                      />
+                    )}
+                    <span className="relative z-10">
+                      {estimateSubTabLabel(st)}
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
 
-          {tab === "estimate" && (
-            <motion.div key="estimate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col gap-3">
-              {/* Estimate sub-tabs */}
-              <div className="flex items-center gap-1 shrink-0">
-                {estimateSubTabs.map((st) => {
-                  const isActive = estimateSubTab === st;
-                  return (
-                    <button
-                      key={st}
-                      onClick={() => handleEstimateSubTabChange(st)}
-                      className={cn(
-                        "relative px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
-                        isActive ? "text-fg" : "text-fg/40 hover:text-fg/60",
-                      )}
-                    >
-                      {isActive && (
-                        <motion.span
-                          layoutId="estimate-subtab-bg"
-                          className="absolute inset-0 rounded-md bg-panel2"
-                          transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                        />
-                      )}
-                      <span className="relative z-10">
-                        {estimateSubTabLabel(st)}
-                      </span>
-                    </button>
-                  );
-                })}
+            <div className="relative flex-1 min-h-0">
+              <div className="absolute inset-0 flex flex-col">
+                <AnimatePresence mode="wait">
+                  {estimateSubTab === "worksheets" && (
+                    <motion.div key="worksheets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                      <EstimateGrid
+                        workspace={workspace}
+                        onApply={apply}
+                        onError={setError}
+                        onRefresh={refreshWorkspace}
+                        highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
+                        activeWorksheetId={selectedWsId}
+                        onActiveWorksheetChange={setSelectedWsId}
+                        onOpenPluginTools={openPluginTools}
+                        onOpenTakeoffLink={handleOpenTakeoffForLineItem}
+                      />
+                    </motion.div>
+                  )}
+
+                  {estimateSubTab === "phases" && (
+                    <motion.div key="phases" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                      <PhasesTab workspace={workspace} onApply={apply} onError={setError} />
+                    </motion.div>
+                  )}
+
+                  {estimateSubTab === "factors" && (
+                    <motion.div key="factors" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
+                      <FactorsTab workspace={workspace} onApply={apply} onError={setError} />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
 
+              {/* Takeoff (always mounted for state persistence across tab switches) */}
+              <div className={cn("absolute inset-0 flex flex-col", estimateSubTab !== "takeoff" && "hidden")}>
+                <TakeoffTab
+                  workspace={workspace}
+                  onOpenAgentChat={openAgentChat}
+                  onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
+                  onWorkspaceMutated={refreshWorkspace}
+                  workspaceSyncOriginId={workspaceSyncOriginRef.current}
+                  selectedWorksheetId={selectedModelWorksheet?.id}
+                  initialDocumentId={takeoffDocumentId}
+                />
+              </div>
+            </div>
+          </div>
 
-              <AnimatePresence mode="wait">
-                {estimateSubTab === "worksheets" && (
-                  <motion.div key="worksheets" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <EstimateGrid
-                      workspace={workspace}
-                      onApply={apply}
-                      onError={setError}
-                      onRefresh={refreshWorkspace}
-	                      highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
-	                      activeWorksheetId={selectedWsId}
-                      onActiveWorksheetChange={setSelectedWsId}
-                      onOpenPluginTools={openPluginTools}
-                      onOpenTakeoffLink={handleOpenTakeoffForLineItem}
-	                    />
-                  </motion.div>
-                )}
+          {/* ─── Other main tabs (animated) ─── */}
+          <div className={cn("absolute inset-0 flex flex-col", tab === "estimate" && "hidden")}>
+            <AnimatePresence mode="wait">
+              {tab === "setup" && (
+                <motion.div key="setup" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+                  <SetupTab workspace={workspace} revDraft={revDraft} setRevDraft={setRevDraft} isPending={isPending} onApply={apply} onError={setError} highlightField={searchHighlight && "field" in searchHighlight ? searchHighlight.field : undefined} />
+                </motion.div>
+              )}
 
-                {estimateSubTab === "phases" && (
-                  <motion.div key="phases" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <PhasesTab workspace={workspace} onApply={apply} onError={setError} />
-                  </motion.div>
-                )}
-
-                {estimateSubTab === "factors" && (
-                  <motion.div key="factors" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <FactorsTab workspace={workspace} onApply={apply} onError={setError} />
-                  </motion.div>
-                )}
-
-                {estimateSubTab === "takeoff" && (
-                  <motion.div key="takeoff" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                    <TakeoffTab
-                      key={takeoffDocumentId ?? "takeoff"}
-                      workspace={workspace}
-                      onOpenAgentChat={openAgentChat}
-                      onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
-                      onWorkspaceMutated={refreshWorkspace}
-                      workspaceSyncOriginId={workspaceSyncOriginRef.current}
-                      selectedWorksheetId={selectedModelWorksheet?.id}
-                      initialDocumentId={takeoffDocumentId}
-                    />
-                  </motion.div>
-                )}
-
-              </AnimatePresence>
-            </motion.div>
-          )}
-
-          {tab === "summarize" && (
-            <motion.div key="summarize" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <SummarizeTab
-                workspace={workspace}
-                resourceSummaryRows={resourceSummaryRows}
-                onApply={apply}
-              />
-            </motion.div>
-          )}
-          {tab === "documents" && (
-            <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <DocumentationTab
-                workspace={workspace}
-                apply={apply}
-                packages={data.packages}
-                highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined}
-                selectedWorksheet={selectedModelWorksheet}
-                modelEditorChannelName={modelEditorSyncChannelName}
-                onOpenInTakeoff={handleOpenFileInTakeoff}
-              />
-            </motion.div>
-          )}
-          {tab === "review" && (
-            <motion.div key="review" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <ReviewTab
-                workspace={workspace}
-                onApply={apply}
-                onError={setError}
-                qualitySummary={qualitySummary}
-                qualityFindings={qualityFindings}
-                resourceSummaryRows={resourceSummaryRows}
-                onQualityFindingAction={(finding) => {
-                  if (finding.itemId && finding.worksheetId) {
-                    const target: SearchNavigationTarget = {
-                      tab: "estimate",
-                      subTab: "worksheets",
-                      worksheetId: finding.worksheetId,
-                      itemId: finding.itemId,
-                    };
-                    handleSearchNavigate(target);
-                  } else {
-                    handleEstimateSubTabChange("worksheets");
-                  }
-                }}
-              />
-            </motion.div>
-          )}
-          {tab === "activity" && (
-            <motion.div key="activity" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
-              <AuditTrailTab workspace={workspace} onApply={apply} />
-            </motion.div>
-          )}
-        </AnimatePresence>
+              {tab === "summarize" && (
+                <motion.div key="summarize" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+                  <SummarizeTab
+                    workspace={workspace}
+                    resourceSummaryRows={resourceSummaryRows}
+                    onApply={apply}
+                  />
+                </motion.div>
+              )}
+              {tab === "documents" && (
+                <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+                  <DocumentationTab
+                    workspace={workspace}
+                    apply={apply}
+                    packages={data.packages}
+                    highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined}
+                    selectedWorksheet={selectedModelWorksheet}
+                    modelEditorChannelName={modelEditorSyncChannelName}
+                    onOpenInTakeoff={handleOpenFileInTakeoff}
+                  />
+                </motion.div>
+              )}
+              {tab === "review" && (
+                <motion.div key="review" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+                  <ReviewTab
+                    workspace={workspace}
+                    onApply={apply}
+                    onError={setError}
+                    qualitySummary={qualitySummary}
+                    qualityFindings={qualityFindings}
+                    resourceSummaryRows={resourceSummaryRows}
+                    onQualityFindingAction={(finding) => {
+                      if (finding.itemId && finding.worksheetId) {
+                        const target: SearchNavigationTarget = {
+                          tab: "estimate",
+                          subTab: "worksheets",
+                          worksheetId: finding.worksheetId,
+                          itemId: finding.itemId,
+                        };
+                        handleSearchNavigate(target);
+                      } else {
+                        handleEstimateSubTabChange("worksheets");
+                      }
+                    }}
+                  />
+                </motion.div>
+              )}
+              {tab === "activity" && (
+                <motion.div key="activity" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
+                  <AuditTrailTab workspace={workspace} onApply={apply} />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        </>
         )}
       </div>
 

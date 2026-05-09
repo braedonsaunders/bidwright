@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Loader2, AlertTriangle, FileSpreadsheet } from "lucide-react";
+import { Loader2, AlertTriangle, FileSpreadsheet, Pencil } from "lucide-react";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
@@ -11,6 +11,7 @@ import "@fortune-sheet/react/dist/index.css";
 interface XlsxViewerProps {
   url: string;
   fileName: string;
+  onEdit?: () => void;
 }
 
 interface CellData {
@@ -57,7 +58,7 @@ function workbookToFortuneSheets(wb: XLSX.WorkBook): SheetData[] {
   });
 }
 
-export function XlsxViewer({ url, fileName }: XlsxViewerProps) {
+export function XlsxViewer({ url, fileName, onEdit }: XlsxViewerProps) {
   const [sheets, setSheets] = useState<SheetData[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -123,13 +124,23 @@ export function XlsxViewer({ url, fileName }: XlsxViewerProps) {
   }
 
   return (
-    <div className="flex flex-1 flex-col overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-line px-4 py-2">
+    <div className="flex flex-col h-full overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-line px-4 py-2 shrink-0">
         <FileSpreadsheet className="h-4 w-4 text-text-secondary" />
         <span className="text-sm font-medium text-text-primary truncate">{fileName}</span>
+        <div className="ml-auto flex items-center gap-1">
+          {onEdit && (
+            <Button variant="ghost" size="xs" onClick={onEdit}>
+              <Pencil className="w-3.5 h-3.5 mr-1" />
+              Edit
+            </Button>
+          )}
+        </div>
       </div>
-      <div className="flex-1 overflow-hidden">
-        <WorkbookComponent data={sheets} />
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="h-full w-full">
+          <WorkbookComponent data={sheets} />
+        </div>
       </div>
     </div>
   );

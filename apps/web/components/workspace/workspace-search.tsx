@@ -334,6 +334,24 @@ export function WorkspaceSearch({ workspace, onNavigate }: WorkspaceSearchProps)
     }
   }, [isOpen]);
 
+  const blurTimeoutRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+
+  const handleInputBlur = useCallback(() => {
+    blurTimeoutRef.current = setTimeout(() => {
+      const active = document.activeElement;
+      const insideContainer = containerRef.current?.contains(active) ?? false;
+      const insideDropdown = dropdownRef.current?.contains(active) ?? false;
+      if (!insideContainer && !insideDropdown) {
+        setIsOpen(false);
+        setQuery("");
+      }
+    }, 150);
+  }, []);
+
+  const handleInputFocus = useCallback(() => {
+    if (blurTimeoutRef.current) clearTimeout(blurTimeoutRef.current);
+  }, []);
+
   // Refs for click-outside and dropdown positioning
   const containerRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -414,6 +432,8 @@ export function WorkspaceSearch({ workspace, onNavigate }: WorkspaceSearchProps)
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleKeyDown}
+                onBlur={handleInputBlur}
+                onFocus={handleInputFocus}
               />
               {query && (
                 <button

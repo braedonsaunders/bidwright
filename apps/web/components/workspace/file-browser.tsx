@@ -198,7 +198,7 @@ const IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp", "t
 const PDF_EXTENSIONS = new Set(["pdf"]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv"]);
 const TEXT_EXTENSIONS = new Set(["txt", "md", "markdown", "json", "xml", "yaml", "yml", "log", "cfg", "ini", "html", "css", "js", "ts"]);
-const CAD_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
+const CAD_EXTENSIONS = new Set(["cd", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt", "nwd", "nwf", "nwc"]);
 const DOCX_EXTENSIONS = new Set(["docx", "doc"]);
 const XLSX_EXTENSIONS = new Set(["xlsx", "xls", "xlsm", "ods"]);
 const EMAIL_EXTENSIONS = new Set(["eml", "msg"]);
@@ -215,6 +215,7 @@ const FILE_UPLOAD_ACCEPT = [
   ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp",
   ".dwg", ".dxf", ".msg", ".eml",
   ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml",
+  ".nwd", ".nwf", ".nwc",
 ].join(",");
 const FILE_NODE_DND_TYPE = "application/x-bidwright-file-node";
 const ROOT_PARENT_VALUE = "__root__";
@@ -235,6 +236,13 @@ function formatBytes(bytes: number): string {
 
 function getFileExtension(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
+}
+
+function isEditableFile(name: string): boolean {
+  const lower = name.toLowerCase();
+  if (lower.endsWith(".checklist.json")) return true;
+  const ext = getFileExtension(name);
+  return XLSX_EXTENSIONS.has(ext) || ext === "html" || ext === "htm" || ext === "md" || ext === "markdown" || ext === "excalidraw" || ext === "json";
 }
 
 function isTakeoffOpenableFileName(name: string) {
@@ -1602,6 +1610,12 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   const [editorMode, setEditorMode] = useState<EditorMode>("none");
   const [editorFileName, setEditorFileName] = useState("");
   const [modelEditorFileNodeId, setModelEditorFileNodeId] = useState<string | null>(null);
+  const [editingFileNodeId, setEditingFileNodeId] = useState<string | null>(null);
+  const [editorInitialContent, setEditorInitialContent] = useState<string | null>(null);
+  const [editorInitialSheets, setEditorInitialSheets] = useState<any[] | null>(null);
+  const [editorInitialWhiteboard, setEditorInitialWhiteboard] = useState<string | null>(null);
+  const [editorInitialChecklist, setEditorInitialChecklist] = useState<string | null>(null);
+  const [editingFileExtension, setEditingFileExtension] = useState<string | null>(null);
   const [userNodes, setUserNodes] = useState<FileNode[]>([]);
   const [sourceDocuments, setSourceDocuments] = useState<SourceDocument[]>(workspace.sourceDocuments ?? []);
   const [loadingNodes, setLoadingNodes] = useState(true);
@@ -2148,20 +2162,104 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       const safeName = fileName.endsWith(`.${extension}`) ? fileName : `${fileName}.${extension}`;
       const blob = content instanceof Blob ? content : new Blob([content], { type: mimeType });
       const file = new globalThis.File([blob], safeName, { type: mimeType });
-      const node = await uploadFile(projectId, file, activeFileParentId);
-      // Refresh tree
+
+      let savedNode: FileNode;
+      if (editingFileNodeId) {
+        savedNode = await saveFileNodeContent(projectId, editingFileNodeId, file);
+      } else {
+        savedNode = await uploadFile(projectId, file, activeFileParentId);
+      }
+
       const updatedNodes = await getFileTree(projectId);
       setUserNodes(updatedNodes);
       if (activeFileParentId) {
         setExpandedFolders((prev) => new Set([...prev, activeFileParentId]));
       }
-      // Select the new file
-      setSelectedId(node.id);
+      setSelectedId(savedNode.id);
       setEditorMode("none");
+      setEditingFileNodeId(null);
+      setEditingFileExtension(null);
+      setEditorInitialContent(null);
+      setEditorInitialSheets(null);
+      setEditorInitialWhiteboard(null);
+      setEditorInitialChecklist(null);
     } catch (err) {
       showError(`Failed to save: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [activeFileParentId, projectId, showError]);
+  }, [activeFileParentId, editingFileNodeId, projectId, showError]);
+
+  const handleEditFile = useCallback(async (item: TreeItem) => {
+    if (!item.fileNode) return;
+    const ext = getFileExtension(item.name);
+    const lower = item.name.toLowerCase();
+    const compoundExt = lower.endsWith(".checklist.json") ? "checklist.json" : ext;
+    const url = getDownloadUrl(item, projectId, true);
+    if (!url) return;
+
+    setEditingFileNodeId(item.fileNode.id);
+    setEditorFileName(item.name.replace(/\.[^.]+$/, ""));
+    setEditingFileExtension(compoundExt);
+
+    try {
+      if (XLSX_EXTENSIONS.has(ext) || SPREADSHEET_EXTENSIONS.has(ext)) {
+        const response = await fetch(url, { credentials: "include" });
+        if (!response.ok) throw new Error("Failed to fetch file");
+        const data = await response.arrayBuffer();
+        const XLSX = await import("xlsx");
+        const readOpts = ext === "tsv" ? { type: "array" as const, FS: "\t" } : { type: "array" as const };
+        const wb = XLSX.read(data, readOpts);
+        const sheets = wb.SheetNames.map((name, index) => {
+          const sheetRows = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[name], { header: 1 }) as unknown[][];
+          const celldata: Array<{ r: number; c: number; v: { v: unknown; m: string } }> = [];
+          let maxCol = 0;
+          for (let r = 0; r < sheetRows.length; r++) {
+            if (!sheetRows[r]) continue;
+            for (let c = 0; c < sheetRows[r].length; c++) {
+              const val = sheetRows[r][c];
+              if (val !== undefined && val !== null && val !== "") {
+                celldata.push({ r, c, v: { v: val, m: String(val) } });
+                if (c > maxCol) maxCol = c;
+              }
+            }
+          }
+          return { name, celldata, row: Math.max(sheetRows.length, 50), column: Math.max(maxCol + 1, 26), order: index, status: index === 0 ? 1 : 0 };
+        });
+        setEditorInitialSheets(sheets);
+        setEditorMode("spreadsheet");
+      } else if (ext === "html" || ext === "htm") {
+        const response = await fetch(url, { credentials: "include" });
+        if (!response.ok) throw new Error("Failed to fetch file");
+        const html = await response.text();
+        setEditorInitialContent(html);
+        setEditorMode("rich-text");
+      } else if (ext === "md" || ext === "markdown") {
+        const response = await fetch(url, { credentials: "include" });
+        if (!response.ok) throw new Error("Failed to fetch file");
+        const md = await response.text();
+        setEditorInitialContent(md);
+        setEditorMode("markdown");
+      } else if (ext === "excalidraw") {
+        const response = await fetch(url, { credentials: "include" });
+        if (!response.ok) throw new Error("Failed to fetch file");
+        const json = await response.text();
+        setEditorInitialWhiteboard(json);
+        setEditorMode("whiteboard");
+      } else if (lower.endsWith(".checklist.json")) {
+        const response = await fetch(url, { credentials: "include" });
+        if (!response.ok) throw new Error("Failed to fetch file");
+        const json = await response.text();
+        setEditorInitialChecklist(json);
+        setEditorMode("checklist");
+      }
+    } catch (err) {
+      showError(`Failed to open file for editing: ${err instanceof Error ? err.message : "Unknown error"}`);
+      setEditingFileNodeId(null);
+      setEditorInitialContent(null);
+      setEditorInitialSheets(null);
+      setEditorInitialWhiteboard(null);
+      setEditorInitialChecklist(null);
+    }
+  }, [projectId, showError]);
 
   const handleCreateModelDocument = useCallback(async () => {
     try {
@@ -2232,19 +2330,19 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   const previewContent = editorMode !== "none" ? (
     <div className="flex-1 overflow-hidden flex flex-col">
       {editorMode === "rich-text" && (
-        <RichTextEditor fileName={editorFileName} onSave={(html) => handleEditorSave(html, editorFileName, "text/html", "html")} onClose={() => setEditorMode("none")} />
+        <RichTextEditor fileName={editorFileName} initialContent={editorInitialContent ?? undefined} onSave={(html) => handleEditorSave(html, editorFileName, "text/html", "html")} onClose={() => { setEditorMode("none"); setEditingFileNodeId(null); setEditingFileExtension(null); setEditorInitialContent(null); }} />
       )}
       {editorMode === "spreadsheet" && (
-        <SpreadsheetEditor fileName={editorFileName} onSave={(blob) => handleEditorSave(blob, editorFileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx")} onClose={() => setEditorMode("none")} />
+        <SpreadsheetEditor fileName={editorFileName} initialData={editorInitialSheets ?? undefined} onSave={(blob) => handleEditorSave(blob, editorFileName, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "xlsx")} onClose={() => { setEditorMode("none"); setEditingFileNodeId(null); setEditingFileExtension(null); setEditorInitialSheets(null); }} />
       )}
       {editorMode === "whiteboard" && (
-        <WhiteboardEditor fileName={editorFileName} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "excalidraw")} onClose={() => setEditorMode("none")} />
+        <WhiteboardEditor fileName={editorFileName} initialData={editorInitialWhiteboard ?? undefined} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "excalidraw")} onClose={() => { setEditorMode("none"); setEditingFileNodeId(null); setEditingFileExtension(null); setEditorInitialWhiteboard(null); }} />
       )}
       {editorMode === "markdown" && (
-        <MarkdownEditor fileName={editorFileName} onSave={(content) => handleEditorSave(content, editorFileName, "text/markdown", "md")} onClose={() => setEditorMode("none")} />
+        <MarkdownEditor fileName={editorFileName} initialContent={editorInitialContent ?? undefined} onSave={(content) => handleEditorSave(content, editorFileName, "text/markdown", "md")} onClose={() => { setEditorMode("none"); setEditingFileNodeId(null); setEditingFileExtension(null); setEditorInitialContent(null); }} />
       )}
       {editorMode === "checklist" && (
-        <ChecklistEditor fileName={editorFileName} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "checklist.json")} onClose={() => setEditorMode("none")} />
+        <ChecklistEditor fileName={editorFileName} initialData={editorInitialChecklist ?? undefined} onSave={(data) => handleEditorSave(data, editorFileName, "application/json", "checklist.json")} onClose={() => { setEditorMode("none"); setEditingFileNodeId(null); setEditingFileExtension(null); setEditorInitialChecklist(null); }} />
       )}
       {editorMode === "model" && (
         <BidwrightModelEditor
@@ -2294,6 +2392,14 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             {filePreviewType === "image" && previewUrl && <ImagePreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "text" && (
               <div className="flex min-h-0 flex-1 flex-col">
+                {selectedItem.fileNode && (getFileExtension(selectedItem.name) === "html" || getFileExtension(selectedItem.name) === "htm" || getFileExtension(selectedItem.name) === "md" || getFileExtension(selectedItem.name) === "markdown" || selectedItem.name.toLowerCase().endsWith(".checklist.json")) && (
+                  <div className="flex items-center justify-end border-b border-line px-3 py-1.5 shrink-0">
+                    <Button variant="ghost" size="xs" onClick={() => handleEditFile(selectedItem)}>
+                      <Pencil className="w-3.5 h-3.5 mr-1" />
+                      Edit
+                    </Button>
+                  </div>
+                )}
                 {ingestSourceRef && isMarkupCandidate(selectedItem) && (
                   <BluebeamMarkupsViewer
                     key={`markups-${ingestSourceRef.sourceKind}-${ingestSourceRef.sourceId}`}
@@ -2329,13 +2435,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               </div>
             )}
             {filePreviewType === "docx" && previewUrl && <DocxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
-            {filePreviewType === "xlsx" && previewUrl && (
-              <div className="flex min-h-0 flex-1 flex-col">
-                <div className="min-h-0 flex-1">
-                  <XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} />
-                </div>
-              </div>
-            )}
+{filePreviewType === "xlsx" && previewUrl && (
+  <div className="flex-1 min-h-0 flex flex-col">
+    <XlsxViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} onEdit={selectedItem.fileNode ? () => handleEditFile(selectedItem) : undefined} />
+  </div>
+)}
             {filePreviewType === "email" && previewUrl && (
               <EmailViewer
                 key={previewUrl}
@@ -2361,13 +2465,25 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             {filePreviewType === "none" && (
               <div className="flex-1 flex flex-col items-center justify-center gap-3 p-8">
                 <File className="h-12 w-12 text-fg/15" />
-                <p className="text-sm text-fg/40">Preview not available for this file type</p>
-                {downloadUrl && <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-4 w-4" /> Download File</Button></a>}
-                {hasExtracted && !showPreviewTabs && (
-                  <div className="w-full mt-4">
-                    <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">Extracted Text</p>
-                    <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">{truncateText(selectedItem.extractedText!, 2000)}</div>
-                  </div>
+                {selectedItem.fileNode && (getFileExtension(selectedItem.name) === "excalidraw" || selectedItem.name.toLowerCase().endsWith(".checklist.json")) ? (
+                  <>
+                    <p className="text-sm text-fg/40">This file can be opened in the editor</p>
+                    <Button variant="secondary" size="sm" onClick={() => handleEditFile(selectedItem)}>
+                      <Pencil className="h-4 w-4 mr-1" />
+                      Open in Editor
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-sm text-fg/40">Preview not available for this file type</p>
+                    {downloadUrl && <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-4 w-4" /> Download File</Button></a>}
+                    {hasExtracted && !showPreviewTabs && (
+                      <div className="w-full mt-4">
+                        <p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider mb-2">Extracted Text</p>
+                        <div className="max-h-64 overflow-y-auto rounded-md border border-line bg-bg/50 p-2.5 text-xs text-fg/60 leading-relaxed whitespace-pre-wrap">{truncateText(selectedItem.extractedText!, 2000)}</div>
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -2419,6 +2535,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
                       onSelect={() => {
                         setEditorFileName("Untitled Document");
+                        setEditingFileNodeId(null);
+                        setEditingFileExtension(null);
+                        setEditorInitialContent(null);
+                        setEditorInitialSheets(null);
                         setEditorMode("rich-text");
                         setSelectedId(null);
                       }}
@@ -2430,6 +2550,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
                       onSelect={() => {
                         setEditorFileName("Untitled Spreadsheet");
+                        setEditingFileNodeId(null);
+                        setEditingFileExtension(null);
+                        setEditorInitialContent(null);
+                        setEditorInitialSheets(null);
                         setEditorMode("spreadsheet");
                         setSelectedId(null);
                       }}
@@ -2441,6 +2565,12 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
                       onSelect={() => {
                         setEditorFileName("Untitled Whiteboard");
+                        setEditingFileNodeId(null);
+                        setEditingFileExtension(null);
+                        setEditorInitialContent(null);
+                        setEditorInitialSheets(null);
+                        setEditorInitialWhiteboard(null);
+                        setEditorInitialChecklist(null);
                         setEditorMode("whiteboard");
                         setSelectedId(null);
                       }}
@@ -2452,6 +2582,12 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
                       onSelect={() => {
                         setEditorFileName("Untitled Note");
+                        setEditingFileNodeId(null);
+                        setEditingFileExtension(null);
+                        setEditorInitialContent(null);
+                        setEditorInitialSheets(null);
+                        setEditorInitialWhiteboard(null);
+                        setEditorInitialChecklist(null);
                         setEditorMode("markdown");
                         setSelectedId(null);
                       }}
@@ -2472,6 +2608,12 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
                       onSelect={() => {
                         setEditorFileName("Untitled Checklist");
+                        setEditingFileNodeId(null);
+                        setEditingFileExtension(null);
+                        setEditorInitialContent(null);
+                        setEditorInitialSheets(null);
+                        setEditorInitialWhiteboard(null);
+                        setEditorInitialChecklist(null);
                         setEditorMode("checklist");
                         setSelectedId(null);
                       }}

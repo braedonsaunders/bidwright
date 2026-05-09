@@ -148,7 +148,7 @@ export function ScheduleToolbar({
   return (
     <div className="rounded-t-lg rounded-b-none border border-line bg-panel shadow-sm" data-testid="schedule-toolbar">
       <div className="grid w-full min-w-0 grid-cols-5 items-center gap-1 px-1 py-1">
-        <div className="grid min-w-0 grid-cols-4 gap-1 rounded-md bg-bg/45 p-0.5">
+        <div className="flex min-w-0 gap-1 rounded-md bg-bg/45 p-0.5">
           {VIEW_OPTIONS.map(({ value, label, icon: Icon }) => (
             <button
               key={value}
@@ -158,12 +158,12 @@ export function ScheduleToolbar({
               onClick={() => onViewChange(value)}
               data-testid={`schedule-view-${value}`}
               className={cn(
-                "flex h-6 min-w-0 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] font-semibold transition-colors",
+                "flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] font-semibold transition-colors",
                 view === value ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:bg-panel/70 hover:text-fg/70"
               )}
             >
               <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span className="truncate">{label}</span>
+              <span className="hidden sm:inline truncate">{label}</span>
             </button>
           ))}
         </div>
@@ -252,7 +252,7 @@ export function ScheduleToolbar({
           )}
         </div>
 
-        <div className="grid min-w-0 grid-cols-3 gap-1 rounded-md bg-bg/45 p-0.5">
+        <div className="grid min-w-0 grid-cols-4 gap-1 rounded-md bg-bg/45 p-0.5">
           <Button
             variant="secondary"
             size="xs"
@@ -262,8 +262,8 @@ export function ScheduleToolbar({
             data-testid="schedule-add-task"
             className="h-6 w-full rounded-md px-1.5 text-[10px]"
           >
-            <Calendar className="h-3.5 w-3.5" />
-            Task
+            <Calendar className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline truncate">Task</span>
           </Button>
           <Button
             variant="ghost"
@@ -273,8 +273,8 @@ export function ScheduleToolbar({
             onClick={onOpenImport}
             className="h-6 w-full rounded-md px-1.5 text-[10px]"
           >
-            <Upload className="h-3.5 w-3.5" />
-            Import
+            <Upload className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline truncate">Import</span>
           </Button>
           <Button
             variant="ghost"
@@ -284,8 +284,8 @@ export function ScheduleToolbar({
             onClick={onToggleFilters}
             className={cn("h-6 w-full rounded-md px-1.5 text-[10px]", filtersActive && "text-accent")}
           >
-            <Filter className="h-3.5 w-3.5" />
-            Filter
+            <Filter className="h-3.5 w-3.5 shrink-0" />
+            <span className="hidden sm:inline truncate">Filter</span>
           </Button>
           {view === "gantt" ? (
             <Button
@@ -296,8 +296,8 @@ export function ScheduleToolbar({
               onClick={onToggleCriticalPath}
               className={cn("h-6 w-full rounded-md px-1.5 text-[10px]", showCriticalPath && "text-accent")}
             >
-              <GitBranch className="h-3.5 w-3.5" />
-              Path
+              <GitBranch className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline truncate">Path</span>
             </Button>
           ) : (
             <Button
@@ -310,8 +310,8 @@ export function ScheduleToolbar({
               data-testid="schedule-toggle-baseline"
               className={cn("h-6 w-full rounded-md px-1.5 text-[10px]", showBaseline && "text-accent")}
             >
-              {showBaseline ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-              Base
+              {showBaseline ? <EyeOff className="h-3.5 w-3.5 shrink-0" /> : <Eye className="h-3.5 w-3.5 shrink-0" />}
+              <span className="hidden sm:inline truncate">Base</span>
             </Button>
           )}
         </div>

@@ -43,6 +43,7 @@ interface ChecklistData {
 
 interface ChecklistEditorProps {
   fileName: string;
+  initialData?: string;
   onSave?: (data: string) => void;
   onClose?: () => void;
 }
@@ -77,10 +78,16 @@ const PRIORITY_LABELS: Record<string, string> = {
 
 /* ─── Component ─── */
 
-export function ChecklistEditor({ fileName, onSave, onClose }: ChecklistEditorProps) {
-  const [sections, setSections] = useState<ChecklistSection[]>([
-    { id: newId(), title: "General", collapsed: false, items: [newItem(), newItem(), newItem()] },
-  ]);
+export function ChecklistEditor({ fileName, initialData, onSave, onClose }: ChecklistEditorProps) {
+  const [sections, setSections] = useState<ChecklistSection[]>(() => {
+    if (initialData) {
+      try {
+        const parsed = JSON.parse(initialData) as ChecklistData;
+        if (parsed.sections && Array.isArray(parsed.sections)) return parsed.sections;
+      } catch {}
+    }
+    return [{ id: newId(), title: "General", collapsed: false, items: [newItem(), newItem(), newItem()] }];
+  });
 
   const totalItems = sections.reduce((s, sec) => s + sec.items.length, 0);
   const checkedItems = sections.reduce((s, sec) => s + sec.items.filter((i) => i.checked).length, 0);

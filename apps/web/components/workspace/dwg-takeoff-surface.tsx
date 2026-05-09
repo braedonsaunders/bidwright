@@ -59,6 +59,7 @@ type DwgDocument = {
   label: string;
   fileName: string;
   fileUrl: string;
+  sourceKind?: "source_document" | "file_node";
 };
 
 type DwgEntity = {
@@ -743,8 +744,8 @@ export function DwgTakeoffSurface({
     setSnapCandidate(null);
     try {
       const result = refresh
-        ? await processDwgTakeoffMetadata(projectId, activeDocument.id)
-        : await getDwgTakeoffMetadata(projectId, activeDocument.id);
+        ? await processDwgTakeoffMetadata(projectId, activeDocument.id, activeDocument.sourceKind)
+        : await getDwgTakeoffMetadata(projectId, activeDocument.id, false, activeDocument.sourceKind);
       setMetadata(result);
       if (result.status !== "processed") {
         setEntities([]);
@@ -1240,7 +1241,7 @@ export function DwgTakeoffSurface({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-panel">
+    <div className="flex h-full w-full min-h-0 flex-col bg-panel">
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
         <div className="w-72">
           <Select

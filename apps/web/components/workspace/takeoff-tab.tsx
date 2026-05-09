@@ -87,6 +87,7 @@ import {
   deleteModelTakeoffLink,
   deleteWorksheetItem,
   createWorksheetItem,
+  createWorksheet,
   getEntityCategories,
   listModelTakeoffLinks,
   queryModelElements,
@@ -158,7 +159,7 @@ import {
 } from "./takeoff/create-annotation-modal";
 
 const DWG_EXTENSIONS = new Set(["dwg", "dxf"]);
-const MODEL_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt"]);
+const MODEL_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt", "nwd", "nwf", "nwc"]);
 const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
 
@@ -924,6 +925,11 @@ export function TakeoffTab({
   const onWorkspaceMutatedRef = useRef(onWorkspaceMutated);
   const calibrationRef = useRef(calibration);
   const initialDocumentAppliedRef = useRef(!initialDocumentId);
+  const prevInitialDocumentIdRef = useRef(initialDocumentId);
+  if (prevInitialDocumentIdRef.current !== initialDocumentId) {
+    prevInitialDocumentIdRef.current = initialDocumentId;
+    initialDocumentAppliedRef.current = false;
+  }
 
   const [modelAssets, setModelAssets] = useState<ModelAsset[]>([]);
   const [modelSelection, setModelSelection] = useState<BidwrightModelSelectionMessage | null>(null);
@@ -935,6 +941,8 @@ export function TakeoffTab({
   const [selectedModelElementIds, setSelectedModelElementIds] = useState<Set<string>>(() => new Set());
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const [worksheetPickerAction, setWorksheetPickerAction] = useState<"send-selection" | "create-elements" | null>(null);
+  const [newWorksheetName, setNewWorksheetName] = useState("");
   const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
     () =>
       modelAssets
@@ -2544,6 +2552,7 @@ export function TakeoffTab({
     selection: BidwrightModelSelectionMessage,
     lineItemDraft?: BidwrightModelLineItemDraft,
     lineItemDrafts?: BidwrightModelLineItemDraft[],
+    explicitWs?: { id: string; name: string },
   ) {
     try {
       const draftList = (lineItemDrafts?.length
@@ -2559,16 +2568,15 @@ export function TakeoffTab({
       const modelAsset = await resolveSelectedModelAsset();
       let previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
       let createdCount = 0;
-      let targetWorksheetName = selectedWorksheet?.name ?? "worksheet";
+      let targetWorksheetName = explicitWs?.name ?? selectedWorksheet?.name ?? "worksheet";
 
       for (const draft of draftList) {
         const targetWs =
           (draft?.worksheetId
             ? workspace.worksheets.find((worksheet) => worksheet.id === draft.worksheetId)
-            : null) ?? selectedWorksheet;
+            : null) ?? explicitWs ?? selectedWorksheet;
         if (!targetWs) {
-          setToastType("error");
-          setToastMessage("Create a worksheet before sending model quantities.");
+          setWorksheetPickerAction("send-selection");
           return;
         }
         targetWorksheetName = targetWs.name;
@@ -2629,10 +2637,11 @@ export function TakeoffTab({
   async function createLineItemFromModelElement(
     element: ModelElementWithQuantities,
     previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id)),
+    explicitWs?: { id: string; name: string },
   ) {
-    if (!selectedWorksheet) {
-      setToastType("error");
-      setToastMessage("Create a worksheet before sending model quantities.");
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction("create-elements");
       return null;
     }
     if (!defaultCategory) {
@@ -2653,7 +2662,7 @@ export function TakeoffTab({
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       category: defaultCategory,
     });
-    const result = await createWorksheetItem(projectId, selectedWorksheet.id, payload);
+    const result = await createWorksheetItem(projectId, ws.id, payload);
     const createdItem = result.workspace.worksheets
       .flatMap((worksheet) => worksheet.items)
       .find((item) => !previousItemIds.has(item.id));
@@ -2697,7 +2706,7 @@ export function TakeoffTab({
     }
   }
 
-  async function handleCreateSelectedModelElements() {
+  async function handleCreateSelectedModelElements(explicitWs?: { id: string; name: string }) {
     const candidates = selectedModelElements.filter((element) => !linkedModelElementIds.has(element.id));
     if (candidates.length === 0) {
       setToastType("error");
@@ -2709,7 +2718,7 @@ export function TakeoffTab({
       let created = 0;
       let previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
       for (const element of candidates.slice(0, 250)) {
-        const createdResult = await createLineItemFromModelElement(element, previousItemIds);
+        const createdResult = await createLineItemFromModelElement(element, previousItemIds, explicitWs);
         if (createdResult?.createdItem) created += 1;
         if (createdResult?.result) {
           previousItemIds = new Set(createdResult.result.workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
@@ -2773,6 +2782,40 @@ export function TakeoffTab({
 
   /* Build document URL */
   const documentUrl = selectedDoc ? buildPdfUrl(selectedDoc) : "";
+
+  async function handleWorksheetPickerSelect(wsId: string) {
+    const ws = workspace.worksheets.find((w) => w.id === wsId);
+    if (!ws) return;
+    if (worksheetPickerAction === "send-selection" && modelSelection) {
+      await handleSendModelSelectionToEstimate(modelSelection, undefined, undefined, ws);
+    } else if (worksheetPickerAction === "create-elements") {
+      await handleCreateSelectedModelElements(ws);
+    }
+    setWorksheetPickerAction(null);
+    setNewWorksheetName("");
+  }
+
+  async function handleCreateWorksheetAndProceed() {
+    if (!newWorksheetName.trim()) return;
+    try {
+      const result = await createWorksheet(projectId, { name: newWorksheetName.trim() });
+      const ws = result.workspace.worksheets.at(-1);
+      notifyWorkspaceMutated();
+      if (ws) {
+        if (worksheetPickerAction === "send-selection" && modelSelection) {
+          await handleSendModelSelectionToEstimate(modelSelection, undefined, undefined, ws);
+        } else if (worksheetPickerAction === "create-elements") {
+          await handleCreateSelectedModelElements(ws);
+        }
+      }
+      setWorksheetPickerAction(null);
+      setNewWorksheetName("");
+    } catch (err) {
+      console.error("[takeoff] Failed to create worksheet:", err);
+      setToastType("error");
+      setToastMessage("Could not create worksheet.");
+    }
+  }
 
   const zoomPercent = Math.round(zoom * 100);
 
@@ -3013,16 +3056,6 @@ export function TakeoffTab({
         ref={cardRef}
         className="relative flex h-full flex-1 min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel"
       >
-        <div className="border-b border-line px-5 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-fg/35">Takeoff</p>
-              <h2 className="mt-1 text-lg font-semibold text-fg">Intake workspace</h2>
-              <p className="mt-1 max-w-2xl text-xs text-fg/45">Source files and takeoff workflows for the active estimate.</p>
-            </div>
-          </div>
-        </div>
-
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
           <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
             {intakeOptions.map((option) => {
@@ -3943,6 +3976,7 @@ export function TakeoffTab({
               label: doc.label,
               fileName: doc.fileName,
               fileUrl: buildPdfUrl(doc),
+              sourceKind: doc.fileNodeId ? "file_node" as const : undefined,
             }))}
             selectedDocumentId={selectedDoc?.kind === "dwg" ? selectedDoc.id : undefined}
             workspace={workspace}
@@ -4187,11 +4221,57 @@ export function TakeoffTab({
                     variant="secondary"
                     size="sm"
                     className="mt-3 w-full justify-center"
-                    onClick={() => void handleSendModelSelectionToEstimate(modelSelection)}
+                    onClick={() => {
+                      if (!selectedWorksheet) {
+                        setWorksheetPickerAction("send-selection");
+                      } else {
+                        void handleSendModelSelectionToEstimate(modelSelection);
+                      }
+                    }}
                   >
                     <ArrowDownToLine className="h-3.5 w-3.5" />
                     Create Object Rows
                   </Button>
+                  {worksheetPickerAction === "send-selection" && (
+                    <div className="mt-2 rounded-md border border-line bg-panel p-2.5 space-y-2">
+                      <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Select Worksheet</p>
+                      {workspace.worksheets.length > 0 && (
+                        <div className="max-h-36 space-y-0.5 overflow-y-auto">
+                          {workspace.worksheets.map((ws) => (
+                            <button
+                              key={ws.id}
+                              type="button"
+                              onClick={() => void handleWorksheetPickerSelect(ws.id)}
+                              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2 transition-colors"
+                            >
+                              <span className="min-w-0 flex-1 truncate">{ws.name}</span>
+                              <span className="text-[10px] text-fg/35">{ws.items.length} items</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-1.5">
+                        <Input
+                          value={newWorksheetName}
+                          onChange={(e) => setNewWorksheetName(e.target.value)}
+                          placeholder="New worksheet..."
+                          className="h-7 text-xs"
+                          onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWorksheetAndProceed(); }}
+                        />
+                        <Button
+                          variant="accent"
+                          size="xs"
+                          onClick={() => void handleCreateWorksheetAndProceed()}
+                          disabled={!newWorksheetName.trim()}
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                      </div>
+                      <Button variant="ghost" size="xs" onClick={() => { setWorksheetPickerAction(null); setNewWorksheetName(""); }} className="w-full text-fg/40">
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -4222,15 +4302,63 @@ export function TakeoffTab({
                   ))}
                 </div>
                 {selectedModelElementIds.size > 0 && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="mt-2 w-full justify-center"
-                    onClick={() => void handleCreateSelectedModelElements()}
-                  >
-                    <ArrowDownToLine className="h-3.5 w-3.5" />
-                    Create {selectedModelElementIds.size} Selected
-                  </Button>
+                  <>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="mt-2 w-full justify-center"
+                      onClick={() => {
+                        if (!selectedWorksheet) {
+                          setWorksheetPickerAction("create-elements");
+                        } else {
+                          void handleCreateSelectedModelElements();
+                        }
+                      }}
+                    >
+                      <ArrowDownToLine className="h-3.5 w-3.5" />
+                      Create {selectedModelElementIds.size} Selected
+                    </Button>
+                    {worksheetPickerAction === "create-elements" && (
+                      <div className="mt-2 rounded-md border border-line bg-panel p-2.5 space-y-2">
+                        <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Select Worksheet</p>
+                        {workspace.worksheets.length > 0 && (
+                          <div className="max-h-36 space-y-0.5 overflow-y-auto">
+                            {workspace.worksheets.map((ws) => (
+                              <button
+                                key={ws.id}
+                                type="button"
+                                onClick={() => void handleWorksheetPickerSelect(ws.id)}
+                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2 transition-colors"
+                              >
+                                <span className="min-w-0 flex-1 truncate">{ws.name}</span>
+                                <span className="text-[10px] text-fg/35">{ws.items.length} items</span>
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <div className="flex gap-1.5">
+                          <Input
+                            value={newWorksheetName}
+                            onChange={(e) => setNewWorksheetName(e.target.value)}
+                            placeholder="New worksheet..."
+                            className="h-7 text-xs"
+                            onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWorksheetAndProceed(); }}
+                          />
+                          <Button
+                            variant="accent"
+                            size="xs"
+                            onClick={() => void handleCreateWorksheetAndProceed()}
+                            disabled={!newWorksheetName.trim()}
+                          >
+                            <Plus className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <Button variant="ghost" size="xs" onClick={() => { setWorksheetPickerAction(null); setNewWorksheetName(""); }} className="w-full text-fg/40">
+                          Cancel
+                        </Button>
+                      </div>
+                    )}
+                  </>
                 )}
                 <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto pr-1">
                   {modelElements.length === 0 && (

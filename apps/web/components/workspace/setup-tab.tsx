@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useState, useTransition, useRef, useCallback, useMemo } from "react";
+import ReactDOM from "react-dom";
+import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowDown,
   ArrowUp,
@@ -9,6 +11,7 @@ import {
   BrainCircuit,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Download,
   Hammer,
@@ -70,6 +73,7 @@ import {
   Input,
   Label,
   ModalBackdrop,
+  Select,
   Textarea,
   Toggle,
 } from "@/components/ui";
@@ -243,6 +247,8 @@ function conditionTypeSectionAccent(tone: ConditionBadgeTone): string {
   };
   return map[tone];
 }
+
+const CONDITION_PAGE_SIZE_OPTIONS = [10, 25, 50, 100] as const;
 
 /* ─── Helpers ─── */
 
@@ -869,20 +875,6 @@ function ConditionsSubTab({
   const [isPending, startTransition] = useTransition();
   const loading = busy || isPending;
 
-  const [library, setLibrary] = useState<ConditionLibraryEntry[]>([]);
-  useEffect(() => {
-    getConditionLibrary().then(setLibrary).catch(() => {});
-  }, []);
-
-  const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false);
-  const [librarySearch, setLibrarySearch] = useState("");
-  const [libraryTypeFilter, setLibraryTypeFilter] = useState<string>("all");
-
-  const refreshLibrary = useCallback(
-    () => getConditionLibrary().then(setLibrary).catch(() => {}),
-    [],
-  );
-
   const allConditions = workspace.conditions ?? [];
 
   const conditionsByType = useMemo(() => {
@@ -899,25 +891,69 @@ function ConditionsSubTab({
     return grouped;
   }, [allConditions]);
 
-  const activeTypeKeys = useMemo(() => {
-    const keys: string[] = [];
-    for (const key of CONDITION_TYPE_KEYS) {
-      if ((conditionsByType.get(key)?.length ?? 0) > 0) keys.push(key);
+  const countsByType = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of allConditions) {
+      const key = c.type.trim().toLowerCase();
+      map.set(key, (map.get(key) ?? 0) + 1);
     }
-    for (const key of conditionsByType.keys()) {
-      if (!keys.includes(key)) keys.push(key);
-    }
-    return keys;
-  }, [conditionsByType]);
+    return map;
+  }, [allConditions]);
 
+  const pillTypes = useMemo(() => {
+    const seen = new Set<string>(CONDITION_TYPE_KEYS);
+    const extras: string[] = [];
+    for (const key of countsByType.keys()) {
+      if (!seen.has(key)) {
+        seen.add(key);
+        extras.push(key);
+      }
+    }
+    return [...CONDITION_TYPE_KEYS, ...extras.sort()];
+  }, [countsByType]);
+
+  const [search, setSearch] = useState("");
+  const [activeFilter, setActiveFilter] = useState<string>("all");
+  const [pageSize, setPageSize] = useState<number>(25);
+  const [pageIndex, setPageIndex] = useState(0);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allConditions
+      .slice()
+      .sort((a, b) => a.order - b.order)
+      .filter((c) => {
+        if (activeFilter !== "all" && c.type.trim().toLowerCase() !== activeFilter) return false;
+        if (q && !c.value.toLowerCase().includes(q) && !c.type.trim().toLowerCase().includes(q)) return false;
+        return true;
+      });
+  }, [allConditions, search, activeFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePageIndex = Math.min(pageIndex, totalPages - 1);
+  const pageRows = useMemo(
+    () => filtered.slice(safePageIndex * pageSize, safePageIndex * pageSize + pageSize),
+    [filtered, safePageIndex, pageSize],
+  );
+
+  useEffect(() => {
+    setPageIndex(0);
+  }, [search, activeFilter, pageSize]);
+
+  // Library
+  const [library, setLibrary] = useState<ConditionLibraryEntry[]>([]);
+  useEffect(() => {
+    getConditionLibrary().then(setLibrary).catch(() => {});
+  }, []);
+  const [libraryDrawerOpen, setLibraryDrawerOpen] = useState(false);
+  const [librarySearch, setLibrarySearch] = useState("");
+  const [libraryTypeFilter, setLibraryTypeFilter] = useState<string>("all");
+  const refreshLibrary = useCallback(() => getConditionLibrary().then(setLibrary).catch(() => {}), []);
   const libraryTypeKeys = useMemo(() => {
     const seen = new Set<string>(CONDITION_TYPE_KEYS);
-    for (const entry of library) {
-      seen.add(entry.type.trim().toLowerCase());
-    }
-    return [...CONDITION_TYPE_KEYS, ...Array.from(seen).filter((k) => !CONDITION_TYPE_KEYS.includes(k as typeof CONDITION_TYPE_KEYS[number])).sort()];
+    for (const entry of library) seen.add(entry.type.trim().toLowerCase());
+    return [...CONDITION_TYPE_KEYS, ...Array.from(seen).filter((k) => !(CONDITION_TYPE_KEYS as readonly string[]).includes(k)).sort()];
   }, [library]);
-
   const filteredLibrary = useMemo(() => {
     const q = librarySearch.trim().toLowerCase();
     return library.filter((entry) => {
@@ -926,6 +962,97 @@ function ConditionsSubTab({
       return true;
     });
   }, [library, librarySearch, libraryTypeFilter]);
+
+  // Drawer
+  const [drawerMode, setDrawerMode] = useState<"create" | "edit" | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [form, setForm] = useState<{ type: string; value: string }>({ type: "inclusion", value: "" });
+  const [saving, setSaving] = useState(false);
+
+  function openCreate() {
+    setEditingId(null);
+    const defaultType = activeFilter !== "all" && CONDITION_TYPE_META[activeFilter] ? activeFilter : "inclusion";
+    setForm({ type: defaultType, value: "" });
+    setDrawerMode("create");
+  }
+
+  function openEdit(c: ProjectCondition) {
+    setEditingId(c.id);
+    setForm({ type: c.type.trim().toLowerCase(), value: c.value });
+    setDrawerMode("edit");
+  }
+
+  function closeDrawer() {
+    setDrawerMode(null);
+    setEditingId(null);
+    setSaving(false);
+  }
+
+  function handleDrawerSave() {
+    const trimmed = form.value.trim();
+    const type = form.type.trim().toLowerCase();
+    if (!trimmed || !type) return;
+    setSaving(true);
+    startTransition(async () => {
+      try {
+        if (drawerMode === "create") {
+          onApply(await createCondition(workspace.project.id, { type, value: trimmed, order: allConditions.length + 1 }));
+        } else if (drawerMode === "edit" && editingId) {
+          onApply(await updateCondition(workspace.project.id, editingId, { type, value: trimmed }));
+        }
+        closeDrawer();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Save failed.");
+        setSaving(false);
+      }
+    });
+  }
+
+  function handleDrawerDelete() {
+    if (!editingId) return;
+    if (!confirm("Delete this condition?")) return;
+    setSaving(true);
+    startTransition(async () => {
+      try {
+        onApply(await deleteCondition(workspace.project.id, editingId));
+        closeDrawer();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Delete failed.");
+        setSaving(false);
+      }
+    });
+  }
+
+  function moveCondition(condition: ProjectCondition, direction: "up" | "down") {
+    const typeKey = condition.type.trim().toLowerCase();
+    const conditions = conditionsByType.get(typeKey) ?? [];
+    const idx = conditions.findIndex((c) => c.id === condition.id);
+    if (idx < 0) return;
+    const swapIndex = direction === "up" ? idx - 1 : idx + 1;
+    if (swapIndex < 0 || swapIndex >= conditions.length) return;
+    const reordered = [...conditions];
+    [reordered[idx], reordered[swapIndex]] = [reordered[swapIndex], reordered[idx]];
+    const otherConditions = allConditions.filter((c) => c.type.trim().toLowerCase() !== typeKey);
+    const orderedIds = [...otherConditions.map((c) => c.id), ...reordered.map((c) => c.id)];
+    startTransition(async () => {
+      try {
+        onApply(await reorderConditions(workspace.project.id, orderedIds));
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Reorder failed.");
+      }
+    });
+  }
+
+  function saveToLibrary(value: string, type: string) {
+    startTransition(async () => {
+      try {
+        await createConditionLibraryEntry({ type, value });
+        refreshLibrary();
+      } catch (e) {
+        onError(e instanceof Error ? e.message : "Failed to save to library.");
+      }
+    });
+  }
 
   function addConditionFromLibrary(entry: ConditionLibraryEntry) {
     startTransition(async () => {
@@ -942,47 +1069,6 @@ function ConditionsSubTab({
     });
   }
 
-  const [addInputValues, setAddInputValues] = useState<Record<string, string>>({});
-
-  function addCondition(typeKey: string) {
-    const value = (addInputValues[typeKey] ?? "").trim();
-    if (!value) return;
-    startTransition(async () => {
-      try {
-        const next = await createCondition(workspace.project.id, {
-          type: typeKey,
-          value,
-          order: (conditionsByType.get(typeKey)?.length ?? 0) + 1,
-        });
-        onApply(next);
-        setAddInputValues((prev) => ({ ...prev, [typeKey]: "" }));
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Add failed.");
-      }
-    });
-  }
-
-  function removeCondition(id: string) {
-    startTransition(async () => {
-      try {
-        onApply(await deleteCondition(workspace.project.id, id));
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Delete failed.");
-      }
-    });
-  }
-
-  function saveToLibrary(value: string, type: string) {
-    startTransition(async () => {
-      try {
-        await createConditionLibraryEntry({ type, value });
-        refreshLibrary();
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Failed to save to library.");
-      }
-    });
-  }
-
   function removeFromLibrary(entryId: string) {
     startTransition(async () => {
       try {
@@ -994,185 +1080,317 @@ function ConditionsSubTab({
     });
   }
 
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState("");
-
-  function saveEdit(id: string, type: string) {
-    if (!editValue.trim()) return;
-    startTransition(async () => {
-      try {
-        onApply(await updateCondition(workspace.project.id, id, { value: editValue.trim() }));
-        setEditingId(null);
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Update failed.");
-      }
-    });
-  }
-
-  function moveCondition(condition: ProjectCondition, typeKey: string, direction: "up" | "down") {
-    const conditions = conditionsByType.get(typeKey) ?? [];
-    const idx = conditions.findIndex((c) => c.id === condition.id);
-    if (idx < 0) return;
-    const swapIndex = direction === "up" ? idx - 1 : idx + 1;
-    if (swapIndex < 0 || swapIndex >= conditions.length) return;
-    const reordered = [...conditions];
-    [reordered[idx], reordered[swapIndex]] = [reordered[swapIndex], reordered[idx]];
-    const otherConditions = allConditions.filter((c) => c.type.trim().toLowerCase() !== typeKey);
-    const orderedIds = [
-      ...otherConditions.map((c) => c.id),
-      ...reordered.map((c) => c.id),
-    ];
-    startTransition(async () => {
-      try {
-        onApply(await reorderConditions(workspace.project.id, orderedIds));
-      } catch (e) {
-        onError(e instanceof Error ? e.message : "Reorder failed.");
-      }
-    });
-  }
-
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex items-center justify-between shrink-0 mb-3">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-fg/70">
-            {allConditions.length} condition{allConditions.length !== 1 ? "s" : ""}
-          </span>
+      <div className="rounded-lg border border-line bg-panel flex flex-col flex-1 min-h-0">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line bg-panel2/40 shrink-0">
+          <div>
+            <h3 className="text-sm font-semibold text-fg">Conditions</h3>
+            <p className="text-xs text-fg/45 mt-0.5">
+              {allConditions.length} condition{allConditions.length !== 1 ? "s" : ""} across this quote
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setLibrarySearch("");
+                setLibraryTypeFilter("all");
+                refreshLibrary();
+                setLibraryDrawerOpen(true);
+              }}
+              disabled={loading}
+            >
+              <BookOpen className="h-3.5 w-3.5" />
+              Library
+            </Button>
+            <Button variant="accent" size="sm" onClick={openCreate}>
+              <Plus className="h-3.5 w-3.5" />
+              New Condition
+            </Button>
+          </div>
         </div>
-        <Button
-          size="sm"
-          variant="secondary"
-          onClick={() => {
-            setLibrarySearch("");
-            setLibraryTypeFilter("all");
-            refreshLibrary();
-            setLibraryDrawerOpen(true);
-          }}
-          disabled={loading}
-        >
-          <BookOpen className="h-3.5 w-3.5" />
-          Pull from Library
-        </Button>
+
+        {/* Search + filters */}
+        <div className="px-4 py-3 space-y-3 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search conditions..."
+                className="pl-9"
+              />
+            </div>
+            <Select
+              className="w-32"
+              value={String(pageSize)}
+              onValueChange={(v) => setPageSize(Number(v) || 25)}
+              options={CONDITION_PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n} per page` }))}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ConditionFilterPill
+              label="All"
+              count={allConditions.length}
+              active={activeFilter === "all"}
+              tone="default"
+              onClick={() => setActiveFilter("all")}
+            />
+            {pillTypes.map((key) => {
+              const meta = conditionTypeMeta(key);
+              return (
+                <ConditionFilterPill
+                  key={key}
+                  label={meta.label}
+                  count={countsByType.get(key) ?? 0}
+                  active={activeFilter === key}
+                  tone={meta.tone}
+                  onClick={() => setActiveFilter(key)}
+                />
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Table */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4">
+          <div className="rounded-lg border border-line overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-panel2/60 sticky top-0">
+                <tr className="text-left text-[11px] uppercase tracking-wider text-fg/45">
+                  <th className="px-4 py-2 w-36 font-medium">Type</th>
+                  <th className="px-4 py-2 font-medium">Value</th>
+                  <th className="px-4 py-2 w-10" />
+                </tr>
+              </thead>
+              <tbody>
+                {pageRows.length === 0 && (
+                  <tr>
+                    <td colSpan={3} className="px-4 py-10">
+                      <EmptyState>
+                        {search || activeFilter !== "all"
+                          ? "No conditions match your filters."
+                          : "No conditions yet. Click \"New Condition\" to add one."}
+                      </EmptyState>
+                    </td>
+                  </tr>
+                )}
+                {pageRows.map((c) => {
+                  const meta = conditionTypeMeta(c.type);
+                  return (
+                    <tr
+                      key={c.id}
+                      onClick={() => openEdit(c)}
+                      className="border-t border-line hover:bg-panel2/40 cursor-pointer transition-colors"
+                    >
+                      <td className="px-4 py-2.5 align-top">
+                        <Badge tone={meta.tone}>{meta.label}</Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-fg/90 leading-relaxed">
+                        <div className="line-clamp-2">{c.value}</div>
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-fg/30">
+                        <ChevronRight className="inline h-3.5 w-3.5" />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        {/* Pagination */}
+        {filtered.length > 0 && (
+          <div className="flex items-center justify-between px-4 py-2.5 border-t border-line text-xs text-fg/50 shrink-0">
+            <span>
+              Showing {safePageIndex * pageSize + 1}–{Math.min((safePageIndex + 1) * pageSize, filtered.length)} of {filtered.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={safePageIndex === 0}
+                onClick={() => setPageIndex(Math.max(0, safePageIndex - 1))}
+              >
+                <ChevronLeft className="h-3.5 w-3.5" />
+                Prev
+              </Button>
+              <span className="text-fg/40">
+                Page {safePageIndex + 1} / {totalPages}
+              </span>
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={safePageIndex >= totalPages - 1}
+                onClick={() => setPageIndex(Math.min(totalPages - 1, safePageIndex + 1))}
+              >
+                Next
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
-        {activeTypeKeys.map((typeKey) => {
-          const meta = conditionTypeMeta(typeKey);
-          const conditions = conditionsByType.get(typeKey) ?? [];
-          return (
-            <div
-              key={typeKey}
-              className={cn(
-                "rounded-lg border border-line border-l-4",
-                conditionTypeSectionAccent(meta.tone),
-              )}
-            >
-              <div className="flex items-center gap-2 px-3 py-2 bg-panel2/40 rounded-t-lg border-b border-line">
-                <Badge tone={meta.tone}>{meta.label}</Badge>
-                <span className="text-[11px] text-fg/35">{conditions.length}</span>
-              </div>
-
-              <div className="p-3 space-y-1">
-                {conditions.length === 0 ? (
-                  <p className="text-xs text-fg/35 py-1">No {meta.label.toLowerCase()} added.</p>
-                ) : (
-                  conditions.map((c, idx) => (
-                    <div
-                      key={c.id}
-                      className="group flex items-center gap-2 rounded-md border border-line/60 bg-bg/30 px-3 py-2 text-sm"
+      {/* ── Edit/Create Drawer ── */}
+      {typeof document !== "undefined" &&
+        ReactDOM.createPortal(
+          <AnimatePresence>
+            {drawerMode && (
+              <>
+                <motion.div
+                  key="condition-drawer-backdrop"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.15 }}
+                  className="fixed inset-0 z-[200] bg-black/30"
+                  onClick={closeDrawer}
+                />
+                <motion.div
+                  key="condition-drawer"
+                  initial={{ x: 480 }}
+                  animate={{ x: 0 }}
+                  exit={{ x: 480 }}
+                  transition={{ type: "spring", damping: 30, stiffness: 300 }}
+                  className="fixed inset-y-0 right-0 z-[201] w-[480px] bg-panel border-l border-line shadow-2xl flex flex-col"
+                >
+                  <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-line bg-panel2/40">
+                    <div>
+                      <p className="text-[10px] font-semibold text-fg/45 uppercase tracking-wider">
+                        {drawerMode === "create" ? "New Condition" : "Edit Condition"}
+                      </p>
+                      <h3 className="text-sm font-medium text-fg mt-0.5">
+                        {drawerMode === "create" ? "Add to this quote" : "Update condition"}
+                      </h3>
+                    </div>
+                    <button
+                      onClick={closeDrawer}
+                      className="rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg transition-colors"
                     >
-                      {editingId === c.id ? (
-                        <div className="flex flex-1 items-center gap-2">
-                          <Input
-                            className="flex-1"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter") saveEdit(c.id, typeKey);
-                              if (e.key === "Escape") setEditingId(null);
-                            }}
-                            autoFocus
-                          />
-                          <Button size="xs" onClick={() => saveEdit(c.id, typeKey)} disabled={loading}>
-                            <Save className="h-3 w-3" />
-                          </Button>
-                          <Button size="xs" variant="ghost" onClick={() => setEditingId(null)}>
-                            Cancel
-                          </Button>
-                        </div>
-                      ) : (
-                        <>
-                          <span
-                            className="flex-1 cursor-pointer"
-                            onDoubleClick={() => {
-                              setEditingId(c.id);
-                              setEditValue(c.value);
+                      <X className="h-4 w-4" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+                    <div>
+                      <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Type</label>
+                      <Select
+                        className="mt-1"
+                        value={form.type}
+                        onValueChange={(v) => setForm({ ...form, type: v })}
+                        options={pillTypes.map((key) => ({
+                          value: key,
+                          label: conditionTypeMeta(key).label,
+                        }))}
+                      />
+                    </div>
+                    <div>
+                      <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Value</label>
+                      <Textarea
+                        className="mt-1 min-h-[140px]"
+                        value={form.value}
+                        onChange={(e) => setForm({ ...form, value: e.target.value })}
+                        placeholder="Enter the clause text..."
+                        autoFocus
+                        onKeyDown={(e) => {
+                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+                            e.preventDefault();
+                            handleDrawerSave();
+                          }
+                          if (e.key === "Escape") {
+                            e.preventDefault();
+                            closeDrawer();
+                          }
+                        }}
+                      />
+                      <p className="mt-1.5 text-[10px] text-fg/40">⌘/Ctrl + Enter to save · Esc to cancel</p>
+                    </div>
+
+                    {drawerMode === "edit" && editingId && (
+                      <div>
+                        <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Reorder</label>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              const c = allConditions.find((x) => x.id === editingId);
+                              if (c) moveCondition(c, "up");
                             }}
                           >
-                            {c.value}
-                          </span>
-                          <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-                            <button
-                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-accent disabled:opacity-30"
-                              onClick={() => saveToLibrary(c.value, typeKey)}
-                              disabled={loading}
-                              title="Save to library"
-                            >
-                              <SaveAll className="h-3 w-3" />
-                            </button>
-                            <button
-                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
-                              onClick={() => moveCondition(c, typeKey, "up")}
-                              disabled={idx === 0 || loading}
-                            >
-                              <ArrowUp className="h-3 w-3" />
-                            </button>
-                            <button
-                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-fg/60 disabled:opacity-30"
-                              onClick={() => moveCondition(c, typeKey, "down")}
-                              disabled={idx === conditions.length - 1 || loading}
-                            >
-                              <ArrowDown className="h-3 w-3" />
-                            </button>
-                            <button
-                              className="rounded p-1 text-fg/30 hover:bg-panel2 hover:text-danger disabled:opacity-30"
-                              onClick={() => removeCondition(c.id)}
-                              disabled={loading}
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
-                          </div>
+                            <ArrowUp className="h-3.5 w-3.5" />
+                            Move Up
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              const c = allConditions.find((x) => x.id === editingId);
+                              if (c) moveCondition(c, "down");
+                            }}
+                          >
+                            <ArrowDown className="h-3.5 w-3.5" />
+                            Move Down
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="border-t border-line px-5 py-3 flex items-center justify-between gap-2 bg-panel2/40">
+                    <div className="flex items-center gap-2">
+                      {drawerMode === "edit" && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={handleDrawerDelete}
+                            disabled={saving}
+                            className="text-danger hover:bg-danger/10"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => saveToLibrary(form.value, form.type)}
+                            disabled={saving || !form.value.trim()}
+                          >
+                            <SaveAll className="h-3.5 w-3.5" />
+                            Save to Library
+                          </Button>
                         </>
                       )}
                     </div>
-                  ))
-                )}
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" size="sm" onClick={closeDrawer} disabled={saving}>
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="accent"
+                        size="sm"
+                        onClick={handleDrawerSave}
+                        disabled={saving || !form.value.trim() || !form.type.trim()}
+                      >
+                        {saving ? "Saving..." : drawerMode === "create" ? "Create" : "Save"}
+                      </Button>
+                    </div>
+                  </div>
+                </motion.div>
+              </>
+            )}
+          </AnimatePresence>,
+          document.body,
+        )}
 
-                <div className="flex items-center gap-2 pt-1">
-                  <Input
-                    className="flex-1"
-                    placeholder={`Add ${meta.label.toLowerCase().replace(/s$/, "")}...`}
-                    value={addInputValues[typeKey] ?? ""}
-                    onChange={(e) => setAddInputValues((prev) => ({ ...prev, [typeKey]: e.target.value }))}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") addCondition(typeKey);
-                    }}
-                  />
-                  <Button
-                    size="xs"
-                    onClick={() => addCondition(typeKey)}
-                    disabled={loading || !(addInputValues[typeKey] ?? "").trim()}
-                  >
-                    <Plus className="h-3.5 w-3.5" />
-                    Add
-                  </Button>
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
+      {/* ── Library Drawer ── */}
       <ModalBackdrop open={libraryDrawerOpen} onClose={() => setLibraryDrawerOpen(false)} size="lg">
         <Card>
           <CardHeader>
@@ -1201,46 +1419,29 @@ function ConditionsSubTab({
                 />
               </div>
             </div>
-
             <div className="flex flex-wrap items-center gap-1.5">
-              <button
-                type="button"
+              <ConditionFilterPill
+                label="All"
+                count={library.length}
+                active={libraryTypeFilter === "all"}
+                tone="default"
                 onClick={() => setLibraryTypeFilter("all")}
-                className={cn(
-                  "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                  libraryTypeFilter === "all"
-                    ? "border-accent/20 bg-accent/8 text-accent ring-2 ring-accent/40 ring-offset-1 ring-offset-panel"
-                    : "border-line bg-panel2 text-fg/70 hover:bg-panel2/80",
-                )}
-              >
-                All
-                <span className="rounded-full bg-bg/40 px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums">
-                  {library.length}
-                </span>
-              </button>
+              />
               {libraryTypeKeys.map((key) => {
                 const meta = conditionTypeMeta(key);
                 const count = library.filter((e) => e.type.trim().toLowerCase() === key).length;
                 return (
-                  <button
+                  <ConditionFilterPill
                     key={key}
-                    type="button"
+                    label={meta.label}
+                    count={count}
+                    active={libraryTypeFilter === key}
+                    tone={meta.tone}
                     onClick={() => setLibraryTypeFilter(key)}
-                    className={cn(
-                      "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
-                      conditionTypeBadgeClasses(meta.tone),
-                      libraryTypeFilter === key && "ring-2 ring-accent/40 ring-offset-1 ring-offset-panel",
-                    )}
-                  >
-                    {meta.label}
-                    <span className="rounded-full bg-bg/40 px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums">
-                      {count}
-                    </span>
-                  </button>
+                  />
                 );
               })}
             </div>
-
             {filteredLibrary.length === 0 ? (
               <EmptyState>
                 {librarySearch || libraryTypeFilter !== "all"
@@ -1257,7 +1458,7 @@ function ConditionsSubTab({
                       className="group flex items-center gap-3 rounded-lg border border-line/60 px-3 py-2 text-sm hover:bg-panel2/40 transition-colors"
                     >
                       <Badge tone={meta.tone} className="shrink-0">
-                        {meta.label.replace(/s$/, "")}
+                        {meta.label}
                       </Badge>
                       <span className="flex-1 text-fg/80 truncate">{entry.value}</span>
                       <div className="flex items-center gap-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
@@ -1287,6 +1488,45 @@ function ConditionsSubTab({
         </Card>
       </ModalBackdrop>
     </div>
+  );
+}
+
+function ConditionFilterPill({
+  label,
+  count,
+  active,
+  tone,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  active: boolean;
+  tone: ConditionBadgeTone;
+  onClick: () => void;
+}) {
+  const toneClasses: Record<ConditionBadgeTone, string> = {
+    default: "border-line bg-panel2 text-fg/70 hover:bg-panel2/80",
+    success: "border-success/20 bg-success/8 text-success hover:bg-success/12",
+    warning: "border-warning/20 bg-warning/8 text-warning hover:bg-warning/12",
+    danger: "border-danger/20 bg-danger/8 text-danger hover:bg-danger/12",
+    info: "border-accent/20 bg-accent/8 text-accent hover:bg-accent/12",
+  };
+  const activeRing = "ring-2 ring-accent/40 ring-offset-1 ring-offset-panel";
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+        toneClasses[tone],
+        active && activeRing,
+      )}
+    >
+      <span>{label}</span>
+      <span className="rounded-full bg-bg/40 px-1.5 py-0.5 text-[9.5px] font-semibold tabular-nums">
+        {count}
+      </span>
+    </button>
   );
 }
 
