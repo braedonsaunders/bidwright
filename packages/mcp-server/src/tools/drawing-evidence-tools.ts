@@ -12,7 +12,7 @@ const DEFAULT_RENDER_DPIS = [72, 150];
 const DEFAULT_ATLAS_DPI = 150;
 const DEFAULT_INSPECTION_DPI = 300;
 const CAD_EVIDENCE_EXTENSIONS = new Set(["dwg", "dxf"]);
-const MODEL_EVIDENCE_EXTENSIONS = new Set(["ifc", "rvt", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae"]);
+const MODEL_EVIDENCE_EXTENSIONS = new Set(["ifc", "rvt", "step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "nwd", "nwf", "nwc"]);
 const ATLAS_ARTIFACT_DIR = ".bidwright/drawing-evidence";
 
 type JsonRecord = Record<string, any>;

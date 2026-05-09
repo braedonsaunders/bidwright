@@ -1056,7 +1056,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
             ref={fileInputRef}
             className="hidden"
             type="file"
-            accept=".zip,.7z,.rar,.tar,.gz,.tgz,.pdf,.xlsx,.xls,.xlsm,.ods,.csv,.tsv,.doc,.docx,.rtf,.pptx,.html,.htm,.mhtml,.mht,.txt,.xml,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.dwg,.dxf,.msg,.eml,.mpp,.mpt,.mpx,.xer,.p6xml,.pmxml,application/zip,application/x-7z-compressed,application/vnd.rar,application/x-rar-compressed,application/x-tar,application/gzip,application/vnd.ms-outlook,message/rfc822"
+            accept=".zip,.7z,.rar,.tar,.gz,.tgz,.pdf,.xlsx,.xls,.xlsm,.ods,.csv,.tsv,.doc,.docx,.rtf,.pptx,.html,.htm,.mhtml,.mht,.txt,.xml,.png,.jpg,.jpeg,.tif,.tiff,.bmp,.dwg,.dxf,.msg,.eml,.mpp,.mpt,.mpx,.xer,.p6xml,.pmxml,.nwd,.nwf,.nwc,application/zip,application/x-7z-compressed,application/vnd.rar,application/x-rar-compressed,application/x-tar,application/gzip,application/vnd.ms-outlook,message/rfc822"
             multiple
             onChange={(e) => handleFiles(e.target.files, { append: true })}
           />

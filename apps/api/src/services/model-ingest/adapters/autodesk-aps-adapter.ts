@@ -1,48 +1,23 @@
-import type { ModelIngestCapability } from "@bidwright/domain";
+import type { CanonicalModelElement, CanonicalModelQuantity, ModelIngestCapability } from "@bidwright/domain";
+import { ApsClient } from "../aps-client.js";
+import { buildEstimateLens, createId, makeCanonicalManifest, makeProvenance } from "../utils.js";
 import type { ModelAdapterIngestResult, ModelIngestAdapter, ModelIngestContext, ModelIngestSettings, ModelIngestSource } from "../types.js";
-import {
-  makeCanonicalManifest,
-  makeProvenance,
-} from "../utils.js";
 
-const ADAPTER_ID = "autodesk-aps.native-cad-bim";
-const ADAPTER_VERSION = "1.0.0";
-const FORMATS = new Set(["rvt", "dwg"]);
-const CONFIG_KEYS = {
-  clientId: "autodeskClientId",
-  clientSecret: "autodeskClientSecret",
-  revitActivityId: "autodeskApsRevitActivityId",
-  autocadActivityId: "autodeskApsAutocadActivityId",
-} as const;
-const ACTIVITY_CONFIG_BY_FORMAT: Record<string, keyof typeof CONFIG_KEYS> = {
-  rvt: "revitActivityId",
-  dwg: "autocadActivityId",
-};
+const ADAPTER_ID = "autodesk-aps.model-derivative";
+const ADAPTER_VERSION = "2.0.0";
+const FORMATS = new Set(["rvt", "dwg", "nwd", "nwf", "nwc"]);
+const MAX_TRANSLATION_WAIT_MS = 600_000;
 
 function settingValue(settings: ModelIngestSettings | undefined, key: string) {
   const value = settings?.integrations?.[key];
   return typeof value === "string" ? value.trim() : "";
 }
 
-function configured(settings: ModelIngestSettings | undefined, key: keyof typeof CONFIG_KEYS) {
-  const settingKey = CONFIG_KEYS[key];
-  const value = settingValue(settings, settingKey);
-  return {
-    configured: Boolean(value),
-    source: value ? "organization_settings" : "missing",
-    missingKey: settingKey,
-  };
-}
-
 function capability(format?: string, settings?: ModelIngestSettings): ModelIngestCapability {
-  const clientId = configured(settings, "clientId");
-  const clientSecret = configured(settings, "clientSecret");
-  const activityConfigKey = format ? ACTIVITY_CONFIG_BY_FORMAT[format] : undefined;
-  const activity = activityConfigKey ? configured(settings, activityConfigKey) : undefined;
-  const missing = [clientId, clientSecret, activity].filter((entry) => entry && !entry.configured).map((entry) => entry!.missingKey);
-  const hasAuth = clientId.configured && clientSecret.configured;
-  const hasActivity = !activity || activity.configured;
-  const status: ModelIngestCapability["status"] = hasAuth && hasActivity ? "available" : hasAuth ? "degraded" : "missing";
+  const clientId = settingValue(settings, "autodeskClientId");
+  const clientSecret = settingValue(settings, "autodeskClientSecret");
+  const hasAuth = Boolean(clientId && clientSecret);
+  const status: ModelIngestCapability["status"] = hasAuth ? "available" : "missing";
   return {
     adapterId: ADAPTER_ID,
     adapterVersion: ADAPTER_VERSION,
@@ -50,30 +25,34 @@ function capability(format?: string, settings?: ModelIngestSettings): ModelInges
     formats: Array.from(FORMATS),
     status,
     message: status === "available"
-      ? "Autodesk APS credentials and extraction activity are configured."
-      : status === "degraded"
-        ? "Autodesk APS credentials are configured, but the format-specific extraction activity is not configured."
-        : "Autodesk APS credentials are not configured. Native RVT/DWG extraction is unavailable.",
-    missingConfigKeys: missing,
+      ? `Autodesk APS Model Derivative API is configured for .${format ?? "rvt/dwg/nwd"} extraction.`
+      : "Autodesk APS credentials are not configured. RVT/DWG/Navisworks extraction requires Client ID and Client Secret in organization settings.",
+    missingConfigKeys: hasAuth ? [] : ["autodeskClientId", "autodeskClientSecret"],
     features: {
-      geometry: status === "available",
-      properties: status === "available",
-      quantities: status === "available",
-      estimateLens: status === "available",
+      geometry: hasAuth,
+      properties: hasAuth,
+      quantities: hasAuth,
+      estimateLens: hasAuth,
       rawArtifacts: true,
       requiresCloud: true,
     },
     metadata: {
+      engine: "autodesk_model_derivative_v2",
       auth: hasAuth ? "configured" : "missing",
-      clientIdSource: clientId.source,
-      clientSecretSource: clientSecret.source,
-      activitySource: activity?.source ?? null,
-      activitySettingKey: activity ? CONFIG_KEYS[activityConfigKey!] : null,
       configScope: "organization_settings_only",
-      allowedProvider: "single Autodesk APS integration",
+      navisworks: "supported_via_nwd_nwf_nwc",
+      revit: "supported_via_rvt",
+      autocad: "supported_via_dwg",
       dgn: "intentionally_unsupported",
     },
   };
+}
+
+function formatLabel(format: string): string {
+  if (format === "rvt") return "Revit";
+  if (format === "dwg") return "AutoCAD DWG";
+  if (format === "nwd" || format === "nwf" || format === "nwc") return "Navisworks";
+  return format.toUpperCase();
 }
 
 export const autodeskApsAdapter: ModelIngestAdapter = {
@@ -86,19 +65,89 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
   },
   async ingest(source: ModelIngestSource, context: ModelIngestContext): Promise<ModelAdapterIngestResult> {
     const activeCapability = capability(context.format, context.settings);
-    const method = context.format === "rvt" ? "autodesk_aps_revit_automation" : "autodesk_aps_autocad_automation";
-    const issue = activeCapability.status === "available"
-      ? {
-          severity: "warning",
-          code: "autodesk_aps_worker_not_bound",
-          message: "Autodesk APS capability is configured, but BidWright has not yet received a completed APS extraction payload for this file. The file is indexed as a native-source shell.",
-        }
-      : {
-          severity: "warning",
-          code: activeCapability.status === "missing" ? "autodesk_aps_missing_config" : "autodesk_aps_activity_missing",
-          message: activeCapability.message ?? "Autodesk APS extraction is unavailable.",
-          metadata: { missingConfigKeys: activeCapability.missingConfigKeys ?? [] },
-        };
+    const clientId = settingValue(context.settings, "autodeskClientId");
+    const clientSecret = settingValue(context.settings, "autodeskClientSecret");
+
+    if (!clientId || !clientSecret) {
+      return buildMissingResult(source, context, activeCapability);
+    }
+
+    const method = `aps_model_derivative_${context.format}`;
+    const client = new ApsClient(clientId, clientSecret);
+
+    const objectKey = `${source.projectId}/${source.id}/${source.fileName}`;
+
+    let uploaded;
+    try {
+      uploaded = await client.uploadObject(objectKey, context.absPath);
+    } catch (err) {
+      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_upload_failed");
+    }
+
+    let translationStatus;
+    try {
+      await client.submitTranslation(uploaded.urn);
+      translationStatus = await client.waitForTranslation(uploaded.urn, MAX_TRANSLATION_WAIT_MS);
+    } catch (err) {
+      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_translation_failed");
+    }
+
+    if (translationStatus.status === "timeout") {
+      return buildTimeoutResult(source, context, activeCapability, method, uploaded.urn);
+    }
+
+    let modelData;
+    try {
+      modelData = await client.extractModelData(uploaded.urn);
+    } catch (err) {
+      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_metadata_extraction_failed");
+    }
+
+    const elements: CanonicalModelElement[] = modelData.objects.map((obj) => ({
+      id: createId("me"),
+      externalId: String(obj.objectid),
+      name: obj.name,
+      elementClass: obj.elementClass || formatLabel(context.format),
+      elementType: obj.elementType || undefined,
+      system: obj.system || undefined,
+      level: obj.level || undefined,
+      material: obj.material || undefined,
+      estimateRelevant: isEstimateRelevant(obj.elementClass, obj.elementType),
+      properties: Object.keys(obj.properties).length > 0 ? obj.properties : undefined,
+    }));
+
+    const quantities: CanonicalModelQuantity[] = [];
+    for (const obj of modelData.objects) {
+      const elementId = String(obj.objectid);
+      for (const q of obj.quantities) {
+        quantities.push({
+          id: createId("mq"),
+          elementId,
+          quantityType: q.quantityType,
+          value: q.value,
+          unit: q.unit || guessUnit(q.quantityType),
+          method: "aps_model_derivative_property",
+          confidence: 0.85,
+        });
+      }
+    }
+
+    const classCounts = new Map<string, number>();
+    for (const el of elements) {
+      const key = el.elementClass || "unknown";
+      classCounts.set(key, (classCounts.get(key) ?? 0) + 1);
+    }
+    const topClasses = Array.from(classCounts.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 30)
+      .map(([name, count]) => ({ name, count }));
+
+    const estimateLens = buildEstimateLens({
+      elements,
+      quantities,
+      defaultSource: "native-quantity",
+    });
+
     const provenance = makeProvenance({
       source,
       format: context.format,
@@ -106,37 +155,150 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
       size: context.size,
       capability: activeCapability,
       method,
-      confidence: 0.2,
+      confidence: 0.85,
     });
+
     const summary = {
       parser: method,
+      engine: "autodesk_model_derivative_v2",
       nativeFormat: context.format,
+      formatLabel: formatLabel(context.format),
       provider: "autodesk-aps",
-      status: activeCapability.status,
-      note: "Native RVT/DWG extraction is intentionally routed through the single Autodesk APS provider, not cad2data or local proprietary converter installs.",
-      missingConfigKeys: activeCapability.missingConfigKeys ?? [],
+      urn: uploaded.urn,
+      viewCount: modelData.views.length,
+      views: modelData.views.map((v) => ({ guid: v.guid, name: v.name, role: v.role })),
+      translationStatus: translationStatus.status,
+      translationProgress: translationStatus.progress,
+      objectCount: elements.length,
+      quantityCount: quantities.length,
     };
+
+    const issues: Array<{ severity: "info" | "warning" | "error"; code: string; message: string; metadata?: Record<string, unknown> }> = [];
+    if (quantities.length === 0) {
+      issues.push({
+        severity: "info",
+        code: "aps_no_quantities_extracted",
+        message: `APS extracted ${elements.length} elements but no numeric quantity properties were found. Properties are available for element classification.`,
+      });
+    }
+
     const canonicalManifest = makeCanonicalManifest({
-      status: "partial",
-      units: "",
+      status: "indexed",
+      units: guessUnits(context.format),
       capability: activeCapability,
       provenance,
       summary,
-      elementStats: {},
-      estimateLens: [],
-      issues: [issue],
+      elementStats: {
+        totalElements: elements.length,
+        totalQuantities: quantities.length,
+        classDistribution: topClasses,
+      },
+      estimateLens,
+      issues,
     });
+
     return {
-      status: "partial",
-      units: "",
+      status: "indexed",
+      units: guessUnits(context.format),
       manifest: summary,
-      elementStats: {},
-      elements: [],
-      quantities: [],
-      bomRows: [],
-      issues: [issue],
+      elementStats: {
+        totalElements: elements.length,
+        totalQuantities: quantities.length,
+        classDistribution: topClasses,
+      },
+      elements,
+      quantities,
+      bomRows: buildBomRows(elements, quantities),
+      issues,
       canonicalManifest,
       artifacts: [],
     };
   },
 };
+
+function isEstimateRelevant(elementClass: string, elementType: string): boolean {
+  const lower = `${elementClass} ${elementType}`.toLowerCase();
+  const keywords = [
+    "wall", "floor", "ceiling", "roof", "door", "window", "column", "beam",
+    "slab", "foundation", "stair", "ramp", "rail", "curtain", "panel",
+    "duct", "pipe", "cable", "conduit", "tray", "conductor", "fitting",
+    "equipment", "fixture", "furniture", "plant", "mechanical", "electrical",
+    "plumbing", "fire", "sprinkler", "structural", "concrete", "steel",
+    "framing", "rebar", "reinforcement", "mep",
+  ];
+  return keywords.some((kw) => lower.includes(kw));
+}
+
+function guessUnit(quantityType: string): string {
+  const lower = quantityType.toLowerCase();
+  if (lower.includes("area")) return "sq ft";
+  if (lower.includes("volume")) return "cu ft";
+  if (lower.includes("length") || lower.includes("width") || lower.includes("height") || lower.includes("depth") || lower.includes("perimeter") || lower.includes("thickness") || lower.includes("radius") || lower.includes("diameter") || lower.includes("offset") || lower.includes("elevation")) return "ft";
+  if (lower.includes("count")) return "ea";
+  return "";
+}
+
+function guessUnits(format: string): string {
+  if (format === "rvt" || format === "dwg") return "ft";
+  return "ft";
+}
+
+function buildBomRows(
+  elements: CanonicalModelElement[],
+  quantities: CanonicalModelQuantity[],
+): Array<Record<string, unknown>> {
+  const qtyByElement = new Map<string, CanonicalModelQuantity[]>();
+  for (const q of quantities) {
+    const rows = qtyByElement.get(q.elementId ?? "") ?? [];
+    rows.push(q);
+    qtyByElement.set(q.elementId ?? "", rows);
+  }
+  return elements.map((el) => ({
+    elementId: el.id,
+    name: el.name,
+    class: el.elementClass,
+    type: el.elementType,
+    level: el.level,
+    material: el.material,
+    quantities: (qtyByElement.get(el.externalId) ?? []).map((q) => ({
+      type: q.quantityType,
+      value: q.value,
+      unit: q.unit,
+    })),
+  }));
+}
+
+function buildMissingResult(source: ModelIngestSource, context: ModelIngestContext, activeCapability: ModelIngestCapability): ModelAdapterIngestResult {
+  const method = `aps_model_derivative_${context.format}`;
+  const issue = {
+    severity: "warning" as const,
+    code: "autodesk_aps_missing_config",
+    message: "Autodesk APS credentials are not configured. RVT/DWG/Navisworks extraction requires Client ID and Client Secret in organization settings.",
+    metadata: { missingConfigKeys: activeCapability.missingConfigKeys ?? [] },
+  };
+  const provenance = makeProvenance({ source, format: context.format, checksum: context.checksum, size: context.size, capability: activeCapability, method, confidence: 0.1 });
+  const summary = { parser: method, nativeFormat: context.format, provider: "autodesk-aps", status: "missing_config" };
+  const canonicalManifest = makeCanonicalManifest({ status: "partial", units: "", capability: activeCapability, provenance, summary, elementStats: {}, issues: [issue] });
+  return { status: "partial", units: "", manifest: summary, elementStats: {}, elements: [], quantities: [], bomRows: [], issues: [issue], canonicalManifest, artifacts: [] };
+}
+
+function buildErrorResult(source: ModelIngestSource, context: ModelIngestContext, activeCapability: ModelIngestCapability, method: string, message: string, code: string): ModelAdapterIngestResult {
+  const issue = { severity: "error" as const, code, message };
+  const provenance = makeProvenance({ source, format: context.format, checksum: context.checksum, size: context.size, capability: activeCapability, method, confidence: 0.1 });
+  const summary = { parser: method, nativeFormat: context.format, provider: "autodesk-aps", error: message };
+  const canonicalManifest = makeCanonicalManifest({ status: "failed", units: "", capability: activeCapability, provenance, summary, elementStats: {}, issues: [issue] });
+  return { status: "failed", units: "", manifest: summary, elementStats: {}, elements: [], quantities: [], bomRows: [], issues: [issue], canonicalManifest, artifacts: [] };
+}
+
+function buildTimeoutResult(source: ModelIngestSource, context: ModelIngestContext, activeCapability: ModelIngestCapability, method: string, urn: string): ModelAdapterIngestResult {
+  const issue = {
+    severity: "warning" as const,
+    code: "aps_translation_timeout",
+    message: `APS Model Derivative translation did not complete within the polling window. The translation may still be processing on Autodesk's servers. URN: ${urn}`,
+    metadata: { urn },
+  };
+  const provenance = makeProvenance({ source, format: context.format, checksum: context.checksum, size: context.size, capability: activeCapability, method, confidence: 0.3 });
+  const summary = { parser: method, nativeFormat: context.format, provider: "autodesk-aps", status: "translation_timeout", urn };
+  const canonicalManifest = makeCanonicalManifest({ status: "partial", units: "", capability: activeCapability, provenance, summary, elementStats: {}, issues: [issue] });
+  return { status: "partial", units: "", manifest: summary, elementStats: {}, elements: [], quantities: [], bomRows: [], issues: [issue], canonicalManifest, artifacts: [] };
+}

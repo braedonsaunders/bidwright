@@ -1700,7 +1700,7 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     zip.forEach((relativePath, entry) => {
       if (!entry.dir && !relativePath.startsWith("__MACOSX") && !relativePath.startsWith(".")) {
         const ext = path.extname(relativePath).toLowerCase();
-        if ([".pdf", ".xlsx", ".xls", ".xlsm", ".ods", ".csv", ".tsv", ".docx", ".doc", ".rtf", ".pptx", ".html", ".htm", ".mhtml", ".mht", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".dwg", ".dxf", ".msg", ".eml", ".txt", ".xml", ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml"].includes(ext)) {
+        if ([".pdf", ".xlsx", ".xls", ".xlsm", ".ods", ".csv", ".tsv", ".docx", ".doc", ".rtf", ".pptx", ".html", ".htm", ".mhtml", ".mht", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".dwg", ".dxf", ".msg", ".eml", ".txt", ".xml", ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml", ".nwd", ".nwf", ".nwc"].includes(ext)) {
           entries.push(relativePath);
         }
       }

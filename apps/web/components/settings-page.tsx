@@ -873,8 +873,7 @@ export function SettingsPage({
   }, []);
 
   const autodeskCredentialsConfigured = Boolean(settings.integrations.autodeskClientId && settings.integrations.autodeskClientSecret);
-  const autodeskActivitiesConfigured = Boolean(settings.integrations.autodeskApsRevitActivityId && settings.integrations.autodeskApsAutocadActivityId);
-  const autodeskReady = autodeskCredentialsConfigured && autodeskActivitiesConfigured;
+  const autodeskReady = autodeskCredentialsConfigured;
 
   return (
     <div className={cn("gap-5", activeGroup === "importExport" ? "flex h-full flex-col" : "space-y-5")}>
@@ -1645,14 +1644,14 @@ export function SettingsPage({
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between gap-4">
-                  <CardTitle>Autodesk APS CAD/BIM</CardTitle>
-                  <Badge tone={autodeskReady ? "success" : autodeskCredentialsConfigured ? "warning" : "default"}>
-                    {autodeskReady ? "Ready" : autodeskCredentialsConfigured ? "Partial" : "Missing"}
+                  <CardTitle>Autodesk APS (Model Derivative)</CardTitle>
+                  <Badge tone={autodeskReady ? "success" : "default"}>
+                    {autodeskReady ? "Ready" : "Missing"}
                   </Badge>
                 </div>
               </CardHeader>
               <CardBody className="space-y-4">
-                <p className="text-xs text-fg/50">Native RVT/DWG extraction through Autodesk APS.</p>
+                <p className="text-xs text-fg/50">Extract elements, properties, and quantities from Revit (.rvt), AutoCAD (.dwg), and Navisworks (.nwd/.nwf/.nwc) files using the Autodesk Model Derivative API. Only Client ID and Client Secret are required.</p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <Label>Client ID</Label>
@@ -1676,25 +1675,8 @@ export function SettingsPage({
                     )}
                   </div>
                 </div>
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div>
-                    <Label>Revit activity ID</Label>
-                    <Input
-                      type="text"
-                      value={settings.integrations.autodeskApsRevitActivityId}
-                      onChange={(e) => updateIntegrations({ autodeskApsRevitActivityId: e.target.value })}
-                      placeholder="nickname.activity+alias"
-                    />
-                  </div>
-                  <div>
-                    <Label>AutoCAD activity ID</Label>
-                    <Input
-                      type="text"
-                      value={settings.integrations.autodeskApsAutocadActivityId}
-                      onChange={(e) => updateIntegrations({ autodeskApsAutocadActivityId: e.target.value })}
-                      placeholder="nickname.activity+alias"
-                    />
-                  </div>
+                <div className="rounded-md bg-panel2/50 p-3">
+                  <p className="text-[11px] text-fg/50">Supported formats: .rvt (Revit), .dwg (AutoCAD), .nwd/.nwf/.nwc (Navisworks). Files are uploaded to APS for cloud translation, then metadata and properties are extracted for takeoff.</p>
                 </div>
               </CardBody>
             </Card>

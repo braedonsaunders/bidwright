@@ -23,6 +23,9 @@ export const MODEL_INGEST_FORMATS = new Set([
   "dwg",
   "dxf",
   "rvt",
+  "nwd",
+  "nwf",
+  "nwc",
 ]);
 
 const ADAPTERS: ModelIngestAdapter[] = [

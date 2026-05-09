@@ -19,12 +19,13 @@ const STEP_EXTS = new Set(["step", "stp", "iges", "igs", "brep"]);
 const MESH_EXTS = new Set(["stl", "obj", "fbx", "gltf", "glb", "3ds", "dae"]);
 const IFC_EXTS = new Set(["ifc"]);
 const DXF_EXTS = new Set(["dxf", "dwg"]);
+const NAVISWORKS_EXTS = new Set(["nwd", "nwf", "nwc"]);
 
 function getFileExt(name: string): string {
   return name.split(".").pop()?.toLowerCase() ?? "";
 }
 
-type FileCategory = "step" | "mesh" | "ifc" | "dxf" | "unknown";
+type FileCategory = "step" | "mesh" | "ifc" | "dxf" | "navisworks" | "unknown";
 
 function categorizeFile(name: string): FileCategory {
   const ext = getFileExt(name);
@@ -32,6 +33,7 @@ function categorizeFile(name: string): FileCategory {
   if (MESH_EXTS.has(ext)) return "mesh";
   if (IFC_EXTS.has(ext)) return "ifc";
   if (DXF_EXTS.has(ext)) return "dxf";
+  if (NAVISWORKS_EXTS.has(ext)) return "navisworks";
   return "unknown";
 }
 
@@ -355,8 +357,10 @@ export function CadViewer({ fileUrl, fileName, className }: CadViewerProps) {
           await loadIFC(sceneCtx, data);
         } else if (category === "dxf") {
           setLoadingText("DXF/DWG viewer loading...");
-          // DXF support can be added via dxf-parser + three.js lines
           throw new Error("DXF/DWG viewing requires an additional parser. Upload a PDF export instead, or convert to STEP/IFC.");
+        } else if (category === "navisworks") {
+          setLoadingText("Navisworks model loading via Autodesk APS...");
+          throw new Error("Navisworks files (.nwd/.nwf/.nwc) require Autodesk APS cloud extraction to view. Configure APS credentials in organization settings to enable Navisworks viewing and takeoff.");
         } else {
           throw new Error(`Unsupported format: .${ext}`);
         }
