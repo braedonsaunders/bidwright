@@ -7,7 +7,6 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import {
   Building2,
   Check,
-  ChevronDown,
   ChevronRight,
   ChevronsUpDown,
   FileText,
@@ -142,35 +141,7 @@ export function AppShell({
   }, []);
   const projects = projectsProp && projectsProp.length > 0 ? projectsProp : selfProjects;
 
-  // Active project selection (persisted in localStorage)
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
-  const [projectSelectorOpen, setProjectSelectorOpen] = useState(false);
   const [themeMenuOpen, setThemeMenuOpen] = useState(false);
-  const projectSelectorRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem("bw_active_project");
-    if (stored) setActiveProjectId(stored);
-  }, []);
-
-  // Auto-select first project if none selected
-  useEffect(() => {
-    if (!activeProjectId && projects.length > 0) {
-      setActiveProjectId(projects[0].id);
-      localStorage.setItem("bw_active_project", projects[0].id);
-    }
-  }, [activeProjectId, projects]);
-
-  // Also detect active project from URL
-  useEffect(() => {
-    const match = pathname.match(/^\/projects\/([^/]+)/);
-    if (match && match[1] !== activeProjectId) {
-      setActiveProjectId(match[1]);
-      localStorage.setItem("bw_active_project", match[1]);
-    }
-  }, [pathname, activeProjectId]);
-
-  const activeProject = projects.find((p) => p.id === activeProjectId) ?? projects[0] ?? null;
   const themeOption = THEME_OPTIONS.find((option) => option.value === theme) ?? THEME_OPTIONS[2];
   const themeLabel = t(`theme.${themeOption.labelKey}`);
   const themeDescription = theme === "system"
@@ -198,7 +169,6 @@ export function AppShell({
     if (!sidebarCollapsed) return;
     setSearchOpen(false);
     setOrgSwitcherOpen(false);
-    setProjectSelectorOpen(false);
     setThemeMenuOpen(false);
     setUserMenuOpen(false);
   }, [sidebarCollapsed]);
@@ -234,10 +204,7 @@ export function AppShell({
       if (searchRef.current && !searchRef.current.contains(target)) {
         setSearchOpen(false);
       }
-      if (projectSelectorRef.current && !projectSelectorRef.current.contains(target)) {
-        setProjectSelectorOpen(false);
-        setThemeMenuOpen(false);
-      }
+      setThemeMenuOpen(false);
       // Close org switcher and user menu on outside clicks
       const sidebar = document.querySelector("aside");
       if (sidebar && !sidebar.contains(target)) {
@@ -537,138 +504,39 @@ export function AppShell({
           })()}
         </nav>
 
-        {!sidebarCollapsed && activeProject && (
-          <div ref={projectSelectorRef} className="relative border-t border-line px-4 py-3">
-            <div className="flex items-center justify-between text-xs text-fg/40">
-              <span>{t("activeProject")}</span>
-              <div className="relative">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setThemeMenuOpen((open) => !open);
-                  }}
-                  className="rounded-md p-1 text-fg/40 transition-colors hover:bg-panel2/50 hover:text-fg/70"
-                  title={themeDescription}
-                >
-                  <ThemeIcon className="h-3.5 w-3.5" />
-                </button>
-                {themeMenuOpen ? (
-                  <div className="absolute bottom-full right-0 z-50 mb-1 w-32 rounded-lg border border-line bg-panel p-1 shadow-lg">
-                    {THEME_OPTIONS.map((option) => {
-                      const Icon = option.icon;
-                      const selected = theme === option.value;
-                      return (
-                        <button
-                          key={option.value}
-                          type="button"
-                          className={cn(
-                            "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors hover:bg-panel2",
-                            selected ? "text-accent" : "text-fg/70",
-                          )}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setTheme(option.value);
-                            setThemeMenuOpen(false);
-                          }}
-                        >
-                          <Icon className="h-3.5 w-3.5" />
-                          <span className="min-w-0 flex-1">{t(`theme.${option.labelKey}`)}</span>
-                          {selected ? <Check className="h-3.5 w-3.5" /> : null}
-                        </button>
-                      );
-                    })}
-                  </div>
-                ) : null}
-              </div>
-            </div>
-            <button
-              onClick={() => setProjectSelectorOpen((v) => !v)}
-              className="mt-2 flex w-full items-center gap-2 rounded-lg bg-panel2 px-3 py-2 text-xs font-medium text-fg/70 transition-colors hover:bg-panel2/80 hover:text-fg"
-            >
-              <span className="min-w-0 flex-1 truncate">{activeProject.name}</span>
-              {activeProject.latestRevision && (
-                <span className="shrink-0 text-[10px] text-fg/35">{formatCompactMoney(activeProject.latestRevision.subtotal)}</span>
-              )}
-              <ChevronDown className={cn("h-3.5 w-3.5 shrink-0 transition-transform", projectSelectorOpen && "rotate-180")} />
-            </button>
-
-            {projectSelectorOpen && projects.length > 0 && (
-              <div className="absolute bottom-full left-3 right-3 mb-1 max-h-56 overflow-y-auto rounded-lg border border-line bg-panel shadow-lg py-1 z-50">
-                <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                  {t("switchProject")}
-                </div>
-                {projects.map((p) => (
-                  <button
+        {!sidebarCollapsed && projects.length > 0 && (
+          <div className="border-t border-line px-3 pt-3 pb-1">
+            <span className="px-1 text-[11px] font-medium uppercase tracking-wider text-fg/30">
+              Recent
+            </span>
+            <div className="mt-1.5 space-y-0.5">
+              {projects.slice(0, 5).map((p) => {
+                const isActive = pathname.startsWith(`/projects/${p.id}`);
+                return (
+                  <Link
                     key={p.id}
-                    onClick={() => {
-                      setActiveProjectId(p.id);
-                      localStorage.setItem("bw_active_project", p.id);
-                      setProjectSelectorOpen(false);
-                    }}
+                    href={`/projects/${p.id}`}
                     className={cn(
-                      "flex w-full items-center gap-2 px-3 py-2 text-xs transition-colors",
-                      p.id === activeProject.id
-                        ? "text-accent bg-accent/5"
-                        : "text-fg/60 hover:bg-panel2 hover:text-fg"
+                      "flex flex-col rounded-lg px-2.5 py-2 transition-colors",
+                      isActive
+                        ? "bg-accent/10 text-accent"
+                        : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
                     )}
                   >
-                    <span className="flex-1 text-left truncate">{p.name}</span>
-                    {p.id === activeProject.id && <Check className="h-3 w-3 text-accent" />}
-                  </button>
-                ))}
-              </div>
-            )}
+                    <span className="truncate text-xs font-medium">{p.name}</span>
+                    <span className="truncate text-[10px] text-fg/30">
+                      {p.clientName}
+                      {p.latestRevision ? ` · ${formatCompactMoney(p.latestRevision.subtotal)}` : ""}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
           </div>
         )}
 
         {sidebarCollapsed && (
-          <div ref={projectSelectorRef} className="relative space-y-2 border-t border-line px-2 py-3">
-            {activeProject && (
-              <div className="relative">
-                <SidebarTooltip label={t("activeProjectLabel", { name: activeProject.name })}>
-                  <button
-                    type="button"
-                    onClick={() => setProjectSelectorOpen((v) => !v)}
-                    className={cn(
-                      "flex h-10 w-full items-center justify-center rounded-lg transition-colors hover:bg-panel2 hover:text-fg",
-                      projectSelectorOpen ? "bg-panel2 text-fg" : "text-fg/45",
-                    )}
-                    aria-label={t("activeProjectLabel", { name: activeProject.name })}
-                  >
-                    <PackageOpen className="h-4 w-4" />
-                  </button>
-                </SidebarTooltip>
-
-                {projectSelectorOpen && projects.length > 0 && (
-                  <div className="absolute bottom-0 left-full z-50 ml-2 max-h-56 w-64 overflow-y-auto rounded-lg border border-line bg-panel py-1 shadow-lg">
-                    <div className="px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-fg/30">
-                      {t("switchProject")}
-                    </div>
-                    {projects.map((p) => (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => {
-                          setActiveProjectId(p.id);
-                          localStorage.setItem("bw_active_project", p.id);
-                          setProjectSelectorOpen(false);
-                        }}
-                        className={cn(
-                          "flex w-full items-center gap-2 px-3 py-2 text-xs transition-colors",
-                          p.id === activeProject.id
-                            ? "bg-accent/5 text-accent"
-                            : "text-fg/60 hover:bg-panel2 hover:text-fg"
-                        )}
-                      >
-                        <span className="flex-1 truncate text-left">{p.name}</span>
-                        {p.id === activeProject.id && <Check className="h-3 w-3 text-accent" />}
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
-
+          <div className="relative space-y-2 border-t border-line px-2 py-3">
             <div className="relative">
               <SidebarTooltip label={themeDescription}>
                 <button
