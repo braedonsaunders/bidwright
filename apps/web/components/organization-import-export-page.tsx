@@ -10,20 +10,17 @@ import {
   Boxes,
   CheckCircle2,
   ClipboardCheck,
-  Columns3,
   Database,
   Download,
   Eye,
   FileJson,
   FileSpreadsheet,
-  Filter,
   FolderOpen,
   Library,
   ListChecks,
   Loader2,
   Play,
   RefreshCw,
-  Search,
   Settings2,
   ShieldCheck,
   Table2,
@@ -524,18 +521,6 @@ function downloadJson(fileName: string, data: unknown) {
   URL.revokeObjectURL(url);
 }
 
-function toneClass(tone: ExportSection["tone"]) {
-  return {
-    accent: "border-accent/30 bg-accent/12 text-accent dark:border-accent/25 dark:bg-accent/8",
-    blue: "border-blue-500/30 bg-blue-500/12 text-blue-600 dark:border-blue-500/20 dark:bg-blue-500/8 dark:text-blue-500",
-    green: "border-success/30 bg-success/12 text-success dark:border-success/20 dark:bg-success/8",
-    violet: "border-violet-500/30 bg-violet-500/12 text-violet-600 dark:border-violet-500/20 dark:bg-violet-500/8 dark:text-violet-500",
-    amber: "border-warning/30 bg-warning/12 text-warning dark:border-warning/20 dark:bg-warning/8",
-    rose: "border-rose-500/30 bg-rose-500/12 text-rose-600 dark:border-rose-500/20 dark:bg-rose-500/8 dark:text-rose-500",
-    slate: "border-fg/20 bg-fg/8 text-fg/70 dark:border-fg/15 dark:bg-fg/6 dark:text-fg/60",
-  }[tone];
-}
-
 function formatCount(value: number) {
   return value > 999 ? `${(value / 1000).toFixed(1)}k` : String(value);
 }
@@ -752,20 +737,20 @@ export function OrganizationImportExportPage({
   };
 
   return (
-    <div className="flex h-full flex-col gap-5 overflow-hidden">
-      <div className="shrink-0 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+      <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-base font-semibold text-fg">Organization Import / Export</h2>
-          <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-fg/45">
-            <span>{organizationName || brand.companyName || "Current organization"}</span>
-            <span className="h-1 w-1 rounded-full bg-fg/25" />
+          <h2 className="text-sm font-semibold text-fg">Import / Export</h2>
+          <div className="mt-0.5 flex items-center gap-2 text-[11px] text-fg/40">
+            <span>{organizationName || brand.companyName || "Organization"}</span>
+            <span className="h-0.5 w-0.5 rounded-full bg-fg/20" />
             <span>{formatCount(counts.projects)} estimates</span>
-            <span className="h-1 w-1 rounded-full bg-fg/25" />
-            <span>{formatCount(counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors)} library records</span>
+            <span className="h-0.5 w-0.5 rounded-full bg-fg/20" />
+            <span>{formatCount(counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors)} library</span>
             {countsLoading && <Loader2 className="h-3 w-3 animate-spin text-fg/30" />}
           </div>
         </div>
-        <div className="inline-flex rounded-lg border border-line bg-panel2/40 p-1">
+        <div className="inline-flex rounded-lg border border-line bg-panel2/40 p-0.5">
           {(["export", "import"] as const).map((item) => (
             <button
               key={item}
@@ -783,290 +768,475 @@ export function OrganizationImportExportPage({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-      {mode === "export" ? (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_340px]">
-          <Card className="overflow-hidden">
-            <CardHeader className="flex flex-row items-center justify-between gap-3">
-              <div>
-                <CardTitle>Export scope</CardTitle>
-                <p className="mt-0.5 text-xs text-fg/45">Select the organizational data to package.</p>
-              </div>
-              <Button variant="ghost" size="xs" onClick={refreshCounts} disabled={countsLoading}>
-                {countsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-                Refresh
-              </Button>
-            </CardHeader>
-            <div className="grid gap-px bg-line md:grid-cols-2">
-              {EXPORT_SECTIONS.map((section) => {
-                const Icon = section.icon;
-                const checked = selectedSections[section.id];
-                const sectionCount = section.id === "users"
-                  ? users.length
-                  : section.id === "datasets"
-                    ? datasets.length
-                    : section.id === "library"
-                      ? counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors
-                      : section.countKey
-                        ? counts[section.countKey]
-                        : 0;
-                const toggleSection = () => setSelectedSections((current) => ({ ...current, [section.id]: !current[section.id] }));
-                return (
-                  <div
-                    key={section.id}
-                    role="button"
-                    tabIndex={0}
-                    aria-pressed={checked}
-                    onClick={toggleSection}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        toggleSection();
-                      }
-                    }}
-                    className={cn(
-                      "group flex min-h-[132px] cursor-pointer flex-col bg-panel p-4 text-left transition-colors hover:bg-panel2/45 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
-                      checked && "bg-panel2/30",
-                    )}
-                  >
-                    <div className="flex items-start gap-3">
-                      <span className={cn("inline-flex h-9 w-9 items-center justify-center rounded-lg border", toneClass(section.tone))}>
-                        <Icon className="h-4 w-4" />
-                      </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2">
-                          <span className="truncate text-sm font-semibold text-fg">{section.label}</span>
-                          <Badge className="shrink-0 text-[10px]">{formatCount(sectionCount)}</Badge>
-                        </div>
-                        <p className="mt-0.5 text-[10px] font-medium uppercase text-fg/35">{section.category}</p>
-                      </div>
-                      <span onClick={(event) => event.stopPropagation()}>
-                        <Toggle checked={checked} onChange={(value) => setSelectedSections((current) => ({ ...current, [section.id]: value }))} />
-                      </span>
-                    </div>
-                    <div className="mt-3 flex flex-wrap gap-1.5">
-                      {section.includes.map((item) => (
-                        <span key={item} className="rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] text-fg/45">
-                          {item}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </Card>
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {mode === "export" ? (
+          <ExportView
+            sections={EXPORT_SECTIONS}
+            selectedSections={selectedSections}
+            setSelectedSections={setSelectedSections}
+            counts={counts}
+            users={users}
+            datasets={datasets}
+            format={format}
+            setFormat={setFormat}
+            dateStart={dateStart}
+            setDateStart={setDateStart}
+            dateEnd={dateEnd}
+            setDateEnd={setDateEnd}
+            includeAttachments={includeAttachments}
+            setIncludeAttachments={setIncludeAttachments}
+            includeDerived={includeDerived}
+            setIncludeDerived={setIncludeDerived}
+            anonymizePricing={anonymizePricing}
+            setAnonymizePricing={setAnonymizePricing}
+            includeInactive={includeInactive}
+            setIncludeInactive={setIncludeInactive}
+            selectedExportSections={selectedExportSections}
+            exporting={exporting}
+            exportMessage={exportMessage}
+            onDownload={handleDownloadExport}
+            onExportLibrary={exportAllDataManagement}
+            onRefreshCounts={refreshCounts}
+            countsLoading={countsLoading}
+          />
+        ) : (
+          <ImportView
+            source={source}
+            target={target}
+            targetId={targetId}
+            mappings={mappings}
+            conflictMode={conflictMode}
+            matchStrategy={matchStrategy}
+            importing={importing}
+            importProgress={importProgress}
+            importResult={importResult}
+            fileError={fileError}
+            validation={validation}
+            mappedPreview={mappedPreview}
+            qualityScore={qualityScore}
+            fileRef={fileRef}
+            onFileChange={handleFileChange}
+            onTargetChange={handleTargetChange}
+            onMatchStrategyChange={setMatchStrategy}
+            onConflictModeChange={setConflictMode}
+            onUpdateMapping={updateMapping}
+            onInferMappings={() => source && setMappings(guessMappings(source, target))}
+            onRunImport={handleRunImport}
+            onDownloadTemplate={handleDownloadTemplate}
+            onDownloadMapping={handleDownloadMapping}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 
-          <div className="space-y-5">
-            <Card>
-              <CardHeader>
-                <CardTitle>Package options</CardTitle>
-              </CardHeader>
-              <CardBody className="space-y-4">
-                <div>
-                  <Label>Format</Label>
-                  <Select
-                    value={format}
-                    onValueChange={(value) => setFormat(value as ExportFormat)}
-                    options={[
-                      { value: "bidwright-json", label: "Bidwright JSON bundle" },
-                      { value: "excel-workbook", label: "Excel workbook" },
-                      { value: "csv-folder", label: "CSV folder manifest" },
-                      { value: "zip-archive", label: "ZIP archive" },
-                    ]}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <Label>From</Label>
-                    <Input type="date" value={dateStart} onChange={(event) => setDateStart(event.target.value)} />
-                  </div>
-                  <div>
-                    <Label>To</Label>
-                    <Input type="date" value={dateEnd} onChange={(event) => setDateEnd(event.target.value)} />
-                  </div>
-                </div>
-                <Separator />
-                <OptionRow icon={FolderOpen} label="Attachments" checked={includeAttachments} onChange={setIncludeAttachments} />
-                <OptionRow icon={Wand2} label="AI derived data" checked={includeDerived} onChange={setIncludeDerived} />
-                <OptionRow icon={ShieldCheck} label="Anonymize pricing" checked={anonymizePricing} onChange={setAnonymizePricing} />
-                <OptionRow icon={Archive} label="Inactive records" checked={includeInactive} onChange={setIncludeInactive} />
-              </CardBody>
-            </Card>
+function ExportView({
+  sections,
+  selectedSections,
+  setSelectedSections,
+  counts,
+  users,
+  datasets,
+  format,
+  setFormat,
+  dateStart,
+  setDateStart,
+  dateEnd,
+  setDateEnd,
+  includeAttachments,
+  setIncludeAttachments,
+  includeDerived,
+  setIncludeDerived,
+  anonymizePricing,
+  setAnonymizePricing,
+  includeInactive,
+  setIncludeInactive,
+  selectedExportSections,
+  exporting,
+  exportMessage,
+  onDownload,
+  onExportLibrary,
+  onRefreshCounts,
+  countsLoading,
+}: {
+  sections: ExportSection[];
+  selectedSections: Record<string, boolean>;
+  setSelectedSections: React.Dispatch<React.SetStateAction<Record<string, boolean>>>;
+  counts: OrgCounts;
+  users: UserRecord[];
+  datasets: DatasetRecord[];
+  format: ExportFormat;
+  setFormat: (v: ExportFormat) => void;
+  dateStart: string;
+  setDateStart: (v: string) => void;
+  dateEnd: string;
+  setDateEnd: (v: string) => void;
+  includeAttachments: boolean;
+  setIncludeAttachments: (v: boolean) => void;
+  includeDerived: boolean;
+  setIncludeDerived: (v: boolean) => void;
+  anonymizePricing: boolean;
+  setAnonymizePricing: (v: boolean) => void;
+  includeInactive: boolean;
+  setIncludeInactive: (v: boolean) => void;
+  selectedExportSections: ExportSection[];
+  exporting: boolean;
+  exportMessage: string | null;
+  onDownload: () => void;
+  onExportLibrary: () => void;
+  onRefreshCounts: () => void;
+  countsLoading: boolean;
+}) {
+  const allOn = selectedExportSections.length === sections.length;
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Export run</CardTitle>
-              </CardHeader>
-              <CardBody className="space-y-3">
-                <div className="rounded-lg border border-line bg-bg/45 p-3">
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-fg/55">Selected sections</span>
-                    <span className="font-semibold text-fg">{selectedExportSections.length}</span>
-                  </div>
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {selectedExportSections.map((section) => (
-                      <Badge key={section.id} tone="default" className="text-[10px]">{section.label}</Badge>
-                    ))}
-                  </div>
-                </div>
-                <Button className="w-full" variant="accent" onClick={handleDownloadExport} disabled={exporting || selectedExportSections.length === 0}>
-                  {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FileJson className="h-3.5 w-3.5" />}
-                  Download Org Bundle
-                </Button>
-                <Button className="w-full" variant="secondary" onClick={exportAllDataManagement} disabled={exporting}>
-                  <Download className="h-3.5 w-3.5" />
-                  Export Library Data
-                </Button>
-                {exportMessage && <p className="text-[11px] text-success">{exportMessage}</p>}
-              </CardBody>
-            </Card>
+  return (
+    <div className="flex h-full gap-4 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-y-auto rounded-lg border border-line">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b border-line bg-panel px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-medium text-fg">Sections</span>
+            <Badge className="text-[10px]">{selectedExportSections.length}/{sections.length}</Badge>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                const next = !allOn;
+                setSelectedSections(Object.fromEntries(sections.map((s) => [s.id, next])));
+              }}
+              className="text-[11px] font-medium text-fg/45 hover:text-fg/70"
+            >
+              {allOn ? "Deselect all" : "Select all"}
+            </button>
+            <button type="button" onClick={onRefreshCounts} disabled={countsLoading} className="text-fg/35 hover:text-fg/60">
+              {countsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+            </button>
           </div>
         </div>
-      ) : (
-        <div className="grid gap-5 xl:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
-          <div className="space-y-5">
-            <Card>
-              <CardHeader>
-                <CardTitle>Source file</CardTitle>
-              </CardHeader>
-              <CardBody className="space-y-4">
-                <button
-                  type="button"
-                  onClick={() => fileRef.current?.click()}
-                  className="flex min-h-[138px] w-full flex-col items-center justify-center rounded-lg border border-dashed border-line bg-bg/45 px-4 text-center transition-colors hover:border-accent/45 hover:bg-accent/5"
-                >
-                  <Upload className="h-7 w-7 text-fg/35" />
-                  <span className="mt-3 text-sm font-semibold text-fg">Upload CSV, Excel, or JSON</span>
-                  <span className="mt-1 text-xs text-fg/40">Mapping starts after parsing the first sheet or table.</span>
-                </button>
-                <input ref={fileRef} type="file" accept=".csv,.tsv,.json,.xlsx,.xls,.xlsm" className="hidden" onChange={handleFileChange} />
-                {fileError && (
-                  <div className="flex gap-2 rounded-lg border border-danger/25 bg-danger/8 p-3 text-xs text-danger">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    {fileError}
-                  </div>
+        <div className="divide-y divide-line">
+          {sections.map((section) => {
+            const Icon = section.icon;
+            const checked = selectedSections[section.id];
+            const sectionCount = section.id === "users"
+              ? users.length
+              : section.id === "datasets"
+                ? datasets.length
+                : section.id === "library"
+                  ? counts.catalogs + counts.rateSchedules + counts.conditionLibrary + counts.factors
+                  : section.countKey
+                    ? counts[section.countKey]
+                    : 0;
+            return (
+              <label
+                key={section.id}
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 px-4 py-2.5 transition-colors hover:bg-panel2/40",
+                  checked && "bg-panel2/20",
                 )}
-                {source && (
-                  <div className="rounded-lg border border-line bg-panel2/35 p-3">
-                    <div className="flex items-center gap-2">
-                      <FileSpreadsheet className="h-4 w-4 text-success" />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-xs font-semibold text-fg">{source.name}</p>
-                        <p className="text-[10px] text-fg/40">{source.rows.length} rows · {source.columns.length} columns{source.sheetName ? ` · ${source.sheetName}` : ""}</p>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </CardBody>
-            </Card>
+              >
+                <Toggle
+                  checked={checked}
+                  onChange={(value) => setSelectedSections((current) => ({ ...current, [section.id]: value }))}
+                />
+                <Icon className="h-4 w-4 shrink-0 text-fg/40" />
+                <div className="min-w-0 flex-1">
+                  <span className="text-xs font-medium text-fg">{section.label}</span>
+                  <span className="ml-2 text-[11px] text-fg/30">{section.category}</span>
+                </div>
+                <span className="shrink-0 text-[11px] font-mono tabular-nums text-fg/35">{formatCount(sectionCount)}</span>
+              </label>
+            );
+          })}
+        </div>
+      </div>
 
-            <Card>
-              <CardHeader>
-                <CardTitle>Import target</CardTitle>
-              </CardHeader>
-              <CardBody className="space-y-4">
-                <div>
-                  <Label>Object</Label>
-                  <Select
-                    value={target.id}
-                    onValueChange={handleTargetChange}
-                    options={IMPORT_TARGETS.map((item) => ({ value: item.id, label: item.label }))}
-                  />
-                </div>
-                <div>
-                  <Label>Match records by</Label>
-                  <Select
-                    value={matchStrategy}
-                    onValueChange={setMatchStrategy}
-                    options={target.fields.map((field) => ({ value: field.key, label: field.label }))}
-                  />
-                </div>
-                <div>
-                  <Label>Conflict handling</Label>
-                  <Select
-                    value={conflictMode}
-                    onValueChange={(value) => setConflictMode(value as ConflictMode)}
-                    options={[
-                      { value: "dry-run", label: "Validate only" },
-                      { value: "add-update", label: "Add and update" },
-                      { value: "skip-existing", label: "Skip existing" },
-                      { value: "replace-matches", label: "Replace matches" },
-                    ]}
-                  />
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <Button variant="secondary" size="sm" onClick={handleDownloadTemplate}>
-                    <Download className="h-3.5 w-3.5" />
-                    Template
-                  </Button>
-                  <Button variant="secondary" size="sm" onClick={handleDownloadMapping}>
-                    <FileJson className="h-3.5 w-3.5" />
-                    Mapping
-                  </Button>
-                </div>
-              </CardBody>
-            </Card>
-          </div>
+      <div className="flex w-72 shrink-0 flex-col gap-3">
+        <Card className="flex min-h-0 flex-col overflow-hidden">
+          <CardHeader className="shrink-0 border-b border-line px-4 py-3">
+            <CardTitle>Options</CardTitle>
+          </CardHeader>
+          <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+            <div>
+              <Label>Format</Label>
+              <Select
+                value={format}
+                onValueChange={(value) => setFormat(value as ExportFormat)}
+                options={[
+                  { value: "bidwright-json", label: "JSON bundle" },
+                  { value: "excel-workbook", label: "Excel workbook" },
+                  { value: "csv-folder", label: "CSV manifest" },
+                  { value: "zip-archive", label: "ZIP archive" },
+                ]}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <Label>From</Label>
+                <Input type="date" value={dateStart} onChange={(e) => setDateStart(e.target.value)} />
+              </div>
+              <div>
+                <Label>To</Label>
+                <Input type="date" value={dateEnd} onChange={(e) => setDateEnd(e.target.value)} />
+              </div>
+            </div>
+            <Separator />
+            <ToggleRow icon={FolderOpen} label="Attachments" checked={includeAttachments} onChange={setIncludeAttachments} />
+            <ToggleRow icon={Wand2} label="AI derived data" checked={includeDerived} onChange={setIncludeDerived} />
+            <ToggleRow icon={ShieldCheck} label="Anonymize pricing" checked={anonymizePricing} onChange={setAnonymizePricing} />
+            <ToggleRow icon={Archive} label="Inactive records" checked={includeInactive} onChange={setIncludeInactive} />
+          </CardBody>
+        </Card>
 
-          <div className="space-y-5">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between gap-3">
-                <div>
-                  <CardTitle>Column mapping</CardTitle>
-                  <p className="mt-0.5 text-xs text-fg/45">Transform source columns into Bidwright fields.</p>
-                </div>
+        <div className="shrink-0 space-y-2">
+          <Button className="w-full" variant="accent" size="sm" onClick={onDownload} disabled={exporting || selectedExportSections.length === 0}>
+            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
+            Export {selectedExportSections.length} sections
+          </Button>
+          <Button className="w-full" variant="secondary" size="sm" onClick={onExportLibrary} disabled={exporting}>
+            <FileJson className="h-3.5 w-3.5" />
+            Library data only
+          </Button>
+          {exportMessage && <p className="text-center text-[11px] text-success">{exportMessage}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ImportView({
+  source,
+  target,
+  targetId,
+  mappings,
+  conflictMode,
+  matchStrategy,
+  importing,
+  importProgress,
+  importResult,
+  fileError,
+  validation,
+  mappedPreview,
+  qualityScore,
+  fileRef,
+  onFileChange,
+  onTargetChange,
+  onMatchStrategyChange,
+  onConflictModeChange,
+  onUpdateMapping,
+  onInferMappings,
+  onRunImport,
+  onDownloadTemplate,
+  onDownloadMapping,
+}: {
+  source: ParsedSource | null;
+  target: ImportTarget;
+  targetId: string;
+  mappings: Record<string, FieldMapping>;
+  conflictMode: ConflictMode;
+  matchStrategy: string;
+  importing: boolean;
+  importProgress: number;
+  importResult: ImportResultState | null;
+  fileError: string | null;
+  validation: { errors: string[]; warnings: string[]; validRows: number };
+  mappedPreview: Array<Record<string, string>>;
+  qualityScore: number;
+  fileRef: React.RefObject<HTMLInputElement | null>;
+  onFileChange: (e: ChangeEvent<HTMLInputElement>) => void;
+  onTargetChange: (id: string) => void;
+  onMatchStrategyChange: (v: string) => void;
+  onConflictModeChange: (v: ConflictMode) => void;
+  onUpdateMapping: (key: string, patch: Partial<FieldMapping>) => void;
+  onInferMappings: () => void;
+  onRunImport: () => void;
+  onDownloadTemplate: () => void;
+  onDownloadMapping: () => void;
+}) {
+  const showMapping = !!source;
+
+  return (
+    <div className="flex h-full min-h-0 gap-4 overflow-hidden">
+      <div className="flex w-64 shrink-0 flex-col gap-3">
+        <Card className="flex min-h-0 flex-col overflow-hidden">
+          <CardHeader className="shrink-0 border-b border-line px-4 py-3">
+            <CardTitle>Source</CardTitle>
+          </CardHeader>
+          <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+            {!source ? (
+              <button
+                type="button"
+                onClick={() => fileRef.current?.click()}
+                className="flex w-full flex-col items-center justify-center rounded-lg border border-dashed border-line bg-bg/45 px-3 py-8 text-center transition-colors hover:border-accent/45 hover:bg-accent/5"
+              >
+                <Upload className="h-6 w-6 text-fg/30" />
+                <span className="mt-2 text-xs font-medium text-fg">Upload file</span>
+                <span className="mt-0.5 text-[10px] text-fg/35">CSV, Excel, or JSON</span>
+              </button>
+            ) : (
+              <div className="rounded-lg border border-line bg-panel2/35 p-3">
                 <div className="flex items-center gap-2">
-                  <Badge tone={qualityScore >= 80 ? "success" : qualityScore >= 55 ? "warning" : "danger"}>{qualityScore}% mapped</Badge>
-                  <Button variant="ghost" size="xs" onClick={() => source && setMappings(guessMappings(source, target))}>
-                    <Wand2 className="h-3 w-3" />
-                    Infer
-                  </Button>
+                  <FileSpreadsheet className="h-4 w-4 shrink-0 text-success" />
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs font-medium text-fg">{source.name}</p>
+                    <p className="text-[10px] text-fg/35">{source.rows.length} rows &middot; {source.columns.length} cols</p>
+                  </div>
                 </div>
-              </CardHeader>
+              </div>
+            )}
+            <input ref={fileRef} type="file" accept=".csv,.tsv,.json,.xlsx,.xls,.xlsm" className="hidden" onChange={onFileChange} />
+            {fileError && (
+              <div className="flex gap-2 rounded-md border border-danger/20 bg-danger/8 px-2.5 py-2 text-[11px] text-danger">
+                <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                {fileError}
+              </div>
+            )}
+          </CardBody>
+        </Card>
+
+        <Card className="flex min-h-0 flex-col overflow-hidden">
+          <CardHeader className="shrink-0 border-b border-line px-4 py-3">
+            <CardTitle>Target</CardTitle>
+          </CardHeader>
+          <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+            <div>
+              <Label>Import into</Label>
+              <Select
+                value={targetId}
+                onValueChange={onTargetChange}
+                options={IMPORT_TARGETS.map((item) => ({ value: item.id, label: item.label }))}
+              />
+            </div>
+            <div>
+              <Label>Match by</Label>
+              <Select
+                value={matchStrategy}
+                onValueChange={onMatchStrategyChange}
+                options={target.fields.map((field) => ({ value: field.key, label: field.label }))}
+              />
+            </div>
+            <div>
+              <Label>On conflict</Label>
+              <Select
+                value={conflictMode}
+                onValueChange={(value) => onConflictModeChange(value as ConflictMode)}
+                options={[
+                  { value: "dry-run", label: "Validate only" },
+                  { value: "add-update", label: "Add and update" },
+                  { value: "skip-existing", label: "Skip existing" },
+                  { value: "replace-matches", label: "Replace matches" },
+                ]}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button variant="ghost" size="xs" onClick={onDownloadTemplate}>
+                <Download className="h-3 w-3" />
+                Template
+              </Button>
+              <Button variant="ghost" size="xs" onClick={onDownloadMapping}>
+                <FileJson className="h-3 w-3" />
+                Mapping
+              </Button>
+            </div>
+          </CardBody>
+        </Card>
+
+        <div className="shrink-0 space-y-2">
+          {importing && (
+            <div className="space-y-1.5 rounded-lg border border-line bg-panel2/35 p-3">
+              <Progress value={importProgress} />
+              <p className="text-[10px] text-fg/40">{importProgress}% staged</p>
+            </div>
+          )}
+          {importResult && (
+            <div className="rounded-lg border border-success/20 bg-success/5 p-3">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-success">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Import staged
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-1.5 text-center">
+                <div><p className="text-sm font-semibold tabular-nums text-success">{importResult.created}</p><p className="text-[9px] uppercase text-fg/30">Created</p></div>
+                <div><p className="text-sm font-semibold tabular-nums text-fg">{importResult.updated}</p><p className="text-[9px] uppercase text-fg/30">Updated</p></div>
+                <div><p className="text-sm font-semibold tabular-nums text-fg/50">{importResult.skipped}</p><p className="text-[9px] uppercase text-fg/30">Skipped</p></div>
+              </div>
+            </div>
+          )}
+          <Button
+            className="w-full"
+            variant="accent"
+            size="sm"
+            onClick={onRunImport}
+            disabled={!source || importing || validation.errors.length > 0}
+          >
+            {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : conflictMode === "dry-run" ? <Eye className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+            {conflictMode === "dry-run" ? "Validate" : "Stage import"}
+          </Button>
+        </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-hidden">
+        {!showMapping ? (
+          <div className="flex h-full items-center justify-center rounded-lg border border-dashed border-line">
+            <div className="text-center">
+              <FileSpreadsheet className="mx-auto h-8 w-8 text-fg/15" />
+              <p className="mt-2 text-xs text-fg/30">Upload a file to begin mapping columns</p>
+            </div>
+          </div>
+        ) : (
+          <div className="flex h-full flex-col gap-3 overflow-hidden">
+            <Card className="flex min-h-0 flex-col overflow-hidden">
+              <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-fg">Column mapping</span>
+                  <Badge tone={qualityScore >= 80 ? "success" : qualityScore >= 55 ? "warning" : "danger"} className="text-[10px]">{qualityScore}%</Badge>
+                </div>
+                <Button variant="ghost" size="xs" onClick={onInferMappings}>
+                  <Wand2 className="h-3 w-3" />
+                  Re-infer
+                </Button>
+              </div>
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm">
+                <table className="w-full min-w-[640px]">
                   <thead>
-                    <tr className="border-b border-line bg-bg/35">
-                      <th className="w-48 px-4 py-2.5 text-left text-[10px] font-semibold uppercase text-fg/40">Bidwright field</th>
-                      <th className="px-4 py-2.5 text-left text-[10px] font-semibold uppercase text-fg/40">Source column</th>
-                      <th className="w-44 px-4 py-2.5 text-left text-[10px] font-semibold uppercase text-fg/40">Transform</th>
-                      <th className="w-40 px-4 py-2.5 text-left text-[10px] font-semibold uppercase text-fg/40">Constant</th>
+                    <tr className="border-b border-line">
+                      <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Field</th>
+                      <th className="px-4 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Source column</th>
+                      <th className="w-36 px-4 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Transform</th>
+                      <th className="w-32 px-4 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Default</th>
                     </tr>
                   </thead>
                   <tbody>
                     {target.fields.map((field) => {
                       const mapping = mappings[field.key] ?? { sourceColumn: "", fallback: "", transform: defaultTransformForType(field.type) };
                       return (
-                        <tr key={field.key} className="border-b border-line last:border-0">
-                          <td className="px-4 py-2.5">
-                            <div className="flex items-center gap-2">
-                              <span className="font-medium text-fg">{field.label}</span>
-                              {field.required && <Badge tone="warning" className="text-[9px]">Required</Badge>}
+                        <tr key={field.key} className="border-b border-line last:border-0 hover:bg-panel2/30 transition-colors">
+                          <td className="px-4 py-2">
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-xs font-medium text-fg">{field.label}</span>
+                              {field.required && <span className="text-[9px] font-medium text-warning">REQ</span>}
                             </div>
-                            <p className="text-[10px] text-fg/35">{field.type}</p>
                           </td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-4 py-2">
                             <Select
                               size="sm"
                               value={mapping.sourceColumn}
-                              onValueChange={(value) => updateMapping(field.key, { sourceColumn: value })}
+                              onValueChange={(value) => onUpdateMapping(field.key, { sourceColumn: value })}
                               options={[{ value: "", label: "Unmapped" }, ...(source?.columns ?? []).map((column) => ({ value: column, label: column }))]}
                             />
                           </td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-4 py-2">
                             <Select
                               size="sm"
                               value={mapping.transform}
-                              onValueChange={(value) => updateMapping(field.key, { transform: value as TransformKind })}
+                              onValueChange={(value) => onUpdateMapping(field.key, { transform: value as TransformKind })}
                               options={TRANSFORM_OPTIONS}
                             />
                           </td>
-                          <td className="px-4 py-2.5">
+                          <td className="px-4 py-2">
                             <Input
-                              className="h-8 text-xs"
+                              className="h-7 text-xs"
                               value={mapping.fallback}
-                              onChange={(event) => updateMapping(field.key, { fallback: event.target.value })}
+                              onChange={(event) => onUpdateMapping(field.key, { fallback: event.target.value })}
                               placeholder="Optional"
                             />
                           </td>
@@ -1078,107 +1248,69 @@ export function OrganizationImportExportPage({
               </div>
             </Card>
 
-            <div className="grid gap-5 2xl:grid-cols-[minmax(0,1fr)_300px]">
-              <Card className="overflow-hidden">
-                <CardHeader className="flex flex-row items-center justify-between">
-                  <div>
-                    <CardTitle>Transformed preview</CardTitle>
-                    <p className="mt-0.5 text-xs text-fg/45">First rows after mapping and transforms.</p>
-                  </div>
-                  <Badge tone={validation.errors.length === 0 ? "success" : "danger"}>
+            <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
+              <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-2.5">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-medium text-fg">Preview</span>
+                  <Badge tone={validation.errors.length === 0 ? "success" : "danger"} className="text-[10px]">
                     {validation.validRows}/{source?.rows.length ?? 0} valid
                   </Badge>
-                </CardHeader>
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[720px] text-xs">
-                    <thead>
-                      <tr className="border-b border-line bg-bg/35">
+                </div>
+                {validation.errors.length > 0 && (
+                  <span className="text-[11px] text-danger">{validation.errors.length} error{validation.errors.length !== 1 ? "s" : ""}</span>
+                )}
+              </div>
+              <div className="flex-1 overflow-auto">
+                <table className="w-full min-w-[600px]">
+                  <thead className="sticky top-0 z-10 bg-panel">
+                    <tr className="border-b border-line">
+                      <th className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-8">#</th>
+                      {target.fields.slice(0, 7).map((field) => (
+                        <th key={field.key} className="px-3 py-2 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">{field.label}</th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mappedPreview.map((row, index) => (
+                      <tr key={index} className="border-b border-line last:border-0">
+                        <td className="px-3 py-1.5 text-[11px] text-fg/25 font-mono">{index + 1}</td>
                         {target.fields.slice(0, 7).map((field) => (
-                          <th key={field.key} className="px-3 py-2 text-left text-[10px] font-semibold uppercase text-fg/40">{field.label}</th>
+                          <td key={field.key} className="max-w-[160px] truncate px-3 py-1.5 text-xs text-fg/65">
+                            {row[field.key] || <span className="text-fg/15">&mdash;</span>}
+                          </td>
                         ))}
                       </tr>
-                    </thead>
-                    <tbody>
-                      {mappedPreview.map((row, index) => (
-                        <tr key={index} className="border-b border-line last:border-0">
-                          {target.fields.slice(0, 7).map((field) => (
-                            <td key={field.key} className="max-w-[180px] truncate px-3 py-2 text-fg/65">{row[field.key] || <span className="text-fg/20">Empty</span>}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>Validation</CardTitle>
-                </CardHeader>
-                <CardBody className="space-y-4">
-                  <div className="grid grid-cols-3 gap-2">
-                    <Metric label="Rows" value={source?.rows.length ?? 0} />
-                    <Metric label="Errors" value={validation.errors.length} tone={validation.errors.length ? "danger" : "success"} />
-                    <Metric label="Warn" value={validation.warnings.length} tone={validation.warnings.length ? "warning" : "default"} />
-                  </div>
-                  <div className="space-y-2">
-                    {validation.errors.slice(0, 4).map((error) => (
-                      <div key={error} className="flex gap-2 rounded-md border border-danger/20 bg-danger/8 px-2 py-1.5 text-[11px] text-danger">
-                        <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>{error}</span>
-                      </div>
                     ))}
-                    {validation.errors.length === 0 && (
-                      <div className="flex gap-2 rounded-md border border-success/20 bg-success/8 px-2 py-1.5 text-[11px] text-success">
-                        <CheckCircle2 className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>Mapping validates against required fields.</span>
-                      </div>
+                    {mappedPreview.length === 0 && (
+                      <tr>
+                        <td colSpan={8} className="px-3 py-8 text-center text-xs text-fg/30">No rows to preview</td>
+                      </tr>
                     )}
-                  </div>
-                  {importing && (
-                    <div className="space-y-2">
-                      <Progress value={importProgress} />
-                      <p className="text-[11px] text-fg/40">{importProgress}% staged</p>
+                  </tbody>
+                </table>
+              </div>
+              {validation.errors.length > 0 && (
+                <div className="shrink-0 max-h-24 overflow-y-auto border-t border-line px-4 py-2 space-y-1">
+                  {validation.errors.slice(0, 3).map((error) => (
+                    <div key={error} className="flex gap-1.5 text-[11px] text-danger">
+                      <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                      <span>{error}</span>
                     </div>
+                  ))}
+                  {validation.errors.length > 3 && (
+                    <p className="text-[10px] text-fg/30">+{validation.errors.length - 3} more errors</p>
                   )}
-                  {importResult && (
-                    <div className="rounded-lg border border-line bg-bg/45 p-3 text-xs">
-                      <div className="flex items-center gap-2 font-semibold text-fg">
-                        <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-                        Import run staged
-                      </div>
-                      <div className="mt-2 grid grid-cols-3 gap-2">
-                        <Metric label="Create" value={importResult.created} tone="success" />
-                        <Metric label="Update" value={importResult.updated} tone="default" />
-                        <Metric label="Skip" value={importResult.skipped} tone="warning" />
-                      </div>
-                    </div>
-                  )}
-                  <Button className="w-full" variant="accent" onClick={handleRunImport} disabled={!source || importing || validation.errors.length > 0}>
-                    {importing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : conflictMode === "dry-run" ? <Eye className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                    {conflictMode === "dry-run" ? "Run Validation" : "Stage Import"}
-                  </Button>
-                </CardBody>
-              </Card>
-            </div>
+                </div>
+              )}
+            </Card>
           </div>
-          </div>
-      )}
+        )}
       </div>
-
-      <Card className="shrink-0">
-        <CardBody className="grid gap-3 md:grid-cols-4">
-          <StatusPill icon={Columns3} label="Column mapping" value={`${mappedFieldCount}/${target.fields.length}`} />
-          <StatusPill icon={Search} label="Match key" value={matchStrategy} />
-          <StatusPill icon={Filter} label="Conflict mode" value={conflictMode.replace("-", " ")} />
-          <StatusPill icon={FileJson} label="Export format" value={format.replace("-", " ")} />
-        </CardBody>
-      </Card>
     </div>
   );
 }
 
-function OptionRow({
+function ToggleRow({
   icon: Icon,
   label,
   checked,
@@ -1191,46 +1323,11 @@ function OptionRow({
 }) {
   return (
     <div className="flex items-center justify-between gap-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <Icon className="h-3.5 w-3.5 shrink-0 text-fg/35" />
-        <span className="truncate text-xs font-medium text-fg/60">{label}</span>
+      <div className="flex items-center gap-2">
+        <Icon className="h-3.5 w-3.5 text-fg/30" />
+        <span className="text-xs text-fg/55">{label}</span>
       </div>
       <Toggle checked={checked} onChange={onChange} />
-    </div>
-  );
-}
-
-function Metric({
-  label,
-  value,
-  tone = "default",
-}: {
-  label: string;
-  value: string | number;
-  tone?: "default" | "success" | "warning" | "danger";
-}) {
-  const toneClassName = {
-    default: "text-fg",
-    success: "text-success",
-    warning: "text-warning",
-    danger: "text-danger",
-  }[tone];
-  return (
-    <div className="rounded-md border border-line bg-panel px-2 py-1.5">
-      <div className={cn("text-sm font-semibold tabular-nums", toneClassName)}>{value}</div>
-      <div className="text-[9px] font-medium uppercase text-fg/35">{label}</div>
-    </div>
-  );
-}
-
-function StatusPill({ icon: Icon, label, value }: { icon: LucideIcon; label: string; value: string }) {
-  return (
-    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-line bg-bg/45 px-3 py-2">
-      <Icon className="h-3.5 w-3.5 shrink-0 text-fg/35" />
-      <div className="min-w-0">
-        <p className="text-[10px] font-medium uppercase text-fg/35">{label}</p>
-        <p className="truncate text-xs font-semibold capitalize text-fg/70">{value}</p>
-      </div>
     </div>
   );
 }
