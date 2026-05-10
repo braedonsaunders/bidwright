@@ -316,8 +316,10 @@ interface TakeoffDocument {
 
 import type { TakeoffSelection } from "./takeoff-link-view";
 import type { InspectActions, InspectSnapshot, InspectModelElement } from "./takeoff-inspect-view";
-import { BimFederationSwitcher } from "./bim-federation-switcher";
-import type { ModelFederation } from "@/lib/api";
+// BimFederationSwitcher + ModelFederation schema/API ship dormant — the
+// federation concept is over-scoped for the everyday estimator workflow.
+// Schema, API endpoints, and the switcher component stay in the codebase
+// for future "advanced" surface; we just don't mount it in the BIM picker.
 
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
@@ -820,21 +822,6 @@ export function TakeoffTab({
   const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
   type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
-  /** When set, the BIM source panel filters its model list down to this
-   *  federation's members. null = "loose" (show all BIM models). Only applies
-   *  while activeIntakeOption === "bim". */
-  const [bimFederationId, setBimFederationId] = useState<string | null>(null);
-  /** Resolved federation object pushed by the switcher. Carries members so we
-   *  can filter BIM docs without an extra fetch from this component. */
-  const [activeBimFederation, setActiveBimFederation] = useState<ModelFederation | null>(null);
-  // Drop the BIM federation selection when the user navigates away from the
-  // BIM intake card so they re-enter on the "loose" view next time.
-  useEffect(() => {
-    if (activeIntakeOption !== "bim" && bimFederationId !== null) {
-      setBimFederationId(null);
-      setActiveBimFederation(null);
-    }
-  }, [activeIntakeOption, bimFederationId]);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
   const [selectedSpreadsheetNodeId, setSelectedSpreadsheetNodeId] = useState<string | null>(null);
@@ -3250,16 +3237,6 @@ export function TakeoffTab({
               }
             : null;
 
-  /** Source-panel doc list with the active BIM federation filter applied. For
-   *  non-BIM modes this is identical to `activeSourcePanel?.docs`; for BIM
-   *  with a federation selected, only the member models pass through. */
-  const filteredSourceDocs = useMemo(() => {
-    const docs = activeSourcePanel?.docs ?? [];
-    if (activeIntakeOption !== "bim" || !activeBimFederation) return docs;
-    const memberIds = new Set(activeBimFederation.members.map((m) => m.modelId));
-    return docs.filter((doc) => doc.modelAssetId && memberIds.has(doc.modelAssetId));
-  }, [activeSourcePanel, activeIntakeOption, activeBimFederation]);
-
   /* ─── Render ─── */
 
   if (showLanding && !detached) {
@@ -3559,27 +3536,10 @@ export function TakeoffTab({
                     </div>
                   </div>
 
-                  {activeIntakeOption === "bim" && (
-                    <div className="mt-3">
-                      <BimFederationSwitcher
-                        projectId={projectId}
-                        bimDocuments={bimDocuments.map((d) => ({
-                          id: d.id,
-                          fileName: d.fileName,
-                          modelAssetId: d.modelAssetId,
-                        }))}
-                        selectedFederationId={bimFederationId}
-                        onSelectFederation={setBimFederationId}
-                        onActiveFederationChange={setActiveBimFederation}
-                        onMembershipChanged={() => void refreshModelAssets()}
-                      />
-                    </div>
-                  )}
-
                   <div className="mt-3 min-h-0 flex-1 overflow-y-auto rounded-md border border-line bg-panel/60 p-2">
-                    {filteredSourceDocs.length > 0 ? (
+                    {activeSourcePanel.docs.length > 0 ? (
                       <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
-                        {filteredSourceDocs.map((doc) => {
+                        {activeSourcePanel.docs.map((doc) => {
                           const Icon = activeSourcePanel.icon;
                           return (
                             <button
