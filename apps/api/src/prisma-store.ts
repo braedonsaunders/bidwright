@@ -8726,7 +8726,7 @@ export class PrismaApiStore {
             ? `Quick scope for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`
             : `Estimate for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
           notes: isSnapProject
-            ? "Small quick quote. Keep it to ten lines or upgrade to a full quote if the scope grows."
+            ? "Quick scope on a single worksheet. Upgrade to a full quote if you need phases, modifiers, or breakouts."
             : "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
           breakoutStyle: isSnapProject ? "grand_total" : "phase_detail",
           type: "Firm",
@@ -8760,7 +8760,6 @@ export class PrismaApiStore {
         ...(isSnapProject
           ? {
               quoteMode: "snap",
-              snapLineLimit: 10,
               snapUpgraded: false,
             }
           : {}),
@@ -8856,7 +8855,7 @@ export class PrismaApiStore {
             ? `Quick scope for ${customerSelection.clientName}`
             : `Estimate for ${customerSelection.clientName}`,
           notes: isSnap
-            ? "Small quick quote. Keep it to ten lines or upgrade to a full quote if the scope grows."
+            ? "Quick scope on a single worksheet. Upgrade to a full quote if you need phases, modifiers, or breakouts."
             : "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
           breakoutStyle: isSnap ? "grand_total" : "phase_detail",
           type: "Firm",

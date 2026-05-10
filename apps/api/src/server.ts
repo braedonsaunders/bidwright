@@ -1627,11 +1627,9 @@ async function captureHumanEstimateFeedback(
   }).catch(() => null);
 }
 
-function snapLineLimitFromState(state: Record<string, unknown> | undefined): number | null {
-  if (!state || state.quoteMode !== "snap" || state.snapUpgraded === true) return null;
-  return typeof state.snapLineLimit === "number"
-    ? Math.max(1, Math.floor(state.snapLineLimit))
-    : 10;
+function isSnapWorkspaceState(state: Record<string, unknown> | undefined): boolean {
+  if (!state) return false;
+  return state.quoteMode === "snap" && state.snapUpgraded !== true;
 }
 
 async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
@@ -2871,20 +2869,6 @@ export function buildServer() {
       }
     }
 
-    const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
-    const snapLineLimit = snapLineLimitFromState(workspaceState?.state as Record<string, unknown> | undefined);
-    if (snapLineLimit !== null) {
-      const workspace = await request.store!.getWorkspace(projectId);
-      const lineCount = workspace?.worksheets
-        .find((worksheet) => worksheet.id === worksheetId)
-        ?.items.length ?? 0;
-      if (lineCount >= snapLineLimit) {
-        return reply.code(400).send({
-          message: `Snaps are capped at ${snapLineLimit} line items. Upgrade this Snap to a quote before adding more lines.`,
-        });
-      }
-    }
-
     const createResult = deltaResponse
       ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput)
       : null;
@@ -2977,7 +2961,7 @@ export function buildServer() {
     }
 
     const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
-    if (snapLineLimitFromState(workspaceState?.state as Record<string, unknown> | undefined) !== null) {
+    if (isSnapWorkspaceState(workspaceState?.state as Record<string, unknown> | undefined)) {
       return reply.code(400).send({
         message: "Snaps use a single worksheet. Upgrade this Snap to a quote before adding worksheets.",
       });

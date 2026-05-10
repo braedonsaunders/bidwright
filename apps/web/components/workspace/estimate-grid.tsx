@@ -143,7 +143,6 @@ export interface EstimateGridProps {
   onOpenPluginTools?: (target?: { pluginId?: string; pluginSlug?: string; toolId?: string }) => void;
   onOpenTakeoffLink?: (worksheetItemId: string) => void;
   variant?: "default" | "snap";
-  maxLineItems?: number;
   lockedWorksheetId?: string;
 }
 
@@ -2105,7 +2104,6 @@ export function EstimateGrid({
   onOpenPluginTools,
   onOpenTakeoffLink,
   variant = "default",
-  maxLineItems,
   lockedWorksheetId,
 }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
@@ -3200,24 +3198,6 @@ export function EstimateGrid({
     : activeFolder
       ? getWorksheetFolderPath(workspace.worksheetFolders ?? [], activeFolder.id)
       : findWs(workspace, activeTab)?.name ?? "Worksheet";
-  const snapLineLimit = isSnapMode
-    ? Math.max(1, Math.floor(maxLineItems ?? 10))
-    : Number.POSITIVE_INFINITY;
-  const snapWorksheetForLimit = isSnapMode
-    ? (snapWorksheetId ? findWs(workspace, snapWorksheetId) : activeWorksheetForActions)
-    : null;
-  const snapLineCount = snapWorksheetForLimit?.items.length ?? 0;
-  const snapRemainingLines = isSnapMode
-    ? Math.max(0, snapLineLimit - snapLineCount)
-    : Number.POSITIVE_INFINITY;
-  const snapLimitReached = isSnapMode && snapRemainingLines <= 0;
-  const ensureSnapLineCapacity = useCallback((requestedCount = 1) => {
-    if (!isSnapMode) return true;
-    if (requestedCount <= snapRemainingLines) return true;
-    onError(`Snaps are capped at ${snapLineLimit} line items. Upgrade to a full quote if this scope is growing.`);
-    return false;
-  }, [isSnapMode, onError, snapLineLimit, snapRemainingLines]);
-
   const fitWidth = worksheetViewMode === "organizer" && gridWidth > 0
     ? gridWidth + WORKSHEET_ORGANIZER_PANEL_WIDTH + WORKSHEET_ORGANIZER_PANEL_GAP
     : gridWidth;
@@ -4304,7 +4284,6 @@ export function EstimateGrid({
   // ─── Row operations ───
 
   const addNewItem = useCallback((_categoryOverride?: string) => {
-    if (!ensureSnapLineCapacity(1)) return;
     const wsId = activeWorksheetForActions?.id;
     if (!wsId) {
       if (activeFolderId) {
@@ -4319,7 +4298,7 @@ export function EstimateGrid({
     if (!ws) return;
 
     createDraftItem(wsId);
-  }, [activeFolderId, activeWorksheetForActions?.id, createDraftItem, ensureSnapLineCapacity, workspace]);
+  }, [activeFolderId, activeWorksheetForActions?.id, createDraftItem, workspace]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -4515,7 +4494,6 @@ export function EstimateGrid({
   }
 
   function insertLineBelow(itemId: string) {
-    if (!ensureSnapLineCapacity(1)) return;
     const row = visibleRows.find((r) => r.id === itemId);
     if (!row) return;
     const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
@@ -4560,14 +4538,12 @@ export function EstimateGrid({
   }
 
   function duplicateRow(itemId: string) {
-    if (!ensureSnapLineCapacity(1)) return;
     const row = visibleRows.find((r) => r.id === itemId);
     if (!row) return;
     createItem(row.worksheetId, payloadFromRow(row, { lineOrder: lineOrderBelow(row) }), "Duplicate failed.");
   }
 
   function splitRow(itemId: string) {
-    if (!ensureSnapLineCapacity(1)) return;
     const row = visibleRows.find((r) => r.id === itemId);
     if (!row) return;
     if (row.quantity <= 0) {
@@ -5047,7 +5023,6 @@ export function EstimateGrid({
       canCreateWorksheetItemFromOption(group, item)
     );
     if (selected.length === 0) return;
-    if (!ensureSnapLineCapacity(selected.length)) return;
 
     const worksheet = findWs(workspace, wsId);
     const baseOrder =
@@ -6849,24 +6824,16 @@ export function EstimateGrid({
               </RadixSelect.Content>
             </RadixSelect.Portal>
           </RadixSelect.Root>
-          {isSnapMode && (
-            <Badge tone={snapLimitReached ? "warning" : "info"} className="h-6 px-2 text-[10px]">
-              {snapLineCount}/{snapLineLimit} lines
-            </Badge>
-          )}
-
           <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-bg/55 p-0.5 shadow-sm">
             <Button
               size="xs"
               className="rounded-md"
               onClick={() => addNewItem()}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0}
               title={
                 (workspace.worksheets ?? []).length === 0
                   ? "Create a worksheet first"
-                  : snapLimitReached
-                    ? `Snap limit reached (${snapLineLimit} lines)`
-                    : "Add one line item"
+                  : "Add one line item"
               }
             >
               <Plus className="h-3 w-3" /> Add
@@ -6876,13 +6843,11 @@ export function EstimateGrid({
               variant="ghost"
               className="rounded-md"
               onClick={() => setShowAddItemsPicker(true)}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0 || snapLimitReached}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0}
               title={
                 (workspace.worksheets ?? []).length === 0
                   ? "Create a worksheet first"
-                  : snapLimitReached
-                    ? `Snap limit reached (${snapLineLimit} lines)`
-                    : "Add multiple line items"
+                  : "Add multiple line items"
               }
             >
               <Boxes className="h-3 w-3" /> Multi
