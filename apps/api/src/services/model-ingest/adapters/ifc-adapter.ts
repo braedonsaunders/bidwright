@@ -181,7 +181,16 @@ function buildIfcLodMap(WebIFC: any, api: any, modelID: number): Map<number, str
       if (!lod) continue;
       const related = Array.isArray(rel.RelatedObjects) ? rel.RelatedObjects : [];
       for (const ref of related) {
-        const expressID = typeof ref?.value === "number" ? ref.value : Number(ref?.value);
+        // web-ifc's GetLine(..., flatten=true) returns nested entities as
+        // full objects with `expressID` (numeric). When flatten is off or
+        // for entities we didn't expand, the same field comes as a ref
+        // wrapper `{ type, value }`. Accept either.
+        const expressID =
+          typeof ref?.expressID === "number"
+            ? ref.expressID
+            : typeof ref?.value === "number"
+              ? ref.value
+              : Number(ref?.value ?? ref?.expressID);
         if (Number.isFinite(expressID)) result.set(expressID, lod);
       }
     }
