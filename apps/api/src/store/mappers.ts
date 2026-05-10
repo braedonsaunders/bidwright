@@ -954,6 +954,24 @@ export function mapTakeoffLink(l: any) {
   };
 }
 
+export function mapDwgEntityLink(l: any) {
+  return {
+    id: l.id,
+    projectId: l.projectId,
+    documentId: l.documentId,
+    entityId: l.entityId,
+    entityType: l.entityType ?? "",
+    layer: l.layer ?? "",
+    worksheetItemId: l.worksheetItemId,
+    quantity: l.quantity ?? 0,
+    multiplier: l.multiplier ?? 1.0,
+    derivedQuantity: l.derivedQuantity ?? 0,
+    selection: (l.selection as Record<string, unknown>) ?? {},
+    createdAt: toISO(l.createdAt),
+    updatedAt: toISO(l.updatedAt),
+  };
+}
+
 export function mapPlugin(p: any): Plugin {
   return {
     id: p.id,

@@ -4691,6 +4691,66 @@ export async function updateTakeoffLink(
   });
 }
 
+// ── DWG Entity Links (CAD Entity ↔ Line Item) ───────────────────────────
+// Direct link from a parsed DXF/DWG entity to a worksheet line item, no
+// intermediate annotation required. Quantity is user-supplied.
+
+export interface DwgEntityLinkRecord {
+  id: string;
+  projectId: string;
+  documentId: string;
+  entityId: string;
+  entityType: string;
+  layer: string;
+  worksheetItemId: string;
+  quantity: number;
+  multiplier: number;
+  derivedQuantity: number;
+  selection: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listDwgEntityLinks(
+  projectId: string,
+  filters: { documentId?: string; entityId?: string; worksheetItemId?: string } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.documentId) params.set("documentId", filters.documentId);
+  if (filters.entityId) params.set("entityId", filters.entityId);
+  if (filters.worksheetItemId) params.set("worksheetItemId", filters.worksheetItemId);
+  const qs = params.toString();
+  return apiRequest<DwgEntityLinkRecord[]>(
+    `/api/takeoff/${projectId}/dwg-links${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function createDwgEntityLink(
+  projectId: string,
+  data: {
+    documentId: string;
+    entityId: string;
+    entityType?: string;
+    layer?: string;
+    worksheetItemId: string;
+    quantity: number;
+    multiplier?: number;
+    selection?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<DwgEntityLinkRecord>(`/api/takeoff/${projectId}/dwg-links`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function deleteDwgEntityLink(projectId: string, linkId: string) {
+  return apiRequest<{ deleted: boolean }>(`/api/takeoff/${projectId}/dwg-links/${linkId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function deleteTakeoffLink(projectId: string, linkId: string) {
   return apiRequest<void>(`/api/takeoff/${projectId}/links/${linkId}`, {
     method: "DELETE",

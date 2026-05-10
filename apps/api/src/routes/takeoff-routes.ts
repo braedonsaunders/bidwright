@@ -226,4 +226,50 @@ export async function takeoffRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
     }
   });
+
+  // ── DWG Entity Links (CAD Entity ↔ Line Item) ─────────────────────────
+
+  // ── GET /api/takeoff/:projectId/dwg-links ─────────────────────────────
+  app.get("/api/takeoff/:projectId/dwg-links", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const query = request.query as {
+      documentId?: string;
+      entityId?: string;
+      worksheetItemId?: string;
+    };
+    try {
+      return await request.store!.listDwgEntityLinks(projectId, {
+        documentId: query.documentId,
+        entityId: query.entityId,
+        worksheetItemId: query.worksheetItemId,
+      });
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
+    }
+  });
+
+  // ── POST /api/takeoff/:projectId/dwg-links ────────────────────────────
+  app.post("/api/takeoff/:projectId/dwg-links", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = request.body as Record<string, unknown>;
+    try {
+      const link = await request.store!.createDwgEntityLink(projectId, body as any);
+      reply.code(201);
+      return link;
+    } catch (error) {
+      console.error("[dwg-link:create] Failed:", error instanceof Error ? error.message : error);
+      return reply.code(400).send({ message: error instanceof Error ? error.message : "Bad request" });
+    }
+  });
+
+  // ── DELETE /api/takeoff/:projectId/dwg-links/:linkId ──────────────────
+  app.delete("/api/takeoff/:projectId/dwg-links/:linkId", async (request, reply) => {
+    const { linkId } = request.params as { projectId: string; linkId: string };
+    try {
+      await request.store!.deleteDwgEntityLink(linkId);
+      return { deleted: true };
+    } catch (error) {
+      return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
+    }
+  });
 }

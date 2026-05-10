@@ -1,15 +1,18 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
-import { Compass, Maximize2, Minimize2, MousePointerClick, Sparkles } from "lucide-react";
+import { Compass, Link2, Maximize2, Minimize2, Sparkles } from "lucide-react";
 import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
 import { EstimateGrid } from "./estimate-grid";
+import { TakeoffLinkView, type TakeoffSelection } from "./takeoff-link-view";
+import type { TakeoffAnnotation } from "./takeoff/annotation-canvas";
+import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
-type RightPanelTab = "inspect" | "detail" | "ai";
+type RightPanelTab = "inspect" | "link" | "ai";
 
 export interface ComboViewProps {
   workspace: ProjectWorkspaceData;
@@ -48,15 +51,44 @@ export function ComboView({
 }: ComboViewProps) {
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspect");
   const [fullscreen, setFullscreen] = useState(false);
+  const [takeoffSelection, setTakeoffSelection] = useState<TakeoffSelection | null>(null);
+  const [annotationsCache, setAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
+  const [linksReloadSignal, setLinksReloadSignal] = useState(0);
+  const handleLinksMutated = useCallback(() => setLinksReloadSignal((k) => k + 1), []);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Bridge: TakeoffTab populates these refs with its action handlers so the
+  // side-panel link view can trigger them without TakeoffTab having to expose
+  // its entire state graph.
+  const modelSendToEstimateRef = useRef<
+    ((selection: BidwrightModelSelectionMessage) => Promise<void> | void) | null
+  >(null);
+  const handleModelSendToEstimate = useCallback(
+    async (selection: BidwrightModelSelectionMessage) => {
+      await modelSendToEstimateRef.current?.(selection);
+    },
+    [],
+  );
+  const modelElementCreateLineItemRef = useRef<((elementId: string) => Promise<void> | void) | null>(null);
+  const handleCreateLineItemFromModelElement = useCallback(async (elementId: string) => {
+    await modelElementCreateLineItemRef.current?.(elementId);
+  }, []);
+
+  const toggleFullscreen = useCallback(() => {
+    if (typeof document === "undefined") return;
+    if (document.fullscreenElement) {
+      void document.exitFullscreen();
+    } else {
+      void containerRef.current?.requestFullscreen();
+    }
+  }, []);
 
   useEffect(() => {
-    if (!fullscreen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setFullscreen(false);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [fullscreen]);
+    if (typeof document === "undefined") return;
+    const onChange = () => setFullscreen(Boolean(document.fullscreenElement));
+    document.addEventListener("fullscreenchange", onChange);
+    return () => document.removeEventListener("fullscreenchange", onChange);
+  }, []);
 
   const takeoffOriginId = workspaceSyncOriginId ? `${workspaceSyncOriginId}-combo` : undefined;
 
@@ -81,9 +113,10 @@ export function ComboView({
 
   return (
     <div
+      ref={containerRef}
       className={cn(
-        "flex flex-col",
-        fullscreen ? "fixed inset-0 z-50 bg-bg p-2" : "flex-1 min-h-0",
+        "flex flex-col flex-1 min-h-0",
+        fullscreen && "bg-bg p-2",
       )}
     >
       <Group
@@ -109,6 +142,13 @@ export function ComboView({
                   workspaceSyncOriginId={takeoffOriginId}
                   selectedWorksheetId={selectedWorksheetId ?? null}
                   initialDocumentId={initialDocumentId}
+                  selection={takeoffSelection}
+                  onSelectionChange={setTakeoffSelection}
+                  onAnnotationsChange={setAnnotationsCache}
+                  linksReloadSignal={linksReloadSignal}
+                  onLinksMutated={handleLinksMutated}
+                  modelSendToEstimateRef={modelSendToEstimateRef}
+                  modelElementCreateLineItemRef={modelElementCreateLineItemRef}
                 />
               </div>
             </Panel>
@@ -119,8 +159,8 @@ export function ComboView({
 
             <Panel
               id="combo-right"
-              defaultSize="33%"
-              minSize="18%"
+              defaultSize="22%"
+              minSize="15%"
               collapsible
               collapsedSize="0%"
             >
@@ -132,7 +172,12 @@ export function ComboView({
                   onTabChange={setRightPanelTab}
                   onOpenAgentChat={onOpenAgentChat}
                   fullscreen={fullscreen}
-                  onToggleFullscreen={() => setFullscreen((f) => !f)}
+                  onToggleFullscreen={toggleFullscreen}
+                  takeoffSelection={takeoffSelection}
+                  annotationsCache={annotationsCache}
+                  onLinksMutated={handleLinksMutated}
+                  onSendModelSelectionToEstimate={handleModelSendToEstimate}
+                  onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
                 />
               </div>
             </Panel>
@@ -177,6 +222,11 @@ function RightPanel({
   onOpenAgentChat,
   fullscreen,
   onToggleFullscreen,
+  takeoffSelection,
+  annotationsCache,
+  onLinksMutated,
+  onSendModelSelectionToEstimate,
+  onCreateLineItemFromModelElement,
 }: {
   workspace: ProjectWorkspaceData;
   activeWorksheetId?: string;
@@ -185,10 +235,15 @@ function RightPanel({
   onOpenAgentChat?: (prefill?: string) => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
+  takeoffSelection: TakeoffSelection | null;
+  annotationsCache: TakeoffAnnotation[];
+  onLinksMutated: () => void;
+  onSendModelSelectionToEstimate: (selection: BidwrightModelSelectionMessage) => Promise<void> | void;
+  onCreateLineItemFromModelElement: (elementId: string) => Promise<void> | void;
 }) {
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "inspect", label: "Inspect", icon: Compass },
-    { id: "detail", label: "Detail", icon: MousePointerClick },
+    { id: "link", label: "Link", icon: Link2 },
     { id: "ai", label: "AI", icon: Sparkles },
   ];
 
@@ -227,7 +282,17 @@ function RightPanel({
 
       <div className="flex-1 min-h-0 overflow-auto p-3">
         {tab === "inspect" && <InspectView workspace={workspace} activeWorksheetId={activeWorksheetId} />}
-        {tab === "detail" && <DetailView />}
+        {tab === "link" && (
+          <TakeoffLinkView
+            workspace={workspace}
+            selection={takeoffSelection}
+            annotations={annotationsCache}
+            activeWorksheetId={activeWorksheetId}
+            onLinksMutated={onLinksMutated}
+            onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
+            onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
+          />
+        )}
         {tab === "ai" && <AIView onOpenAgentChat={onOpenAgentChat} />}
       </div>
     </>
@@ -257,18 +322,8 @@ function InspectView({
         <Stat label={activeWs ? "Items" : "Worksheets"} value={activeWs ? itemCount : wsCount} />
         {!activeWs && <Stat label="Items (total)" value={itemCount} />}
       </Section>
-
-      <Section label="Cross-pane links">
-        <p className="text-[11px] leading-relaxed text-fg/50">
-          Select an annotation in the takeoff or a row in the worksheet to see linked items here.
-        </p>
-      </Section>
     </div>
   );
-}
-
-function DetailView() {
-  return <div className="text-[11px] italic text-fg/40">Nothing selected. Click an item to view its detail.</div>;
 }
 
 function AIView({ onOpenAgentChat }: { onOpenAgentChat?: (prefill?: string) => void }) {

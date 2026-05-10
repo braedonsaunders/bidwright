@@ -548,6 +548,20 @@ function aggregateEntityGroups(entities: DwgEntity[], calibration: CalibrationSt
   return Array.from(groups.values()).sort((left, right) => right.count - left.count).slice(0, 8);
 }
 
+/** Minimal annotation shape compatible with TakeoffAnnotation, published up
+ *  so the unified side-panel link UI can look annotations up by id. */
+export interface DwgPublishedAnnotation {
+  id: string;
+  type: string;
+  label: string;
+  color: string;
+  thickness: number;
+  points: { x: number; y: number }[];
+  visible: boolean;
+  groupName?: string;
+  measurement?: { value: number; unit: string; area?: number; volume?: number };
+}
+
 interface DwgTakeoffSurfaceProps {
   projectId: string;
   documents: DwgDocument[];
@@ -557,6 +571,25 @@ interface DwgTakeoffSurfaceProps {
   defaultEstimateCategory?: EstimateCategory | null;
   onSelectedDocumentChange?: (documentId: string) => void;
   onWorkspaceMutated?: () => void;
+  /** Notifies the parent when the user selects/deselects a CAD entity, so a
+   * shared link panel can drive linking workflows. */
+  onSelectedEntityChange?: (
+    selection: {
+      documentId: string;
+      entityId: string;
+      entityType?: string;
+      layer?: string;
+      label?: string;
+      summary?: string;
+    } | null,
+  ) => void;
+  /** Notifies the parent when the user selects/deselects a DWG measurement
+   *  annotation. Selection ids match the underlying TakeoffAnnotation rows so
+   *  the unified link panel can look them up just like PDF annotations. */
+  onSelectedAnnotationChange?: (annotationId: string | null) => void;
+  /** Mirror of the current DWG annotation array (in TakeoffAnnotation shape)
+   *  so a parent can merge with PDF annotations and feed the side-panel cache. */
+  onAnnotationsChange?: (annotations: DwgPublishedAnnotation[]) => void;
 }
 
 export function DwgTakeoffSurface({
@@ -568,6 +601,9 @@ export function DwgTakeoffSurface({
   defaultEstimateCategory,
   onSelectedDocumentChange,
   onWorkspaceMutated,
+  onSelectedEntityChange,
+  onSelectedAnnotationChange,
+  onAnnotationsChange,
 }: DwgTakeoffSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -583,9 +619,14 @@ export function DwgTakeoffSurface({
   const [metadata, setMetadata] = useState<DwgTakeoffMetadata | null>(null);
   const [entities, setEntities] = useState<DwgEntity[]>([]);
   const [annotations, setAnnotations] = useState<DwgMeasurementAnnotation[]>([]);
+  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(() => new Set());
   const [selectedLayout, setSelectedLayout] = useState<string>("__all__");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+
+  // Publish entity selection to parent so the shared link panel can render it.
+  // Effect lives further down so it can read `selectedEntity` once that memo is set up.
+
   const [activeTool, setActiveTool] = useState<DwgTool>("select");
   const [activeColor, setActiveColor] = useState(PRESET_COLORS[0]);
   const [drawPoints, setDrawPoints] = useState<DwgPoint[]>([]);
@@ -597,7 +638,6 @@ export function DwgTakeoffSurface({
   const [layerSearch, setLayerSearch] = useState("");
   const [entitySearch, setEntitySearch] = useState("");
   const [calibration, setCalibration] = useState<CalibrationState | null>(null);
-  const [creatingAnnotationId, setCreatingAnnotationId] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "success" | "danger" | "info"; message: string } | null>(null);
 
   const targetWorksheet = useMemo(
@@ -622,6 +662,53 @@ export function DwgTakeoffSurface({
     () => layoutEntities.find((entity) => entity.id === selectedEntityId) ?? null,
     [layoutEntities, selectedEntityId],
   );
+
+  // Publish DWG annotations to the parent in a TakeoffAnnotation-compatible shape so the
+  // unified annotation link UI can look them up identically to PDF annotations.
+  useEffect(() => {
+    if (!onAnnotationsChange) return;
+    onAnnotationsChange(
+      annotations.map((a) => ({
+        id: a.id,
+        type: a.annotationType,
+        label: a.label,
+        color: a.color,
+        thickness: 2,
+        points: a.points.map((p) => ({ x: p.x, y: p.y })),
+        visible: true,
+        groupName: a.groupName,
+        measurement: a.measurement && a.measurement.value !== undefined && a.measurement.unit
+          ? { value: a.measurement.value, unit: a.measurement.unit }
+          : undefined,
+      })),
+    );
+  }, [annotations, onAnnotationsChange]);
+
+  // Publish DWG annotation selection to the parent.
+  useEffect(() => {
+    onSelectedAnnotationChange?.(selectedAnnotationId);
+  }, [selectedAnnotationId, onSelectedAnnotationChange]);
+
+  // Publish entity selection to parent so the shared link panel can render it.
+  useEffect(() => {
+    if (!onSelectedEntityChange) return;
+    if (selectedEntity && selectedDocumentId) {
+      const measurement = measureEntity(selectedEntity, calibration);
+      const summary = measurement
+        ? `${measurement.value.toFixed(2)} ${measurement.unit}`
+        : selectedEntity.text || undefined;
+      onSelectedEntityChange({
+        documentId: selectedDocumentId,
+        entityId: selectedEntity.id,
+        entityType: selectedEntity.type,
+        layer: selectedEntity.layer,
+        label: selectedEntity.text || `${selectedEntity.type} on ${selectedEntity.layer}`,
+        summary,
+      });
+    } else {
+      onSelectedEntityChange(null);
+    }
+  }, [selectedEntity, selectedDocumentId, calibration, onSelectedEntityChange]);
 
   const layers = useMemo(() => {
     const computed = buildLayers(layoutEntities);
@@ -1173,54 +1260,6 @@ export function DwgTakeoffSurface({
     if (annotation) pushHistory({ kind: "delete", annotation });
   }
 
-  async function sendAnnotationToEstimate(annotation: DwgMeasurementAnnotation) {
-    if (!targetWorksheet) {
-      setStatus({ tone: "danger", message: "Create a worksheet before sending DWG measurements to the estimate." });
-      return;
-    }
-    const quantity = annotation.measurement?.value ?? 1;
-    const unit = annotation.measurement?.unit ?? "EA";
-    const previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
-    setCreatingAnnotationId(annotation.id);
-    try {
-      const category = defaultEstimateCategory ?? { name: "Model Takeoff", entityType: "DWG Measurement" };
-      const result = await createWorksheetItem(projectId, targetWorksheet.id, {
-        categoryId: category.id ?? null,
-        category: category.name,
-        entityType: category.entityType || "DWG Measurement",
-        entityName: annotation.label || "DWG measurement",
-        description: activeDocument?.fileName ?? "",
-        quantity,
-        uom: mapUom(unit),
-        cost: 0,
-        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-        price: 0,
-        sourceNotes: [
-          `From DWG takeoff: ${activeDocument?.fileName ?? "drawing"}`,
-          `${formatNumber(quantity)} ${unit}`,
-          `Tool: ${annotation.annotationType}`,
-        ].join("\n"),
-      });
-      const createdItem = result.workspace.worksheets
-        .flatMap((worksheet) => worksheet.items)
-        .find((item) => !previousItemIds.has(item.id));
-      if (createdItem) {
-        await createTakeoffLink(projectId, {
-          annotationId: annotation.id,
-          worksheetItemId: createdItem.id,
-          quantityField: "quantity",
-          multiplier: 1,
-        });
-      }
-      setStatus({ tone: "success", message: `Created estimate line in ${targetWorksheet.name}.` });
-      onWorkspaceMutated?.();
-    } catch (err) {
-      setStatus({ tone: "danger", message: err instanceof Error ? err.message : "Could not create estimate line." });
-    } finally {
-      setCreatingAnnotationId(null);
-    }
-  }
-
   const layerOptions = documents.map((document) => ({ value: document.id, label: document.label }));
   const visibleEntityCount = filteredEntities.length;
   const totalMeasured = annotations.reduce((sum, annotation) => sum + (annotation.measurement?.value ?? 0), 0);
@@ -1543,8 +1582,17 @@ export function DwgTakeoffSurface({
                     Draw a distance, area, rectangle, count, or text note to build the DWG takeoff ledger.
                   </p>
                 ) : (
-                  annotations.map((annotation) => (
-                    <div key={annotation.id} className="rounded-lg border border-line bg-bg/35 p-2">
+                  annotations.map((annotation) => {
+                    const isSelected = selectedAnnotationId === annotation.id;
+                    return (
+                    <div
+                      key={annotation.id}
+                      onClick={() => setSelectedAnnotationId(isSelected ? null : annotation.id)}
+                      className={cn(
+                        "cursor-pointer rounded-lg border p-2 transition-colors",
+                        isSelected ? "border-accent/40 bg-accent/5" : "border-line bg-bg/35 hover:bg-panel2/40",
+                      )}
+                    >
                       <div className="flex items-start gap-2">
                         <span className="mt-1 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: annotation.color }} />
                         <div className="min-w-0 flex-1">
@@ -1555,16 +1603,7 @@ export function DwgTakeoffSurface({
                         </div>
                         <button
                           type="button"
-                          onClick={() => void sendAnnotationToEstimate(annotation)}
-                          disabled={creatingAnnotationId === annotation.id}
-                          className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 hover:bg-accent/10 hover:text-accent disabled:opacity-40"
-                          title="Send to estimate"
-                        >
-                          {creatingAnnotationId === annotation.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Link2 className="h-3.5 w-3.5" />}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => void deleteAnnotation(annotation.id)}
+                          onClick={(e) => { e.stopPropagation(); void deleteAnnotation(annotation.id); }}
                           className="flex h-7 w-7 items-center justify-center rounded-md text-fg/35 hover:bg-danger/10 hover:text-danger"
                           title="Delete measurement"
                         >
@@ -1572,7 +1611,8 @@ export function DwgTakeoffSurface({
                         </button>
                       </div>
                     </div>
-                  ))
+                    );
+                  })
                 )}
               </div>
             </section>

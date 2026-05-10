@@ -217,6 +217,7 @@ import {
   mapSummaryRow,
   mapTakeoffAnnotation,
   mapTakeoffLink,
+  mapDwgEntityLink,
   mapUser,
   mapWorksheet,
   mapWorksheetFolder,
@@ -14826,6 +14827,84 @@ export class PrismaApiStore {
     // Recalculate item quantity from remaining links
     await this.recalcLinkedItemQuantity(worksheetItemId, projectId);
 
+    return { deleted: true };
+  }
+
+  // ── DWG Entity Links ────────────────────────────────────────────────
+  // Direct CAD-entity-to-line-item links. Quantity is user-supplied
+  // (DWG entities don't carry intrinsic measurement the way annotations do).
+
+  async listDwgEntityLinks(
+    projectId: string,
+    filters: { documentId?: string; entityId?: string; worksheetItemId?: string } = {},
+  ) {
+    await this.requireProject(projectId);
+    const where: any = { projectId };
+    if (filters.documentId) where.documentId = filters.documentId;
+    if (filters.entityId) where.entityId = filters.entityId;
+    if (filters.worksheetItemId) where.worksheetItemId = filters.worksheetItemId;
+    const rows = await this.db.dwgEntityLink.findMany({ where, orderBy: { createdAt: "asc" } });
+    return rows.map(mapDwgEntityLink);
+  }
+
+  async createDwgEntityLink(
+    projectId: string,
+    input: {
+      documentId: string;
+      entityId: string;
+      entityType?: string;
+      layer?: string;
+      worksheetItemId: string;
+      quantity: number;
+      multiplier?: number;
+      selection?: Record<string, unknown>;
+    },
+  ) {
+    await this.requireProject(projectId);
+    if (!input.documentId) throw new Error("documentId is required");
+    if (!input.entityId) throw new Error("entityId is required");
+    if (!input.worksheetItemId) throw new Error("worksheetItemId is required");
+
+    const item = await this.db.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
+    if (!item) throw new Error(`Worksheet item ${input.worksheetItemId} not found`);
+
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (revision) {
+      const worksheet = await this.db.worksheet.findFirst({ where: { id: item.worksheetId } });
+      if (!worksheet || worksheet.revisionId !== revision.id) {
+        throw new Error(`Worksheet item ${input.worksheetItemId} not in current revision`);
+      }
+    }
+
+    const quantity = Number.isFinite(input.quantity) ? input.quantity : 0;
+    const multiplier = input.multiplier ?? 1.0;
+    const derivedQuantity = quantity * multiplier;
+
+    const link = await this.db.dwgEntityLink.create({
+      data: {
+        id: createId("dlink"),
+        projectId,
+        documentId: input.documentId,
+        entityId: input.entityId,
+        entityType: input.entityType ?? "",
+        layer: input.layer ?? "",
+        worksheetItemId: input.worksheetItemId,
+        quantity,
+        multiplier,
+        derivedQuantity,
+        selection: (input.selection ?? {}) as any,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+
+    return mapDwgEntityLink(link);
+  }
+
+  async deleteDwgEntityLink(linkId: string) {
+    const link = await this.db.dwgEntityLink.findFirst({ where: { id: linkId } });
+    if (!link) throw new Error(`DWG entity link ${linkId} not found`);
+    await this.db.dwgEntityLink.delete({ where: { id: linkId } });
     return { deleted: true };
   }
 

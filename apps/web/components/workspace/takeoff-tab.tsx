@@ -98,14 +98,12 @@ import {
   apiRequest,
   detectTitleBlockScale,
   extractLegendFromPage,
-  suggestLineItemsForAnnotation,
   getFileTree,
   importPreview,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
   type EntityCategory,
   type LegendEntryRecord,
-  type LineItemSuggestionRecord,
   type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
@@ -151,7 +149,6 @@ import {
   type TakeoffAnnotation,
 } from "./takeoff/annotation-canvas";
 import { AnnotationSidebar } from "./takeoff/annotation-sidebar";
-import { LinkToLineItemModal } from "./takeoff/link-to-item-modal";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import {
   CreateAnnotationModal,
@@ -297,6 +294,8 @@ interface TakeoffDocument {
   bookId?: string;
 }
 
+import type { TakeoffSelection } from "./takeoff-link-view";
+
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
   onOpenAgentChat?: (prefill?: string) => void;
@@ -307,6 +306,25 @@ interface TakeoffTabProps {
   detached?: boolean;
   workspaceSyncOriginId?: string;
   selectedWorksheetId?: string | null;
+  /** Externally-controlled selection (e.g. when a parent renders the link UI). */
+  selection?: TakeoffSelection | null;
+  onSelectionChange?: (selection: TakeoffSelection | null) => void;
+  /** Mirror of the current annotations array, for parents that need to render them. */
+  onAnnotationsChange?: (annotations: TakeoffAnnotation[]) => void;
+  /** Incrementing counter — when it changes, takeoff reloads its links from the server. */
+  linksReloadSignal?: number;
+  /** Called whenever this tab mutates links so the parent can re-fetch its own copy. */
+  onLinksMutated?: () => void;
+  /** A ref the parent provides; this tab populates it with its model
+   *  send-to-estimate handler so a sibling component (the side-panel link view)
+   *  can trigger the flow without lifting all of TakeoffTab's state. */
+  modelSendToEstimateRef?: React.MutableRefObject<
+    ((selection: BidwrightModelSelectionMessage) => Promise<void> | void) | null
+  >;
+  /** A ref this tab populates with the per-element line-item creation flow. */
+  modelElementCreateLineItemRef?: React.MutableRefObject<
+    ((elementId: string) => Promise<void> | void) | null
+  >;
 }
 
 interface TakeoffSyncBase {
@@ -682,6 +700,13 @@ export function TakeoffTab({
   detached = false,
   workspaceSyncOriginId,
   selectedWorksheetId,
+  selection,
+  onSelectionChange,
+  onAnnotationsChange,
+  linksReloadSignal,
+  onLinksMutated,
+  modelSendToEstimateRef,
+  modelElementCreateLineItemRef,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
   const selectedWorksheet =
@@ -781,6 +806,7 @@ export function TakeoffTab({
   /* Annotation state */
   const [annotations, setAnnotations] = useState<TakeoffAnnotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [dwgAnnotationsCache, setDwgAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -790,7 +816,6 @@ export function TakeoffTab({
 
   /* ─── Takeoff Link state ─── */
   const [takeoffLinks, setTakeoffLinks] = useState<TakeoffLinkRecord[]>([]);
-  const [linkModalAnnotationId, setLinkModalAnnotationId] = useState<string | null>(null);
 
   /* Calibration state */
   const [calibration, setCalibration] = useState<Calibration | null>(null);
@@ -1189,6 +1214,82 @@ export function TakeoffTab({
   useEffect(() => {
     loadTakeoffLinks();
   }, [loadTakeoffLinks]);
+
+  // Reload links when the parent signals a mutation happened outside this tab
+  // (e.g. from the side-panel link UI). Skip the first run so we don't double-fetch.
+  const reloadSignalSeenRef = useRef(false);
+  useEffect(() => {
+    if (linksReloadSignal === undefined) return;
+    if (!reloadSignalSeenRef.current) {
+      reloadSignalSeenRef.current = true;
+      return;
+    }
+    void loadTakeoffLinks();
+  }, [linksReloadSignal, loadTakeoffLinks]);
+
+  // Publish annotations (PDF + DWG merged) to the parent so the side panel can
+  // look them up by id regardless of which viewer drew them.
+  useEffect(() => {
+    onAnnotationsChange?.([...annotations, ...dwgAnnotationsCache]);
+  }, [annotations, dwgAnnotationsCache, onAnnotationsChange]);
+
+  // Mirror the externally-controlled annotation selection into local state.
+  useEffect(() => {
+    if (selection?.kind === "annotation") {
+      if (selection.annotationId !== selectedAnnotationId) {
+        setSelectedAnnotationId(selection.annotationId);
+      }
+    } else if (selection === null && selectedAnnotationId !== null) {
+      setSelectedAnnotationId(null);
+    }
+    // For non-annotation kinds, leave the local annotation selection alone.
+  }, [selection, selectedAnnotationId]);
+
+  // Publish local annotation selection up to the parent.
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    if (selectedAnnotationId) {
+      if (selection?.kind !== "annotation" || selection.annotationId !== selectedAnnotationId) {
+        onSelectionChange({ kind: "annotation", annotationId: selectedAnnotationId });
+      }
+    } else if (selection?.kind === "annotation") {
+      onSelectionChange(null);
+    }
+  }, [selectedAnnotationId, onSelectionChange, selection]);
+
+  // Expose action handlers to the parent via mutable refs. Runs on every render
+  // so refs always point at the latest closure.
+  useEffect(() => {
+    if (modelSendToEstimateRef) {
+      modelSendToEstimateRef.current = handleSendModelSelectionToEstimate;
+    }
+    if (modelElementCreateLineItemRef) {
+      modelElementCreateLineItemRef.current = async (elementId: string) => {
+        const element = modelElements.find((e) => e.id === elementId);
+        if (!element) throw new Error("Model element not found");
+        await handleCreateModelElementLineItem(element);
+      };
+    }
+  });
+
+  // Publish 3D model-editor selection up to the parent so the side-panel link view can render it.
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    if (modelSelection && modelSelection.modelId) {
+      const selectedNodeIds = modelSelection.nodes.map((node) => node.id);
+      onSelectionChange({
+        kind: "model-selection",
+        modelId: modelSelection.modelId,
+        modelDocumentId: modelSelection.modelDocumentId,
+        fileName: modelSelection.fileName,
+        selectedCount: modelSelection.selectedCount,
+        selectedNodeIds,
+        totals: modelSelection.totals,
+      });
+    } else if (selection?.kind === "model-selection") {
+      onSelectionChange(null);
+    }
+  }, [modelSelection, onSelectionChange, selection]);
 
   useEffect(() => {
     if (!projectId || typeof BroadcastChannel === "undefined") return;
@@ -2369,168 +2470,6 @@ export function TakeoffTab({
     setAnnotations([]);
     if (removed.length > 0) pushTakeoffHistory({ kind: "clear", annotations: removed });
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
-  }
-
-  /* ─── Takeoff Link handlers ─── */
-
-  function handleLinkToLineItem(annotationId: string) {
-    setLinkModalAnnotationId(annotationId);
-  }
-
-  async function handleLinkConfirm(data: { worksheetItemId: string; quantityField: string; multiplier: number }) {
-    if (!linkModalAnnotationId) return;
-    try {
-      await createTakeoffLink(projectId, {
-        annotationId: linkModalAnnotationId,
-        worksheetItemId: data.worksheetItemId,
-        quantityField: data.quantityField,
-        multiplier: data.multiplier,
-      });
-      await loadTakeoffLinks();
-      notifyTakeoffLinksMutated();
-    } catch (err) {
-      console.error("[takeoff-link] Failed to create link:", err);
-    }
-    setLinkModalAnnotationId(null);
-  }
-
-  async function handleSendToEstimate(annotationId: string) {
-    const ann = annotations.find((a) => a.id === annotationId);
-    if (!ann?.measurement) return;
-
-    const targetWs = selectedWorksheet;
-    if (!targetWs) return;
-
-    try {
-      // Determine UOM from annotation measurement
-      const unit = ann.measurement.unit ?? "EA";
-      const uomMap: Record<string, string> = { ft: "LF", "ft\u00B2": "SF", "ft\u00B3": "CF", m: "M", "m\u00B2": "SM", count: "EA" };
-      const uom = uomMap[unit] ?? unit;
-
-      const qty = ann.measurement.value ?? 0;
-      if (!defaultCategory) {
-        setToastType("error");
-        setToastMessage("Configure at least one entity category in Settings before adding takeoff lines.");
-        return;
-      }
-      const result = await createWorksheetItem(projectId, targetWs.id, {
-        categoryId: defaultCategory.id,
-        category: defaultCategory.name,
-        entityType: defaultCategory.entityType,
-        entityName: ann.label || `${ann.type} Measurement`,
-        description: "",
-        quantity: qty,
-        uom,
-        cost: 0,
-        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-        price: 0,
-        sourceNotes: `From takeoff: ${ann.label || ann.type}`,
-      });
-
-      // Extract new item ID from workspace response and create link
-      const newItems = result?.workspace?.worksheets
-        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
-      const newItem = newItems.find((i: { id: string }) =>
-        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id)
-      );
-
-      if (newItem) {
-        await createTakeoffLink(projectId, {
-          annotationId,
-          worksheetItemId: newItem.id,
-        });
-        await loadTakeoffLinks();
-        notifyTakeoffLinksMutated();
-      }
-      notifyWorkspaceMutated();
-    } catch (err) {
-      console.error("[takeoff] Failed to send to estimate:", err);
-    }
-  }
-
-  /* ─── AI line-item suggestions for an annotation ─── */
-
-  async function handleSuggestLineItems(annotationId: string) {
-    return suggestLineItemsForAnnotation(projectId, annotationId);
-  }
-
-  /* Apply one of the AI's suggestions: create a worksheet item using the
-     suggestion's name/code/unit (instead of the raw annotation label) and
-     the annotation's measured quantity, then link the new line item back
-     to the annotation. Same shape as handleSendToEstimate, just sourced
-     from the catalog/rate-schedule match. */
-  async function handleApplySuggestion(
-    annotationId: string,
-    suggestion: LineItemSuggestionRecord,
-  ) {
-    const ann = annotations.find((a) => a.id === annotationId);
-    if (!ann?.measurement) return;
-    const targetWs = selectedWorksheet;
-    if (!targetWs) {
-      console.warn("[takeoff:suggest] No worksheet selected; cannot apply suggestion");
-      return;
-    }
-
-    const quantity =
-      suggestion.recommendedQuantity > 0
-        ? suggestion.recommendedQuantity
-        : ann.measurement.value ?? 0;
-    const uom = suggestion.unit || ann.measurement.unit || "EA";
-    // Suggestions tagged "rateScheduleItem" map to whichever org category sources from rate schedules; everything else falls through to the first enabled category.
-    const targetCat = suggestion.kind === "rateScheduleItem"
-      ? rateScheduleCategory ?? defaultCategory
-      : defaultCategory;
-    if (!targetCat) {
-      setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before adding suggestions.");
-      return;
-    }
-    const category = targetCat.name;
-    const entityName = suggestion.code
-      ? `[${suggestion.code}] ${suggestion.name}`
-      : suggestion.name;
-
-    try {
-      // Forward the catalog or rate-schedule reference so server-side
-      // validation passes — rate-schedule-backed categories (Labour by
-      // default) require rateScheduleItemId, and catalog-backed
-      // categories require itemId. Without these the create-item
-      // endpoint rejects with 400 and the Add action silently fails.
-      const result = await createWorksheetItem(projectId, targetWs.id, {
-        categoryId: targetCat.id,
-        category,
-        entityType: targetCat.entityType,
-        entityName,
-        description: suggestion.reasoning ?? "",
-        quantity,
-        uom,
-        cost: 0,
-        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-        price: 0,
-        sourceNotes: `AI-suggested from takeoff: ${ann.label || ann.type}`,
-        ...(suggestion.kind === "rateScheduleItem"
-          ? { rateScheduleItemId: suggestion.id }
-          : { itemId: suggestion.id }),
-      });
-
-      const newItems = result?.workspace?.worksheets
-        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
-      const newItem = newItems.find((i: { id: string }) =>
-        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id),
-      );
-
-      if (newItem) {
-        await createTakeoffLink(projectId, {
-          annotationId,
-          worksheetItemId: newItem.id,
-        });
-        await loadTakeoffLinks();
-        notifyTakeoffLinksMutated();
-      }
-      notifyWorkspaceMutated();
-    } catch (err) {
-      console.error("[takeoff:suggest] Failed to apply suggestion:", err);
-    }
   }
 
   async function resolveSelectedModelAsset() {
@@ -3993,6 +3932,31 @@ export function TakeoffTab({
               setAutoCountSnippet(null);
             }}
             onWorkspaceMutated={notifyWorkspaceMutated}
+            onSelectedEntityChange={(entitySelection) => {
+              if (!onSelectionChange) return;
+              if (entitySelection) {
+                onSelectionChange({
+                  kind: "cad-entity",
+                  documentId: entitySelection.documentId,
+                  entityId: entitySelection.entityId,
+                  entityType: entitySelection.entityType,
+                  layer: entitySelection.layer,
+                  label: entitySelection.label,
+                  summary: entitySelection.summary,
+                });
+              } else if (selection?.kind === "cad-entity") {
+                onSelectionChange(null);
+              }
+            }}
+            onSelectedAnnotationChange={(annotationId) => {
+              if (!onSelectionChange) return;
+              if (annotationId) {
+                onSelectionChange({ kind: "annotation", annotationId });
+              } else if (selection?.kind === "annotation") {
+                onSelectionChange(null);
+              }
+            }}
+            onAnnotationsChange={setDwgAnnotationsCache}
           />
         ) : (
           <>
@@ -4154,10 +4118,6 @@ export function TakeoffTab({
               selectedAnnotationId={selectedAnnotationId}
               editingAnnotationId={editingAnnotationId}
               takeoffLinks={takeoffLinks}
-              onLinkToLineItem={handleLinkToLineItem}
-              onSendToEstimate={handleSendToEstimate}
-              onSuggestLineItems={handleSuggestLineItems}
-              onApplySuggestion={handleApplySuggestion}
             />
           </div>
         ) : (
@@ -4217,61 +4177,9 @@ export function TakeoffTab({
                       <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.volume, "model^3")}</p>
                     </div>
                   </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="mt-3 w-full justify-center"
-                    onClick={() => {
-                      if (!selectedWorksheet) {
-                        setWorksheetPickerAction("send-selection");
-                      } else {
-                        void handleSendModelSelectionToEstimate(modelSelection);
-                      }
-                    }}
-                  >
-                    <ArrowDownToLine className="h-3.5 w-3.5" />
-                    Create Object Rows
-                  </Button>
-                  {worksheetPickerAction === "send-selection" && (
-                    <div className="mt-2 rounded-md border border-line bg-panel p-2.5 space-y-2">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Select Worksheet</p>
-                      {workspace.worksheets.length > 0 && (
-                        <div className="max-h-36 space-y-0.5 overflow-y-auto">
-                          {workspace.worksheets.map((ws) => (
-                            <button
-                              key={ws.id}
-                              type="button"
-                              onClick={() => void handleWorksheetPickerSelect(ws.id)}
-                              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                            >
-                              <span className="min-w-0 flex-1 truncate">{ws.name}</span>
-                              <span className="text-[10px] text-fg/35">{ws.items.length} items</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex gap-1.5">
-                        <Input
-                          value={newWorksheetName}
-                          onChange={(e) => setNewWorksheetName(e.target.value)}
-                          placeholder="New worksheet..."
-                          className="h-7 text-xs"
-                          onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWorksheetAndProceed(); }}
-                        />
-                        <Button
-                          variant="accent"
-                          size="xs"
-                          onClick={() => void handleCreateWorksheetAndProceed()}
-                          disabled={!newWorksheetName.trim()}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                      </div>
-                      <Button variant="ghost" size="xs" onClick={() => { setWorksheetPickerAction(null); setNewWorksheetName(""); }} className="w-full text-fg/40">
-                        Cancel
-                      </Button>
-                    </div>
-                  )}
+                  <p className="mt-2 text-[10px] leading-relaxed text-fg/40">
+                    Use the side-panel <span className="font-medium text-fg/60">Link</span> tab to send this selection to an estimate or manage its links.
+                  </p>
                 </div>
               )}
 
@@ -4301,65 +4209,6 @@ export function TakeoffTab({
                     </button>
                   ))}
                 </div>
-                {selectedModelElementIds.size > 0 && (
-                  <>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="mt-2 w-full justify-center"
-                      onClick={() => {
-                        if (!selectedWorksheet) {
-                          setWorksheetPickerAction("create-elements");
-                        } else {
-                          void handleCreateSelectedModelElements();
-                        }
-                      }}
-                    >
-                      <ArrowDownToLine className="h-3.5 w-3.5" />
-                      Create {selectedModelElementIds.size} Selected
-                    </Button>
-                    {worksheetPickerAction === "create-elements" && (
-                      <div className="mt-2 rounded-md border border-line bg-panel p-2.5 space-y-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Select Worksheet</p>
-                        {workspace.worksheets.length > 0 && (
-                          <div className="max-h-36 space-y-0.5 overflow-y-auto">
-                            {workspace.worksheets.map((ws) => (
-                              <button
-                                key={ws.id}
-                                type="button"
-                                onClick={() => void handleWorksheetPickerSelect(ws.id)}
-                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                              >
-                                <span className="min-w-0 flex-1 truncate">{ws.name}</span>
-                                <span className="text-[10px] text-fg/35">{ws.items.length} items</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        <div className="flex gap-1.5">
-                          <Input
-                            value={newWorksheetName}
-                            onChange={(e) => setNewWorksheetName(e.target.value)}
-                            placeholder="New worksheet..."
-                            className="h-7 text-xs"
-                            onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWorksheetAndProceed(); }}
-                          />
-                          <Button
-                            variant="accent"
-                            size="xs"
-                            onClick={() => void handleCreateWorksheetAndProceed()}
-                            disabled={!newWorksheetName.trim()}
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        </div>
-                        <Button variant="ghost" size="xs" onClick={() => { setWorksheetPickerAction(null); setNewWorksheetName(""); }} className="w-full text-fg/40">
-                          Cancel
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                )}
                 <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto pr-1">
                   {modelElements.length === 0 && (
                     <p className="rounded-md border border-line bg-panel/60 px-3 py-4 text-center text-[11px] text-fg/40">
@@ -4368,28 +4217,37 @@ export function TakeoffTab({
                   )}
                   {modelElements.map((element) => {
                     const linked = linkedModelElementIds.has(element.id);
-                    const selected = selectedModelElementIds.has(element.id);
+                    const isPanelSelection =
+                      selection?.kind === "model-element" && selection.elementId === element.id;
                     return (
                       <div
                         key={element.id}
+                        onClick={() => {
+                          if (!onSelectionChange || !selectedModelAsset) return;
+                          if (isPanelSelection) {
+                            onSelectionChange(null);
+                          } else {
+                            onSelectionChange({
+                              kind: "model-element",
+                              assetId: selectedModelAsset.id,
+                              elementId: element.id,
+                              elementName: element.name || element.externalId,
+                              elementClass: element.elementClass ?? undefined,
+                              material: element.material ?? undefined,
+                              level: element.level ?? undefined,
+                              quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+                            });
+                          }
+                        }}
                         className={cn(
-                          "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2",
-                          linked ? "border-success/25 bg-success/5" : selected ? "border-accent/35 bg-accent/5" : "border-line bg-panel/60",
+                          "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2 cursor-pointer transition-colors",
+                          isPanelSelection
+                            ? "border-accent/40 bg-accent/10"
+                            : linked
+                              ? "border-success/25 bg-success/5"
+                              : "border-line bg-panel/60 hover:bg-panel2/40",
                         )}
                       >
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={linked}
-                          onChange={(event) => {
-                            const next = new Set(selectedModelElementIds);
-                            if (event.target.checked) next.add(element.id);
-                            else next.delete(element.id);
-                            setSelectedModelElementIds(next);
-                          }}
-                          className="h-3.5 w-3.5 rounded border-line accent-sky-500 disabled:opacity-30"
-                          aria-label={`Select ${element.name || element.externalId}`}
-                        />
                         <div className="min-w-0">
                           <p className="truncate text-[11px] font-semibold text-fg/80">{element.name || element.externalId}</p>
                           <p className="mt-0.5 truncate text-[10px] text-fg/40">
@@ -4397,47 +4255,13 @@ export function TakeoffTab({
                           </p>
                           <p className="mt-1 text-[10px] font-medium text-fg/60">{formatElementQuantity(element, modelLedgerBasis)}</p>
                         </div>
-                        {linked ? (
-                          <Badge tone="success" className="text-[10px]">Linked</Badge>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            title="Create line item"
-                            onClick={() => void handleCreateModelElementLineItem(element)}
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
+                        {linked && <Badge tone="success" className="text-[10px]">Linked</Badge>}
                       </div>
                     );
                   })}
                 </div>
               </div>
 
-              {linkedModelLineItems.length > 0 && (
-                <div className="rounded-md border border-line bg-bg/50 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Linked Line Items</p>
-                  <div className="mt-2 space-y-1.5">
-                    {linkedModelLineItems.slice(0, 8).map((item) => (
-                      <div key={item.linkId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-line bg-panel/60 px-2 py-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-[11px] font-semibold text-fg/80">{item.entityName}</p>
-                          <p className="text-[10px] text-fg/45">{formatModelSelectionQuantity(item.quantity, item.uom)}</p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          title="Delete linked line item"
-                          onClick={() => void handleDeleteModelLinkedLineItem({ linkId: item.linkId, worksheetItemId: item.worksheetItemId })}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
 
               {modelError && (
                 <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-[11px] text-danger">
@@ -4483,19 +4307,6 @@ export function TakeoffTab({
         }}
         onConfirm={handleAnnotationConfigConfirm}
         initialType={activeTool}
-      />
-
-      {/* ─── Link to Line Item Modal ─── */}
-      <LinkToLineItemModal
-        open={linkModalAnnotationId !== null}
-        onClose={() => setLinkModalAnnotationId(null)}
-        onConfirm={handleLinkConfirm}
-        measurement={
-          linkModalAnnotationId
-            ? annotations.find((a) => a.id === linkModalAnnotationId)?.measurement
-            : undefined
-        }
-        worksheets={workspace.worksheets}
       />
 
       {/* ─── Calibration Prompt ─── */}

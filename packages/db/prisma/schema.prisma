@@ -199,6 +199,7 @@ model Project {
   pluginExecutions            PluginExecution[]
   takeoffAnnotations          TakeoffAnnotation[]
   takeoffLinks                TakeoffLink[]
+  dwgEntityLinks              DwgEntityLink[]
   modelAssets                 ModelAsset[]
   modelTakeoffLinks           ModelTakeoffLink[]
   modelRevisionDiffs          ModelRevisionDiff[]
@@ -413,6 +414,7 @@ model WorksheetItem {
 
   takeoffLinks      TakeoffLink[]
   modelTakeoffLinks ModelTakeoffLink[]
+  dwgEntityLinks    DwgEntityLink[]
 
   @@index([worksheetId])
   @@index([phaseId])
@@ -966,6 +968,35 @@ model TakeoffLink {
   @@index([annotationId])
   @@index([worksheetItemId])
   @@index([projectId])
+}
+
+// ── DWG Entity Links ──────────────────────────────────────────────────────
+// Direct link from a CAD entity (DXF/DWG) to a worksheet line item, without
+// requiring an intermediate annotation. Useful for tagging native CAD
+// geometry (a wall, a duct, a fixture) to its estimate row.
+
+model DwgEntityLink {
+  id              String        @id @default(cuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documentId      String        // takeoff document id (file-<fileNodeId> or doc-<sourceDocumentId>)
+  entityId        String        // CAD entity id from the DXF/DWG parser
+  entityType      String        @default("") // "line" | "circle" | "polyline" | etc.
+  layer           String        @default("")
+  worksheetItemId String
+  worksheetItem   WorksheetItem @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
+  quantity        Float         @default(0) // user-supplied (DWG entities lack intrinsic measurement)
+  multiplier      Float         @default(1.0)
+  derivedQuantity Float         @default(0) // cached: quantity * multiplier
+  selection       Json          @default("{}") // entity context for display (geometry summary, layer, color)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@unique([documentId, entityId, worksheetItemId])
+  @@index([projectId])
+  @@index([documentId])
+  @@index([entityId])
+  @@index([worksheetItemId])
 }
 
 // ── AI Runs ───────────────────────────────────────────────────────────────
