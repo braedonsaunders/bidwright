@@ -24,6 +24,12 @@ COPY packages/vision/package.json packages/vision/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 RUN pnpm install --frozen-lockfile
+# pnpm 10 silently skips build scripts by default ("Ignored build scripts").
+# node-pty publishes prebuilt binaries for darwin/win32 but NOT linux-x64,
+# so the runtime needs a from-source build. Force the rebuild here so the
+# linux-x64 prebuilds/ dir gets populated; otherwise the api crashes at
+# require time with "Failed to load native module: pty.node".
+RUN pnpm rebuild node-pty
 
 # --- build stage ---
 FROM base AS builder
