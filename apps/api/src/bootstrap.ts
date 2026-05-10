@@ -220,45 +220,62 @@ export async function applyPendingMigrations(): Promise<{ applied: boolean; reas
     return { applied: false, reason: "BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS=1" };
   }
 
-  const first = await runPrismaCommand(["migrate", "deploy"]);
-  if (first.ok) {
-    const out = first.result?.stdout.trim() ?? "";
-    if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
-    return { applied: true };
-  }
+  // Self-heal P3009 in a loop: when desktop installs upgrade across a
+  // window where multiple migrations got partially applied, the failed
+  // ones stack up in `_prisma_migrations`. `migrate deploy` only reports
+  // ONE of them at a time, so we resolve, retry, and repeat. Bail if the
+  // same migration name surfaces twice in a row (genuine block) or after
+  // a sanity cap.
+  const MAX_RECOVERY_ATTEMPTS = 10;
+  const resolved = new Set<string>();
+  let attempt = 0;
 
-  // Self-heal: P3009 means the migration history table has a row stuck in
-  // a failed state. If the schema is otherwise current (typical for setups
-  // that mix `db push` + `migrate deploy`), marking the failed row as
-  // applied and retrying clears the block without manual SQL.
-  const combinedOutput = `${first.lastErr?.stdout ?? ""}\n${first.lastErr?.stderr ?? ""}`;
-  if (combinedOutput.includes("P3009")) {
-    const match = combinedOutput.match(FAILED_MIGRATION_PATTERN);
-    const stuckMigration = match?.[1];
-    if (stuckMigration) {
-      console.warn(
-        `[bootstrap] Detected stuck migration "${stuckMigration}" (P3009). ` +
-          `Marking applied and retrying — schema is already managed elsewhere.`,
-      );
-      const resolved = await resolveMigrationApplied(stuckMigration);
-      if (resolved) {
-        const retry = await runPrismaCommand(["migrate", "deploy"]);
-        if (retry.ok) {
-          const out = retry.result?.stdout.trim() ?? "";
-          if (out) console.log(`[bootstrap] prisma migrate deploy (after recovery):\n${out}`);
-          return { applied: true };
-        }
-        const detail = `\n${retry.lastErr?.stdout.trim() ?? ""}\n${retry.lastErr?.stderr.trim() ?? ""}`;
-        throw new Error(`prisma migrate deploy failed even after resolving ${stuckMigration}.${detail}`);
+  while (attempt < MAX_RECOVERY_ATTEMPTS) {
+    attempt++;
+    const result = await runPrismaCommand(["migrate", "deploy"]);
+    if (result.ok) {
+      const out = result.result?.stdout.trim() ?? "";
+      if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
+      if (resolved.size > 0) {
+        console.log(
+          `[bootstrap] migrate deploy succeeded after resolving ${resolved.size} stuck ` +
+            `migration(s): ${[...resolved].join(", ")}`,
+        );
       }
-      console.warn(`[bootstrap] Failed to mark "${stuckMigration}" as applied; surfacing original error.`);
+      return { applied: true };
     }
+
+    const output = `${result.lastErr?.stdout ?? ""}\n${result.lastErr?.stderr ?? ""}`;
+    const match = output.match(FAILED_MIGRATION_PATTERN);
+    const stuck = match?.[1];
+
+    if (!output.includes("P3009") || !stuck) {
+      const detail = `\n${result.lastErr?.stdout.trim() ?? ""}\n${result.lastErr?.stderr.trim() ?? ""}`;
+      throw new Error(`prisma migrate deploy failed.${detail}`);
+    }
+    if (resolved.has(stuck)) {
+      throw new Error(
+        `prisma migrate deploy reported "${stuck}" as stuck twice in a row — ` +
+          `marking it applied did not unblock the deploy. Manual intervention required.`,
+      );
+    }
+
+    console.warn(
+      `[bootstrap] Detected stuck migration "${stuck}" (P3009). ` +
+        `Marking applied and retrying — schema is already managed elsewhere.`,
+    );
+    const ok = await resolveMigrationApplied(stuck);
+    if (!ok) {
+      const detail = `\n${result.lastErr?.stdout.trim() ?? ""}\n${result.lastErr?.stderr.trim() ?? ""}`;
+      throw new Error(`Failed to mark stuck migration "${stuck}" as applied.${detail}`);
+    }
+    resolved.add(stuck);
   }
 
-  const detail = first.lastErr
-    ? `\n${first.lastErr.stdout.trim()}\n${first.lastErr.stderr.trim()}`
-    : "";
-  throw new Error(`prisma migrate deploy failed across all candidates.${detail}`);
+  throw new Error(
+    `prisma migrate deploy stuck after ${MAX_RECOVERY_ATTEMPTS} recovery attempts. ` +
+      `Resolved migrations so far: ${[...resolved].join(", ")}`,
+  );
 }
 
 // ── Optional: ensure prisma client is generated ───────────────────────────
