@@ -1,4 +1,5 @@
 import type { CanonicalModelElement, CanonicalModelQuantity, ModelIngestCapability } from "@bidwright/domain";
+import { classificationDefaultsToRecord, defaultClassificationForIfcClass } from "@bidwright/domain";
 import { ApsClient } from "../aps-client.js";
 import { buildEstimateLens, createId, makeCanonicalManifest, makeProvenance } from "../utils.js";
 import type { ModelAdapterIngestResult, ModelIngestAdapter, ModelIngestContext, ModelIngestSettings, ModelIngestSource } from "../types.js";
@@ -103,18 +104,29 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
       return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_metadata_extraction_failed");
     }
 
-    const elements: CanonicalModelElement[] = modelData.objects.map((obj) => ({
-      id: createId("me"),
-      externalId: String(obj.objectid),
-      name: obj.name,
-      elementClass: obj.elementClass || formatLabel(context.format),
-      elementType: obj.elementType || undefined,
-      system: obj.system || undefined,
-      level: obj.level || undefined,
-      material: obj.material || undefined,
-      estimateRelevant: isEstimateRelevant(obj.elementClass, obj.elementType),
-      properties: Object.keys(obj.properties).length > 0 ? obj.properties : undefined,
-    }));
+    const elements: CanonicalModelElement[] = modelData.objects.map((obj) => {
+      const elementClass = obj.elementClass || formatLabel(context.format);
+      // APS Model Derivative reports Revit categories that translate to IFC
+      // class names for the most common entities (Walls, Doors, Windows, etc).
+      // Run them through the IFC heuristic so RVT/NWD ingest gets the same
+      // default Uniformat/MasterFormat codes as native IFC.
+      const classification = classificationDefaultsToRecord(
+        defaultClassificationForIfcClass(elementClass),
+      );
+      return {
+        id: createId("me"),
+        externalId: String(obj.objectid),
+        name: obj.name,
+        elementClass,
+        elementType: obj.elementType || undefined,
+        system: obj.system || undefined,
+        level: obj.level || undefined,
+        material: obj.material || undefined,
+        estimateRelevant: isEstimateRelevant(obj.elementClass, obj.elementType),
+        classification,
+        properties: Object.keys(obj.properties).length > 0 ? obj.properties : undefined,
+      };
+    });
 
     const quantities: CanonicalModelQuantity[] = [];
     for (const obj of modelData.objects) {

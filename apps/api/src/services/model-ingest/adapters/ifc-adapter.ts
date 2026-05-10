@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import type { CanonicalModelElement, CanonicalModelQuantity, ModelIngestCapability } from "@bidwright/domain";
+import { classificationDefaultsToRecord, defaultClassificationForIfcClass } from "@bidwright/domain";
 import type { ModelAdapterIngestResult, ModelIngestAdapter, ModelIngestContext, ModelIngestSource } from "../types.js";
 import {
   buildEstimateLens,
@@ -328,6 +329,9 @@ function fallbackIfcEntityIndex(text: string, source: ModelIngestSource, context
       const quoted = getQuotedValues(args);
       const globalId = quoted[0] ?? expressId;
       const name = quoted[2] || quoted[1] || entityType;
+      const classification = classificationDefaultsToRecord(
+        defaultClassificationForIfcClass(entityType),
+      );
       elements.push({
         id: createId("me"),
         externalId: globalId || expressId,
@@ -335,6 +339,7 @@ function fallbackIfcEntityIndex(text: string, source: ModelIngestSource, context
         elementClass: entityType,
         elementType: entityType.replace(/^IFC/, ""),
         estimateRelevant: true,
+        classification,
         properties: { expressId, globalId, rawName: name },
       });
     }
@@ -471,6 +476,9 @@ export const ifcAdapter: ModelIngestAdapter = {
           const name = textScalar(line.Name) || textScalar(line.ObjectType) || classFromApi;
           const elementType = textScalar(line.PredefinedType) || classFromApi.replace(/^IFC/, "");
           const lodFromPset = lodByExpressId.get(expressID) ?? "";
+          const classification = classificationDefaultsToRecord(
+            defaultClassificationForIfcClass(classFromApi),
+          );
           elements.push({
             id: elementId,
             externalId: globalId,
@@ -482,6 +490,7 @@ export const ifcAdapter: ModelIngestAdapter = {
             estimateRelevant: true,
             lod: lodFromPset,
             lodSource: lodFromPset ? "pset" : "",
+            classification,
             properties: {
               expressId: `#${expressID}`,
               globalId,
