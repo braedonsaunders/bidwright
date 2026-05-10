@@ -354,6 +354,21 @@ function EditAnnotationRow({
   );
 }
 
+/** Grouping axes for the BIM element list. Reuses the same construction-
+ *  classification primitive that powers the estimate summary rollups, so the
+ *  element grouping is consistent with how the line items those elements
+ *  back will appear in the quote summary. */
+type InspectGroupBy = "none" | "uniformat" | "masterformat" | "elementClass" | "level" | "material";
+
+const GROUP_BY_OPTIONS: { id: InspectGroupBy; label: string }[] = [
+  { id: "none",         label: "Flat" },
+  { id: "uniformat",    label: "Uniformat" },
+  { id: "masterformat", label: "MasterFormat" },
+  { id: "elementClass", label: "Class" },
+  { id: "level",        label: "Level" },
+  { id: "material",     label: "Material" },
+];
+
 function ModelInspect({
   snapshot,
   actions,
@@ -363,6 +378,60 @@ function ModelInspect({
 }) {
   const { modelElements, modelElementsLoading, modelError, modelSyncing, modelSearch, modelBasis, modelAsset, selectedModelElementId } = snapshot;
   const isBim = snapshot.mode === "bim";
+  const [groupBy, setGroupBy] = useState<InspectGroupBy>("none");
+  const [collapsedElementGroups, setCollapsedElementGroups] = useState<Set<string>>(new Set());
+
+  // Group elements by the selected axis. For classification axes (Uniformat,
+  // MasterFormat) we read the code straight off element.classification[key]
+  // — same shape as WorksheetItem.classification, so the grouping is
+  // consistent with the by_uniformat_division / by_masterformat_division
+  // summary rollups (no separate mapping needed). For class/level/material
+  // we fall back to the element's typed columns. Elements with no value
+  // bucket into "Unclassified" / "Untagged" so they're still discoverable.
+  const groupedElements = useMemo(() => {
+    if (groupBy === "none") return null;
+    const groups = new Map<string, { key: string; label: string; elements: InspectModelElement[] }>();
+    for (const element of modelElements) {
+      let code = "";
+      let label = "";
+      if (groupBy === "uniformat" || groupBy === "masterformat") {
+        code = element.classification?.[groupBy]?.trim() ?? "";
+        label = code || (groupBy === "uniformat" ? "Unclassified — Uniformat" : "Unclassified — MasterFormat");
+      } else if (groupBy === "elementClass") {
+        code = element.elementClass?.trim() ?? "";
+        label = code || "No class";
+      } else if (groupBy === "level") {
+        code = element.level?.trim() ?? "";
+        label = code || "No level";
+      } else if (groupBy === "material") {
+        code = element.material?.trim() ?? "";
+        label = code || "No material";
+      }
+      const key = code || `__unclassified__${groupBy}`;
+      let group = groups.get(key);
+      if (!group) {
+        group = { key, label, elements: [] };
+        groups.set(key, group);
+      }
+      group.elements.push(element);
+    }
+    // Sort: unclassified bucket(s) last; everything else alphabetical by key.
+    return Array.from(groups.values()).sort((a, b) => {
+      const aUn = a.key.startsWith("__unclassified__") ? 1 : 0;
+      const bUn = b.key.startsWith("__unclassified__") ? 1 : 0;
+      if (aUn !== bUn) return aUn - bUn;
+      return a.key.localeCompare(b.key);
+    });
+  }, [modelElements, groupBy]);
+
+  const toggleGroup = (key: string) => {
+    setCollapsedElementGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
 
   return (
     <div className="flex h-full flex-col gap-2 text-xs">
@@ -421,6 +490,32 @@ function ModelInspect({
             </button>
           ))}
         </div>
+        {/* Group-by selector. Reuses the same classification keys as the
+            estimate summary rollups (Uniformat / MasterFormat) so the
+            element grouping shown here aligns with how the resulting line
+            items will appear in the quote summary. Class/level/material
+            fall back to the typed columns for non-classification axes. */}
+        <div className="flex items-center gap-1 overflow-x-auto rounded-md border border-line bg-panel p-0.5">
+          <span className="shrink-0 px-1 text-[9px] font-medium uppercase tracking-wider text-fg/35">
+            Group
+          </span>
+          {GROUP_BY_OPTIONS.map((opt) => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => {
+                setGroupBy(opt.id);
+                setCollapsedElementGroups(new Set());
+              }}
+              className={cn(
+                "shrink-0 rounded px-1.5 py-1 text-[10px] font-medium transition-colors",
+                groupBy === opt.id ? "bg-accent/15 text-accent" : "text-fg/45 hover:text-fg/70",
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="flex flex-1 flex-col gap-1 overflow-auto pr-1">
@@ -432,100 +527,39 @@ function ModelInspect({
           <p className="rounded-md border border-line bg-panel/40 px-3 py-4 text-center text-[11px] text-fg/40">
             {modelAsset ? "No model objects match this search." : "Sync the model index to list model objects."}
           </p>
-        ) : (
-          modelElements.map((element) => {
-            const isSelected = selectedModelElementId === element.id;
-            // Surface the most useful classification codes inline. Uniformat
-            // first (the most common takeoff reporting axis); MasterFormat
-            // second (work-section view). Other standards available via the
-            // element drawer (Phase 2.6) but not in the row to keep it scannable.
-            const uniformat = element.classification?.uniformat?.trim();
-            const masterformat = element.classification?.masterformat?.trim();
-            const lod = element.lod?.trim();
-            const lodFromPset = element.lodSource === "pset";
+        ) : groupedElements ? (
+          // Grouped rendering: each axis bucket gets a sticky-ish header with
+          // a count and a collapse toggle. Element rows inside reuse the same
+          // markup as the flat list.
+          groupedElements.map((group) => {
+            const collapsed = collapsedElementGroups.has(group.key);
+            const linkedCount = group.elements.filter((e) => e.isLinked).length;
             return (
-              <div
-                key={element.id}
-                onClick={() => actions?.selectModelElement(isSelected ? null : element.id)}
-                className={cn(
-                  "cursor-pointer rounded-md border px-2 py-1.5 transition-colors",
-                  isSelected
-                    ? "border-accent/40 bg-accent/10"
-                    : element.isLinked
-                      ? "border-success/25 bg-success/5"
-                      : "border-line bg-panel/60 hover:bg-panel2/40",
-                )}
-              >
-                <div className="flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[11px] font-medium text-fg/80">{element.name || element.externalId}</p>
-                    <p className="mt-0.5 truncate text-[10px] text-fg/40">
-                      {[element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element"}
-                    </p>
-                    {(uniformat || masterformat || lod) && (
-                      <div className="mt-1 flex flex-wrap items-center gap-1">
-                        {uniformat && (
-                          <span
-                            className="rounded bg-violet-500/12 px-1 py-px text-[9px] font-medium text-violet-500"
-                            title={`Uniformat: ${uniformat}`}
-                          >
-                            UF · {uniformat}
-                          </span>
-                        )}
-                        {masterformat && (
-                          <span
-                            className="rounded bg-amber-500/12 px-1 py-px text-[9px] font-medium text-amber-600"
-                            title={`MasterFormat: ${masterformat}`}
-                          >
-                            MF · {masterformat}
-                          </span>
-                        )}
-                        {lod && (
-                          <span
-                            className={cn(
-                              "rounded px-1 py-px text-[9px] font-medium",
-                              lodFromPset
-                                ? "bg-sky-500/12 text-sky-500"
-                                : "bg-fg/10 text-fg/70",
-                            )}
-                            title={`Level of Development${lodFromPset ? " (from model property set)" : " (manual)"}`}
-                          >
-                            LOD {lod}
-                          </span>
-                        )}
-                      </div>
+              <div key={group.key} className="flex flex-col gap-1">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  className="flex items-center gap-1.5 rounded-md border border-line bg-panel/80 px-2 py-1 text-left text-[10px] font-medium text-fg/70 transition-colors hover:bg-panel2/40"
+                >
+                  {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                  <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                  <span className="shrink-0 text-fg/40">
+                    {group.elements.length}
+                    {linkedCount > 0 && (
+                      <span className="ml-1 text-success/80">· {linkedCount} linked</span>
                     )}
-                    <p className="mt-1 text-[10px] font-medium text-fg/60">{element.quantitySummary}</p>
-                  </div>
-                  <div className="flex shrink-0 flex-col items-end gap-1">
-                    {element.isLinked ? (
-                      <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-medium text-success">
-                        Linked
-                      </span>
-                    ) : (
-                      // Send-to-worksheet: one click creates a new line item
-                      // pre-filled with the element's classification and primary
-                      // quantity, and binds a ModelTakeoffLink so it stays in
-                      // sync. Stop propagation so the row's select handler
-                      // doesn't fire alongside.
-                      <button
-                        type="button"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void actions?.createLineItemFromElement(element.id);
-                        }}
-                        className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-                        title="Create a worksheet line item from this element (carries classification + quantity, keeps it linked)"
-                      >
-                        <FilePlus className="h-3 w-3" />
-                        Send
-                      </button>
-                    )}
-                  </div>
-                </div>
+                  </span>
+                </button>
+                {!collapsed && group.elements.map((element) => renderElementRow(
+                  element,
+                  selectedModelElementId,
+                  actions,
+                ))}
               </div>
             );
           })
+        ) : (
+          modelElements.map((element) => renderElementRow(element, selectedModelElementId, actions))
         )}
       </div>
 
@@ -550,6 +584,98 @@ function ModelInspect({
           <BrainCircuit className="h-3 w-3" />
           Ask AI about this model
         </Button>
+      </div>
+    </div>
+  );
+}
+
+/** Shared element-row renderer for the BIM Inspect list. Lives outside the
+ *  ModelInspect component so the flat-list and grouped-list branches don't
+ *  duplicate ~80 lines of JSX. */
+function renderElementRow(
+  element: InspectModelElement,
+  selectedModelElementId: string | null,
+  actions: InspectActions | null,
+) {
+  const isSelected = selectedModelElementId === element.id;
+  const uniformat = element.classification?.uniformat?.trim();
+  const masterformat = element.classification?.masterformat?.trim();
+  const lod = element.lod?.trim();
+  const lodFromPset = element.lodSource === "pset";
+  return (
+    <div
+      key={element.id}
+      onClick={() => actions?.selectModelElement(isSelected ? null : element.id)}
+      className={cn(
+        "cursor-pointer rounded-md border px-2 py-1.5 transition-colors",
+        isSelected
+          ? "border-accent/40 bg-accent/10"
+          : element.isLinked
+            ? "border-success/25 bg-success/5"
+            : "border-line bg-panel/60 hover:bg-panel2/40",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[11px] font-medium text-fg/80">{element.name || element.externalId}</p>
+          <p className="mt-0.5 truncate text-[10px] text-fg/40">
+            {[element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element"}
+          </p>
+          {(uniformat || masterformat || lod) && (
+            <div className="mt-1 flex flex-wrap items-center gap-1">
+              {uniformat && (
+                <span
+                  className="rounded bg-violet-500/12 px-1 py-px text-[9px] font-medium text-violet-500"
+                  title={`Uniformat: ${uniformat}`}
+                >
+                  UF · {uniformat}
+                </span>
+              )}
+              {masterformat && (
+                <span
+                  className="rounded bg-amber-500/12 px-1 py-px text-[9px] font-medium text-amber-600"
+                  title={`MasterFormat: ${masterformat}`}
+                >
+                  MF · {masterformat}
+                </span>
+              )}
+              {lod && (
+                <span
+                  className={cn(
+                    "rounded px-1 py-px text-[9px] font-medium",
+                    lodFromPset
+                      ? "bg-sky-500/12 text-sky-500"
+                      : "bg-fg/10 text-fg/70",
+                  )}
+                  title={`Level of Development${lodFromPset ? " (from model property set)" : " (manual)"}`}
+                >
+                  LOD {lod}
+                </span>
+              )}
+            </div>
+          )}
+          <p className="mt-1 text-[10px] font-medium text-fg/60">{element.quantitySummary}</p>
+        </div>
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          {element.isLinked ? (
+            <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-medium text-success">
+              Linked
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                void actions?.createLineItemFromElement(element.id);
+              }}
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+              title="Create a worksheet line item from this element (carries classification + quantity, keeps it linked)"
+            >
+              <FilePlus className="h-3 w-3" />
+              Send
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );
