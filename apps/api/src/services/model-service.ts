@@ -1266,3 +1266,239 @@ export async function deleteModelTakeoffLink(projectId: string, modelId: string,
   await prisma.modelTakeoffLink.delete({ where: { id: linkId } });
   return { deleted: true };
 }
+
+// ── Per-element classification/LOD updates ────────────────────────────────
+//
+// The BIM workspace UI calls this when the user tags an element manually.
+// `classification` patches merge into the existing JSON blob; passing an empty
+// object (or omitting the field) leaves the prior value untouched. Setting an
+// individual key to "" deletes that classification standard for the element.
+// LOD updates always set lodSource to "manual" so the next ingest doesn't
+// clobber the manual override.
+
+const elementUpdateClassificationSchema = {
+  // Whitelisted standard keys. Anything else passed in the body is ignored to
+  // keep the JSON blob clean and queryable.
+  keys: ["masterformat", "uniformat", "omniclass", "uniclass", "din276", "nrm", "icms"] as const,
+};
+
+export interface UpdateModelElementInput {
+  classification?: Record<string, string>;
+  /** "100" | "200" | "300" | "350" | "400" | "500" | "" (clear). */
+  lod?: string;
+}
+
+export async function updateModelElement(
+  projectId: string,
+  modelId: string,
+  elementId: string,
+  input: UpdateModelElementInput,
+) {
+  const element = await prisma.modelElement.findFirst({
+    where: { id: elementId, modelId },
+    select: { id: true, classification: true, modelId: true, model: { select: { projectId: true } } },
+  });
+  if (!element || element.model.projectId !== projectId) {
+    throw new Error(`Model element ${elementId} not found`);
+  }
+
+  const data: any = {};
+
+  if (input.classification && typeof input.classification === "object") {
+    const next: Record<string, string> = { ...((element.classification as Record<string, string>) ?? {}) };
+    for (const key of elementUpdateClassificationSchema.keys) {
+      const incoming = input.classification[key];
+      if (typeof incoming !== "string") continue;
+      const trimmed = incoming.trim();
+      if (trimmed) next[key] = trimmed;
+      else delete next[key];
+    }
+    data.classification = next as any;
+  }
+
+  if (typeof input.lod === "string") {
+    const lod = input.lod.trim();
+    data.lod = lod;
+    // Always tag manual on user edit so re-ingest preserves it.
+    data.lodSource = lod ? "manual" : "";
+  }
+
+  if (Object.keys(data).length === 0) {
+    return prisma.modelElement.findUniqueOrThrow({ where: { id: elementId } });
+  }
+
+  return prisma.modelElement.update({
+    where: { id: elementId },
+    data,
+  });
+}
+
+// ── Federations ───────────────────────────────────────────────────────────
+//
+// A federation is a named grouping of one or more ModelAssets driving a single
+// estimate. Standalone lifecycle, optionally linked to a QuoteRevision so a
+// "scenario" estimate can pin a specific federation snapshot without affecting
+// the project-wide working federation.
+
+export interface CreateFederationInput {
+  name: string;
+  description?: string;
+  revisionId?: string | null;
+  status?: string;
+  metadata?: unknown;
+}
+
+export interface UpdateFederationInput {
+  name?: string;
+  description?: string;
+  revisionId?: string | null;
+  status?: string;
+  metadata?: unknown;
+}
+
+export interface UpsertFederationMemberInput {
+  modelId: string;
+  discipline?: string;
+  role?: string;
+  position?: number;
+  metadata?: unknown;
+}
+
+export async function listProjectFederations(projectId: string, opts: { revisionId?: string | null } = {}) {
+  const where: any = { projectId };
+  if (opts.revisionId !== undefined) where.revisionId = opts.revisionId;
+  return prisma.modelFederation.findMany({
+    where,
+    orderBy: [{ updatedAt: "desc" }],
+    include: {
+      members: {
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        include: {
+          model: { select: { id: true, fileName: true, format: true, status: true, units: true } },
+        },
+      },
+    },
+  });
+}
+
+export async function getProjectFederation(projectId: string, federationId: string) {
+  const federation = await prisma.modelFederation.findFirst({
+    where: { id: federationId, projectId },
+    include: {
+      members: {
+        orderBy: [{ position: "asc" }, { createdAt: "asc" }],
+        include: {
+          model: { select: { id: true, fileName: true, format: true, status: true, units: true } },
+        },
+      },
+    },
+  });
+  if (!federation) throw new Error(`Federation ${federationId} not found`);
+  return federation;
+}
+
+export async function createProjectFederation(projectId: string, input: CreateFederationInput) {
+  if (!input.name?.trim()) throw new Error("Federation name is required");
+  if (input.revisionId) {
+    // Validate the revision belongs to this project.
+    const revision = await prisma.quoteRevision.findFirst({
+      where: { id: input.revisionId, quote: { projectId } },
+      select: { id: true },
+    });
+    if (!revision) throw new Error(`Revision ${input.revisionId} not found in project ${projectId}`);
+  }
+  return prisma.modelFederation.create({
+    data: {
+      projectId,
+      name: input.name.trim(),
+      description: input.description?.trim() ?? "",
+      revisionId: input.revisionId ?? null,
+      status: input.status ?? "active",
+      metadata: (input.metadata ?? {}) as any,
+    },
+    include: {
+      members: { include: { model: { select: { id: true, fileName: true, format: true, status: true, units: true } } } },
+    },
+  });
+}
+
+export async function updateProjectFederation(
+  projectId: string,
+  federationId: string,
+  input: UpdateFederationInput,
+) {
+  const existing = await prisma.modelFederation.findFirst({ where: { id: federationId, projectId } });
+  if (!existing) throw new Error(`Federation ${federationId} not found`);
+  if (input.revisionId !== undefined && input.revisionId !== null) {
+    const revision = await prisma.quoteRevision.findFirst({
+      where: { id: input.revisionId, quote: { projectId } },
+      select: { id: true },
+    });
+    if (!revision) throw new Error(`Revision ${input.revisionId} not found in project ${projectId}`);
+  }
+  const data: any = {};
+  if (typeof input.name === "string") data.name = input.name.trim();
+  if (typeof input.description === "string") data.description = input.description.trim();
+  if (input.revisionId !== undefined) data.revisionId = input.revisionId ?? null;
+  if (typeof input.status === "string") data.status = input.status;
+  if (input.metadata !== undefined) data.metadata = input.metadata as any;
+  return prisma.modelFederation.update({
+    where: { id: federationId },
+    data,
+    include: {
+      members: { include: { model: { select: { id: true, fileName: true, format: true, status: true, units: true } } } },
+    },
+  });
+}
+
+export async function deleteProjectFederation(projectId: string, federationId: string) {
+  const existing = await prisma.modelFederation.findFirst({ where: { id: federationId, projectId } });
+  if (!existing) throw new Error(`Federation ${federationId} not found`);
+  await prisma.modelFederation.delete({ where: { id: federationId } });
+  return { deleted: true };
+}
+
+export async function upsertFederationMember(
+  projectId: string,
+  federationId: string,
+  input: UpsertFederationMemberInput,
+) {
+  const federation = await prisma.modelFederation.findFirst({ where: { id: federationId, projectId } });
+  if (!federation) throw new Error(`Federation ${federationId} not found`);
+  const model = await prisma.modelAsset.findFirst({ where: { id: input.modelId, projectId } });
+  if (!model) throw new Error(`Model ${input.modelId} not found in project`);
+
+  return prisma.modelFederationMember.upsert({
+    where: {
+      federationId_modelId: { federationId, modelId: input.modelId },
+    },
+    create: {
+      federationId,
+      modelId: input.modelId,
+      discipline: input.discipline ?? "other",
+      role: input.role ?? "primary",
+      position: input.position ?? 0,
+      metadata: (input.metadata ?? {}) as any,
+    },
+    update: {
+      ...(input.discipline !== undefined ? { discipline: input.discipline } : {}),
+      ...(input.role !== undefined ? { role: input.role } : {}),
+      ...(input.position !== undefined ? { position: input.position } : {}),
+      ...(input.metadata !== undefined ? { metadata: input.metadata as any } : {}),
+    },
+    include: { model: { select: { id: true, fileName: true, format: true, status: true, units: true } } },
+  });
+}
+
+export async function removeFederationMember(
+  projectId: string,
+  federationId: string,
+  modelId: string,
+) {
+  const federation = await prisma.modelFederation.findFirst({ where: { id: federationId, projectId } });
+  if (!federation) throw new Error(`Federation ${federationId} not found`);
+  await prisma.modelFederationMember.deleteMany({
+    where: { federationId, modelId },
+  });
+  return { deleted: true };
+}

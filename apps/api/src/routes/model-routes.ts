@@ -2,14 +2,22 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   createModelTakeoffLink,
+  createProjectFederation,
   deleteModelTakeoffLink,
+  deleteProjectFederation,
   getModelBom,
-  getProjectModelIngestCapabilities,
+  getProjectFederation,
   getProjectModelAsset,
+  getProjectModelIngestCapabilities,
   listModelTakeoffLinks,
+  listProjectFederations,
   listProjectModelAssets,
   queryModelElements,
+  removeFederationMember,
   syncProjectModelAssets,
+  updateModelElement,
+  updateProjectFederation,
+  upsertFederationMember,
 } from "../services/model-service.js";
 import {
   applyRevisionRetakeoff,
@@ -40,6 +48,76 @@ const createModelTakeoffLinkSchema = z.object({
   multiplier: z.coerce.number().finite().optional(),
   derivedQuantity: z.coerce.number().finite().optional(),
   selection: z.unknown().optional(),
+});
+
+// ── Element classification/LOD update ──────────────────────────────────
+//
+// Whitelisted classification standards mirror classification-utils.ts on the
+// web side. Anything outside this list is silently dropped to keep the JSON
+// blob queryable and prevent accidental schema drift.
+
+const classificationKeySchema = z.enum([
+  "masterformat",
+  "uniformat",
+  "omniclass",
+  "uniclass",
+  "din276",
+  "nrm",
+  "icms",
+]);
+
+const lodSchema = z.enum(["", "100", "200", "300", "350", "400", "500"]);
+
+const updateModelElementSchema = z.object({
+  classification: z.record(classificationKeySchema, z.string()).optional(),
+  lod: lodSchema.optional(),
+});
+
+// ── Federation schemas ─────────────────────────────────────────────────
+//
+// Federations group multiple ModelAssets into one logical model for an
+// estimate (architectural + structural + MEP federated for takeoff).
+// `revisionId` is optional — null/undefined = "loose" federation, set =
+// scenario-pinned to that quote revision.
+
+const federationStatusSchema = z.enum(["active", "draft", "archived"]);
+const federationDisciplineSchema = z.enum([
+  "architecture",
+  "structure",
+  "mep",
+  "civil",
+  "landscape",
+  "fp",
+  "other",
+]);
+const federationRoleSchema = z.enum(["primary", "reference", "clash"]);
+
+const createFederationSchema = z.object({
+  name: z.string().min(1).max(200),
+  description: z.string().max(2000).optional(),
+  revisionId: z.string().min(1).nullable().optional(),
+  status: federationStatusSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const updateFederationSchema = z.object({
+  name: z.string().min(1).max(200).optional(),
+  description: z.string().max(2000).optional(),
+  revisionId: z.string().min(1).nullable().optional(),
+  status: federationStatusSchema.optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const upsertFederationMemberSchema = z.object({
+  modelId: z.string().min(1),
+  discipline: federationDisciplineSchema.optional(),
+  role: federationRoleSchema.optional(),
+  position: z.coerce.number().int().min(0).optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+});
+
+const listFederationsQuerySchema = z.object({
+  revisionId: z.string().min(1).optional(),
 });
 
 function routeError(reply: any, error: unknown) {
@@ -149,6 +227,108 @@ export async function modelRoutes(app: FastifyInstance) {
     const { projectId, modelId, linkId } = request.params as { projectId: string; modelId: string; linkId: string };
     try {
       return await deleteModelTakeoffLink(projectId, modelId, linkId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  // ── Per-element classification / LOD ──────────────────────────────────
+
+  app.patch("/api/models/:projectId/assets/:modelId/elements/:elementId", async (request, reply) => {
+    const { projectId, modelId, elementId } = request.params as { projectId: string; modelId: string; elementId: string };
+    const parsed = updateModelElementSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const element = await updateModelElement(projectId, modelId, elementId, parsed.data);
+      return { element };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  // ── Federations ───────────────────────────────────────────────────────
+
+  app.get("/api/models/:projectId/federations", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = listFederationsQuerySchema.safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      return { federations: await listProjectFederations(projectId, parsed.data) };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/federations", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createFederationSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const federation = await createProjectFederation(projectId, parsed.data);
+      reply.code(201);
+      return { federation };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.get("/api/models/:projectId/federations/:federationId", async (request, reply) => {
+    const { projectId, federationId } = request.params as { projectId: string; federationId: string };
+    try {
+      return { federation: await getProjectFederation(projectId, federationId) };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.patch("/api/models/:projectId/federations/:federationId", async (request, reply) => {
+    const { projectId, federationId } = request.params as { projectId: string; federationId: string };
+    const parsed = updateFederationSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const federation = await updateProjectFederation(projectId, federationId, parsed.data);
+      return { federation };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.delete("/api/models/:projectId/federations/:federationId", async (request, reply) => {
+    const { projectId, federationId } = request.params as { projectId: string; federationId: string };
+    try {
+      return await deleteProjectFederation(projectId, federationId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/federations/:federationId/members", async (request, reply) => {
+    const { projectId, federationId } = request.params as { projectId: string; federationId: string };
+    const parsed = upsertFederationMemberSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const member = await upsertFederationMember(projectId, federationId, parsed.data);
+      reply.code(201);
+      return { member };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.delete("/api/models/:projectId/federations/:federationId/members/:modelId", async (request, reply) => {
+    const { projectId, federationId, modelId } = request.params as { projectId: string; federationId: string; modelId: string };
+    try {
+      return await removeFederationMember(projectId, federationId, modelId);
     } catch (error) {
       return routeError(reply, error);
     }
