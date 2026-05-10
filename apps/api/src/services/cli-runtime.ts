@@ -16,7 +16,7 @@
  * `cli-adapters/index.ts` and it shows up here automatically.
  */
 
-import { spawn, type ChildProcess, execSync } from "node:child_process";
+import { type ChildProcess, execSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -34,7 +34,8 @@ import {
   tryGetAdapter,
 } from "./cli-adapters/registry.js";
 import { ensureUserAgentHome, getUserAgentHome } from "./agent-home.js";
-import { BIDWRIGHT_PERMISSIONS, quoteWindowsArg } from "./cli-adapters/shared.js";
+import { getAgentRuntimeHost } from "./agent-host/index.js";
+import { BIDWRIGHT_PERMISSIONS } from "./cli-adapters/shared.js";
 import type {
   AgentReasoningEffort,
   ApiKeys,
@@ -404,10 +405,13 @@ export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
 }
 
 /**
- * Build the per-process child with proper cwd/env, and a Windows .bat
- * shim when needed. The shim is the same trick the old code used to
- * dodge cmd.exe quoting — adapter declares where the prompt lives via
- * `promptHandling`.
+ * Fork a CLI process via the active {@link AgentRuntimeHost}.
+ *
+ * The actual spawn lives in `agent-host/local-process.ts` (lifted byte-for-
+ * byte from this file's old inline `spawnChild`). Going through the host
+ * factory means future deployment modes — bubblewrap-isolated multitenant
+ * Docker, cloud sandboxes — can swap in stronger isolation without
+ * touching this orchestration layer.
  */
 async function spawnChild(
   plan: SpawnPlan,
@@ -415,71 +419,16 @@ async function spawnChild(
   cliEnv: Record<string, string>,
   isWin: boolean,
   batSuffix: "run" | "resume",
+  userId?: string | null,
 ): Promise<ChildProcess> {
-  if (!isWin) {
-    console.log(
-      `[cli:spawn] cmd=${plan.cliCmd} cwd=${projectDir} argCount=${plan.args.length}`,
-    );
-    const child = spawn(plan.cliCmd, plan.args, {
-      cwd: projectDir,
-      env: { ...process.env, ...cliEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    console.log(`[cli:spawn] pid=${child.pid}`);
-    return child;
-  }
-
-  // Windows: resolve the .cmd/.bat/.exe behind the binary name and wrap in a
-  // launcher .bat so we don't fight cmd.exe over argument quoting.
-  let resolvedCmd = plan.cliCmd;
-  try {
-    const candidates = execSync(`where ${plan.cliCmd}`, { encoding: "utf-8" })
-      .trim()
-      .split(/\r?\n/);
-    resolvedCmd =
-      candidates.find((c) => /\.(cmd|bat|exe)$/i.test(c)) || candidates[0] || resolvedCmd;
-  } catch {
-    // fall back to plan.cliCmd
-  }
-
-  const args = [...plan.args];
-  const promptFile = join(projectDir, ".bidwright-prompt.txt");
-  let usePromptStdin = false;
-
-  if (plan.promptHandling.kind === "flag") {
-    const idx = plan.promptHandling.index;
-    if (idx >= 0 && idx < args.length) {
-      await writeFile(promptFile, args[idx], "utf-8");
-      args[idx] = "Execute the instructions in .bidwright-prompt.txt";
-    }
-  } else if (plan.promptHandling.kind === "positional-stdin") {
-    const idx = plan.promptHandling.index;
-    if (idx >= 0 && idx < args.length) {
-      await writeFile(promptFile, args[idx], "utf-8");
-      args[idx] = "-";
-      usePromptStdin = true;
-    }
-  } // "positional" needs no transformation; quoting handles it.
-
-  const batLines = ["@echo off"];
-  const quotedArgs = args.map(quoteWindowsArg);
-  if (usePromptStdin) {
-    batLines.push(`type "${promptFile}" | call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
-  } else {
-    batLines.push(`call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
-  }
-
-  const batFile = join(projectDir, `.bidwright-${batSuffix}.bat`);
-  await writeFile(batFile, batLines.join("\r\n") + "\r\n");
-
-  console.log(`[cli:spawn:win] bat=${batFile} cmd=${resolvedCmd}`);
-  const child = spawn("cmd.exe", ["/c", batFile], {
-    cwd: projectDir,
-    env: { ...process.env, ...cliEnv },
-    stdio: ["ignore", "pipe", "pipe"],
+  return getAgentRuntimeHost().spawnProcess({
+    plan,
+    projectDir,
+    cliEnv,
+    isWin,
+    batSuffix,
+    userId,
   });
-  console.log(`[cli:spawn:win] pid=${child.pid}`);
-  return child;
 }
 
 /**
@@ -654,7 +603,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     ...plan.extraEnv,
   };
 
-  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "run");
+  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "run", opts.userId);
 
   const events = new EventEmitter();
   const session: CliSession = {
@@ -871,7 +820,7 @@ async function spawnResumedSession(
     ...plan.extraEnv,
   };
 
-  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "resume");
+  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "resume", opts.userId);
 
   const events = new EventEmitter();
   const session: CliSession = {
