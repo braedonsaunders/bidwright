@@ -87,6 +87,14 @@
         { "target": "nsis", "arch": ["x64"] }
       ]
     },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true,
+      "shortcutName": "Bidwright"
+    },
     "linux": {
       "category": "Office",
       "target": [

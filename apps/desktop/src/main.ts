@@ -23,7 +23,8 @@
  */
 
 import { app, BrowserWindow, dialog, Menu, shell } from "electron";
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, execSync, type ChildProcess } from "node:child_process";
+import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -56,6 +57,54 @@ function packagedResource(...segments: string[]): string {
 // app-data is per-user, not per-install.
 function userDataPath(...segments: string[]): string {
   return resolve(app.getPath("userData"), ...segments);
+}
+
+/**
+ * Open a tee'd write stream for capturing api/web subprocess output to a
+ * log file in the user's app-data dir AND echoing to the parent's
+ * stdout. The path returned to the caller is what the error dialog
+ * shows when boot fails — users can grab it for support.
+ *
+ * One file per process (api, web), per launch. Old logs are kept until
+ * the user manually cleans the dir; we don't auto-rotate because the
+ * disk cost is trivial and a deleted log is a worse debugging story.
+ */
+function openBootLog(name: string): { path: string; stream: WriteStream } {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const dir = userDataPath("logs");
+  // mkdir is async-only via fs/promises; we want sync here to avoid
+  // racing the spawn that writes into this stream. Use the sync recursive
+  // mkdir from node:fs which is safe to call repeatedly.
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const fs = require("node:fs") as typeof import("node:fs");
+  fs.mkdirSync(dir, { recursive: true });
+  const path = join(dir, `${name}-${stamp}.log`);
+  return { path, stream: createWriteStream(path, { flags: "a" }) };
+}
+
+/**
+ * Best-effort tree kill — Windows installers fail when the running app
+ * holds child processes (api / web sidecars) with file locks on
+ * node-pty's pty.node, embedded-postgres' postgres.exe, etc. Use
+ * `taskkill /T /F` on Windows to recursively terminate; on Unix we send
+ * SIGTERM to the process group (negative pid) which cascades to
+ * descendants spawned without their own session.
+ */
+function killProcessTree(child: ChildProcess | null): void {
+  if (!child || child.killed || !child.pid) return;
+  if (process.platform === "win32") {
+    try {
+      execSync(`taskkill /pid ${child.pid} /T /F`, { stdio: "ignore" });
+    } catch {
+      /* ignore — process may already be gone */
+    }
+  } else {
+    try {
+      process.kill(-child.pid, "SIGTERM");
+    } catch {
+      try { child.kill("SIGTERM"); } catch { /* ignore */ }
+    }
+  }
 }
 
 interface BootedServers {
@@ -148,13 +197,31 @@ async function bootPackaged(): Promise<BootedServers> {
   process.env.BIDWRIGHT_MODE = "desktop";
   process.env.BIDWRIGHT_MULTITENANT = "false";
   process.env.AGENT_HOME_ROOT = userDataPath("agent-home");
-  // The packaged Bidwright api expects to find prisma migrations relative
-  // to /app, but the bundled location moves to extraResources/migrations.
-  process.env.BIDWRIGHT_MIGRATIONS_DIR = packagedResource("migrations");
 
-  // 2. Apply migrations -----------------------------------------------------
-  console.log(`[desktop] applying Prisma migrations`);
-  await applyPrismaMigrations(databaseUrl);
+  // Tell the api's bootstrap where to find Prisma's schema + migrations.
+  // The bundle stages @bidwright/db at Resources/app/node_modules/@bidwright/db,
+  // not at the workspace-relative `packages/db/` that bootstrap.ts walks
+  // toward by default. Without these env overrides the api crashes on
+  // startup with "schema.prisma not found", which manifests upstream
+  // as "WaitForHttpReady timeout after 60s" because the child never
+  // reaches `app.listen()`.
+  const dbPkgDir = (() => {
+    try {
+      return dirname(fileURLToPath(import.meta.resolve("@bidwright/db/package.json")));
+    } catch {
+      return null;
+    }
+  })();
+  if (dbPkgDir) {
+    process.env.BIDWRIGHT_PRISMA_CWD = dbPkgDir;
+    process.env.BIDWRIGHT_PRISMA_SCHEMA = join(dbPkgDir, "prisma", "schema.prisma");
+  }
+
+  // The api child runs `prisma migrate deploy` itself during its own
+  // bootstrap (see apps/api/src/bootstrap.ts → applyPendingMigrations).
+  // We DO NOT run a duplicate migrate from main here; that path tried
+  // to use a Resources/api dir that no longer exists since dropping
+  // apps/api/dist from extraResources.
 
   // 2b. Try to enable pgvector + create the vector_records table.
   //     Vanilla Postgres binaries (which embedded-postgres ships) don't
@@ -192,6 +259,9 @@ async function bootPackaged(): Promise<BootedServers> {
   }
   console.log(`[desktop] spawning Fastify api on 127.0.0.1:${apiPort} from ${apiServerScript}`);
 
+  const apiLog = openBootLog("api");
+  console.log(`[desktop] api log → ${apiLog.path}`);
+
   const apiProcess = spawn(process.execPath, [apiServerScript], {
     cwd: dirname(apiServerScript),
     env: {
@@ -200,21 +270,63 @@ async function bootPackaged(): Promise<BootedServers> {
       NODE_ENV: "production",
     },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+    windowsHide: true,
   });
-  apiProcess.stdout?.on("data", (chunk) => process.stdout.write(`[api] ${chunk}`));
-  apiProcess.stderr?.on("data", (chunk) => process.stderr.write(`[api] ${chunk}`));
+  apiProcess.stdout?.on("data", (chunk: Buffer) => {
+    apiLog.stream.write(chunk);
+    process.stdout.write(`[api] ${chunk}`);
+  });
+  apiProcess.stderr?.on("data", (chunk: Buffer) => {
+    apiLog.stream.write(chunk);
+    process.stderr.write(`[api] ${chunk}`);
+  });
+
+  let apiExitedDuringBoot = false;
+  let apiExitCode: number | null = null;
   apiProcess.on("exit", (code, signal) => {
     console.error(`[desktop] api process exited code=${code} signal=${signal}`);
+    apiExitCode = code;
     if (mainWindow && !mainWindow.isDestroyed()) {
       dialog.showErrorBox(
         "Bidwright stopped",
-        "The Bidwright api server exited unexpectedly. Please reopen the app.",
+        `The Bidwright api server exited unexpectedly (code=${code}, signal=${signal}).\n\n` +
+          `Logs: ${apiLog.path}\n\n` +
+          "Please reopen the app and share that file if the issue persists.",
       );
       app.quit();
+    } else {
+      apiExitedDuringBoot = true;
     }
   });
 
-  await waitForHttpReady(`${apiUrl}/health`, { timeoutMs: 60_000 });
+  // Race the health-check against an early exit so a crashing api fails
+  // fast (within seconds) rather than blocking on the 90-second timeout
+  // and eating the user's startup patience.
+  try {
+    await Promise.race([
+      waitForHttpReady(`${apiUrl}/health`, { timeoutMs: 90_000 }),
+      new Promise<never>((_, rejectFn) => {
+        const interval = setInterval(() => {
+          if (apiExitedDuringBoot) {
+            clearInterval(interval);
+            rejectFn(
+              new Error(
+                `api process exited before becoming healthy (code=${apiExitCode}). ` +
+                  `Logs: ${apiLog.path}`,
+              ),
+            );
+          }
+        }, 500);
+      }),
+    ]);
+  } catch (err) {
+    throw new Error(
+      `Bidwright api failed to become ready.\n\n` +
+        `Logs: ${apiLog.path}\n\n` +
+        (err instanceof Error ? err.message : String(err)),
+    );
+  }
 
   // 4. Spawn Next.js standalone server -------------------------------------
   const webPort = await getAvailablePort();
@@ -233,6 +345,9 @@ async function bootPackaged(): Promise<BootedServers> {
     );
   }
   console.log(`[desktop] spawning Next standalone on 127.0.0.1:${webPort}`);
+  const webLog = openBootLog("web");
+  console.log(`[desktop] web log → ${webLog.path}`);
+
   const webProcess = spawn(process.execPath, [standaloneServer], {
     cwd: dirname(standaloneServer),
     env: {
@@ -248,13 +363,17 @@ async function bootPackaged(): Promise<BootedServers> {
       NODE_ENV: "production",
     },
     stdio: ["ignore", "pipe", "pipe"],
+    detached: process.platform !== "win32",
+    windowsHide: true,
   });
-  webProcess.stdout?.on("data", (chunk) =>
-    process.stdout.write(`[web] ${chunk}`),
-  );
-  webProcess.stderr?.on("data", (chunk) =>
-    process.stderr.write(`[web] ${chunk}`),
-  );
+  webProcess.stdout?.on("data", (chunk: Buffer) => {
+    webLog.stream.write(chunk);
+    process.stdout.write(`[web] ${chunk}`);
+  });
+  webProcess.stderr?.on("data", (chunk: Buffer) => {
+    webLog.stream.write(chunk);
+    process.stderr.write(`[web] ${chunk}`);
+  });
   webProcess.on("exit", (code, signal) => {
     console.error(`[desktop] Next standalone exited code=${code} signal=${signal}`);
     if (mainWindow && !mainWindow.isDestroyed()) {
@@ -262,13 +381,14 @@ async function bootPackaged(): Promise<BootedServers> {
       // the failure rather than leaving a blank window.
       dialog.showErrorBox(
         "Bidwright stopped",
-        "The Bidwright web server exited unexpectedly. Please reopen the app.",
+        `The Bidwright web server exited unexpectedly (code=${code}, signal=${signal}).\n\n` +
+          `Logs: ${webLog.path}\n\nPlease reopen the app.`,
       );
       app.quit();
     }
   });
 
-  await waitForHttpReady(webUrl, { timeoutMs: 30_000 });
+  await waitForHttpReady(webUrl, { timeoutMs: 60_000 });
 
   return {
     apiPort,
@@ -323,54 +443,6 @@ async function findStandaloneServer(root: string): Promise<string | null> {
     }
   }
   return null;
-}
-
-async function applyPrismaMigrations(databaseUrl: string): Promise<void> {
-  // Spawn `prisma migrate deploy` as a one-shot using Electron's own
-  // node. The prisma binary lives under @bidwright/db's node_modules in
-  // the packaged app (asar-unpacked, so it's executable).
-  const dbModuleRoot = packagedResource("api", "node_modules", "@bidwright", "db");
-  const prismaCli = packagedResource(
-    "api",
-    "node_modules",
-    "prisma",
-    "build",
-    "index.js",
-  );
-  if (!existsSync(prismaCli)) {
-    // In dev / dir-mode builds we skip migrations; the host's docker
-    // postgres already has them applied. Log instead of throwing so a
-    // packaged-mode-but-no-prisma build still boots into the UI.
-    console.warn(
-      `[desktop] prisma cli not found at ${prismaCli}; skipping migrate deploy`,
-    );
-    return;
-  }
-  await new Promise<void>((resolveFn, rejectFn) => {
-    const child = spawn(
-      process.execPath,
-      [prismaCli, "migrate", "deploy", "--schema", join(dbModuleRoot, "prisma", "schema.prisma")],
-      {
-        env: {
-          ...process.env,
-          ELECTRON_RUN_AS_NODE: "1",
-          DATABASE_URL: databaseUrl,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stderr = "";
-    child.stdout?.on("data", (chunk) => process.stdout.write(`[migrate] ${chunk}`));
-    child.stderr?.on("data", (chunk) => {
-      stderr += chunk.toString();
-      process.stderr.write(`[migrate] ${chunk}`);
-    });
-    child.once("exit", (code) => {
-      if (code === 0) resolveFn();
-      else rejectFn(new Error(`prisma migrate deploy exited code=${code}\n${stderr}`));
-    });
-    child.once("error", rejectFn);
-  });
 }
 
 function createMainWindow(webUrl: string): BrowserWindow {
@@ -492,9 +564,16 @@ async function start() {
     booted = app.isPackaged ? await bootPackaged() : await bootDev();
   } catch (err) {
     console.error("[desktop] fatal during boot:", err);
+    // Best-effort cleanup so an installer can replace files even if the
+    // user closes this dialog before quitting.
+    killProcessTree(booted?.apiProcess ?? null);
+    killProcessTree(booted?.webProcess ?? null);
+    if (booted?.pg) await booted.pg.stop().catch(() => {});
+    const detail = err instanceof Error ? err.message : String(err);
+    const logsDir = userDataPath("logs");
     dialog.showErrorBox(
       "Bidwright failed to start",
-      err instanceof Error ? err.message : String(err),
+      `${detail}\n\nDiagnostic logs are in:\n${logsDir}`,
     );
     app.quit();
     return;
@@ -521,12 +600,12 @@ async function start() {
 
 async function shutdown(): Promise<void> {
   console.log("[desktop] shutdown");
-  if (booted?.webProcess) {
-    booted.webProcess.kill("SIGINT");
-  }
-  if (booted?.apiProcess) {
-    booted.apiProcess.kill("SIGINT");
-  }
+  // Tree-kill so an installer or process-replacing update can drop file
+  // locks (Windows). Plain SIGINT to the immediate child often leaves
+  // grand-children running — pty.node, postgres.exe — and the next
+  // installer run fails with "could not close existing app".
+  killProcessTree(booted?.webProcess ?? null);
+  killProcessTree(booted?.apiProcess ?? null);
   if (booted?.pg) {
     await booted.pg.stop().catch(() => {});
   }

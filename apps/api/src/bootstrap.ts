@@ -82,15 +82,21 @@ export async function ensureIntegrationsEncryptionKey(): Promise<{
 // ── Prisma migrations ─────────────────────────────────────────────────────
 
 function locatePrismaSchema(): string {
-  // packages/db/prisma/schema.prisma — resolved relative to this file's location
-  // at runtime, both in dev (tsx) and in Docker (where the source tree is copied
-  // verbatim into /app).
+  // The Electron desktop bundle and any other host that doesn't preserve
+  // the workspace path layout sets BIDWRIGHT_PRISMA_SCHEMA explicitly.
+  // Honor that first; fall back to the relative-to-this-file walk that
+  // works under tsx (dev + docker, where the source tree is on disk).
+  if (process.env.BIDWRIGHT_PRISMA_SCHEMA) return process.env.BIDWRIGHT_PRISMA_SCHEMA;
   const here = path.dirname(fileURLToPath(import.meta.url));
   // apps/api/src/bootstrap.ts → ../../../packages/db/prisma/schema.prisma
   return path.resolve(here, "../../..", "packages/db/prisma/schema.prisma");
 }
 
 function locatePrismaCwd(): string {
+  // BIDWRIGHT_PRISMA_CWD escape hatch for the desktop bundle (where the
+  // @bidwright/db package lives under Resources/app/node_modules/, not at
+  // a fixed repo-root-relative path).
+  if (process.env.BIDWRIGHT_PRISMA_CWD) return process.env.BIDWRIGHT_PRISMA_CWD;
   // Run from the @bidwright/db package directory so prisma picks up local
   // node_modules and the standard schema location.
   const here = path.dirname(fileURLToPath(import.meta.url));
