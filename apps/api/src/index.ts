@@ -1,5 +1,5 @@
 import { runStartupBootstrap } from "./bootstrap.js";
-import { buildServer } from "./server";
+import { buildServer } from "./server.js";
 import { ensureEgressProxyForMultitenant } from "./services/egress-proxy-bootstrap.js";
 
 const port = Number(process.env.API_PORT ?? "4001");
