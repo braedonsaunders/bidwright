@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../generated/prisma-client/default.js";
 import { seedEstimatorPersonas } from "./seed-data.js";
 
 async function main() {

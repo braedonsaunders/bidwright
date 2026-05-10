@@ -5,7 +5,7 @@
  *
  * Usage: pnpm --filter @bidwright/db db:reset
  */
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../generated/prisma-client/default.js";
 
 async function main() {
   const prisma = new PrismaClient();

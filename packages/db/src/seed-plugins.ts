@@ -3,7 +3,7 @@
  * Each JSON file is a full plugin definition. Plugins are upserted by slug — existing ones are replaced.
  * Seed datasets embedded in the plugin JSON are also created.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma-client/default.js";
 import { firstPartyPlugins } from "@bidwright/domain";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";

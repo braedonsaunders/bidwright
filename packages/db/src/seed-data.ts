@@ -2,7 +2,7 @@
  * Reusable seed functions — can be called from CLI (seed.ts) or API endpoints.
  */
 import { mockStore, type BidwrightStore } from "@bidwright/domain";
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma-client/default.js";
 
 export { mockStore };
 

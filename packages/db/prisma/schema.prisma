@@ -1,5 +1,12 @@
 generator client {
   provider      = "prisma-client-js"
+  // Generate to a stable path inside the package rather than the default
+  // node_modules/.prisma/client. The dot-prefixed peer doesn't survive
+  // pnpm symlink-following during electron-builder packaging, so the
+  // packaged Electron app crashes on `require('.prisma/client/default')`.
+  // Our explicit output ships naturally with the @bidwright/db workspace
+  // dep.
+  output        = "../generated/prisma-client"
   binaryTargets = ["native", "debian-openssl-3.0.x"]
 }
 
