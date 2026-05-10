@@ -6,7 +6,7 @@ import {
   deriveEffectiveCostFromObservations,
   normalizeCostObservation,
   normalizeResourceName,
-} from "./cost-intelligence";
+} from "./cost-intelligence.js";
 
 const resource = {
   id: "resource-copper-pipe",

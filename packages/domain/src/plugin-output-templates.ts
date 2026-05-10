@@ -1,4 +1,4 @@
-import type { PluginToolOutputTemplate } from "./models";
+import type { PluginToolOutputTemplate } from "./models.js";
 
 export function materialSearchOutputTemplate(args: {
   title: string;

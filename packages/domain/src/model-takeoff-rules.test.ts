@@ -10,7 +10,7 @@ import {
   scoreModelTakeoffRule,
   type ModelTakeoffElement,
   type ModelTakeoffQuantityRule,
-} from "./model-takeoff-rules";
+} from "./model-takeoff-rules.js";
 
 const elements: ModelTakeoffElement[] = [
   {

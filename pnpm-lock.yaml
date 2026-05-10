@@ -387,6 +387,9 @@ importers:
 
   packages/db:
     dependencies:
+      '@bidwright/domain':
+        specifier: workspace:*
+        version: link:../domain
       '@prisma/adapter-pg':
         specifier: ^7.5.0
         version: 7.5.0

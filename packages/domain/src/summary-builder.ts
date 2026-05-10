@@ -9,8 +9,8 @@ import type {
   SummaryRow,
   SummaryRowStyle,
   SummaryRowType,
-} from "./models";
-import { normalizeSummaryClassificationConfig } from "./construction-classification";
+} from "./models.js";
+import { normalizeSummaryClassificationConfig } from "./construction-classification.js";
 
 const standalonePricingModes = new Set<AdjustmentPricingMode>([
   "option_standalone",

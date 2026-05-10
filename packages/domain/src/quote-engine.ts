@@ -20,14 +20,14 @@ import type {
   SummaryRowType,
   Worksheet,
   WorksheetItem,
-} from "./models";
+} from "./models.js";
 import {
   normalizeSummaryClassificationConfig,
   resolveConstructionClassification,
   type ResolvedConstructionClassification,
-} from "./construction-classification";
-import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder";
-import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours";
+} from "./construction-classification.js";
+import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder.js";
+import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours.js";
 
 /**
  * Shape of a row in the extended-duration interpolation table. Stored on each
