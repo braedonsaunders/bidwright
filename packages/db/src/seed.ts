@@ -1,4 +1,4 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../generated/prisma-client/default.js";
 import { seedAllForOrganization } from "./seed-data.js";
 import { seedCatalogTemplates } from "./seed-items.js";
 import { seedPluginTemplates } from "./seed-plugins.js";

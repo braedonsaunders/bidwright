@@ -3,7 +3,7 @@
  * Each JSON file contains { name, description, kind, source, sourceDescription, items[] }.
  * Templates are upserted by name — existing templates are replaced.
  */
-import type { PrismaClient } from "@prisma/client";
+import type { PrismaClient } from "../generated/prisma-client/default.js";
 import { readFileSync, readdirSync, existsSync } from "fs";
 import path from "path";
 import { randomUUID } from "crypto";

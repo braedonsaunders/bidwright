@@ -2,7 +2,7 @@
  * Standalone script to seed plugins from packages/db/seed-plugins/.
  * Run: npx tsx src/run-seed-plugins.ts
  */
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient } from "../generated/prisma-client/default.js";
 import { seedPluginTemplates } from "./seed-plugins.js";
 
 async function main() {

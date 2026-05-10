@@ -12,6 +12,7 @@ playwright-report/
 test-results/
 .turbo
 .prisma
+packages/db/generated/
 .codex/
 .bidwright/
 .bidwright-*/
