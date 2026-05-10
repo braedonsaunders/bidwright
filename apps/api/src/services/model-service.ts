@@ -40,6 +40,12 @@ interface GeneratedElement {
   bbox?: unknown;
   geometryRef?: string;
   estimateRelevant?: boolean;
+  /** Construction classification keyed by standard (mirrors WorksheetItem). */
+  classification?: Record<string, string>;
+  /** Level of Development extracted from a Pset or set manually. */
+  lod?: string;
+  /** "pset" | "manual" | "" — provenance of the LOD value. */
+  lodSource?: "pset" | "manual" | "";
   properties?: Record<string, unknown>;
 }
 
@@ -915,6 +921,12 @@ async function replaceModelChildren(modelId: string, generated: GeneratedManifes
         material: element.material ?? "",
         bbox: (element.bbox ?? {}) as any,
         geometryRef: element.geometryRef ?? "",
+        // Typed BIM fields populated by adapters when available; fall back to
+        // empty values so re-ingest doesn't clobber UI-set overrides handled
+        // by a separate upsert path elsewhere.
+        classification: (element.classification ?? {}) as any,
+        lod: element.lod ?? "",
+        lodSource: element.lodSource ?? "",
         properties: {
           ...(element.properties ?? {}),
           estimateRelevant: element.estimateRelevant ?? undefined,

@@ -113,6 +113,83 @@ function getIfcClassName(WebIFC: any, api: any, modelID: number, expressID: numb
   return "IFCUNKNOWN";
 }
 
+/** Common Pset names that carry an LOD value. The check is loose because
+ *  authoring tools name these inconsistently — some shops use "Pset_LOD",
+ *  others "Pset_VerificationStatus" with a "LOD" property, others a vendor
+ *  Pset like "ePset_LOD". We match any Pset whose name contains "LOD" or
+ *  "VerificationStatus", then look for any of LOD/LevelOfDevelopment/
+ *  LevelOfDetail properties. */
+function lodValueFromProperties(propsByName: Map<string, unknown>): string {
+  const candidates = ["LOD", "LevelOfDevelopment", "LevelOfDetail", "Status"];
+  for (const key of candidates) {
+    const raw = propsByName.get(key);
+    if (raw == null) continue;
+    const text = typeof raw === "string" ? raw : String(raw);
+    const match = text.match(/\b(100|200|300|350|400|500)\b/);
+    if (match) return match[1];
+  }
+  return "";
+}
+
+/** Walk IFCRELDEFINESBYPROPERTIES and build a map: expressID → LOD string.
+ *  Bounded to keep ingest fast on large models — bails after MAX_REL_LINES
+ *  relations or MAX_LOD_HITS resolved elements (whichever first). Returns
+ *  an empty map on any error so the rest of ingest still succeeds. */
+function buildIfcLodMap(WebIFC: any, api: any, modelID: number): Map<number, string> {
+  const result = new Map<number, string>();
+  const MAX_REL_LINES = 50000;
+  const MAX_LOD_HITS = 20000;
+  try {
+    const relType = WebIFC.IFCRELDEFINESBYPROPERTIES;
+    if (typeof relType !== "number") return result;
+    const relIds = vectorToArray(api.GetLineIDsWithType(modelID, relType, false));
+    let processed = 0;
+    for (const relId of relIds) {
+      if (processed >= MAX_REL_LINES || result.size >= MAX_LOD_HITS) break;
+      processed += 1;
+      let rel: any;
+      try {
+        rel = api.GetLine(modelID, relId, true);
+      } catch {
+        continue;
+      }
+      const def = rel?.RelatingPropertyDefinition;
+      if (!def) continue;
+      const psetName = textScalar(def.Name);
+      if (!psetName) continue;
+      const upper = psetName.toUpperCase();
+      // Cheap pre-filter: only look at Psets that could plausibly carry LOD.
+      if (!upper.includes("LOD") && !upper.includes("VERIFICATIONSTATUS") && !upper.includes("DEVELOPMENT")) {
+        continue;
+      }
+      const props = Array.isArray(def.HasProperties) ? def.HasProperties : [];
+      const propsByName = new Map<string, unknown>();
+      for (const prop of props) {
+        const name = textScalar(prop?.Name);
+        if (!name) continue;
+        // IFC single-value: NominalValue.value; enumeration: EnumerationValues; numeric: just .value.
+        const value =
+          scalar(prop?.NominalValue) ??
+          scalar(prop?.EnumerationValues?.[0]) ??
+          scalar(prop?.LengthValues?.[0]) ??
+          scalar(prop?.value);
+        if (value == null) continue;
+        propsByName.set(name, value);
+      }
+      const lod = lodValueFromProperties(propsByName);
+      if (!lod) continue;
+      const related = Array.isArray(rel.RelatedObjects) ? rel.RelatedObjects : [];
+      for (const ref of related) {
+        const expressID = typeof ref?.value === "number" ? ref.value : Number(ref?.value);
+        if (Number.isFinite(expressID)) result.set(expressID, lod);
+      }
+    }
+  } catch {
+    // Pset map is best-effort; ingest must not fail because LOD lookup blew up.
+  }
+  return result;
+}
+
 function applyMatrix(point: number[], matrix?: ArrayLike<number>) {
   if (!matrix || matrix.length < 16) return point;
   const [x, y, z] = point;
@@ -366,6 +443,8 @@ export const ifcAdapter: ModelIngestAdapter = {
       modelID = Number(api.OpenModel(data));
       const activeModelID: number = modelID;
       const geometryByExpressId = geometryMetricsFromWebIfc(WebIFC, api, activeModelID);
+      // Pre-build LOD lookup so each element-build doesn't re-walk relations.
+      const lodByExpressId = buildIfcLodMap(WebIFC, api, activeModelID);
 
       const elements: CanonicalModelElement[] = [];
       const quantities: CanonicalModelQuantity[] = [];
@@ -391,6 +470,7 @@ export const ifcAdapter: ModelIngestAdapter = {
           const globalId = textScalar(line.GlobalId) || `#${expressID}`;
           const name = textScalar(line.Name) || textScalar(line.ObjectType) || classFromApi;
           const elementType = textScalar(line.PredefinedType) || classFromApi.replace(/^IFC/, "");
+          const lodFromPset = lodByExpressId.get(expressID) ?? "";
           elements.push({
             id: elementId,
             externalId: globalId,
@@ -400,6 +480,8 @@ export const ifcAdapter: ModelIngestAdapter = {
             bbox: geometry ? finalizeBbox(geometry.bbox) ?? undefined : undefined,
             geometryRef: geometry?.meshRefs[0],
             estimateRelevant: true,
+            lod: lodFromPset,
+            lodSource: lodFromPset ? "pset" : "",
             properties: {
               expressId: `#${expressID}`,
               globalId,
