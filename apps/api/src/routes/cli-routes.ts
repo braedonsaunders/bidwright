@@ -1002,7 +1002,7 @@ async function prepareCliAgentWorkspace(input: {
   });
 
   const settings = await store.getSettings();
-  const integrations = (settings as any)?.integrations || {};
+  const integrations = await store.getEffectiveIntegrations(request.user?.id);
   const estimateDefaults = (settings as any)?.defaults || {};
   const persona = await resolveEstimatorPersonaForPrompt(store, input.personaId);
 
@@ -1098,8 +1098,7 @@ export function registerCliRoutes(app: FastifyInstance) {
   // ── CLI Detection + Auth Status ──────────────────────────────
   app.get("/api/cli/detect", async (request) => {
     const store = request.store!;
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const configuredRuntime = isCliRuntime(integrations.agentRuntime) ? integrations.agentRuntime : null;
     const configuredModel = configuredRuntime ? normalizeCliModel(configuredRuntime, integrations.agentModel) : null;
 
@@ -1147,8 +1146,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     }
 
     const store = request.store!;
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const cliPath = resolveCliPathOverride(runtime, integrations, requestedPath);
     const detected = detectCli(
       runtime,
@@ -1256,9 +1254,11 @@ export function registerCliRoutes(app: FastifyInstance) {
       store,
     });
 
-    // Fetch settings early so we can pass integrations into CLAUDE.md params
+    // Fetch settings early so we can pass integrations into CLAUDE.md params.
+    // Integrations come from the user-overlaid (org defaults + user
+    // overrides) blob so OAuth tokens / personal API keys land in the spawn.
     const settingsEarly = await store.getSettings();
-    const integrationsEarly = (settingsEarly as any)?.integrations || {};
+    const integrationsEarly = await store.getEffectiveIntegrations(request.user?.id);
     const estimateDefaults = (settingsEarly as any)?.defaults || {};
     const runtime = resolveCliRuntime(body.runtime, integrationsEarly.agentRuntime);
     const adapter = getAdapter(runtime);
@@ -1356,9 +1356,10 @@ export function registerCliRoutes(app: FastifyInstance) {
       },
     }).catch(() => {});
 
-    // Get settings for auth token
+    // Get settings for auth token. Integrations are user-overlaid so the
+    // CLI spawn picks up the user's OAuth / personal API key when set.
     const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const benchmarkingEnabled = (settings as any)?.defaults?.benchmarkingEnabled !== false;
     const instructionFile = adapter.primaryInstructionFile;
 
@@ -1504,8 +1505,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       return reply.code(404).send({ error: "Project not found" });
     }
 
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const latestRun = await prisma.aiRun.findFirst({
       where: { projectId, kind: "cli-intake" },
       orderBy: { createdAt: "desc" },
@@ -1608,8 +1608,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     const ingestionBlock = ingestionStartBlock(project);
     if (ingestionBlock) return reply.code(409).send(ingestionBlock);
 
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const latestRun = await prisma.aiRun.findFirst({
       where: { projectId, kind: "cli-intake" },
       orderBy: { createdAt: "desc" },
@@ -1712,8 +1711,7 @@ ${message}`;
       fullPrompt = `First, look at the image file at "${imagePath}". Then answer: ${prompt}`;
     }
 
-    const settings = await request.store!.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
     const askModel = normalizeCliModel("claude-code", integrations.agentModel);
     const askEffort = mapClaudeEffort(normalizeCliReasoningEffort(integrations.agentReasoningEffort));
 
@@ -1727,7 +1725,7 @@ ${message}`;
       ];
       if (askEffort) args.push("--effort", askEffort);
 
-      // Build env — pass API key if configured
+      // Build env — pass API key if configured (user override wins over org default)
       const env: Record<string, string> = { ...process.env as any };
       if (integrations.anthropicKey) env.ANTHROPIC_API_KEY = integrations.anthropicKey;
 
@@ -1902,9 +1900,9 @@ ${message}`;
     const book = await store.getKnowledgeBook(bookId);
     if (!book) return { error: "Book not found" };
 
-    // Get Azure DI credentials
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    // Integrations are user-overlaid so the per-user OAuth / personal API
+    // key reaches the dataset-extraction CLI spawn, not just org defaults.
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const runtime = resolveCliRuntime(requestedRuntime, integrations.agentRuntime);
     const normalizedModel = normalizeCliModel(runtime, model ?? integrations.agentModel);
     const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);

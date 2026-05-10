@@ -106,9 +106,25 @@ model User {
 
   activities Activity[]
   sessions   Session[]
+  settings   UserSettings?
 
   @@unique([organizationId, email])
   @@index([organizationId])
+}
+
+// Per-user overrides for credentials and preferences. Mirrors the JSON-blob
+// pattern used by OrganizationSettings.integrations: keys match the org-level
+// integration keys (anthropicKey, openaiKey, geminiKey, openrouterKey, plus
+// nested OAuth blocks like anthropicOauth = { accessToken, refreshToken,
+// expiresAt }) so the CLI spawn pipeline can shallow-merge user values onto
+// org defaults — empty values fall through to the org default.
+model UserSettings {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  integrations Json     @default("{}")
+  preferences  Json     @default("{}")
+  updatedAt    DateTime @updatedAt
 }
 
 model SuperAdmin {

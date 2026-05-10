@@ -100,6 +100,7 @@ import { catalogRoutes } from "./routes/catalog-routes.js";
 import { assemblyRoutes } from "./routes/assembly-routes.js";
 import { laborUnitRoutes } from "./routes/labor-unit-routes.js";
 import { settingsRoutes } from "./routes/settings-routes.js";
+import { userRoutes } from "./routes/user-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
@@ -5481,8 +5482,9 @@ export function buildServer() {
     const { prompt, categories } = request.body as { prompt: string; categories?: string[] };
     if (!prompt?.trim()) return reply.code(400).send({ message: "prompt is required" });
 
-    const settings = await request.store!.getSettings();
-    const integrations = settings.integrations ?? {} as any;
+    // User-overlaid integrations: a user's personal API key wins over the
+    // org default, so plugin generation bills against the right account.
+    const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
     const apiKey = integrations.anthropicKey ?? process.env.ANTHROPIC_API_KEY ?? integrations.openaiKey ?? process.env.OPENAI_API_KEY ?? "";
     const provider = integrations.llmProvider ?? process.env.LLM_PROVIDER ?? (apiKey ? "anthropic" : "openai");
     const model = integrations.llmModel ?? process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
@@ -6326,6 +6328,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(scheduleImportRoutes);
   app.register(rateScheduleRoutes);
   app.register(settingsRoutes);
+  app.register(userRoutes);
   app.register(integrationsRoutes);
   app.register(webhooksRoutes);
   app.register(costIntelligenceRoutes);
