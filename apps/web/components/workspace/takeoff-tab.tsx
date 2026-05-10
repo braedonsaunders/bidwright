@@ -172,6 +172,11 @@ const MESH_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "o
 const MODEL_EXTENSIONS = new Set([...BIM_EXTENSIONS, ...MESH_EXTENSIONS]);
 const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
+/** Image file extensions usable for the Site Photos intake. Mirrors what
+ *  the photo-takeoff service accepts (JPG / PNG / WebP / HEIC / HEIF) so the
+ *  count on the intake card matches the number of photos a user could
+ *  actually feed into a BOM run. */
+const PHOTO_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"]);
 
 type TakeoffHistoryCommand =
   | { kind: "create"; annotation: TakeoffAnnotation }
@@ -204,6 +209,10 @@ function isPdfSource(fileName: string, fileType?: string | null): boolean {
 
 function isSpreadsheetFile(fileName: string): boolean {
   return SPREADSHEET_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isPhotoFile(fileName: string): boolean {
+  return PHOTO_EXTENSIONS.has(getFileExtension(fileName));
 }
 
 /* ─── Tool definitions ─── */
@@ -3025,6 +3034,7 @@ export function TakeoffTab({
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
+  const photoSources = fileTreeNodes.filter((node) => node.type === "file" && isPhotoFile(node.name));
   const spreadsheetProfiles = spreadsheetPreview?.columnProfiles?.length
     ? spreadsheetPreview.columnProfiles
     : (spreadsheetPreview?.headers ?? []).map((header, index) => {
@@ -3230,8 +3240,8 @@ export function TakeoffTab({
       id: "photo",
       title: "Site Photos",
       detail: "Drop photos from the field — AI scaffolds a Bill of Materials grouped by your category taxonomy.",
-      metric: "AI",
-      metricLabel: "vision",
+      metric: photoSources.length.toLocaleString(),
+      metricLabel: "photos",
       icon: Camera,
       tone: "photo",
       disabled: false,
