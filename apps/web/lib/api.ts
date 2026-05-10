@@ -5679,6 +5679,30 @@ export async function listRevisionDiffs(projectId: string): Promise<RevisionDiff
   return apiRequest<RevisionDiffSummary[]>(`/api/models/${projectId}/diffs`);
 }
 
+/** Per-worksheet-item impact rollup for the most recent revision diff. The
+ *  estimate grid uses this to badge BIM-linked rows with a pending change-
+ *  order delta. `diffId === null` means no diff has been computed for this
+ *  project yet. */
+export interface LatestRevisionImpactByItem {
+  diffId: string | null;
+  baseModelId: string | null;
+  headModelId: string | null;
+  createdAt: string | null;
+  items: Record<string, RevisionImpactedItem & { changeName: string; changeClass: string }>;
+  summary: {
+    elementsAdded: number;
+    elementsRemoved: number;
+    elementsModified: number;
+    affectedItems: number;
+    totalCostDelta: number;
+    totalPriceDelta: number;
+  };
+}
+
+export async function getLatestRevisionImpactByItem(projectId: string): Promise<LatestRevisionImpactByItem> {
+  return apiRequest<LatestRevisionImpactByItem>(`/api/models/${projectId}/revision-impact/latest`);
+}
+
 export async function createRevisionDiff(
   projectId: string,
   input: { baseModelId: string; headModelId: string },

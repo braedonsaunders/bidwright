@@ -430,6 +430,68 @@ export async function applyRevisionRetakeoff(
   return { updated, skipped };
 }
 
+/**
+ * Roll up the latest unapplied(-ish) revision diff into a worksheetItemId →
+ * impact map, suitable for surfacing as a per-row chip in the estimate grid.
+ *
+ * "Latest" = most recent ModelRevisionDiff for the project. There's no
+ * applied flag today, so a stale diff can linger — the UI should reflect this
+ * by labelling the diff with its createdAt timestamp so estimators can tell
+ * an old change-order from a fresh one.
+ */
+export async function getLatestRevisionImpactByItem(projectId: string): Promise<{
+  diffId: string | null;
+  baseModelId: string | null;
+  headModelId: string | null;
+  createdAt: string | null;
+  items: Record<string, ImpactedWorksheetItem & { changeName: string; changeClass: string }>;
+  summary: RevisionImpactReport["summary"];
+}> {
+  const latest = await prisma.modelRevisionDiff.findFirst({
+    where: { projectId },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!latest) {
+    return {
+      diffId: null,
+      baseModelId: null,
+      headModelId: null,
+      createdAt: null,
+      items: {},
+      summary: {
+        elementsAdded: 0,
+        elementsRemoved: 0,
+        elementsModified: 0,
+        affectedItems: 0,
+        totalCostDelta: 0,
+        totalPriceDelta: 0,
+      },
+    };
+  }
+  const report = await getRevisionImpactReport(projectId, latest.id);
+  const items: Record<string, ImpactedWorksheetItem & { changeName: string; changeClass: string }> = {};
+  for (const change of report.changes) {
+    for (const impact of change.impactedItems) {
+      // Last-write-wins if a single worksheet item is impacted by multiple
+      // element changes in the same diff. In practice almost never (one item
+      // links to one element via ModelTakeoffLink), but the order is stable.
+      items[impact.worksheetItemId] = {
+        ...impact,
+        changeName: change.name,
+        changeClass: change.elementClass,
+      };
+    }
+  }
+  return {
+    diffId: latest.id,
+    baseModelId: latest.baseModelId,
+    headModelId: latest.headModelId,
+    createdAt: latest.createdAt.toISOString(),
+    items,
+    summary: report.summary,
+  };
+}
+
 export async function listProjectRevisionDiffs(projectId: string) {
   const diffs = await prisma.modelRevisionDiff.findMany({
     where: { projectId },

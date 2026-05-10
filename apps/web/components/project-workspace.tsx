@@ -95,6 +95,8 @@ import {
   getProjectWorkspace,
   getCustomers,
   getEntityCategories,
+  getLatestRevisionImpactByItem,
+  type LatestRevisionImpactByItem,
   createModelTakeoffLink,
   deleteModelTakeoffLink,
   deleteEstimateFactor,
@@ -1142,6 +1144,50 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  /** Per-row revision-diff impact for BIM-linked worksheet items. Loaded on
+   *  mount and after every workspace mutation so the estimate grid can show
+   *  a "↻ +$XX" chip on lines whose source element changed in the latest diff.
+   *  Empty object means no diff exists or no BIM linkage. */
+  const [revisionImpactByItem, setRevisionImpactByItem] = useState<
+    LatestRevisionImpactByItem["items"]
+  >({});
+  const [revisionImpactMeta, setRevisionImpactMeta] = useState<{
+    diffId: string | null;
+    createdAt: string | null;
+    summary: LatestRevisionImpactByItem["summary"];
+  }>({
+    diffId: null,
+    createdAt: null,
+    summary: {
+      elementsAdded: 0,
+      elementsRemoved: 0,
+      elementsModified: 0,
+      affectedItems: 0,
+      totalCostDelta: 0,
+      totalPriceDelta: 0,
+    },
+  });
+  useEffect(() => {
+    let cancelled = false;
+    getLatestRevisionImpactByItem(data.workspace.project.id)
+      .then((report) => {
+        if (cancelled) return;
+        setRevisionImpactByItem(report.items);
+        setRevisionImpactMeta({
+          diffId: report.diffId,
+          createdAt: report.createdAt,
+          summary: report.summary,
+        });
+      })
+      .catch(() => {
+        // No revision diffs yet, or model service unavailable — leave the
+        // map empty so no chips render.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.workspace.project.id, data.workspace.currentRevision.id]);
   const modelLineCategory = useMemo(() => pickModelLineCategory(entityCategories), [entityCategories]);
   const [modal, setModal] = useState<ModalState>(null);
   const [aiResult, setAiResult] = useState<string | null>(null);
@@ -2139,6 +2185,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                         onActiveWorksheetChange={setSelectedWsId}
                         onOpenPluginTools={openPluginTools}
                         onOpenTakeoffLink={handleOpenTakeoffForLineItem}
+                        revisionImpactByItem={revisionImpactByItem}
+                        onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
                       />
                     </motion.div>
                   )}
@@ -2186,6 +2234,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                   onActiveWorksheetChange={setSelectedWsId}
                   initialDocumentId={takeoffDocumentId}
                   highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
+                  revisionImpactByItem={revisionImpactByItem}
                 />
               </motion.div>
             </div>

@@ -31,6 +31,16 @@ export interface ComboViewProps {
   onActiveWorksheetChange?: (worksheetId: string) => void;
   initialDocumentId?: string | null;
   highlightItemId?: string;
+  /** Forwarded to the embedded EstimateGrid so BIM-linked worksheet rows
+   *  display the latest revision-diff impact chip. */
+  revisionImpactByItem?: Record<string, {
+    oldQuantity: number;
+    newQuantity: number;
+    costDelta: number;
+    changeType: "added" | "removed" | "modified";
+    changeName: string;
+    changeClass: string;
+  }>;
 }
 
 export function ComboView({
@@ -49,6 +59,7 @@ export function ComboView({
   onActiveWorksheetChange,
   initialDocumentId,
   highlightItemId,
+  revisionImpactByItem,
 }: ComboViewProps) {
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspect");
   const [fullscreen, setFullscreen] = useState(false);
@@ -217,6 +228,8 @@ export function ComboView({
               onActiveWorksheetChange={onActiveWorksheetChange}
               onOpenPluginTools={onOpenPluginTools}
               onOpenTakeoffLink={onOpenTakeoffLink}
+              revisionImpactByItem={revisionImpactByItem}
+              onOpenRevisionDiff={onOpenRevisionDiff}
             />
           </div>
         </Panel>

@@ -37,6 +37,7 @@ import {
   Package,
   PlugZap,
   Plus,
+  RefreshCw,
   Search,
   Sparkles,
   Store,
@@ -144,6 +145,21 @@ export interface EstimateGridProps {
   onOpenTakeoffLink?: (worksheetItemId: string) => void;
   variant?: "default" | "snap";
   lockedWorksheetId?: string;
+  /** Per-row revision-diff impact for BIM-linked items. When a row's id is a
+   *  key, the grid renders a "↻ Δqty / Δ$" chip on the entity-name cell so the
+   *  estimator can see at a glance which lines a pending revision changes.
+   *  Clicking the chip calls `onOpenRevisionDiff` to surface the full diff. */
+  revisionImpactByItem?: Record<string, {
+    oldQuantity: number;
+    newQuantity: number;
+    costDelta: number;
+    changeType: "added" | "removed" | "modified";
+    changeName: string;
+    changeClass: string;
+  }>;
+  /** Opens the revision-diff modal (parent owns this; same handler that drives
+   *  the toolbar Compare button). */
+  onOpenRevisionDiff?: () => void;
 }
 
 type EditingCell = {
@@ -2105,6 +2121,8 @@ export function EstimateGrid({
   onOpenTakeoffLink,
   variant = "default",
   lockedWorksheetId,
+  revisionImpactByItem,
+  onOpenRevisionDiff,
 }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
   const isSnapMode = variant === "snap";
@@ -6526,6 +6544,48 @@ export function EstimateGrid({
 	            <span className={cn("truncate", isDraft && "italic text-fg/35")}>
 	              {isDraft ? "Choose item..." : row.entityName}
 	            </span>
+              {/* Revision-diff impact chip for BIM-linked rows. Surfaces the
+                  pending change-order delta from the latest model revision
+                  so the estimator knows this line will move when the diff is
+                  applied. Click opens the existing revision-diff modal. */}
+              {(() => {
+                const impact = revisionImpactByItem?.[row.id];
+                if (!impact) return null;
+                const qtyDelta = impact.newQuantity - impact.oldQuantity;
+                const tone =
+                  impact.changeType === "removed"
+                    ? "bg-rose-500/12 text-rose-500 border-rose-500/25"
+                    : impact.changeType === "added"
+                      ? "bg-emerald-500/12 text-emerald-600 border-emerald-500/25"
+                      : qtyDelta === 0
+                        ? "bg-fg/10 text-fg/60 border-line"
+                        : qtyDelta > 0
+                          ? "bg-amber-500/12 text-amber-600 border-amber-500/25"
+                          : "bg-sky-500/12 text-sky-500 border-sky-500/25";
+                const label =
+                  impact.changeType === "removed"
+                    ? "Removed"
+                    : impact.changeType === "added"
+                      ? "Added"
+                      : `${qtyDelta > 0 ? "+" : ""}${qtyDelta.toFixed(qtyDelta % 1 === 0 ? 0 : 2)} ${row.uom || ""}`.trim();
+                return (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onOpenRevisionDiff?.();
+                    }}
+                    className={cn(
+                      "ml-1 inline-flex shrink-0 items-center gap-1 rounded border px-1 py-px text-[9px] font-medium leading-none",
+                      tone,
+                    )}
+                    title={`Source element ${impact.changeName || impact.changeClass} (${impact.changeType}). Quantity ${impact.oldQuantity} → ${impact.newQuantity}. Cost delta ${impact.costDelta >= 0 ? "+" : "-"}$${Math.abs(impact.costDelta).toFixed(2)}. Click to review.`}
+                  >
+                    <RefreshCw className="h-2.5 w-2.5" />
+                    {label}
+                  </button>
+                );
+              })()}
 	          </div>
         </td>
       );

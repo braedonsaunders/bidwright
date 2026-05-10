@@ -22,6 +22,7 @@ import {
 import {
   applyRevisionRetakeoff,
   computeRevisionDiff,
+  getLatestRevisionImpactByItem,
   getRevisionImpactReport,
   listProjectRevisionDiffs,
 } from "../services/revision-diff-service.js";
@@ -340,6 +341,18 @@ export async function modelRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     try {
       return await listProjectRevisionDiffs(projectId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  /** Rollup of the most recent revision diff's per-item impact, used by the
+   *  estimate grid to badge BIM-linked rows with their pending change-order
+   *  delta. Returns `{ diffId: null, items: {} }` when no diff exists. */
+  app.get("/api/models/:projectId/revision-impact/latest", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    try {
+      return await getLatestRevisionImpactByItem(projectId);
     } catch (error) {
       return routeError(reply, error);
     }
