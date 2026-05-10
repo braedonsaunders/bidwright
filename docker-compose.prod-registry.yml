@@ -85,6 +85,15 @@ services:
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
     restart: unless-stopped
+    # CAP_SYS_ADMIN + relaxed seccomp/apparmor are required by bubblewrap
+    # (BubblewrappedHost) for per-tenant pivot_root + mount inside CLI
+    # session namespaces. Scope is the api container only; bwrap drops
+    # all caps before exec'ing the actual CLI child.
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
     depends_on:
       postgres:
         condition: service_healthy
@@ -102,6 +111,10 @@ services:
       # user's Claude / Codex / OpenCode / Gemini auth from every other user.
       BIDWRIGHT_MODE: "${BIDWRIGHT_MODE:-server}"
       AGENT_HOME_ROOT: "${AGENT_HOME_ROOT:-/data/agent-home}"
+      # When true, every CLI spawn runs inside a per-user bwrap sandbox.
+      # Required for any multi-user deployment. bwrap ships setuid root in
+      # the api image so no --privileged flag is needed.
+      BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-true}"
       # The db-migrate container applies pending migrations (`prisma migrate deploy`) before
       # api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
       BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"

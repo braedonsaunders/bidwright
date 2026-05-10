@@ -34,6 +34,18 @@ services:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
+    # Capabilities + security options for the bubblewrap-based per-tenant
+    # CLI sandbox (BubblewrappedHost). bwrap needs CAP_SYS_ADMIN to do
+    # pivot_root + mount(2) inside the new namespaces, and the default
+    # Docker seccomp/apparmor profiles block enough syscalls that bwrap
+    # fails even with the cap. These are scoped to the api container only;
+    # the spawned CLI processes never see them because bwrap drops all
+    # caps before exec'ing the child.
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
     depends_on:
       postgres:
         condition: service_healthy
@@ -50,6 +62,13 @@ services:
       # so user A's Claude OAuth never leaks into user B's CLI session.
       BIDWRIGHT_MODE: server
       AGENT_HOME_ROOT: /data/agent-home
+      # When true, every CLI spawn runs inside a per-user bwrap sandbox
+      # (BubblewrappedHost). Required for any deployment with more than one
+      # Bidwright user — otherwise users can read each other's project
+      # files via the shared API container FS. bwrap ships setuid root in
+      # the api image so no --privileged flag is needed at the container
+      # level. Default false here so single-user self-host stays cheap.
+      BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-false}"
     volumes:
       - ./data/bidwright-api:/data
       - ./data/agent-home:/data/agent-home

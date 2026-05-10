@@ -55,6 +55,13 @@ RUN wget -q -O /tmp/libredwg.tar.gz "https://github.com/LibreDWG/libredwg/releas
 # --- runtime stage ---
 FROM node:22-bookworm-slim AS runner
 RUN corepack enable
+# bubblewrap is the per-tenant CLI sandbox primitive used by
+# BubblewrappedHost when BIDWRIGHT_MODE=server + BIDWRIGHT_MULTITENANT=true.
+# The Debian package installs /usr/bin/bwrap setuid-root by default, which
+# is the recommended posture: lets unprivileged container processes create
+# user/mount/pid namespaces without granting CAP_SYS_ADMIN on the
+# container itself. We re-assert the setuid bit defensively in case a
+# future Debian build changes the default.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
@@ -69,7 +76,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     unzip \
     ripgrep \
-    && rm -rf /var/lib/apt/lists/*
+    bubblewrap \
+    && rm -rf /var/lib/apt/lists/* \
+    && chmod u+s /usr/bin/bwrap \
+    && /usr/bin/bwrap --version
 COPY --from=libredwg-builder /usr/local/bin/dwg2dxf /usr/local/bin/dwg2dxf
 COPY --from=libredwg-builder /usr/local/bin/dwgread /usr/local/bin/dwgread
 RUN wget -q -O /tmp/mpxj.zip "https://downloads.sourceforge.net/project/mpxj/mpxj/Version%2016.1.0/mpxj-16.1.0.zip" \

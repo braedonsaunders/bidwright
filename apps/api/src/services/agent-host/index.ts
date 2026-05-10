@@ -7,15 +7,17 @@
  *   • `BIDWRIGHT_MODE=server`,
  *     `BIDWRIGHT_MULTITENANT` unset/false     — LocalProcessHost
  *   • `BIDWRIGHT_MODE=server`,
- *     `BIDWRIGHT_MULTITENANT=true`            — LocalProcessHost (today;
- *                                                BubblewrappedHost in B1)
+ *     `BIDWRIGHT_MULTITENANT=true`            — BubblewrappedHost
+ *                                                (Linux only; CLI sessions
+ *                                                run inside per-tenant
+ *                                                bwrap user/mount/pid
+ *                                                namespaces)
  *
- * The factory is intentionally simple: today every mode uses the same
- * implementation, but the seam exists so B1 can swap in `BubblewrappedHost`
- * for multi-tenant Docker without touching the spawn pipeline or any
- * adapter. The cloud sandbox tier (B4) plugs in a third host the same way.
+ * Future cloud-sandbox tier plugs in a third host (gVisor / Firecracker /
+ * managed) the same way without touching adapters or the spawn pipeline.
  */
 
+import { bubblewrappedHost } from "./bubblewrapped.js";
 import { localProcessHost } from "./local-process.js";
 import type { AgentRuntimeHost } from "./types.js";
 
@@ -31,12 +33,18 @@ function isMultitenantServer(): boolean {
 
 export function getAgentRuntimeHost(): AgentRuntimeHost {
   if (cached) return cached;
-  // Placeholder for future selection; today every branch resolves to
-  // LocalProcessHost. B1 replaces the multitenant branch with bubblewrap.
-  if (isMultitenantServer()) {
-    cached = localProcessHost;
+  if (isMultitenantServer() && process.platform !== "win32") {
+    cached = bubblewrappedHost;
+    console.log(
+      "[agent-host] selected: bubblewrapped (multi-tenant) — CLI sessions run in per-tenant namespaces",
+    );
   } else {
     cached = localProcessHost;
+    if (isMultitenantServer()) {
+      console.warn(
+        "[agent-host] BIDWRIGHT_MULTITENANT=true but platform is win32; falling back to LocalProcessHost. Multi-tenant Windows is not supported.",
+      );
+    }
   }
   return cached;
 }
