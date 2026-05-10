@@ -9,7 +9,7 @@ import {
   proposeEstimateRunStage,
   refreshEstimateRunPlan,
   summarizeEstimateRunPlan,
-} from "./estimate-run-plan.js";
+} from "./estimate-run-plan";
 
 test("createDefaultEstimateRunPlan starts with intake ready and later stages blocked", () => {
   const plan = createDefaultEstimateRunPlan("run-1", "rev-1");

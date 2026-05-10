@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   type EstimateValidationWorkspaceLike,
   validateEstimateWorkspace,
-} from "./estimate-validation.js";
+} from "./estimate-validation";
 
 const labourCategory = {
   name: "Labour",

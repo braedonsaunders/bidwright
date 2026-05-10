@@ -9,13 +9,13 @@ import type {
   RateSchedule,
   RateScheduleItem,
   WorksheetItem,
-} from "./models.js";
+} from "./models";
 import {
   type CostMatcherCandidate,
   matchCostCandidates,
   normalizeCostMatcherCandidates,
   normalizeUnit,
-} from "./cost-matcher.js";
+} from "./cost-matcher";
 
 function makeCandidate(
   sourceId: string,

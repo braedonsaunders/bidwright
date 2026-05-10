@@ -4,7 +4,7 @@ import type {
   SummaryBuilderClassificationConfig,
   WorksheetItem,
   WorksheetItemClassification,
-} from "./models.js";
+} from "./models";
 
 const DEFAULT_CLASSIFICATION_CONFIG: SummaryBuilderClassificationConfig = {
   standard: "masterformat",

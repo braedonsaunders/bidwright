@@ -9,7 +9,7 @@ import {
   normalizeSmartImportRows,
   summarizeSmartImportBatch,
   transitionSmartImportRow,
-} from "./smart-import.js";
+} from "./smart-import";
 
 test("createStagedEstimateRow maps an Excel-like row into staged estimate fields", () => {
   const [row] = normalizeSmartImportRows(

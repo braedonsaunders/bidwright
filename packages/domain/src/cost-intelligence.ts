@@ -2,7 +2,7 @@ import type {
   CostObservation,
   EffectiveCostMethod,
   ResourceCatalogItem,
-} from "./models.js";
+} from "./models";
 
 export interface CostObservationLike {
   id: string;

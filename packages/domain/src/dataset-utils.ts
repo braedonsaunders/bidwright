@@ -1,4 +1,4 @@
-import type { DatasetColumn } from "./models.js";
+import type { DatasetColumn } from "./models";
 
 export type DatasetRowRecord = Record<string, unknown>;
 export type DatasetFieldDefinition = Pick<DatasetColumn, "key" | "name">;
