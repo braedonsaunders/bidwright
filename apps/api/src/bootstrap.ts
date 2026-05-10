@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmod, mkdir, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -204,8 +204,6 @@ async function resolveMigrationApplied(migrationName: string): Promise<boolean> 
   return ok;
 }
 
-const FAILED_MIGRATION_PATTERN = /The `([^`]+)` migration[^]*?failed/;
-
 export async function applyPendingMigrations(): Promise<{ applied: boolean; reason?: string }> {
   if (!process.env.DATABASE_URL) {
     return { applied: false, reason: "DATABASE_URL not set" };
@@ -220,66 +218,96 @@ export async function applyPendingMigrations(): Promise<{ applied: boolean; reas
     return { applied: false, reason: "BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS=1" };
   }
 
-  // Self-heal P3009 in a loop: when desktop installs upgrade across a
-  // window where multiple migrations got partially applied, the failed
-  // ones stack up in `_prisma_migrations`. `migrate deploy` only reports
-  // ONE of them at a time, so we resolve, retry, and repeat. Bail if the
-  // same migration name surfaces twice in a row (genuine block) or after
-  // a sanity cap.
-  // Bounded by the total number of migrations in prisma/migrations (45
-  // today, growing). The same-name-twice check below is the real guard
-  // against genuine progress blocks; this cap only protects against
-  // pathological loops.
-  const MAX_RECOVERY_ATTEMPTS = 100;
-  const resolved = new Set<string>();
-  let attempt = 0;
-
-  while (attempt < MAX_RECOVERY_ATTEMPTS) {
-    attempt++;
-    const result = await runPrismaCommand(["migrate", "deploy"]);
-    if (result.ok) {
-      const out = result.result?.stdout.trim() ?? "";
-      if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
-      if (resolved.size > 0) {
-        console.log(
-          `[bootstrap] migrate deploy succeeded after resolving ${resolved.size} stuck ` +
-            `migration(s): ${[...resolved].join(", ")}`,
-        );
-      }
-      return { applied: true };
-    }
-
-    const output = `${result.lastErr?.stdout ?? ""}\n${result.lastErr?.stderr ?? ""}`;
-    const match = output.match(FAILED_MIGRATION_PATTERN);
-    const stuck = match?.[1];
-
-    if (!output.includes("P3009") || !stuck) {
-      const detail = `\n${result.lastErr?.stdout.trim() ?? ""}\n${result.lastErr?.stderr.trim() ?? ""}`;
-      throw new Error(`prisma migrate deploy failed.${detail}`);
-    }
-    if (resolved.has(stuck)) {
-      throw new Error(
-        `prisma migrate deploy reported "${stuck}" as stuck twice in a row — ` +
-          `marking it applied did not unblock the deploy. Manual intervention required.`,
-      );
-    }
-
-    console.warn(
-      `[bootstrap] Detected stuck migration "${stuck}" (P3009). ` +
-        `Marking applied and retrying — schema is already managed elsewhere.`,
-    );
-    const ok = await resolveMigrationApplied(stuck);
-    if (!ok) {
-      const detail = `\n${result.lastErr?.stdout.trim() ?? ""}\n${result.lastErr?.stderr.trim() ?? ""}`;
-      throw new Error(`Failed to mark stuck migration "${stuck}" as applied.${detail}`);
-    }
-    resolved.add(stuck);
+  const first = await runPrismaCommand(["migrate", "deploy"]);
+  if (first.ok) {
+    const out = first.result?.stdout.trim() ?? "";
+    if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
+    return { applied: true };
   }
 
-  throw new Error(
-    `prisma migrate deploy stuck after ${MAX_RECOVERY_ATTEMPTS} recovery attempts. ` +
-      `Resolved migrations so far: ${[...resolved].join(", ")}`,
+  // v0.1.0 baseline migration collapses pre-launch migration history. Any
+  // user who installed an earlier rc has stale `_prisma_migrations` rows
+  // pointing at migrations that no longer exist in our folder, and likely
+  // some of those rows are in failed state. We can't iterate-and-resolve
+  // through a folder that doesn't have those migration names anymore.
+  //
+  // Resolution: drop `_prisma_migrations` outright, then mark our single
+  // baseline migration as applied (idempotent — schema is already in sync
+  // from the prior install). New installs never hit this path because
+  // their first migrate-deploy succeeds.
+  const out = `${first.lastErr?.stdout ?? ""}\n${first.lastErr?.stderr ?? ""}`;
+  const isRecoverable =
+    out.includes("P3009") || // failed migration row
+    out.includes("P3005") || // schema not empty, migrate not initialized
+    out.includes("P3018") || // migration failed to apply cleanly
+    out.includes("non-empty database");
+  if (!isRecoverable) {
+    const detail = `\n${first.lastErr?.stdout.trim() ?? ""}\n${first.lastErr?.stderr.trim() ?? ""}`;
+    throw new Error(`prisma migrate deploy failed.${detail}`);
+  }
+
+  console.warn(
+    `[bootstrap] Dirty migration history detected. Dropping _prisma_migrations and ` +
+      `rebaselining against the v0.1.0 init migration.`,
   );
+  await dropPrismaMigrationsTable();
+
+  const migrationsDir = path.resolve(path.dirname(locatePrismaSchema()), "migrations");
+  const baseline = (await listMigrationDirs(migrationsDir))[0];
+  if (!baseline) {
+    throw new Error(`No migrations found under ${migrationsDir} — cannot rebaseline.`);
+  }
+  const resolved = await resolveMigrationApplied(baseline);
+  if (!resolved) {
+    throw new Error(`Failed to mark baseline migration "${baseline}" as applied.`);
+  }
+
+  const retry = await runPrismaCommand(["migrate", "deploy"]);
+  if (retry.ok) {
+    const retryOut = retry.result?.stdout.trim() ?? "";
+    if (retryOut) console.log(`[bootstrap] prisma migrate deploy (after rebaseline):\n${retryOut}`);
+    console.log(`[bootstrap] migrate deploy succeeded after rebaselining on "${baseline}".`);
+    return { applied: true };
+  }
+  const detail = `\n${retry.lastErr?.stdout.trim() ?? ""}\n${retry.lastErr?.stderr.trim() ?? ""}`;
+  throw new Error(`prisma migrate deploy failed even after rebaselining.${detail}`);
+}
+
+/**
+ * List all migration directory names under `migrationsDir`, sorted
+ * chronologically (Prisma names them with a leading timestamp). Returns
+ * empty if the directory doesn't exist or contains no migration subdirs.
+ */
+async function listMigrationDirs(migrationsDir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(migrationsDir, { withFileTypes: true });
+    return entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith("."))
+      .map((e) => e.name)
+      .sort();
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw err;
+  }
+}
+
+/**
+ * Drop the `_prisma_migrations` table directly via pg. Used to clear a
+ * dirty migration history when the schema is otherwise in sync — safer
+ * than `prisma migrate reset` which wipes user data.
+ */
+async function dropPrismaMigrationsTable(): Promise<void> {
+  // @ts-expect-error - pg has no types installed at the api package level
+  const pgMod = await import("pg");
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const Client = ((pgMod as any).default ?? pgMod).Client;
+  const client = new Client({ connectionString: process.env.DATABASE_URL });
+  try {
+    await client.connect();
+    await client.query(`DROP TABLE IF EXISTS "_prisma_migrations"`);
+  } finally {
+    try { await client.end(); } catch { /* ignore */ }
+  }
 }
 
 // ── Optional: ensure prisma client is generated ───────────────────────────
