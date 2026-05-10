@@ -226,7 +226,11 @@ export async function applyPendingMigrations(): Promise<{ applied: boolean; reas
   // ONE of them at a time, so we resolve, retry, and repeat. Bail if the
   // same migration name surfaces twice in a row (genuine block) or after
   // a sanity cap.
-  const MAX_RECOVERY_ATTEMPTS = 10;
+  // Bounded by the total number of migrations in prisma/migrations (45
+  // today, growing). The same-name-twice check below is the real guard
+  // against genuine progress blocks; this cap only protects against
+  // pathological loops.
+  const MAX_RECOVERY_ATTEMPTS = 100;
   const resolved = new Set<string>();
   let attempt = 0;
 
