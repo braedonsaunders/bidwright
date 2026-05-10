@@ -2446,55 +2446,6 @@ export function EstimateGrid({
     });
   }, [applyMutationError, onApply, selectedRowId, workspace.project.id, workspace.worksheets]);
 
-  const createDraftItem = useCallback((worksheetId: string) => {
-    const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
-    const worksheet = workspace.worksheets.find((entry) => entry.id === worksheetId);
-    const fallbackOrder =
-      worksheet?.items.reduce(
-        (maxOrder, item) => Math.max(maxOrder, item.lineOrder),
-        0,
-      ) ?? 0;
-    const draftItem: WorkspaceWorksheetItem = {
-      id: temporaryId,
-	      worksheetId,
-	      phaseId: null,
-	      categoryId: null,
-	      category: "",
-      entityType: "",
-      entityName: "",
-      classification: {},
-      costCode: null,
-      vendor: undefined,
-      description: "",
-      quantity: 1,
-      uom: "",
-      cost: 0,
-      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-      price: 0,
-      lineOrder: fallbackOrder + 1,
-      rateScheduleItemId: null,
-      itemId: null,
-      costResourceId: null,
-      effectiveCostId: null,
-      laborUnitId: null,
-      tierUnits: {},
-      sourceNotes: "",
-      resourceComposition: {},
-      sourceEvidence: {},
-    };
-
-    setCategoryFilter("");
-    onApply((current) => applyWorksheetItemUpsert(current, draftItem));
-    setSelectedRowId(temporaryId);
-    setSelectedCell({ rowId: temporaryId, column: "entityName" });
-    setEntityDropdownVisible(false);
-    setEntityDropdownClosingRowId(null);
-    setEntityDropdownRowId(temporaryId);
-    setEntitySearchTerm("");
-    setEntitySearchError(null);
-    setEntityPluginResults([]);
-  }, [onApply, workspace.currentRevision.defaultMarkup, workspace.worksheets]);
-
   const removeItem = useCallback((
     itemId: string,
     fallbackMessage = "Delete failed.",
@@ -2650,6 +2601,51 @@ export function EstimateGrid({
     });
   }, [clearEntityDropdownTimers, positionEntityDropdown]);
 
+  const createDraftItem = useCallback((worksheetId: string) => {
+    const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
+    const worksheet = workspace.worksheets.find((entry) => entry.id === worksheetId);
+    const fallbackOrder =
+      worksheet?.items.reduce(
+        (maxOrder, item) => Math.max(maxOrder, item.lineOrder),
+        0,
+      ) ?? 0;
+    const draftItem: WorkspaceWorksheetItem = {
+      id: temporaryId,
+      worksheetId,
+      phaseId: null,
+      categoryId: null,
+      category: "",
+      entityType: "",
+      entityName: "",
+      classification: {},
+      costCode: null,
+      vendor: undefined,
+      description: "",
+      quantity: 1,
+      uom: "",
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      lineOrder: fallbackOrder + 1,
+      rateScheduleItemId: null,
+      itemId: null,
+      costResourceId: null,
+      effectiveCostId: null,
+      laborUnitId: null,
+      tierUnits: {},
+      sourceNotes: "",
+      resourceComposition: {},
+      sourceEvidence: {},
+    };
+
+    setCategoryFilter("");
+    onApply((current) => applyWorksheetItemUpsert(current, draftItem));
+    // Route through openEntityDropdown so the picker gets the deferred RAF re-position
+    // — without it the dropdown can land at top-left for the brand-new row whose <td>
+    // hasn't been laid out by the time the position effect fires.
+    openEntityDropdown(temporaryId);
+  }, [onApply, openEntityDropdown, workspace.currentRevision.defaultMarkup, workspace.worksheets]);
+
   const handleEntityDropdownExitComplete = useCallback(() => {
     if (entityDropdownRowId) return;
     clearEntityDropdownTimers();
@@ -2671,17 +2667,24 @@ export function EstimateGrid({
 
   // Sync active tab when worksheets change
   useEffect(() => {
+    // Use setActiveTabState (stable) instead of setActiveTab to avoid a render loop:
+    // setActiveTab depends on workspace.worksheets, so including it in deps caused
+    // every parent re-render to recreate the callback, re-fire this effect, and call
+    // onActiveWorksheetChange — which set parent state and caused another parent render.
+    const fallback = workspace.worksheets[0]?.id ?? "all";
     if (worksheetViewIsFolder(activeTab)) {
       const folderId = folderIdFromView(activeTab);
       if (folderId && !findWorksheetFolder(workspace, folderId)) {
-        setActiveTab(workspace.worksheets[0]?.id ?? "all");
+        setActiveTabState(fallback);
+        prevTabRef.current = fallback;
       }
       return;
     }
     if (activeTab !== "all" && !findWs(workspace, activeTab)) {
-      setActiveTab(workspace.worksheets[0]?.id ?? "all");
+      setActiveTabState(fallback);
+      prevTabRef.current = fallback;
     }
-  }, [workspace, activeTab, setActiveTab]);
+  }, [workspace, activeTab]);
 
   // Focus entity search when dropdown opens
   useEffect(() => {
@@ -3033,11 +3036,21 @@ export function EstimateGrid({
     return cols;
   }, [entityCategories, isSnapMode, workspace.worksheets]);
 
-  // Apply auto-default columns when categories first load (and user hasn't toggled)
+  // Apply auto-default columns when categories first load (and user hasn't toggled).
+  // The memo above returns a new Set on every render (Set identity is unstable), so
+  // diff against the previous value to keep React from looping setVisibleColumns.
   useEffect(() => {
-    if (autoDefaultColumns && !userToggledColumnsRef.current) {
-      setVisibleColumns(autoDefaultColumns);
-    }
+    if (!autoDefaultColumns || userToggledColumnsRef.current) return;
+    setVisibleColumns((prev) => {
+      if (prev.size === autoDefaultColumns.size) {
+        let same = true;
+        for (const col of prev) {
+          if (!autoDefaultColumns.has(col)) { same = false; break; }
+        }
+        if (same) return prev;
+      }
+      return autoDefaultColumns;
+    });
   }, [autoDefaultColumns]);
 
   const getRowHourBreakdown = useCallback(
@@ -4527,14 +4540,7 @@ export function EstimateGrid({
     };
 
     onApply((current) => applyWorksheetItemUpsert(current, draftItem));
-    setSelectedRowId(temporaryId);
-    setSelectedCell({ rowId: temporaryId, column: "entityName" });
-    setEntityDropdownVisible(false);
-    setEntityDropdownClosingRowId(null);
-    setEntityDropdownRowId(temporaryId);
-    setEntitySearchTerm("");
-    setEntitySearchError(null);
-    setEntityPluginResults([]);
+    openEntityDropdown(temporaryId);
   }
 
   function duplicateRow(itemId: string) {

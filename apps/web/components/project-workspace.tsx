@@ -2158,8 +2158,18 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 </AnimatePresence>
               </div>
 
-              {/* Takeoff (always mounted for state persistence across tab switches) */}
-              <div className={cn("absolute inset-0 flex flex-col", estimateSubTab !== "takeoff" && "hidden")}>
+              {/* Takeoff (always mounted for state persistence across tab switches).
+                  Animate opacity to match the 0.12s fade other sub-tabs use; keep
+                  pointer-events disabled when hidden so background tabs can still be clicked. */}
+              <motion.div
+                className="absolute inset-0 flex flex-col"
+                animate={{ opacity: estimateSubTab === "takeoff" ? 1 : 0 }}
+                transition={{ duration: 0.12 }}
+                style={{
+                  pointerEvents: estimateSubTab === "takeoff" ? "auto" : "none",
+                  visibility: estimateSubTab === "takeoff" ? "visible" : "hidden",
+                }}
+              >
                 <ComboView
                   workspace={workspace}
                   onApply={apply}
@@ -2177,7 +2187,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                   initialDocumentId={takeoffDocumentId}
                   highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
                 />
-              </div>
+              </motion.div>
             </div>
           </div>
 

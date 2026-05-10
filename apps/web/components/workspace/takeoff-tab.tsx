@@ -742,17 +742,24 @@ export function TakeoffTab({
     return entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule").slice().sort((a, b) => a.order - b.order)[0];
   }, [entityCategories]);
 
-  /* Project source documents that are PDFs or CAD files */
-  const projectPdfs: TakeoffDocument[] = (workspace.sourceDocuments ?? [])
-    .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
-    .map((d) => ({
-      id: d.id,
-      label: takeoffDisplayFileName(d.fileName),
-      fileName: d.fileName,
-      kind: getTakeoffDocumentKind(d.fileName),
-      source: "project" as const,
-      projectId,
-    }));
+  /* Project source documents that are PDFs or CAD files.
+   * Memoized: without this, .map() returned fresh objects every render, which
+   * cascaded through `drawings` → `takeoffDocuments` (useMemo) → `selectedDoc`
+   * being a new reference each render. That made the snapshot-publishing effect
+   * downstream re-fire every render, calling parent setState and looping. */
+  const projectPdfs: TakeoffDocument[] = useMemo(
+    () => (workspace.sourceDocuments ?? [])
+      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
+      .map((d) => ({
+        id: d.id,
+        label: takeoffDisplayFileName(d.fileName),
+        fileName: d.fileName,
+        kind: getTakeoffDocumentKind(d.fileName),
+        source: "project" as const,
+        projectId,
+      })),
+    [workspace.sourceDocuments, projectId],
+  );
 
   /* Knowledge books (loaded async) */
   const [knowledgePdfs, setKnowledgePdfs] = useState<TakeoffDocument[]>([]);
@@ -782,7 +789,7 @@ export function TakeoffTab({
     return () => { cancelled = true; };
   }, [projectId]);
 
-  const drawings = [...projectPdfs, ...knowledgePdfs];
+  const drawings = useMemo(() => [...projectPdfs, ...knowledgePdfs], [projectPdfs, knowledgePdfs]);
 
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
@@ -2550,6 +2557,10 @@ export function TakeoffTab({
 
   // Publish a snapshot of inspect-relevant state to the parent so the
   // side-panel Inspect tab can render the appropriate browse view.
+  // Idempotent: skip the parent setState if the rendered snapshot is byte-equal
+  // to the last one we published. Without this guard, a fresh object literal
+  // each call defeated React's bailout and looped through parent re-renders.
+  const lastPublishedSnapshotRef = useRef<string | null>(null);
   useEffect(() => {
     if (!onInspectSnapshotChange) return;
     const mode: InspectSnapshot["mode"] = !selectedDoc
@@ -2580,7 +2591,7 @@ export function TakeoffTab({
             isLinked: linkedModelElementIds.has(element.id),
           }))
         : [];
-    onInspectSnapshotChange({
+    const nextSnapshot: InspectSnapshot = {
       mode,
       annotations: inspectAnnotations,
       takeoffLinks,
@@ -2610,7 +2621,11 @@ export function TakeoffTab({
           : null,
       selectedModelElementId:
         selection?.kind === "model-element" ? selection.elementId : null,
-    });
+    };
+    const serialized = JSON.stringify(nextSnapshot);
+    if (serialized === lastPublishedSnapshotRef.current) return;
+    lastPublishedSnapshotRef.current = serialized;
+    onInspectSnapshotChange(nextSnapshot);
   }, [
     onInspectSnapshotChange,
     selectedDoc,
