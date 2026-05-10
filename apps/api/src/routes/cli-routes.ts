@@ -2442,9 +2442,13 @@ Merge tables that span multiple pages. Skip non-data pages.
           }
         }, 1500);
 
-        socket.on("message", (raw) => {
+        socket.on("message", (raw: Buffer | ArrayBuffer | Buffer[]) => {
           let frame: any;
           try {
+            // raw is whatever @fastify/websocket forwards from `ws`'s
+            // RawData union — Buffer is the common case for binary
+            // frames, but text frames arrive as Buffer too. toString()
+            // works for all three union members.
             frame = JSON.parse(raw.toString());
           } catch {
             send({ type: "error", message: "Malformed JSON frame" });
