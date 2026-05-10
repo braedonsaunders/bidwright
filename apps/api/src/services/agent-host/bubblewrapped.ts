@@ -35,6 +35,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
+import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
 
 const BWRAP_BIN = process.env.BIDWRIGHT_BWRAP_PATH || "/usr/bin/bwrap";
@@ -206,12 +207,22 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       );
     }
 
+    // Layer the egress-proxy env on top of the spawn env: bwrap'd CLI
+    // sessions get HTTPS_PROXY pointing at the per-process proxy so all
+    // outbound LLM API / MCP traffic is funneled through the allowlist.
+    // The proxy may not be running on platforms where multitenant mode
+    // is force-disabled (e.g. dev box) — fall through silently in that
+    // case; the sandbox will still have direct network access since we
+    // don't unshare-net.
+    const proxy = getRunningEgressProxy();
+    const proxyEnv = proxy ? proxy.toEnv() : {};
+
     const bwrapPlan = buildBwrapArgs({
       projectDir,
       agentHomeDir,
       cliCmd: plan.cliCmd,
       cliArgs: plan.args,
-      cliEnv: { ...process.env as Record<string, string>, ...cliEnv },
+      cliEnv: { ...process.env as Record<string, string>, ...cliEnv, ...proxyEnv },
     });
 
     console.log(
