@@ -590,6 +590,9 @@ interface DwgTakeoffSurfaceProps {
   /** Mirror of the current DWG annotation array (in TakeoffAnnotation shape)
    *  so a parent can merge with PDF annotations and feed the side-panel cache. */
   onAnnotationsChange?: (annotations: DwgPublishedAnnotation[]) => void;
+  /** A ref the parent populates so it can dispatch annotation actions
+   *  (delete, etc.) to this surface from the unified Inspect view. */
+  actionsRef?: React.MutableRefObject<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>;
 }
 
 export function DwgTakeoffSurface({
@@ -604,6 +607,7 @@ export function DwgTakeoffSurface({
   onSelectedEntityChange,
   onSelectedAnnotationChange,
   onAnnotationsChange,
+  actionsRef,
 }: DwgTakeoffSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -688,6 +692,18 @@ export function DwgTakeoffSurface({
   useEffect(() => {
     onSelectedAnnotationChange?.(selectedAnnotationId);
   }, [selectedAnnotationId, onSelectedAnnotationChange]);
+
+  // Publish action dispatchers to the parent each render so the Inspect tab
+  // can drive deletions (and future actions) on DWG annotations.
+  useEffect(() => {
+    if (actionsRef) {
+      actionsRef.current = { deleteAnnotation };
+    }
+  });
+
+  // External annotation selection (from the side-panel inspector list) →
+  // mirror into the local selectedAnnotationId so the in-canvas highlight stays
+  // in sync.
 
   // Publish entity selection to parent so the shared link panel can render it.
   useEffect(() => {
@@ -1554,68 +1570,6 @@ export function DwgTakeoffSurface({
               </div>
             </section>
 
-            <Separator className="my-4" />
-
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-semibold text-fg">Measurement Ledger</h3>
-                <span className="text-[10px] text-fg/35">Total {formatNumber(totalMeasured)}</span>
-              </div>
-              {annotationGroups.length > 0 && (
-                <div className="grid gap-1">
-                  {annotationGroups.map((group) => (
-                    <div key={group.key} className="flex items-center gap-2 rounded-md bg-panel2/40 px-2 py-1 text-[11px]">
-                      <span className="min-w-0 flex-1 truncate text-fg/55">{group.label}</span>
-                      <span className="font-mono text-fg/35">x{group.count}</span>
-                      <span className="font-mono text-emerald-400/80">
-                        {group.totals.length > 0
-                          ? group.totals.map((total) => `${formatNumber(total.value)} ${total.unit}`).join(" · ")
-                          : "notes"}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              )}
-              <div className="space-y-1.5">
-                {annotations.length === 0 ? (
-                  <p className="rounded-lg border border-line bg-bg/30 px-3 py-2 text-xs text-fg/40">
-                    Draw a distance, area, rectangle, count, or text note to build the DWG takeoff ledger.
-                  </p>
-                ) : (
-                  annotations.map((annotation) => {
-                    const isSelected = selectedAnnotationId === annotation.id;
-                    return (
-                    <div
-                      key={annotation.id}
-                      onClick={() => setSelectedAnnotationId(isSelected ? null : annotation.id)}
-                      className={cn(
-                        "cursor-pointer rounded-lg border p-2 transition-colors",
-                        isSelected ? "border-accent/40 bg-accent/5" : "border-line bg-bg/35 hover:bg-panel2/40",
-                      )}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span className="mt-1 h-2.5 w-2.5 rounded-full" style={{ backgroundColor: annotation.color }} />
-                        <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold text-fg/75">{annotation.label || annotation.annotationType}</p>
-                          <p className="font-mono text-[11px] text-fg/45">
-                            {formatNumber(annotation.measurement?.value)} {annotation.measurement?.unit ?? ""}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={(e) => { e.stopPropagation(); void deleteAnnotation(annotation.id); }}
-                          className="flex h-7 w-7 items-center justify-center rounded-md text-fg/35 hover:bg-danger/10 hover:text-danger"
-                          title="Delete measurement"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                    );
-                  })
-                )}
-              </div>
-            </section>
           </div>
         </aside>
       </div>

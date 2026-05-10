@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
 import { EstimateGrid } from "./estimate-grid";
 import { TakeoffLinkView, type TakeoffSelection } from "./takeoff-link-view";
+import { TakeoffInspectView, type InspectActions, type InspectSnapshot } from "./takeoff-inspect-view";
 import type { TakeoffAnnotation } from "./takeoff/annotation-canvas";
 import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
@@ -73,6 +74,12 @@ export function ComboView({
   const handleCreateLineItemFromModelElement = useCallback(async (elementId: string) => {
     await modelElementCreateLineItemRef.current?.(elementId);
   }, []);
+
+  // Inspect bridge: TakeoffTab publishes a snapshot of what's currently
+  // inspectable (annotations or model elements) and populates an actions ref
+  // so the side-panel Inspect tab can drive everything.
+  const [inspectSnapshot, setInspectSnapshot] = useState<InspectSnapshot | null>(null);
+  const inspectActionsRef = useRef<InspectActions | null>(null);
 
   const toggleFullscreen = useCallback(() => {
     if (typeof document === "undefined") return;
@@ -149,6 +156,8 @@ export function ComboView({
                   onLinksMutated={handleLinksMutated}
                   modelSendToEstimateRef={modelSendToEstimateRef}
                   modelElementCreateLineItemRef={modelElementCreateLineItemRef}
+                  inspectActionsRef={inspectActionsRef}
+                  onInspectSnapshotChange={setInspectSnapshot}
                 />
               </div>
             </Panel>
@@ -178,6 +187,8 @@ export function ComboView({
                   onLinksMutated={handleLinksMutated}
                   onSendModelSelectionToEstimate={handleModelSendToEstimate}
                   onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
+                  inspectSnapshot={inspectSnapshot}
+                  inspectActionsRef={inspectActionsRef}
                 />
               </div>
             </Panel>
@@ -227,6 +238,8 @@ function RightPanel({
   onLinksMutated,
   onSendModelSelectionToEstimate,
   onCreateLineItemFromModelElement,
+  inspectSnapshot,
+  inspectActionsRef,
 }: {
   workspace: ProjectWorkspaceData;
   activeWorksheetId?: string;
@@ -240,6 +253,8 @@ function RightPanel({
   onLinksMutated: () => void;
   onSendModelSelectionToEstimate: (selection: BidwrightModelSelectionMessage) => Promise<void> | void;
   onCreateLineItemFromModelElement: (elementId: string) => Promise<void> | void;
+  inspectSnapshot: InspectSnapshot | null;
+  inspectActionsRef: React.MutableRefObject<InspectActions | null>;
 }) {
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "inspect", label: "Inspect", icon: Compass },
@@ -281,7 +296,7 @@ function RightPanel({
       </div>
 
       <div className="flex-1 min-h-0 overflow-auto p-3">
-        {tab === "inspect" && <InspectView workspace={workspace} activeWorksheetId={activeWorksheetId} />}
+        {tab === "inspect" && <TakeoffInspectView snapshot={inspectSnapshot} actions={inspectActionsRef.current} />}
         {tab === "link" && (
           <TakeoffLinkView
             workspace={workspace}

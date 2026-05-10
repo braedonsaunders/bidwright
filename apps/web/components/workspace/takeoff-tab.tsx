@@ -295,6 +295,7 @@ interface TakeoffDocument {
 }
 
 import type { TakeoffSelection } from "./takeoff-link-view";
+import type { InspectActions, InspectSnapshot, InspectModelElement } from "./takeoff-inspect-view";
 
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
@@ -325,6 +326,12 @@ interface TakeoffTabProps {
   modelElementCreateLineItemRef?: React.MutableRefObject<
     ((elementId: string) => Promise<void> | void) | null
   >;
+  /** A ref the parent owns; this tab populates it with action callbacks the
+   *  side-panel Inspect tab can drive (toggle visibility, delete, edit, etc.). */
+  inspectActionsRef?: React.MutableRefObject<InspectActions | null>;
+  /** Called whenever the inspect-relevant state changes so the parent can
+   *  re-render the Inspect tab. */
+  onInspectSnapshotChange?: (snapshot: InspectSnapshot) => void;
 }
 
 interface TakeoffSyncBase {
@@ -707,6 +714,8 @@ export function TakeoffTab({
   onLinksMutated,
   modelSendToEstimateRef,
   modelElementCreateLineItemRef,
+  inspectActionsRef,
+  onInspectSnapshotChange,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
   const selectedWorksheet =
@@ -1257,6 +1266,10 @@ export function TakeoffTab({
     }
   }, [selectedAnnotationId, onSelectionChange, selection]);
 
+  // Bridge for dispatching DWG annotation actions (delete) from the side panel.
+  // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
+  const dwgActionsRef = useRef<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>(null);
+
   // Expose action handlers to the parent via mutable refs. Runs on every render
   // so refs always point at the latest closure.
   useEffect(() => {
@@ -1268,6 +1281,69 @@ export function TakeoffTab({
         const element = modelElements.find((e) => e.id === elementId);
         if (!element) throw new Error("Model element not found");
         await handleCreateModelElementLineItem(element);
+      };
+    }
+    if (inspectActionsRef) {
+      const isDwg = isDwgDocument;
+      inspectActionsRef.current = {
+        selectAnnotation: (id) => {
+          // For DWG, route through onSelectionChange so DwgTakeoffSurface picks
+          // it up via the `selection` prop; for PDF, mutate local state directly.
+          if (isDwg) {
+            if (id) onSelectionChange?.({ kind: "annotation", annotationId: id });
+            else if (selection?.kind === "annotation") onSelectionChange?.(null);
+          } else {
+            setSelectedAnnotationId(id);
+          }
+        },
+        toggleAnnotationVisibility: (id) => {
+          // Visibility toggle is a PDF-only feature today (DWG annotations are
+          // always visible). Silently no-op for DWG ids.
+          if (annotations.some((a) => a.id === id)) {
+            handleToggleVisibility(id);
+          }
+        },
+        deleteAnnotation: (id) => {
+          if (annotations.some((a) => a.id === id)) {
+            void handleDeleteAnnotation(id);
+          } else {
+            void dwgActionsRef.current?.deleteAnnotation(id);
+          }
+        },
+        editAnnotation: (id) => {
+          if (annotations.some((a) => a.id === id)) {
+            handleEditAnnotation(id);
+          }
+        },
+        saveAnnotationEdit: (id, updates) => {
+          handleSaveAnnotationEdit(id, updates);
+        },
+        setModelSearch: (s) => setModelElementSearch(s),
+        setModelBasis: (b) => setModelLedgerBasis(b),
+        selectModelElement: (id) => {
+          if (!onSelectionChange) return;
+          if (!id || !selectedModelAsset) {
+            if (selection?.kind === "model-element") onSelectionChange(null);
+            return;
+          }
+          const element = modelElements.find((e) => e.id === id);
+          if (!element) return;
+          onSelectionChange({
+            kind: "model-element",
+            assetId: selectedModelAsset.id,
+            elementId: element.id,
+            elementName: element.name || element.externalId,
+            elementClass: element.elementClass ?? undefined,
+            material: element.material ?? undefined,
+            level: element.level ?? undefined,
+            quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+          });
+        },
+        refreshModel: () => void refreshModelAssets(true),
+        askAiAboutModel: () =>
+          onOpenAgentChat?.(
+            `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Query model elements, quantities, linked worksheet items, and any unlinked scope, then prepare 5D takeoff recommendations for this estimate.`,
+          ),
       };
     }
   });
@@ -2471,6 +2547,92 @@ export function TakeoffTab({
     if (removed.length > 0) pushTakeoffHistory({ kind: "clear", annotations: removed });
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
   }
+
+  // Publish a snapshot of inspect-relevant state to the parent so the
+  // side-panel Inspect tab can render the appropriate browse view.
+  useEffect(() => {
+    if (!onInspectSnapshotChange) return;
+    const mode: InspectSnapshot["mode"] = !selectedDoc
+      ? "empty"
+      : isDwgDocument
+        ? "dwg"
+        : isCadDocument
+          ? "model"
+          : "pdf";
+    const inspectAnnotations =
+      mode === "dwg" ? dwgAnnotationsCache : mode === "pdf" ? annotations : [];
+    const inspectSelectedAnnotationId =
+      mode === "dwg"
+        ? selection?.kind === "annotation"
+          ? selection.annotationId
+          : null
+        : selectedAnnotationId;
+    const inspectModelElements: InspectModelElement[] =
+      mode === "model"
+        ? modelElements.map((element) => ({
+            id: element.id,
+            name: element.name || element.externalId,
+            externalId: element.externalId,
+            elementClass: element.elementClass ?? null,
+            material: element.material ?? null,
+            level: element.level ?? null,
+            quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+            isLinked: linkedModelElementIds.has(element.id),
+          }))
+        : [];
+    onInspectSnapshotChange({
+      mode,
+      annotations: inspectAnnotations,
+      takeoffLinks,
+      selectedAnnotationId: inspectSelectedAnnotationId,
+      editingAnnotationId,
+      modelElements: inspectModelElements,
+      modelElementsLoading,
+      modelError,
+      modelSyncing,
+      modelSearch: modelElementSearch,
+      modelBasis: modelLedgerBasis,
+      modelAsset:
+        mode === "model" && selectedModelAsset
+          ? {
+              id: selectedModelAsset.id,
+              fileName: selectedDoc?.fileName ?? selectedModelAsset.fileName,
+              status: selectedModelAsset.status ?? "pending",
+              parser: String(selectedModelAsset.manifest?.parser ?? selectedModelAsset.format ?? "Not indexed"),
+              isEditable: selectedModelIsEditable,
+              counts: {
+                elements: selectedModelAsset._count?.elements ?? 0,
+                quantities: selectedModelAsset._count?.quantities ?? 0,
+                links: linkedModelLineItems.length,
+                issues: selectedModelAsset._count?.issues ?? 0,
+              },
+            }
+          : null,
+      selectedModelElementId:
+        selection?.kind === "model-element" ? selection.elementId : null,
+    });
+  }, [
+    onInspectSnapshotChange,
+    selectedDoc,
+    isDwgDocument,
+    isCadDocument,
+    annotations,
+    dwgAnnotationsCache,
+    selection,
+    selectedAnnotationId,
+    editingAnnotationId,
+    takeoffLinks,
+    modelElements,
+    modelElementsLoading,
+    modelError,
+    modelSyncing,
+    modelElementSearch,
+    modelLedgerBasis,
+    selectedModelAsset,
+    selectedModelIsEditable,
+    linkedModelElementIds,
+    linkedModelLineItems.length,
+  ]);
 
   async function resolveSelectedModelAsset() {
     if (selectedModelAsset) return selectedModelAsset;
@@ -3957,6 +4119,7 @@ export function TakeoffTab({
               }
             }}
             onAnnotationsChange={setDwgAnnotationsCache}
+            actionsRef={dwgActionsRef}
           />
         ) : (
           <>
@@ -4104,196 +4267,6 @@ export function TakeoffTab({
           )}
         </div>
 
-        {/* Right: Annotation sidebar (embedded — border provided by wrapper) */}
-        {!isCadDocument ? (
-          <div className="flex w-72 shrink-0 flex-col border-l border-line overflow-hidden">
-            <AnnotationSidebar
-              embedded
-              annotations={annotations}
-              onToggleVisibility={handleToggleVisibility}
-              onDelete={handleDeleteAnnotation}
-              onEdit={handleEditAnnotation}
-              onSaveEdit={handleSaveAnnotationEdit}
-              onSelectAnnotation={setSelectedAnnotationId}
-              selectedAnnotationId={selectedAnnotationId}
-              editingAnnotationId={editingAnnotationId}
-              takeoffLinks={takeoffLinks}
-            />
-          </div>
-        ) : (
-          <div className="flex w-96 shrink-0 flex-col border-l border-line bg-panel overflow-hidden">
-            <div className="border-b border-line px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-xs font-semibold text-fg">{selectedDoc?.fileName}</p>
-                <Badge tone={selectedModelIsEditable ? "success" : "warning"} className="text-[10px]">
-                  {selectedModelIsEditable ? "Editable" : "Preview"}
-                </Badge>
-              </div>
-              <div className="mt-2 grid grid-cols-4 gap-1.5 text-center">
-                {[
-                  ["Objects", selectedModelAsset?._count?.elements ?? 0],
-                  ["Qty", selectedModelAsset?._count?.quantities ?? 0],
-                  ["Links", linkedModelLineItems.length],
-                  ["Issues", selectedModelAsset?._count?.issues ?? 0],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-md border border-line bg-bg/50 px-2 py-1.5">
-                    <p className="text-[10px] text-fg/40">{label}</p>
-                    <p className="text-xs font-semibold text-fg/80">{value}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 text-xs text-fg/60">
-              <div className="rounded-md border border-line bg-bg/50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Index</span>
-                  <Badge
-                    tone={selectedModelAsset?.status === "indexed" ? "success" : selectedModelAsset ? "warning" : "info"}
-                    className="text-[10px]"
-                  >
-                    {modelSyncing ? "Syncing" : selectedModelAsset?.status ?? "Pending"}
-                  </Badge>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Parser</span>
-                  <span className="truncate text-fg/70">{String(selectedModelAsset?.manifest?.parser ?? selectedModelAsset?.format ?? "Not indexed")}</span>
-                </div>
-              </div>
-
-              {modelSelection && modelSelection.selectedCount > 0 && (
-                <div className="rounded-md border border-accent/30 bg-accent/5 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-fg/45">Selected in view</span>
-                    <span className="font-medium text-fg/80">{modelSelection.selectedCount}</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div className="rounded border border-accent/20 bg-bg/30 p-2">
-                      <p className="text-[10px] text-fg/40">Area</p>
-                      <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.surfaceArea, "model^2")}</p>
-                    </div>
-                    <div className="rounded border border-accent/20 bg-bg/30 p-2">
-                      <p className="text-[10px] text-fg/40">Volume</p>
-                      <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.volume, "model^3")}</p>
-                    </div>
-                  </div>
-                  <p className="mt-2 text-[10px] leading-relaxed text-fg/40">
-                    Use the side-panel <span className="font-medium text-fg/60">Link</span> tab to send this selection to an estimate or manage its links.
-                  </p>
-                </div>
-              )}
-
-              <div className="rounded-md border border-line bg-bg/50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Model Objects</p>
-                  {modelElementsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />}
-                </div>
-                <Input
-                  className="mt-2 h-8 text-xs"
-                  value={modelElementSearch}
-                  onChange={(event) => setModelElementSearch(event.target.value)}
-                  placeholder="Search objects, classes, materials..."
-                />
-                <div className="mt-2 flex items-center gap-1 rounded-md border border-line bg-panel p-0.5">
-                  {(["count", "area", "volume"] as ModelQuantityBasis[]).map((basis) => (
-                    <button
-                      key={basis}
-                      type="button"
-                      onClick={() => setModelLedgerBasis(basis)}
-                      className={cn(
-                        "flex-1 rounded px-2 py-1 text-[11px] font-medium capitalize transition-colors",
-                        modelLedgerBasis === basis ? "bg-accent/15 text-accent" : "text-fg/45 hover:text-fg/70",
-                      )}
-                    >
-                      {basis}
-                    </button>
-                  ))}
-                </div>
-                <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto pr-1">
-                  {modelElements.length === 0 && (
-                    <p className="rounded-md border border-line bg-panel/60 px-3 py-4 text-center text-[11px] text-fg/40">
-                      {selectedModelAsset ? "No model objects match this search." : "Sync the model index to list model objects."}
-                    </p>
-                  )}
-                  {modelElements.map((element) => {
-                    const linked = linkedModelElementIds.has(element.id);
-                    const isPanelSelection =
-                      selection?.kind === "model-element" && selection.elementId === element.id;
-                    return (
-                      <div
-                        key={element.id}
-                        onClick={() => {
-                          if (!onSelectionChange || !selectedModelAsset) return;
-                          if (isPanelSelection) {
-                            onSelectionChange(null);
-                          } else {
-                            onSelectionChange({
-                              kind: "model-element",
-                              assetId: selectedModelAsset.id,
-                              elementId: element.id,
-                              elementName: element.name || element.externalId,
-                              elementClass: element.elementClass ?? undefined,
-                              material: element.material ?? undefined,
-                              level: element.level ?? undefined,
-                              quantitySummary: formatElementQuantity(element, modelLedgerBasis),
-                            });
-                          }
-                        }}
-                        className={cn(
-                          "grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2 cursor-pointer transition-colors",
-                          isPanelSelection
-                            ? "border-accent/40 bg-accent/10"
-                            : linked
-                              ? "border-success/25 bg-success/5"
-                              : "border-line bg-panel/60 hover:bg-panel2/40",
-                        )}
-                      >
-                        <div className="min-w-0">
-                          <p className="truncate text-[11px] font-semibold text-fg/80">{element.name || element.externalId}</p>
-                          <p className="mt-0.5 truncate text-[10px] text-fg/40">
-                            {[element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element"}
-                          </p>
-                          <p className="mt-1 text-[10px] font-medium text-fg/60">{formatElementQuantity(element, modelLedgerBasis)}</p>
-                        </div>
-                        {linked && <Badge tone="success" className="text-[10px]">Linked</Badge>}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-
-              {modelError && (
-                <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-[11px] text-danger">
-                  {modelError}
-                </div>
-              )}
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-center"
-                disabled={modelSyncing}
-                onClick={() => void refreshModelAssets(true)}
-              >
-                {modelSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                Sync Model Index
-              </Button>
-
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full justify-center"
-                onClick={() => onOpenAgentChat?.(
-                  `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Query model elements, quantities, linked worksheet items, and any unlinked scope, then prepare 5D takeoff recommendations for this estimate.`
-                )}
-              >
-                <BrainCircuit className="h-3.5 w-3.5" />
-                Ask AI
-              </Button>
-            </div>
-          </div>
-        )}
           </>
         )}
       </div>
