@@ -64,8 +64,8 @@ interface BootedServers {
   webPort: number;
   webUrl: string;
   pg: { stop: () => Promise<void> } | null;
+  apiProcess: ChildProcess | null;
   webProcess: ChildProcess | null;
-  apiServer: { close: () => Promise<void> } | null;
 }
 
 let booted: BootedServers | null = null;
@@ -91,9 +91,25 @@ async function bootDev(): Promise<BootedServers> {
     webPort: 3000,
     webUrl: DEV_WEB_URL,
     pg: null,
+    apiProcess: null,
     webProcess: null,
-    apiServer: null,
   };
+}
+
+/**
+ * Resolve the absolute path to the bundled @bidwright/api entry script.
+ * In a packaged build the workspace dep ships at
+ *   Resources/app/node_modules/@bidwright/api/
+ * with `dist/apps/api/src/index.js` inside it (emitted by `tsc` during
+ * the desktop release CI's `pnpm --filter @bidwright/api build` step).
+ * `import.meta.resolve` works in ESM and is the most portable way to
+ * locate the package without hard-coding bundle paths that differ
+ * between asar / asar-unpacked / dir builds and across platforms.
+ */
+function resolveApiEntryScript(): string {
+  const pkgUrl = import.meta.resolve("@bidwright/api/package.json");
+  const pkgPath = fileURLToPath(pkgUrl);
+  return join(dirname(pkgPath), "dist", "apps", "api", "src", "index.js");
 }
 
 // ── Boot: packaged path ───────────────────────────────────────────
@@ -152,26 +168,57 @@ async function bootPackaged(): Promise<BootedServers> {
     initSqlPath: packagedResource("init-pgvector.sql"),
   });
 
-  // 3. Boot Fastify in-process ---------------------------------------------
-  // Importing @bidwright/api in the Electron main process is fine: same
-  // Node version, same module loader. Saves a child-process boundary
-  // (no need to bundle a separate node binary).
+  // 3. Spawn the Fastify api as a child process ----------------------------
+  // We deliberately don't import @bidwright/api in-process. The packaged
+  // bundle layout (workspace dep at Resources/app/node_modules/@bidwright/api,
+  // its compiled dist/ inside that, peer deps at Resources/app/node_modules/)
+  // resolves cleanly when Node spawns the entry script directly with
+  // ELECTRON_RUN_AS_NODE — but in-process ESM `import("@bidwright/api/...")`
+  // hits ERR_MODULE_NOT_FOUND on Windows installers (and intermittently on
+  // mac-arm64 dist:dir builds) because Electron's renderer-context resolver
+  // diverges from a fresh Node invocation. The child-process spawn matches
+  // the pattern that already works for the Next.js sidecar below.
   const apiPort = await getAvailablePort();
+  const apiUrl = `http://127.0.0.1:${apiPort}`;
   process.env.API_PORT = String(apiPort);
-  console.log(`[desktop] booting Fastify api on 127.0.0.1:${apiPort}`);
 
-  // Lazy-import so the cold path doesn't pay for the api module graph
-  // until we know we're in packaged mode.
-  const { runStartupBootstrap } = await import("@bidwright/api/dist/apps/api/src/bootstrap.js" as string);
-  const { buildServer } = await import("@bidwright/api/dist/apps/api/src/server.js" as string);
-  await runStartupBootstrap();
-  const apiApp = buildServer();
-  await apiApp.listen({ host: "127.0.0.1", port: apiPort });
+  const apiServerScript = resolveApiEntryScript();
+  if (!existsSync(apiServerScript)) {
+    throw new Error(
+      `Bidwright Desktop bundle is missing the api server at ${apiServerScript}. ` +
+        `electron-builder should have copied @bidwright/api's dist into the bundle. ` +
+        `Verify the upstream "pnpm --filter @bidwright/api build" step ran before packaging.`,
+    );
+  }
+  console.log(`[desktop] spawning Fastify api on 127.0.0.1:${apiPort} from ${apiServerScript}`);
+
+  const apiProcess = spawn(process.execPath, [apiServerScript], {
+    cwd: dirname(apiServerScript),
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      NODE_ENV: "production",
+    },
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  apiProcess.stdout?.on("data", (chunk) => process.stdout.write(`[api] ${chunk}`));
+  apiProcess.stderr?.on("data", (chunk) => process.stderr.write(`[api] ${chunk}`));
+  apiProcess.on("exit", (code, signal) => {
+    console.error(`[desktop] api process exited code=${code} signal=${signal}`);
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      dialog.showErrorBox(
+        "Bidwright stopped",
+        "The Bidwright api server exited unexpectedly. Please reopen the app.",
+      );
+      app.quit();
+    }
+  });
+
+  await waitForHttpReady(`${apiUrl}/health`, { timeoutMs: 60_000 });
 
   // 4. Spawn Next.js standalone server -------------------------------------
   const webPort = await getAvailablePort();
   const webUrl = `http://127.0.0.1:${webPort}`;
-  const apiUrl = `http://127.0.0.1:${apiPort}`;
   // Next.js standalone preserves the source workspace path layout inside
   // the build output (e.g. `apps/web/server.js` for normal monorepos,
   // `.claude/worktrees/<name>/apps/web/server.js` when built from a git
@@ -229,12 +276,8 @@ async function bootPackaged(): Promise<BootedServers> {
     webPort,
     webUrl,
     pg: { stop: () => pg.stop() },
+    apiProcess,
     webProcess,
-    apiServer: {
-      close: async () => {
-        await apiApp.close();
-      },
-    },
   };
 }
 
@@ -331,6 +374,16 @@ async function applyPrismaMigrations(databaseUrl: string): Promise<void> {
 }
 
 function createMainWindow(webUrl: string): BrowserWindow {
+  // electron-builder embeds the icon set into the .app / .exe so macOS
+  // and Windows pick up the dock / taskbar icon automatically. On Linux
+  // (AppImage and dev launches) we still need to set BrowserWindow.icon
+  // explicitly. Fall through to the default if the file is missing — a
+  // missing icon is cosmetic, never fatal.
+  const iconPath = app.isPackaged
+    ? packagedResource("icon.png")
+    : resolve(__dirname, "..", "build", "icon.png");
+  const icon = existsSync(iconPath) ? iconPath : undefined;
+
   const win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -338,6 +391,7 @@ function createMainWindow(webUrl: string): BrowserWindow {
     minHeight: 640,
     title: APP_NAME,
     backgroundColor: "#0b0d10",
+    icon,
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,
@@ -470,8 +524,8 @@ async function shutdown(): Promise<void> {
   if (booted?.webProcess) {
     booted.webProcess.kill("SIGINT");
   }
-  if (booted?.apiServer) {
-    await booted.apiServer.close().catch(() => {});
+  if (booted?.apiProcess) {
+    booted.apiProcess.kill("SIGINT");
   }
   if (booted?.pg) {
     await booted.pg.stop().catch(() => {});
