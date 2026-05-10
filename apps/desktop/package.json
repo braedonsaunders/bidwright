@@ -18,10 +18,13 @@
     "@bidwright/api": "workspace:*",
     "@bidwright/db": "workspace:*",
     "@bidwright/domain": "workspace:*",
-    "embedded-postgres": "18.3.0-beta.17"
+    "electron-updater": "^6.6.2",
+    "embedded-postgres": "18.3.0-beta.17",
+    "pg": "^8.20.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "@types/pg": "8.11.11",
     "electron": "^33.2.1",
     "electron-builder": "^25.1.8",
     "tsx": "^4.19.2",
@@ -44,6 +47,10 @@
       {
         "from": "../../packages/db/prisma/migrations",
         "to": "migrations"
+      },
+      {
+        "from": "../../scripts/db/init-pgvector.sql",
+        "to": "init-pgvector.sql"
       },
       {
         "from": "../web/.next/standalone",
@@ -84,6 +91,13 @@
         { "target": "AppImage", "arch": ["x64"] }
       ]
     },
-    "publish": null
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "braedonsaunders",
+        "repo": "bidwright",
+        "releaseType": "release"
+      }
+    ]
   }
 }

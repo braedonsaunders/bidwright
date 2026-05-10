@@ -77,24 +77,63 @@ flattened tree before running electron-builder; that's a follow-up
 once we add a `dist:staging` script. Until then the bundle is unpacked,
 which is slightly larger but functionally identical.
 
+## Releasing via CI
+
+Push a `desktop-v*` tag and `.github/workflows/desktop-release.yml`
+matrix-builds across macOS / Linux / Windows in parallel, then uploads
+the installers to a **draft** GitHub Release. A maintainer reviews +
+publishes; auto-update only sees the release once it's published, so
+unverified builds never hit existing installs.
+
+```bash
+git tag desktop-v0.1.0
+git push origin desktop-v0.1.0
+# …watch the Actions tab; release lands in `Releases / Drafts`
+```
+
+The workflow also exposes `workflow_dispatch` so you can dry-run a
+matrix build without cutting a release. Provide an empty `tag` input
+and the build artifacts will land as workflow artifacts (14-day
+retention) without creating a Release.
+
+The first time you tag, the build will be **unsigned** because no
+signing secrets are set. Gatekeeper / SmartScreen will warn users on
+install. Wire the secrets (table below) and re-tag to ship a signed
+build that auto-update can apply silently.
+
+## Auto-update
+
+Wired via `electron-updater` against the `publish: github` feed in
+`apps/desktop/package.json`. On every packaged-mode launch:
+
+1. Fetches `latest-mac.yml` / `latest.yml` / `latest-linux.yml` from
+   the latest **published** GitHub Release.
+2. If a newer version exists, downloads in the background and shows a
+   "Restart now to update?" dialog when ready.
+3. Falls through silently when offline / no release published yet.
+
+Dev launches (`BIDWRIGHT_DESKTOP_DEV=true`) skip the update check.
+
 ## Known gaps for v1
 
-These don't block the dev experience but block a fully-functional
-packaged release:
-
 1. **pgvector** — embedded-postgres ships plain Postgres binaries
-   without the `vector` extension. Migrations that create vector
-   columns fail in packaged mode. Options for v2: rebuild a custom
-   `embedded-postgres` binary with pgvector, or split the schema into
-   a `desktop` flavor that swaps vectors for a JSON-array fallback.
-2. **Auto-update** — `electron-updater` is not wired. Add a release
-   feed (`publish.provider: github`) when there's a real release
-   pipeline.
-3. **Tray icon + OS notifications** — placeholder (`preload.ts` was
-   removed; re-add as `preload.cts` when the IPC surface lands).
-4. **Code signing certs** — see the table above. Without them
-   `dist:dir` works (unsigned) but downloaded `.dmg` / `.exe` will be
-   blocked by Gatekeeper / SmartScreen.
+   without the `vector` extension. The desktop bootstrap tries
+   `CREATE EXTENSION vector` on every launch and falls back gracefully
+   when it isn't available — semantic search degrades to text-only via
+   the api's existing fallback path in
+   [`apps/api/src/services/knowledge-service.ts`](../apps/api/src/services/knowledge-service.ts).
+   Estimating, agent runs, and document ingestion all keep working
+   without pgvector. To get true semantic search in the desktop bundle,
+   rebuild a custom `embedded-postgres` binary that includes pgvector,
+   or drop a prebuilt `vector.dylib` / `vector.so` / `vector.dll` into
+   the postgres extension dir. Tracked as a v2 enhancement.
+2. **Tray icon + OS notifications** — not implemented. Re-add a
+   preload script as `preload.cts` (CommonJS — Electron's preload
+   sandbox loader doesn't support ESM) when the IPC surface lands.
+3. **Code signing certs** — workflow has the env vars wired (CSC_LINK,
+   APPLE_ID, etc.) but the secrets aren't set in repo settings yet.
+   Without them, builds finish but installers are unsigned. See the
+   "Cross-platform release" table above for what each platform needs.
 
 ## Architecture notes
 
