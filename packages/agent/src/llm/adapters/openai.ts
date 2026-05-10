@@ -32,6 +32,26 @@ export class OpenAIAdapter implements LLMAdapter {
         if (assistantToolCalls.length > 0) {
           const textParts = blocks.filter(b => b.type === "text").map(b => b.text).join("");
           messages.push({ role: "assistant", content: textParts || null, tool_calls: assistantToolCalls });
+        } else if (blocks.some((b) => b.type === "image")) {
+          // OpenAI Chat Completions vision: array of content parts
+          // mixing { type: "text", text } and { type: "image_url",
+          // image_url: { url: "data:<mime>;base64,<data>" } }. Mirrors the
+          // shape Anthropic already speaks via `imageData` + `imageMimeType`,
+          // keeping the agent's ChatContentBlock contract provider-agnostic.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const parts: any[] = [];
+          for (const b of blocks) {
+            if (b.type === "text" && b.text) {
+              parts.push({ type: "text", text: b.text });
+            } else if (b.type === "image" && b.imageData) {
+              const mime = b.imageMimeType ?? "image/png";
+              parts.push({
+                type: "image_url",
+                image_url: { url: `data:${mime};base64,${b.imageData}` },
+              });
+            }
+          }
+          messages.push({ role: m.role, content: parts });
         } else {
           const textParts = blocks.filter(b => b.type === "text").map(b => b.text).join("");
           messages.push({ role: m.role, content: textParts });

@@ -53,6 +53,7 @@ import {
   Trash2,
   Box,
   Boxes,
+  Camera,
   Undo2,
   Redo2,
 } from "lucide-react";
@@ -320,6 +321,7 @@ import type { InspectActions, InspectSnapshot, InspectModelElement } from "./tak
 // federation concept is over-scoped for the everyday estimator workflow.
 // Schema, API endpoints, and the switcher component stay in the codebase
 // for future "advanced" surface; we just don't mount it in the BIM picker.
+import { SitePhotoIntake } from "./site-photo-intake";
 
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
@@ -834,7 +836,7 @@ export function TakeoffTab({
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
   const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
+  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "photo";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
@@ -3112,7 +3114,7 @@ export function TakeoffTab({
     setShowLanding(false);
   }
 
-  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
+  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "photo";
   const intakeToneClasses: Record<
     IntakeOptionTone,
     { accent: string; active: string; hover: string; icon: string; rail: string; wash: string; ghost: string }
@@ -3161,6 +3163,15 @@ export function TakeoffTab({
       rail: "bg-rose-500",
       wash: "bg-rose-500/5",
       ghost: "text-rose-500/[0.06] group-hover/card:text-rose-500/[0.10]",
+    },
+    photo: {
+      accent: "text-cyan-500",
+      active: "border-cyan-500/45 ring-2 ring-cyan-500/10",
+      hover: "hover:border-cyan-500/45",
+      icon: "border-cyan-500/25 bg-cyan-500/10 text-cyan-500",
+      rail: "bg-cyan-500",
+      wash: "bg-cyan-500/5",
+      ghost: "text-cyan-500/[0.06] group-hover/card:text-cyan-500/[0.10]",
     },
   };
 
@@ -3213,6 +3224,16 @@ export function TakeoffTab({
       metricLabel: "files",
       icon: Boxes,
       tone: "model",
+      disabled: false,
+    },
+    {
+      id: "photo",
+      title: "Site Photos",
+      detail: "Drop photos from the field — AI scaffolds a Bill of Materials grouped by your category taxonomy.",
+      metric: "AI",
+      metricLabel: "vision",
+      icon: Camera,
+      tone: "photo",
       disabled: false,
     },
   ] satisfies Array<{
@@ -3549,6 +3570,30 @@ export function TakeoffTab({
                     )}
                   </div>
                 </div>
+              )}
+
+              {activeIntakeOption === "photo" && (
+                <SitePhotoIntake
+                  projectId={projectId}
+                  activeWorksheetId={selectedWorksheet?.id ?? null}
+                  defaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
+                  categories={entityCategories}
+                  projectContextText={[
+                    workspace.project.name,
+                    workspace.currentRevision.title,
+                    workspace.currentRevision.description,
+                  ].filter(Boolean).join("\n")}
+                  onApplyItem={async (input) => {
+                    const ws = selectedWorksheet?.id;
+                    if (!ws) throw new Error("No active worksheet to apply to.");
+                    await createWorksheetItem(projectId, ws, input);
+                  }}
+                  onApplyComplete={(count) => {
+                    notifyWorkspaceMutated();
+                    setToastType("success");
+                    setToastMessage(`Added ${count} line item${count === 1 ? "" : "s"} from site photos.`);
+                  }}
+                />
               )}
 
               {activeSourcePanel && (

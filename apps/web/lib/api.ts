@@ -5703,6 +5703,53 @@ export async function getLatestRevisionImpactByItem(projectId: string): Promise<
   return apiRequest<LatestRevisionImpactByItem>(`/api/models/${projectId}/revision-impact/latest`);
 }
 
+// ── Site-Photo BOM intake ─────────────────────────────────────────────────
+
+export interface PhotoTakeoffImageInput {
+  /** Either a raw base64 string OR a full `data:image/...;base64,...` URL.
+   *  The server strips the prefix if present. */
+  data: string;
+  mimeType: string;
+  caption?: string;
+}
+
+export interface PhotoTakeoffLineItem {
+  description: string;
+  quantity: number;
+  uom: string;
+  categoryId: string;
+  notes: string;
+  confidence: number;
+  sourceImageIndexes: number[];
+}
+
+export interface PhotoTakeoffResult {
+  items: PhotoTakeoffLineItem[];
+  summary: string;
+  warnings: string[];
+}
+
+/**
+ * Run a site-photo Bill-of-Materials extraction. Uses whatever LLM runtime
+ * the user has selected in Settings > Integrations — no Claude assumption.
+ * The server enforces that the active provider supports vision and returns
+ * an actionable error when it doesn't.
+ */
+export async function generatePhotoBom(
+  projectId: string,
+  input: {
+    images: PhotoTakeoffImageInput[];
+    focusPrompt?: string;
+    projectContext?: string[];
+  },
+): Promise<PhotoTakeoffResult> {
+  return apiRequest<PhotoTakeoffResult>(`/api/takeoff/${projectId}/photo-bom`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function createRevisionDiff(
   projectId: string,
   input: { baseModelId: string; headModelId: string },

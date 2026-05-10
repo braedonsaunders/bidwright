@@ -1,8 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { z } from "zod";
 import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
 import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
+import { generatePhotoTakeoff } from "../services/photo-takeoff-service.js";
 
 // Azure Document Intelligence creds come exclusively from organisation
 // Settings > Integrations. There is no env-var fallback — configure them
@@ -270,6 +272,112 @@ export async function takeoffRoutes(app: FastifyInstance) {
       return { deleted: true };
     } catch (error) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
+    }
+  });
+
+  // ── POST /api/takeoff/:projectId/photo-bom ────────────────────────────
+  //
+  // Site-photo intake: accept one or more base64-encoded photographs plus
+  // an optional focus prompt and return a structured BOM the estimator can
+  // review and convert into worksheet line items.
+  //
+  // Runtime-agnostic: the LLM provider/model is resolved via the same
+  // getEffectiveIntegrations() chain every other AI feature uses — there is
+  // no Claude-specific fallback. If the user has selected an OpenAI or
+  // OpenRouter model with vision support, that's what gets called.
+  app.post("/api/takeoff/:projectId/photo-bom", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+
+    const bodySchema = z.object({
+      images: z
+        .array(
+          z.object({
+            // The client sends a data URL OR a raw base64 string. Either is
+            // accepted — the server splits the prefix off before sending to
+            // the adapter (which only wants the base64 payload).
+            data: z.string().min(8, "Image data is required"),
+            mimeType: z.string().min(3),
+            caption: z.string().max(500).optional(),
+          }),
+        )
+        .min(1, "At least one image is required")
+        .max(8, "At most 8 images per request"),
+      focusPrompt: z.string().max(2000).optional(),
+      projectContext: z.array(z.string().max(500)).max(20).optional(),
+    });
+
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+
+    try {
+      // Verify the project exists / the user can see it before spending
+      // tokens on the LLM.
+      const project = await request.store!.getProject(projectId);
+      if (!project) return reply.code(404).send({ message: "Project not found" });
+
+      // Resolve the user's effective LLM credentials. Mirrors the canonical
+      // pattern (see server.ts plugin-builder endpoint).
+      const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
+      const apiKey =
+        integrations.anthropicKey ??
+        process.env.ANTHROPIC_API_KEY ??
+        integrations.openaiKey ??
+        process.env.OPENAI_API_KEY ??
+        "";
+      const provider =
+        integrations.llmProvider ??
+        process.env.LLM_PROVIDER ??
+        (integrations.anthropicKey || process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai");
+      const model =
+        integrations.llmModel ??
+        process.env.LLM_MODEL ??
+        (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+
+      if (!apiKey) {
+        return reply
+          .code(400)
+          .send({ message: "No LLM API key configured. Set one in Settings > Integrations before running photo takeoff." });
+      }
+
+      // Organization category taxonomy. Passed into the LLM so it tags rows
+      // with the user's actual category buckets instead of inventing one
+      // (or worse, defaulting to a code system the org doesn't use).
+      const categories = await request.store!.listEntityCategories();
+
+      // Strip any "data:image/...;base64," prefix the browser may have sent.
+      const normalizedImages = parsed.data.images.map((image) => {
+        const commaIdx = image.data.indexOf(",");
+        const payload = image.data.startsWith("data:") && commaIdx > 0
+          ? image.data.slice(commaIdx + 1)
+          : image.data;
+        return {
+          data: payload,
+          mimeType: image.mimeType,
+          caption: image.caption,
+        };
+      });
+
+      const result = await generatePhotoTakeoff({
+        images: normalizedImages,
+        focusPrompt: parsed.data.focusPrompt,
+        projectContext: parsed.data.projectContext,
+        categories: categories.map((c) => ({
+          id: c.id,
+          name: c.name,
+          entityType: c.entityType,
+          defaultUom: c.defaultUom ?? "EA",
+          shortform: c.shortform ?? null,
+        })),
+        llm: { provider, apiKey, model },
+      });
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Photo takeoff failed";
+      const status = message.includes("not configured") || message.includes("Settings >") ? 400 : 500;
+      request.log.error({ err: error }, "photo-bom failed");
+      return reply.code(status).send({ message });
     }
   });
 }
