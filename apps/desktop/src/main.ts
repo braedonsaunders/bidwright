@@ -216,6 +216,39 @@ async function bootPackaged(): Promise<BootedServers> {
   if (dbPkgDir) {
     process.env.BIDWRIGHT_PRISMA_CWD = dbPkgDir;
     process.env.BIDWRIGHT_PRISMA_SCHEMA = join(dbPkgDir, "prisma", "schema.prisma");
+    // Lock the api's prisma CLI invocation to the bundled v6 binary. End
+    // users don't have prisma/pnpm/npx on PATH; without this the bootstrap
+    // historically fell back to `npx --yes prisma` which fetches the
+    // LATEST prisma (currently v7) whose schema validator rejects our
+    // v6-style `url = env(...)` datasource.
+    const prismaCliCandidates = [
+      // Direct nesting under @bidwright/db (electron-builder usually flattens here)
+      join(dbPkgDir, "node_modules", "prisma", "build", "index.js"),
+      // Hoisted to the bundle's root node_modules
+      resolve(dbPkgDir, "..", "..", "prisma", "build", "index.js"),
+      // Try import.meta.resolve as a last attempt
+      (() => {
+        try {
+          return fileURLToPath(import.meta.resolve("prisma/package.json"))
+            .replace(/package\.json$/, "build/index.js");
+        } catch {
+          return null;
+        }
+      })(),
+    ].filter((p): p is string => p !== null);
+    for (const candidate of prismaCliCandidates) {
+      if (existsSync(candidate)) {
+        process.env.BIDWRIGHT_PRISMA_CLI = candidate;
+        console.log(`[desktop] using bundled prisma CLI at ${candidate}`);
+        break;
+      }
+    }
+    if (!process.env.BIDWRIGHT_PRISMA_CLI) {
+      console.warn(
+        `[desktop] could not locate bundled prisma CLI; bootstrap will fall back ` +
+          `to npx prisma@^6. Tried: ${prismaCliCandidates.join(", ")}`,
+      );
+    }
   }
 
   // The api child runs `prisma migrate deploy` itself during its own
