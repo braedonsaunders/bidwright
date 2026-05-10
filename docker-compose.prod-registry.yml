@@ -115,6 +115,15 @@ services:
       # Required for any multi-user deployment. bwrap ships setuid root in
       # the api image so no --privileged flag is needed.
       BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-true}"
+      # Workspace snapshot/restore — see docker-compose.prod.yml for env shape.
+      WORKSPACE_STORAGE_PROVIDER: "${WORKSPACE_STORAGE_PROVIDER:-}"
+      WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET:-}"
+      WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
+      WORKSPACE_S3_ENDPOINT: "${WORKSPACE_S3_ENDPOINT:-}"
+      WORKSPACE_S3_ACCESS_KEY_ID: "${WORKSPACE_S3_ACCESS_KEY_ID:-}"
+      WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY:-}"
+      WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
+      WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
       # The db-migrate container applies pending migrations (`prisma migrate deploy`) before
       # api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
       BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"

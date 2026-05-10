@@ -1435,6 +1435,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         quoteId: quote.id,
         customCliPath: resolveCliPathOverride(runtime, integrations),
         userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(integrations),
       });
 
@@ -1552,6 +1553,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         quoteId: workspace.quote.id,
         customCliPath: resolveCliPathOverride(runtime, integrations),
         userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
       });
@@ -1703,6 +1705,7 @@ ${message}`;
         quoteId: workspace.quote.id,
         customCliPath: resolveCliPathOverride(runtime, prepared.integrations),
         userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
         emitCompletionMessage: false,
@@ -2035,6 +2038,7 @@ Merge tables that span multiple pages. Skip non-data pages.
       model: normalizedModel,
       authToken: token,
       userId: request.user?.id ?? null,
+      organizationId: request.user?.organizationId ?? null,
       ...buildSpawnApiKeys(integrations),
       reasoningEffort,
     });

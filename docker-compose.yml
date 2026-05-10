@@ -69,6 +69,19 @@ services:
       # the api image so no --privileged flag is needed at the container
       # level. Default false here so single-user self-host stays cheap.
       BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-false}"
+      # ── Workspace storage (project files survive host restarts and
+      # ── follow users across hosts in a stateless pool). Set to "s3"
+      # ── to enable, leave unset to keep workspaces on local disk only
+      # ── (single-host self-host's default). Same env shape works for
+      # ── Cloudflare R2, AWS S3, and the bundled MinIO profile above.
+      WORKSPACE_STORAGE_PROVIDER: "${WORKSPACE_STORAGE_PROVIDER:-}"
+      WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET:-}"
+      WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
+      WORKSPACE_S3_ENDPOINT: "${WORKSPACE_S3_ENDPOINT:-}"
+      WORKSPACE_S3_ACCESS_KEY_ID: "${WORKSPACE_S3_ACCESS_KEY_ID:-}"
+      WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY:-}"
+      WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
+      WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
     volumes:
       - ./data/bidwright-api:/data
       - ./data/agent-home:/data/agent-home
@@ -102,6 +115,16 @@ services:
       REDIS_URL: redis://redis:6379
       DATA_DIR: /data
       API_PORT: "3001"
+      # Worker spawns CLI sessions for background ingestion / review jobs
+      # so it needs the same workspace-storage env as the api.
+      WORKSPACE_STORAGE_PROVIDER: "${WORKSPACE_STORAGE_PROVIDER:-}"
+      WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET:-}"
+      WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
+      WORKSPACE_S3_ENDPOINT: "${WORKSPACE_S3_ENDPOINT:-}"
+      WORKSPACE_S3_ACCESS_KEY_ID: "${WORKSPACE_S3_ACCESS_KEY_ID:-}"
+      WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY:-}"
+      WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
+      WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
     volumes:
       - ./data/bidwright-api:/data
 
@@ -118,7 +141,36 @@ services:
     ports:
       - "11434:11434"
 
+  # Local S3-compatible workspace storage for self-host. Opt-in via:
+  #   docker compose --profile workspace-storage up -d
+  # …and set WORKSPACE_STORAGE_PROVIDER=s3 +
+  # WORKSPACE_S3_ENDPOINT=http://minio:9000 + WORKSPACE_S3_BUCKET +
+  # WORKSPACE_S3_ACCESS_KEY_ID/SECRET on the api/worker services. The
+  # bucket needs to be pre-created (mc alias / aws s3api create-bucket /
+  # the MinIO console at :9001). Hosted SaaS deployments point at R2
+  # instead and don't need this service.
+  minio:
+    image: minio/minio:latest
+    profiles:
+      - workspace-storage
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: "${MINIO_ROOT_USER:-bidwright}"
+      MINIO_ROOT_PASSWORD: "${MINIO_ROOT_PASSWORD:-bidwright-dev-only}"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
 volumes:
   pgdata:
   redisdata:
   ollama_data:
+  miniodata:

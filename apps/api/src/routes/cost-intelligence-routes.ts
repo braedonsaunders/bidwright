@@ -313,6 +313,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         customCliPath: resolveCostAgentCliPath(runtime, integrations),
         userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildCostAgentApiKeys(integrations),
       });
 

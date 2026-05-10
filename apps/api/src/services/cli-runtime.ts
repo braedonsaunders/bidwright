@@ -36,6 +36,12 @@ import {
 import { ensureUserAgentHome, getUserAgentHome } from "./agent-home.js";
 import { getAgentRuntimeHost } from "./agent-host/index.js";
 import { BIDWRIGHT_PERMISSIONS } from "./cli-adapters/shared.js";
+import {
+  getWorkspaceStorage,
+  restoreWorkspaceIfPresent,
+  snapshotWorkspaceSafe,
+  workspaceStorageKey,
+} from "./workspace-storage.js";
 import type {
   AgentReasoningEffort,
   ApiKeys,
@@ -395,6 +401,12 @@ export interface SpawnSessionOpts {
    * state is isolated from every other user on the host.
    */
   userId?: string | null;
+  /**
+   * The user's organization id, used to namespace project workspace
+   * snapshots (so two orgs with colliding cuids stay separated). When
+   * unset, snapshots fall under a generic "_" org bucket.
+   */
+  organizationId?: string | null;
 }
 
 export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
@@ -562,6 +574,40 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   const apiKeys = buildApiKeys(opts);
   const agentHomeDir = await ensureUserAgentHome(opts.userId);
 
+  // If we're in stateless multi-host mode (R2 / MinIO / S3 backed), pull
+  // this project's workspace snapshot down before the adapter scaffolds
+  // its native config files. The restore is idempotent and a no-op when
+  // there's no snapshot yet (first run for this project) or no storage
+  // backend configured (single-host self-host / desktop). Errors here
+  // bubble up because spawning against a half-restored workspace is
+  // worse than a clear "couldn't restore your project" message.
+  const workspaceStorage = getWorkspaceStorage();
+  if (workspaceStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    try {
+      const restored = await restoreWorkspaceIfPresent({
+        storage: workspaceStorage,
+        key: wsKey,
+        targetDir: opts.projectDir,
+      });
+      if (restored) {
+        console.log(
+          `[cli:spawn] restored workspace from snapshot key=${wsKey} project=${opts.projectId}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[cli:spawn] workspace restore failed for project=${opts.projectId} (key=${wsKey}); proceeding with whatever's on local disk:`,
+        err instanceof Error ? err.message : err,
+      );
+      // Don't throw — a stale local copy is still more useful than no
+      // session at all. The next snapshot on session-exit will overwrite.
+    }
+  }
+
   // Always materialize the bidwright MCP config file. Adapters that need it
   // (Claude --mcp-config) reference it; others ignore it.
   const mcpConfigPath = await writeMcpConfigFile(
@@ -619,6 +665,24 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   session._spawnOpts = { ...opts, reasoningEffort };
   session._recoveryCount = 0;
   sessions.set(opts.projectId, session);
+
+  // Snapshot the project workspace to remote storage when the session
+  // exits (multi-host hosted SaaS so the user's files follow them across
+  // pool members). No-op when WORKSPACE_STORAGE_PROVIDER is unset (every
+  // self-host / desktop deploy).
+  if (workspaceStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    child.once("exit", () => {
+      void snapshotWorkspaceSafe({
+        storage: workspaceStorage,
+        key: wsKey,
+        sourceDir: opts.projectDir,
+      });
+    });
+  }
 
   // ── Inactivity watchdog ─────────────────────────────────────
   const INACTIVITY_TIMEOUT_MINUTES = 15;
@@ -780,6 +844,35 @@ async function spawnResumedSession(
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
   const agentHomeDir = await ensureUserAgentHome(opts.userId);
+
+  // Resume flow: same workspace-restore semantics as spawnSession. If the
+  // user landed on a host that doesn't have the local copy (stateless
+  // pool) we pull the snapshot down before the adapter scaffolds.
+  const resumeWorkspaceStorage = getWorkspaceStorage();
+  if (resumeWorkspaceStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    try {
+      const restored = await restoreWorkspaceIfPresent({
+        storage: resumeWorkspaceStorage,
+        key: wsKey,
+        targetDir: opts.projectDir,
+      });
+      if (restored) {
+        console.log(
+          `[cli:resume] restored workspace from snapshot key=${wsKey} project=${opts.projectId}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[cli:resume] workspace restore failed for project=${opts.projectId} (key=${wsKey}); proceeding with whatever's on local disk:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   const mcpConfigPath = await writeMcpConfigFile(
     opts.projectDir,
     mcpRunner,
@@ -845,6 +938,25 @@ async function spawnResumedSession(
 
   sessions.set(opts.projectId, session);
   wireChildProcess(child, session, adapter, events);
+
+  // Mirror the spawnSession flow: snapshot the workspace on exit so a
+  // resumed session also persists its final state to remote storage.
+  // No-op when WORKSPACE_STORAGE_PROVIDER is unset.
+  const resumeStorage = getWorkspaceStorage();
+  if (resumeStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    child.once("exit", () => {
+      void snapshotWorkspaceSafe({
+        storage: resumeStorage,
+        key: wsKey,
+        sourceDir: opts.projectDir,
+      });
+    });
+  }
+
   await persistSessionState(session, { resumed: true });
   return session;
 }
