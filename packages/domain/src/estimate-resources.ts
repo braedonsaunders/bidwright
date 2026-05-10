@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { CatalogItem, RateScheduleItem } from "./models.js";
+import type { CatalogItem, RateScheduleItem } from "./models";
 
 export enum EstimateResourceType {
   Labor = "labor",

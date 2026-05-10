@@ -11,7 +11,7 @@ import {
   measureCadGroups,
   type CadEntity,
   type CanonicalCadDrawing,
-} from "./cad-takeoff.js";
+} from "./cad-takeoff";
 
 const entities: CadEntity[] = [
   {

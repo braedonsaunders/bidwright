@@ -1,6 +1,6 @@
-import type { CalculationType } from "./calculation-types.js";
-import type { LineTotal, MarkupRatio, PerUnitCost } from "./money.js";
-import type { UnitOfMeasure } from "./uom.js";
+import type { CalculationType } from "./calculation-types";
+import type { LineTotal, MarkupRatio, PerUnitCost } from "./money";
+import type { UnitOfMeasure } from "./uom";
 
 export type ProjectIngestionStatus = "queued" | "processing" | "ready" | "review" | "quoted" | "estimating";
 export type QuoteStatus = "draft" | "review" | "submitted" | "awarded" | "lost";

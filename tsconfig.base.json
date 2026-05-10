@@ -23,7 +23,11 @@
       "@bidwright/agent": ["packages/agent/src/index.ts"],
       "@bidwright/agent/*": ["packages/agent/src/*"],
       "@bidwright/integrations": ["packages/integrations/src/index.ts"],
-      "@bidwright/integrations/*": ["packages/integrations/src/*"]
+      "@bidwright/integrations/*": ["packages/integrations/src/*"],
+      "@bidwright/vector": ["packages/vector/src/index.ts"],
+      "@bidwright/vector/*": ["packages/vector/src/*"],
+      "@bidwright/vision": ["packages/vision/src/index.ts"],
+      "@bidwright/vision/*": ["packages/vision/src/*"]
     }
   }
 }

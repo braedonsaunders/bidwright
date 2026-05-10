@@ -13,7 +13,7 @@ import {
   rollupEstimateResourcesByName,
   rollupEstimateResourcesByType,
   type EstimateResourceLineInput,
-} from "./estimate-resources.js";
+} from "./estimate-resources";
 
 const baseResources: EstimateResourceLineInput[] = [
   {

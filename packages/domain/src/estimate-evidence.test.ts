@@ -13,7 +13,7 @@ import {
   validateEstimateEvidence,
   validateEstimateEvidenceRows,
   type EstimateEvidence,
-} from "./estimate-evidence.js";
+} from "./estimate-evidence";
 
 test("normalizeEstimateEvidence trims text, normalizes confidence, and repairs page ranges", () => {
   const evidence = normalizeEstimateEvidence({
