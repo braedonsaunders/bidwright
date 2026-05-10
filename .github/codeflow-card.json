@@ -2,108 +2,6 @@
   "version": 1,
   "runs": [
     {
-      "at": "2026-05-04T04:08:12.387Z",
-      "sha": "e02a9924afafb975a068a1088a7d7ee3a890f0fb",
-      "pr": null,
-      "actor": "braedonsaunders",
-      "files": 1038,
-      "functions": 5578,
-      "loc": 369199,
-      "languages": 21,
-      "topLanguages": [
-        {
-          "ext": "ts",
-          "pct": 40,
-          "lines": 145847
-        },
-        {
-          "ext": "json",
-          "pct": 28,
-          "lines": 103009
-        },
-        {
-          "ext": "tsx",
-          "pct": 25,
-          "lines": 92392
-        },
-        {
-          "ext": "yaml",
-          "pct": 2,
-          "lines": 8469
-        },
-        {
-          "ext": "py",
-          "pct": 1,
-          "lines": 3428
-        }
-      ],
-      "dead": 88,
-      "deadPct": 1.6,
-      "circular": 1,
-      "godObjects": 1,
-      "avgCoupling": 9.3,
-      "securityIssues": 78,
-      "patterns": 10,
-      "duplicates": 30,
-      "layerViolations": 2340,
-      "connections": 9602,
-      "avgFnLines": 15.6,
-      "longestFn": 16,
-      "testFiles": 94,
-      "testRatio": 9.1,
-      "topFolders": [
-        {
-          "name": "apps",
-          "count": 810
-        },
-        {
-          "name": "packages",
-          "count": 199
-        },
-        {
-          "name": "scripts",
-          "count": 14
-        },
-        {
-          "name": "root",
-          "count": 11
-        },
-        {
-          "name": ".claude",
-          "count": 2
-        }
-      ],
-      "folders": 5,
-      "grade": "F",
-      "score": 58,
-      "topBlast": {
-        "path": "apps/model-editor/cpp/test/index.html",
-        "direct": 555,
-        "transitive": 777,
-        "total": 1332
-      },
-      "fragility": [
-        {
-          "path": "apps/model-editor/cpp/test/index.html",
-          "direct": 555,
-          "transitive": 777,
-          "total": 1332
-        },
-        {
-          "path": "apps/api/src/services/integrations-service.ts",
-          "direct": 331,
-          "transitive": 776,
-          "total": 1107
-        },
-        {
-          "path": "apps/model-editor/packages/core/src/config.ts",
-          "direct": 182,
-          "transitive": 772,
-          "total": 954
-        }
-      ]
-    },
-    {
       "at": "2026-05-04T04:24:21.181Z",
       "sha": "fa71f8c6784bb53441c78cc15609127d1d311e6f",
       "pr": null,
@@ -3046,6 +2944,108 @@
           "direct": 612,
           "transitive": 865,
           "total": 1477
+        },
+        {
+          "path": "apps/api/src/services/integrations-service.ts",
+          "direct": 357,
+          "transitive": 864,
+          "total": 1221
+        },
+        {
+          "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
+          "direct": 259,
+          "transitive": 866,
+          "total": 1125
+        }
+      ]
+    },
+    {
+      "at": "2026-05-10T05:17:44.893Z",
+      "sha": "cfeb8318ac5dc83f7e6316963ac7b528075ffd14",
+      "pr": null,
+      "actor": "braedonsaunders",
+      "files": 1132,
+      "functions": 6691,
+      "loc": 426725,
+      "languages": 22,
+      "topLanguages": [
+        {
+          "ext": "ts",
+          "pct": 41,
+          "lines": 175661
+        },
+        {
+          "ext": "json",
+          "pct": 26,
+          "lines": 111244
+        },
+        {
+          "ext": "tsx",
+          "pct": 25,
+          "lines": 104848
+        },
+        {
+          "ext": "yaml",
+          "pct": 3,
+          "lines": 14213
+        },
+        {
+          "ext": "py",
+          "pct": 1,
+          "lines": 3442
+        }
+      ],
+      "dead": 117,
+      "deadPct": 1.7,
+      "circular": 1,
+      "godObjects": 1,
+      "avgCoupling": 9.9,
+      "securityIssues": 86,
+      "patterns": 10,
+      "duplicates": 43,
+      "layerViolations": 2715,
+      "connections": 11165,
+      "avgFnLines": 15.6,
+      "longestFn": 16,
+      "testFiles": 95,
+      "testRatio": 8.4,
+      "topFolders": [
+        {
+          "name": "apps",
+          "count": 871
+        },
+        {
+          "name": "packages",
+          "count": 222
+        },
+        {
+          "name": "scripts",
+          "count": 21
+        },
+        {
+          "name": "root",
+          "count": 12
+        },
+        {
+          "name": "docs",
+          "count": 4
+        }
+      ],
+      "folders": 5,
+      "grade": "F",
+      "score": 57,
+      "topBlast": {
+        "path": "apps/model-editor/cpp/test/index.html",
+        "direct": 614,
+        "transitive": 865,
+        "total": 1479
+      },
+      "fragility": [
+        {
+          "path": "apps/model-editor/cpp/test/index.html",
+          "direct": 614,
+          "transitive": 865,
+          "total": 1479
         },
         {
           "path": "apps/api/src/services/integrations-service.ts",
