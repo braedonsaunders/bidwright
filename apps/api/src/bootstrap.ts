@@ -103,6 +103,42 @@ function locatePrismaCwd(): string {
   return path.resolve(here, "../../..", "packages/db");
 }
 
+/**
+ * Resolve the bundled prisma CLI's entry script (build/index.js). In the
+ * packaged Electron app, end-users don't have prisma / pnpm / npx on PATH,
+ * and the historic `npx --yes prisma` fallback fetches the LATEST prisma
+ * (currently v7), whose schema validator rejects our v6-style datasource
+ * `url = env(...)` block. Invoking the workspace's pinned prisma binary
+ * with `process.execPath` keeps the CLI version locked to whatever's in
+ * pnpm-lock.yaml.
+ *
+ * Resolution order:
+ *   1. BIDWRIGHT_PRISMA_CLI env var (set by desktop main.ts which has
+ *      direct access to @bidwright/db's node_modules layout)
+ *   2. Walk node_modules from this file (works in dev / docker)
+ *   3. Walk @bidwright/db's node_modules (transitive dep location)
+ */
+function locateBundledPrismaCli(): string | null {
+  if (process.env.BIDWRIGHT_PRISMA_CLI) {
+    return process.env.BIDWRIGHT_PRISMA_CLI;
+  }
+  try {
+    const pkgUrl = import.meta.resolve("prisma/package.json");
+    const pkgPath = fileURLToPath(pkgUrl);
+    return path.resolve(path.dirname(pkgPath), "build", "index.js");
+  } catch {
+    /* fall through */
+  }
+  try {
+    const dbPkgUrl = import.meta.resolve("@bidwright/db/package.json");
+    const dbPkgDir = path.dirname(fileURLToPath(dbPkgUrl));
+    const candidate = path.resolve(dbPkgDir, "node_modules", "prisma", "build", "index.js");
+    return candidate;
+  } catch {
+    return null;
+  }
+}
+
 interface SpawnResult { code: number | null; stdout: string; stderr: string; }
 
 function runCommand(cmd: string, args: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<SpawnResult> {
@@ -129,10 +165,18 @@ async function runPrismaCommand(
   const schema = locatePrismaSchema();
   const env = { ...process.env };
 
+  const bundledCli = locateBundledPrismaCli();
   const candidates: Array<{ cmd: string; args: string[] }> = [
+    // Bundled prisma binary — guaranteed-version, no PATH or network deps.
+    // Tried first so packaged Electron installs always hit it.
+    ...(bundledCli
+      ? [{ cmd: process.execPath, args: [bundledCli, ...subArgs, `--schema=${schema}`] }]
+      : []),
     { cmd: "prisma", args: [...subArgs, `--schema=${schema}`] },
     { cmd: "pnpm", args: ["--filter", "@bidwright/db", "exec", "prisma", ...subArgs, `--schema=${schema}`] },
-    { cmd: "npx", args: ["--yes", "prisma", ...subArgs, `--schema=${schema}`] },
+    // Last-resort: pin the major version so npx never grabs a newer
+    // incompatible release. Pinned to ^6 to track our @prisma/client.
+    { cmd: "npx", args: ["--yes", "prisma@^6", ...subArgs, `--schema=${schema}`] },
   ];
 
   let lastErr: SpawnResult | undefined;
@@ -237,10 +281,14 @@ export async function ensurePrismaClientGenerated(): Promise<{ generated: boolea
   const cwd = locatePrismaCwd();
   const schema = locatePrismaSchema();
   const env = { ...process.env };
+  const bundledCli = locateBundledPrismaCli();
   const candidates: Array<{ cmd: string; args: string[] }> = [
+    ...(bundledCli
+      ? [{ cmd: process.execPath, args: [bundledCli, "generate", `--schema=${schema}`] }]
+      : []),
     { cmd: "prisma", args: ["generate", `--schema=${schema}`] },
     { cmd: "pnpm", args: ["--filter", "@bidwright/db", "exec", "prisma", "generate", `--schema=${schema}`] },
-    { cmd: "npx", args: ["--yes", "prisma", "generate", `--schema=${schema}`] },
+    { cmd: "npx", args: ["--yes", "prisma@^6", "generate", `--schema=${schema}`] },
   ];
   for (const c of candidates) {
     try {
