@@ -115,7 +115,7 @@ import {
   parseAzureDocumentIntelligenceQueryFields,
 } from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
-import { prisma as sharedPrisma } from "@bidwright/db";
+import { prisma as sharedPrisma, mergeIntegrations } from "@bidwright/db";
 import { decodeHtmlEntities } from "./text-utils.js";
 import {
   attachNativePdfMetadata,
@@ -15760,6 +15760,102 @@ export class PrismaApiStore {
     });
 
     return structuredClone(merged);
+  }
+
+  // ── User-scoped Settings ───────────────────────────────────────────────
+  // Per-user overrides for credentials and preferences. Org-scoped because
+  // every UserSettings row hangs off a User that belongs to one organization,
+  // so we always validate the user is in this org before reading or writing.
+
+  async getUserSettings(userId: string): Promise<{
+    integrations: Record<string, unknown>;
+    preferences: Record<string, unknown>;
+    updatedAt: string | null;
+  }> {
+    const user = await this.db.user.findFirst({
+      where: { id: userId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new Error(`User ${userId} not found in this organization`);
+    }
+    const settings = await this.db.userSettings.findUnique({ where: { userId } });
+    return {
+      integrations: ((settings?.integrations as Record<string, unknown> | null) ?? {}),
+      preferences: ((settings?.preferences as Record<string, unknown> | null) ?? {}),
+      updatedAt: settings?.updatedAt ? settings.updatedAt.toISOString() : null,
+    };
+  }
+
+  async updateUserSettings(
+    userId: string,
+    patch: { integrations?: Record<string, unknown>; preferences?: Record<string, unknown> },
+  ): Promise<{
+    integrations: Record<string, unknown>;
+    preferences: Record<string, unknown>;
+    updatedAt: string;
+  }> {
+    const user = await this.db.user.findFirst({
+      where: { id: userId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new Error(`User ${userId} not found in this organization`);
+    }
+    const existing = await this.db.userSettings.findUnique({ where: { userId } });
+    const existingIntegrations = (existing?.integrations as Record<string, unknown> | null) ?? {};
+    const existingPreferences = (existing?.preferences as Record<string, unknown> | null) ?? {};
+    const mergedIntegrations = patch.integrations
+      ? { ...existingIntegrations, ...patch.integrations }
+      : existingIntegrations;
+    const mergedPreferences = patch.preferences
+      ? { ...existingPreferences, ...patch.preferences }
+      : existingPreferences;
+
+    const saved = await this.db.userSettings.upsert({
+      where: { userId },
+      create: {
+        userId,
+        integrations: mergedIntegrations as any,
+        preferences: mergedPreferences as any,
+        updatedAt: new Date(),
+      },
+      update: {
+        integrations: mergedIntegrations as any,
+        preferences: mergedPreferences as any,
+        updatedAt: new Date(),
+      },
+    });
+
+    return {
+      integrations: (saved.integrations as Record<string, unknown> | null) ?? {},
+      preferences: (saved.preferences as Record<string, unknown> | null) ?? {},
+      updatedAt: saved.updatedAt.toISOString(),
+    };
+  }
+
+  /**
+   * Merged integrations blob (org defaults overlaid with the user's per-user
+   * overrides). Use this anywhere you need the credentials that should
+   * actually drive a CLI spawn or a model call for a given user. When no
+   * userId is provided, returns the org-wide settings unchanged.
+   *
+   * Returns Record<string, any> so call sites can read individual properties
+   * without ceremony — matches the historical shape of
+   * `(settings as any).integrations` that this method replaces.
+   */
+  async getEffectiveIntegrations(userId: string | null | undefined): Promise<Record<string, any>> {
+    const orgSettings = await this.getSettings();
+    const orgIntegrations = ((orgSettings as any)?.integrations ?? {}) as Record<string, any>;
+    if (!userId) return orgIntegrations;
+    try {
+      const userSettings = await this.getUserSettings(userId);
+      return mergeIntegrations(orgIntegrations, userSettings.integrations) as Record<string, any>;
+    } catch {
+      // User row missing or out-of-org — fall back to org defaults rather
+      // than leaking an error to a CLI spawn / model call.
+      return orgIntegrations;
+    }
   }
 
   // ── Users ──────────────────────────────────────────────────────────────

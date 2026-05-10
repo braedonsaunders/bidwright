@@ -390,8 +390,10 @@ export function registerReviewRoutes(app: FastifyInstance) {
       store,
     });
 
-    const settingsEarly = await store.getSettings();
-    const integrationsEarly = (settingsEarly as any)?.integrations || {};
+    // User-overlaid integrations: org admin's defaults + this estimator's
+    // personal OAuth / API key, so the review CLI spawn picks up subscription
+    // billing when the user has connected one.
+    const integrationsEarly = await store.getEffectiveIntegrations(request.user?.id);
 
     // Generate review-specific instruction files for the active runtime
     await generateReviewInstructionFiles(runtime, {
@@ -469,8 +471,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
 CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or delete any line items. Only ANALYZE and REPORT via the saveReview* tools. Be thorough — read every page of every document. Missing scope = missing findings.`;
 
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const reasoningEffort = typeof integrations.agentReasoningEffort === "string" && integrations.agentReasoningEffort
       ? integrations.agentReasoningEffort
       : "extra_high";
@@ -490,6 +491,8 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
           (typeof integrations[adapter.pathSettingKey] === "string"
             ? (integrations[adapter.pathSettingKey] as string)
             : undefined) || undefined,
+        userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
         googleApiKey:

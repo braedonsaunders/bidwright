@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
+import { KeyRound } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useAuth } from "@/components/auth-provider";
 import { updateProfile } from "@/lib/api";
@@ -100,6 +102,31 @@ export default function ProfilePage() {
                   <Badge tone="warning">{t("account.superAdmin")}</Badge>
                 </div>
               )}
+            </div>
+          </CardBody>
+        </Card>
+
+        {/* My credentials — per-user CLI auth + API key overrides. Sits on
+            the profile page because it's per-user state, not org-wide. */}
+        <Card>
+          <CardHeader>
+            <div className="flex items-center justify-between gap-3">
+              <CardTitle>My credentials</CardTitle>
+              <Badge tone="info">Per-user</Badge>
+            </div>
+          </CardHeader>
+          <CardBody>
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-sm text-fg/70">
+                Sign in to a CLI runtime with your own subscription, or paste a personal API key.
+                These values override the organization defaults whenever set.
+              </p>
+              <Link href="/profile/credentials">
+                <Button variant="secondary" size="sm">
+                  <KeyRound className="h-3.5 w-3.5" />
+                  Manage
+                </Button>
+              </Link>
             </div>
           </CardBody>
         </Card>

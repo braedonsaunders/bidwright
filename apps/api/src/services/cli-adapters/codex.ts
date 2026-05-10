@@ -86,11 +86,16 @@ async function prepareCodexHome(
   mcpRunner: string,
   mcpArgs: string[],
   mcpEnv: Record<string, string>,
+  agentHomeDir: string | null | undefined,
 ): Promise<string> {
   const codexHome = join(projectDir, ".codex");
   await mkdir(codexHome, { recursive: true });
 
-  const sourceCodexHome = process.env.CODEX_HOME || join(homeDir(), ".codex");
+  // Source: in server mode, this user's per-user namespace; in desktop mode,
+  // the operator's host ~/.codex (or the explicit CODEX_HOME override).
+  const sourceCodexHome = agentHomeDir
+    ? join(agentHomeDir, ".codex")
+    : process.env.CODEX_HOME || join(homeDir(), ".codex");
 
   for (const fileName of ["auth.json", "cap_sid"]) {
     const sourcePath = join(sourceCodexHome, fileName);
@@ -415,9 +420,16 @@ export const codexAdapter: CliAdapter = {
     return { available: true, path, version: getCliVersion(path) } satisfies CliDetectResult;
   },
 
-  checkAuth({ apiKeys }): CliAuthStatus {
+  checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
     if (apiKeys.openai || process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
       return { authenticated: true, method: "api_key" };
+    }
+    if (agentHomeDir) {
+      // Server mode: only consider this user's own ~/.codex/auth.json under
+      // the namespace; never leak the host's auth into another user's status.
+      const userCodexAuth = join(agentHomeDir, ".codex", "auth.json");
+      if (existsSync(userCodexAuth)) return { authenticated: true, method: "oauth" };
+      return { authenticated: false, method: "none" };
     }
     const codexAuth = join(homeDir(), ".codex", "auth.json");
     if (existsSync(codexAuth)) {
@@ -444,6 +456,7 @@ export const codexAdapter: CliAdapter = {
       ctx.mcpRunner,
       ctx.mcpArgs,
       ctx.mcpEnv as unknown as Record<string, string>,
+      ctx.agentHomeDir ?? null,
     );
     return { extraEnv: { CODEX_HOME: codexHome } };
   },

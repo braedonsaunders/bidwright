@@ -16,7 +16,7 @@
  * `cli-adapters/index.ts` and it shows up here automatically.
  */
 
-import { spawn, type ChildProcess, execSync } from "node:child_process";
+import { type ChildProcess, execSync } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
@@ -33,7 +33,15 @@ import {
   listAdapters,
   tryGetAdapter,
 } from "./cli-adapters/registry.js";
-import { BIDWRIGHT_PERMISSIONS, quoteWindowsArg } from "./cli-adapters/shared.js";
+import { ensureUserAgentHome, getUserAgentHome } from "./agent-home.js";
+import { getAgentRuntimeHost } from "./agent-host/index.js";
+import { BIDWRIGHT_PERMISSIONS } from "./cli-adapters/shared.js";
+import {
+  getWorkspaceStorage,
+  restoreWorkspaceIfPresent,
+  snapshotWorkspaceSafe,
+  workspaceStorageKey,
+} from "./workspace-storage.js";
 import type {
   AgentReasoningEffort,
   ApiKeys,
@@ -333,10 +341,26 @@ export function detectCli(
   return adapter.detect(customCliPath);
 }
 
-export function checkCliAuth(runtime: AgentRuntime, apiKey?: string): CliAuthStatus {
+/**
+ * Check whether `runtime` is authenticated for a given user.
+ *
+ * In server mode pass the userId so detection is scoped to that user's
+ * per-user agent-home dir; the host's `~/.claude` is never consulted as a
+ * fallback (preventing one user's auth from showing up in another user's
+ * status pill). In desktop mode `userId` may be omitted and the operator's
+ * own `~/.claude` is the source of truth.
+ */
+export function checkCliAuth(
+  runtime: AgentRuntime,
+  apiKey?: string,
+  userId?: string | null,
+): CliAuthStatus {
   const adapter = tryGetAdapter(runtime);
   if (!adapter) return { authenticated: false, method: "none" };
-  return adapter.checkAuth({ apiKeys: legacyApiKeysFor(runtime, apiKey) });
+  return adapter.checkAuth({
+    apiKeys: legacyApiKeysFor(runtime, apiKey),
+    agentHomeDir: getUserAgentHome(userId ?? null),
+  });
 }
 
 export async function listCliModels(
@@ -370,6 +394,19 @@ export interface SpawnSessionOpts {
   stoppedMessage?: string;
   failedMessagePrefix?: string;
   emitCompletionMessage?: boolean;
+  /**
+   * The Bidwright user this session belongs to. In server mode the runtime
+   * resolves this to a per-user agent-home dir (CLAUDE_CONFIG_DIR / CODEX_HOME
+   * / XDG_DATA_HOME / HOME, depending on adapter) so each user's CLI auth
+   * state is isolated from every other user on the host.
+   */
+  userId?: string | null;
+  /**
+   * The user's organization id, used to namespace project workspace
+   * snapshots (so two orgs with colliding cuids stay separated). When
+   * unset, snapshots fall under a generic "_" org bucket.
+   */
+  organizationId?: string | null;
 }
 
 export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
@@ -380,10 +417,13 @@ export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
 }
 
 /**
- * Build the per-process child with proper cwd/env, and a Windows .bat
- * shim when needed. The shim is the same trick the old code used to
- * dodge cmd.exe quoting — adapter declares where the prompt lives via
- * `promptHandling`.
+ * Fork a CLI process via the active {@link AgentRuntimeHost}.
+ *
+ * The actual spawn lives in `agent-host/local-process.ts` (lifted byte-for-
+ * byte from this file's old inline `spawnChild`). Going through the host
+ * factory means future deployment modes — bubblewrap-isolated multitenant
+ * Docker, cloud sandboxes — can swap in stronger isolation without
+ * touching this orchestration layer.
  */
 async function spawnChild(
   plan: SpawnPlan,
@@ -391,71 +431,16 @@ async function spawnChild(
   cliEnv: Record<string, string>,
   isWin: boolean,
   batSuffix: "run" | "resume",
+  userId?: string | null,
 ): Promise<ChildProcess> {
-  if (!isWin) {
-    console.log(
-      `[cli:spawn] cmd=${plan.cliCmd} cwd=${projectDir} argCount=${plan.args.length}`,
-    );
-    const child = spawn(plan.cliCmd, plan.args, {
-      cwd: projectDir,
-      env: { ...process.env, ...cliEnv },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    console.log(`[cli:spawn] pid=${child.pid}`);
-    return child;
-  }
-
-  // Windows: resolve the .cmd/.bat/.exe behind the binary name and wrap in a
-  // launcher .bat so we don't fight cmd.exe over argument quoting.
-  let resolvedCmd = plan.cliCmd;
-  try {
-    const candidates = execSync(`where ${plan.cliCmd}`, { encoding: "utf-8" })
-      .trim()
-      .split(/\r?\n/);
-    resolvedCmd =
-      candidates.find((c) => /\.(cmd|bat|exe)$/i.test(c)) || candidates[0] || resolvedCmd;
-  } catch {
-    // fall back to plan.cliCmd
-  }
-
-  const args = [...plan.args];
-  const promptFile = join(projectDir, ".bidwright-prompt.txt");
-  let usePromptStdin = false;
-
-  if (plan.promptHandling.kind === "flag") {
-    const idx = plan.promptHandling.index;
-    if (idx >= 0 && idx < args.length) {
-      await writeFile(promptFile, args[idx], "utf-8");
-      args[idx] = "Execute the instructions in .bidwright-prompt.txt";
-    }
-  } else if (plan.promptHandling.kind === "positional-stdin") {
-    const idx = plan.promptHandling.index;
-    if (idx >= 0 && idx < args.length) {
-      await writeFile(promptFile, args[idx], "utf-8");
-      args[idx] = "-";
-      usePromptStdin = true;
-    }
-  } // "positional" needs no transformation; quoting handles it.
-
-  const batLines = ["@echo off"];
-  const quotedArgs = args.map(quoteWindowsArg);
-  if (usePromptStdin) {
-    batLines.push(`type "${promptFile}" | call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
-  } else {
-    batLines.push(`call "${resolvedCmd}" ${quotedArgs.join(" ")}`);
-  }
-
-  const batFile = join(projectDir, `.bidwright-${batSuffix}.bat`);
-  await writeFile(batFile, batLines.join("\r\n") + "\r\n");
-
-  console.log(`[cli:spawn:win] bat=${batFile} cmd=${resolvedCmd}`);
-  const child = spawn("cmd.exe", ["/c", batFile], {
-    cwd: projectDir,
-    env: { ...process.env, ...cliEnv },
-    stdio: ["ignore", "pipe", "pipe"],
+  return getAgentRuntimeHost().spawnProcess({
+    plan,
+    projectDir,
+    cliEnv,
+    isWin,
+    batSuffix,
+    userId,
   });
-  console.log(`[cli:spawn:win] pid=${child.pid}`);
-  return child;
 }
 
 /**
@@ -587,6 +572,41 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   const { mcpRunner, mcpArgs, isWin } = resolveMcpRunner();
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
+  const agentHomeDir = await ensureUserAgentHome(opts.userId);
+
+  // If we're in stateless multi-host mode (R2 / MinIO / S3 backed), pull
+  // this project's workspace snapshot down before the adapter scaffolds
+  // its native config files. The restore is idempotent and a no-op when
+  // there's no snapshot yet (first run for this project) or no storage
+  // backend configured (single-host self-host / desktop). Errors here
+  // bubble up because spawning against a half-restored workspace is
+  // worse than a clear "couldn't restore your project" message.
+  const workspaceStorage = getWorkspaceStorage();
+  if (workspaceStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    try {
+      const restored = await restoreWorkspaceIfPresent({
+        storage: workspaceStorage,
+        key: wsKey,
+        targetDir: opts.projectDir,
+      });
+      if (restored) {
+        console.log(
+          `[cli:spawn] restored workspace from snapshot key=${wsKey} project=${opts.projectId}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[cli:spawn] workspace restore failed for project=${opts.projectId} (key=${wsKey}); proceeding with whatever's on local disk:`,
+        err instanceof Error ? err.message : err,
+      );
+      // Don't throw — a stale local copy is still more useful than no
+      // session at all. The next snapshot on session-exit will overwrite.
+    }
+  }
 
   // Always materialize the bidwright MCP config file. Adapters that need it
   // (Claude --mcp-config) reference it; others ignore it.
@@ -605,6 +625,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     permissions: [...BIDWRIGHT_PERMISSIONS],
     isWin,
     isResume: false,
+    agentHomeDir,
   });
 
   const plan = await adapter.buildSpawnPlan({
@@ -619,6 +640,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     mcpEnv,
     isWin,
     mcpConfigPath,
+    agentHomeDir,
   });
 
   const cliEnv: Record<string, string> = {
@@ -627,7 +649,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     ...plan.extraEnv,
   };
 
-  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "run");
+  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "run", opts.userId);
 
   const events = new EventEmitter();
   const session: CliSession = {
@@ -643,6 +665,24 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   session._spawnOpts = { ...opts, reasoningEffort };
   session._recoveryCount = 0;
   sessions.set(opts.projectId, session);
+
+  // Snapshot the project workspace to remote storage when the session
+  // exits (multi-host hosted SaaS so the user's files follow them across
+  // pool members). No-op when WORKSPACE_STORAGE_PROVIDER is unset (every
+  // self-host / desktop deploy).
+  if (workspaceStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    child.once("exit", () => {
+      void snapshotWorkspaceSafe({
+        storage: workspaceStorage,
+        key: wsKey,
+        sourceDir: opts.projectDir,
+      });
+    });
+  }
 
   // ── Inactivity watchdog ─────────────────────────────────────
   const INACTIVITY_TIMEOUT_MINUTES = 15;
@@ -803,6 +843,36 @@ async function spawnResumedSession(
   const { mcpRunner, mcpArgs, isWin } = resolveMcpRunner();
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
+  const agentHomeDir = await ensureUserAgentHome(opts.userId);
+
+  // Resume flow: same workspace-restore semantics as spawnSession. If the
+  // user landed on a host that doesn't have the local copy (stateless
+  // pool) we pull the snapshot down before the adapter scaffolds.
+  const resumeWorkspaceStorage = getWorkspaceStorage();
+  if (resumeWorkspaceStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    try {
+      const restored = await restoreWorkspaceIfPresent({
+        storage: resumeWorkspaceStorage,
+        key: wsKey,
+        targetDir: opts.projectDir,
+      });
+      if (restored) {
+        console.log(
+          `[cli:resume] restored workspace from snapshot key=${wsKey} project=${opts.projectId}`,
+        );
+      }
+    } catch (err) {
+      console.error(
+        `[cli:resume] workspace restore failed for project=${opts.projectId} (key=${wsKey}); proceeding with whatever's on local disk:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   const mcpConfigPath = await writeMcpConfigFile(
     opts.projectDir,
     mcpRunner,
@@ -818,6 +888,7 @@ async function spawnResumedSession(
     permissions: [...BIDWRIGHT_PERMISSIONS],
     isWin,
     isResume: true,
+    agentHomeDir,
   });
 
   const plan = await adapter.buildResumePlan({
@@ -833,6 +904,7 @@ async function spawnResumedSession(
     isWin,
     mcpConfigPath,
     sessionId,
+    agentHomeDir,
   });
 
   const cliEnv: Record<string, string> = {
@@ -841,7 +913,7 @@ async function spawnResumedSession(
     ...plan.extraEnv,
   };
 
-  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "resume");
+  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "resume", opts.userId);
 
   const events = new EventEmitter();
   const session: CliSession = {
@@ -866,6 +938,25 @@ async function spawnResumedSession(
 
   sessions.set(opts.projectId, session);
   wireChildProcess(child, session, adapter, events);
+
+  // Mirror the spawnSession flow: snapshot the workspace on exit so a
+  // resumed session also persists its final state to remote storage.
+  // No-op when WORKSPACE_STORAGE_PROVIDER is unset.
+  const resumeStorage = getWorkspaceStorage();
+  if (resumeStorage.ready()) {
+    const wsKey = workspaceStorageKey({
+      organizationId: opts.organizationId,
+      projectId: opts.projectId,
+    });
+    child.once("exit", () => {
+      void snapshotWorkspaceSafe({
+        storage: resumeStorage,
+        key: wsKey,
+        sourceDir: opts.projectDir,
+      });
+    });
+  }
+
   await persistSessionState(session, { resumed: true });
   return session;
 }

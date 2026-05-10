@@ -1,5 +1,7 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
+import websocket from "@fastify/websocket";
 import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
@@ -100,6 +102,7 @@ import { catalogRoutes } from "./routes/catalog-routes.js";
 import { assemblyRoutes } from "./routes/assembly-routes.js";
 import { laborUnitRoutes } from "./routes/labor-unit-routes.js";
 import { settingsRoutes } from "./routes/settings-routes.js";
+import { userRoutes } from "./routes/user-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
@@ -1850,6 +1853,26 @@ export function buildServer() {
       parts: MULTIPART_MAX_FILES + MULTIPART_MAX_FIELDS,
       fileSize: MULTIPART_MAX_FILE_SIZE_BYTES
     }
+  });
+
+  // WebSocket transport — currently used by the CLI OAuth login modal to
+  // stream a PTY between the browser xterm.js terminal and the server-side
+  // `claude` / `codex` / `opencode` / `gemini` login process.
+  app.register(websocket, {
+    options: {
+      // Login flows occasionally print large QR codes / device codes; cap
+      // payloads at 1 MiB so a runaway CLI can't OOM the server.
+      maxPayload: 1 * 1024 * 1024,
+    },
+  });
+
+  // Rate limiter — applied opt-in via `config.rateLimit` on a per-route
+  // basis (currently /api/auth/signup). Default config disables the
+  // global limit and lets routes set their own. Hosted deployments may
+  // also wrap brute-protect at the Caddy edge (see infra/Caddyfile).
+  app.register(rateLimit, {
+    global: false,
+    skipOnError: true,
   });
 
   app.register(authPlugin);
@@ -5465,8 +5488,9 @@ export function buildServer() {
     const { prompt, categories } = request.body as { prompt: string; categories?: string[] };
     if (!prompt?.trim()) return reply.code(400).send({ message: "prompt is required" });
 
-    const settings = await request.store!.getSettings();
-    const integrations = settings.integrations ?? {} as any;
+    // User-overlaid integrations: a user's personal API key wins over the
+    // org default, so plugin generation bills against the right account.
+    const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
     const apiKey = integrations.anthropicKey ?? process.env.ANTHROPIC_API_KEY ?? integrations.openaiKey ?? process.env.OPENAI_API_KEY ?? "";
     const provider = integrations.llmProvider ?? process.env.LLM_PROVIDER ?? (apiKey ? "anthropic" : "openai");
     const model = integrations.llmModel ?? process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
@@ -6333,6 +6357,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(scheduleImportRoutes);
   app.register(rateScheduleRoutes);
   app.register(settingsRoutes);
+  app.register(userRoutes);
   app.register(integrationsRoutes);
   app.register(webhooksRoutes);
   app.register(costIntelligenceRoutes);

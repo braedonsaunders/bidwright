@@ -134,3 +134,65 @@ export async function captureBrand(websiteUrl: string) {
     body: JSON.stringify({ websiteUrl }),
   });
 }
+
+// ── Per-user settings ────────────────────────────────────────────────────
+// User-scoped overrides for credentials and preferences. Keys mirror
+// AppSettingsRecord["integrations"] so the spawn pipeline can shallow-merge
+// these onto org defaults. OAuth blocks are nested objects keyed by
+// `<provider>Oauth = { accessToken, refreshToken?, expiresAt? }`.
+
+export interface UserOauthCredential {
+  accessToken: string;
+  refreshToken?: string;
+  expiresAt?: string;
+}
+
+export interface UserSettingsRecord {
+  integrations: Partial<{
+    anthropicKey: string;
+    openaiKey: string;
+    geminiKey: string;
+    openrouterKey: string;
+    anthropicOauth: UserOauthCredential;
+    openaiOauth: UserOauthCredential;
+    googleOauth: UserOauthCredential;
+    agentRuntime: string;
+    agentModel: string;
+    agentReasoningEffort: string;
+    claudeCodePath: string;
+    codexPath: string;
+    opencodePath: string;
+    geminiPath: string;
+  }>;
+  preferences: Record<string, unknown>;
+  updatedAt: string | null;
+}
+
+/**
+ * For each provider/kind slot, returns where the credential the spawn
+ * pipeline will actually use is sourced from. Lets the UI render
+ * "Using: your Claude Pro OAuth" / "Using: org Anthropic API key" without
+ * re-implementing the merge logic.
+ */
+export interface EffectiveCredentialSources {
+  sources: Record<string, { source: "user" | "organization" | "none"; kind: "api_key" | "oauth" | null }>;
+}
+
+export async function getUserSettings() {
+  return apiRequest<UserSettingsRecord>("/user/settings");
+}
+
+export async function updateUserSettings(patch: {
+  integrations?: UserSettingsRecord["integrations"];
+  preferences?: UserSettingsRecord["preferences"];
+}) {
+  return apiRequest<UserSettingsRecord>("/user/settings", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+}
+
+export async function getEffectiveCredentialSources() {
+  return apiRequest<EffectiveCredentialSources>("/user/settings/effective");
+}

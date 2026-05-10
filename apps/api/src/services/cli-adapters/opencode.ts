@@ -17,7 +17,7 @@
  */
 
 import { existsSync } from "node:fs";
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import type {
@@ -205,7 +205,7 @@ export const opencodeAdapter: CliAdapter = {
     return { available: true, path, version: getCliVersion(path) } satisfies CliDetectResult;
   },
 
-  checkAuth({ apiKeys }): CliAuthStatus {
+  checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
     if (
       apiKeys.anthropic ||
       apiKeys.openai ||
@@ -217,6 +217,14 @@ export const opencodeAdapter: CliAdapter = {
       process.env.OPENROUTER_API_KEY
     ) {
       return { authenticated: true, method: "api_key" };
+    }
+    if (agentHomeDir) {
+      // Server mode: OpenCode follows XDG Base Directory; we redirect it via
+      // XDG_DATA_HOME=<agentHomeDir>/data, so OAuth lands at
+      // <agentHomeDir>/data/opencode/auth.json.
+      const userOpencodeAuth = join(agentHomeDir, "data", "opencode", "auth.json");
+      if (existsSync(userOpencodeAuth)) return { authenticated: true, method: "oauth" };
+      return { authenticated: false, method: "none" };
     }
     // OpenCode persists OAuth tokens under the OS data dir.
     const home = homeDir();
@@ -245,6 +253,22 @@ export const opencodeAdapter: CliAdapter = {
 
   async prepareWorkspace(ctx) {
     await writeOpencodeConfig(ctx);
+    if (ctx.agentHomeDir) {
+      // Server mode: redirect XDG so OpenCode reads/writes its OAuth token
+      // and config under <agentHomeDir>/data/opencode and <agentHomeDir>/config/opencode
+      // instead of the host-wide ~/.local/share/opencode that's shared across
+      // every container user.
+      const userDataHome = join(ctx.agentHomeDir, "data");
+      const userConfigHome = join(ctx.agentHomeDir, "config");
+      await mkdir(join(userDataHome, "opencode"), { recursive: true });
+      await mkdir(join(userConfigHome, "opencode"), { recursive: true });
+      return {
+        extraEnv: {
+          XDG_DATA_HOME: userDataHome,
+          XDG_CONFIG_HOME: userConfigHome,
+        },
+      };
+    }
     return {};
   },
 

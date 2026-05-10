@@ -6,6 +6,18 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentRuntime } from "../services/cli-runtime.js";
+import {
+  startLoginSession,
+  attachLoginSession,
+  writeLoginInput,
+  resizeLoginSession,
+  killLoginSession,
+  getLoginSession,
+  getLoginSessionStatus,
+  markSessionAuthenticated,
+  LoginCliMissingError,
+  LoginNotSupportedError,
+} from "../services/cli-login-pty.js";
 import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "../services/cli-adapters/registry.js";
 import { generateInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
@@ -1002,7 +1014,7 @@ async function prepareCliAgentWorkspace(input: {
   });
 
   const settings = await store.getSettings();
-  const integrations = (settings as any)?.integrations || {};
+  const integrations = await store.getEffectiveIntegrations(request.user?.id);
   const estimateDefaults = (settings as any)?.defaults || {};
   const persona = await resolveEstimatorPersonaForPrompt(store, input.personaId);
 
@@ -1098,8 +1110,7 @@ export function registerCliRoutes(app: FastifyInstance) {
   // ── CLI Detection + Auth Status ──────────────────────────────
   app.get("/api/cli/detect", async (request) => {
     const store = request.store!;
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const configuredRuntime = isCliRuntime(integrations.agentRuntime) ? integrations.agentRuntime : null;
     const configuredModel = configuredRuntime ? normalizeCliModel(configuredRuntime, integrations.agentModel) : null;
 
@@ -1109,7 +1120,11 @@ export function registerCliRoutes(app: FastifyInstance) {
     for (const adapter of listAdapters()) {
       const cliPath = resolveCliPathOverride(adapter.id, integrations) || undefined;
       const detected = detectCli(adapter.id, cliPath);
-      const auth = checkCliAuth(adapter.id, resolveRuntimeApiKey(adapter.id, integrations));
+      const auth = checkCliAuth(
+        adapter.id,
+        resolveRuntimeApiKey(adapter.id, integrations),
+        request.user?.id ?? null,
+      );
       const models = detected.available
         ? await listRuntimeModels(adapter.id, integrations).catch(() => [])
         : [];
@@ -1147,8 +1162,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     }
 
     const store = request.store!;
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const cliPath = resolveCliPathOverride(runtime, integrations, requestedPath);
     const detected = detectCli(
       runtime,
@@ -1256,9 +1270,11 @@ export function registerCliRoutes(app: FastifyInstance) {
       store,
     });
 
-    // Fetch settings early so we can pass integrations into CLAUDE.md params
+    // Fetch settings early so we can pass integrations into CLAUDE.md params.
+    // Integrations come from the user-overlaid (org defaults + user
+    // overrides) blob so OAuth tokens / personal API keys land in the spawn.
     const settingsEarly = await store.getSettings();
-    const integrationsEarly = (settingsEarly as any)?.integrations || {};
+    const integrationsEarly = await store.getEffectiveIntegrations(request.user?.id);
     const estimateDefaults = (settingsEarly as any)?.defaults || {};
     const runtime = resolveCliRuntime(body.runtime, integrationsEarly.agentRuntime);
     const adapter = getAdapter(runtime);
@@ -1356,9 +1372,10 @@ export function registerCliRoutes(app: FastifyInstance) {
       },
     }).catch(() => {});
 
-    // Get settings for auth token
+    // Get settings for auth token. Integrations are user-overlaid so the
+    // CLI spawn picks up the user's OAuth / personal API key when set.
     const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const benchmarkingEnabled = (settings as any)?.defaults?.benchmarkingEnabled !== false;
     const instructionFile = adapter.primaryInstructionFile;
 
@@ -1427,6 +1444,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         revisionId: revision.id,
         quoteId: quote.id,
         customCliPath: resolveCliPathOverride(runtime, integrations),
+        userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(integrations),
       });
 
@@ -1514,8 +1533,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       return reply.code(404).send({ error: "Project not found" });
     }
 
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const latestRun = await prisma.aiRun.findFirst({
       where: { projectId, kind: "cli-intake" },
       orderBy: { createdAt: "desc" },
@@ -1544,6 +1562,8 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
         customCliPath: resolveCliPathOverride(runtime, integrations),
+        userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
       });
@@ -1618,8 +1638,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     const ingestionBlock = ingestionStartBlock(project);
     if (ingestionBlock) return reply.code(409).send(ingestionBlock);
 
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const latestRun = await prisma.aiRun.findFirst({
       where: { projectId, kind: "cli-intake" },
       orderBy: { createdAt: "desc" },
@@ -1695,6 +1714,8 @@ ${message}`;
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
         customCliPath: resolveCliPathOverride(runtime, prepared.integrations),
+        userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
         emitCompletionMessage: false,
@@ -1722,8 +1743,7 @@ ${message}`;
       fullPrompt = `First, look at the image file at "${imagePath}". Then answer: ${prompt}`;
     }
 
-    const settings = await request.store!.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
     const askModel = normalizeCliModel("claude-code", integrations.agentModel);
     const askEffort = mapClaudeEffort(normalizeCliReasoningEffort(integrations.agentReasoningEffort));
 
@@ -1737,7 +1757,7 @@ ${message}`;
       ];
       if (askEffort) args.push("--effort", askEffort);
 
-      // Build env — pass API key if configured
+      // Build env — pass API key if configured (user override wins over org default)
       const env: Record<string, string> = { ...process.env as any };
       if (integrations.anthropicKey) env.ANTHROPIC_API_KEY = integrations.anthropicKey;
 
@@ -1912,9 +1932,9 @@ ${message}`;
     const book = await store.getKnowledgeBook(bookId);
     if (!book) return { error: "Book not found" };
 
-    // Get Azure DI credentials
-    const settings = await store.getSettings();
-    const integrations = (settings as any)?.integrations || {};
+    // Integrations are user-overlaid so the per-user OAuth / personal API
+    // key reaches the dataset-extraction CLI spawn, not just org defaults.
+    const integrations = await store.getEffectiveIntegrations(request.user?.id);
     const runtime = resolveCliRuntime(requestedRuntime, integrations.agentRuntime);
     const normalizedModel = normalizeCliModel(runtime, model ?? integrations.agentModel);
     const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);
@@ -2027,6 +2047,8 @@ Merge tables that span multiple pages. Skip non-data pages.
       runtime,
       model: normalizedModel,
       authToken: token,
+      userId: request.user?.id ?? null,
+      organizationId: request.user?.organizationId ?? null,
       ...buildSpawnApiKeys(integrations),
       reasoningEffort,
     });
@@ -2269,5 +2291,207 @@ Merge tables that span multiple pages. Skip non-data pages.
       waiting: true,
       questionId: questionId || pending?.id || null,
     };
+  });
+
+  // ── CLI OAuth login (PTY + WebSocket) ──────────────────────────
+  // Spawn the runtime's interactive `login` flow inside a real PTY so the
+  // browser can drive it through xterm.js. The flow runs *inside* the
+  // current user's per-user agent-home namespace so the OAuth credential
+  // it produces lands at the right path on disk and is picked up by every
+  // subsequent CLI spawn for that user (and only that user).
+
+  /**
+   * POST /api/cli/login
+   * Body: { runtime: AgentRuntime }
+   * Returns: { sessionId } — open WS at /api/cli/login/:sessionId/stream
+   *                          to attach.
+   */
+  app.post("/api/cli/login", async (request, reply) => {
+    const userId = request.user?.id;
+    if (!userId) {
+      return reply.code(401).send({ error: "Authentication required" });
+    }
+    const body = (request.body || {}) as { runtime?: string };
+    if (!body.runtime || typeof body.runtime !== "string" || !isCliRuntime(body.runtime)) {
+      return reply.code(400).send({ error: `runtime must be one of: ${listAdapters().map((a) => a.id).join(", ")}` });
+    }
+    try {
+      const result = await startLoginSession({ userId, runtime: body.runtime });
+      return { sessionId: result.sessionId, runtime: body.runtime };
+    } catch (err) {
+      if (err instanceof LoginCliMissingError) {
+        return reply.code(404).send({ error: err.message });
+      }
+      if (err instanceof LoginNotSupportedError) {
+        return reply.code(400).send({ error: err.message });
+      }
+      request.log.error(err, "Failed to start CLI login session");
+      return reply.code(500).send({
+        error: err instanceof Error ? err.message : "Failed to start login session",
+      });
+    }
+  });
+
+  /**
+   * GET /api/cli/login/:sessionId/status
+   * Returns runtime state of a login session (no scrollback). The browser
+   * polls this after seeing the OAuth URL so it knows when the credential
+   * has actually landed on disk and the modal can close itself.
+   */
+  app.get("/api/cli/login/:sessionId/status", async (request, reply) => {
+    const userId = request.user?.id;
+    if (!userId) return reply.code(401).send({ error: "Authentication required" });
+    const { sessionId } = request.params as { sessionId: string };
+    const session = getLoginSession(sessionId);
+    if (!session) return reply.code(404).send({ error: "Login session not found" });
+    if (session.userId !== userId) return reply.code(403).send({ error: "Login session not owned by this user" });
+
+    // Re-run checkCliAuth scoped to this user to detect that the OAuth
+    // dance has completed (credentials file wrote successfully). We do not
+    // mark the session authenticated unless we positively detect it; the
+    // browser polls until exited or authenticated to close the modal.
+    const auth = checkCliAuth(session.runtime, undefined, userId);
+    if (auth.authenticated && auth.method !== "api_key") {
+      markSessionAuthenticated(sessionId);
+    }
+
+    return { ...getLoginSessionStatus(sessionId), auth };
+  });
+
+  /**
+   * DELETE /api/cli/login/:sessionId
+   * User-initiated termination — used when the modal is closed without
+   * completing the flow. Idempotent on already-exited sessions.
+   */
+  app.delete("/api/cli/login/:sessionId", async (request, reply) => {
+    const userId = request.user?.id;
+    if (!userId) return reply.code(401).send({ error: "Authentication required" });
+    const { sessionId } = request.params as { sessionId: string };
+    const session = getLoginSession(sessionId);
+    if (!session) return { ok: true, alreadyGone: true };
+    if (session.userId !== userId) {
+      return reply.code(403).send({ error: "Login session not owned by this user" });
+    }
+    await killLoginSession(sessionId, "user");
+    return { ok: true, alreadyGone: false };
+  });
+
+  /**
+   * GET /api/cli/login/:sessionId/stream  (WebSocket)
+   * Bidirectional bridge between the browser xterm.js terminal and the
+   * server-side PTY. Frame format is JSON, one message per frame:
+   *
+   *   client → server:
+   *     { type: "input",  data: string }       — keystrokes / paste
+   *     { type: "resize", cols: number, rows: number }
+   *     { type: "kill"   }                     — equivalent to DELETE
+   *
+   *   server → client:
+   *     { type: "data",   data: string }       — bytes from the PTY
+   *     { type: "exit",   code: number | null } — process exited
+   *     { type: "auth-ok" }                    — credentials file detected
+   *     { type: "error",  message: string }
+   */
+  app.register(async (instance) => {
+    instance.get(
+      "/api/cli/login/:sessionId/stream",
+      { websocket: true },
+      (socket, req) => {
+        const userId = req.user?.id;
+        const { sessionId } = req.params as { sessionId: string };
+        const session = getLoginSession(sessionId);
+
+        if (!userId) {
+          socket.send(JSON.stringify({ type: "error", message: "Authentication required" }));
+          socket.close(1008, "unauthenticated");
+          return;
+        }
+        if (!session) {
+          socket.send(JSON.stringify({ type: "error", message: "Login session not found" }));
+          socket.close(1008, "no-session");
+          return;
+        }
+        if (session.userId !== userId) {
+          socket.send(JSON.stringify({ type: "error", message: "Login session not owned by this user" }));
+          socket.close(1008, "wrong-user");
+          return;
+        }
+
+        const send = (frame: object) => {
+          if (socket.readyState === socket.OPEN) {
+            socket.send(JSON.stringify(frame));
+          }
+        };
+
+        // Attach to the PTY broadcaster — backlog replays the scrollback
+        // since the spawn so a late-attaching browser doesn't miss the
+        // OAuth URL.
+        const handle = attachLoginSession(sessionId, (chunk) => {
+          send({ type: "data", data: chunk });
+        });
+        if (!handle) {
+          socket.send(JSON.stringify({ type: "error", message: "Login session unavailable" }));
+          socket.close(1011, "attach-failed");
+          return;
+        }
+
+        if (handle.backlog) send({ type: "data", data: handle.backlog });
+        if (session.exited) {
+          send({ type: "exit", code: session.exitCode });
+        }
+
+        // Periodic check: when the OAuth file lands on disk we send auth-ok
+        // so the browser can close the modal without waiting for the user
+        // to manually exit. The PTY itself often persists a few seconds
+        // after the redirect lands.
+        const authPoll = setInterval(() => {
+          const auth = checkCliAuth(session.runtime, undefined, userId);
+          if (auth.authenticated && auth.method !== "api_key" && !session.authenticatedAt) {
+            markSessionAuthenticated(sessionId);
+            send({ type: "auth-ok" });
+          }
+        }, 1500);
+
+        socket.on("message", (raw) => {
+          let frame: any;
+          try {
+            frame = JSON.parse(raw.toString());
+          } catch {
+            send({ type: "error", message: "Malformed JSON frame" });
+            return;
+          }
+          if (!frame || typeof frame.type !== "string") {
+            send({ type: "error", message: "Frame must include a type" });
+            return;
+          }
+          if (frame.type === "input") {
+            if (typeof frame.data !== "string") {
+              send({ type: "error", message: "input frame requires data:string" });
+              return;
+            }
+            writeLoginInput(sessionId, frame.data);
+          } else if (frame.type === "resize") {
+            const cols = Number(frame.cols);
+            const rows = Number(frame.rows);
+            if (!Number.isFinite(cols) || !Number.isFinite(rows)) {
+              send({ type: "error", message: "resize requires numeric cols/rows" });
+              return;
+            }
+            resizeLoginSession(sessionId, cols, rows);
+          } else if (frame.type === "kill") {
+            void killLoginSession(sessionId, "user");
+          } else {
+            send({ type: "error", message: `Unknown frame type: ${frame.type}` });
+          }
+        });
+
+        const cleanup = () => {
+          clearInterval(authPoll);
+          handle.detach();
+        };
+        socket.on("close", cleanup);
+        socket.on("error", cleanup);
+      },
+    );
   });
 }

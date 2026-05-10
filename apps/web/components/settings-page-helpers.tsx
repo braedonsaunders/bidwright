@@ -500,11 +500,13 @@ export function AgentRuntimeSettings({
 
         <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
           <p className="font-medium text-fg/50">Authentication</p>
-          <p>Claude Code uses your <code className="text-fg/50">ANTHROPIC_API_KEY</code> environment variable or OAuth login (run <code className="text-fg/50">claude</code> in terminal and type <code className="text-fg/50">/login</code>).</p>
-          <p>Codex uses your <code className="text-fg/50">OPENAI_API_KEY</code> environment variable or OAuth login.</p>
-          <p>OpenCode reads provider keys (<code className="text-fg/50">ANTHROPIC_API_KEY</code> / <code className="text-fg/50">OPENAI_API_KEY</code> / <code className="text-fg/50">GOOGLE_API_KEY</code>) and supports its own OAuth via <code className="text-fg/50">opencode auth login</code>.</p>
-          <p>Gemini CLI uses your <code className="text-fg/50">GOOGLE_API_KEY</code> / <code className="text-fg/50">GEMINI_API_KEY</code> or Google OAuth (run <code className="text-fg/50">gemini auth</code>).</p>
-          <p>API keys configured in the API Keys tab are also passed to the CLI automatically.</p>
+          <p>
+            Each estimator can sign in to a CLI runtime with their own subscription, or paste a personal API key, on the{' '}
+            <a href="/profile/credentials" className="underline-offset-4 hover:underline text-fg/60">My credentials</a>{' '}
+            page. Personal credentials override the org defaults below whenever set; this keeps each user&apos;s OAuth
+            token isolated in their own namespace on this server.
+          </p>
+          <p>API keys configured in the API Keys tab are passed to the CLI as the org-wide fallback.</p>
         </div>
       </CardBody>
     </Card>

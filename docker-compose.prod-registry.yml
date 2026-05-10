@@ -85,6 +85,15 @@ services:
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
     restart: unless-stopped
+    # CAP_SYS_ADMIN + relaxed seccomp/apparmor are required by bubblewrap
+    # (BubblewrappedHost) for per-tenant pivot_root + mount inside CLI
+    # session namespaces. Scope is the api container only; bwrap drops
+    # all caps before exec'ing the actual CLI child.
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,8 +106,24 @@ services:
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
-      CLAUDE_CONFIG_DIR: "${CLAUDE_CONFIG_DIR:-/root/.claude}"
-      CODEX_HOME: "${CODEX_HOME:-/root/.codex}"
+      # Multi-tenant server mode: per-user CLI auth namespaces under
+      # AGENT_HOME_ROOT/users/<userId>; spawn-time env wiring isolates each
+      # user's Claude / Codex / OpenCode / Gemini auth from every other user.
+      BIDWRIGHT_MODE: "${BIDWRIGHT_MODE:-server}"
+      AGENT_HOME_ROOT: "${AGENT_HOME_ROOT:-/data/agent-home}"
+      # When true, every CLI spawn runs inside a per-user bwrap sandbox.
+      # Required for any multi-user deployment. bwrap ships setuid root in
+      # the api image so no --privileged flag is needed.
+      BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-true}"
+      # Workspace snapshot/restore — see docker-compose.prod.yml for env shape.
+      WORKSPACE_STORAGE_PROVIDER: "${WORKSPACE_STORAGE_PROVIDER:-}"
+      WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET:-}"
+      WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
+      WORKSPACE_S3_ENDPOINT: "${WORKSPACE_S3_ENDPOINT:-}"
+      WORKSPACE_S3_ACCESS_KEY_ID: "${WORKSPACE_S3_ACCESS_KEY_ID:-}"
+      WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY:-}"
+      WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
+      WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
       # The db-migrate container applies pending migrations (`prisma migrate deploy`) before
       # api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
       BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"
@@ -111,8 +136,7 @@ services:
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
     volumes:
       - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
-      - ${CLAUDE_CONFIG_PATH:-/opt/bidwright/data/agent-home/claude}:/root/.claude
-      - ${CODEX_HOME_PATH:-/opt/bidwright/data/agent-home/codex}:/root/.codex
+      - ${AGENT_HOME_PATH:-/opt/bidwright/data/agent-home}:/data/agent-home
     ports:
       - "${API_PUBLIC_PORT:-3001}:3001"
     healthcheck:

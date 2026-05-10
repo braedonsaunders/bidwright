@@ -197,7 +197,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       }
 
       const settings = await request.store?.getSettings().catch(() => null);
-      const integrations = (settings as any)?.integrations ?? {};
+      const integrations = (await request.store?.getEffectiveIntegrations(request.user?.id).catch(() => null)) ?? {};
       const defaultCurrency = String((settings as any)?.defaults?.currency ?? "USD").trim().toUpperCase().slice(0, 3) || "USD";
       const azureConfig = {
         endpoint: process.env.AZURE_DI_ENDPOINT ?? integrations.azureDiEndpoint ?? "",
@@ -286,8 +286,8 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       if (parsed.data.force) {
         await rm(resolve(reviewFolder, "agent-reviewed-candidates.json"), { force: true });
       }
-      const settings = await request.store?.getSettings().catch(() => null);
-      const integrations = ((settings as any)?.integrations ?? {}) as Record<string, unknown>;
+      const integrations =
+        ((await request.store?.getEffectiveIntegrations(request.user?.id).catch(() => null)) ?? {}) as Record<string, unknown>;
       const runtime = resolveCostAgentRuntime(integrations);
       const adapter = tryGetAdapter(runtime);
       if (!adapter) return reply.code(400).send({ error: `No CLI runtime is registered for ${runtime}` });
@@ -312,6 +312,8 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
         authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         customCliPath: resolveCostAgentCliPath(runtime, integrations),
+        userId: request.user?.id ?? null,
+        organizationId: request.user?.organizationId ?? null,
         ...buildCostAgentApiKeys(integrations),
       });
 
@@ -387,7 +389,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       }
 
       const settings = await request.store?.getSettings().catch(() => null);
-      const integrations = (settings as any)?.integrations ?? {};
+      const integrations = (await request.store?.getEffectiveIntegrations(request.user?.id).catch(() => null)) ?? {};
       const defaultCurrency = String((settings as any)?.defaults?.currency ?? "USD").trim().toUpperCase().slice(0, 3) || "USD";
       const azureConfig = {
         endpoint: process.env.AZURE_DI_ENDPOINT ?? integrations.azureDiEndpoint ?? "",

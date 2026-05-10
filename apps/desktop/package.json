@@ -1,0 +1,89 @@
+{
+  "name": "@bidwright/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Electron-native single-user shell for Bidwright. Bundles embedded Postgres + the Fastify API + the Next.js web app so a non-technical estimator can install one .dmg / .exe / .AppImage and launch the product without Docker.",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "dev": "BIDWRIGHT_DESKTOP_DEV=true electron . --enable-logging",
+    "start": "electron . --enable-logging",
+    "dist": "pnpm run build && electron-builder",
+    "dist:dir": "pnpm run build && electron-builder --dir"
+  },
+  "dependencies": {
+    "@bidwright/api": "workspace:*",
+    "@bidwright/db": "workspace:*",
+    "@bidwright/domain": "workspace:*",
+    "embedded-postgres": "18.3.0-beta.17"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "electron": "^33.2.1",
+    "electron-builder": "^25.1.8",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "com.bidwright.desktop",
+    "productName": "Bidwright",
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json",
+      "!node_modules/**/{*.md,*.markdown,LICENSE*,license*,test,tests,docs,example,examples}",
+      "!**/*.{ts,map,d.ts,bak,backup}"
+    ],
+    "extraResources": [
+      {
+        "from": "../../packages/db/prisma/migrations",
+        "to": "migrations"
+      },
+      {
+        "from": "../web/.next/standalone",
+        "to": "web/standalone"
+      },
+      {
+        "from": "../web/.next/static",
+        "to": "web/standalone/apps/web/.next/static"
+      },
+      {
+        "from": "../web/public",
+        "to": "web/standalone/apps/web/public"
+      },
+      {
+        "from": "../api/dist",
+        "to": "api"
+      }
+    ],
+    "asar": false,
+    "mac": {
+      "category": "public.app-category.business",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] }
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "linux": {
+      "category": "Office",
+      "target": [
+        { "target": "AppImage", "arch": ["x64"] }
+      ]
+    },
+    "publish": null
+  }
+}
