@@ -203,6 +203,7 @@ model Project {
   modelAssets                 ModelAsset[]
   modelTakeoffLinks           ModelTakeoffLink[]
   modelRevisionDiffs          ModelRevisionDiff[]
+  modelFederations            ModelFederation[]
   scheduleTasks               ScheduleTask[]
   scheduleCalendars           ScheduleCalendar[]
   scheduleBaselines           ScheduleBaseline[]
@@ -332,6 +333,7 @@ model QuoteRevision {
   rateSchedules               RateSchedule[]
   estimateStrategies          EstimateStrategy[]
   estimateCalibrationFeedback EstimateCalibrationFeedback[]
+  modelFederations            ModelFederation[]
 
   @@index([quoteId])
 }
@@ -1032,6 +1034,7 @@ model ModelAsset {
   takeoffLinks      ModelTakeoffLink[]
   revisionDiffsBase ModelRevisionDiff[] @relation("ModelRevisionBase")
   revisionDiffsHead ModelRevisionDiff[] @relation("ModelRevisionHead")
+  federationMemberships ModelFederationMember[]
 
   @@unique([projectId, sourceDocumentId])
   @@unique([projectId, fileNodeId])
@@ -1056,6 +1059,22 @@ model ModelElement {
   material     String         @default("")
   bbox         Json           @default("{}")
   geometryRef  String         @default("")
+  /// Construction classification keyed by standard. Mirrors the WorksheetItem
+  /// shape (see classification-utils.ts) so codes propagate cleanly into the
+  /// existing summary rollups (by_uniformat_division, by_masterformat_division,
+  /// etc). Keys: masterformat | uniformat | omniclass | uniclass | din276 | nrm | icms.
+  classification Json         @default("{}")
+  /// Level of Development. Sourced from IFC Pset_VerificationStatus / Pset_LOD
+  /// when present; manual override via UI takes precedence. Values: "100" | "200"
+  /// | "300" | "350" | "400" | "500" | "" (untagged).
+  lod          String         @default("")
+  /// Source of the LOD tag: "manual" | "pset" | "" (untagged). Lets the UI show
+  /// where the value came from and prevents pset-imports from clobbering manual
+  /// overrides on subsequent re-ingest.
+  lodSource    String         @default("")
+  /// Catch-all for everything not promoted to a typed column (raw IFC Psets,
+  /// non-estimating Revit parameters, etc.). Always present; queries should
+  /// prefer typed columns where available.
   properties   Json           @default("{}")
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
@@ -1067,6 +1086,7 @@ model ModelElement {
   @@index([modelId])
   @@index([modelId, externalId])
   @@index([elementClass])
+  @@index([lod])
 }
 
 model ModelQuantity {
@@ -1128,6 +1148,63 @@ model ModelTakeoffLink {
   @@index([modelElementId])
   @@index([modelQuantityId])
   @@index([worksheetItemId])
+}
+
+/// A coordinated grouping of one or more ModelAssets that drive a single
+/// estimate. This is how multi-discipline BIM works in the real world:
+/// architectural + structural + MEP authored separately, federated for takeoff.
+/// Standalone lifecycle — optionally associated with a quote revision for
+/// scenario branching, but a federation can also exist project-wide as the
+/// "current" coordinated model.
+model ModelFederation {
+  id          String         @id @default(cuid())
+  projectId   String
+  project     Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  name        String
+  description String         @default("")
+  /// Optional link to a specific quote revision. When set, the federation
+  /// drives that revision's takeoff/re-takeoff. When null, the federation is
+  /// "loose" — usable as a working draft or a project-wide reference.
+  revisionId  String?
+  revision    QuoteRevision? @relation(fields: [revisionId], references: [id], onDelete: SetNull)
+  /// "active" | "draft" | "archived" — soft state separate from revision status.
+  status      String         @default("active")
+  metadata    Json           @default("{}")
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  members     ModelFederationMember[]
+
+  @@index([projectId])
+  @@index([revisionId])
+}
+
+/// Membership of a ModelAsset in a ModelFederation. One ModelAsset can belong
+/// to many federations (e.g. the same architectural model federated into
+/// different scenarios), and a federation has many members.
+model ModelFederationMember {
+  id           String          @id @default(cuid())
+  federationId String
+  federation   ModelFederation @relation(fields: [federationId], references: [id], onDelete: Cascade)
+  modelId      String
+  model        ModelAsset      @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  /// Discipline tag for the member: "architecture" | "structure" | "mep" |
+  /// "civil" | "landscape" | "fp" | "other". Used for grouping in the
+  /// federation switcher UI; not enforced as enum because non-standard
+  /// disciplines come up.
+  discipline   String          @default("other")
+  /// "primary" | "reference" | "clash". Primary members contribute quantities
+  /// to the takeoff; reference members are visible in the viewer but don't
+  /// roll up; clash members are used for coordination only.
+  role         String          @default("primary")
+  /// Display order within the federation.
+  position     Int             @default(0)
+  metadata     Json            @default("{}")
+  createdAt    DateTime        @default(now())
+
+  @@unique([federationId, modelId])
+  @@index([federationId])
+  @@index([modelId])
 }
 
 model ModelIssue {
