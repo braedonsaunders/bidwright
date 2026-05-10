@@ -96,16 +96,29 @@ export interface PhotoTakeoffResult {
 }
 
 /**
- * Conservative list of providers we currently know speak the vision shape
- * in our agent adapters. If a user has selected a provider not in this set,
- * we 400 with a clear error instead of guessing.
+ * Providers whose adapters translate ChatContentBlock image blocks into the
+ * provider's native vision shape. If the user picks a provider not in this
+ * set, we 400 with a clear error rather than guessing.
  *
- * Keep this list in sync with the adapters under packages/agent/src/llm/adapters.
- * Anthropic's adapter handles image blocks natively; the OpenAI adapter was
- * extended in this same change to translate image content blocks into
- * `image_url` content parts.
+ * Keep this list in sync with the adapters under packages/agent/src/llm/adapters:
+ *   - anthropic   : native image content blocks (base64 source).
+ *   - openai      : Chat Completions vision (`image_url` data: URLs).
+ *   - openrouter  : OpenAI-compatible; passes vision parts through to the
+ *                   chosen upstream model.
+ *   - gemini      : Google's OpenAI-compatible endpoint; same `image_url`
+ *                   shape as OpenAI.
+ *   - lmstudio    : OpenAI-compatible local; vision works when the loaded
+ *                   model supports it (LLaVA, Llama 3.2 Vision, etc).
+ *                   If the local model can't, the LMStudio server itself
+ *                   returns the error — we don't second-guess from here.
  */
-const VISION_CAPABLE_PROVIDERS = new Set(["anthropic", "openai", "openrouter"]);
+const VISION_CAPABLE_PROVIDERS = new Set([
+  "anthropic",
+  "openai",
+  "openrouter",
+  "gemini",
+  "lmstudio",
+]);
 
 function trimText(value: string, max = 240): string {
   if (value.length <= max) return value;

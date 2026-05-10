@@ -28,8 +28,31 @@ export class GeminiAdapter implements LLMAdapter {
       } else if (typeof m.content === "string") {
         messages.push({ role: m.role, content: m.content });
       } else {
-        const text = (m.content ?? []).filter(b => b.type === "text").map(b => b.text).join("");
-        messages.push({ role: m.role, content: text || "" });
+        const blocks = m.content ?? [];
+        if (blocks.some((b) => b.type === "image")) {
+          // Google's Gemini OpenAI-compatible endpoint accepts the standard
+          // Chat Completions vision shape — array of content parts mixing
+          // text and `image_url` with a data: URL. Same as the OpenAI
+          // adapter, mirrored here so the agent's ChatContentBlock contract
+          // stays provider-agnostic.
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const parts: any[] = [];
+          for (const b of blocks) {
+            if (b.type === "text" && b.text) {
+              parts.push({ type: "text", text: b.text });
+            } else if (b.type === "image" && b.imageData) {
+              const mime = b.imageMimeType ?? "image/png";
+              parts.push({
+                type: "image_url",
+                image_url: { url: `data:${mime};base64,${b.imageData}` },
+              });
+            }
+          }
+          messages.push({ role: m.role, content: parts });
+        } else {
+          const text = blocks.filter(b => b.type === "text").map(b => b.text).join("");
+          messages.push({ role: m.role, content: text || "" });
+        }
       }
     }
 
