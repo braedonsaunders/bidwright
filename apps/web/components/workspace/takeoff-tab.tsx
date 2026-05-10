@@ -1060,10 +1060,25 @@ export function TakeoffTab({
   );
   const takeoffDocuments = useMemo(
     () => {
-      const byId = new Map<string, TakeoffDocument>();
-      for (const doc of [...drawings, ...projectFileTakeoffDocuments, ...fileManagerModelDocuments]) {
-        byId.set(doc.id, doc);
+      // Same physical file can surface both as a FileNode (file tree) and as
+      // a ModelAsset (because ingest creates a ModelAsset pointing back at
+      // the FileNode). They use different ids — fn-... vs model-asset-... —
+      // so a plain id-based dedupe lets both into the dropdown. Track which
+      // FileNode ids are already covered by a ModelAsset and skip the raw
+      // FileNode version. The ModelAsset version carries `modelAssetId`,
+      // which the BIM inspect surface needs.
+      const modelAssetFileNodeIds = new Set<string>();
+      for (const doc of fileManagerModelDocuments) {
+        if (doc.fileNodeId) modelAssetFileNodeIds.add(doc.fileNodeId);
       }
+      const byId = new Map<string, TakeoffDocument>();
+      const push = (doc: TakeoffDocument) => byId.set(doc.id, doc);
+      for (const doc of drawings) push(doc);
+      for (const doc of projectFileTakeoffDocuments) {
+        if (doc.fileNodeId && modelAssetFileNodeIds.has(doc.fileNodeId)) continue;
+        push(doc);
+      }
+      for (const doc of fileManagerModelDocuments) push(doc);
       return Array.from(byId.values());
     },
     [drawings, fileManagerModelDocuments, projectFileTakeoffDocuments],
@@ -2628,7 +2643,15 @@ export function TakeoffTab({
   const lastPublishedSnapshotRef = useRef<string | null>(null);
   useEffect(() => {
     if (!onInspectSnapshotChange) return;
-    const mode: InspectSnapshot["mode"] = !selectedDoc
+    // selectedDocId defaults to the first project PDF on mount so the
+    // viewer has something to open when the user clicks into a takeoff.
+    // BUT while we're on the intake landing page (`showLanding && !detached`),
+    // the user hasn't actually opened anything — surfacing the auto-selected
+    // doc's elements in the right-hand Inspect panel is wrong. Force mode
+    // "empty" in that case so the Inspect tab shows its empty state and
+    // doesn't preview a model the estimator hasn't asked to see yet.
+    const isLandingShown = showLanding && !detached;
+    const mode: InspectSnapshot["mode"] = isLandingShown || !selectedDoc
       ? "empty"
       : isDwgDocument
         ? "dwg"
@@ -2703,6 +2726,8 @@ export function TakeoffTab({
     onInspectSnapshotChange(nextSnapshot);
   }, [
     onInspectSnapshotChange,
+    showLanding,
+    detached,
     selectedDoc,
     isDwgDocument,
     isBimDocument,
