@@ -173,10 +173,10 @@ const MODEL_EXTENSIONS = new Set([...BIM_EXTENSIONS, ...MESH_EXTENSIONS]);
 const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
 /** Image file extensions usable for the Site Photos intake. Mirrors what
- *  the photo-takeoff service accepts (JPG / PNG / WebP / HEIC / HEIF) so the
- *  count on the intake card matches the number of photos a user could
+ *  the photo-takeoff service accepts (JPG / PNG / WebP / HEIC / HEIF / TIFF)
+ *  so the count on the intake card matches the number of photos a user could
  *  actually feed into a BOM run. */
-const PHOTO_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif"]);
+const PHOTO_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif", "tif", "tiff"]);
 
 type TakeoffHistoryCommand =
   | { kind: "create"; annotation: TakeoffAnnotation }

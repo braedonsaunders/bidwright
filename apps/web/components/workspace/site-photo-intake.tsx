@@ -34,6 +34,8 @@ const ACCEPTED_TYPES = new Set([
   "image/webp",
   "image/heic",
   "image/heif",
+  "image/tiff",
+  "image/tif",
 ]);
 
 interface PendingImage {
@@ -136,7 +138,7 @@ export function SitePhotoIntake({
       const accepted: PendingImage[] = [];
       for (const file of files.slice(0, remainingSlots)) {
         if (!ACCEPTED_TYPES.has(file.type)) {
-          setError(`"${file.name}" isn't a supported image type. Use JPG, PNG, WebP, or HEIC.`);
+          setError(`"${file.name}" isn't a supported image type. Use JPG, PNG, WebP, HEIC, or TIFF.`);
           continue;
         }
         if (file.size > MAX_IMAGE_BYTES) {
@@ -347,7 +349,9 @@ export function SitePhotoIntake({
                 browse files
               </button>
             </p>
-            <p className="text-[10px] text-fg/35">Up to {MAX_IMAGES} · {formatBytes(MAX_IMAGE_BYTES)} each</p>
+            <p className="text-[10px] text-fg/35">
+            Up to {MAX_IMAGES} · {formatBytes(MAX_IMAGE_BYTES)} each · JPG / PNG / WebP / HEIC / TIFF
+          </p>
             <input
               ref={fileInputRef}
               type="file"
