@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ArrowLeft,
   ArrowRight,
   Download,
   Expand,
@@ -51,6 +52,7 @@ import {
   StretchHorizontal,
   Trash2,
   Box,
+  Boxes,
   Undo2,
   Redo2,
 } from "lucide-react";
@@ -98,14 +100,12 @@ import {
   apiRequest,
   detectTitleBlockScale,
   extractLegendFromPage,
-  suggestLineItemsForAnnotation,
   getFileTree,
   importPreview,
   type DetectedDisciplineRecord,
   type DetectedScaleRecord,
   type EntityCategory,
   type LegendEntryRecord,
-  type LineItemSuggestionRecord,
   type WorkspaceStateRecord,
 } from "@/lib/api";
 import {
@@ -151,7 +151,6 @@ import {
   type TakeoffAnnotation,
 } from "./takeoff/annotation-canvas";
 import { AnnotationSidebar } from "./takeoff/annotation-sidebar";
-import { LinkToLineItemModal } from "./takeoff/link-to-item-modal";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import {
   CreateAnnotationModal,
@@ -159,7 +158,17 @@ import {
 } from "./takeoff/create-annotation-modal";
 
 const DWG_EXTENSIONS = new Set(["dwg", "dxf"]);
-const MODEL_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt", "nwd", "nwf", "nwc"]);
+/** Semantic, element-aware building information formats. These carry typed
+ *  schema (IFC properties, Revit families, Navisworks federation) and drive
+ *  the BIM-takeoff workflow (element table, Pset filtering, classification). */
+const BIM_EXTENSIONS = new Set(["ifc", "rvt", "nwd", "nwf", "nwc", "rfa"]);
+/** Geometry-only formats: parametric solids (STEP/IGES/BREP) plus visualization
+ *  meshes (STL/OBJ/FBX/glTF/etc). No element semantics — visualization and
+ *  bbox/area/volume metrics only. STEP/BREP can be edited in the parametric model editor. */
+const MESH_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae"]);
+/** Union — kept for backwards compatibility with helpers/registries that ask
+ *  "is this any kind of 3D model file?". New code should branch on BIM vs MESH. */
+const MODEL_EXTENSIONS = new Set([...BIM_EXTENSIONS, ...MESH_EXTENSIONS]);
 const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
 
@@ -174,6 +183,14 @@ function getFileExtension(fileName: string): string {
 
 function isDwgFile(fileName: string): boolean {
   return DWG_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isBimFile(fileName: string): boolean {
+  return BIM_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isMeshFile(fileName: string): boolean {
+  return MESH_EXTENSIONS.has(getFileExtension(fileName));
 }
 
 function isCadFile(fileName: string): boolean {
@@ -287,7 +304,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "model" | "dwg";
+  kind: "pdf" | "bim" | "model" | "dwg";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -296,6 +313,13 @@ interface TakeoffDocument {
   /** For knowledge books – use getBookFileUrl */
   bookId?: string;
 }
+
+import type { TakeoffSelection } from "./takeoff-link-view";
+import type { InspectActions, InspectSnapshot, InspectModelElement } from "./takeoff-inspect-view";
+// BimFederationSwitcher + ModelFederation schema/API ship dormant — the
+// federation concept is over-scoped for the everyday estimator workflow.
+// Schema, API endpoints, and the switcher component stay in the codebase
+// for future "advanced" surface; we just don't mount it in the BIM picker.
 
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
@@ -307,6 +331,31 @@ interface TakeoffTabProps {
   detached?: boolean;
   workspaceSyncOriginId?: string;
   selectedWorksheetId?: string | null;
+  /** Externally-controlled selection (e.g. when a parent renders the link UI). */
+  selection?: TakeoffSelection | null;
+  onSelectionChange?: (selection: TakeoffSelection | null) => void;
+  /** Mirror of the current annotations array, for parents that need to render them. */
+  onAnnotationsChange?: (annotations: TakeoffAnnotation[]) => void;
+  /** Incrementing counter — when it changes, takeoff reloads its links from the server. */
+  linksReloadSignal?: number;
+  /** Called whenever this tab mutates links so the parent can re-fetch its own copy. */
+  onLinksMutated?: () => void;
+  /** A ref the parent provides; this tab populates it with its model
+   *  send-to-estimate handler so a sibling component (the side-panel link view)
+   *  can trigger the flow without lifting all of TakeoffTab's state. */
+  modelSendToEstimateRef?: React.MutableRefObject<
+    ((selection: BidwrightModelSelectionMessage) => Promise<void> | void) | null
+  >;
+  /** A ref this tab populates with the per-element line-item creation flow. */
+  modelElementCreateLineItemRef?: React.MutableRefObject<
+    ((elementId: string) => Promise<void> | void) | null
+  >;
+  /** A ref the parent owns; this tab populates it with action callbacks the
+   *  side-panel Inspect tab can drive (toggle visibility, delete, edit, etc.). */
+  inspectActionsRef?: React.MutableRefObject<InspectActions | null>;
+  /** Called whenever the inspect-relevant state changes so the parent can
+   *  re-render the Inspect tab. */
+  onInspectSnapshotChange?: (snapshot: InspectSnapshot) => void;
 }
 
 interface TakeoffSyncBase {
@@ -334,7 +383,8 @@ function takeoffChannelName(projectId: string): string {
 
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
   if (isDwgFile(fileName)) return "dwg";
-  return isCadFile(fileName) ? "model" : "pdf";
+  if (isBimFile(fileName)) return "bim";
+  return isMeshFile(fileName) ? "model" : "pdf";
 }
 
 function takeoffDisplayFileName(fileName: string) {
@@ -358,7 +408,8 @@ function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDo
 
 function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
   if (kind === "dwg") return "DWG/DXF";
-  if (kind === "model") return "Model";
+  if (kind === "bim") return "BIM";
+  if (kind === "model") return "3D";
   return "PDF";
 }
 
@@ -561,11 +612,22 @@ function buildModelElementLineItem(
   const allQuantities = (element.quantities ?? [])
     .map((quantity) => `${quantity.quantityType}: ${formatModelSelectionQuantity(quantity.value, quantity.unit || "")}`)
     .join("\n");
+  // Carry the element's BIM classification straight through to the new
+  // worksheet item. The shape on both sides is identical (see
+  // classification-utils.ts) so codes seeded by the IFC heuristic propagate
+  // into the existing by_uniformat / by_masterformat rollups without any
+  // mapping table here. Empty classifications fall through as undefined.
+  const classification: Record<string, unknown> | undefined =
+    element.classification && Object.keys(element.classification).length > 0
+      ? { ...element.classification }
+      : undefined;
+  const lod = element.lod?.trim();
   return {
     categoryId: options.category?.id ?? null,
     category: options.category?.name ?? "Model Takeoff",
     entityType: options.category?.entityType ?? element.elementClass ?? "Model Element",
     entityName: element.name || element.externalId || element.id,
+    classification,
     description: options.fileName ?? "",
     quantity: primary.quantity,
     uom: primary.uom,
@@ -578,6 +640,9 @@ function buildModelElementLineItem(
       `Element class: ${element.elementClass || "Model Element"}`,
       element.material ? `Material: ${element.material}` : "",
       element.level ? `Level: ${element.level}` : "",
+      lod ? `LOD: ${lod}${element.lodSource === "pset" ? " (from model)" : ""}` : "",
+      classification?.uniformat ? `Uniformat: ${classification.uniformat}` : "",
+      classification?.masterformat ? `MasterFormat: ${classification.masterformat}` : "",
       `External id: ${element.externalId || element.id}`,
       allQuantities ? `Available quantities:\n${allQuantities}` : "",
     ].filter(Boolean).join("\n"),
@@ -682,6 +747,15 @@ export function TakeoffTab({
   detached = false,
   workspaceSyncOriginId,
   selectedWorksheetId,
+  selection,
+  onSelectionChange,
+  onAnnotationsChange,
+  linksReloadSignal,
+  onLinksMutated,
+  modelSendToEstimateRef,
+  modelElementCreateLineItemRef,
+  inspectActionsRef,
+  onInspectSnapshotChange,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
   const selectedWorksheet =
@@ -708,17 +782,24 @@ export function TakeoffTab({
     return entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule").slice().sort((a, b) => a.order - b.order)[0];
   }, [entityCategories]);
 
-  /* Project source documents that are PDFs or CAD files */
-  const projectPdfs: TakeoffDocument[] = (workspace.sourceDocuments ?? [])
-    .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
-    .map((d) => ({
-      id: d.id,
-      label: takeoffDisplayFileName(d.fileName),
-      fileName: d.fileName,
-      kind: getTakeoffDocumentKind(d.fileName),
-      source: "project" as const,
-      projectId,
-    }));
+  /* Project source documents that are PDFs or CAD files.
+   * Memoized: without this, .map() returned fresh objects every render, which
+   * cascaded through `drawings` → `takeoffDocuments` (useMemo) → `selectedDoc`
+   * being a new reference each render. That made the snapshot-publishing effect
+   * downstream re-fire every render, calling parent setState and looping. */
+  const projectPdfs: TakeoffDocument[] = useMemo(
+    () => (workspace.sourceDocuments ?? [])
+      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
+      .map((d) => ({
+        id: d.id,
+        label: takeoffDisplayFileName(d.fileName),
+        fileName: d.fileName,
+        kind: getTakeoffDocumentKind(d.fileName),
+        source: "project" as const,
+        projectId,
+      })),
+    [workspace.sourceDocuments, projectId],
+  );
 
   /* Knowledge books (loaded async) */
   const [knowledgePdfs, setKnowledgePdfs] = useState<TakeoffDocument[]>([]);
@@ -748,13 +829,13 @@ export function TakeoffTab({
     return () => { cancelled = true; };
   }, [projectId]);
 
-  const drawings = [...projectPdfs, ...knowledgePdfs];
+  const drawings = useMemo(() => [...projectPdfs, ...knowledgePdfs], [projectPdfs, knowledgePdfs]);
 
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
   const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "model";
-  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId>("pdf");
+  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
+  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
   const [selectedSpreadsheetNodeId, setSelectedSpreadsheetNodeId] = useState<string | null>(null);
@@ -781,6 +862,7 @@ export function TakeoffTab({
   /* Annotation state */
   const [annotations, setAnnotations] = useState<TakeoffAnnotation[]>([]);
   const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [dwgAnnotationsCache, setDwgAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -790,7 +872,6 @@ export function TakeoffTab({
 
   /* ─── Takeoff Link state ─── */
   const [takeoffLinks, setTakeoffLinks] = useState<TakeoffLinkRecord[]>([]);
-  const [linkModalAnnotationId, setLinkModalAnnotationId] = useState<string | null>(null);
 
   /* Calibration state */
   const [calibration, setCalibration] = useState<Calibration | null>(null);
@@ -951,7 +1032,7 @@ export function TakeoffTab({
           id: `model-asset-${asset.id}`,
           label: asset.fileName,
           fileName: asset.fileName,
-          kind: "model" as const,
+          kind: getTakeoffDocumentKind(asset.fileName),
           source: "project" as const,
           projectId,
           fileNodeId: asset.fileNodeId ?? undefined,
@@ -980,7 +1061,11 @@ export function TakeoffTab({
   const pdfDocuments = takeoffDocuments.filter((d) => d.kind === "pdf");
   const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
   const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
-  const isCadDocument = selectedDocumentKind === "model";
+  const isBimDocument = selectedDocumentKind === "bim";
+  // `isCadDocument` retains its historical "any 3D file" semantic so all the
+  // PDF-only-UI guards (`!isCadDocument && !isDwgDocument && …`) keep working
+  // for both BIM and mesh files. Branch on `isBimDocument` for BIM-specific UI.
+  const isCadDocument = selectedDocumentKind === "model" || selectedDocumentKind === "bim";
   const isDwgDocument = selectedDocumentKind === "dwg";
   const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
   const selectedModelAsset = isCadDocument
@@ -1189,6 +1274,159 @@ export function TakeoffTab({
   useEffect(() => {
     loadTakeoffLinks();
   }, [loadTakeoffLinks]);
+
+  // Reload links when the parent signals a mutation happened outside this tab
+  // (e.g. from the side-panel link UI). Skip the first run so we don't double-fetch.
+  const reloadSignalSeenRef = useRef(false);
+  useEffect(() => {
+    if (linksReloadSignal === undefined) return;
+    if (!reloadSignalSeenRef.current) {
+      reloadSignalSeenRef.current = true;
+      return;
+    }
+    void loadTakeoffLinks();
+  }, [linksReloadSignal, loadTakeoffLinks]);
+
+  // Publish annotations (PDF + DWG merged) to the parent so the side panel can
+  // look them up by id regardless of which viewer drew them.
+  useEffect(() => {
+    onAnnotationsChange?.([...annotations, ...dwgAnnotationsCache]);
+  }, [annotations, dwgAnnotationsCache, onAnnotationsChange]);
+
+  // Mirror the externally-controlled annotation selection into local state.
+  useEffect(() => {
+    if (selection?.kind === "annotation") {
+      if (selection.annotationId !== selectedAnnotationId) {
+        setSelectedAnnotationId(selection.annotationId);
+      }
+    } else if (selection === null && selectedAnnotationId !== null) {
+      setSelectedAnnotationId(null);
+    }
+    // For non-annotation kinds, leave the local annotation selection alone.
+  }, [selection, selectedAnnotationId]);
+
+  // Publish local annotation selection up to the parent.
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    if (selectedAnnotationId) {
+      if (selection?.kind !== "annotation" || selection.annotationId !== selectedAnnotationId) {
+        onSelectionChange({ kind: "annotation", annotationId: selectedAnnotationId });
+      }
+    } else if (selection?.kind === "annotation") {
+      onSelectionChange(null);
+    }
+  }, [selectedAnnotationId, onSelectionChange, selection]);
+
+  // Bridge for dispatching DWG annotation actions (delete) from the side panel.
+  // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
+  const dwgActionsRef = useRef<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>(null);
+
+  // Expose action handlers to the parent via mutable refs. Runs on every render
+  // so refs always point at the latest closure.
+  useEffect(() => {
+    if (modelSendToEstimateRef) {
+      modelSendToEstimateRef.current = handleSendModelSelectionToEstimate;
+    }
+    if (modelElementCreateLineItemRef) {
+      modelElementCreateLineItemRef.current = async (elementId: string) => {
+        const element = modelElements.find((e) => e.id === elementId);
+        if (!element) throw new Error("Model element not found");
+        await handleCreateModelElementLineItem(element);
+      };
+    }
+    if (inspectActionsRef) {
+      const isDwg = isDwgDocument;
+      inspectActionsRef.current = {
+        selectAnnotation: (id) => {
+          // For DWG, route through onSelectionChange so DwgTakeoffSurface picks
+          // it up via the `selection` prop; for PDF, mutate local state directly.
+          if (isDwg) {
+            if (id) onSelectionChange?.({ kind: "annotation", annotationId: id });
+            else if (selection?.kind === "annotation") onSelectionChange?.(null);
+          } else {
+            setSelectedAnnotationId(id);
+          }
+        },
+        toggleAnnotationVisibility: (id) => {
+          // Visibility toggle is a PDF-only feature today (DWG annotations are
+          // always visible). Silently no-op for DWG ids.
+          if (annotations.some((a) => a.id === id)) {
+            handleToggleVisibility(id);
+          }
+        },
+        deleteAnnotation: (id) => {
+          if (annotations.some((a) => a.id === id)) {
+            void handleDeleteAnnotation(id);
+          } else {
+            void dwgActionsRef.current?.deleteAnnotation(id);
+          }
+        },
+        editAnnotation: (id) => {
+          if (annotations.some((a) => a.id === id)) {
+            handleEditAnnotation(id);
+          }
+        },
+        saveAnnotationEdit: (id, updates) => {
+          handleSaveAnnotationEdit(id, updates);
+        },
+        setModelSearch: (s) => setModelElementSearch(s),
+        setModelBasis: (b) => setModelLedgerBasis(b),
+        selectModelElement: (id) => {
+          if (!onSelectionChange) return;
+          if (!id || !selectedModelAsset) {
+            if (selection?.kind === "model-element") onSelectionChange(null);
+            return;
+          }
+          const element = modelElements.find((e) => e.id === id);
+          if (!element) return;
+          onSelectionChange({
+            kind: "model-element",
+            assetId: selectedModelAsset.id,
+            elementId: element.id,
+            elementName: element.name || element.externalId,
+            elementClass: element.elementClass ?? undefined,
+            material: element.material ?? undefined,
+            level: element.level ?? undefined,
+            quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+          });
+        },
+        createLineItemFromElement: async (id) => {
+          // One-click send-to-worksheet from the BIM Inspect element row.
+          // Reuses the same builder that the existing model-takeoff flow uses,
+          // which now plumbs classification + LOD into the new line item and
+          // sets up the ModelTakeoffLink so the line tracks the element on
+          // subsequent revision diffs.
+          const element = modelElements.find((e) => e.id === id);
+          if (!element) return;
+          await handleCreateModelElementLineItem(element);
+        },
+        refreshModel: () => void refreshModelAssets(true),
+        askAiAboutModel: () =>
+          onOpenAgentChat?.(
+            `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Query model elements, quantities, linked worksheet items, and any unlinked scope, then prepare 5D takeoff recommendations for this estimate.`,
+          ),
+      };
+    }
+  });
+
+  // Publish 3D model-editor selection up to the parent so the side-panel link view can render it.
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    if (modelSelection && modelSelection.modelId) {
+      const selectedNodeIds = modelSelection.nodes.map((node) => node.id);
+      onSelectionChange({
+        kind: "model-selection",
+        modelId: modelSelection.modelId,
+        modelDocumentId: modelSelection.modelDocumentId,
+        fileName: modelSelection.fileName,
+        selectedCount: modelSelection.selectedCount,
+        selectedNodeIds,
+        totals: modelSelection.totals,
+      });
+    } else if (selection?.kind === "model-selection") {
+      onSelectionChange(null);
+    }
+  }, [modelSelection, onSelectionChange, selection]);
 
   useEffect(() => {
     if (!projectId || typeof BroadcastChannel === "undefined") return;
@@ -2371,167 +2609,110 @@ export function TakeoffTab({
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
   }
 
-  /* ─── Takeoff Link handlers ─── */
-
-  function handleLinkToLineItem(annotationId: string) {
-    setLinkModalAnnotationId(annotationId);
-  }
-
-  async function handleLinkConfirm(data: { worksheetItemId: string; quantityField: string; multiplier: number }) {
-    if (!linkModalAnnotationId) return;
-    try {
-      await createTakeoffLink(projectId, {
-        annotationId: linkModalAnnotationId,
-        worksheetItemId: data.worksheetItemId,
-        quantityField: data.quantityField,
-        multiplier: data.multiplier,
-      });
-      await loadTakeoffLinks();
-      notifyTakeoffLinksMutated();
-    } catch (err) {
-      console.error("[takeoff-link] Failed to create link:", err);
-    }
-    setLinkModalAnnotationId(null);
-  }
-
-  async function handleSendToEstimate(annotationId: string) {
-    const ann = annotations.find((a) => a.id === annotationId);
-    if (!ann?.measurement) return;
-
-    const targetWs = selectedWorksheet;
-    if (!targetWs) return;
-
-    try {
-      // Determine UOM from annotation measurement
-      const unit = ann.measurement.unit ?? "EA";
-      const uomMap: Record<string, string> = { ft: "LF", "ft\u00B2": "SF", "ft\u00B3": "CF", m: "M", "m\u00B2": "SM", count: "EA" };
-      const uom = uomMap[unit] ?? unit;
-
-      const qty = ann.measurement.value ?? 0;
-      if (!defaultCategory) {
-        setToastType("error");
-        setToastMessage("Configure at least one entity category in Settings before adding takeoff lines.");
-        return;
-      }
-      const result = await createWorksheetItem(projectId, targetWs.id, {
-        categoryId: defaultCategory.id,
-        category: defaultCategory.name,
-        entityType: defaultCategory.entityType,
-        entityName: ann.label || `${ann.type} Measurement`,
-        description: "",
-        quantity: qty,
-        uom,
-        cost: 0,
-        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-        price: 0,
-        sourceNotes: `From takeoff: ${ann.label || ann.type}`,
-      });
-
-      // Extract new item ID from workspace response and create link
-      const newItems = result?.workspace?.worksheets
-        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
-      const newItem = newItems.find((i: { id: string }) =>
-        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id)
-      );
-
-      if (newItem) {
-        await createTakeoffLink(projectId, {
-          annotationId,
-          worksheetItemId: newItem.id,
-        });
-        await loadTakeoffLinks();
-        notifyTakeoffLinksMutated();
-      }
-      notifyWorkspaceMutated();
-    } catch (err) {
-      console.error("[takeoff] Failed to send to estimate:", err);
-    }
-  }
-
-  /* ─── AI line-item suggestions for an annotation ─── */
-
-  async function handleSuggestLineItems(annotationId: string) {
-    return suggestLineItemsForAnnotation(projectId, annotationId);
-  }
-
-  /* Apply one of the AI's suggestions: create a worksheet item using the
-     suggestion's name/code/unit (instead of the raw annotation label) and
-     the annotation's measured quantity, then link the new line item back
-     to the annotation. Same shape as handleSendToEstimate, just sourced
-     from the catalog/rate-schedule match. */
-  async function handleApplySuggestion(
-    annotationId: string,
-    suggestion: LineItemSuggestionRecord,
-  ) {
-    const ann = annotations.find((a) => a.id === annotationId);
-    if (!ann?.measurement) return;
-    const targetWs = selectedWorksheet;
-    if (!targetWs) {
-      console.warn("[takeoff:suggest] No worksheet selected; cannot apply suggestion");
-      return;
-    }
-
-    const quantity =
-      suggestion.recommendedQuantity > 0
-        ? suggestion.recommendedQuantity
-        : ann.measurement.value ?? 0;
-    const uom = suggestion.unit || ann.measurement.unit || "EA";
-    // Suggestions tagged "rateScheduleItem" map to whichever org category sources from rate schedules; everything else falls through to the first enabled category.
-    const targetCat = suggestion.kind === "rateScheduleItem"
-      ? rateScheduleCategory ?? defaultCategory
-      : defaultCategory;
-    if (!targetCat) {
-      setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before adding suggestions.");
-      return;
-    }
-    const category = targetCat.name;
-    const entityName = suggestion.code
-      ? `[${suggestion.code}] ${suggestion.name}`
-      : suggestion.name;
-
-    try {
-      // Forward the catalog or rate-schedule reference so server-side
-      // validation passes — rate-schedule-backed categories (Labour by
-      // default) require rateScheduleItemId, and catalog-backed
-      // categories require itemId. Without these the create-item
-      // endpoint rejects with 400 and the Add action silently fails.
-      const result = await createWorksheetItem(projectId, targetWs.id, {
-        categoryId: targetCat.id,
-        category,
-        entityType: targetCat.entityType,
-        entityName,
-        description: suggestion.reasoning ?? "",
-        quantity,
-        uom,
-        cost: 0,
-        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-        price: 0,
-        sourceNotes: `AI-suggested from takeoff: ${ann.label || ann.type}`,
-        ...(suggestion.kind === "rateScheduleItem"
-          ? { rateScheduleItemId: suggestion.id }
-          : { itemId: suggestion.id }),
-      });
-
-      const newItems = result?.workspace?.worksheets
-        ?.flatMap((ws: { items?: { id: string }[] }) => ws.items ?? []) ?? [];
-      const newItem = newItems.find((i: { id: string }) =>
-        !workspace.worksheets.flatMap((ws) => ws.items).some((existing) => existing.id === i.id),
-      );
-
-      if (newItem) {
-        await createTakeoffLink(projectId, {
-          annotationId,
-          worksheetItemId: newItem.id,
-        });
-        await loadTakeoffLinks();
-        notifyTakeoffLinksMutated();
-      }
-      notifyWorkspaceMutated();
-    } catch (err) {
-      console.error("[takeoff:suggest] Failed to apply suggestion:", err);
-    }
-  }
+  // Publish a snapshot of inspect-relevant state to the parent so the
+  // side-panel Inspect tab can render the appropriate browse view.
+  // Idempotent: skip the parent setState if the rendered snapshot is byte-equal
+  // to the last one we published. Without this guard, a fresh object literal
+  // each call defeated React's bailout and looped through parent re-renders.
+  const lastPublishedSnapshotRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!onInspectSnapshotChange) return;
+    const mode: InspectSnapshot["mode"] = !selectedDoc
+      ? "empty"
+      : isDwgDocument
+        ? "dwg"
+        : isBimDocument
+          ? "bim"
+          : isCadDocument
+            ? "model"
+            : "pdf";
+    const inspectAnnotations =
+      mode === "dwg" ? dwgAnnotationsCache : mode === "pdf" ? annotations : [];
+    const inspectSelectedAnnotationId =
+      mode === "dwg"
+        ? selection?.kind === "annotation"
+          ? selection.annotationId
+          : null
+        : selectedAnnotationId;
+    // Both BIM and 3D-geometry modes carry model elements; PDF/DWG don't.
+    const isModelMode = mode === "bim" || mode === "model";
+    const inspectModelElements: InspectModelElement[] =
+      isModelMode
+        ? modelElements.map((element) => ({
+            id: element.id,
+            name: element.name || element.externalId,
+            externalId: element.externalId,
+            elementClass: element.elementClass ?? null,
+            material: element.material ?? null,
+            level: element.level ?? null,
+            // Phase 2 BIM fields. classification is the typed record; lod/lodSource
+            // come from the per-element schema columns. Use ?? to surface "" as null
+            // so the UI can `lod ?? null` without falsy-vs-empty confusion.
+            classification: (element as { classification?: Record<string, string> }).classification ?? null,
+            lod: (element as { lod?: string }).lod ?? null,
+            lodSource: (element as { lodSource?: string }).lodSource ?? null,
+            quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+            isLinked: linkedModelElementIds.has(element.id),
+          }))
+        : [];
+    const nextSnapshot: InspectSnapshot = {
+      mode,
+      annotations: inspectAnnotations,
+      takeoffLinks,
+      selectedAnnotationId: inspectSelectedAnnotationId,
+      editingAnnotationId,
+      modelElements: inspectModelElements,
+      modelElementsLoading,
+      modelError,
+      modelSyncing,
+      modelSearch: modelElementSearch,
+      modelBasis: modelLedgerBasis,
+      modelAsset:
+        isModelMode && selectedModelAsset
+          ? {
+              id: selectedModelAsset.id,
+              fileName: selectedDoc?.fileName ?? selectedModelAsset.fileName,
+              status: selectedModelAsset.status ?? "pending",
+              parser: String(selectedModelAsset.manifest?.parser ?? selectedModelAsset.format ?? "Not indexed"),
+              isEditable: selectedModelIsEditable,
+              counts: {
+                elements: selectedModelAsset._count?.elements ?? 0,
+                quantities: selectedModelAsset._count?.quantities ?? 0,
+                links: linkedModelLineItems.length,
+                issues: selectedModelAsset._count?.issues ?? 0,
+              },
+            }
+          : null,
+      selectedModelElementId:
+        selection?.kind === "model-element" ? selection.elementId : null,
+    };
+    const serialized = JSON.stringify(nextSnapshot);
+    if (serialized === lastPublishedSnapshotRef.current) return;
+    lastPublishedSnapshotRef.current = serialized;
+    onInspectSnapshotChange(nextSnapshot);
+  }, [
+    onInspectSnapshotChange,
+    selectedDoc,
+    isDwgDocument,
+    isBimDocument,
+    isCadDocument,
+    annotations,
+    dwgAnnotationsCache,
+    selection,
+    selectedAnnotationId,
+    editingAnnotationId,
+    takeoffLinks,
+    modelElements,
+    modelElementsLoading,
+    modelError,
+    modelSyncing,
+    modelElementSearch,
+    modelLedgerBasis,
+    selectedModelAsset,
+    selectedModelIsEditable,
+    linkedModelElementIds,
+    linkedModelLineItems.length,
+  ]);
 
   async function resolveSelectedModelAsset() {
     if (selectedModelAsset) return selectedModelAsset;
@@ -2838,6 +3019,7 @@ export function TakeoffTab({
   const activeToolDef = TOOLS.find((tool) => tool.id === activeTool) ?? TOOLS[0];
   const canUndoTakeoff = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
+  const bimDocuments = takeoffDocuments.filter((doc) => doc.kind === "bim");
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
@@ -2930,10 +3112,10 @@ export function TakeoffTab({
     setShowLanding(false);
   }
 
-  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "model";
+  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
   const intakeToneClasses: Record<
     IntakeOptionTone,
-    { accent: string; active: string; hover: string; icon: string; rail: string; wash: string }
+    { accent: string; active: string; hover: string; icon: string; rail: string; wash: string; ghost: string }
   > = {
     spreadsheet: {
       accent: "text-emerald-600",
@@ -2942,6 +3124,7 @@ export function TakeoffTab({
       icon: "border-emerald-600/25 bg-emerald-600/10 text-emerald-600",
       rail: "bg-emerald-600",
       wash: "bg-emerald-600/5",
+      ghost: "text-emerald-600/[0.06] group-hover/card:text-emerald-600/[0.10]",
     },
     pdf: {
       accent: "text-sky-500",
@@ -2950,6 +3133,7 @@ export function TakeoffTab({
       icon: "border-sky-500/25 bg-sky-500/10 text-sky-500",
       rail: "bg-sky-500",
       wash: "bg-sky-500/5",
+      ghost: "text-sky-500/[0.06] group-hover/card:text-sky-500/[0.10]",
     },
     dwg: {
       accent: "text-amber-500",
@@ -2958,14 +3142,25 @@ export function TakeoffTab({
       icon: "border-amber-500/25 bg-amber-500/10 text-amber-500",
       rail: "bg-amber-500",
       wash: "bg-amber-500/5",
+      ghost: "text-amber-500/[0.06] group-hover/card:text-amber-500/[0.10]",
     },
-    model: {
+    bim: {
       accent: "text-violet-500",
       active: "border-violet-500/45 ring-2 ring-violet-500/10",
       hover: "hover:border-violet-500/45",
       icon: "border-violet-500/25 bg-violet-500/10 text-violet-500",
       rail: "bg-violet-500",
       wash: "bg-violet-500/5",
+      ghost: "text-violet-500/[0.06] group-hover/card:text-violet-500/[0.10]",
+    },
+    model: {
+      accent: "text-rose-500",
+      active: "border-rose-500/45 ring-2 ring-rose-500/10",
+      hover: "hover:border-rose-500/45",
+      icon: "border-rose-500/25 bg-rose-500/10 text-rose-500",
+      rail: "bg-rose-500",
+      wash: "bg-rose-500/5",
+      ghost: "text-rose-500/[0.06] group-hover/card:text-rose-500/[0.10]",
     },
   };
 
@@ -3001,12 +3196,22 @@ export function TakeoffTab({
       disabled: false,
     },
     {
-      id: "model",
-      title: "3D / Model",
-      detail: "Inspect model geometry and linked quantities.",
-      metric: modelDocuments.length.toLocaleString(),
+      id: "bim",
+      title: "BIM",
+      detail: "Building models with element schema, properties, and quantities (IFC, Revit, Navisworks).",
+      metric: bimDocuments.length.toLocaleString(),
       metricLabel: "models",
       icon: Box,
+      tone: "bim",
+      disabled: false,
+    },
+    {
+      id: "model",
+      title: "3D Geometry",
+      detail: "Geometry-only models for visualization and metrics (STEP, glTF, OBJ, STL).",
+      metric: modelDocuments.length.toLocaleString(),
+      metricLabel: "files",
+      icon: Boxes,
       tone: "model",
       disabled: false,
     },
@@ -3038,15 +3243,23 @@ export function TakeoffTab({
             docs: dwgDocuments,
             icon: FileJson,
           }
-        : activeIntakeOption === "model"
+        : activeIntakeOption === "bim"
           ? {
-              title: "3D / Model sources",
-              detail: sourceCountText(modelDocuments.length, "model", "models") || "Model files ready for takeoff",
-              emptyLabel: "No model sources",
-              docs: modelDocuments,
+              title: "BIM models",
+              detail: sourceCountText(bimDocuments.length, "BIM model", "BIM models") || "IFC, Revit, and Navisworks files ready for takeoff",
+              emptyLabel: "No BIM models",
+              docs: bimDocuments,
               icon: Box,
             }
-          : null;
+          : activeIntakeOption === "model"
+            ? {
+                title: "3D geometry",
+                detail: sourceCountText(modelDocuments.length, "geometry file", "geometry files") || "Visualization-only models (STEP, glTF, OBJ, STL)",
+                emptyLabel: "No 3D geometry files",
+                docs: modelDocuments,
+                icon: Boxes,
+              }
+            : null;
 
   /* ─── Render ─── */
 
@@ -3057,59 +3270,86 @@ export function TakeoffTab({
         className="relative flex h-full flex-1 min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel"
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
-          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-            {intakeOptions.map((option) => {
-              const Icon = option.icon;
-              const active = activeIntakeOption === option.id;
-              const tone = intakeToneClasses[option.tone];
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  disabled={option.disabled}
-                  onClick={() => setActiveIntakeOption(option.id)}
-                  className={cn(
-                    "group/card relative z-0 flex min-h-[112px] min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-3 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 xl:min-h-[132px]",
-                    active ? tone.active : tone.hover,
-                    "disabled:cursor-not-allowed disabled:opacity-50"
-                  )}
-                >
-                  <span className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", tone.wash, active && "opacity-100")} />
-                  <motion.span
-                    layoutId={`takeoff-intake-rail-${option.id}`}
-                    className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", tone.rail)}
-                    transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                  />
-                  <span className="relative flex items-start justify-between gap-3">
-                    <span className="flex min-w-0 items-start gap-2.5">
-                      <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", tone.icon)}>
-                        <Icon className="h-[18px] w-[18px]" />
+          <AnimatePresence mode="wait" initial={false}>
+            {activeIntakeOption === null ? (
+              <motion.div
+                key="cards"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="grid min-h-0 flex-1 grid-cols-2 auto-rows-fr gap-2.5 lg:grid-cols-3"
+              >
+                {intakeOptions.map((option) => {
+                  const Icon = option.icon;
+                  const tone = intakeToneClasses[option.tone];
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      disabled={option.disabled}
+                      onClick={() => setActiveIntakeOption(option.id)}
+                      className={cn(
+                        "group/card relative z-0 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-5 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
+                        tone.hover,
+                        "disabled:cursor-not-allowed disabled:opacity-50"
+                      )}
+                    >
+                      <span className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", tone.wash)} />
+                      <Icon
+                        aria-hidden
+                        strokeWidth={1.25}
+                        className={cn(
+                          "pointer-events-none absolute -bottom-10 -right-10 h-56 w-56 transition-all duration-300 group-hover/card:scale-[1.04] group-hover/card:rotate-[-2deg]",
+                          tone.ghost
+                        )}
+                      />
+                      <motion.span
+                        layoutId={`takeoff-intake-rail-${option.id}`}
+                        className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", tone.rail)}
+                        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                      />
+                      <span className="relative flex items-start justify-between gap-3">
+                        <span className="flex min-w-0 items-start gap-2.5">
+                          <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", tone.icon)}>
+                            <Icon className="h-[18px] w-[18px]" />
+                          </span>
+                          <span className="min-w-0 pt-0.5">
+                            <span className="block truncate text-sm font-semibold text-fg">{option.title}</span>
+                            <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{option.detail}</span>
+                          </span>
+                        </span>
+                        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
                       </span>
-                      <span className="min-w-0 pt-0.5">
-                        <span className="block truncate text-sm font-semibold text-fg">{option.title}</span>
-                        <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{option.detail}</span>
+                      <span className="relative mt-auto pt-3">
+                        <span className={cn("block text-[10px] font-semibold uppercase", tone.accent)}>{option.metricLabel}</span>
+                        <span className="mt-1 block truncate text-3xl font-semibold leading-none tabular-nums text-fg">{option.metric}</span>
                       </span>
-                    </span>
-                    <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
-                  </span>
-                  <span className="relative mt-auto pt-3">
-                    <span className={cn("block text-[10px] font-semibold uppercase", tone.accent)}>{option.metricLabel}</span>
-                    <span className="mt-1 block truncate text-3xl font-semibold leading-none tabular-nums text-fg">{option.metric}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeIntakeOption}
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.22, ease: "easeOut" }}
-              className="mt-4 flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm"
-            >
+                    </button>
+                  );
+                })}
+              </motion.div>
+            ) : (
+              <motion.div
+                key={`source-${activeIntakeOption}`}
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.22, ease: "easeOut" }}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <div className="mb-3 flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setActiveIntakeOption(null)}
+                    title="Back to intake options"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    Back
+                  </Button>
+                </div>
+                <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm">
               {activeIntakeOption === "spreadsheet" && (
                 <div className="grid h-full min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[310px_minmax(0,1fr)]">
                   <div className="flex min-w-0 min-h-0 flex-col rounded-md border border-line bg-panel/65 p-3">
@@ -3357,7 +3597,9 @@ export function TakeoffTab({
                   </div>
                 </div>
               )}
-            </motion.div>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </div>
@@ -3373,19 +3615,21 @@ export function TakeoffTab({
       )}
     >
       {/* ─── Top Toolbar ─── */}
-      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-line bg-panel px-2 py-1.5 shrink-0">
+      {/* `overflow-x-auto` lets controls scroll horizontally instead of squishing
+          when the takeoff panel is narrow (e.g. 13" laptop with side panels open).
+          Inner items use `shrink-0` so they keep intrinsic widths and the row scrolls. */}
+      <div className="flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-line bg-panel px-2 py-1.5 shrink-0 [scrollbar-width:thin]">
         {!detached && (
           <>
-            <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake">
+            <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake" className="shrink-0">
               <FolderOpen className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">Intake</span>
+              <span className="hidden 2xl:inline">Intake</span>
             </Button>
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
           </>
         )}
         {/* Document selector */}
-        <div className="flex min-w-0 items-center gap-2">
-          <label className="hidden text-xs font-medium text-fg/50 xl:inline">Source:</label>
+        <div className="flex shrink-0 items-center gap-2">
           <RadixSelect.Root
             value={selectedDocId}
             onValueChange={(v) => {
@@ -3398,7 +3642,7 @@ export function TakeoffTab({
               setAutoCountSnippet(null);
             }}
           >
-            <RadixSelect.Trigger className="inline-flex h-8 w-44 min-w-0 items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2.5 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 2xl:w-56">
+            <RadixSelect.Trigger className="inline-flex h-8 w-36 shrink-0 items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2.5 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 lg:w-44 2xl:w-56">
               <RadixSelect.Value placeholder="No drawings available" />
               <RadixSelect.Icon className="ml-auto shrink-0">
                 <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
@@ -3479,7 +3723,7 @@ export function TakeoffTab({
 
         {!isCadDocument && !isDwgDocument && (
           <>
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
             {onOpenRevisionDiff && !detached && (
               <>
                 <Button
@@ -3487,16 +3731,17 @@ export function TakeoffTab({
                   size="xs"
                   onClick={onOpenRevisionDiff}
                   title="Compare drawing revisions and re-takeoff"
+                  className="shrink-0"
                 >
                   <GitCompare className="h-3.5 w-3.5" />
                   <span className="hidden 2xl:inline">Compare</span>
                 </Button>
-                <Separator className="!h-6 !w-px" />
+                <Separator className="!h-6 !w-px shrink-0" />
               </>
             )}
 
             {/* Page navigation */}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="xs" onClick={handlePrevPage} disabled={page <= 1}>
                 <ChevronLeft className="h-3.5 w-3.5" />
               </Button>
@@ -3519,10 +3764,10 @@ export function TakeoffTab({
               </Button>
             </div>
 
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
 
             {/* Zoom controls */}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="xs" onClick={handleZoomOut}>
                 <Minus className="h-3.5 w-3.5" />
               </Button>
@@ -3543,7 +3788,7 @@ export function TakeoffTab({
               </Button>
             </div>
 
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
 
             {/* Calibration indicator — click to set/reset scale */}
             {calibration ? (
@@ -3993,6 +4238,32 @@ export function TakeoffTab({
               setAutoCountSnippet(null);
             }}
             onWorkspaceMutated={notifyWorkspaceMutated}
+            onSelectedEntityChange={(entitySelection) => {
+              if (!onSelectionChange) return;
+              if (entitySelection) {
+                onSelectionChange({
+                  kind: "cad-entity",
+                  documentId: entitySelection.documentId,
+                  entityId: entitySelection.entityId,
+                  entityType: entitySelection.entityType,
+                  layer: entitySelection.layer,
+                  label: entitySelection.label,
+                  summary: entitySelection.summary,
+                });
+              } else if (selection?.kind === "cad-entity") {
+                onSelectionChange(null);
+              }
+            }}
+            onSelectedAnnotationChange={(annotationId) => {
+              if (!onSelectionChange) return;
+              if (annotationId) {
+                onSelectionChange({ kind: "annotation", annotationId });
+              } else if (selection?.kind === "annotation") {
+                onSelectionChange(null);
+              }
+            }}
+            onAnnotationsChange={setDwgAnnotationsCache}
+            actionsRef={dwgActionsRef}
           />
         ) : (
           <>
@@ -4140,336 +4411,6 @@ export function TakeoffTab({
           )}
         </div>
 
-        {/* Right: Annotation sidebar (embedded — border provided by wrapper) */}
-        {!isCadDocument ? (
-          <div className="flex w-72 shrink-0 flex-col border-l border-line overflow-hidden">
-            <AnnotationSidebar
-              embedded
-              annotations={annotations}
-              onToggleVisibility={handleToggleVisibility}
-              onDelete={handleDeleteAnnotation}
-              onEdit={handleEditAnnotation}
-              onSaveEdit={handleSaveAnnotationEdit}
-              onSelectAnnotation={setSelectedAnnotationId}
-              selectedAnnotationId={selectedAnnotationId}
-              editingAnnotationId={editingAnnotationId}
-              takeoffLinks={takeoffLinks}
-              onLinkToLineItem={handleLinkToLineItem}
-              onSendToEstimate={handleSendToEstimate}
-              onSuggestLineItems={handleSuggestLineItems}
-              onApplySuggestion={handleApplySuggestion}
-            />
-          </div>
-        ) : (
-          <div className="flex w-96 shrink-0 flex-col border-l border-line bg-panel overflow-hidden">
-            <div className="border-b border-line px-3 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="min-w-0 truncate text-xs font-semibold text-fg">{selectedDoc?.fileName}</p>
-                <Badge tone={selectedModelIsEditable ? "success" : "warning"} className="text-[10px]">
-                  {selectedModelIsEditable ? "Editable" : "Preview"}
-                </Badge>
-              </div>
-              <div className="mt-2 grid grid-cols-4 gap-1.5 text-center">
-                {[
-                  ["Objects", selectedModelAsset?._count?.elements ?? 0],
-                  ["Qty", selectedModelAsset?._count?.quantities ?? 0],
-                  ["Links", linkedModelLineItems.length],
-                  ["Issues", selectedModelAsset?._count?.issues ?? 0],
-                ].map(([label, value]) => (
-                  <div key={label} className="rounded-md border border-line bg-bg/50 px-2 py-1.5">
-                    <p className="text-[10px] text-fg/40">{label}</p>
-                    <p className="text-xs font-semibold text-fg/80">{value}</p>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-3 text-xs text-fg/60">
-              <div className="rounded-md border border-line bg-bg/50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Index</span>
-                  <Badge
-                    tone={selectedModelAsset?.status === "indexed" ? "success" : selectedModelAsset ? "warning" : "info"}
-                    className="text-[10px]"
-                  >
-                    {modelSyncing ? "Syncing" : selectedModelAsset?.status ?? "Pending"}
-                  </Badge>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-2">
-                  <span className="text-fg/45">Parser</span>
-                  <span className="truncate text-fg/70">{String(selectedModelAsset?.manifest?.parser ?? selectedModelAsset?.format ?? "Not indexed")}</span>
-                </div>
-              </div>
-
-              {modelSelection && modelSelection.selectedCount > 0 && (
-                <div className="rounded-md border border-accent/30 bg-accent/5 p-3">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-fg/45">Selected in view</span>
-                    <span className="font-medium text-fg/80">{modelSelection.selectedCount}</span>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2">
-                    <div className="rounded border border-accent/20 bg-bg/30 p-2">
-                      <p className="text-[10px] text-fg/40">Area</p>
-                      <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.surfaceArea, "model^2")}</p>
-                    </div>
-                    <div className="rounded border border-accent/20 bg-bg/30 p-2">
-                      <p className="text-[10px] text-fg/40">Volume</p>
-                      <p className="mt-0.5 truncate font-semibold text-fg/80">{formatModelSelectionQuantity(modelSelection.totals.volume, "model^3")}</p>
-                    </div>
-                  </div>
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    className="mt-3 w-full justify-center"
-                    onClick={() => {
-                      if (!selectedWorksheet) {
-                        setWorksheetPickerAction("send-selection");
-                      } else {
-                        void handleSendModelSelectionToEstimate(modelSelection);
-                      }
-                    }}
-                  >
-                    <ArrowDownToLine className="h-3.5 w-3.5" />
-                    Create Object Rows
-                  </Button>
-                  {worksheetPickerAction === "send-selection" && (
-                    <div className="mt-2 rounded-md border border-line bg-panel p-2.5 space-y-2">
-                      <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Select Worksheet</p>
-                      {workspace.worksheets.length > 0 && (
-                        <div className="max-h-36 space-y-0.5 overflow-y-auto">
-                          {workspace.worksheets.map((ws) => (
-                            <button
-                              key={ws.id}
-                              type="button"
-                              onClick={() => void handleWorksheetPickerSelect(ws.id)}
-                              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                            >
-                              <span className="min-w-0 flex-1 truncate">{ws.name}</span>
-                              <span className="text-[10px] text-fg/35">{ws.items.length} items</span>
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex gap-1.5">
-                        <Input
-                          value={newWorksheetName}
-                          onChange={(e) => setNewWorksheetName(e.target.value)}
-                          placeholder="New worksheet..."
-                          className="h-7 text-xs"
-                          onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWorksheetAndProceed(); }}
-                        />
-                        <Button
-                          variant="accent"
-                          size="xs"
-                          onClick={() => void handleCreateWorksheetAndProceed()}
-                          disabled={!newWorksheetName.trim()}
-                        >
-                          <Plus className="h-3 w-3" />
-                        </Button>
-                      </div>
-                      <Button variant="ghost" size="xs" onClick={() => { setWorksheetPickerAction(null); setNewWorksheetName(""); }} className="w-full text-fg/40">
-                        Cancel
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              <div className="rounded-md border border-line bg-bg/50 p-3">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Model Objects</p>
-                  {modelElementsLoading && <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />}
-                </div>
-                <Input
-                  className="mt-2 h-8 text-xs"
-                  value={modelElementSearch}
-                  onChange={(event) => setModelElementSearch(event.target.value)}
-                  placeholder="Search objects, classes, materials..."
-                />
-                <div className="mt-2 flex items-center gap-1 rounded-md border border-line bg-panel p-0.5">
-                  {(["count", "area", "volume"] as ModelQuantityBasis[]).map((basis) => (
-                    <button
-                      key={basis}
-                      type="button"
-                      onClick={() => setModelLedgerBasis(basis)}
-                      className={cn(
-                        "flex-1 rounded px-2 py-1 text-[11px] font-medium capitalize transition-colors",
-                        modelLedgerBasis === basis ? "bg-accent/15 text-accent" : "text-fg/45 hover:text-fg/70",
-                      )}
-                    >
-                      {basis}
-                    </button>
-                  ))}
-                </div>
-                {selectedModelElementIds.size > 0 && (
-                  <>
-                    <Button
-                      variant="secondary"
-                      size="sm"
-                      className="mt-2 w-full justify-center"
-                      onClick={() => {
-                        if (!selectedWorksheet) {
-                          setWorksheetPickerAction("create-elements");
-                        } else {
-                          void handleCreateSelectedModelElements();
-                        }
-                      }}
-                    >
-                      <ArrowDownToLine className="h-3.5 w-3.5" />
-                      Create {selectedModelElementIds.size} Selected
-                    </Button>
-                    {worksheetPickerAction === "create-elements" && (
-                      <div className="mt-2 rounded-md border border-line bg-panel p-2.5 space-y-2">
-                        <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Select Worksheet</p>
-                        {workspace.worksheets.length > 0 && (
-                          <div className="max-h-36 space-y-0.5 overflow-y-auto">
-                            {workspace.worksheets.map((ws) => (
-                              <button
-                                key={ws.id}
-                                type="button"
-                                onClick={() => void handleWorksheetPickerSelect(ws.id)}
-                                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                              >
-                                <span className="min-w-0 flex-1 truncate">{ws.name}</span>
-                                <span className="text-[10px] text-fg/35">{ws.items.length} items</span>
-                              </button>
-                            ))}
-                          </div>
-                        )}
-                        <div className="flex gap-1.5">
-                          <Input
-                            value={newWorksheetName}
-                            onChange={(e) => setNewWorksheetName(e.target.value)}
-                            placeholder="New worksheet..."
-                            className="h-7 text-xs"
-                            onKeyDown={(e) => { if (e.key === "Enter") void handleCreateWorksheetAndProceed(); }}
-                          />
-                          <Button
-                            variant="accent"
-                            size="xs"
-                            onClick={() => void handleCreateWorksheetAndProceed()}
-                            disabled={!newWorksheetName.trim()}
-                          >
-                            <Plus className="h-3 w-3" />
-                          </Button>
-                        </div>
-                        <Button variant="ghost" size="xs" onClick={() => { setWorksheetPickerAction(null); setNewWorksheetName(""); }} className="w-full text-fg/40">
-                          Cancel
-                        </Button>
-                      </div>
-                    )}
-                  </>
-                )}
-                <div className="mt-2 max-h-80 space-y-1.5 overflow-y-auto pr-1">
-                  {modelElements.length === 0 && (
-                    <p className="rounded-md border border-line bg-panel/60 px-3 py-4 text-center text-[11px] text-fg/40">
-                      {selectedModelAsset ? "No model objects match this search." : "Sync the model index to list model objects."}
-                    </p>
-                  )}
-                  {modelElements.map((element) => {
-                    const linked = linkedModelElementIds.has(element.id);
-                    const selected = selectedModelElementIds.has(element.id);
-                    return (
-                      <div
-                        key={element.id}
-                        className={cn(
-                          "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 rounded-md border px-2 py-2",
-                          linked ? "border-success/25 bg-success/5" : selected ? "border-accent/35 bg-accent/5" : "border-line bg-panel/60",
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={selected}
-                          disabled={linked}
-                          onChange={(event) => {
-                            const next = new Set(selectedModelElementIds);
-                            if (event.target.checked) next.add(element.id);
-                            else next.delete(element.id);
-                            setSelectedModelElementIds(next);
-                          }}
-                          className="h-3.5 w-3.5 rounded border-line accent-sky-500 disabled:opacity-30"
-                          aria-label={`Select ${element.name || element.externalId}`}
-                        />
-                        <div className="min-w-0">
-                          <p className="truncate text-[11px] font-semibold text-fg/80">{element.name || element.externalId}</p>
-                          <p className="mt-0.5 truncate text-[10px] text-fg/40">
-                            {[element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element"}
-                          </p>
-                          <p className="mt-1 text-[10px] font-medium text-fg/60">{formatElementQuantity(element, modelLedgerBasis)}</p>
-                        </div>
-                        {linked ? (
-                          <Badge tone="success" className="text-[10px]">Linked</Badge>
-                        ) : (
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            title="Create line item"
-                            onClick={() => void handleCreateModelElementLineItem(element)}
-                          >
-                            <Plus className="h-3.5 w-3.5" />
-                          </Button>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-
-              {linkedModelLineItems.length > 0 && (
-                <div className="rounded-md border border-line bg-bg/50 p-3">
-                  <p className="text-[10px] font-semibold uppercase tracking-wide text-fg/40">Linked Line Items</p>
-                  <div className="mt-2 space-y-1.5">
-                    {linkedModelLineItems.slice(0, 8).map((item) => (
-                      <div key={item.linkId} className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-md border border-line bg-panel/60 px-2 py-2">
-                        <div className="min-w-0">
-                          <p className="truncate text-[11px] font-semibold text-fg/80">{item.entityName}</p>
-                          <p className="text-[10px] text-fg/45">{formatModelSelectionQuantity(item.quantity, item.uom)}</p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="xs"
-                          title="Delete linked line item"
-                          onClick={() => void handleDeleteModelLinkedLineItem({ linkId: item.linkId, worksheetItemId: item.worksheetItemId })}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {modelError && (
-                <div className="rounded-md border border-danger/30 bg-danger/5 p-3 text-[11px] text-danger">
-                  {modelError}
-                </div>
-              )}
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-center"
-                disabled={modelSyncing}
-                onClick={() => void refreshModelAssets(true)}
-              >
-                {modelSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                Sync Model Index
-              </Button>
-
-              <Button
-                variant="secondary"
-                size="sm"
-                className="w-full justify-center"
-                onClick={() => onOpenAgentChat?.(
-                  `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Query model elements, quantities, linked worksheet items, and any unlinked scope, then prepare 5D takeoff recommendations for this estimate.`
-                )}
-              >
-                <BrainCircuit className="h-3.5 w-3.5" />
-                Ask AI
-              </Button>
-            </div>
-          </div>
-        )}
           </>
         )}
       </div>
@@ -4483,19 +4424,6 @@ export function TakeoffTab({
         }}
         onConfirm={handleAnnotationConfigConfirm}
         initialType={activeTool}
-      />
-
-      {/* ─── Link to Line Item Modal ─── */}
-      <LinkToLineItemModal
-        open={linkModalAnnotationId !== null}
-        onClose={() => setLinkModalAnnotationId(null)}
-        onConfirm={handleLinkConfirm}
-        measurement={
-          linkModalAnnotationId
-            ? annotations.find((a) => a.id === linkModalAnnotationId)?.measurement
-            : undefined
-        }
-        worksheets={workspace.worksheets}
       />
 
       {/* ─── Calibration Prompt ─── */}

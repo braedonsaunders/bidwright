@@ -93,6 +93,17 @@ export interface CanonicalModelElement {
   bbox?: unknown;
   geometryRef?: string;
   estimateRelevant?: boolean;
+  /** Construction classification keyed by standard. Same shape as
+   *  WorksheetItem.classification (see classification-utils.ts) — keys:
+   *  masterformat | uniformat | omniclass | uniclass | din276 | nrm | icms.
+   *  Adapters set the codes they can derive (heuristics-driven for IFC); the
+   *  UI can override per element. */
+  classification?: Record<string, string>;
+  /** Level of Development. "100" | "200" | "300" | "350" | "400" | "500".
+   *  IFC adapters extract from Pset_VerificationStatus / Pset_LOD when present. */
+  lod?: string;
+  /** Provenance of the LOD value: "pset" (auto from model) | "manual" (UI). */
+  lodSource?: "pset" | "manual" | "";
   properties?: Record<string, unknown>;
 }
 

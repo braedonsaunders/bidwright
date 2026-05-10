@@ -4691,6 +4691,66 @@ export async function updateTakeoffLink(
   });
 }
 
+// ── DWG Entity Links (CAD Entity ↔ Line Item) ───────────────────────────
+// Direct link from a parsed DXF/DWG entity to a worksheet line item, no
+// intermediate annotation required. Quantity is user-supplied.
+
+export interface DwgEntityLinkRecord {
+  id: string;
+  projectId: string;
+  documentId: string;
+  entityId: string;
+  entityType: string;
+  layer: string;
+  worksheetItemId: string;
+  quantity: number;
+  multiplier: number;
+  derivedQuantity: number;
+  selection: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function listDwgEntityLinks(
+  projectId: string,
+  filters: { documentId?: string; entityId?: string; worksheetItemId?: string } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.documentId) params.set("documentId", filters.documentId);
+  if (filters.entityId) params.set("entityId", filters.entityId);
+  if (filters.worksheetItemId) params.set("worksheetItemId", filters.worksheetItemId);
+  const qs = params.toString();
+  return apiRequest<DwgEntityLinkRecord[]>(
+    `/api/takeoff/${projectId}/dwg-links${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function createDwgEntityLink(
+  projectId: string,
+  data: {
+    documentId: string;
+    entityId: string;
+    entityType?: string;
+    layer?: string;
+    worksheetItemId: string;
+    quantity: number;
+    multiplier?: number;
+    selection?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<DwgEntityLinkRecord>(`/api/takeoff/${projectId}/dwg-links`, {
+    method: "POST",
+    body: JSON.stringify(data),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+export async function deleteDwgEntityLink(projectId: string, linkId: string) {
+  return apiRequest<{ deleted: boolean }>(`/api/takeoff/${projectId}/dwg-links/${linkId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function deleteTakeoffLink(projectId: string, linkId: string) {
   return apiRequest<void>(`/api/takeoff/${projectId}/links/${linkId}`, {
     method: "DELETE",
@@ -5240,6 +5300,13 @@ export interface ModelElement {
   material: string;
   bbox: Record<string, unknown>;
   geometryRef: string;
+  /** Construction classification keyed by standard. Same shape as
+   *  WorksheetItem.classification — see classification-utils.ts. */
+  classification: Record<string, string>;
+  /** Level of Development: "" | "100" | "200" | "300" | "350" | "400" | "500". */
+  lod: string;
+  /** Provenance of the LOD value: "manual" | "pset" | "". */
+  lodSource: string;
   properties: Record<string, unknown>;
   quantities?: ModelQuantity[];
   createdAt: string;
@@ -5344,6 +5411,173 @@ export async function queryModelElements(projectId: string, modelId: string, fil
   );
 }
 
+/**
+ * Patch a single model element's classification or LOD. Classification keys
+ * mirror WorksheetItem.classification (masterformat | uniformat | omniclass |
+ * uniclass | din276 | nrm | icms); send "" to clear a code. LOD: "" | "100" |
+ * "200" | "300" | "350" | "400" | "500". The server stamps lodSource="manual"
+ * on any LOD edit so subsequent ingest doesn't clobber the override.
+ */
+export async function updateModelElement(
+  projectId: string,
+  modelId: string,
+  elementId: string,
+  patch: {
+    classification?: Record<string, string>;
+    lod?: "" | "100" | "200" | "300" | "350" | "400" | "500";
+  },
+) {
+  return apiRequest<{ element: ModelElement }>(
+    `/api/models/${projectId}/assets/${modelId}/elements/${elementId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+// ── Federations ───────────────────────────────────────────────────────────
+
+export type FederationDiscipline =
+  | "architecture"
+  | "structure"
+  | "mep"
+  | "civil"
+  | "landscape"
+  | "fp"
+  | "other";
+
+export type FederationRole = "primary" | "reference" | "clash";
+
+export type FederationStatus = "active" | "draft" | "archived";
+
+export interface ModelFederationMember {
+  id: string;
+  federationId: string;
+  modelId: string;
+  discipline: FederationDiscipline;
+  role: FederationRole;
+  position: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  model?: {
+    id: string;
+    fileName: string;
+    format: string;
+    status: string;
+    units: string;
+  };
+}
+
+export interface ModelFederation {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  revisionId: string | null;
+  status: FederationStatus;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  members: ModelFederationMember[];
+}
+
+export async function listProjectFederations(
+  projectId: string,
+  filters: { revisionId?: string } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.revisionId) params.set("revisionId", filters.revisionId);
+  const qs = params.toString();
+  return apiRequest<{ federations: ModelFederation[] }>(
+    `/api/models/${projectId}/federations${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function createProjectFederation(
+  projectId: string,
+  input: {
+    name: string;
+    description?: string;
+    revisionId?: string | null;
+    status?: FederationStatus;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<{ federation: ModelFederation }>(
+    `/api/models/${projectId}/federations`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateProjectFederation(
+  projectId: string,
+  federationId: string,
+  patch: Partial<{
+    name: string;
+    description: string;
+    revisionId: string | null;
+    status: FederationStatus;
+    metadata: Record<string, unknown>;
+  }>,
+) {
+  return apiRequest<{ federation: ModelFederation }>(
+    `/api/models/${projectId}/federations/${federationId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+export async function deleteProjectFederation(projectId: string, federationId: string) {
+  return apiRequest<{ deleted: boolean }>(
+    `/api/models/${projectId}/federations/${federationId}`,
+    { method: "DELETE" },
+  );
+}
+
+/** Upsert (create or update) a member in a federation. Server matches on
+ *  (federationId, modelId) so a second call with the same modelId updates the
+ *  existing member's discipline/role/position. */
+export async function upsertFederationMember(
+  projectId: string,
+  federationId: string,
+  input: {
+    modelId: string;
+    discipline?: FederationDiscipline;
+    role?: FederationRole;
+    position?: number;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<{ member: ModelFederationMember }>(
+    `/api/models/${projectId}/federations/${federationId}/members`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function removeFederationMember(
+  projectId: string,
+  federationId: string,
+  modelId: string,
+) {
+  return apiRequest<{ deleted: boolean }>(
+    `/api/models/${projectId}/federations/${federationId}/members/${modelId}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function listModelTakeoffLinks(projectId: string, modelId: string) {
   return apiRequest<{ links: ModelTakeoffLinkRecord[] }>(
     `/api/models/${projectId}/assets/${modelId}/takeoff-links`,
@@ -5443,6 +5677,30 @@ export interface RevisionImpactReport {
 
 export async function listRevisionDiffs(projectId: string): Promise<RevisionDiffSummary[]> {
   return apiRequest<RevisionDiffSummary[]>(`/api/models/${projectId}/diffs`);
+}
+
+/** Per-worksheet-item impact rollup for the most recent revision diff. The
+ *  estimate grid uses this to badge BIM-linked rows with a pending change-
+ *  order delta. `diffId === null` means no diff has been computed for this
+ *  project yet. */
+export interface LatestRevisionImpactByItem {
+  diffId: string | null;
+  baseModelId: string | null;
+  headModelId: string | null;
+  createdAt: string | null;
+  items: Record<string, RevisionImpactedItem & { changeName: string; changeClass: string }>;
+  summary: {
+    elementsAdded: number;
+    elementsRemoved: number;
+    elementsModified: number;
+    affectedItems: number;
+    totalCostDelta: number;
+    totalPriceDelta: number;
+  };
+}
+
+export async function getLatestRevisionImpactByItem(projectId: string): Promise<LatestRevisionImpactByItem> {
+  return apiRequest<LatestRevisionImpactByItem>(`/api/models/${projectId}/revision-impact/latest`);
 }
 
 export async function createRevisionDiff(

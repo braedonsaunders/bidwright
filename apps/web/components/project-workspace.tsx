@@ -95,6 +95,8 @@ import {
   getProjectWorkspace,
   getCustomers,
   getEntityCategories,
+  getLatestRevisionImpactByItem,
+  type LatestRevisionImpactByItem,
   createModelTakeoffLink,
   deleteModelTakeoffLink,
   deleteEstimateFactor,
@@ -122,7 +124,6 @@ import { FactorParameterEditor } from "@/components/workspace/factor-parameter-e
 import { SetupTab } from "@/components/workspace/setup-tab";
 import { SummarizeTab } from "@/components/workspace/summarize-tab";
 import { DocumentationTab } from "@/components/workspace/documentation-tab";
-import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { ComboView } from "@/components/workspace/combo-view";
 import { ReviewTab } from "@/components/workspace/review-tab";
 import { AuditTrailTab } from "@/components/workspace/audit-trail";
@@ -173,7 +174,7 @@ import type { ResourceSummaryRow } from "@/components/workspace/resource-summary
 /* ─── Types ─── */
 
 type WorkspaceTab = "setup" | "estimate" | "summarize" | "documents" | "review" | "activity";
-type EstimateSubTab = "takeoff" | "worksheets" | "combo" | "factors" | "phases";
+type EstimateSubTab = "takeoff" | "worksheets" | "factors" | "phases";
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
 
 type ItemDraft = {
@@ -238,7 +239,7 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof FileText }> = 
   { id: "review", label: "Review", icon: SearchCheck },
   { id: "activity", label: "Activity", icon: MessageSquareText },
 ];
-const estimateSubTabs = ["takeoff", "worksheets", "combo", "factors", "phases"] as const;
+const estimateSubTabs = ["takeoff", "worksheets", "factors", "phases"] as const;
 
 /* ─── Utilities ─── */
 
@@ -299,7 +300,6 @@ function statusTone(s: string | undefined | null) {
 function estimateSubTabLabel(tab: EstimateSubTab) {
   if (tab === "takeoff") return "Takeoff";
   if (tab === "worksheets") return "Worksheets";
-  if (tab === "combo") return "Combo";
   if (tab === "factors") return "Factors";
   return "Phases";
 }
@@ -1144,6 +1144,50 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  /** Per-row revision-diff impact for BIM-linked worksheet items. Loaded on
+   *  mount and after every workspace mutation so the estimate grid can show
+   *  a "↻ +$XX" chip on lines whose source element changed in the latest diff.
+   *  Empty object means no diff exists or no BIM linkage. */
+  const [revisionImpactByItem, setRevisionImpactByItem] = useState<
+    LatestRevisionImpactByItem["items"]
+  >({});
+  const [revisionImpactMeta, setRevisionImpactMeta] = useState<{
+    diffId: string | null;
+    createdAt: string | null;
+    summary: LatestRevisionImpactByItem["summary"];
+  }>({
+    diffId: null,
+    createdAt: null,
+    summary: {
+      elementsAdded: 0,
+      elementsRemoved: 0,
+      elementsModified: 0,
+      affectedItems: 0,
+      totalCostDelta: 0,
+      totalPriceDelta: 0,
+    },
+  });
+  useEffect(() => {
+    let cancelled = false;
+    getLatestRevisionImpactByItem(data.workspace.project.id)
+      .then((report) => {
+        if (cancelled) return;
+        setRevisionImpactByItem(report.items);
+        setRevisionImpactMeta({
+          diffId: report.diffId,
+          createdAt: report.createdAt,
+          summary: report.summary,
+        });
+      })
+      .catch(() => {
+        // No revision diffs yet, or model service unavailable — leave the
+        // map empty so no chips render.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [data.workspace.project.id, data.workspace.currentRevision.id]);
   const modelLineCategory = useMemo(() => pickModelLineCategory(entityCategories), [entityCategories]);
   const [modal, setModal] = useState<ModalState>(null);
   const [aiResult, setAiResult] = useState<string | null>(null);
@@ -2141,6 +2185,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                         onActiveWorksheetChange={setSelectedWsId}
                         onOpenPluginTools={openPluginTools}
                         onOpenTakeoffLink={handleOpenTakeoffForLineItem}
+                        revisionImpactByItem={revisionImpactByItem}
+                        onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
                       />
                     </motion.div>
                   )}
@@ -2157,42 +2203,40 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                     </motion.div>
                   )}
 
-                  {estimateSubTab === "combo" && (
-                    <motion.div key="combo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                      <ComboView
-                        workspace={workspace}
-                        onApply={apply}
-                        onError={setError}
-                        onRefresh={refreshWorkspace}
-                        onOpenAgentChat={openAgentChat}
-                        onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
-                        onOpenPluginTools={openPluginTools}
-                        onOpenTakeoffLink={handleOpenTakeoffForLineItem}
-                        onWorkspaceMutated={refreshWorkspace}
-                        workspaceSyncOriginId={workspaceSyncOriginRef.current}
-                        selectedWorksheetId={selectedModelWorksheet?.id}
-                        activeWorksheetId={selectedWsId}
-                        onActiveWorksheetChange={setSelectedWsId}
-                        initialDocumentId={takeoffDocumentId}
-                        highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
-                      />
-                    </motion.div>
-                  )}
                 </AnimatePresence>
               </div>
 
-              {/* Takeoff (always mounted for state persistence across tab switches) */}
-              <div className={cn("absolute inset-0 flex flex-col", estimateSubTab !== "takeoff" && "hidden")}>
-                <TakeoffTab
+              {/* Takeoff (always mounted for state persistence across tab switches).
+                  Animate opacity to match the 0.12s fade other sub-tabs use; keep
+                  pointer-events disabled when hidden so background tabs can still be clicked. */}
+              <motion.div
+                className="absolute inset-0 flex flex-col"
+                animate={{ opacity: estimateSubTab === "takeoff" ? 1 : 0 }}
+                transition={{ duration: 0.12 }}
+                style={{
+                  pointerEvents: estimateSubTab === "takeoff" ? "auto" : "none",
+                  visibility: estimateSubTab === "takeoff" ? "visible" : "hidden",
+                }}
+              >
+                <ComboView
                   workspace={workspace}
+                  onApply={apply}
+                  onError={setError}
+                  onRefresh={refreshWorkspace}
                   onOpenAgentChat={openAgentChat}
                   onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
+                  onOpenPluginTools={openPluginTools}
+                  onOpenTakeoffLink={handleOpenTakeoffForLineItem}
                   onWorkspaceMutated={refreshWorkspace}
                   workspaceSyncOriginId={workspaceSyncOriginRef.current}
                   selectedWorksheetId={selectedModelWorksheet?.id}
+                  activeWorksheetId={selectedWsId}
+                  onActiveWorksheetChange={setSelectedWsId}
                   initialDocumentId={takeoffDocumentId}
+                  highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
+                  revisionImpactByItem={revisionImpactByItem}
                 />
-              </div>
+              </motion.div>
             </div>
           </div>
 
