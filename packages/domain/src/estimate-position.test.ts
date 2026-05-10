@@ -15,7 +15,7 @@ import {
   mapWorkspaceEstimateToPositions,
   renumberEstimatePositions,
   type EstimatePosition,
-} from "./estimate-position";
+} from "./estimate-position.js";
 
 function makePosition(patch: Partial<EstimatePosition> & Pick<EstimatePosition, "id" | "ordinal">): EstimatePosition {
   return {

@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { calculateTotals, computeSummaryRows } from "./quote-engine";
-import { createSummaryBuilderPreset, materializeSummaryRowsFromBuilder } from "./summary-builder";
-import type { Adjustment, EntityCategory, EstimateFactor, QuoteRevision, Worksheet, WorksheetItem } from "./models";
+import { calculateTotals, computeSummaryRows } from "./quote-engine.js";
+import { createSummaryBuilderPreset, materializeSummaryRowsFromBuilder } from "./summary-builder.js";
+import type { Adjustment, EntityCategory, EstimateFactor, QuoteRevision, Worksheet, WorksheetItem } from "./models.js";
 
 function revision(): QuoteRevision {
   return {

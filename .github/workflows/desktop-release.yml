@@ -96,6 +96,15 @@ jobs:
       - name: Generate Prisma client
         run: pnpm --filter @bidwright/db db:generate
 
+      - name: Build workspace packages
+        # The packaged api child runs through pure Node, which resolves
+        # bare specifiers like `@bidwright/db` via node_modules → main.
+        # Each package's main now points to ./dist/index.js, so they
+        # must be built before electron-builder copies the workspace
+        # symlinks into the installer bundle. tsx-driven dev mode still
+        # works through tsconfig paths.
+        run: pnpm -r --filter "./packages/*" build
+
       - name: Build api
         run: pnpm --filter @bidwright/api build
 

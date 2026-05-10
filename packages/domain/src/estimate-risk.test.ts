@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildSensitivityDrivers,
   classifyEstimateMaturity,
-} from "./estimate-risk";
+} from "./estimate-risk.js";
 
 test("classifyEstimateMaturity returns class 1 for highly mature estimates", () => {
   const result = classifyEstimateMaturity({

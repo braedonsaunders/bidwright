@@ -1,9 +1,9 @@
-import type { BidwrightStore } from "./models";
+import type { BidwrightStore } from "./models.js";
 import {
   googleHotelsOutputTemplate,
   googleShoppingOutputTemplate,
   homeDepotSearchOutputTemplate,
-} from "./plugin-output-templates";
+} from "./plugin-output-templates.js";
 
 export const mockStore: BidwrightStore = {
   projects: [

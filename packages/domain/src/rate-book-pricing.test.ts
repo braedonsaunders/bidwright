@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { resolveRateBookLine } from "./rate-book-pricing";
-import type { EntityCategory, WorksheetItem } from "./models";
+import { resolveRateBookLine } from "./rate-book-pricing.js";
+import type { EntityCategory, WorksheetItem } from "./models.js";
 
 function worksheetItem(overrides: Partial<WorksheetItem> = {}): WorksheetItem {
   return {
