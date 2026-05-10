@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import rateLimit from "@fastify/rate-limit";
 import websocket from "@fastify/websocket";
 import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
@@ -1865,6 +1866,15 @@ export function buildServer() {
       // payloads at 1 MiB so a runaway CLI can't OOM the server.
       maxPayload: 1 * 1024 * 1024,
     },
+  });
+
+  // Rate limiter — applied opt-in via `config.rateLimit` on a per-route
+  // basis (currently /api/auth/signup). Default config disables the
+  // global limit and lets routes set their own. Hosted deployments may
+  // also wrap brute-protect at the Caddy edge (see infra/Caddyfile).
+  app.register(rateLimit, {
+    global: false,
+    skipOnError: true,
   });
 
   app.register(authPlugin);

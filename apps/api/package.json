@@ -21,6 +21,7 @@
     "@aws-sdk/lib-storage": "^3.715.0",
     "@fastify/cors": "^10.0.2",
     "@fastify/multipart": "^9.3.0",
+    "@fastify/rate-limit": "^10.2.1",
     "@fastify/websocket": "^11.0.1",
     "@kenjiuno/msgreader": "^1.28.0",
     "argon2": "^0.41.1",

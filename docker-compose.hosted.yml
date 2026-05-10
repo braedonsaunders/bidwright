@@ -1,0 +1,228 @@
+# Hosted SaaS compose — bidwright.com (or your domain).
+#
+# Differs from docker-compose.prod-registry.yml in three ways:
+#   1. Caddy front-end with auto-TLS via Let's Encrypt (zero-config HTTPS).
+#   2. Multi-tenant on by default (BIDWRIGHT_MULTITENANT=true) — every CLI
+#      session runs in a per-user bwrap sandbox, project workspaces snapshot
+#      to Cloudflare R2 between sessions so users follow the api pool.
+#   3. No host port exposure for api/web — only Caddy speaks to the public
+#      internet on :80 / :443. Internal services talk on the compose network.
+#
+# Required env (put in .env.hosted alongside this file):
+#
+#   HOSTED_DOMAIN=bidwright.example.com
+#   HOSTED_ADMIN_EMAIL=admin@example.com   # for Let's Encrypt account
+#
+#   POSTGRES_USER=bidwright
+#   POSTGRES_PASSWORD=<long random>
+#   POSTGRES_DB=bidwright
+#
+#   # R2 (Cloudflare) — create the bucket via the R2 dashboard first.
+#   WORKSPACE_S3_BUCKET=bidwright-workspaces
+#   WORKSPACE_S3_ENDPOINT=https://<account-id>.r2.cloudflarestorage.com
+#   WORKSPACE_S3_ACCESS_KEY_ID=<R2 token id>
+#   WORKSPACE_S3_SECRET_ACCESS_KEY=<R2 token secret>
+#
+#   INTEGRATIONS_ENCRYPTION_KEY=<base64 32 bytes — pin from a vault>
+#
+# Boot:
+#   docker compose --env-file .env.hosted -f docker-compose.hosted.yml up -d
+#
+# Caddy will provision TLS for ${HOSTED_DOMAIN} automatically on first start;
+# DNS A record must already point at the host's public IP.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp" # HTTP/3 (QUIC)
+    environment:
+      HOSTED_DOMAIN: "${HOSTED_DOMAIN}"
+      HOSTED_ADMIN_EMAIL: "${HOSTED_ADMIN_EMAIL}"
+    volumes:
+      - ./infra/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+    depends_on:
+      - api
+      - web
+
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}"
+      POSTGRES_DB: "${POSTGRES_DB:-bidwright}"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./scripts/db/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB:-bidwright}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollamadata:/root/.ollama
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  ollama-init:
+    image: curlimages/curl:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    restart: "no"
+    entrypoint: >
+      sh -c "curl -sf -X POST http://ollama:11434/api/pull -d '{\"name\":\"${EMBEDDING_MODEL:-snowflake-arctic-embed}\"}' && echo 'Model ready'"
+
+  db-migrate:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bidwright}"
+    restart: "no"
+    command: ["pnpm", "--filter", "@bidwright/db", "db:migrate"]
+
+  api:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
+    # Required by bubblewrap for per-tenant pivot_root + mount inside CLI
+    # session namespaces. bwrap drops all caps before exec'ing the child
+    # CLI, so the sandboxed agent never inherits these.
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp:unconfined
+      - apparmor:unconfined
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bidwright}"
+      REDIS_URL: "redis://redis:6379"
+      DATA_DIR: "/data"
+      API_PORT: "3001"
+      # Hosted SaaS defaults: per-user CLI sandboxes ON, workspace
+      # snapshot/restore ON pointing at R2.
+      BIDWRIGHT_MODE: server
+      BIDWRIGHT_MULTITENANT: "true"
+      AGENT_HOME_ROOT: "/data/agent-home"
+      WORKSPACE_STORAGE_PROVIDER: "s3"
+      WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET}"
+      WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
+      WORKSPACE_S3_ENDPOINT: "${WORKSPACE_S3_ENDPOINT}"
+      WORKSPACE_S3_ACCESS_KEY_ID: "${WORKSPACE_S3_ACCESS_KEY_ID}"
+      WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY}"
+      WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
+      WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
+      # Migrations run in a dedicated container (db-migrate); the API
+      # process should not also try `migrate deploy`.
+      BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
+      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      INTEGRATIONS_ENCRYPTION_KEY: "${INTEGRATIONS_ENCRYPTION_KEY}"
+      # Anthropic / OpenAI org-wide fallback keys; per-user OAuth or BYOK
+      # via /profile/credentials wins when set.
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
+    volumes:
+      - apidata:/data
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  web:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-web:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
+    depends_on:
+      - api
+    environment:
+      # Browser hits https://${HOSTED_DOMAIN}; same-origin /api/* and /proxy/*
+      # are forwarded to the api service by Caddy. INTERNAL_API_BASE_URL is
+      # for server-side rendering (Next.js → api over compose network).
+      NEXT_PUBLIC_API_BASE_URL: "https://${HOSTED_DOMAIN}"
+      INTERNAL_API_BASE_URL: "http://api:3001"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  worker:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-worker:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
+    environment:
+      DATABASE_URL: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-bidwright}"
+      REDIS_URL: "redis://redis:6379"
+      DATA_DIR: "/data"
+      API_PORT: "3001"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
+      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
+      EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      INTEGRATIONS_ENCRYPTION_KEY: "${INTEGRATIONS_ENCRYPTION_KEY}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Worker also needs workspace storage so background jobs that
+      # spawn CLI sessions snapshot too.
+      WORKSPACE_STORAGE_PROVIDER: "s3"
+      WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET}"
+      WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
+      WORKSPACE_S3_ENDPOINT: "${WORKSPACE_S3_ENDPOINT}"
+      WORKSPACE_S3_ACCESS_KEY_ID: "${WORKSPACE_S3_ACCESS_KEY_ID}"
+      WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY}"
+      WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
+      WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
+    volumes:
+      - apidata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  ollamadata:
+  apidata:
+  caddydata:
+  caddyconfig:

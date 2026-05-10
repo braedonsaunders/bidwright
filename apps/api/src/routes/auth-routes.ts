@@ -125,7 +125,20 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   });
 
   // ── POST /api/auth/signup ──────────────────────────────────────────────
-  fastify.post("/api/auth/signup", async (request: FastifyRequest, reply: FastifyReply) => {
+  // Rate-limited because public signup is a brute-force surface — anyone
+  // can spam this endpoint to create throwaway orgs / probe slug
+  // availability. 5 successful or rejected attempts per minute per source
+  // IP is enough headroom for a real estimator typing a slug they might
+  // need to retry, and tight enough that a script can't churn through
+  // the namespace. Hosted deployments layer Caddy edge limits on top.
+  fastify.post("/api/auth/signup", {
+    config: {
+      rateLimit: {
+        max: 5,
+        timeWindow: "1 minute",
+      },
+    },
+  }, async (request: FastifyRequest, reply: FastifyReply) => {
     const { orgName, orgSlug, email, name, password } = request.body as {
       orgName: string;
       orgSlug: string;

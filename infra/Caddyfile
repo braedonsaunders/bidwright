@@ -1,0 +1,68 @@
+# Caddy reverse proxy for the hosted Bidwright SaaS.
+#
+# Auto-TLS via Let's Encrypt — DNS for ${HOSTED_DOMAIN} must point at
+# this host's public IP before first start. ${HOSTED_ADMIN_EMAIL} is
+# the account email Caddy uses with ACME (rate-limit recovery, expiry
+# warnings).
+#
+# Routing:
+#   /api/*                     → api:3001 (REST + WebSocket)
+#   /proxy/*                   → api:3001 (browser-side proxy for
+#                                          same-origin requests)
+#   /health                    → api:3001 (load-balancer probe)
+#   everything else            → web:3000 (Next.js)
+#
+# Same-origin browser fetches use NEXT_PUBLIC_API_BASE_URL=
+# https://${HOSTED_DOMAIN}, so all four api endpoints are reached via
+# Caddy on :443; no separate api hostname is needed.
+
+{
+	email {$HOSTED_ADMIN_EMAIL}
+	# Production servers; remove this block to disable HTTP/3 if it
+	# causes issues with a specific client base.
+	servers {
+		protocols h1 h2 h3
+	}
+}
+
+{$HOSTED_DOMAIN} {
+	encode zstd gzip
+
+	# Sensible browser-side defaults. The Bidwright web app sets its
+	# own CSP via <meta>, so we don't enforce one here — the browser
+	# uses whichever is more restrictive when both are present.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options    "nosniff"
+		Referrer-Policy           "strict-origin-when-cross-origin"
+		Permissions-Policy        "geolocation=(), microphone=(), camera=()"
+		# We don't trust intermediaries; let the upstream set its own
+		# Cache-Control on dynamic responses.
+		-Server
+	}
+
+	# WebSocket upgrade for /ws/cli/login/:id/stream + the SSE-style
+	# /api/cli/:projectId/stream. Caddy handles upgrades transparently
+	# but a long read timeout matters because login flows can sit on a
+	# blank prompt for minutes while the user reads an OAuth URL.
+	@api path /api/* /proxy/* /health
+	reverse_proxy @api api:3001 {
+		flush_interval -1
+		transport http {
+			read_timeout      30m
+			write_timeout     30m
+			dial_timeout      10s
+			response_header_timeout 30s
+		}
+	}
+
+	# Signup brute-force protection lives in the api process (B4 wires
+	# fastify-rate-limit at /api/auth/signup with 5 req/min per IP).
+	# If you want a second layer here, build Caddy with the
+	# `caddy-ratelimit` plugin (https://github.com/mholt/caddy-ratelimit)
+	# and wrap @signup with `rate_limit` — stock Caddy doesn't include it.
+
+	# Everything else → Next.js. The web container serves SSR + static
+	# assets; long-poll / Suspense streams use the same connection.
+	reverse_proxy web:3000
+}
