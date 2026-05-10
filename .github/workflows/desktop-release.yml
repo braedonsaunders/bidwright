@@ -70,6 +70,16 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - name: Setup Python (node-gyp needs distutils, Python 3.12 dropped it)
+        # node-gyp 9.x's gyp Python scripts import distutils which was
+        # removed from the Python stdlib in 3.12. macOS-latest and
+        # windows-latest runners default to 3.13 / 3.12 respectively,
+        # so we pin 3.11 to keep the gyp builds working until we can
+        # upgrade to a node-gyp ≥ 10 line that supports Python 3.12+.
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
