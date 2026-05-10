@@ -1,4 +1,4 @@
-import type { Worksheet, WorksheetItem } from "./models";
+import type { Worksheet, WorksheetItem } from "./models.js";
 
 export const EstimatePositionKind = {
   Group: "group",

@@ -1,13 +1,6 @@
-import { createReadStream } from "node:fs";
-import { readdir, stat } from "node:fs/promises";
-import { join, relative, resolve } from "node:path";
-import { createInterface } from "node:readline";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, projectPath, getProjectId } from "../api-client.js";
-
-const LIBRARY_SNAPSHOT_ROOT = "library-snapshots";
-const SEARCH_FILE_EXTENSIONS = [".search.txt", ".md"];
 
 function truncateText(text: string, maxChars = 12_000, offset = 0) {
   const safeOffset = Math.max(0, offset);
@@ -65,13 +58,40 @@ function searchMatchMetadata(hit: any) {
   const match = hit?.metadata?.searchMatch && typeof hit.metadata.searchMatch === "object"
     ? hit.metadata.searchMatch
     : {};
-  return Object.keys(match).length > 0 ? {
+  if (Object.keys(match).length === 0) return {};
+  // Compacted: matchedTerms 12→8, matchedPhrases 6→4. The agent only needs a
+  // few terms/phrases to judge fit; the rest is redundant context.
+  return {
     matchScore: match.score,
     coverage: match.coverage,
-    matchedTerms: Array.isArray(match.matchedTerms) ? match.matchedTerms.slice(0, 12) : undefined,
-    matchedPhrases: Array.isArray(match.matchedPhrases) ? match.matchedPhrases.slice(0, 6) : undefined,
+    matchedTerms: Array.isArray(match.matchedTerms) ? match.matchedTerms.slice(0, 8) : undefined,
+    matchedPhrases: Array.isArray(match.matchedPhrases) ? match.matchedPhrases.slice(0, 4) : undefined,
     anchorMatches: match.anchorMatches,
-  } : {};
+  };
+}
+
+// Compact a knowledge-search hit so heavy querying does not eat the context
+// window. Drop redundant title fields, cap text excerpts to ~380 chars
+// (one screen), and keep ID fields the agent needs to drill in via
+// readDocumentText / getBookPage.
+function compactKnowledgeHit(h: any) {
+  const text = typeof h?.text === "string" ? h.text.replace(/\s+/g, " ").trim() : "";
+  const source = h?.source || h?.bookName;
+  const documentTitle = h?.documentTitle && h?.documentTitle !== source ? h.documentTitle : undefined;
+  const pageTitle = h?.pageTitle && h?.pageTitle !== h?.sectionTitle ? h.pageTitle : undefined;
+  return {
+    text: text.length > 380 ? `${text.slice(0, 380)}...` : text,
+    source,
+    sourceType: h?.sourceType,
+    documentTitle,
+    pageTitle,
+    sectionTitle: h?.sectionTitle,
+    pageNumber: h?.pageNumber,
+    documentId: h?.documentId,
+    pageId: h?.pageId,
+    score: h?.score ?? h?.metadata?.searchMatch?.score,
+    ...searchMatchMetadata(h),
+  };
 }
 
 function columnKeyFromLabel(value: unknown, index: number) {
@@ -117,261 +137,94 @@ function resolveQuery(input: { query?: string; q?: string }) {
   return (input.query ?? input.q ?? "").trim();
 }
 
-type LibraryCorpusScope = "all" | "knowledge" | "datasets" | "cost" | "catalogs" | "rates" | "labor" | "assemblies";
-
-function corpusQueryTerms(query: string) {
-  return query
-    .toLowerCase()
-    .replace(/[^a-z0-9._#/-]+/g, " ")
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length > 1);
-}
-
-function corpusLineScore(line: string, query: string, terms: string[]) {
-  const lower = line.toLowerCase();
-  const exact = lower.includes(query.toLowerCase()) ? 100 : 0;
-  const termScore = terms.reduce((score, term) => score + (lower.includes(term) ? 5 : 0), 0);
-  return exact + termScore;
-}
-
-function corpusFileInScope(relativePath: string, scope: LibraryCorpusScope) {
-  const rel = relativePath.replace(/\\/g, "/").toLowerCase();
-  if (scope === "all") return true;
-  if (scope === "knowledge") return rel.includes("knowledge") || rel.includes("books");
-  if (scope === "datasets") return rel.includes("dataset");
-  if (scope === "cost") return rel.includes("cost") || rel.includes("effective");
-  if (scope === "catalogs") return rel.includes("catalog");
-  if (scope === "rates") return rel.includes("rate");
-  if (scope === "labor") return rel.includes("labor") || rel.includes("labour");
-  if (scope === "assemblies") return rel.includes("assembl");
-  return true;
-}
-
-async function listLibraryCorpusFiles(root: string): Promise<string[]> {
-  async function walk(dir: string): Promise<string[]> {
-    const entries = await readdir(dir, { withFileTypes: true });
-    const files: string[] = [];
-    for (const entry of entries) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        files.push(...await walk(path));
-      } else if (entry.isFile() && SEARCH_FILE_EXTENSIONS.some((extension) => entry.name.endsWith(extension))) {
-        files.push(path);
-      }
-    }
-    return files;
-  }
-
-  const searchRoot = join(root, "search");
-  try {
-    return await walk(searchRoot);
-  } catch {
-    return await walk(root);
-  }
-}
-
-async function searchLibraryCorpusFiles(input: {
-  query: string;
-  scope: LibraryCorpusScope;
-  limit: number;
-}) {
-  const root = resolve(process.cwd(), LIBRARY_SNAPSHOT_ROOT);
-  const rootStat = await stat(root).catch(() => null);
-  if (!rootStat?.isDirectory()) {
-    return {
-      root,
-      filesSearched: 0,
-      linesScanned: 0,
-      matches: [],
-      warning: `No ${LIBRARY_SNAPSHOT_ROOT} folder exists in the MCP runtime cwd. Start an intake/review run so Bidwright writes the runtime library corpus first.`,
-    };
-  }
-
-  const terms = corpusQueryTerms(input.query);
-  const files = (await listLibraryCorpusFiles(root))
-    .map((path) => ({ path, relativePath: relative(root, path).replace(/\\/g, "/") }))
-    .filter((file) => corpusFileInScope(file.relativePath, input.scope));
-  const matches: Array<{ file: string; lineNumber: number; score: number; text: string }> = [];
-  let linesScanned = 0;
-  const maxKeep = Math.max(input.limit * 20, 200);
-
-  for (const file of files) {
-    const reader = createInterface({
-      input: createReadStream(file.path, { encoding: "utf-8" }),
-      crlfDelay: Infinity,
-    });
-    let lineNumber = 0;
-    for await (const line of reader) {
-      lineNumber += 1;
-      linesScanned += 1;
-      const score = corpusLineScore(line, input.query, terms);
-      if (score <= 0) continue;
-      // Compact the line text aggressively before keeping it. Library corpus
-      // records like "[dataset] id=... | name=... | description=... | columns=[{...}]"
-      // can run several KB each because the columns/scope/tags JSON blobs are
-      // inlined; with a default limit of 25 matches that was producing 50KB+
-      // tool results and chewing through Claude's context window after just a
-      // few searches. Strip the heavier secondary fields and clamp each entry
-      // to roughly one screen of text. The agent can drill into a specific
-      // dataset/labor-unit/cost-resource via the structured tools using the
-      // returned id, which is preserved.
-      const compactLine = line
-        .replace(/ \| columns=\[[^\]]*\]/g, " | columns=[trimmed]")
-        .replace(/ \| scope=\{[^}]*\}/g, "")
-        .replace(/ \| tags=\[[^\]]*\]/g, "");
-      matches.push({
-        file: `${LIBRARY_SNAPSHOT_ROOT}/${file.relativePath}`,
-        lineNumber,
-        score,
-        text: compactLine.length > 500 ? `${compactLine.slice(0, 500)}...[truncated]` : compactLine,
-      });
-      if (matches.length > maxKeep) {
-        matches.sort((left, right) => right.score - left.score || left.file.localeCompare(right.file) || left.lineNumber - right.lineNumber);
-        matches.length = maxKeep;
-      }
-    }
-  }
-
-  matches.sort((left, right) => right.score - left.score || left.file.localeCompare(right.file) || left.lineNumber - right.lineNumber);
-  return {
-    root,
-    filesSearched: files.length,
-    linesScanned,
-    matches: matches.slice(0, input.limit),
-    warning: undefined,
-  };
-}
-
 export function registerKnowledgeTools(server: McpServer) {
 
-  // ── queryKnowledge ────────────────────────────────────────
+  // ── queryKnowledgeBook ────────────────────────────────────
+  // Searches GLOBAL knowledge books only — the cross-project estimator
+  // manuals, productivity handbooks, ASME codes, and any other reference
+  // material that lives at scope='global'. Lane for "what does the manual
+  // say about X."
+  //
+  // Project-attached books (auto-created from this project's source PDFs at
+  // ingest time) are deliberately NOT searched here because their chunking
+  // is OCR-noisy and lacks page numbers — queryProjectFile is the canonical
+  // project-document search and returns cleaner hits.
   server.tool(
-    "queryKnowledge",
-    `Search the knowledge base for information. Searches both project documents and the global library (estimating manuals, rate books, standards). Use this to find man-hour estimates, material specs, labour productivity data, pricing references, and any domain knowledge. Returns text snippets with source, page number, and section title.`,
+    "queryKnowledgeBook",
+    "Search the GLOBAL knowledge library — cross-project estimator manuals, productivity handbooks, ASME codes, vendor reference data. Returns text snippets with bookName + sectionTitle + pageNumber. Use for industry-wide labour rates, install methods, code requirements. For THIS project's source PDFs use queryProjectFile; for tabular productivity tables use queryKnowledgeDataset; for catalogs/cost-intel/labor-units/rates/assemblies use queryLibrary.",
     {
-      query: z.string().optional().describe("Search query — be specific about what you need"),
-      q: z.string().optional().describe("Alias for query; accepted for consistency with other search tools."),
-      scope: z.enum(["project", "library", "all"]).default("all").describe("Search scope: project docs only, global library only, or all"),
-      limit: z.coerce.number().int().positive().max(25).default(10).describe("Max results to return"),
-    },
-    async (input) => {
-      const query = resolveQuery(input);
-      const { scope, limit } = input;
-      if (!query) {
-        return {
-          content: [{ type: "text" as const, text: "ERROR: query is required. Pass query (or q) with the labour/productivity phrase to search." }],
-          isError: true,
-        };
-      }
-      // Use the text-based search which outperforms vector search for this use case
-      const params = new URLSearchParams({ q: query, limit: String(limit), scope: apiKnowledgeScope(scope) });
-      const data = await apiGet(`/knowledge/search?${params}`);
-      const results = Array.isArray(data) ? data : (data.results || []);
-      const hits = results.map((h: any) => ({
-        text: h.text?.substring(0, 600),
-        source: h.source || h.bookName,
-        sourceType: h.sourceType,
-        bookName: h.bookName,
-        documentTitle: h.documentTitle,
-        pageTitle: h.pageTitle,
-        documentId: h.documentId,
-        pageId: h.pageId,
-        sectionTitle: h.sectionTitle,
-        pageNumber: h.pageNumber,
-        score: h.score ?? h.metadata?.searchMatch?.score,
-        ...searchMatchMetadata(h),
-      }));
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify({
-          query,
-          scope,
-          resultCount: hits.length,
-          hits,
-          guidance: [
-            "Use matchedTerms/matchedPhrases to judge whether the result really matches the work activity.",
-            "If top hits are context-only, refine with the trade, material, action verb, size/class, and desired unit such as hours/ton or hours/ea.",
-          ],
-        }, null, 2) }],
-      };
-    }
-  );
-
-  // ── queryGlobalLibrary ────────────────────────────────────
-  server.tool(
-    "queryGlobalLibrary",
-    "Search the global knowledge library only — estimating manuals, labour productivity data, rate books, material specs, industry standards. Use this for domain knowledge like pipe installation hours per foot, equipment rental rates, etc. Returns text snippets with source, page, and section.",
-    {
-      query: z.string().optional().describe("What to search for — e.g. 'carbon steel butt weld pipe fittings labor hours'"),
-      q: z.string().optional().describe("Alias for query; accepted for consistency with other search tools."),
-      limit: z.coerce.number().int().positive().max(25).default(10),
+      query: z.string().optional().describe("Search phrase — be specific (trade + material + action + size/class + unit)."),
+      q: z.string().optional().describe("Alias for query."),
+      limit: z.coerce.number().int().positive().max(25).default(10).describe("Max results."),
     },
     async (input) => {
       const query = resolveQuery(input);
       const { limit } = input;
       if (!query) {
         return {
-          content: [{ type: "text" as const, text: "ERROR: query is required. Pass query (or q) with the labour/productivity phrase to search." }],
+          content: [{ type: "text" as const, text: "ERROR: query is required. Pass query (or q) with the productivity/code/install-method phrase to search." }],
           isError: true,
         };
       }
-      const params = new URLSearchParams({ q: query, scope: "global", limit: String(limit) });
+      const params = new URLSearchParams({ q: query, limit: String(limit), scope: "global" });
       const data = await apiGet(`/knowledge/search?${params}`);
       const results = Array.isArray(data) ? data : (data.results || []);
-      const hits = results.map((h: any) => ({
-        text: h.text?.substring(0, 600),
-        source: h.source || h.bookName,
-        sourceType: h.sourceType,
-        bookName: h.bookName,
-        documentTitle: h.documentTitle,
-        pageTitle: h.pageTitle,
-        documentId: h.documentId,
-        pageId: h.pageId,
-        sectionTitle: h.sectionTitle,
-        pageNumber: h.pageNumber,
-        score: h.score ?? h.metadata?.searchMatch?.score,
-        ...searchMatchMetadata(h),
-      }));
+      const hits = results.map((h: any) => compactKnowledgeHit(h));
       return {
-        content: [{ type: "text" as const, text: JSON.stringify({ query, resultCount: hits.length, hits }, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify({
+          query,
+          scope: "global",
+          resultCount: hits.length,
+          hits,
+          guidance: [
+            "Use matchedTerms to judge fit; refine with trade + material + action + size/class + unit (hours/LF, hours/ea, hours/ton) if top hits are context-only.",
+            "Drill into a hit with readDocumentText({documentId, pages, maxChars: 3000}) or getBookPage({bookId, pageNumber}) for the visual PDF page.",
+            "For productivity numbers in tabular form, queryKnowledgeDataset is usually more direct.",
+          ],
+        }, null, 2) }],
       };
     }
   );
 
-  // ── searchLibraryCorpus ───────────────────────────────────
+  // ── queryProjectFile ─────────────────────────────────────
+  // Single-call ranked search across THIS project's source documents — full
+  // extracted text, Azure structured tables (as markdown), and key-value
+  // pairs. Use BEFORE looping readDocumentText/getDocumentStructured.
   server.tool(
-    "searchLibraryCorpus",
-    "Fast first-party search over the plain-text library corpora Bidwright writes into the agent runtime folder at intake start. Searches cost intelligence, catalogs, rate items, labor units, assemblies, datasets, and knowledge indexes. This is retrieval only; the estimating agent decides relevance.",
+    "queryProjectFile",
+    "Search THIS project's source documents (RFQ, specs, drawings, vendor sheets, BOMs/parts lists) in one call — full extracted text + Azure structured tables (markdown) + key-value pairs. Returns ranked hits with documentId, pageNumber/caption when available, and a ≤360-char snippet. Use BEFORE looping readDocumentText/getDocumentStructured to find which document/page/table mentions a phrase. For cross-project estimator manuals use queryKnowledgeBook; for tabular productivity tables use queryKnowledgeDataset; for catalog/cost-intel/labor/rates use queryLibrary.",
     {
-      query: z.string().optional().describe("Search query, phrase, code, vendor, item, operation, or unit."),
+      query: z.string().optional().describe("Phrase to search across the project's source documents."),
       q: z.string().optional().describe("Alias for query."),
-      scope: z.enum(["all", "knowledge", "datasets", "cost", "catalogs", "rates", "labor", "assemblies"]).default("all"),
-      limit: z.coerce.number().int().positive().max(50).default(10),
+      limit: z.coerce.number().int().positive().max(40).default(12).describe("Max hits to return."),
+      kinds: z.array(z.enum(["text", "table", "kv"])).optional().describe("Restrict to text, table, or key-value matches. Defaults to all three."),
+      documentType: z.string().optional().describe("Optional filter on documentType (e.g. 'rfq', 'spec', 'drawing')."),
     },
     async (input) => {
       const query = resolveQuery(input);
       if (!query) {
         return {
-          content: [{ type: "text" as const, text: "ERROR: query is required. Pass query or q with the first-party library phrase to search." }],
+          content: [{ type: "text" as const, text: "ERROR: query is required. Pass query (or q) with the phrase to search across project documents." }],
           isError: true,
         };
       }
-      const result = await searchLibraryCorpusFiles({
-        query,
-        scope: input.scope,
-        limit: input.limit,
-      });
+      const params = new URLSearchParams({ q: query, projectId: getProjectId(), limit: String(input.limit) });
+      if (input.kinds && input.kinds.length > 0) params.set("kinds", input.kinds.join(","));
+      if (input.documentType) params.set("documentType", input.documentType);
+      const data = await apiGet(`/knowledge/project-corpus/search?${params}`);
       return {
         content: [{
           type: "text" as const,
           text: JSON.stringify({
             query,
-            scope: input.scope,
-            ...result,
+            documentsScanned: data.documentsScanned,
+            totalHits: data.totalHits,
+            returned: (data.hits ?? []).length,
+            hits: data.hits,
             guidance: [
-              "This tool only retrieves matching first-party records from runtime text files; it does not decide what source is correct.",
-              "Use returned IDs/file/line hits to call the authoritative MCP tools: searchLineItemCandidates, queryKnowledge, queryDatasets, listRateScheduleItems, listLaborUnits, searchCatalogs, or previewAssembly.",
-              "For broad investigation, also use shell rg directly against library-snapshots/search.",
+              "Hits include documentId + pageNumber/caption + a ≤360-char snippet — use them to pick which document/page to drill into.",
+              "Drill in with readDocumentText({documentId, pages: '<n>', maxChars: 3000}) or getDocumentStructured({documentId, maxTables: 3}).",
+              "Re-run with kinds=['table'] to focus on schedules/BOMs, or kinds=['kv'] to focus on Azure key-value extracts.",
             ],
           }, null, 2),
         }],
@@ -379,10 +232,11 @@ export function registerKnowledgeTools(server: McpServer) {
     },
   );
 
-  // ── queryDatasets ─────────────────────────────────────────
+
+  // ── queryKnowledgeDataset ──────────────────────────────────
   server.tool(
-    "queryDatasets",
-    "Search structured datasets for precise values — man hours, material weights, labour rates, equipment specs. Returns matching datasets with context (description, tags, notes) and sample rows. Use for concrete numbers when estimating.",
+    "queryKnowledgeDataset",
+    "Search structured knowledge datasets for precise values — man hours, material weights, labour rates, equipment specs, productivity-by-condition tables. Returns matching datasets with context (description, tags, notes) and sample rows. Use for concrete tabular numbers. For prose / handbook chapters use queryKnowledgeBook; for project documents use queryProjectFile; for catalogs/cost-intel/labor-units/rates/assemblies use queryLibrary.",
     {
       query: z.string().optional().describe("Search query — e.g. 'weld neck flange 6 inch 150 lb man hours'"),
       q: z.string().optional().describe("Alias for query; accepted for consistency with other search tools."),
@@ -412,10 +266,10 @@ export function registerKnowledgeTools(server: McpServer) {
           dataset: {
             id: dataset.id,
             name: dataset.name,
-            description: compactValue(dataset.description, 500),
-            tags: dataset.tags,
+            description: compactValue(dataset.description, 240),
+            tags: Array.isArray(dataset.tags) ? dataset.tags.slice(0, 8) : dataset.tags,
             columns: Array.isArray(dataset.columns)
-              ? dataset.columns.slice(0, 40).map((column: any) => ({
+              ? dataset.columns.slice(0, 20).map((column: any) => ({
                   key: column.key,
                   name: column.name || column.label,
                   type: column.type,
@@ -430,7 +284,7 @@ export function registerKnowledgeTools(server: McpServer) {
             hasMore: page.hasMore,
             values: page.rows,
           },
-          note: "Rows are compact and paginated. Use offset/rowLimit or a narrower query to continue. Column names show units and conditions.",
+          note: "Rows compact + paginated. Continue with offset/rowLimit or narrow the query. Column names encode units and conditions.",
         }, null, 2) }] };
       }
 
@@ -440,13 +294,13 @@ export function registerKnowledgeTools(server: McpServer) {
       const results = (data.results || []).map((r: any) => ({
         datasetId: r.datasetId,
         name: r.datasetName,
-        description: compactValue(r.description, 500),
-        tags: r.tags,
-        columns: r.columns?.slice(0, 30).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
+        description: compactValue(r.description, 240),
+        tags: Array.isArray(r.tags) ? r.tags.slice(0, 8) : r.tags,
+        columns: r.columns?.slice(0, 20).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
         columnCount: r.columns?.length ?? 0,
         rowCount: r.rowCount,
         sampleRows: Array.isArray(r.sampleRows) ? r.sampleRows.slice(0, sampleRowLimit).map((row: any) => compactRow(row)) : [],
-        note: "Call queryDatasets again with datasetId plus rowLimit/offset for focused matching rows.",
+        note: "Drill in: queryKnowledgeDataset({ datasetId, query, rowLimit, offset }) for focused matching rows.",
       }));
       return { content: [{ type: "text" as const, text: JSON.stringify({
         query,
@@ -551,7 +405,7 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── listDatasets ────────────────────────────────────────
   server.tool(
     "listDatasets",
-    "List existing datasets in the organization as a compact, paginated index. Use queryDatasets for focused row searches.",
+    "List existing datasets in the organization as a compact, paginated index. Use queryKnowledgeDataset for focused row searches.",
     {
       q: z.string().optional().describe("Optional search across name, description, category, and tags."),
       category: z.string().optional(),

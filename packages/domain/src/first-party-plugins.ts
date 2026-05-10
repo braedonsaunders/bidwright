@@ -1,11 +1,11 @@
-import type { Plugin, PluginField, PluginToolDefinition } from "./models";
-import { mockStore } from "./mock-data";
-import { SHOP_WELD_COMPONENTS, SHOP_PIPE_DATA } from "./plugin-calculators";
+import type { Plugin, PluginField, PluginToolDefinition } from "./models.js";
+import { mockStore } from "./mock-data.js";
+import { SHOP_WELD_COMPONENTS, SHOP_PIPE_DATA } from "./plugin-calculators.js";
 import {
   googleHotelsOutputTemplate,
   googleShoppingOutputTemplate,
   homeDepotSearchOutputTemplate,
-} from "./plugin-output-templates";
+} from "./plugin-output-templates.js";
 
 const pluginMap = new Map(mockStore.plugins.map((plugin) => [plugin.slug, plugin]));
 const LABOR_RATE_OPTIONS_SOURCE = { type: "rate_schedule", scope: "revision" } as const;

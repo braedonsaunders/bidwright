@@ -92,14 +92,14 @@ function searchValue(value: unknown, max = 240): string {
     return String(value);
   }
   // Drop nested JSON blobs from search-line records. The library-snapshot
-  // search files (used by rg/searchLibraryCorpus) used to inline things
+  // search files (used by rg cross-cutting grep) used to inline things
   // like columns=[{...},...], tags=[...], scope={...} verbose objects up
   // to 900 chars per field. With thousands of records and aggressive rg
   // queries that produced 50KB+ raw text dumps that ate the agent's
   // context window before any worksheet items could be created. The
   // structural id/name/description/category fields stay searchable;
   // anything that requires the full nested metadata can be fetched via
-  // the targeted MCP tools (queryDatasets, getLaborUnit, etc.) using the
+  // the targeted MCP tools (queryKnowledgeDataset, getLaborUnit, etc.) using the
   // returned id.
   if (Array.isArray(value)) {
     return `[len=${value.length}]`;
@@ -354,7 +354,7 @@ ${countRows}
 
 - \`${SNAPSHOT_ROOT}/README.md\` - usage guide
 - \`${SNAPSHOT_ROOT}/files-manifest.jsonl\` - full snapshot file manifest, one file per line; search it, do not read it all
-- \`${SNAPSHOT_ROOT}/search/all-library.search.txt\` - plain-text first-party library corpus for fast rg/searchLibraryCorpus
+- \`${SNAPSHOT_ROOT}/search/all-library.search.txt\` - plain-text first-party library corpus for fast rg cross-cutting grep
 - \`${SNAPSHOT_ROOT}/search/\` - category-specific plain-text corpora for books, datasets, cost intelligence, catalogs, rates, labour units, and assemblies
 - \`${SNAPSHOT_ROOT}/books.jsonl\` - knowledge book IDs
 - \`${SNAPSHOT_ROOT}/knowledge-pages.jsonl\` - authored knowledge page IDs
@@ -386,13 +386,14 @@ Use them like this:
 1. Search \`${SNAPSHOT_ROOT}/search/\` first for scope terms from the bid package, for example material names, equipment names, sizes, cost codes, vendors, locations, spec sections, and production activities.
 2. Treat matches as retrieval results, not decisions. The estimator agent must judge relevance, exact/similar/context/manual basis, and source authority.
 3. Use MCP tools to read the authoritative source and preserve source IDs:
-   - \`listKnowledgeBooks\`, \`queryKnowledge\`, \`queryGlobalLibrary\`, \`readDocumentText\`
-   - \`listDatasets\`, \`queryDatasets\`
-   - \`searchLibraryCorpus\`, \`searchLineItemCandidates\`, \`recommendCostSource\`, \`createWorksheetItemFromCandidate\`
-   - \`listLaborUnits\`, \`previewAssembly\`
+   - **Project documents (RFQ/spec/drawings)**: \`queryProjectFile\`, then drill in with \`readDocumentText\` / \`getDocumentStructured\`
+   - **Global knowledge books**: \`queryKnowledgeBook\`, \`listKnowledgeBooks\`, \`readDocumentText\` for chapter reads
+   - **Structured datasets**: \`queryKnowledgeDataset\`, \`listDatasets\`
+   - **Cost/catalog/rate evidence**: \`queryLibrary\`, \`recommendCostSource\`, \`searchCatalogs\`, \`listRateScheduleItems\`, \`createWorksheetItemFromCandidate\`
+   - **Labour units**: \`listLaborUnitTree\`, \`listLaborUnits\`, \`getLaborUnit\`, \`previewAssembly\`
 4. Put the actual source IDs and page/table/row references in \`sourceNotes\`.
 
-Plain-text \`.search.txt\` files contain one grep-friendly record per line. JSONL files contain the structured record payloads. Large datasets may be truncated in these snapshots; when that happens, use \`queryDatasets\` or the relevant MCP list/search tool for the full source.
+Plain-text \`.search.txt\` files contain one grep-friendly record per line. JSONL files contain the structured record payloads. Large datasets may be truncated in these snapshots; when that happens, use \`queryKnowledgeDataset\` or the relevant MCP list/search tool for the full source.
 
 Useful commands:
 
@@ -584,14 +585,14 @@ export async function writeAgentLibrarySnapshot({
     files.push({
       path: String(dataset.rowsFile),
       label: `Dataset rows: ${String(dataset.name ?? dataset.id)}`,
-      description: "One row per line; use queryDatasets for authoritative search.",
+      description: "One row per line; use queryKnowledgeDataset for authoritative search.",
       count: numberValue(dataset.rowsWritten),
       truncated: dataset.truncated === true,
     });
     files.push({
       path: String(dataset.searchFile),
       label: `Dataset row search corpus: ${String(dataset.name ?? dataset.id)}`,
-      description: "Plain-text row corpus for rg/searchLibraryCorpus; use queryDatasets for authoritative row reads.",
+      description: "Plain-text row corpus for rg cross-cutting grep; use queryKnowledgeDataset for authoritative row reads.",
       count: numberValue(dataset.rowsWritten),
       truncated: dataset.truncated === true,
     });
@@ -658,7 +659,7 @@ export async function writeAgentLibrarySnapshot({
     toJsonLines(catalogItems),
     {
       count: catalogItems.length,
-      description: "Use searchLineItemCandidates/recommendCostSource before creating rows.",
+      description: "Use queryLibrary/recommendCostSource before creating rows.",
       truncated: catalogItems.length >= MAX_CATALOG_ITEMS,
     },
   );
@@ -667,7 +668,7 @@ export async function writeAgentLibrarySnapshot({
     "Catalog items search corpus",
     "catalog-item",
     catalogItems,
-    "Plain-text material/equipment catalog item corpus; use searchLineItemCandidates or searchCatalogs for authoritative IDs.",
+    "Plain-text material/equipment catalog item corpus; use queryLibrary or searchCatalogs for authoritative IDs.",
   );
 
   const rateScheduleItems = [
@@ -873,7 +874,7 @@ export async function writeAgentLibrarySnapshot({
       toJsonLines(costResourceRows),
       {
         count: (resources as JsonRecord[]).length,
-        description: "Use searchLineItemCandidates/recommendCostSource for linked worksheet rows.",
+        description: "Use queryLibrary/recommendCostSource for linked worksheet rows.",
         truncated: (resources as JsonRecord[]).length < counts.costResources,
       },
     );
@@ -936,7 +937,7 @@ export async function writeAgentLibrarySnapshot({
     "All library search corpus",
     allSearchContent,
     {
-      description: "Concatenated plain-text first-party library corpus for rg/searchLibraryCorpus. Search it; do not read it wholesale.",
+      description: "Concatenated plain-text first-party library corpus for rg cross-cutting grep. Search it; do not read it wholesale.",
       count: allSearchContent ? allSearchContent.split("\n").filter((line) => line.startsWith("[")).length : 0,
       truncated: Object.values(counts).some((count) => count >= MAX_DATASET_ROWS_PER_FILE || count >= MAX_LABOR_UNITS || count >= MAX_CATALOG_ITEMS || count >= MAX_COST_ROWS),
     },

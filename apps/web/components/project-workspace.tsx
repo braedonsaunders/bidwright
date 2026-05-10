@@ -1248,10 +1248,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const isSnap =
     data.workspaceState?.state.quoteMode === "snap" &&
     data.workspaceState?.state.snapUpgraded !== true;
-  const snapLineLimit =
-    typeof data.workspaceState?.state.snapLineLimit === "number"
-      ? data.workspaceState.state.snapLineLimit
-      : 10;
   const snapWorksheetId =
     typeof data.workspaceState?.state.selectedWorksheetId === "string"
       ? data.workspaceState.state.selectedWorksheetId
@@ -2091,7 +2087,6 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         {isSnap ? (
           <SnapQuoteSheet
             workspace={workspace}
-            snapLineLimit={snapLineLimit}
             snapWorksheetId={snapWorksheetId}
             onApply={apply}
             onError={setError}
@@ -2623,7 +2618,6 @@ function SnapPdfPreviewModal({
 
 function SnapQuoteSheet({
   workspace,
-  snapLineLimit,
   snapWorksheetId,
   onApply,
   onError,
@@ -2633,7 +2627,6 @@ function SnapQuoteSheet({
   isPending,
 }: {
   workspace: ProjectWorkspaceData;
-  snapLineLimit: number;
   snapWorksheetId?: string;
   onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   onError: (message: string) => void;
@@ -2864,7 +2857,6 @@ function SnapQuoteSheet({
               onRefresh={onRefresh}
               onOpenPluginTools={onOpenPluginTools}
               variant="snap"
-              maxLineItems={snapLineLimit}
               lockedWorksheetId={snapWorksheet?.id}
             />
           </div>

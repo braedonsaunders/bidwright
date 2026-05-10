@@ -1630,11 +1630,9 @@ async function captureHumanEstimateFeedback(
   }).catch(() => null);
 }
 
-function snapLineLimitFromState(state: Record<string, unknown> | undefined): number | null {
-  if (!state || state.quoteMode !== "snap" || state.snapUpgraded === true) return null;
-  return typeof state.snapLineLimit === "number"
-    ? Math.max(1, Math.floor(state.snapLineLimit))
-    : 10;
+function isSnapWorkspaceState(state: Record<string, unknown> | undefined): boolean {
+  if (!state) return false;
+  return state.quoteMode === "snap" && state.snapUpgraded !== true;
 }
 
 async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
@@ -2894,20 +2892,6 @@ export function buildServer() {
       }
     }
 
-    const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
-    const snapLineLimit = snapLineLimitFromState(workspaceState?.state as Record<string, unknown> | undefined);
-    if (snapLineLimit !== null) {
-      const workspace = await request.store!.getWorkspace(projectId);
-      const lineCount = workspace?.worksheets
-        .find((worksheet) => worksheet.id === worksheetId)
-        ?.items.length ?? 0;
-      if (lineCount >= snapLineLimit) {
-        return reply.code(400).send({
-          message: `Snaps are capped at ${snapLineLimit} line items. Upgrade this Snap to a quote before adding more lines.`,
-        });
-      }
-    }
-
     const createResult = deltaResponse
       ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput)
       : null;
@@ -3000,7 +2984,7 @@ export function buildServer() {
     }
 
     const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
-    if (snapLineLimitFromState(workspaceState?.state as Record<string, unknown> | undefined) !== null) {
+    if (isSnapWorkspaceState(workspaceState?.state as Record<string, unknown> | undefined)) {
       return reply.code(400).send({
         message: "Snaps use a single worksheet. Upgrade this Snap to a quote before adding worksheets.",
       });
@@ -6050,6 +6034,29 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
         return rightScore - leftScore;
       })
       .slice(0, finalLimit);
+  });
+
+  // ── GET /knowledge/project-corpus/search ─────────────────────────────────
+  // Cross-document text + structured-table search across the current project's
+  // SourceDocuments. One call returns ranked hits from extractedText,
+  // structuredData.tables (Azure markdown), and keyValuePairs. The agent uses
+  // this to find which documents/pages/tables mention a phrase before
+  // drilling in with readDocumentText / getDocumentStructured.
+  app.get("/knowledge/project-corpus/search", async (request, reply) => {
+    const { q, projectId, limit, kinds, documentType } = (request.query ?? {}) as {
+      q?: string; projectId?: string; limit?: string; kinds?: string; documentType?: string;
+    };
+    if (!projectId) return reply.code(400).send({ message: "projectId is required" });
+    if (!q || !q.trim()) return reply.code(400).send({ message: "q is required" });
+    const parsedLimit = limit ? Math.max(1, Math.min(parseInt(limit, 10) || 12, 40)) : 12;
+    const parsedKinds = kinds
+      ? (kinds.split(",").map((s) => s.trim()).filter(Boolean) as Array<"text" | "table" | "kv">)
+      : undefined;
+    return await request.store!.searchProjectCorpus(projectId, q, {
+      limit: parsedLimit,
+      kinds: parsedKinds,
+      documentType: documentType?.trim() || undefined,
+    });
   });
 
   // ── Knowledge Book File Serving ────────────────────────────────────
