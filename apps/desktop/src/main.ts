@@ -24,9 +24,8 @@
 
 import { app, BrowserWindow, dialog, Menu, shell } from "electron";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
-import { createWriteStream, type WriteStream } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, type WriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -72,12 +71,9 @@ function userDataPath(...segments: string[]): string {
 function openBootLog(name: string): { path: string; stream: WriteStream } {
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const dir = userDataPath("logs");
-  // mkdir is async-only via fs/promises; we want sync here to avoid
-  // racing the spawn that writes into this stream. Use the sync recursive
-  // mkdir from node:fs which is safe to call repeatedly.
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const fs = require("node:fs") as typeof import("node:fs");
-  fs.mkdirSync(dir, { recursive: true });
+  // sync mkdir so the createWriteStream below has a real dir to land
+  // in. Safe to call repeatedly thanks to recursive:true.
+  mkdirSync(dir, { recursive: true });
   const path = join(dir, `${name}-${stamp}.log`);
   return { path, stream: createWriteStream(path, { flags: "a" }) };
 }
@@ -164,6 +160,11 @@ function resolveApiEntryScript(): string {
 // ── Boot: packaged path ───────────────────────────────────────────
 
 async function bootPackaged(): Promise<BootedServers> {
+  // Create the logs dir up-front so even a very early boot crash points
+  // the user at a real folder. The error dialog mentions this path; it
+  // shouldn't be a lie if start() throws before any subprocess spawns.
+  mkdirSync(userDataPath("logs"), { recursive: true });
+
   // 1. Embedded Postgres ----------------------------------------------------
   const databaseDir = userDataPath("postgres");
   await mkdir(databaseDir, { recursive: true });
