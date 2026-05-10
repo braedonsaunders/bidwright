@@ -24,21 +24,24 @@ COPY packages/vision/package.json packages/vision/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 RUN pnpm install --frozen-lockfile
-# pnpm 10's approve-builds policy denies postinstall by default AND
-# `pnpm rebuild` respects the same policy — both no-op silently for
-# unapproved packages. node-pty publishes prebuilt binaries for
-# darwin/win32 but NOT linux-x64, so the linux runtime needs a
-# from-source build. Bypass pnpm entirely by running the postinstall
-# script directly in the package directory; this populates
-# build/Release/pty.node which the runtime require() picks up.
-# Verify the binary actually exists at the end so a silent failure here
-# fails the image build instead of crashing at first request in prod.
+# pnpm 10's approve-builds policy denies node-pty's `install` script
+# (the one that runs `node-gyp rebuild`). node-pty ships prebuilds for
+# darwin/win32 but NOT linux-x64, so the linux runtime needs that
+# rebuild or the api crashes with "Failed to load native module:
+# pty.node" at first require.
+#
+# We bypass pnpm by running node-gyp directly in the node-pty package
+# dir. Installing node-gyp globally avoids the `.bin` discovery dance
+# that pnpm's symlink layout makes awkward inside a package subdir.
+# The trailing `test -f` makes a silent build failure fail the image
+# build instead of crashing the api in prod.
+RUN npm install -g node-gyp@^11
 RUN set -eux \
     && PTY_DIR=$(find /app/node_modules/.pnpm -maxdepth 5 -type d -name "node-pty" | head -1) \
     && test -n "$PTY_DIR" \
     && cd "$PTY_DIR" \
-    && node scripts/post-install.js \
-    && test -f build/Release/pty.node || (echo "node-pty native build missing build/Release/pty.node" && exit 1)
+    && node-gyp rebuild \
+    && test -f build/Release/pty.node
 
 # --- build stage ---
 FROM base AS builder
