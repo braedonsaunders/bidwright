@@ -2617,6 +2617,12 @@ export function TakeoffTab({
             elementClass: element.elementClass ?? null,
             material: element.material ?? null,
             level: element.level ?? null,
+            // Phase 2 BIM fields. classification is the typed record; lod/lodSource
+            // come from the per-element schema columns. Use ?? to surface "" as null
+            // so the UI can `lod ?? null` without falsy-vs-empty confusion.
+            classification: (element as { classification?: Record<string, string> }).classification ?? null,
+            lod: (element as { lod?: string }).lod ?? null,
+            lodSource: (element as { lodSource?: string }).lodSource ?? null,
             quantitySummary: formatElementQuantity(element, modelLedgerBasis),
             isLinked: linkedModelElementIds.has(element.id),
           }))

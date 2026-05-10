@@ -20,6 +20,15 @@ export interface InspectModelElement {
   elementClass?: string | null;
   material?: string | null;
   level?: string | null;
+  /** Construction classification keyed by standard. Same shape and keys as
+   *  WorksheetItem.classification. UI surfaces Uniformat first (most common
+   *  estimating reporting axis), then MasterFormat. */
+  classification?: Record<string, string> | null;
+  /** Level of Development: "" | "100" | "200" | "300" | "350" | "400" | "500". */
+  lod?: string | null;
+  /** Provenance of LOD: "manual" | "pset" | "". Used by the UI to badge how
+   *  the LOD was determined and warn before re-ingest could clobber it. */
+  lodSource?: string | null;
   quantitySummary: string;
   isLinked: boolean;
 }
@@ -421,6 +430,14 @@ function ModelInspect({
         ) : (
           modelElements.map((element) => {
             const isSelected = selectedModelElementId === element.id;
+            // Surface the most useful classification codes inline. Uniformat
+            // first (the most common takeoff reporting axis); MasterFormat
+            // second (work-section view). Other standards available via the
+            // element drawer (Phase 2.6) but not in the row to keep it scannable.
+            const uniformat = element.classification?.uniformat?.trim();
+            const masterformat = element.classification?.masterformat?.trim();
+            const lod = element.lod?.trim();
+            const lodFromPset = element.lodSource === "pset";
             return (
               <div
                 key={element.id}
@@ -440,6 +457,39 @@ function ModelInspect({
                     <p className="mt-0.5 truncate text-[10px] text-fg/40">
                       {[element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element"}
                     </p>
+                    {(uniformat || masterformat || lod) && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        {uniformat && (
+                          <span
+                            className="rounded bg-violet-500/12 px-1 py-px text-[9px] font-medium text-violet-500"
+                            title={`Uniformat: ${uniformat}`}
+                          >
+                            UF · {uniformat}
+                          </span>
+                        )}
+                        {masterformat && (
+                          <span
+                            className="rounded bg-amber-500/12 px-1 py-px text-[9px] font-medium text-amber-600"
+                            title={`MasterFormat: ${masterformat}`}
+                          >
+                            MF · {masterformat}
+                          </span>
+                        )}
+                        {lod && (
+                          <span
+                            className={cn(
+                              "rounded px-1 py-px text-[9px] font-medium",
+                              lodFromPset
+                                ? "bg-sky-500/12 text-sky-500"
+                                : "bg-fg/10 text-fg/70",
+                            )}
+                            title={`Level of Development${lodFromPset ? " (from model property set)" : " (manual)"}`}
+                          >
+                            LOD {lod}
+                          </span>
+                        )}
+                      </div>
+                    )}
                     <p className="mt-1 text-[10px] font-medium text-fg/60">{element.quantitySummary}</p>
                   </div>
                   {element.isLinked && (

@@ -5300,6 +5300,13 @@ export interface ModelElement {
   material: string;
   bbox: Record<string, unknown>;
   geometryRef: string;
+  /** Construction classification keyed by standard. Same shape as
+   *  WorksheetItem.classification — see classification-utils.ts. */
+  classification: Record<string, string>;
+  /** Level of Development: "" | "100" | "200" | "300" | "350" | "400" | "500". */
+  lod: string;
+  /** Provenance of the LOD value: "manual" | "pset" | "". */
+  lodSource: string;
   properties: Record<string, unknown>;
   quantities?: ModelQuantity[];
   createdAt: string;
@@ -5401,6 +5408,32 @@ export async function queryModelElements(projectId: string, modelId: string, fil
   const qs = params.toString();
   return apiRequest<{ elements: ModelElement[]; count: number }>(
     `/api/models/${projectId}/assets/${modelId}/elements${qs ? `?${qs}` : ""}`,
+  );
+}
+
+/**
+ * Patch a single model element's classification or LOD. Classification keys
+ * mirror WorksheetItem.classification (masterformat | uniformat | omniclass |
+ * uniclass | din276 | nrm | icms); send "" to clear a code. LOD: "" | "100" |
+ * "200" | "300" | "350" | "400" | "500". The server stamps lodSource="manual"
+ * on any LOD edit so subsequent ingest doesn't clobber the override.
+ */
+export async function updateModelElement(
+  projectId: string,
+  modelId: string,
+  elementId: string,
+  patch: {
+    classification?: Record<string, string>;
+    lod?: "" | "100" | "200" | "300" | "350" | "400" | "500";
+  },
+) {
+  return apiRequest<{ element: ModelElement }>(
+    `/api/models/${projectId}/assets/${modelId}/elements/${elementId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
   );
 }
 
