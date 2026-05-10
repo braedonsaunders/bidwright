@@ -1,4 +1,14 @@
-import { PrismaClient } from "@prisma/client";
+// Prisma's CJS bundle uses `module.exports = { ...require(...) }`, which
+// Node ESM's cjs-module-lexer can't statically resolve into named exports.
+// Pure Node ESM (the packaged Electron api child) rejects
+// `import { PrismaClient } from "@prisma/client"`. Take the value through
+// default-import and the types through a separate type-only import — both
+// tsx (dev) and Turbopack handle this identically.
+import PrismaPkg from "@prisma/client";
+import type { PrismaClient as PrismaClientCtor } from "@prisma/client";
+const PrismaClient = PrismaPkg.PrismaClient as typeof PrismaClientCtor;
+type PrismaClient = PrismaClientCtor;
+
 import { PrismaPg } from "@prisma/adapter-pg";
 import pg from "pg";
 
