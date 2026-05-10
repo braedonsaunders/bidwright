@@ -80,6 +80,14 @@ export interface PrepareWorkspaceCtx {
   /** True when called from a resume flow; adapters use this to skip
    *  destructive steps like wiping `.claude/`. */
   isResume: boolean;
+  /**
+   * Per-user agent-home dir in server mode (e.g. `/data/agent-home/users/<userId>`),
+   * or `null` in desktop mode (host user's `~/.claude` etc. wins). Adapters
+   * source the user's OAuth credentials from `<agentHomeDir>/.<cli>` and set
+   * the corresponding env var (`CLAUDE_CONFIG_DIR`, `CODEX_HOME`, …) so each
+   * spawned child sees its own auth state.
+   */
+  agentHomeDir?: string | null;
 }
 
 /**
@@ -119,6 +127,10 @@ export interface SpawnCtx {
   isWin: boolean;
   /** `<projectDir>/.bidwright-mcp-config.json` — already written by runtime. */
   mcpConfigPath: string;
+  /** See {@link PrepareWorkspaceCtx.agentHomeDir}. Adapters that need to
+   *  point a CLI at the per-user namespace via env (e.g. CLAUDE_CONFIG_DIR)
+   *  read this in `buildSpawnPlan`. */
+  agentHomeDir?: string | null;
 }
 
 export interface ResumeCtx extends SpawnCtx {
@@ -149,7 +161,15 @@ export interface CliAdapter {
 
   binaryNames(opts: { isWin: boolean }): string[];
   detect(customPath?: string): CliDetectResult;
-  checkAuth(opts: { apiKeys: ApiKeys }): CliAuthStatus;
+  /**
+   * Determine whether the runtime is authenticated for this user. In desktop
+   * mode `agentHomeDir` is null and adapters check the host's OS-default
+   * credential locations (`~/.claude/.credentials.json`, macOS keychain, etc.).
+   * In server mode `agentHomeDir` points at the per-user namespace and
+   * adapters check there only — never the host fallback — so each user sees
+   * their own auth state, not whoever last logged in on the box.
+   */
+  checkAuth(opts: { apiKeys: ApiKeys; agentHomeDir?: string | null }): CliAuthStatus;
 
   /** Heuristic: does this model id belong to this runtime? */
   isCompatibleModel(modelId: string): boolean;

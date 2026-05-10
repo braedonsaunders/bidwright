@@ -169,7 +169,7 @@ export const geminiAdapter: CliAdapter = {
     return { available: true, path, version: getCliVersion(path) } satisfies CliDetectResult;
   },
 
-  checkAuth({ apiKeys }): CliAuthStatus {
+  checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
     if (
       apiKeys.google ||
       process.env.GOOGLE_API_KEY ||
@@ -177,6 +177,17 @@ export const geminiAdapter: CliAdapter = {
       process.env.GOOGLE_GENAI_API_KEY
     ) {
       return { authenticated: true, method: "api_key" };
+    }
+    if (agentHomeDir) {
+      // Server mode: only the per-user namespace counts. Gemini reads its
+      // OAuth from ~/.gemini/credentials.json by default; we redirect that
+      // via HOME=<agentHomeDir> at spawn so the OAuth lands here.
+      const candidates = [
+        join(agentHomeDir, ".gemini", "credentials.json"),
+        join(agentHomeDir, ".gemini", "auth.json"),
+      ];
+      if (candidates.some(existsSync)) return { authenticated: true, method: "oauth" };
+      return { authenticated: false, method: "none" };
     }
     const home = homeDir();
     const candidates = [
@@ -204,6 +215,13 @@ export const geminiAdapter: CliAdapter = {
 
   async prepareWorkspace(ctx) {
     await writeGeminiSettings(ctx);
+    if (ctx.agentHomeDir) {
+      // Server mode: redirect Gemini at the per-user namespace via HOME so
+      // its ~/.gemini/credentials.json lands under <agentHomeDir>/.gemini/
+      // and never collides with another container user.
+      await mkdir(join(ctx.agentHomeDir, ".gemini"), { recursive: true });
+      return { extraEnv: { HOME: ctx.agentHomeDir } };
+    }
     return {};
   },
 

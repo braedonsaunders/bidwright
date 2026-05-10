@@ -1108,7 +1108,11 @@ export function registerCliRoutes(app: FastifyInstance) {
     for (const adapter of listAdapters()) {
       const cliPath = resolveCliPathOverride(adapter.id, integrations) || undefined;
       const detected = detectCli(adapter.id, cliPath);
-      const auth = checkCliAuth(adapter.id, resolveRuntimeApiKey(adapter.id, integrations));
+      const auth = checkCliAuth(
+        adapter.id,
+        resolveRuntimeApiKey(adapter.id, integrations),
+        request.user?.id ?? null,
+      );
       const models = detected.available
         ? await listRuntimeModels(adapter.id, integrations).catch(() => [])
         : [];
@@ -1418,6 +1422,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         revisionId: revision.id,
         quoteId: quote.id,
         customCliPath: resolveCliPathOverride(runtime, integrations),
+        userId: request.user?.id ?? null,
         ...buildSpawnApiKeys(integrations),
       });
 
@@ -1534,6 +1539,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
         customCliPath: resolveCliPathOverride(runtime, integrations),
+        userId: request.user?.id ?? null,
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
       });
@@ -1684,6 +1690,7 @@ ${message}`;
         revisionId: workspace.currentRevision.id,
         quoteId: workspace.quote.id,
         customCliPath: resolveCliPathOverride(runtime, prepared.integrations),
+        userId: request.user?.id ?? null,
         ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
         emitCompletionMessage: false,
@@ -2015,6 +2022,7 @@ Merge tables that span multiple pages. Skip non-data pages.
       runtime,
       model: normalizedModel,
       authToken: token,
+      userId: request.user?.id ?? null,
       ...buildSpawnApiKeys(integrations),
       reasoningEffort,
     });

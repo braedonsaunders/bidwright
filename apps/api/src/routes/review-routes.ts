@@ -491,6 +491,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
           (typeof integrations[adapter.pathSettingKey] === "string"
             ? (integrations[adapter.pathSettingKey] as string)
             : undefined) || undefined,
+        userId: request.user?.id ?? null,
         anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
         openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
         googleApiKey:

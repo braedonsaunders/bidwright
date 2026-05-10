@@ -44,12 +44,15 @@ services:
       REDIS_URL: redis://redis:6379
       DATA_DIR: /data
       API_PORT: "3001"
-      CLAUDE_CONFIG_DIR: /root/.claude
-      CODEX_HOME: /root/.codex
+      # Multi-tenant server mode: each authenticated user gets their own CLI
+      # auth namespace under AGENT_HOME_ROOT/users/<userId>. The runtime sets
+      # CLAUDE_CONFIG_DIR / CODEX_HOME / XDG_DATA_HOME / HOME at spawn time
+      # so user A's Claude OAuth never leaks into user B's CLI session.
+      BIDWRIGHT_MODE: server
+      AGENT_HOME_ROOT: /data/agent-home
     volumes:
       - ./data/bidwright-api:/data
-      - ./data/agent-home/claude:/root/.claude
-      - ./data/agent-home/codex:/root/.codex
+      - ./data/agent-home:/data/agent-home
     ports:
       - "3001:3001"
 

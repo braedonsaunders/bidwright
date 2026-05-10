@@ -328,10 +328,20 @@ export const claudeCodeAdapter: CliAdapter = {
     return { available: true, path, version: getCliVersion(path) } satisfies CliDetectResult;
   },
 
-  checkAuth({ apiKeys }): CliAuthStatus {
+  checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
     if (apiKeys.anthropic || process.env.ANTHROPIC_API_KEY) {
       return { authenticated: true, method: "api_key" };
     }
+    if (agentHomeDir) {
+      // Server mode: scope auth detection to this user's namespace only.
+      // We deliberately do NOT fall back to the host `~/.claude` — that
+      // would leak whoever last logged into the container into every user's
+      // status pill.
+      const credPath = join(agentHomeDir, ".claude", ".credentials.json");
+      if (existsSync(credPath)) return { authenticated: true, method: "oauth" };
+      return { authenticated: false, method: "none" };
+    }
+    // Desktop mode: the operator's own host credentials win.
     const home = homeDir();
     const configDir = process.env.CLAUDE_CONFIG_DIR || join(home, ".claude");
     const credPath = join(configDir, ".credentials.json");
@@ -368,6 +378,14 @@ export const claudeCodeAdapter: CliAdapter = {
     // settings.json is in place without wiping CLI state the running process
     // might still depend on.
     await writeClaudeSettings(ctx, !ctx.isResume);
+    if (ctx.agentHomeDir) {
+      // Server mode: redirect Claude Code at the per-user namespace so its
+      // OAuth credentials, settings, and statsig cache live under
+      // <agentHomeDir>/.claude instead of leaking into a container-wide ~/.claude.
+      const userClaudeDir = join(ctx.agentHomeDir, ".claude");
+      await mkdir(userClaudeDir, { recursive: true });
+      return { extraEnv: { CLAUDE_CONFIG_DIR: userClaudeDir } };
+    }
     return {};
   },
 

@@ -33,6 +33,7 @@ import {
   listAdapters,
   tryGetAdapter,
 } from "./cli-adapters/registry.js";
+import { ensureUserAgentHome, getUserAgentHome } from "./agent-home.js";
 import { BIDWRIGHT_PERMISSIONS, quoteWindowsArg } from "./cli-adapters/shared.js";
 import type {
   AgentReasoningEffort,
@@ -333,10 +334,26 @@ export function detectCli(
   return adapter.detect(customCliPath);
 }
 
-export function checkCliAuth(runtime: AgentRuntime, apiKey?: string): CliAuthStatus {
+/**
+ * Check whether `runtime` is authenticated for a given user.
+ *
+ * In server mode pass the userId so detection is scoped to that user's
+ * per-user agent-home dir; the host's `~/.claude` is never consulted as a
+ * fallback (preventing one user's auth from showing up in another user's
+ * status pill). In desktop mode `userId` may be omitted and the operator's
+ * own `~/.claude` is the source of truth.
+ */
+export function checkCliAuth(
+  runtime: AgentRuntime,
+  apiKey?: string,
+  userId?: string | null,
+): CliAuthStatus {
   const adapter = tryGetAdapter(runtime);
   if (!adapter) return { authenticated: false, method: "none" };
-  return adapter.checkAuth({ apiKeys: legacyApiKeysFor(runtime, apiKey) });
+  return adapter.checkAuth({
+    apiKeys: legacyApiKeysFor(runtime, apiKey),
+    agentHomeDir: getUserAgentHome(userId ?? null),
+  });
 }
 
 export async function listCliModels(
@@ -370,6 +387,13 @@ export interface SpawnSessionOpts {
   stoppedMessage?: string;
   failedMessagePrefix?: string;
   emitCompletionMessage?: boolean;
+  /**
+   * The Bidwright user this session belongs to. In server mode the runtime
+   * resolves this to a per-user agent-home dir (CLAUDE_CONFIG_DIR / CODEX_HOME
+   * / XDG_DATA_HOME / HOME, depending on adapter) so each user's CLI auth
+   * state is isolated from every other user on the host.
+   */
+  userId?: string | null;
 }
 
 export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
@@ -587,6 +611,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   const { mcpRunner, mcpArgs, isWin } = resolveMcpRunner();
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
+  const agentHomeDir = await ensureUserAgentHome(opts.userId);
 
   // Always materialize the bidwright MCP config file. Adapters that need it
   // (Claude --mcp-config) reference it; others ignore it.
@@ -605,6 +630,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     permissions: [...BIDWRIGHT_PERMISSIONS],
     isWin,
     isResume: false,
+    agentHomeDir,
   });
 
   const plan = await adapter.buildSpawnPlan({
@@ -619,6 +645,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     mcpEnv,
     isWin,
     mcpConfigPath,
+    agentHomeDir,
   });
 
   const cliEnv: Record<string, string> = {
@@ -803,6 +830,7 @@ async function spawnResumedSession(
   const { mcpRunner, mcpArgs, isWin } = resolveMcpRunner();
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
+  const agentHomeDir = await ensureUserAgentHome(opts.userId);
   const mcpConfigPath = await writeMcpConfigFile(
     opts.projectDir,
     mcpRunner,
@@ -818,6 +846,7 @@ async function spawnResumedSession(
     permissions: [...BIDWRIGHT_PERMISSIONS],
     isWin,
     isResume: true,
+    agentHomeDir,
   });
 
   const plan = await adapter.buildResumePlan({
@@ -833,6 +862,7 @@ async function spawnResumedSession(
     isWin,
     mcpConfigPath,
     sessionId,
+    agentHomeDir,
   });
 
   const cliEnv: Record<string, string> = {
