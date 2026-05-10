@@ -122,7 +122,6 @@ import { FactorParameterEditor } from "@/components/workspace/factor-parameter-e
 import { SetupTab } from "@/components/workspace/setup-tab";
 import { SummarizeTab } from "@/components/workspace/summarize-tab";
 import { DocumentationTab } from "@/components/workspace/documentation-tab";
-import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { ComboView } from "@/components/workspace/combo-view";
 import { ReviewTab } from "@/components/workspace/review-tab";
 import { AuditTrailTab } from "@/components/workspace/audit-trail";
@@ -173,7 +172,7 @@ import type { ResourceSummaryRow } from "@/components/workspace/resource-summary
 /* ─── Types ─── */
 
 type WorkspaceTab = "setup" | "estimate" | "summarize" | "documents" | "review" | "activity";
-type EstimateSubTab = "takeoff" | "worksheets" | "combo" | "factors" | "phases";
+type EstimateSubTab = "takeoff" | "worksheets" | "factors" | "phases";
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
 
 type ItemDraft = {
@@ -238,7 +237,7 @@ const tabs: Array<{ id: WorkspaceTab; label: string; icon: typeof FileText }> = 
   { id: "review", label: "Review", icon: SearchCheck },
   { id: "activity", label: "Activity", icon: MessageSquareText },
 ];
-const estimateSubTabs = ["takeoff", "worksheets", "combo", "factors", "phases"] as const;
+const estimateSubTabs = ["takeoff", "worksheets", "factors", "phases"] as const;
 
 /* ─── Utilities ─── */
 
@@ -299,7 +298,6 @@ function statusTone(s: string | undefined | null) {
 function estimateSubTabLabel(tab: EstimateSubTab) {
   if (tab === "takeoff") return "Takeoff";
   if (tab === "worksheets") return "Worksheets";
-  if (tab === "combo") return "Combo";
   if (tab === "factors") return "Factors";
   return "Phases";
 }
@@ -2157,40 +2155,27 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                     </motion.div>
                   )}
 
-                  {estimateSubTab === "combo" && (
-                    <motion.div key="combo" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="flex-1 min-h-0 flex flex-col">
-                      <ComboView
-                        workspace={workspace}
-                        onApply={apply}
-                        onError={setError}
-                        onRefresh={refreshWorkspace}
-                        onOpenAgentChat={openAgentChat}
-                        onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
-                        onOpenPluginTools={openPluginTools}
-                        onOpenTakeoffLink={handleOpenTakeoffForLineItem}
-                        onWorkspaceMutated={refreshWorkspace}
-                        workspaceSyncOriginId={workspaceSyncOriginRef.current}
-                        selectedWorksheetId={selectedModelWorksheet?.id}
-                        activeWorksheetId={selectedWsId}
-                        onActiveWorksheetChange={setSelectedWsId}
-                        initialDocumentId={takeoffDocumentId}
-                        highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
-                      />
-                    </motion.div>
-                  )}
                 </AnimatePresence>
               </div>
 
               {/* Takeoff (always mounted for state persistence across tab switches) */}
               <div className={cn("absolute inset-0 flex flex-col", estimateSubTab !== "takeoff" && "hidden")}>
-                <TakeoffTab
+                <ComboView
                   workspace={workspace}
+                  onApply={apply}
+                  onError={setError}
+                  onRefresh={refreshWorkspace}
                   onOpenAgentChat={openAgentChat}
                   onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
+                  onOpenPluginTools={openPluginTools}
+                  onOpenTakeoffLink={handleOpenTakeoffForLineItem}
                   onWorkspaceMutated={refreshWorkspace}
                   workspaceSyncOriginId={workspaceSyncOriginRef.current}
                   selectedWorksheetId={selectedModelWorksheet?.id}
+                  activeWorksheetId={selectedWsId}
+                  onActiveWorksheetChange={setSelectedWsId}
                   initialDocumentId={takeoffDocumentId}
+                  highlightItemId={searchHighlight && "itemId" in searchHighlight ? searchHighlight.itemId : undefined}
                 />
               </div>
             </div>

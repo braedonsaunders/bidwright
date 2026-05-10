@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Group, Panel, Separator } from "react-resizable-panels";
+import { useEffect, useMemo, useState } from "react";
+import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
 import { Compass, Maximize2, Minimize2, MousePointerClick, Sparkles } from "lucide-react";
 import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
@@ -60,6 +60,25 @@ export function ComboView({
 
   const takeoffOriginId = workspaceSyncOriginId ? `${workspaceSyncOriginId}-combo` : undefined;
 
+  const layoutStorage = useMemo<LayoutStorage>(() => ({
+    getItem: (key) => (typeof window === "undefined" ? null : window.localStorage.getItem(key)),
+    setItem: (key, value) => {
+      if (typeof window === "undefined") return;
+      try { window.localStorage.setItem(key, value); } catch {}
+    },
+  }), []);
+
+  const verticalLayout = useDefaultLayout({
+    id: "combo-view-vertical",
+    panelIds: ["combo-top", "combo-bottom"],
+    storage: layoutStorage,
+  });
+  const horizontalLayout = useDefaultLayout({
+    id: "combo-view-horizontal",
+    panelIds: ["combo-takeoff", "combo-right"],
+    storage: layoutStorage,
+  });
+
   return (
     <div
       className={cn(
@@ -67,10 +86,20 @@ export function ComboView({
         fullscreen ? "fixed inset-0 z-50 bg-bg p-2" : "flex-1 min-h-0",
       )}
     >
-      <Group orientation="vertical" className="flex-1 min-h-0">
-        <Panel defaultSize="67%" minSize="30%">
-          <Group orientation="horizontal" className="h-full">
-            <Panel defaultSize="67%" minSize="30%">
+      <Group
+        orientation="vertical"
+        className="flex-1 min-h-0"
+        defaultLayout={verticalLayout.defaultLayout}
+        onLayoutChanged={verticalLayout.onLayoutChanged}
+      >
+        <Panel id="combo-top" defaultSize="67%" minSize="30%">
+          <Group
+            orientation="horizontal"
+            className="h-full"
+            defaultLayout={horizontalLayout.defaultLayout}
+            onLayoutChanged={horizontalLayout.onLayoutChanged}
+          >
+            <Panel id="combo-takeoff" defaultSize="67%" minSize="30%">
               <div className="h-full min-h-0 flex flex-col pr-1.5 pb-1.5">
                 <TakeoffTab
                   workspace={workspace}
@@ -88,7 +117,13 @@ export function ComboView({
               <div className="absolute inset-y-0 -left-1 -right-1" />
             </Separator>
 
-            <Panel defaultSize="33%" minSize="18%">
+            <Panel
+              id="combo-right"
+              defaultSize="33%"
+              minSize="18%"
+              collapsible
+              collapsedSize="0%"
+            >
               <div className="h-full min-h-0 flex flex-col bg-panel/30">
                 <RightPanel
                   workspace={workspace}
@@ -108,7 +143,13 @@ export function ComboView({
           <div className="absolute inset-x-0 -top-1 -bottom-1" />
         </Separator>
 
-        <Panel defaultSize="33%" minSize="15%">
+        <Panel
+          id="combo-bottom"
+          defaultSize="33%"
+          minSize="15%"
+          collapsible
+          collapsedSize="0%"
+        >
           <div className="h-full min-h-0 flex flex-col">
             <EstimateGrid
               workspace={workspace}
