@@ -7,6 +7,7 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ArrowLeft,
   ArrowRight,
   Download,
   Expand,
@@ -51,6 +52,7 @@ import {
   StretchHorizontal,
   Trash2,
   Box,
+  Boxes,
   Undo2,
   Redo2,
 } from "lucide-react";
@@ -156,7 +158,17 @@ import {
 } from "./takeoff/create-annotation-modal";
 
 const DWG_EXTENSIONS = new Set(["dwg", "dxf"]);
-const MODEL_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae", "ifc", "rvt", "nwd", "nwf", "nwc"]);
+/** Semantic, element-aware building information formats. These carry typed
+ *  schema (IFC properties, Revit families, Navisworks federation) and drive
+ *  the BIM-takeoff workflow (element table, Pset filtering, classification). */
+const BIM_EXTENSIONS = new Set(["ifc", "rvt", "nwd", "nwf", "nwc", "rfa"]);
+/** Geometry-only formats: parametric solids (STEP/IGES/BREP) plus visualization
+ *  meshes (STL/OBJ/FBX/glTF/etc). No element semantics — visualization and
+ *  bbox/area/volume metrics only. STEP/BREP can be edited in the parametric model editor. */
+const MESH_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "obj", "fbx", "gltf", "glb", "3ds", "dae"]);
+/** Union — kept for backwards compatibility with helpers/registries that ask
+ *  "is this any kind of 3D model file?". New code should branch on BIM vs MESH. */
+const MODEL_EXTENSIONS = new Set([...BIM_EXTENSIONS, ...MESH_EXTENSIONS]);
 const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
 
@@ -171,6 +183,14 @@ function getFileExtension(fileName: string): string {
 
 function isDwgFile(fileName: string): boolean {
   return DWG_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isBimFile(fileName: string): boolean {
+  return BIM_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isMeshFile(fileName: string): boolean {
+  return MESH_EXTENSIONS.has(getFileExtension(fileName));
 }
 
 function isCadFile(fileName: string): boolean {
@@ -284,7 +304,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "model" | "dwg";
+  kind: "pdf" | "bim" | "model" | "dwg";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -359,7 +379,8 @@ function takeoffChannelName(projectId: string): string {
 
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
   if (isDwgFile(fileName)) return "dwg";
-  return isCadFile(fileName) ? "model" : "pdf";
+  if (isBimFile(fileName)) return "bim";
+  return isMeshFile(fileName) ? "model" : "pdf";
 }
 
 function takeoffDisplayFileName(fileName: string) {
@@ -383,7 +404,8 @@ function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDo
 
 function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
   if (kind === "dwg") return "DWG/DXF";
-  if (kind === "model") return "Model";
+  if (kind === "bim") return "BIM";
+  if (kind === "model") return "3D";
   return "PDF";
 }
 
@@ -794,8 +816,8 @@ export function TakeoffTab({
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
   const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "model";
-  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId>("pdf");
+  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
+  const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
   const [selectedSpreadsheetNodeId, setSelectedSpreadsheetNodeId] = useState<string | null>(null);
@@ -992,7 +1014,7 @@ export function TakeoffTab({
           id: `model-asset-${asset.id}`,
           label: asset.fileName,
           fileName: asset.fileName,
-          kind: "model" as const,
+          kind: getTakeoffDocumentKind(asset.fileName),
           source: "project" as const,
           projectId,
           fileNodeId: asset.fileNodeId ?? undefined,
@@ -1021,7 +1043,11 @@ export function TakeoffTab({
   const pdfDocuments = takeoffDocuments.filter((d) => d.kind === "pdf");
   const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
   const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
-  const isCadDocument = selectedDocumentKind === "model";
+  const isBimDocument = selectedDocumentKind === "bim";
+  // `isCadDocument` retains its historical "any 3D file" semantic so all the
+  // PDF-only-UI guards (`!isCadDocument && !isDwgDocument && …`) keep working
+  // for both BIM and mesh files. Branch on `isBimDocument` for BIM-specific UI.
+  const isCadDocument = selectedDocumentKind === "model" || selectedDocumentKind === "bim";
   const isDwgDocument = selectedDocumentKind === "dwg";
   const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
   const selectedModelAsset = isCadDocument
@@ -2567,9 +2593,11 @@ export function TakeoffTab({
       ? "empty"
       : isDwgDocument
         ? "dwg"
-        : isCadDocument
-          ? "model"
-          : "pdf";
+        : isBimDocument
+          ? "bim"
+          : isCadDocument
+            ? "model"
+            : "pdf";
     const inspectAnnotations =
       mode === "dwg" ? dwgAnnotationsCache : mode === "pdf" ? annotations : [];
     const inspectSelectedAnnotationId =
@@ -2578,8 +2606,10 @@ export function TakeoffTab({
           ? selection.annotationId
           : null
         : selectedAnnotationId;
+    // Both BIM and 3D-geometry modes carry model elements; PDF/DWG don't.
+    const isModelMode = mode === "bim" || mode === "model";
     const inspectModelElements: InspectModelElement[] =
-      mode === "model"
+      isModelMode
         ? modelElements.map((element) => ({
             id: element.id,
             name: element.name || element.externalId,
@@ -2604,7 +2634,7 @@ export function TakeoffTab({
       modelSearch: modelElementSearch,
       modelBasis: modelLedgerBasis,
       modelAsset:
-        mode === "model" && selectedModelAsset
+        isModelMode && selectedModelAsset
           ? {
               id: selectedModelAsset.id,
               fileName: selectedDoc?.fileName ?? selectedModelAsset.fileName,
@@ -2630,6 +2660,7 @@ export function TakeoffTab({
     onInspectSnapshotChange,
     selectedDoc,
     isDwgDocument,
+    isBimDocument,
     isCadDocument,
     annotations,
     dwgAnnotationsCache,
@@ -2954,6 +2985,7 @@ export function TakeoffTab({
   const activeToolDef = TOOLS.find((tool) => tool.id === activeTool) ?? TOOLS[0];
   const canUndoTakeoff = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
+  const bimDocuments = takeoffDocuments.filter((doc) => doc.kind === "bim");
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
@@ -3046,10 +3078,10 @@ export function TakeoffTab({
     setShowLanding(false);
   }
 
-  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "model";
+  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "bim" | "model";
   const intakeToneClasses: Record<
     IntakeOptionTone,
-    { accent: string; active: string; hover: string; icon: string; rail: string; wash: string }
+    { accent: string; active: string; hover: string; icon: string; rail: string; wash: string; ghost: string }
   > = {
     spreadsheet: {
       accent: "text-emerald-600",
@@ -3058,6 +3090,7 @@ export function TakeoffTab({
       icon: "border-emerald-600/25 bg-emerald-600/10 text-emerald-600",
       rail: "bg-emerald-600",
       wash: "bg-emerald-600/5",
+      ghost: "text-emerald-600/[0.06] group-hover/card:text-emerald-600/[0.10]",
     },
     pdf: {
       accent: "text-sky-500",
@@ -3066,6 +3099,7 @@ export function TakeoffTab({
       icon: "border-sky-500/25 bg-sky-500/10 text-sky-500",
       rail: "bg-sky-500",
       wash: "bg-sky-500/5",
+      ghost: "text-sky-500/[0.06] group-hover/card:text-sky-500/[0.10]",
     },
     dwg: {
       accent: "text-amber-500",
@@ -3074,14 +3108,25 @@ export function TakeoffTab({
       icon: "border-amber-500/25 bg-amber-500/10 text-amber-500",
       rail: "bg-amber-500",
       wash: "bg-amber-500/5",
+      ghost: "text-amber-500/[0.06] group-hover/card:text-amber-500/[0.10]",
     },
-    model: {
+    bim: {
       accent: "text-violet-500",
       active: "border-violet-500/45 ring-2 ring-violet-500/10",
       hover: "hover:border-violet-500/45",
       icon: "border-violet-500/25 bg-violet-500/10 text-violet-500",
       rail: "bg-violet-500",
       wash: "bg-violet-500/5",
+      ghost: "text-violet-500/[0.06] group-hover/card:text-violet-500/[0.10]",
+    },
+    model: {
+      accent: "text-rose-500",
+      active: "border-rose-500/45 ring-2 ring-rose-500/10",
+      hover: "hover:border-rose-500/45",
+      icon: "border-rose-500/25 bg-rose-500/10 text-rose-500",
+      rail: "bg-rose-500",
+      wash: "bg-rose-500/5",
+      ghost: "text-rose-500/[0.06] group-hover/card:text-rose-500/[0.10]",
     },
   };
 
@@ -3117,12 +3162,22 @@ export function TakeoffTab({
       disabled: false,
     },
     {
-      id: "model",
-      title: "3D / Model",
-      detail: "Inspect model geometry and linked quantities.",
-      metric: modelDocuments.length.toLocaleString(),
+      id: "bim",
+      title: "BIM",
+      detail: "Building models with element schema, properties, and quantities (IFC, Revit, Navisworks).",
+      metric: bimDocuments.length.toLocaleString(),
       metricLabel: "models",
       icon: Box,
+      tone: "bim",
+      disabled: false,
+    },
+    {
+      id: "model",
+      title: "3D Geometry",
+      detail: "Geometry-only models for visualization and metrics (STEP, glTF, OBJ, STL).",
+      metric: modelDocuments.length.toLocaleString(),
+      metricLabel: "files",
+      icon: Boxes,
       tone: "model",
       disabled: false,
     },
@@ -3154,15 +3209,23 @@ export function TakeoffTab({
             docs: dwgDocuments,
             icon: FileJson,
           }
-        : activeIntakeOption === "model"
+        : activeIntakeOption === "bim"
           ? {
-              title: "3D / Model sources",
-              detail: sourceCountText(modelDocuments.length, "model", "models") || "Model files ready for takeoff",
-              emptyLabel: "No model sources",
-              docs: modelDocuments,
+              title: "BIM models",
+              detail: sourceCountText(bimDocuments.length, "BIM model", "BIM models") || "IFC, Revit, and Navisworks files ready for takeoff",
+              emptyLabel: "No BIM models",
+              docs: bimDocuments,
               icon: Box,
             }
-          : null;
+          : activeIntakeOption === "model"
+            ? {
+                title: "3D geometry",
+                detail: sourceCountText(modelDocuments.length, "geometry file", "geometry files") || "Visualization-only models (STEP, glTF, OBJ, STL)",
+                emptyLabel: "No 3D geometry files",
+                docs: modelDocuments,
+                icon: Boxes,
+              }
+            : null;
 
   /* ─── Render ─── */
 
@@ -3173,59 +3236,86 @@ export function TakeoffTab({
         className="relative flex h-full flex-1 min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel"
       >
         <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-5">
-          <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-            {intakeOptions.map((option) => {
-              const Icon = option.icon;
-              const active = activeIntakeOption === option.id;
-              const tone = intakeToneClasses[option.tone];
-              return (
-                <button
-                  key={option.id}
-                  type="button"
-                  disabled={option.disabled}
-                  onClick={() => setActiveIntakeOption(option.id)}
-                  className={cn(
-                    "group/card relative z-0 flex min-h-[112px] min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-3 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35 xl:min-h-[132px]",
-                    active ? tone.active : tone.hover,
-                    "disabled:cursor-not-allowed disabled:opacity-50"
-                  )}
-                >
-                  <span className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", tone.wash, active && "opacity-100")} />
-                  <motion.span
-                    layoutId={`takeoff-intake-rail-${option.id}`}
-                    className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", tone.rail)}
-                    transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                  />
-                  <span className="relative flex items-start justify-between gap-3">
-                    <span className="flex min-w-0 items-start gap-2.5">
-                      <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", tone.icon)}>
-                        <Icon className="h-[18px] w-[18px]" />
+          <AnimatePresence mode="wait" initial={false}>
+            {activeIntakeOption === null ? (
+              <motion.div
+                key="cards"
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                transition={{ duration: 0.18, ease: "easeOut" }}
+                className="grid min-h-0 flex-1 grid-cols-2 auto-rows-fr gap-2.5 lg:grid-cols-3"
+              >
+                {intakeOptions.map((option) => {
+                  const Icon = option.icon;
+                  const tone = intakeToneClasses[option.tone];
+                  return (
+                    <button
+                      key={option.id}
+                      type="button"
+                      disabled={option.disabled}
+                      onClick={() => setActiveIntakeOption(option.id)}
+                      className={cn(
+                        "group/card relative z-0 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-5 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
+                        tone.hover,
+                        "disabled:cursor-not-allowed disabled:opacity-50"
+                      )}
+                    >
+                      <span className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", tone.wash)} />
+                      <Icon
+                        aria-hidden
+                        strokeWidth={1.25}
+                        className={cn(
+                          "pointer-events-none absolute -bottom-10 -right-10 h-56 w-56 transition-all duration-300 group-hover/card:scale-[1.04] group-hover/card:rotate-[-2deg]",
+                          tone.ghost
+                        )}
+                      />
+                      <motion.span
+                        layoutId={`takeoff-intake-rail-${option.id}`}
+                        className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", tone.rail)}
+                        transition={{ type: "spring", stiffness: 500, damping: 35 }}
+                      />
+                      <span className="relative flex items-start justify-between gap-3">
+                        <span className="flex min-w-0 items-start gap-2.5">
+                          <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", tone.icon)}>
+                            <Icon className="h-[18px] w-[18px]" />
+                          </span>
+                          <span className="min-w-0 pt-0.5">
+                            <span className="block truncate text-sm font-semibold text-fg">{option.title}</span>
+                            <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{option.detail}</span>
+                          </span>
+                        </span>
+                        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
                       </span>
-                      <span className="min-w-0 pt-0.5">
-                        <span className="block truncate text-sm font-semibold text-fg">{option.title}</span>
-                        <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{option.detail}</span>
+                      <span className="relative mt-auto pt-3">
+                        <span className={cn("block text-[10px] font-semibold uppercase", tone.accent)}>{option.metricLabel}</span>
+                        <span className="mt-1 block truncate text-3xl font-semibold leading-none tabular-nums text-fg">{option.metric}</span>
                       </span>
-                    </span>
-                    <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
-                  </span>
-                  <span className="relative mt-auto pt-3">
-                    <span className={cn("block text-[10px] font-semibold uppercase", tone.accent)}>{option.metricLabel}</span>
-                    <span className="mt-1 block truncate text-3xl font-semibold leading-none tabular-nums text-fg">{option.metric}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-
-          <AnimatePresence mode="wait">
-            <motion.div
-              key={activeIntakeOption}
-              initial={{ opacity: 0, y: -8 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -6 }}
-              transition={{ duration: 0.22, ease: "easeOut" }}
-              className="mt-4 flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm"
-            >
+                    </button>
+                  );
+                })}
+              </motion.div>
+            ) : (
+              <motion.div
+                key={`source-${activeIntakeOption}`}
+                initial={{ opacity: 0, y: -8 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -6 }}
+                transition={{ duration: 0.22, ease: "easeOut" }}
+                className="flex min-h-0 flex-1 flex-col overflow-hidden"
+              >
+                <div className="mb-3 flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={() => setActiveIntakeOption(null)}
+                    title="Back to intake options"
+                  >
+                    <ArrowLeft className="h-3.5 w-3.5" />
+                    Back
+                  </Button>
+                </div>
+                <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm">
               {activeIntakeOption === "spreadsheet" && (
                 <div className="grid h-full min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[310px_minmax(0,1fr)]">
                   <div className="flex min-w-0 min-h-0 flex-col rounded-md border border-line bg-panel/65 p-3">
@@ -3473,7 +3563,9 @@ export function TakeoffTab({
                   </div>
                 </div>
               )}
-            </motion.div>
+                </div>
+              </motion.div>
+            )}
           </AnimatePresence>
         </div>
       </div>
@@ -3489,19 +3581,21 @@ export function TakeoffTab({
       )}
     >
       {/* ─── Top Toolbar ─── */}
-      <div className="flex min-w-0 items-center gap-2 overflow-hidden border-b border-line bg-panel px-2 py-1.5 shrink-0">
+      {/* `overflow-x-auto` lets controls scroll horizontally instead of squishing
+          when the takeoff panel is narrow (e.g. 13" laptop with side panels open).
+          Inner items use `shrink-0` so they keep intrinsic widths and the row scrolls. */}
+      <div className="flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-line bg-panel px-2 py-1.5 shrink-0 [scrollbar-width:thin]">
         {!detached && (
           <>
-            <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake">
+            <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake" className="shrink-0">
               <FolderOpen className="h-3.5 w-3.5" />
-              <span className="hidden xl:inline">Intake</span>
+              <span className="hidden 2xl:inline">Intake</span>
             </Button>
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
           </>
         )}
         {/* Document selector */}
-        <div className="flex min-w-0 items-center gap-2">
-          <label className="hidden text-xs font-medium text-fg/50 xl:inline">Source:</label>
+        <div className="flex shrink-0 items-center gap-2">
           <RadixSelect.Root
             value={selectedDocId}
             onValueChange={(v) => {
@@ -3514,7 +3608,7 @@ export function TakeoffTab({
               setAutoCountSnippet(null);
             }}
           >
-            <RadixSelect.Trigger className="inline-flex h-8 w-44 min-w-0 items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2.5 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 2xl:w-56">
+            <RadixSelect.Trigger className="inline-flex h-8 w-36 shrink-0 items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2.5 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 lg:w-44 2xl:w-56">
               <RadixSelect.Value placeholder="No drawings available" />
               <RadixSelect.Icon className="ml-auto shrink-0">
                 <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
@@ -3595,7 +3689,7 @@ export function TakeoffTab({
 
         {!isCadDocument && !isDwgDocument && (
           <>
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
             {onOpenRevisionDiff && !detached && (
               <>
                 <Button
@@ -3603,16 +3697,17 @@ export function TakeoffTab({
                   size="xs"
                   onClick={onOpenRevisionDiff}
                   title="Compare drawing revisions and re-takeoff"
+                  className="shrink-0"
                 >
                   <GitCompare className="h-3.5 w-3.5" />
                   <span className="hidden 2xl:inline">Compare</span>
                 </Button>
-                <Separator className="!h-6 !w-px" />
+                <Separator className="!h-6 !w-px shrink-0" />
               </>
             )}
 
             {/* Page navigation */}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="xs" onClick={handlePrevPage} disabled={page <= 1}>
                 <ChevronLeft className="h-3.5 w-3.5" />
               </Button>
@@ -3635,10 +3730,10 @@ export function TakeoffTab({
               </Button>
             </div>
 
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
 
             {/* Zoom controls */}
-            <div className="flex items-center gap-1">
+            <div className="flex shrink-0 items-center gap-1">
               <Button variant="ghost" size="xs" onClick={handleZoomOut}>
                 <Minus className="h-3.5 w-3.5" />
               </Button>
@@ -3659,7 +3754,7 @@ export function TakeoffTab({
               </Button>
             </div>
 
-            <Separator className="!h-6 !w-px" />
+            <Separator className="!h-6 !w-px shrink-0" />
 
             {/* Calibration indicator — click to set/reset scale */}
             {calibration ? (

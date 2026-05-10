@@ -7,7 +7,10 @@ import { cn } from "@/lib/utils";
 import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
 import type { TakeoffLinkRecord } from "@/lib/api";
 
-export type InspectMode = "pdf" | "dwg" | "model" | "empty";
+/** `bim` is element-aware (IFC/Revit/Navisworks) and uses the BIM-specific
+ *  inspect surface; `model` is geometry-only (STEP/glTF/OBJ/STL) and degrades
+ *  to a metric summary without element semantics. */
+export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "empty";
 export type InspectModelBasis = "count" | "area" | "volume";
 
 export interface InspectModelElement {
@@ -88,7 +91,7 @@ export function TakeoffInspectView({
     );
   }
 
-  if (snapshot.mode === "model") {
+  if (snapshot.mode === "bim" || snapshot.mode === "model") {
     return <ModelInspect snapshot={snapshot} actions={actions} />;
   }
 
@@ -345,6 +348,7 @@ function ModelInspect({
   actions: InspectActions | null;
 }) {
   const { modelElements, modelElementsLoading, modelError, modelSyncing, modelSearch, modelBasis, modelAsset, selectedModelElementId } = snapshot;
+  const isBim = snapshot.mode === "bim";
 
   return (
     <div className="flex h-full flex-col gap-2 text-xs">
@@ -352,14 +356,25 @@ function ModelInspect({
         <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5">
           <div className="flex items-center justify-between gap-2">
             <p className="min-w-0 truncate text-[11px] font-semibold text-fg">{modelAsset.fileName}</p>
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
-                modelAsset.isEditable ? "bg-success/15 text-success" : "bg-warning/15 text-warning",
-              )}
-            >
-              {modelAsset.isEditable ? "Editable" : "Preview"}
-            </span>
+            <div className="flex shrink-0 items-center gap-1">
+              <span
+                className={cn(
+                  "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
+                  isBim ? "bg-violet-500/15 text-violet-500" : "bg-rose-500/15 text-rose-500",
+                )}
+                title={isBim ? "Building Information Model" : "Geometry-only model"}
+              >
+                {isBim ? "BIM" : "3D"}
+              </span>
+              <span
+                className={cn(
+                  "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
+                  modelAsset.isEditable ? "bg-success/15 text-success" : "bg-warning/15 text-warning",
+                )}
+              >
+                {modelAsset.isEditable ? "Editable" : "Preview"}
+              </span>
+            </div>
           </div>
           <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[10px]">
             <Stat label="Objects" value={modelAsset.counts.elements} />
