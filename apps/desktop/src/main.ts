@@ -30,6 +30,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { getAvailablePort, waitForHttpReady } from "./port-utils.js";
+import { initPgvectorIfAvailable } from "./pgvector-init.js";
+import { wireAutoUpdater } from "./auto-updater.js";
 
 // ── Constants ─────────────────────────────────────────────────────
 
@@ -137,6 +139,18 @@ async function bootPackaged(): Promise<BootedServers> {
   // 2. Apply migrations -----------------------------------------------------
   console.log(`[desktop] applying Prisma migrations`);
   await applyPrismaMigrations(databaseUrl);
+
+  // 2b. Try to enable pgvector + create the vector_records table.
+  //     Vanilla Postgres binaries (which embedded-postgres ships) don't
+  //     include pgvector; we attempt the extension and fall through if
+  //     it isn't installable. The api's knowledge-service has a graceful
+  //     text-search fallback when vector_records is missing, so a desktop
+  //     install without pgvector keeps working — just with text-only
+  //     semantic search instead of hybrid.
+  await initPgvectorIfAvailable({
+    databaseUrl,
+    initSqlPath: packagedResource("init-pgvector.sql"),
+  });
 
   // 3. Boot Fastify in-process ---------------------------------------------
   // Importing @bidwright/api in the Electron main process is fine: same
@@ -434,6 +448,15 @@ async function start() {
 
   buildAppMenu();
   mainWindow = createMainWindow(booted.webUrl);
+
+  // Auto-update from GitHub Releases — packaged builds only, dev
+  // launches skip the update check. Failures here are logged and
+  // swallowed; an offline user shouldn't see a popup on every launch.
+  if (app.isPackaged) {
+    wireAutoUpdater().catch((err) => {
+      console.warn("[desktop] auto-updater wiring failed:", err);
+    });
+  }
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0 && booted) {

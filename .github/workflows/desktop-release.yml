@@ -1,0 +1,170 @@
+# Desktop release pipeline.
+#
+# Triggers on `desktop-v*` tags or manual `workflow_dispatch`. Builds the
+# Electron desktop wrapper across macOS, Linux, and Windows in parallel,
+# then uploads the resulting installers to a GitHub Release.
+#
+# Code signing is OPT-IN via repo secrets — without them, builds finish
+# successfully but the artifacts are unsigned (Gatekeeper / SmartScreen
+# warn the user on install). To enable signing later, set:
+#
+#   CSC_LINK / CSC_KEY_PASSWORD                — base64'd .p12 + password
+#                                                 (works for mac and win)
+#   APPLE_ID / APPLE_APP_SPECIFIC_PASSWORD /
+#   APPLE_TEAM_ID                              — Apple notarization (mac only)
+#
+# Releasing:
+#
+#   git tag desktop-v0.1.0
+#   git push origin desktop-v0.1.0
+#
+# …and watch the Actions tab. The release is created in draft mode so a
+# human reviews release notes before publishing — auto-update on existing
+# installs is gated on the release being published, not just drafted.
+
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - "desktop-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version tag (e.g. desktop-v0.1.0). Leave empty to skip the release step and just produce per-platform artifacts."
+        required: false
+
+permissions:
+  contents: write   # needed to create a GitHub Release on tag
+
+concurrency:
+  group: desktop-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            artifact_glob: "*.dmg *.zip *.blockmap *-mac.yml"
+          - os: ubuntu-latest
+            artifact_glob: "*.AppImage *.blockmap *-linux.yml"
+          - os: windows-latest
+            artifact_glob: "*.exe *.blockmap *.yml"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.30.3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Approve native build scripts
+        # `pnpm approve-builds` is interactive; we set the
+        # `onlyBuiltDependencies` field via env so embedded-postgres,
+        # node-pty, argon2, electron, and friends actually compile their
+        # native bindings. Without this they're skipped and the runtime
+        # binary is missing.
+        run: |
+          pnpm rebuild embedded-postgres node-pty argon2 || true
+        shell: bash
+
+      - name: Generate Prisma client
+        run: pnpm --filter @bidwright/db db:generate
+
+      - name: Build api
+        run: pnpm --filter @bidwright/api build
+
+      - name: Build web (Next.js standalone)
+        run: pnpm --filter @bidwright/web build
+
+      - name: Build desktop main process
+        run: pnpm --filter @bidwright/desktop build
+
+      - name: Package desktop installer
+        run: pnpm --filter @bidwright/desktop exec electron-builder --publish=never
+        env:
+          # Code signing — set in repo secrets when ready. Unset = unsigned build.
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          # Apple notarization — macOS only.
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # electron-builder reads this when no signing creds are present
+          # so it explicitly produces an unsigned bundle instead of erroring.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK == '' && 'false' || 'true' }}
+
+      - name: Upload installer artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/*.yml
+          if-no-files-found: warn
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/desktop-v') || (github.event_name == 'workflow_dispatch' && inputs.tag != '')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        # Each matrix runner uploads under its own directory; gh-release
+        # wants a flat list. Move every file up one level so the release
+        # body shows e.g. `Bidwright-0.1.0.dmg` rather than
+        # `desktop-macos-latest/Bidwright-0.1.0.dmg`.
+        run: |
+          set -euo pipefail
+          mkdir -p flat
+          find artifacts -type f \( -name "*.dmg" -o -name "*.zip" -o -name "*.AppImage" -o -name "*.exe" -o -name "*.blockmap" -o -name "*.yml" \) -exec mv -n {} flat/ \;
+          ls -la flat/
+
+      - name: Resolve tag name
+        id: resolve_tag
+        run: |
+          if [ -n "${{ github.ref_name }}" ] && [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve_tag.outputs.tag }}
+          name: ${{ steps.resolve_tag.outputs.tag }}
+          draft: true
+          # Generated body is fine — for a real release the maintainer
+          # edits it in the GitHub UI before clicking Publish. This pipeline
+          # creates the release as a draft so unsigned / unverified
+          # artifacts don't auto-update existing installs.
+          generate_release_notes: true
+          files: flat/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
