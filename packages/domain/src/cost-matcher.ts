@@ -7,7 +7,7 @@ import type {
   RateSchedule,
   RateScheduleItem,
   WorksheetItem,
-} from "./models.js";
+} from "./models";
 
 export type CostMatcherSourceType =
   | "catalog_item"

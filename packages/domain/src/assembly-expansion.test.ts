@@ -11,7 +11,7 @@ import {
   expandAssembly,
   findAssemblyCycles,
   summarizeExpandedAssemblyResources,
-} from "./assembly-expansion.js";
+} from "./assembly-expansion";
 
 // ── Expression evaluator tests ────────────────────────────────────────────
 

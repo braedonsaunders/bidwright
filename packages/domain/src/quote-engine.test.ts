@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { computeItemCost } from "./quote-engine.js";
-import type { WorksheetItem } from "./models.js";
+import { computeItemCost } from "./quote-engine";
+import type { WorksheetItem } from "./models";
 
 const baseItem: WorksheetItem = {
   id: "li-test",

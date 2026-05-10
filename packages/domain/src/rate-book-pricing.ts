@@ -6,7 +6,7 @@ import type {
   RateResolutionSnapshot,
   RateResolutionComponent,
   WorksheetItem,
-} from "./models.js";
+} from "./models";
 
 export type RateBookComponentKind =
   | "base_rate"
