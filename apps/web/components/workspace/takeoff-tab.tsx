@@ -612,11 +612,22 @@ function buildModelElementLineItem(
   const allQuantities = (element.quantities ?? [])
     .map((quantity) => `${quantity.quantityType}: ${formatModelSelectionQuantity(quantity.value, quantity.unit || "")}`)
     .join("\n");
+  // Carry the element's BIM classification straight through to the new
+  // worksheet item. The shape on both sides is identical (see
+  // classification-utils.ts) so codes seeded by the IFC heuristic propagate
+  // into the existing by_uniformat / by_masterformat rollups without any
+  // mapping table here. Empty classifications fall through as undefined.
+  const classification: Record<string, unknown> | undefined =
+    element.classification && Object.keys(element.classification).length > 0
+      ? { ...element.classification }
+      : undefined;
+  const lod = element.lod?.trim();
   return {
     categoryId: options.category?.id ?? null,
     category: options.category?.name ?? "Model Takeoff",
     entityType: options.category?.entityType ?? element.elementClass ?? "Model Element",
     entityName: element.name || element.externalId || element.id,
+    classification,
     description: options.fileName ?? "",
     quantity: primary.quantity,
     uom: primary.uom,
@@ -629,6 +640,9 @@ function buildModelElementLineItem(
       `Element class: ${element.elementClass || "Model Element"}`,
       element.material ? `Material: ${element.material}` : "",
       element.level ? `Level: ${element.level}` : "",
+      lod ? `LOD: ${lod}${element.lodSource === "pset" ? " (from model)" : ""}` : "",
+      classification?.uniformat ? `Uniformat: ${classification.uniformat}` : "",
+      classification?.masterformat ? `MasterFormat: ${classification.masterformat}` : "",
       `External id: ${element.externalId || element.id}`,
       allQuantities ? `Available quantities:\n${allQuantities}` : "",
     ].filter(Boolean).join("\n"),
@@ -1375,6 +1389,16 @@ export function TakeoffTab({
             level: element.level ?? undefined,
             quantitySummary: formatElementQuantity(element, modelLedgerBasis),
           });
+        },
+        createLineItemFromElement: async (id) => {
+          // One-click send-to-worksheet from the BIM Inspect element row.
+          // Reuses the same builder that the existing model-takeoff flow uses,
+          // which now plumbs classification + LOD into the new line item and
+          // sets up the ModelTakeoffLink so the line tracks the element on
+          // subsequent revision diffs.
+          const element = modelElements.find((e) => e.id === id);
+          if (!element) return;
+          await handleCreateModelElementLineItem(element);
         },
         refreshModel: () => void refreshModelAssets(true),
         askAiAboutModel: () =>

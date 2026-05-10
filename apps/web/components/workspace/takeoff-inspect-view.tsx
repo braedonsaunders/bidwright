@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Link2, Loader2, Pencil, RefreshCw, Trash2, X, BrainCircuit } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, FilePlus, Link2, Loader2, Pencil, RefreshCw, Trash2, X, BrainCircuit } from "lucide-react";
 import { Button, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
@@ -69,6 +69,11 @@ export interface InspectActions {
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
+  /** Create a worksheet line item from the model element in one click. Preserves
+   *  classification (Uniformat/MasterFormat/...) and the primary quantity, and
+   *  binds a ModelTakeoffLink so the line stays in sync with the element on
+   *  revision diff. Implemented by TakeoffTab; the inspect view just dispatches. */
+  createLineItemFromElement: (id: string) => Promise<void> | void;
   refreshModel: () => void;
   askAiAboutModel: () => void;
 }
@@ -492,11 +497,31 @@ function ModelInspect({
                     )}
                     <p className="mt-1 text-[10px] font-medium text-fg/60">{element.quantitySummary}</p>
                   </div>
-                  {element.isLinked && (
-                    <span className="shrink-0 rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-medium text-success">
-                      Linked
-                    </span>
-                  )}
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    {element.isLinked ? (
+                      <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-medium text-success">
+                        Linked
+                      </span>
+                    ) : (
+                      // Send-to-worksheet: one click creates a new line item
+                      // pre-filled with the element's classification and primary
+                      // quantity, and binds a ModelTakeoffLink so it stays in
+                      // sync. Stop propagation so the row's select handler
+                      // doesn't fire alongside.
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void actions?.createLineItemFromElement(element.id);
+                        }}
+                        className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                        title="Create a worksheet line item from this element (carries classification + quantity, keeps it linked)"
+                      >
+                        <FilePlus className="h-3 w-3" />
+                        Send
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );
