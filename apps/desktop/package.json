@@ -37,6 +37,7 @@
       "output": "release",
       "buildResources": "build"
     },
+    "icon": "build/icon.png",
     "files": [
       "dist/**/*",
       "package.json",
@@ -65,8 +66,8 @@
         "to": "web/standalone/apps/web/public"
       },
       {
-        "from": "../api/dist",
-        "to": "api"
+        "from": "build/icon.png",
+        "to": "icon.png"
       }
     ],
     "asar": false,
