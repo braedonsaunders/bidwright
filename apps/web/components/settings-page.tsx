@@ -876,8 +876,8 @@ export function SettingsPage({
   const autodeskReady = autodeskCredentialsConfigured;
 
   return (
-    <div className={cn("gap-5", activeGroup === "importExport" ? "flex h-full flex-col" : "space-y-5")}>
-      <div className={cn(activeGroup === "importExport" && "shrink-0")}>
+    <div className="flex h-full flex-col gap-5">
+      <div className="shrink-0">
         <FadeIn>
           <div className="flex items-center justify-between">
             <div>
@@ -913,7 +913,7 @@ export function SettingsPage({
       </div>
 
       {/* Tab content */}
-      <FadeIn delay={0.1} className={cn("space-y-5", activeGroup === "importExport" && "min-h-0 flex-1 overflow-hidden")}>
+      <FadeIn delay={0.1} className={cn("min-h-0 flex-1 space-y-5", activeGroup === "importExport" ? "overflow-hidden" : "overflow-y-auto")}>
           {activeGroup === "organization" && (
             <div className="flex items-center gap-1 shrink-0">
               {ORG_SUBTABS.map((tab) => {
