@@ -104,48 +104,75 @@ async function writeOpencodeConfig(ctx: PrepareWorkspaceCtx): Promise<void> {
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   const events: SSEEventData[] = [];
 
-  // OpenCode's JSONL schema is provider-agnostic but commonly uses these tags.
-  // The parser tries each shape in turn — unknown lines fall through silently.
+  // OpenCode 1.14+ wraps event payloads in a `part` field with sub-typed
+  // content; older shapes used flat top-level fields. Handle both. Unknown
+  // lines fall through silently and the runtime layer can forward raw
+  // stdout if parsing fails outright.
+  const part = (msg && typeof msg === "object" ? msg.part : null) as any;
+  const partType = part?.type as string | undefined;
+
   if (msg?.type === "session.started" || msg?.type === "session_started") {
     const sessionId = msg.session_id || msg.sessionId || msg.id;
     if (sessionId) {
       events.push({ type: "status", data: { status: "running", sessionId } });
     }
+  } else if (msg?.type === "step_start" || partType === "step-start") {
+    const sessionId = msg.sessionID || msg.sessionId || msg.session_id;
+    if (sessionId) events.push({ type: "status", data: { status: "running", sessionId } });
+  } else if (msg?.type === "step_finish" || partType === "step-finish") {
+    const tokens = part?.tokens || msg.tokens;
+    const cost = part?.cost ?? msg.cost;
+    events.push({
+      type: "progress",
+      data: {
+        phase: "Step complete",
+        detail: `OpenCode step finished${tokens ? ` (in=${tokens.input ?? 0} out=${tokens.output ?? 0} reasoning=${tokens.reasoning ?? 0})` : ""}${typeof cost === "number" ? ` cost=$${cost}` : ""}`,
+      },
+    });
   } else if (msg?.type === "message" && msg.role === "assistant") {
     const content = typeof msg.content === "string" ? msg.content : msg.text;
     if (content) events.push({ type: "message", data: { role: "assistant", content } });
-  } else if (msg?.type === "text" || msg?.role === "assistant") {
-    const content = msg.content || msg.text;
-    if (typeof content === "string") {
+  } else if (msg?.type === "text" || partType === "text") {
+    const content = part?.text ?? msg.content ?? msg.text;
+    if (typeof content === "string" && content.length > 0) {
       events.push({ type: "message", data: { role: "assistant", content } });
     }
-  } else if (msg?.type === "thinking" || msg?.type === "reasoning") {
-    const content = msg.content || msg.text || msg.thinking;
+  } else if (msg?.type === "reasoning" || msg?.type === "thinking" || partType === "reasoning") {
+    const content = part?.text ?? part?.thinking ?? msg.content ?? msg.text ?? msg.thinking;
     if (content) events.push({ type: "thinking", data: { content } });
-  } else if (msg?.type === "tool_call" || msg?.type === "tool_use" || msg?.type === "tool.call") {
-    const id = msg.id || msg.tool_use_id || msg.call_id;
+  } else if (
+    msg?.type === "tool" || msg?.type === "tool_call" || msg?.type === "tool_use" ||
+    msg?.type === "tool.call" || partType === "tool" || partType === "tool-call"
+  ) {
+    const idSource = part ?? msg;
+    const id = idSource.id || idSource.callID || idSource.tool_use_id || idSource.call_id;
+    const state2 = part?.state || idSource.state;
     if (id) state.toolStartTimes.set(id, Date.now());
     events.push({
       type: "tool_call",
       data: {
-        toolId: msg.name || msg.tool || msg.function,
+        toolId: part?.tool || idSource.tool || idSource.name || idSource.function,
         toolUseId: id,
-        input: msg.input || msg.arguments || msg.parameters,
+        input: state2?.input ?? idSource.input ?? idSource.arguments ?? idSource.parameters,
       },
     });
-  } else if (msg?.type === "tool_result" || msg?.type === "tool.result") {
-    const toolUseId = msg.tool_use_id || msg.id || msg.call_id;
+  } else if (
+    msg?.type === "tool_result" || msg?.type === "tool.result" || partType === "tool-result"
+  ) {
+    const idSource = part ?? msg;
+    const toolUseId = idSource.callID || idSource.tool_use_id || idSource.id || idSource.call_id;
     let duration_ms = 0;
     if (toolUseId && state.toolStartTimes.has(toolUseId)) {
       duration_ms = Date.now() - state.toolStartTimes.get(toolUseId)!;
       state.toolStartTimes.delete(toolUseId);
     }
+    const content = part?.output ?? part?.result ?? idSource.content ?? idSource.output ?? idSource.result;
     events.push({
       type: "tool_result",
       data: {
         toolUseId,
         duration_ms,
-        content: typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content ?? msg.output ?? msg.result),
+        content: typeof content === "string" ? content : JSON.stringify(content),
       },
     });
   } else if (msg?.type === "turn.completed" || msg?.type === "turn_completed") {
@@ -154,8 +181,6 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
     const message = typeof msg.message === "string" ? msg.message : JSON.stringify(msg);
     events.push({ type: "error", data: { message } });
   }
-  // Lines that don't match any known pattern are ignored; the runtime layer
-  // will fall back to forwarding raw stdout if parsing fails outright.
 
   return events;
 }
@@ -227,10 +252,23 @@ export const opencodeAdapter: CliAdapter = {
     const cliCmd = resolveCliCommand(["opencode"], ctx.customCliPath, getWindowsBinaryExtras());
     if (!cliCmd) throw new Error("OpenCode CLI not found");
 
+    // opencode 1.14+ flags:
+    //   --format json                       → emit JSONL events to stdout (parsed by parseEvent)
+    //   --dangerously-skip-permissions      → auto-approve tool calls (replaces --auto-approve from older versions)
+    //   --dir <projectDir>                  → pin workspace to the per-project sandbox; without this,
+    //                                          opencode walks up to the nearest .git and treats the repo
+    //                                          root as the project, so the agent globs for AGENTS.md in the
+    //                                          wrong place and bails out with "no AGENTS.md found".
+    //   --thinking                          → surface provider reasoning blocks as `type:"reasoning"` events
+    //                                          in the JSONL stream (parser maps these to thinking events).
+    //                                          Verified to work for zai/glm-5.1; no harm if the model lacks
+    //                                          extended thinking.
     const args: string[] = [
       "run",
-      "--print-logs",
-      "--auto-approve",
+      "--format", "json",
+      "--dangerously-skip-permissions",
+      "--dir", ctx.projectDir,
+      "--thinking",
     ];
     if (ctx.model) args.push("--model", ctx.model);
     args.push(ctx.prompt);
@@ -255,8 +293,10 @@ export const opencodeAdapter: CliAdapter = {
 
     const args: string[] = [
       "run",
-      "--print-logs",
-      "--auto-approve",
+      "--format", "json",
+      "--dangerously-skip-permissions",
+      "--dir", ctx.projectDir,
+      "--thinking",
       "--session",
       ctx.sessionId,
     ];

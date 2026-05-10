@@ -72,7 +72,7 @@ export const AGENT_TOOL_REGISTRY = {
   updateSummaryRow: { id: "updateSummaryRow", displayName: "Update summary row", category: "summary", mutates: true },
   deleteSummaryRow: { id: "deleteSummaryRow", displayName: "Delete summary row", category: "summary", mutates: true },
 
-  searchLineItemCandidates: { id: "searchLineItemCandidates", displayName: "Search cost sources", category: "resources" },
+  queryLibrary: { id: "queryLibrary", displayName: "Search org library (catalogs/cost-intel/labor/rates/assemblies)", category: "resources" },
   recommendCostSource: { id: "recommendCostSource", displayName: "Recommend cost source", category: "resources" },
   recommendEstimateBasis: { id: "recommendEstimateBasis", displayName: "Recommend estimate basis", category: "resources" },
   createWorksheetItemFromCandidate: { id: "createWorksheetItemFromCandidate", displayName: "Add priced line", category: "worksheet", mutates: true },
@@ -81,10 +81,9 @@ export const AGENT_TOOL_REGISTRY = {
   listLaborUnitTree: { id: "listLaborUnitTree", displayName: "Browse labor units", category: "resources" },
   previewAssembly: { id: "previewAssembly", displayName: "Preview assembly", category: "resources" },
 
-  searchLibraryCorpus: { id: "searchLibraryCorpus", displayName: "Search library corpus", category: "knowledge" },
-  queryKnowledge: { id: "queryKnowledge", displayName: "Search knowledge", category: "knowledge" },
-  queryGlobalLibrary: { id: "queryGlobalLibrary", displayName: "Search global library", category: "knowledge" },
-  queryDatasets: { id: "queryDatasets", displayName: "Query datasets", category: "knowledge" },
+  queryKnowledgeBook: { id: "queryKnowledgeBook", displayName: "Search global knowledge books", category: "knowledge" },
+  queryProjectFile: { id: "queryProjectFile", displayName: "Search project files", category: "knowledge" },
+  queryKnowledgeDataset: { id: "queryKnowledgeDataset", displayName: "Search knowledge datasets", category: "knowledge" },
   createDataset: { id: "createDataset", displayName: "Create dataset", category: "knowledge", mutates: true },
   listDatasets: { id: "listDatasets", displayName: "List datasets", category: "knowledge" },
   listKnowledgeBooks: { id: "listKnowledgeBooks", displayName: "List books", category: "knowledge" },

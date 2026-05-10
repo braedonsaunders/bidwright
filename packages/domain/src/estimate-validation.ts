@@ -523,7 +523,7 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
           message: `Priced worksheet item "${displayItemName(row.item)}" has no structured cost source or cited web/vendor basis.`,
           element: itemRef(row),
           suggestions: [
-            "Call searchLineItemCandidates or recommendCostSource and link the row to a catalog item, rate item, effective cost, cost resource, or labor unit when available.",
+            "Call queryLibrary or recommendCostSource and link the row to a catalog item, rate item, effective cost, cost resource, or labor unit when available.",
             "If current web/vendor evidence is intentionally used instead, store the source in sourceEvidence/sourceNotes with the query, URL/vendor, and date.",
           ],
           scoreImpact: 0.75,

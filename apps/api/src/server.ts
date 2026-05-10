@@ -6012,6 +6012,29 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
       .slice(0, finalLimit);
   });
 
+  // ── GET /knowledge/project-corpus/search ─────────────────────────────────
+  // Cross-document text + structured-table search across the current project's
+  // SourceDocuments. One call returns ranked hits from extractedText,
+  // structuredData.tables (Azure markdown), and keyValuePairs. The agent uses
+  // this to find which documents/pages/tables mention a phrase before
+  // drilling in with readDocumentText / getDocumentStructured.
+  app.get("/knowledge/project-corpus/search", async (request, reply) => {
+    const { q, projectId, limit, kinds, documentType } = (request.query ?? {}) as {
+      q?: string; projectId?: string; limit?: string; kinds?: string; documentType?: string;
+    };
+    if (!projectId) return reply.code(400).send({ message: "projectId is required" });
+    if (!q || !q.trim()) return reply.code(400).send({ message: "q is required" });
+    const parsedLimit = limit ? Math.max(1, Math.min(parseInt(limit, 10) || 12, 40)) : 12;
+    const parsedKinds = kinds
+      ? (kinds.split(",").map((s) => s.trim()).filter(Boolean) as Array<"text" | "table" | "kv">)
+      : undefined;
+    return await request.store!.searchProjectCorpus(projectId, q, {
+      limit: parsedLimit,
+      kinds: parsedKinds,
+      documentType: documentType?.trim() || undefined,
+    });
+  });
+
   // ── Knowledge Book File Serving ────────────────────────────────────
 
   app.get("/knowledge/books/:bookId/file", async (request, reply) => {

@@ -7006,6 +7006,171 @@ export class PrismaApiStore {
     return docs.map(mapSourceDocument);
   }
 
+  /**
+   * Cross-document text + structured-table search across the current project's
+   * source documents. One call returns ranked hits from extractedText + Azure
+   * tables + key-value pairs. The agent uses this in place of N round-trips of
+   * readDocumentText/getDocumentStructured to find which documents/pages/tables
+   * mention a phrase before drilling in.
+   *
+   * Returns compact hit records (≤320-char snippets) so heavy querying stays
+   * within the context budget.
+   */
+  async searchProjectCorpus(projectId: string, query: string, opts: {
+    limit?: number;
+    kinds?: Array<"text" | "table" | "kv">;
+    documentType?: string;
+  } = {}) {
+    await this.requireProject(projectId);
+    const profile = buildEstimatorSearchProfile(query);
+    if (profile.terms.length === 0) {
+      return { query, hits: [], totalHits: 0, documentsScanned: 0 };
+    }
+    const limit = Math.max(1, Math.min(opts.limit ?? 12, 40));
+    const kinds = new Set(opts.kinds && opts.kinds.length > 0 ? opts.kinds : ["text", "table", "kv"]);
+    const docs = await this.db.sourceDocument.findMany({
+      where: {
+        projectId,
+        ...(opts.documentType ? { documentType: opts.documentType } : {}),
+      },
+      select: {
+        id: true, fileName: true, fileType: true, documentType: true,
+        pageCount: true, extractedText: true, structuredData: true,
+      },
+    });
+
+    type Hit = {
+      documentId: string;
+      fileName: string;
+      documentType: string | null;
+      kind: "text" | "table" | "kv";
+      pageNumber?: number | null;
+      caption?: string | null;
+      sectionTitle?: string | null;
+      snippet: string;
+      score: number;
+      coverage: number;
+      matchedTerms: string[];
+      matchedPhrases: string[];
+    };
+    const hits: Hit[] = [];
+
+    const bestSnippet = (text: string, maxChars: number): string => {
+      const haystack = text.replace(/\s+/g, " ").trim();
+      if (haystack.length <= maxChars) return haystack;
+      // Find the densest window around the highest-weight matched term.
+      const lowered = haystack.toLowerCase();
+      let bestStart = 0;
+      let bestScore = -1;
+      for (const term of profile.terms) {
+        for (const variant of term.variants) {
+          let from = 0;
+          let pos: number;
+          while ((pos = lowered.indexOf(variant, from)) !== -1) {
+            const windowStart = Math.max(0, pos - Math.floor(maxChars / 3));
+            const windowEnd = Math.min(haystack.length, windowStart + maxChars);
+            const window = lowered.slice(windowStart, windowEnd);
+            const score = profile.terms.reduce((acc, t) => {
+              for (const v of t.variants) if (window.includes(v)) return acc + t.weight;
+              return acc;
+            }, 0);
+            if (score > bestScore) {
+              bestScore = score;
+              bestStart = windowStart;
+            }
+            from = pos + variant.length;
+          }
+        }
+      }
+      const slice = haystack.slice(bestStart, bestStart + maxChars);
+      return (bestStart > 0 ? "…" : "") + slice + (bestStart + maxChars < haystack.length ? "…" : "");
+    };
+
+    for (const doc of docs) {
+      // Text hit — score the extracted text + filename/sectionTitle as heading.
+      if (kinds.has("text") && doc.extractedText && doc.extractedText.length > 0) {
+        const match = scoreEstimatorSearchText(profile, doc.extractedText, doc.fileName);
+        if (match) {
+          hits.push({
+            documentId: doc.id,
+            fileName: doc.fileName,
+            documentType: doc.documentType ?? null,
+            kind: "text",
+            snippet: bestSnippet(doc.extractedText, 320),
+            score: match.score,
+            coverage: match.coverage,
+            matchedTerms: match.matchedTerms,
+            matchedPhrases: match.matchedPhrases,
+          });
+        }
+      }
+
+      // Structured tables.
+      const sd = doc.structuredData as any;
+      if (sd && typeof sd === "object") {
+        if (kinds.has("table") && Array.isArray(sd.tables)) {
+          for (const table of sd.tables) {
+            const md = typeof table?.markdown === "string" ? table.markdown : "";
+            if (!md) continue;
+            const caption = String(table?.caption ?? table?.title ?? "");
+            const match = scoreEstimatorSearchText(profile, md, caption);
+            if (match) {
+              hits.push({
+                documentId: doc.id,
+                fileName: doc.fileName,
+                documentType: doc.documentType ?? null,
+                kind: "table",
+                pageNumber: table?.pageNumber ?? table?.page ?? null,
+                caption: caption ? caption.slice(0, 160) : null,
+                snippet: bestSnippet(md, 360),
+                score: match.score * 1.15, // tables are higher-signal than prose
+                coverage: match.coverage,
+                matchedTerms: match.matchedTerms,
+                matchedPhrases: match.matchedPhrases,
+              });
+            }
+          }
+        }
+        if (kinds.has("kv") && Array.isArray(sd.keyValuePairs)) {
+          for (const kv of sd.keyValuePairs) {
+            const key = String(kv?.key ?? "");
+            const value = String(kv?.value ?? "");
+            if (!key && !value) continue;
+            const blob = `${key} = ${value}`.trim();
+            const match = scoreEstimatorSearchText(profile, blob, key);
+            if (match) {
+              hits.push({
+                documentId: doc.id,
+                fileName: doc.fileName,
+                documentType: doc.documentType ?? null,
+                kind: "kv",
+                pageNumber: kv?.pageNumber ?? null,
+                snippet: blob.slice(0, 240),
+                score: match.score,
+                coverage: match.coverage,
+                matchedTerms: match.matchedTerms,
+                matchedPhrases: match.matchedPhrases,
+              });
+            }
+          }
+        }
+      }
+    }
+
+    hits.sort((a, b) =>
+      b.score - a.score ||
+      b.coverage - a.coverage ||
+      a.fileName.localeCompare(b.fileName),
+    );
+
+    return {
+      query,
+      hits: hits.slice(0, limit),
+      totalHits: hits.length,
+      documentsScanned: docs.length,
+    };
+  }
+
   async getDocument(projectId: string, documentId: string) {
     await this.requireProject(projectId);
     const doc = await this.db.sourceDocument.findFirst({ where: { id: documentId, projectId } });

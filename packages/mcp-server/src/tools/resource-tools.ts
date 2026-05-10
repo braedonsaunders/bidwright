@@ -907,8 +907,8 @@ function groupedCandidates(candidates: EnrichedSearchCandidate[]) {
 
 export function registerResourceTools(server: McpServer) {
   server.tool(
-    "searchLineItemCandidates",
-    "Search the unified Bidwright line-item index for catalog items, imported rates, cost-intelligence effective costs, cost resources, labor units, assemblies, and provider actions. Use this before creating priced worksheet rows.",
+    "queryLibrary",
+    "Single ranked search across the org library: catalog items (priced SKUs), imported rate-schedule items, cost-intelligence effective costs + cost resources (prior-job pricing), labor units (productivity), assemblies, and provider actions. Backed by the same `LineItemSearchDocument` index the worksheet line-item dropdown uses, so improvements here improve the UI too. Returns compact candidates with structural IDs (catalogId/itemId, rateScheduleItemId, costResourceId/effectiveCostId, laborUnitId, assemblyId) ready to plumb into createWorksheetItem. **Pass `category` (e.g. 'Labour', 'Material', 'Equipment', 'Subcontractor') whenever you know what kind of row you're pricing — it gives a +4 score boost to matching source-types and dramatically improves ranking.** For prose handbook chapters use queryKnowledgeBook; for tabular productivity tables use queryKnowledgeDataset; for project documents use queryProjectFile.",
     {
       q: z.string().optional().describe("Search terms, item name, cost code, vendor, or scope phrase."),
       categoryId: z.string().optional().describe("Stable EntityCategory id to prefer for category-aware search."),
@@ -1207,10 +1207,10 @@ export function registerResourceTools(server: McpServer) {
 
   server.tool(
     "createWorksheetItemFromCandidate",
-    "Create a worksheet item from a candidate returned by searchLineItemCandidates, recommendCostSource, or recommendEstimateBasis, preserving structured cost-resource provenance and source-basis evidence. When drawings exist, include evidenceBasis so this helper cannot bypass the line-level evidence contract.",
+    "Create a worksheet item from a candidate returned by queryLibrary, recommendCostSource, or recommendEstimateBasis, preserving structured cost-resource provenance and source-basis evidence. When drawings exist, include evidenceBasis so this helper cannot bypass the line-level evidence contract.",
     {
       worksheetId: z.string(),
-      candidate: z.record(z.unknown()).optional().describe("A candidate object returned by searchLineItemCandidates/recommendCostSource."),
+      candidate: z.record(z.unknown()).optional().describe("A candidate object returned by queryLibrary/recommendCostSource."),
       candidateId: z.string().optional().describe("Search-document id from a prior search. Provide q/category if using candidateId."),
       q: z.string().optional(),
       categoryId: z.string().optional(),
@@ -1254,7 +1254,7 @@ export function registerResourceTools(server: McpServer) {
         candidate = candidates.find((result) => result.id === input.candidateId);
       }
       if (!candidate) {
-        return { content: [{ type: "text" as const, text: "No candidate was provided or found. Call searchLineItemCandidates first." }], isError: true };
+        return { content: [{ type: "text" as const, text: "No candidate was provided or found. Call queryLibrary first." }], isError: true };
       }
       if (candidate.actionType && candidate.actionType !== "select") {
         return { content: [{ type: "text" as const, text: `Candidate ${candidate.id ?? ""} is an action (${candidate.actionType}), not a selectable cost source.` }], isError: true };

@@ -437,9 +437,9 @@ const DEFAULT_EXPECTED_TOOLS = [
   "listDrawingPages",
   "renderDrawingPage",
   "zoomDrawingRegion",
-  "queryKnowledge",
+  "queryKnowledgeBook",
+  "queryLibrary",
   "recommendEstimateBasis",
-  "searchLineItemCandidates",
   "recomputeEstimateBenchmarks",
   "updateQuote",
   "getItemConfig",
@@ -510,23 +510,28 @@ const PHASE_TOOL_PATTERNS: Array<{
     note: "used takeoff annotations, symbol counts, or measured quantities",
   },
   {
+    phase: "project_files",
+    matches: [/^queryProjectFile$/],
+    note: "searched the project's source documents (RFQ, specs, drawings) for a phrase",
+  },
+  {
     phase: "reference_books",
-    matches: [/^searchLibraryCorpus$/, /^listKnowledgeBooks$/, /^queryKnowledge$/, /^queryGlobalLibrary$/, /^listKnowledgeDocuments$/],
-    note: "looked up estimator references, books, or knowledge pages",
+    matches: [/^queryKnowledgeBook$/, /^listKnowledgeBooks$/, /^listKnowledgeDocuments$/, /^getBookPage$/],
+    note: "looked up estimator manuals or global knowledge books",
   },
   {
     phase: "datasets",
-    matches: [/dataset/i, /^queryDatasets$/, /^listDatasets$/],
+    matches: [/dataset/i, /^queryKnowledgeDataset$/, /^listDatasets$/],
     note: "looked up dataset or table-backed production/pricing data",
   },
   {
     phase: "labor_units",
-    matches: [/^listLaborUnitTree$/, /^listLaborUnits$/, /^searchLibraryCorpus$/, /^getLaborUnit/],
+    matches: [/^listLaborUnitTree$/, /^listLaborUnits$/, /^getLaborUnit/],
     note: "looked up labour productivity or labour-unit basis",
   },
   {
     phase: "pricing_basis",
-    matches: [/^searchLibraryCorpus$/, /^recommendEstimateBasis$/, /^recommendCostSource$/, /^searchLineItemCandidates$/, /^previewAssembly$/, /^listRateSchedules$/, /^getRateSchedule/, /^importRateSchedule/, /^listRateScheduleItems$/],
+    matches: [/^recommendEstimateBasis$/, /^recommendCostSource$/, /^queryLibrary$/, /^previewAssembly$/, /^listRateSchedules$/, /^getRateSchedule/, /^importRateSchedule/, /^listRateScheduleItems$/],
     note: "looked up cost, catalog, assembly, benchmark, or rate basis",
   },
   {
@@ -3720,7 +3725,12 @@ function missingNeedles(haystack: string, needles: string[]) {
 }
 
 function normalizeToolId(toolId: string) {
-  return toolId.replace(/^mcp__bidwright__/, "");
+  // Strip MCP prefixes from both Claude Code (`mcp__bidwright__foo`) and
+  // opencode (`bidwright_foo`) so journey-detection regexes match `^foo$`
+  // regardless of which CLI runtime sourced the event.
+  return toolId
+    .replace(/^mcp__bidwright__/, "")
+    .replace(/^bidwright_/, "");
 }
 
 function defaultManualQuestion() {

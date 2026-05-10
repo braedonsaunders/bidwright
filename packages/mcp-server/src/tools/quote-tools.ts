@@ -1736,7 +1736,7 @@ export function registerQuoteTools(server: McpServer) {
       tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
       rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
       itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
-      costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from searchLineItemCandidates/recommendCostSource."),
+      costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from queryLibrary/recommendCostSource."),
       effectiveCostId: z.string().nullable().optional().describe("Effective cost ID from cost intelligence. Preserve this when a priced effective_cost candidate is selected."),
       laborUnitId: z.string().nullable().optional().describe("Labor unit ID for labour productivity sources."),
       resourceComposition: z.record(z.unknown()).optional().describe("Structured resource rollup from a search candidate, recommendation, or assembly expansion."),
@@ -1872,7 +1872,7 @@ export function registerQuoteTools(server: McpServer) {
             return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is system-calculated from a rate schedule — rateScheduleItemId is required.\n1. Call listRateScheduleItems with q/category filters\n2. Set rateScheduleItemId to a valid item ID\n3. Provide quantity and positive tierUnits only; Bidwright calculates cost and price.` }], isError: true };
           }
           if (src === "catalog" && !rest.itemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call searchLineItemCandidates or getItemConfig, then retry with a valid itemId.` }], isError: true };
+            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call queryLibrary or getItemConfig, then retry with a valid itemId.` }], isError: true };
           }
 
           // Validate rateScheduleItemId actually exists in revision rate schedules
