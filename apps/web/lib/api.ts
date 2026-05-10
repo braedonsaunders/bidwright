@@ -5437,6 +5437,147 @@ export async function updateModelElement(
   );
 }
 
+// ── Federations ───────────────────────────────────────────────────────────
+
+export type FederationDiscipline =
+  | "architecture"
+  | "structure"
+  | "mep"
+  | "civil"
+  | "landscape"
+  | "fp"
+  | "other";
+
+export type FederationRole = "primary" | "reference" | "clash";
+
+export type FederationStatus = "active" | "draft" | "archived";
+
+export interface ModelFederationMember {
+  id: string;
+  federationId: string;
+  modelId: string;
+  discipline: FederationDiscipline;
+  role: FederationRole;
+  position: number;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  model?: {
+    id: string;
+    fileName: string;
+    format: string;
+    status: string;
+    units: string;
+  };
+}
+
+export interface ModelFederation {
+  id: string;
+  projectId: string;
+  name: string;
+  description: string;
+  revisionId: string | null;
+  status: FederationStatus;
+  metadata: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+  members: ModelFederationMember[];
+}
+
+export async function listProjectFederations(
+  projectId: string,
+  filters: { revisionId?: string } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.revisionId) params.set("revisionId", filters.revisionId);
+  const qs = params.toString();
+  return apiRequest<{ federations: ModelFederation[] }>(
+    `/api/models/${projectId}/federations${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function createProjectFederation(
+  projectId: string,
+  input: {
+    name: string;
+    description?: string;
+    revisionId?: string | null;
+    status?: FederationStatus;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<{ federation: ModelFederation }>(
+    `/api/models/${projectId}/federations`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateProjectFederation(
+  projectId: string,
+  federationId: string,
+  patch: Partial<{
+    name: string;
+    description: string;
+    revisionId: string | null;
+    status: FederationStatus;
+    metadata: Record<string, unknown>;
+  }>,
+) {
+  return apiRequest<{ federation: ModelFederation }>(
+    `/api/models/${projectId}/federations/${federationId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+export async function deleteProjectFederation(projectId: string, federationId: string) {
+  return apiRequest<{ deleted: boolean }>(
+    `/api/models/${projectId}/federations/${federationId}`,
+    { method: "DELETE" },
+  );
+}
+
+/** Upsert (create or update) a member in a federation. Server matches on
+ *  (federationId, modelId) so a second call with the same modelId updates the
+ *  existing member's discipline/role/position. */
+export async function upsertFederationMember(
+  projectId: string,
+  federationId: string,
+  input: {
+    modelId: string;
+    discipline?: FederationDiscipline;
+    role?: FederationRole;
+    position?: number;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  return apiRequest<{ member: ModelFederationMember }>(
+    `/api/models/${projectId}/federations/${federationId}/members`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function removeFederationMember(
+  projectId: string,
+  federationId: string,
+  modelId: string,
+) {
+  return apiRequest<{ deleted: boolean }>(
+    `/api/models/${projectId}/federations/${federationId}/members/${modelId}`,
+    { method: "DELETE" },
+  );
+}
+
 export async function listModelTakeoffLinks(projectId: string, modelId: string) {
   return apiRequest<{ links: ModelTakeoffLinkRecord[] }>(
     `/api/models/${projectId}/assets/${modelId}/takeoff-links`,
