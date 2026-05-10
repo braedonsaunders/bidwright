@@ -3,7 +3,14 @@ RUN corepack enable
 WORKDIR /app
 
 # --- dependency stage ---
+# node-pty (used by the in-app CLI OAuth login modal) ships native bindings
+# without prebuilt Linux binaries on most channels, so we install build tools
+# here so `pnpm install` can compile it from source.
 FROM base AS deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/

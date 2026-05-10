@@ -1,5 +1,6 @@
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
+import websocket from "@fastify/websocket";
 import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
@@ -1853,6 +1854,17 @@ export function buildServer() {
       parts: MULTIPART_MAX_FILES + MULTIPART_MAX_FIELDS,
       fileSize: MULTIPART_MAX_FILE_SIZE_BYTES
     }
+  });
+
+  // WebSocket transport — currently used by the CLI OAuth login modal to
+  // stream a PTY between the browser xterm.js terminal and the server-side
+  // `claude` / `codex` / `opencode` / `gemini` login process.
+  app.register(websocket, {
+    options: {
+      // Login flows occasionally print large QR codes / device codes; cap
+      // payloads at 1 MiB so a runaway CLI can't OOM the server.
+      maxPayload: 1 * 1024 * 1024,
+    },
   });
 
   app.register(authPlugin);
