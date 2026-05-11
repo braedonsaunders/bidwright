@@ -4,7 +4,7 @@ WORKDIR /app
 
 # --- dependency stage ---
 FROM base AS deps
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/domain/package.json packages/domain/
 COPY apps/web/package.json apps/web/
 RUN pnpm install --frozen-lockfile
