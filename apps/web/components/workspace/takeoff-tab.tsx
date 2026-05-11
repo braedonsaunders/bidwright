@@ -840,24 +840,59 @@ export function TakeoffTab({
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
-  /** Default category for takeoff-derived line items (BIM elements,
-   *  annotations, spreadsheet rows). Excludes rate-schedule categories
-   *  because takeoff entities don't carry a rateScheduleItemId — the API
-   *  rejects rate-schedule line items without one, so we'd get a 400 if
-   *  the first enabled category happened to be "Labour" or similar. Falls
-   *  through to the first plain-enabled category only if no freeform /
-   *  catalog category exists. */
-  const defaultCategory = useMemo(() => {
-    const enabled = entityCategories
-      .filter((c) => c.enabled)
-      .slice()
-      .sort((a, b) => a.order - b.order);
-    const takeoffSafe = enabled.find((c) => c.itemSource !== "rate_schedule");
-    return takeoffSafe ?? enabled[0];
-  }, [entityCategories]);
   const rateScheduleCategory = useMemo(() => {
     return entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule").slice().sort((a, b) => a.order - b.order)[0];
   }, [entityCategories]);
+
+  /** User-controlled override for which category takeoff-derived line items
+   *  land in. Persisted per-project in localStorage so the estimator only
+   *  picks it once. Resolution priority:
+   *    1. Saved choice in localStorage (if still enabled in this project)
+   *    2. Enabled freeform / catalog category whose name suggests it's a
+   *       takeoff bucket — `material(s)`, `direct`, `subcontract`,
+   *       `equipment` — in that order
+   *    3. First enabled non-rate-schedule category
+   *    4. null → blocks + Add and prompts the user via the picker
+   *
+   *  Rate-schedule categories are excluded because takeoff entities don't
+   *  carry a rateScheduleItemId; the API rejects rate-schedule items
+   *  without one. */
+  const takeoffCategoryStorageKey = `bw-takeoff-category-${projectId}`;
+  const [takeoffCategoryOverrideId, setTakeoffCategoryOverrideId] = useState<string | null>(null);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const stored = window.localStorage.getItem(takeoffCategoryStorageKey);
+    if (stored) setTakeoffCategoryOverrideId(stored);
+  }, [takeoffCategoryStorageKey]);
+  const takeoffCategory = useMemo<EntityCategory | null>(() => {
+    const enabled = entityCategories.filter((c) => c.enabled);
+    if (enabled.length === 0) return null;
+    if (takeoffCategoryOverrideId) {
+      const saved = enabled.find((c) => c.id === takeoffCategoryOverrideId);
+      if (saved) return saved;
+    }
+    const nonRateSchedule = enabled
+      .filter((c) => c.itemSource !== "rate_schedule")
+      .slice()
+      .sort((a, b) => a.order - b.order);
+    // Name-based heuristic — most estimating shops drop takeoff into a
+    // generically-named bucket like "Material" or "Materials" first.
+    const namePriority = ["material", "direct", "subcontract", "equipment"];
+    for (const needle of namePriority) {
+      const match = nonRateSchedule.find((c) => c.name.toLowerCase().includes(needle));
+      if (match) return match;
+    }
+    return nonRateSchedule[0] ?? null;
+  }, [entityCategories, takeoffCategoryOverrideId]);
+  const setTakeoffCategoryId = useCallback((categoryId: string | null) => {
+    setTakeoffCategoryOverrideId(categoryId);
+    if (typeof window === "undefined") return;
+    if (categoryId) {
+      window.localStorage.setItem(takeoffCategoryStorageKey, categoryId);
+    } else {
+      window.localStorage.removeItem(takeoffCategoryStorageKey);
+    }
+  }, [takeoffCategoryStorageKey]);
 
   /* Project source documents that are PDFs or CAD files.
    * Memoized: without this, .map() returned fresh objects every render, which
@@ -1574,6 +1609,9 @@ export function TakeoffTab({
         },
         createLineItemsFromAllSpreadsheetRows: async () => {
           await handleCreateAllSpreadsheetLineItems();
+        },
+        setTakeoffCategoryId: (categoryId) => {
+          setTakeoffCategoryId(categoryId);
         },
         refreshModel: () => void refreshModelAssets(true),
       };
@@ -2912,6 +2950,17 @@ export function TakeoffTab({
       selectedModelElementId:
         selection?.kind === "model-element" ? selection.elementId : null,
       spreadsheet: inspectSpreadsheet,
+      availableCategories: entityCategories
+        .filter((c) => c.enabled)
+        .map((c) => ({
+          id: c.id,
+          name: c.name,
+          itemSource: c.itemSource,
+          enabled: c.enabled,
+          order: c.order,
+        }))
+        .sort((a, b) => a.order - b.order),
+      takeoffCategoryId: takeoffCategory?.id ?? null,
     };
     const serialized = JSON.stringify(nextSnapshot);
     if (serialized === lastPublishedSnapshotRef.current) return;
@@ -2943,6 +2992,8 @@ export function TakeoffTab({
     linkedModelElementIds,
     linkedModelLineItems.length,
     spreadsheetPreview,
+    entityCategories,
+    takeoffCategory,
   ]);
 
   async function resolveSelectedModelAsset() {
@@ -2974,7 +3025,7 @@ export function TakeoffTab({
           : buildModelSelectionObjectDrafts(selection, {
               fileName: selectedDoc?.fileName,
               markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-              category: defaultCategory,
+              category: takeoffCategory,
             })
       ).slice(0, 250);
       const modelAsset = await resolveSelectedModelAsset();
@@ -2997,7 +3048,7 @@ export function TakeoffTab({
         const fallbackPayload = buildModelSelectionLineItem(draftSelection, {
           fileName: selectedDoc?.fileName,
           markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-          category: defaultCategory,
+          category: takeoffCategory,
         });
         const payload = normalizeModelLineItemDraft(draft, fallbackPayload);
         const result = await createWorksheetItem(projectId, targetWs.id, payload);
@@ -3056,9 +3107,9 @@ export function TakeoffTab({
       setWorksheetPickerAction({ kind: "create-single-element", elementId: element.id });
       return null;
     }
-    if (!defaultCategory) {
+    if (!takeoffCategory) {
       setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before creating model line items.");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
       return null;
     }
     const modelAsset = await resolveSelectedModelAsset();
@@ -3072,7 +3123,7 @@ export function TakeoffTab({
     const payload = buildModelElementLineItem(element, primary, {
       fileName: selectedDoc?.fileName,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
-      category: defaultCategory,
+      category: takeoffCategory,
     });
     const result = await createWorksheetItem(projectId, ws.id, payload);
     const createdItem = result.workspace.worksheets
@@ -3132,18 +3183,18 @@ export function TakeoffTab({
       setWorksheetPickerAction({ kind: "create-single-annotation", annotationId: annotation.id });
       return null;
     }
-    if (!defaultCategory) {
+    if (!takeoffCategory) {
       setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before creating line items.");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
       return null;
     }
 
     const { quantity, uom } = annotationToQuantity(annotation);
     const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const payload = {
-      categoryId: defaultCategory.id,
-      category: defaultCategory.name,
-      entityType: defaultCategory.entityType,
+      categoryId: takeoffCategory.id,
+      category: takeoffCategory.name,
+      entityType: takeoffCategory.entityType,
       entityName: annotation.label || `${annotation.type} mark`,
       description: "",
       quantity,
@@ -3202,9 +3253,9 @@ export function TakeoffTab({
       });
       return null;
     }
-    if (!defaultCategory) {
+    if (!takeoffCategory) {
       setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before creating line items.");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
       return null;
     }
 
@@ -3232,9 +3283,9 @@ export function TakeoffTab({
 
     const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const payload = {
-      categoryId: defaultCategory.id,
-      category: defaultCategory.name,
-      entityType: defaultCategory.entityType,
+      categoryId: takeoffCategory.id,
+      category: takeoffCategory.name,
+      entityType: takeoffCategory.entityType,
       entityName: groupLabel || `${annotations.length} takeoff marks`,
       description: "",
       quantity: totalQty,
@@ -3300,9 +3351,9 @@ export function TakeoffTab({
       });
       return null;
     }
-    if (!defaultCategory) {
+    if (!takeoffCategory) {
       setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before creating line items.");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
       return null;
     }
     const modelAsset = await resolveSelectedModelAsset();
@@ -3335,9 +3386,9 @@ export function TakeoffTab({
 
     const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const payload = {
-      categoryId: defaultCategory.id,
-      category: defaultCategory.name,
-      entityType: defaultCategory.entityType,
+      categoryId: takeoffCategory.id,
+      category: takeoffCategory.name,
+      entityType: takeoffCategory.entityType,
       entityName: groupLabel || `${elements.length} model elements`,
       description: "",
       quantity: totalQty,
@@ -3413,7 +3464,7 @@ export function TakeoffTab({
     headers: string[],
     mapping: ReturnType<typeof deriveSpreadsheetMapping>,
   ) {
-    if (!defaultCategory) return null;
+    if (!takeoffCategory) return null;
     const col = (header: string | null) => (header ? headers.indexOf(header) : -1);
     const readNum = (header: string | null) => {
       const idx = col(header);
@@ -3431,13 +3482,13 @@ export function TakeoffTab({
 
     const entityName = readStr(mapping.name).trim() || "Imported row";
     const quantity = readNum(mapping.quantity) ?? 1;
-    const uom = readStr(mapping.uom).trim().toUpperCase() || defaultCategory.defaultUom || "EA";
+    const uom = readStr(mapping.uom).trim().toUpperCase() || takeoffCategory.defaultUom || "EA";
     const cost = readNum(mapping.cost) ?? 0;
 
     return {
-      categoryId: defaultCategory.id,
-      category: defaultCategory.name,
-      entityType: defaultCategory.entityType,
+      categoryId: takeoffCategory.id,
+      category: takeoffCategory.name,
+      entityType: takeoffCategory.entityType,
       entityName,
       description: "",
       quantity,
@@ -3461,9 +3512,9 @@ export function TakeoffTab({
       setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex });
       return null;
     }
-    if (!defaultCategory) {
+    if (!takeoffCategory) {
       setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before importing rows.");
+      setToastMessage("Pick a takeoff category in the Entities panel before importing rows.");
       return null;
     }
     const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
@@ -3496,9 +3547,9 @@ export function TakeoffTab({
       setWorksheetPickerAction({ kind: "create-spreadsheet-all" });
       return null;
     }
-    if (!defaultCategory) {
+    if (!takeoffCategory) {
       setToastType("error");
-      setToastMessage("Configure at least one entity category in Settings before importing rows.");
+      setToastMessage("Pick a takeoff category in the Entities panel before importing rows.");
       return null;
     }
     const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
@@ -4967,7 +5018,7 @@ export function TakeoffTab({
             }
             workspace={workspace}
             selectedWorksheetId={selectedWorksheet?.id}
-            defaultEstimateCategory={defaultCategory ? { id: defaultCategory.id, name: defaultCategory.name, entityType: defaultCategory.entityType } : null}
+            defaultEstimateCategory={takeoffCategory ? { id: takeoffCategory.id, name: takeoffCategory.name, entityType: takeoffCategory.entityType } : null}
             onSelectedDocumentChange={(apiDocId) => {
               // Map the backend id back to the takeoff doc's wrapper id so
               // the rest of TakeoffTab keeps working with its `selectedDocId`

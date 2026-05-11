@@ -67,6 +67,17 @@ export interface InspectModelElement {
   isLinked: boolean;
 }
 
+/** Trimmed shape of an EntityCategory the side panel needs for its
+ *  takeoff-category picker. Avoids dragging the full EntityCategory dep
+ *  into takeoff-inspect-view. */
+export interface InspectCategoryOption {
+  id: string;
+  name: string;
+  itemSource: "rate_schedule" | "catalog" | "freeform";
+  enabled: boolean;
+  order: number;
+}
+
 export interface InspectAssetSummary {
   id: string;
   fileName: string;
@@ -94,6 +105,15 @@ export interface InspectSnapshot {
   selectedModelElementId: string | null;
   // Spreadsheet — populated only when mode === "spreadsheet"
   spreadsheet: InspectSpreadsheet | null;
+  /** Available enabled categories for the takeoff-category picker; carried
+   *  here so the side panel can render the picker without dragging the
+   *  full workspace object in. */
+  availableCategories: InspectCategoryOption[];
+  /** Currently-selected takeoff category id (the bucket every + Add lands
+   *  in). null = the user hasn't picked one yet AND no heuristic match
+   *  exists; the side panel should surface a "pick a category" prompt and
+   *  disable + Add buttons. */
+  takeoffCategoryId: string | null;
 }
 
 export interface InspectActions {
@@ -127,6 +147,9 @@ export interface InspectActions {
   /** "Σ Add" — import every spreadsheet row as its own line item in one
    *  batch. Same mapping, same target worksheet. */
   createLineItemsFromAllSpreadsheetRows: () => Promise<void> | void;
+  /** Override which category every subsequent + Add lands in. Persisted
+   *  per-project on the takeoff-tab side via localStorage. */
+  setTakeoffCategoryId: (categoryId: string | null) => void;
   refreshModel: () => void;
 }
 
@@ -157,15 +180,67 @@ export function TakeoffInspectView({
     );
   }
 
-  if (snapshot.mode === "bim" || snapshot.mode === "model") {
-    return <ModelInspect snapshot={snapshot} actions={actions} />;
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2 text-xs">
+      <TakeoffCategoryPicker snapshot={snapshot} actions={actions} />
+      <div className="flex min-h-0 flex-1 flex-col">
+        {snapshot.mode === "bim" || snapshot.mode === "model" ? (
+          <ModelInspect snapshot={snapshot} actions={actions} />
+        ) : snapshot.mode === "spreadsheet" ? (
+          <SpreadsheetInspect snapshot={snapshot} actions={actions} />
+        ) : (
+          <AnnotationsInspect snapshot={snapshot} actions={actions} />
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** The bucket every + Add lands in. Persisted per-project on the takeoff-tab
+ *  side; surfacing it here lets the estimator override at any point without
+ *  leaving the entities list. Rate-schedule categories are dimmed because
+ *  takeoff entities don't carry a rateScheduleItemId, so picking one would
+ *  cause the API to reject the next + Add. */
+function TakeoffCategoryPicker({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const { availableCategories, takeoffCategoryId } = snapshot;
+  const selected = availableCategories.find((c) => c.id === takeoffCategoryId) ?? null;
+
+  if (availableCategories.length === 0) {
+    return (
+      <div className="shrink-0 rounded-md border border-warning/30 bg-warning/5 px-2.5 py-1.5 text-[11px] text-warning">
+        Enable at least one estimate category in Settings before importing takeoff items.
+      </div>
+    );
   }
 
-  if (snapshot.mode === "spreadsheet") {
-    return <SpreadsheetInspect snapshot={snapshot} actions={actions} />;
-  }
-
-  return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
+  return (
+    <div className="shrink-0 flex items-center gap-1.5 rounded-md border border-line bg-panel/50 px-2 py-1 text-[10px]">
+      <span className="shrink-0 font-medium uppercase tracking-wider text-fg/45">
+        Add to
+      </span>
+      <select
+        value={takeoffCategoryId ?? ""}
+        onChange={(e) => actions?.setTakeoffCategoryId(e.target.value || null)}
+        className={cn(
+          "min-w-0 flex-1 rounded border border-line bg-bg/50 px-1.5 py-0.5 text-[11px] text-fg outline-none focus:border-accent/50",
+          !selected && "text-fg/45",
+        )}
+      >
+        {!selected && <option value="">Pick a category…</option>}
+        {availableCategories.map((c) => (
+          <option key={c.id} value={c.id} disabled={c.itemSource === "rate_schedule"}>
+            {c.name}{c.itemSource === "rate_schedule" ? " (rate schedule — needs items)" : ""}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 }
 
 function AnnotationsInspect({
