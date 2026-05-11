@@ -17,6 +17,7 @@
   "dependencies": {
     "@bidwright/domain": "workspace:*",
     "@excalidraw/excalidraw": "^0.18.0",
+    "@next/env": "^16.2.1",
     "@fortune-sheet/core": "^1.0.4",
     "@fortune-sheet/react": "^1.0.4",
     "@openuidev/react-lang": "^0.1.5",
