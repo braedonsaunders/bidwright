@@ -10,7 +10,6 @@ import {
   EyeOff,
   Hand,
   Layers,
-  Link2,
   Loader2,
   Maximize2,
   MousePointer2,
@@ -18,16 +17,15 @@ import {
   PenTool,
   RefreshCw,
   Ruler,
-  Search,
   Square,
   Tally5,
-  Trash2,
   Type,
   Undo2,
   Redo2,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 import {
   Badge,
   Button,
@@ -507,47 +505,6 @@ function exportAnnotationsCsv(documentName: string, annotations: DwgMeasurementA
   );
 }
 
-function aggregateAnnotationGroups(annotations: DwgMeasurementAnnotation[]) {
-  const groups = new Map<string, { key: string; label: string; count: number; unitTotals: Map<string, number> }>();
-  for (const annotation of annotations) {
-    const key = annotation.groupName || annotation.annotationType || "Takeoff";
-    const group = groups.get(key) ?? { key, label: key, count: 0, unitTotals: new Map<string, number>() };
-    group.count += 1;
-    const value = annotation.measurement?.value;
-    const unit = annotation.measurement?.unit ?? "";
-    if (Number.isFinite(value) && unit) {
-      group.unitTotals.set(unit, (group.unitTotals.get(unit) ?? 0) + Number(value));
-    }
-    groups.set(key, group);
-  }
-  return Array.from(groups.values()).map((group) => ({
-    ...group,
-    totals: Array.from(group.unitTotals.entries()).map(([unit, value]) => ({ unit, value })),
-  }));
-}
-
-function aggregateEntityGroups(entities: DwgEntity[], calibration: CalibrationState | null) {
-  const groups = new Map<string, { key: string; count: number; length: number; area: number; unit: string }>();
-  for (const entity of entities) {
-    const measurement = measureEntity(entity, calibration);
-    const key = `${entity.layer}:${entity.type}`;
-    const group = groups.get(key) ?? {
-      key,
-      count: 0,
-      length: 0,
-      area: 0,
-      unit: calibration?.unit ?? "du",
-    };
-    group.count += 1;
-    if (measurement) {
-      if (measurement.unit.endsWith("2")) group.area += measurement.value;
-      else group.length += measurement.value;
-    }
-    groups.set(key, group);
-  }
-  return Array.from(groups.values()).sort((left, right) => right.count - left.count).slice(0, 8);
-}
-
 /** Minimal annotation shape compatible with TakeoffAnnotation, published up
  *  so the unified side-panel link UI can look annotations up by id. */
 export interface DwgPublishedAnnotation {
@@ -640,7 +597,6 @@ export function DwgTakeoffSurface({
   const [viewportVersion, setViewportVersion] = useState(0);
   const [historyVersion, setHistoryVersion] = useState(0);
   const [layerSearch, setLayerSearch] = useState("");
-  const [entitySearch, setEntitySearch] = useState("");
   const [calibration, setCalibration] = useState<CalibrationState | null>(null);
   const [status, setStatus] = useState<{ tone: "success" | "danger" | "info"; message: string } | null>(null);
 
@@ -741,16 +697,8 @@ export function DwgTakeoffSurface({
     return layers.filter((layer) => layer.name.toLowerCase().includes(query));
   }, [layerSearch, layers]);
   const filteredEntities = useMemo(() => {
-    const query = entitySearch.trim().toLowerCase();
-    return layoutEntities.filter((entity) => {
-      if (!visibleLayers.has(entity.layer)) return false;
-      if (!query) return true;
-      return `${entity.type} ${entity.layer} ${entity.text ?? ""} ${entity.id}`.toLowerCase().includes(query);
-    });
-  }, [layoutEntities, entitySearch, visibleLayers]);
-
-  const annotationGroups = useMemo(() => aggregateAnnotationGroups(annotations), [annotations]);
-  const entityGroups = useMemo(() => aggregateEntityGroups(filteredEntities, calibration), [calibration, filteredEntities]);
+    return layoutEntities.filter((entity) => visibleLayers.has(entity.layer));
+  }, [layoutEntities, visibleLayers]);
   const canUndo = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedo = historyVersion >= 0 && redoStackRef.current.length > 0;
 
@@ -1279,7 +1227,6 @@ export function DwgTakeoffSurface({
   const layerOptions = documents.map((document) => ({ value: document.id, label: document.label }));
   const visibleEntityCount = filteredEntities.length;
   const totalMeasured = annotations.reduce((sum, annotation) => sum + (annotation.measurement?.value ?? 0), 0);
-  const selectedMeasurement = selectedEntity ? measureEntity(selectedEntity, calibration) : null;
 
   if (documents.length === 0) {
     return (
@@ -1374,6 +1321,70 @@ export function DwgTakeoffSurface({
         <Button variant="ghost" size="xs" onClick={() => fitToEntities()}>
           <Maximize2 className="h-3.5 w-3.5" />
         </Button>
+
+        {/* Layer visibility — replaces the old right-aside layer list. The
+            selection/inspect surface lives in the workspace side panel; only
+            view-state controls remain in the canvas toolbar. */}
+        <Popover.Root>
+          <Popover.Trigger asChild>
+            <Button variant="ghost" size="xs" title="Layer visibility">
+              <Layers className="h-3.5 w-3.5" />
+              <span className="text-[10px] tabular-nums">{visibleLayers.size}/{layers.length}</span>
+            </Button>
+          </Popover.Trigger>
+          <Popover.Portal>
+            <Popover.Content
+              align="start"
+              sideOffset={6}
+              className="z-[100] w-72 rounded-lg border border-line bg-panel p-3 shadow-xl outline-none"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold text-fg">Layers</h3>
+                <div className="flex items-center gap-1 text-[11px]">
+                  <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set(layers.map((layer) => layer.name)))}>All on</button>
+                  <span className="text-fg/25">/</span>
+                  <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set())}>All off</button>
+                </div>
+              </div>
+              <Input
+                value={layerSearch}
+                onChange={(event) => setLayerSearch(event.target.value)}
+                placeholder="Filter layers"
+                className="mt-2 h-7 text-xs"
+              />
+              <div className="mt-2 max-h-64 space-y-1 overflow-auto">
+                {filteredLayers.length === 0 ? (
+                  <p className="rounded-md border border-line bg-bg/30 px-2 py-3 text-center text-[11px] text-fg/40">
+                    No layers match.
+                  </p>
+                ) : filteredLayers.map((layer) => {
+                  const visible = visibleLayers.has(layer.name);
+                  return (
+                    <button
+                      key={layer.name}
+                      type="button"
+                      onClick={() => {
+                        setVisibleLayers((current) => {
+                          const next = new Set(current);
+                          if (next.has(layer.name)) next.delete(layer.name);
+                          else next.add(layer.name);
+                          return next;
+                        });
+                      }}
+                      className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-fg/65 hover:bg-panel2"
+                    >
+                      {visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-fg/30" />}
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: layer.color }} />
+                      <span className="min-w-0 flex-1 truncate">{layer.name}</span>
+                      <span className="font-mono text-[10px] text-fg/35">{layer.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Popover.Content>
+          </Popover.Portal>
+        </Popover.Root>
+
         <Button variant="ghost" size="xs" onClick={() => void loadDrawingMetadata(true)} title="Reprocess DWG/DXF metadata">
           <RefreshCw className="h-3.5 w-3.5" />
         </Button>
@@ -1434,6 +1445,24 @@ export function DwgTakeoffSurface({
                 <AlertTriangle className="mx-auto mb-3 h-8 w-8 text-warning" />
                 <p className="text-sm font-semibold text-fg">DWG/DXF viewer could not open this drawing</p>
                 <p className="mt-1 text-xs text-fg/50">{error}</p>
+                {metadata?.status === "converter_required" && (
+                  <p className="mt-3 text-[11px] leading-relaxed text-fg/45">
+                    Binary DWG files need a converter to be parsed.
+                    Export the drawing as <span className="font-semibold text-fg/65">DXF</span> from your CAD tool, or set
+                    <span className="font-mono text-[10px] text-fg/55"> BIDWRIGHT_DWG_CONVERTER_CMD</span> on the API.
+                  </p>
+                )}
+                <div className="mt-3 flex justify-center">
+                  <Button
+                    variant="secondary"
+                    size="xs"
+                    onClick={() => void loadDrawingMetadata(true)}
+                    title="Reprocess this drawing"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                    Retry
+                  </Button>
+                </div>
               </div>
             </div>
           )}
@@ -1454,124 +1483,6 @@ export function DwgTakeoffSurface({
             <canvas ref={canvasRef} className="block h-full w-full" />
           </div>
         </div>
-
-        <aside className="flex w-80 shrink-0 flex-col border-l border-line bg-panel">
-          <div className="border-b border-line p-3">
-            <div className="relative">
-              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-fg/30" />
-              <Input
-                value={entitySearch}
-                onChange={(event) => setEntitySearch(event.target.value)}
-                placeholder="Filter entities, layers, text..."
-                className="h-8 pl-8 text-xs"
-              />
-            </div>
-          </div>
-
-          <div className="min-h-0 flex-1 overflow-auto p-3">
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-semibold text-fg">Layers</h3>
-                <div className="flex items-center gap-1 text-[11px]">
-                  <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set(layers.map((layer) => layer.name)))}>All on</button>
-                  <span className="text-fg/25">/</span>
-                  <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set())}>All off</button>
-                </div>
-              </div>
-              <Input
-                value={layerSearch}
-                onChange={(event) => setLayerSearch(event.target.value)}
-                placeholder="Filter layers"
-                className="h-7 text-xs"
-              />
-              <div className="max-h-52 space-y-1 overflow-auto">
-                {filteredLayers.map((layer) => {
-                  const visible = visibleLayers.has(layer.name);
-                  return (
-                    <button
-                      key={layer.name}
-                      type="button"
-                      onClick={() => {
-                        setVisibleLayers((current) => {
-                          const next = new Set(current);
-                          if (next.has(layer.name)) next.delete(layer.name);
-                          else next.add(layer.name);
-                          return next;
-                        });
-                      }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-fg/65 hover:bg-panel2"
-                    >
-                      {visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-fg/30" />}
-                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: layer.color }} />
-                      <span className="min-w-0 flex-1 truncate">{layer.name}</span>
-                      <span className="font-mono text-[10px] text-fg/35">{layer.count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-
-            <Separator className="my-4" />
-
-            <section className="space-y-2">
-              <h3 className="text-xs font-semibold text-fg">Selected Entity</h3>
-              {selectedEntity ? (
-                <div className="rounded-lg border border-line bg-bg/35 p-3 text-xs">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-fg">{selectedEntity.type}</span>
-                    <Badge tone="default" className="text-[10px]">{selectedEntity.layer}</Badge>
-                  </div>
-                  <div className="mt-2 grid grid-cols-2 gap-2 text-fg/55">
-                    <span>ID</span>
-                    <span className="truncate text-right font-mono">{selectedEntity.id}</span>
-                    <span>Layout</span>
-                    <span className="truncate text-right font-mono">{selectedEntity.layoutName || "Model"}</span>
-                    {selectedMeasurement && (
-                      <>
-                        <span>{selectedMeasurement.label}</span>
-                        <span className="text-right font-mono">
-                          {formatNumber(selectedMeasurement.value)} {selectedMeasurement.unit}
-                        </span>
-                      </>
-                    )}
-                  </div>
-                </div>
-              ) : (
-                <p className="rounded-lg border border-line bg-bg/30 px-3 py-2 text-xs text-fg/40">
-                  Use Select to inspect an entity and confirm its layer, type, and computed quantity.
-                </p>
-              )}
-            </section>
-
-            <Separator className="my-4" />
-
-            <section className="space-y-2">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-semibold text-fg">Entity Groups</h3>
-                <span className="text-[10px] text-fg/35">{entityGroups.length} rollups</span>
-              </div>
-              <div className="space-y-1">
-                {entityGroups.length === 0 ? (
-                  <p className="rounded-lg border border-line bg-bg/30 px-3 py-2 text-xs text-fg/40">
-                    Turn layers on to aggregate visible CAD entities by layer and type.
-                  </p>
-                ) : entityGroups.map((group) => (
-                  <div key={group.key} className="rounded-md border border-line bg-bg/30 px-2 py-1.5 text-xs">
-                    <div className="flex items-center justify-between gap-2">
-                      <span className="min-w-0 truncate text-fg/65">{group.key}</span>
-                      <span className="font-mono text-[10px] text-fg/35">x{group.count}</span>
-                    </div>
-                    <div className="mt-1 flex flex-wrap gap-1 font-mono text-[10px] text-fg/45">
-                      {group.length > 0 && <span>{formatNumber(group.length)} {group.unit}</span>}
-                      {group.area > 0 && <span>{formatNumber(group.area)} {group.unit}2</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </section>
-
-          </div>
-        </aside>
       </div>
 
       <div className="flex shrink-0 items-center gap-2 border-t border-line bg-panel px-3 py-1.5 text-[11px] text-fg/40">

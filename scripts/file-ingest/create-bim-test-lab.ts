@@ -94,6 +94,91 @@ function makeEstimatingCsv(): string {
 }
 
 /**
+ * Synthetic ASCII DXF — small but real DXF (R2010) the server-side parser
+ * can ingest without an external converter. Drives the DWG intake card and
+ * the DWG/DXF takeoff surface end-to-end on a fresh checkout, even when
+ * BIDWRIGHT_DWG_CONVERTER_CMD isn't set. The geometry is a 12 m x 8 m
+ * room outline with a 0.9 m door arc and a 1.8 m window, on three named
+ * layers (WALL / DOOR / WINDOW) so the layer-visibility popover has
+ * something interesting to filter.
+ */
+function makeSyntheticDxf(): string {
+  const pairs: Array<[number, string]> = [];
+  const push = (code: number, value: string | number) => pairs.push([code, String(value)]);
+
+  // ── HEADER ──
+  push(0, "SECTION");
+  push(2, "HEADER");
+  push(9, "$ACADVER");
+  push(1, "AC1024");
+  push(9, "$INSUNITS");
+  push(70, 6); // 6 = meters
+  push(0, "ENDSEC");
+
+  // ── TABLES (LAYER table only) ──
+  push(0, "SECTION");
+  push(2, "TABLES");
+  push(0, "TABLE");
+  push(2, "LAYER");
+  for (const layer of [
+    { name: "WALL", color: 7 },
+    { name: "DOOR", color: 3 },
+    { name: "WINDOW", color: 5 },
+  ]) {
+    push(0, "LAYER");
+    push(2, layer.name);
+    push(70, 0);
+    push(62, layer.color);
+    push(6, "CONTINUOUS");
+  }
+  push(0, "ENDTAB");
+  push(0, "ENDSEC");
+
+  // ── ENTITIES ──
+  push(0, "SECTION");
+  push(2, "ENTITIES");
+  // Room outline — four walls.
+  const corners = [
+    [0, 0],
+    [12, 0],
+    [12, 8],
+    [0, 8],
+  ];
+  for (let i = 0; i < corners.length; i++) {
+    const [x1, y1] = corners[i];
+    const [x2, y2] = corners[(i + 1) % corners.length];
+    push(0, "LINE");
+    push(8, "WALL");
+    push(10, x1);
+    push(20, y1);
+    push(11, x2);
+    push(21, y2);
+  }
+  // Door arc on south wall.
+  push(0, "ARC");
+  push(8, "DOOR");
+  push(10, 5.4);
+  push(20, 0);
+  push(40, 0.9);
+  push(50, 0); // start angle
+  push(51, 90); // end angle
+  // Window on north wall.
+  push(0, "LINE");
+  push(8, "WINDOW");
+  push(10, 4);
+  push(20, 8);
+  push(11, 5.8);
+  push(21, 8);
+  push(0, "ENDSEC");
+
+  push(0, "EOF");
+
+  // DXF uses CRLF historically; LF works fine with our parser but CRLF
+  // matches what AutoCAD emits.
+  return pairs.map(([code, value]) => `${String(code).padStart(3, " ")}\n${value}`).join("\r\n") + "\r\n";
+}
+
+/**
  * Minimal valid 1x1 JPEG — single grey pixel. Browsers and vision APIs
  * accept it as a real image even though it carries no information. Used
  * to populate the on-card photo count for testing the UI; estimators
@@ -183,10 +268,20 @@ function buildFixtures(): Fixture[] {
       notes: "Industry-standard reference BIM model. Drives the BIM intake card + element table + classification heuristic at realistic scale.",
     },
 
-    // ── DWG ────────────────────────────────────────────────────────────
-    // Real DWG — small AutoCAD-saved line drawing. The DWG intake card
-    // counts this and the DXF/DWG takeoff surface opens it; depending on
-    // adapter setup (Autodesk APS) extraction may be limited locally.
+    // ── DWG / DXF ──────────────────────────────────────────────────────
+    // The ASCII DXF is the headline fixture for the DWG card — it parses
+    // directly without an external converter, so the DWG/DXF takeoff
+    // surface is exercisable end-to-end on a fresh checkout.
+    {
+      group: "dwg",
+      name: "test-room.dxf",
+      content: makeSyntheticDxf(),
+      sourceLabel: "Synthetic 12 m x 8 m room (WALL / DOOR / WINDOW layers)",
+      notes: "ASCII DXF — opens directly in the DWG/DXF takeoff surface, no converter needed.",
+    },
+    // Real binary DWG kept alongside for testing the converter integration
+    // path. On a stock install with no BIDWRIGHT_DWG_CONVERTER_CMD it will
+    // surface a friendly error pointing at the DXF above.
     {
       group: "dwg",
       name: "line-2000.dwg",
