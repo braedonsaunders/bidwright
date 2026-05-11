@@ -4,7 +4,7 @@ WORKDIR /app
 
 # --- dependency stage ---
 FROM base AS deps
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
 COPY packages/ai/package.json packages/ai/

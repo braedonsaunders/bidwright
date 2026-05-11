@@ -112,6 +112,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const refreshUser = useCallback(async () => {
     try {
+      // Re-check setup state. After /api/setup/init creates the first
+      // SuperAdmin + org, `initialized` flips from false→true and any
+      // downstream redirects (e.g. RequireAuth bouncing "/" back to
+      // /setup) need to see that. Without this re-fetch the cached
+      // initialized=false from the initial mount sticks around and the
+      // user gets pinballed back to the welcome step after seeding.
+      const status = await getSetupStatus();
+      setInitialized(status.initialized);
+
       const me = await getCurrentUser();
       setToken(COOKIE_SESSION_TOKEN);
       setUser(me.user);

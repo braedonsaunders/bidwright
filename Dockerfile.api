@@ -11,7 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     python3 \
     && rm -rf /var/lib/apt/lists/*
-COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
 COPY packages/agent/package.json packages/agent/
