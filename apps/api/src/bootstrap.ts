@@ -222,6 +222,15 @@ export async function applyPendingMigrations(): Promise<{ applied: boolean; reas
   if (first.ok) {
     const out = first.result?.stdout.trim() ?? "";
     if (out) console.log(`[bootstrap] prisma migrate deploy:\n${out}`);
+    // Desktop-mode safety net: run db push to guarantee schema sync.
+    // Migrate deploy can report "no pending migrations" against a DB
+    // whose history table says baseline is applied but whose actual
+    // schema is partial (rc14 bug — marked the baseline applied without
+    // ever running it). db push is idempotent: no-op on a clean DB,
+    // heals partial-schema DBs by creating the missing tables.
+    if (process.env.BIDWRIGHT_MODE === "desktop") {
+      await reconcileDesktopSchema();
+    }
     return { applied: true };
   }
 
@@ -300,6 +309,34 @@ async function listMigrationDirs(migrationsDir: string): Promise<string[]> {
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
     throw err;
+  }
+}
+
+/**
+ * Desktop-only safety net: run `prisma db push` after a successful
+ * migrate-deploy to guarantee the live schema matches schema.prisma.
+ *
+ * Why this is needed: rc14 had a recovery bug that dropped
+ * `_prisma_migrations` and marked the baseline migration applied
+ * WITHOUT ever running it, leaving DBs with a partial schema and a
+ * "clean" migration history. Subsequent launches see migrate-deploy
+ * say "no pending migrations" and proceed, then crash on the first
+ * query against a missing table.
+ *
+ * db push is idempotent — diffs the live schema against schema.prisma
+ * and applies only what's needed. No-op on a clean DB.
+ */
+async function reconcileDesktopSchema(): Promise<void> {
+  const push = await runPrismaCommand([
+    "db", "push", "--accept-data-loss", "--skip-generate",
+  ]);
+  if (!push.ok) {
+    const detail = `\n${push.lastErr?.stdout.trim() ?? ""}\n${push.lastErr?.stderr.trim() ?? ""}`;
+    throw new Error(`prisma db push (desktop safety net) failed.${detail}`);
+  }
+  const out = push.result?.stdout.trim() ?? "";
+  if (out && !/already in sync/i.test(out)) {
+    console.log(`[bootstrap] prisma db push (desktop safety net):\n${out}`);
   }
 }
 
