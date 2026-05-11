@@ -4197,7 +4197,6 @@ export function TakeoffTab({
                 <SitePhotoIntake
                   projectId={projectId}
                   activeWorksheetId={selectedWorksheet?.id ?? null}
-                  defaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
                   categories={entityCategories}
                   projectContextText={[
                     workspace.project.name,
@@ -4205,16 +4204,9 @@ export function TakeoffTab({
                     workspace.currentRevision.description,
                   ].filter(Boolean).join("\n")}
                   photoFiles={photoSources}
-                  onApplyItem={async (input) => {
-                    const ws = selectedWorksheet?.id;
-                    if (!ws) throw new Error("No active worksheet to apply to.");
-                    await createWorksheetItem(projectId, ws, input);
-                  }}
-                  onApplyComplete={(count) => {
-                    notifyWorkspaceMutated();
-                    setToastType("success");
-                    setToastMessage(`Added ${count} line item${count === 1 ? "" : "s"} from site photos.`);
-                  }}
+                  takeoffCategoryId={takeoffCategory?.id ?? null}
+                  onOpenAgentChat={onOpenAgentChat}
+                  onWorkspaceMaybeMutated={notifyWorkspaceMutated}
                 />
               )}
 

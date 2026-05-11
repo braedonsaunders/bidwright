@@ -5713,27 +5713,26 @@ export interface PhotoTakeoffImageInput {
   caption?: string;
 }
 
-export interface PhotoTakeoffLineItem {
-  description: string;
-  quantity: number;
-  uom: string;
-  categoryId: string;
-  notes: string;
-  confidence: number;
-  sourceImageIndexes: number[];
-}
+export type PhotoTakeoffHandoffStatus =
+  | "handed-off"
+  | "needs-agent-session";
 
-export interface PhotoTakeoffResult {
-  items: PhotoTakeoffLineItem[];
-  summary: string;
-  warnings: string[];
+export interface PhotoTakeoffHandoffResult {
+  status: PhotoTakeoffHandoffStatus;
+  runId: string;
+  photosSaved: number;
+  /** Human-readable explanation surfaced to the user. */
+  message: string;
 }
 
 /**
- * Run a site-photo Bill-of-Materials extraction. Uses whatever LLM runtime
- * the user has selected in Settings > Integrations — no Claude assumption.
- * The server enforces that the active provider supports vision and returns
- * an actionable error when it doesn't.
+ * Hand a batch of site photos off to the project's agent runtime to extract
+ * a Bill of Materials. The agent reads the photos on disk via its Read
+ * tool, analyses them, and creates worksheet line items directly via the
+ * createWorksheetItem MCP tool — no separate direct-LLM call, no separate
+ * vision API key. If the project's agent session isn't running yet, the
+ * photos are still saved and a `needs-agent-session` status is returned so
+ * the UI can prompt the estimator to start the agent.
  */
 export async function generatePhotoBom(
   projectId: string,
@@ -5741,9 +5740,13 @@ export async function generatePhotoBom(
     images: PhotoTakeoffImageInput[];
     focusPrompt?: string;
     projectContext?: string[];
+    /** Target worksheet for the line items the agent creates. */
+    worksheetId: string;
+    /** Category bucket the line items land in. */
+    categoryId: string;
   },
-): Promise<PhotoTakeoffResult> {
-  return apiRequest<PhotoTakeoffResult>(`/api/takeoff/${projectId}/photo-bom`, {
+): Promise<PhotoTakeoffHandoffResult> {
+  return apiRequest<PhotoTakeoffHandoffResult>(`/api/takeoff/${projectId}/photo-bom`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

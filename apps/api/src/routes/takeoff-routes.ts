@@ -1,10 +1,27 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
 import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
-import { generatePhotoTakeoff } from "../services/photo-takeoff-service.js";
+import { interruptAndResumeSession } from "../services/cli-runtime.js";
+import { resolveProjectDir } from "../paths.js";
+
+// Map MIME type → file extension for photos persisted to disk so the
+// agent's Read tool can pick the right loader. Keep this list aligned
+// with site-photo-intake's ACCEPTED_TYPES on the client.
+const PHOTO_MIME_TO_EXT: Record<string, string> = {
+  "image/jpeg": "jpg",
+  "image/jpg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/heic": "heic",
+  "image/heif": "heif",
+  "image/tiff": "tiff",
+  "image/tif": "tiff",
+};
 
 // Azure Document Intelligence creds come exclusively from organisation
 // Settings > Integrations. There is no env-var fallback — configure them
@@ -277,14 +294,18 @@ export async function takeoffRoutes(app: FastifyInstance) {
 
   // ── POST /api/takeoff/:projectId/photo-bom ────────────────────────────
   //
-  // Site-photo intake: accept one or more base64-encoded photographs plus
-  // an optional focus prompt and return a structured BOM the estimator can
-  // review and convert into worksheet line items.
+  // Hand site photos off to the project's configured agent runtime. The
+  // agent already runs every other AI workflow in the estimate; instead
+  // of duplicating that path with a separate direct-LLM vision call (and
+  // a separate API-key contract), we save the photos under the project's
+  // working dir and inject a prompt into the agent session telling it to
+  // read them and create worksheet items via the createWorksheetItem MCP
+  // tool. The agent handles vision via whatever auth the CLI is using —
+  // OAuth, stored key, whatever — no separate vision adapter needed here.
   //
-  // Runtime-agnostic: the LLM provider/model is resolved via the same
-  // getEffectiveIntegrations() chain every other AI feature uses — there is
-  // no Claude-specific fallback. If the user has selected an OpenAI or
-  // OpenRouter model with vision support, that's what gets called.
+  // If the agent session isn't running, the photos are still persisted
+  // and the response is { status: "needs-agent-session" } so the UI can
+  // tell the estimator to start the agent without losing their uploads.
   app.post("/api/takeoff/:projectId/photo-bom", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
 
@@ -292,9 +313,6 @@ export async function takeoffRoutes(app: FastifyInstance) {
       images: z
         .array(
           z.object({
-            // The client sends a data URL OR a raw base64 string. Either is
-            // accepted — the server splits the prefix off before sending to
-            // the adapter (which only wants the base64 payload).
             data: z.string().min(8, "Image data is required"),
             mimeType: z.string().min(3),
             caption: z.string().max(500).optional(),
@@ -304,6 +322,8 @@ export async function takeoffRoutes(app: FastifyInstance) {
         .max(8, "At most 8 images per request"),
       focusPrompt: z.string().max(2000).optional(),
       projectContext: z.array(z.string().max(500)).max(20).optional(),
+      worksheetId: z.string().min(1, "worksheetId is required"),
+      categoryId: z.string().min(1, "categoryId is required"),
     });
 
     const parsed = bodySchema.safeParse(request.body ?? {});
@@ -312,72 +332,113 @@ export async function takeoffRoutes(app: FastifyInstance) {
     }
 
     try {
-      // Verify the project exists / the user can see it before spending
-      // tokens on the LLM.
       const project = await request.store!.getProject(projectId);
       if (!project) return reply.code(404).send({ message: "Project not found" });
 
-      // Resolve the user's effective LLM credentials. Mirrors the canonical
-      // pattern (see server.ts plugin-builder endpoint).
-      const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
-      const apiKey =
-        integrations.anthropicKey ??
-        process.env.ANTHROPIC_API_KEY ??
-        integrations.openaiKey ??
-        process.env.OPENAI_API_KEY ??
-        "";
-      const provider =
-        integrations.llmProvider ??
-        process.env.LLM_PROVIDER ??
-        (integrations.anthropicKey || process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai");
-      const model =
-        integrations.llmModel ??
-        process.env.LLM_MODEL ??
-        (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
-
-      if (!apiKey) {
-        return reply
-          .code(400)
-          .send({ message: "No LLM API key configured. Set one in Settings > Integrations before running photo takeoff." });
+      // Look up worksheet + category names for the prompt so the agent
+      // (and the run log the user reads later) gets readable context.
+      const workspace = await request.store!.getWorkspace(projectId);
+      const worksheet = workspace?.worksheets?.find((w: { id: string }) => w.id === parsed.data.worksheetId);
+      if (!worksheet) {
+        return reply.code(400).send({ message: "Target worksheet not found in this project." });
+      }
+      const categories = await request.store!.listEntityCategories();
+      const category = (categories as Array<{ id: string; name: string }>).find(
+        (c) => c.id === parsed.data.categoryId,
+      );
+      if (!category) {
+        return reply.code(400).send({ message: "Target category not found in this project." });
       }
 
-      // Organization category taxonomy. Passed into the LLM so it tags rows
-      // with the user's actual category buckets instead of inventing one
-      // (or worse, defaulting to a code system the org doesn't use).
-      const categories = await request.store!.listEntityCategories();
+      // Persist the photos under <projectDir>/.bidwright/photo-bom/<runId>/.
+      // The agent's CWD is the project dir, so the prompt can reference
+      // these by their project-relative path and Read will find them.
+      const runId = `photo-bom-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+      const projectDir = resolveProjectDir(projectId);
+      const photoDirRel = path.posix.join(".bidwright", "photo-bom", runId);
+      const photoDirAbs = path.join(projectDir, ".bidwright", "photo-bom", runId);
+      await mkdir(photoDirAbs, { recursive: true });
 
-      // Strip any "data:image/...;base64," prefix the browser may have sent.
-      const normalizedImages = parsed.data.images.map((image) => {
+      const savedPhotos: { relPath: string; mimeType: string; caption?: string }[] = [];
+      for (let i = 0; i < parsed.data.images.length; i++) {
+        const image = parsed.data.images[i];
         const commaIdx = image.data.indexOf(",");
-        const payload = image.data.startsWith("data:") && commaIdx > 0
+        const base64 = image.data.startsWith("data:") && commaIdx > 0
           ? image.data.slice(commaIdx + 1)
           : image.data;
-        return {
-          data: payload,
+        const ext = PHOTO_MIME_TO_EXT[image.mimeType.toLowerCase()] ?? "jpg";
+        const fileName = `photo-${String(i + 1).padStart(2, "0")}.${ext}`;
+        const filePathAbs = path.join(photoDirAbs, fileName);
+        await writeFile(filePathAbs, Buffer.from(base64, "base64"));
+        savedPhotos.push({
+          relPath: path.posix.join(photoDirRel, fileName),
           mimeType: image.mimeType,
           caption: image.caption,
-        };
-      });
+        });
+      }
 
-      const result = await generatePhotoTakeoff({
-        images: normalizedImages,
-        focusPrompt: parsed.data.focusPrompt,
-        projectContext: parsed.data.projectContext,
-        categories: categories.map((c) => ({
-          id: c.id,
-          name: c.name,
-          entityType: c.entityType,
-          defaultUom: c.defaultUom ?? "EA",
-          shortform: c.shortform ?? null,
-        })),
-        llm: { provider, apiKey, model },
+      const promptLines = [
+        "SITE PHOTO BOM REQUEST",
+        "",
+        `The estimator just dropped ${savedPhotos.length} site photo${savedPhotos.length === 1 ? "" : "s"} into ${photoDirRel}/.`,
+        `Each photo is captured below by its project-relative path:`,
+        ...savedPhotos.map((p, idx) => {
+          const captionPart = p.caption ? ` — caption: ${p.caption.replace(/\n/g, " ")}` : "";
+          return `  ${idx + 1}. ${p.relPath}${captionPart}`;
+        }),
+        "",
+        parsed.data.focusPrompt?.trim()
+          ? `Estimator focus / measurement hints:\n${parsed.data.focusPrompt.trim()}`
+          : "(no additional focus prompt)",
+        "",
+        ...(parsed.data.projectContext?.length
+          ? ["Project context:", ...parsed.data.projectContext.map((line) => `  - ${line}`), ""]
+          : []),
+        "Task:",
+        `  1. Read each photo file using your Read tool.`,
+        `  2. Identify the construction scope visible — work items, quantities, materials, conditions.`,
+        `  3. For each distinct line item, call createWorksheetItem against:`,
+        `       worksheetId: ${worksheet.id}   (named "${worksheet.name}")`,
+        `       categoryId:  ${category.id}    (named "${category.name}")`,
+        `     Populate entityName, description, quantity, uom, and sourceNotes that name the source photos`,
+        `     by their relative paths above so the line stays auditable.`,
+        `  4. When you've created the items, post a one-paragraph summary describing what you found and any`,
+        `     uncertainty. Do not invent measurements; if a photo is ambiguous, say so and lower the qty or`,
+        `     skip the item entirely.`,
+        "",
+        "Do NOT recreate worksheets, packages, or items that already exist. Only add new line items derived",
+        "from these photos.",
+      ];
+      const prompt = promptLines.join("\n");
+
+      const reason = `Site photo BOM (${savedPhotos.length} photo${savedPhotos.length === 1 ? "" : "s"})`;
+      const result = await interruptAndResumeSession(projectId, prompt, reason);
+
+      if (result.interrupted || result.resumed) {
+        return reply.send({
+          status: "handed-off" as const,
+          runId,
+          photosSaved: savedPhotos.length,
+          message:
+            `Sent ${savedPhotos.length} photo${savedPhotos.length === 1 ? "" : "s"} to the agent. ` +
+            `Watch the agent chat panel for progress.`,
+        });
+      }
+
+      // The agent isn't running. Photos are saved; tell the user to start
+      // the agent and re-run instead of failing with a generic error.
+      return reply.send({
+        status: "needs-agent-session" as const,
+        runId,
+        photosSaved: savedPhotos.length,
+        message:
+          `Saved ${savedPhotos.length} photo${savedPhotos.length === 1 ? "" : "s"} to ${photoDirRel}. ` +
+          `Start the agent for this project (Agent panel → Start), then re-run to hand them off.`,
       });
-      return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Photo takeoff failed";
-      const status = message.includes("not configured") || message.includes("Settings >") ? 400 : 500;
-      request.log.error({ err: error }, "photo-bom failed");
-      return reply.code(status).send({ message });
+      const message = error instanceof Error ? error.message : "Photo takeoff hand-off failed";
+      request.log.error({ err: error }, "photo-bom hand-off failed");
+      return reply.code(500).send({ message });
     }
   });
 }
