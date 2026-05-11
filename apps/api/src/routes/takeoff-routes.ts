@@ -317,88 +317,28 @@ export async function takeoffRoutes(app: FastifyInstance) {
       const project = await request.store!.getProject(projectId);
       if (!project) return reply.code(404).send({ message: "Project not found" });
 
-      // Resolve effective LLM credentials. The old version only knew about
-      // anthropicKey / openaiKey, so a user who'd configured Gemini or
-      // OpenRouter (or only set the agent runtime — claude-code / opencode
-      // — without a separate direct-API key field) hit "No LLM API key" even
-      // though the integration was complete from their perspective.
-      //
-      // New resolution chain:
-      //   1. Honor an explicit integrations.llmProvider when it points at a
-      //      vision-capable direct adapter (anthropic / openai / openrouter
-      //      / gemini / lmstudio).
-      //   2. Otherwise, infer the underlying LLM from the agent runtime.
-      //      claude-code → anthropic. opencode → anthropic.
-      //      The CLI wrapper is just a transport; vision still goes through
-      //      our direct LLM adapter using the API key it shares.
-      //   3. Otherwise pick the first provider with an API key set.
-      //   4. apiKey is then resolved BY PROVIDER (not blindly from anthropic
-      //      → openai), so a Gemini-only config doesn't dead-end on the
-      //      anthropic check.
+      // Resolve the user's effective LLM credentials. Mirrors the canonical
+      // pattern (see server.ts plugin-builder endpoint).
       const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
-
-      const directProviders = new Set(["anthropic", "openai", "openrouter", "gemini", "lmstudio"]);
-      const llmKeyByProvider: Record<string, string> = {
-        anthropic: (integrations.anthropicKey as string | undefined) ?? process.env.ANTHROPIC_API_KEY ?? "",
-        openai: (integrations.openaiKey as string | undefined) ?? process.env.OPENAI_API_KEY ?? "",
-        openrouter:
-          (integrations.openrouterKey as string | undefined) ?? process.env.OPENROUTER_API_KEY ?? "",
-        gemini:
-          (integrations.geminiKey as string | undefined) ??
-          process.env.GEMINI_API_KEY ??
-          process.env.GOOGLE_GENAI_API_KEY ??
-          "",
-        // LMStudio is a local OpenAI-compatible server; the adapter takes a
-        // literal "lm-studio" sentinel rather than a real secret.
-        lmstudio: "lm-studio",
-      };
-
-      let provider: string =
-        typeof integrations.llmProvider === "string" && directProviders.has(integrations.llmProvider)
-          ? integrations.llmProvider
-          : "";
-
-      // CLI agent runtimes wrap an underlying LLM. Map them so the photo
-      // route can still pick a vision-capable direct adapter.
-      if (!provider && typeof integrations.agentRuntime === "string") {
-        const runtimeMap: Record<string, string> = {
-          "claude-code": "anthropic",
-          "opencode": "anthropic",
-        };
-        provider = runtimeMap[integrations.agentRuntime] ?? "";
-      }
-
-      // env override and explicit-direct-provider fallback.
-      if (!provider) {
-        provider = process.env.LLM_PROVIDER ?? "";
-        if (provider && !directProviders.has(provider)) provider = "";
-      }
-
-      // Last resort: pick the first provider whose key is set.
-      if (!provider) {
-        provider =
-          (Object.entries(llmKeyByProvider).find(([, key]) => Boolean(key))?.[0]) ?? "anthropic";
-      }
-
-      const apiKey = llmKeyByProvider[provider] ?? "";
-      const defaultModelByProvider: Record<string, string> = {
-        anthropic: "claude-sonnet-4-20250514",
-        openai: "gpt-4o",
-        openrouter: "anthropic/claude-sonnet-4",
-        gemini: "gemini-2.0-flash",
-        lmstudio: "lmstudio-community/Llama-3.2-11B-Vision-Instruct-GGUF",
-      };
+      const apiKey =
+        integrations.anthropicKey ??
+        process.env.ANTHROPIC_API_KEY ??
+        integrations.openaiKey ??
+        process.env.OPENAI_API_KEY ??
+        "";
+      const provider =
+        integrations.llmProvider ??
+        process.env.LLM_PROVIDER ??
+        (integrations.anthropicKey || process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai");
       const model =
-        (integrations.llmModel as string | undefined) ??
+        integrations.llmModel ??
         process.env.LLM_MODEL ??
-        defaultModelByProvider[provider] ??
-        "claude-sonnet-4-20250514";
+        (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
 
       if (!apiKey) {
-        return reply.code(400).send({
-          message:
-            `No API key found for provider "${provider}". Open Settings > Integrations and either add an API key for ${provider} or pick a different LLM provider that has one.`,
-        });
+        return reply
+          .code(400)
+          .send({ message: "No LLM API key configured. Set one in Settings > Integrations before running photo takeoff." });
       }
 
       // Organization category taxonomy. Passed into the LLM so it tags rows
@@ -423,7 +363,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
         images: normalizedImages,
         focusPrompt: parsed.data.focusPrompt,
         projectContext: parsed.data.projectContext,
-        categories: (categories as Array<{ id: string; name: string; entityType: string; defaultUom?: string | null; shortform?: string | null }>).map((c) => ({
+        categories: categories.map((c) => ({
           id: c.id,
           name: c.name,
           entityType: c.entityType,
