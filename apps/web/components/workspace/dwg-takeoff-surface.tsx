@@ -777,17 +777,26 @@ export function DwgTakeoffSurface({
     updateViewport(makeFitViewport(allBounds(nextEntities), container.clientWidth || 800, container.clientHeight || 600));
   }, []);
 
+  // Track id + sourceKind as primitives so callback identity is stable when
+  // the parent re-maps the `documents` prop on every render (which it does —
+  // takeoff-tab .map()s into a fresh array each time). Using `activeDocument`
+  // itself in the deps array previously caused these callbacks (and the
+  // loading effect that depends on them) to re-fire every render, looping
+  // "Loading…" → flash error → "Loading…" forever.
+  const activeDocumentId = activeDocument?.id;
+  const activeDocumentSourceKind = activeDocument?.sourceKind;
+
   const reloadAnnotations = useCallback(async () => {
-    if (!activeDocument) {
+    if (!activeDocumentId) {
       setAnnotations([]);
       return;
     }
-    const rows = await listTakeoffAnnotations(projectId, activeDocument.id, 1);
+    const rows = await listTakeoffAnnotations(projectId, activeDocumentId, 1);
     setAnnotations(rows.map(apiAnnotationToDwg).filter((annotation) => annotation.metadata?.surface === "dwg-takeoff" || annotation.metadata?.source === "dwg-takeoff"));
-  }, [activeDocument, projectId]);
+  }, [activeDocumentId, projectId]);
 
   const loadDrawingMetadata = useCallback(async (refresh = false) => {
-    if (!activeDocument) return;
+    if (!activeDocumentId) return;
     setLoading(true);
     setError(null);
     setSelectedEntityId(null);
@@ -795,8 +804,8 @@ export function DwgTakeoffSurface({
     setSnapCandidate(null);
     try {
       const result = refresh
-        ? await processDwgTakeoffMetadata(projectId, activeDocument.id, activeDocument.sourceKind)
-        : await getDwgTakeoffMetadata(projectId, activeDocument.id, false, activeDocument.sourceKind);
+        ? await processDwgTakeoffMetadata(projectId, activeDocumentId, activeDocumentSourceKind)
+        : await getDwgTakeoffMetadata(projectId, activeDocumentId, false, activeDocumentSourceKind);
       setMetadata(result);
       if (result.status !== "processed") {
         setEntities([]);
@@ -825,18 +834,18 @@ export function DwgTakeoffSurface({
     } finally {
       setLoading(false);
     }
-  }, [activeDocument, fitToEntities, projectId]);
+  }, [activeDocumentId, activeDocumentSourceKind, fitToEntities, projectId]);
 
   useEffect(() => {
-    if (!activeDocument) return;
-    const stored = window.localStorage.getItem(calibrationStorageKey(projectId, activeDocument.id));
+    if (!activeDocumentId) return;
+    const stored = window.localStorage.getItem(calibrationStorageKey(projectId, activeDocumentId));
     setCalibration(stored ? JSON.parse(stored) as CalibrationState : null);
     undoStackRef.current = [];
     redoStackRef.current = [];
     updateHistoryVersion();
     void loadDrawingMetadata();
     void reloadAnnotations().catch(() => setAnnotations([]));
-  }, [activeDocument, loadDrawingMetadata, projectId, reloadAnnotations]);
+  }, [activeDocumentId, loadDrawingMetadata, projectId, reloadAnnotations]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
