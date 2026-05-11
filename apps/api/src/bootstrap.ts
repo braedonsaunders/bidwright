@@ -346,7 +346,6 @@ async function reconcileDesktopSchema(): Promise<void> {
  * than `prisma migrate reset` which wipes user data.
  */
 async function dropPrismaMigrationsTable(): Promise<void> {
-  // @ts-expect-error - pg has no types installed at the api package level
   const pgMod = await import("pg");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const Client = ((pgMod as any).default ?? pgMod).Client;
