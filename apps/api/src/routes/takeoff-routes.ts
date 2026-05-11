@@ -382,24 +382,6 @@ export async function takeoffRoutes(app: FastifyInstance) {
         defaultModelByProvider[provider] ??
         "claude-sonnet-4-5";
 
-      // OpenRouter requires `<provider>/<model-id>`. If the user's saved
-      // model is just `claude-sonnet-4-5` (the anthropic-direct format),
-      // OpenRouter returns "404 No endpoints found that support image
-      // input" because the bare id doesn't resolve. Prefix sensibly so the
-      // call goes through.
-      if (provider === "openrouter" && !model.includes("/")) {
-        const inferredPrefix = model.startsWith("claude")
-          ? "anthropic"
-          : model.startsWith("gpt") || model.startsWith("o1") || model.startsWith("o3")
-            ? "openai"
-            : model.startsWith("gemini")
-              ? "google"
-              : model.startsWith("llama")
-                ? "meta-llama"
-                : null;
-        if (inferredPrefix) model = `${inferredPrefix}/${model}`;
-      }
-
       if (!apiKey) {
         return reply.code(400).send({
           message:
