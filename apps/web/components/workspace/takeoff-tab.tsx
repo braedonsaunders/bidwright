@@ -331,6 +331,7 @@ import type { InspectActions, InspectSnapshot, InspectModelElement } from "./tak
 // Schema, API endpoints, and the switcher component stay in the codebase
 // for future "advanced" surface; we just don't mount it in the BIM picker.
 import { SitePhotoIntake } from "./site-photo-intake";
+import { CreateWorksheetModal } from "./modals";
 
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
@@ -1039,7 +1040,15 @@ export function TakeoffTab({
   const [selectedModelElementIds, setSelectedModelElementIds] = useState<Set<string>>(() => new Set());
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
-  const [worksheetPickerAction, setWorksheetPickerAction] = useState<"send-selection" | "create-elements" | null>(null);
+  // Discriminated union: the picker carries enough context to resume the
+  // original action once a worksheet exists. "send-selection" and
+  // "create-elements" are the batch flows; "create-single-element" carries
+  // the explicit element id for per-row "+ Add" clicks from the side panel.
+  type WorksheetPickerAction =
+    | { kind: "send-selection" }
+    | { kind: "create-elements" }
+    | { kind: "create-single-element"; elementId: string };
+  const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
   const [newWorksheetName, setNewWorksheetName] = useState("");
   const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
     () =>
@@ -2861,7 +2870,7 @@ export function TakeoffTab({
             ? workspace.worksheets.find((worksheet) => worksheet.id === draft.worksheetId)
             : null) ?? explicitWs ?? selectedWorksheet;
         if (!targetWs) {
-          setWorksheetPickerAction("send-selection");
+          setWorksheetPickerAction({ kind: "send-selection" });
           return;
         }
         targetWorksheetName = targetWs.name;
@@ -2926,7 +2935,7 @@ export function TakeoffTab({
   ) {
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction("create-elements");
+      setWorksheetPickerAction({ kind: "create-single-element", elementId: element.id });
       return null;
     }
     if (!defaultCategory) {
@@ -2979,7 +2988,10 @@ export function TakeoffTab({
 
   async function handleCreateModelElementLineItem(element: ModelElementWithQuantities) {
     try {
-      await createLineItemFromModelElement(element);
+      const created = await createLineItemFromModelElement(element);
+      // null = the call short-circuited (e.g. no worksheet → picker opened).
+      // Don't celebrate; the resumed flow after the picker emits its own toast.
+      if (!created) return;
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
       setToastType("success");
@@ -3068,30 +3080,44 @@ export function TakeoffTab({
   /* Build document URL */
   const documentUrl = selectedDoc ? buildPdfUrl(selectedDoc) : "";
 
+  async function runPendingPickerAction(action: WorksheetPickerAction, ws: { id: string; name: string }) {
+    if (action.kind === "send-selection" && modelSelection) {
+      await handleSendModelSelectionToEstimate(modelSelection, undefined, undefined, ws);
+    } else if (action.kind === "create-elements") {
+      await handleCreateSelectedModelElements(ws);
+    } else if (action.kind === "create-single-element") {
+      const element = modelElements.find((e) => e.id === action.elementId);
+      if (!element) {
+        setToastType("error");
+        setToastMessage("That model element is no longer available.");
+        return;
+      }
+      await createLineItemFromModelElement(element, undefined, ws);
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Created model line item.");
+    }
+  }
+
   async function handleWorksheetPickerSelect(wsId: string) {
     const ws = workspace.worksheets.find((w) => w.id === wsId);
-    if (!ws) return;
-    if (worksheetPickerAction === "send-selection" && modelSelection) {
-      await handleSendModelSelectionToEstimate(modelSelection, undefined, undefined, ws);
-    } else if (worksheetPickerAction === "create-elements") {
-      await handleCreateSelectedModelElements(ws);
-    }
+    if (!ws || !worksheetPickerAction) return;
+    await runPendingPickerAction(worksheetPickerAction, ws);
     setWorksheetPickerAction(null);
     setNewWorksheetName("");
   }
 
-  async function handleCreateWorksheetAndProceed() {
-    if (!newWorksheetName.trim()) return;
+  async function handleCreateWorksheetAndProceed(nameOverride?: string) {
+    const name = (nameOverride ?? newWorksheetName).trim();
+    if (!name || !worksheetPickerAction) return;
+    const action = worksheetPickerAction;
     try {
-      const result = await createWorksheet(projectId, { name: newWorksheetName.trim() });
+      const result = await createWorksheet(projectId, { name });
       const ws = result.workspace.worksheets.at(-1);
       notifyWorkspaceMutated();
       if (ws) {
-        if (worksheetPickerAction === "send-selection" && modelSelection) {
-          await handleSendModelSelectionToEstimate(modelSelection, undefined, undefined, ws);
-        } else if (worksheetPickerAction === "create-elements") {
-          await handleCreateSelectedModelElements(ws);
-        }
+        await runPendingPickerAction(action, ws);
       }
       setWorksheetPickerAction(null);
       setNewWorksheetName("");
@@ -5349,6 +5375,23 @@ export function TakeoffTab({
           </>
         )}
       </div>
+
+      {/* ─── No-active-worksheet prompt ─── */}
+      {/* Mounted whenever a model-element / model-selection action is queued
+          against a non-existent worksheet. The user creates one inline; once
+          they confirm, handleCreateWorksheetAndProceed resumes the queued
+          action with the new worksheet. */}
+      <CreateWorksheetModal
+        open={worksheetPickerAction !== null}
+        onClose={() => {
+          setWorksheetPickerAction(null);
+          setNewWorksheetName("");
+        }}
+        onConfirm={(name) => {
+          setNewWorksheetName(name);
+          void handleCreateWorksheetAndProceed(name);
+        }}
+      />
 
       {/* ─── Toast Notification ─── */}
       {toastMessage && (
