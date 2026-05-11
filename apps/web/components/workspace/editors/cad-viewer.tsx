@@ -11,6 +11,8 @@ interface CadViewerProps {
   fileUrl?: string;
   fileName?: string;
   className?: string;
+  /** Fires on IFC click. expressID -1 means "miss / background". */
+  onIfcElementSelect?: (selection: { expressID: number; elementClass: string }) => void;
 }
 
 /* ─── Supported format detection ─── */
@@ -244,9 +246,22 @@ async function loadIFC(
 
   const modelID = api.OpenModel(new Uint8Array(data));
   const group = new THREE.Group();
+  group.name = "ifc-elements";
 
   // Get all mesh geometries from the IFC
   api.StreamAllMeshes(modelID, (mesh: any) => {
+    const expressID: number = Number(mesh.expressID ?? mesh.expressId ?? mesh.productID ?? mesh.productId ?? -1);
+    let elementClass = "";
+    if (expressID > 0) {
+      try {
+        const typeCode = (api as any).GetLineType(modelID, expressID);
+        const name = (api as any).GetNameFromTypeCode(typeCode);
+        if (name) elementClass = String(name).toUpperCase();
+      } catch {
+        // best effort
+      }
+    }
+
     const placedGeometries = mesh.geometries;
     for (let i = 0; i < placedGeometries.size(); i++) {
       const placed = placedGeometries.get(i);
@@ -288,6 +303,7 @@ async function loadIFC(
       matrix.fromArray(placed.flatTransformation);
       obj.applyMatrix4(matrix);
 
+      obj.userData.ifc = { expressID, elementClass };
       group.add(obj);
 
       ifcGeo.delete();
@@ -299,14 +315,72 @@ async function loadIFC(
   sceneCtx.fitToContent();
 }
 
+/* ─── IFC click picking ─── */
+
+function attachIfcPicker(
+  sceneCtx: Awaited<ReturnType<typeof createScene>>,
+  onSelectRef: { current?: (sel: { expressID: number; elementClass: string }) => void },
+) {
+  const { THREE, scene, camera, renderer } = sceneCtx;
+  const ifcGroup = scene.getObjectByName("ifc-elements");
+  if (!ifcGroup) return () => {};
+
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const canvas = renderer.domElement;
+  let downAt: { x: number; y: number; t: number } | null = null;
+
+  const onDown = (e: PointerEvent) => {
+    if (e.button !== 0) return;
+    downAt = { x: e.clientX, y: e.clientY, t: performance.now() };
+  };
+  const onUp = (e: PointerEvent) => {
+    if (!downAt) return;
+    const dx = Math.abs(e.clientX - downAt.x);
+    const dy = Math.abs(e.clientY - downAt.y);
+    const dt = performance.now() - downAt.t;
+    downAt = null;
+    // Treat anything that drags more than a few pixels or lasts > 350ms as orbit/pan, not a click.
+    if (dx > 4 || dy > 4 || dt > 350) return;
+
+    const rect = canvas.getBoundingClientRect();
+    ndc.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(ifcGroup.children, false);
+
+    for (const hit of hits) {
+      const info = (hit.object as any)?.userData?.ifc;
+      if (info && typeof info.expressID === "number" && info.expressID > 0) {
+        onSelectRef.current?.({ expressID: info.expressID, elementClass: info.elementClass ?? "" });
+        return;
+      }
+    }
+    // Background miss — clear the selection.
+    onSelectRef.current?.({ expressID: -1, elementClass: "" });
+  };
+
+  canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointerup", onUp);
+  return () => {
+    canvas.removeEventListener("pointerdown", onDown);
+    canvas.removeEventListener("pointerup", onUp);
+  };
+}
+
 /* ─── Component ─── */
 
-export function CadViewer({ fileUrl, fileName, className }: CadViewerProps) {
+export function CadViewer({ fileUrl, fileName, className, onIfcElementSelect }: CadViewerProps) {
   const [state, setState] = useState<CadViewerState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [loadingText, setLoadingText] = useState("Initializing 3D engine...");
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<Awaited<ReturnType<typeof createScene>> | null>(null);
+  // Stable ref so the picker handler reads the latest callback without rebinding.
+  const onIfcElementSelectRef = useRef<typeof onIfcElementSelect>(undefined);
+  useEffect(() => {
+    onIfcElementSelectRef.current = onIfcElementSelect;
+  }, [onIfcElementSelect]);
 
   const handleFitView = useCallback(() => {
     sceneRef.current?.fitToContent();
@@ -325,6 +399,7 @@ export function CadViewer({ fileUrl, fileName, className }: CadViewerProps) {
     if (!canvasContainerRef.current || !fileUrl || !fileName) return;
 
     let cancelled = false;
+    let detachPicker: (() => void) | null = null;
     const container = canvasContainerRef.current;
 
     (async () => {
@@ -355,6 +430,7 @@ export function CadViewer({ fileUrl, fileName, className }: CadViewerProps) {
         } else if (category === "ifc") {
           setLoadingText("Parsing BIM model (IFC)...");
           await loadIFC(sceneCtx, data);
+          if (!cancelled) detachPicker = attachIfcPicker(sceneCtx, onIfcElementSelectRef);
         } else if (category === "dxf") {
           setLoadingText("DXF/DWG viewer loading...");
           throw new Error("DXF/DWG viewing requires an additional parser. Upload a PDF export instead, or convert to STEP/IFC.");
@@ -376,6 +452,7 @@ export function CadViewer({ fileUrl, fileName, className }: CadViewerProps) {
 
     return () => {
       cancelled = true;
+      detachPicker?.();
       sceneRef.current?.dispose();
       sceneRef.current = null;
     };

@@ -1209,6 +1209,35 @@ export function TakeoffTab({
     [modelElements, selectedModelElementIds],
   );
 
+  // Map an IFC raycast hit (expressID) back to a ModelElement and publish a
+  // model-element selection so the side-panel Link view populates.
+  const handleIfcElementSelect = useCallback(
+    (sel: { expressID: number; elementClass: string }) => {
+      if (!onSelectionChange || !selectedModelAsset) return;
+      if (sel.expressID < 0) {
+        if (selection?.kind === "model-element") onSelectionChange(null);
+        return;
+      }
+      const wanted = `#${sel.expressID}`;
+      const element = modelElements.find((e) => {
+        const props = (e.properties as Record<string, unknown> | null) ?? {};
+        return props.expressId === wanted;
+      });
+      if (!element) return;
+      onSelectionChange({
+        kind: "model-element",
+        assetId: selectedModelAsset.id,
+        elementId: element.id,
+        elementName: element.name || element.externalId,
+        elementClass: element.elementClass ?? undefined,
+        material: element.material ?? undefined,
+        level: element.level ?? undefined,
+        quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+      });
+    },
+    [onSelectionChange, selectedModelAsset, modelElements, modelLedgerBasis, selection],
+  );
+
   useEffect(() => {
     selectedDocIdRef.current = selectedDocId;
   }, [selectedDocId]);
@@ -4453,7 +4482,11 @@ export function TakeoffTab({
                   onDeleteLinkedLineItem={handleDeleteModelLinkedLineItem}
                 />
               ) : (
-                <CadViewer fileUrl={documentUrl} fileName={selectedDoc?.fileName} />
+                <CadViewer
+                  fileUrl={documentUrl}
+                  fileName={selectedDoc?.fileName}
+                  onIfcElementSelect={handleIfcElementSelect}
+                />
               )}
             </div>
           ) : (
