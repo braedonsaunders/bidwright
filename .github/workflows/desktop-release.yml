@@ -109,7 +109,13 @@ jobs:
         run: pnpm --filter @bidwright/api build
 
       - name: Build web (Next.js standalone)
+        # NEXT_PUBLIC_BIDWRIGHT_DESKTOP makes the api client always route
+        # through /proxy/, which the web sidecar forwards to the api
+        # spawned on a dynamic port (passed via INTERNAL_API_BASE_URL at
+        # runtime from desktop/main.ts).
         run: pnpm --filter @bidwright/web build
+        env:
+          NEXT_PUBLIC_BIDWRIGHT_DESKTOP: "1"
 
       - name: Build desktop main process
         run: pnpm --filter @bidwright/desktop build
