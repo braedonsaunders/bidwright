@@ -1600,6 +1600,26 @@ function DeleteFileModal({
 export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  /** Broadcast a "files changed" signal on the shared takeoff channel so
+   *  the Takeoff tab (running in this window or a detached one) can refresh
+   *  its file tree and update the intake-card counts. Called after every
+   *  upload / create / rename / move / delete. */
+  const notifyFilesMutated = useCallback(() => {
+    if (typeof BroadcastChannel === "undefined") return;
+    try {
+      const channel = new BroadcastChannel(`bw-takeoff-${projectId}`);
+      channel.postMessage({
+        type: "files-mutated",
+        projectId,
+        originId: "file-browser",
+      });
+      channel.close();
+    } catch (err) {
+      console.warn("[file-browser] Failed to broadcast files-mutated:", err);
+    }
+  }, [projectId]);
+
   const pendingUploadParentIdRef = useRef<string | null | undefined>(undefined);
   const pendingUploadDocumentTypeRef = useRef<string | undefined>(undefined);
   const [searchQuery, setSearchQuery] = useState("");
@@ -1728,6 +1748,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
           setSourceDocuments((prev) => [...prev, document]);
         }
       }
+      notifyFilesMutated();
       // Expand parent if uploading into a folder
       if (parentId) {
         setExpandedFolders((prev) => new Set([...prev, parentId!]));
@@ -1740,7 +1761,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } finally {
       setUploading(false);
     }
-  }, [activeFileParentId, projectId, selectedItem?.documentType, selectedItem?.fileNode, selectedItem?.sourceDocument?.documentType, showError]);
+  }, [activeFileParentId, projectId, selectedItem?.documentType, selectedItem?.fileNode, selectedItem?.sourceDocument?.documentType, showError, notifyFilesMutated]);
 
   const openFilePickerForParent = useCallback((parentId?: string | null, documentType?: string) => {
     pendingUploadParentIdRef.current = parentId;
@@ -1772,6 +1793,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     try {
       const updated = await updateFileNode(projectId, nodeId, { parentId });
       setUserNodes((prev) => prev.map((entry) => entry.id === nodeId ? updated : entry));
+      notifyFilesMutated();
       if (parentId) {
         setExpandedFolders((prev) => new Set([...prev, parentId]));
       }
@@ -1835,6 +1857,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         type: "directory",
       });
       setUserNodes((prev) => [...prev, node]);
+      notifyFilesMutated();
       setCreatingFolder(false);
       setNewFolderName("");
       setNewFolderParentId(null);
@@ -1844,7 +1867,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } catch (err) {
       showError(`Failed to create folder: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, newFolderName, newFolderParentId, showError]);
+  }, [projectId, newFolderName, newFolderParentId, showError, notifyFilesMutated]);
 
   const handleRename = useCallback(async () => {
     if (!renamingId) return;
@@ -1878,12 +1901,13 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         });
         setSourceDocuments((prev) => prev.map((document) => document.id === updated.id ? updated : document));
       }
+      notifyFilesMutated();
       setRenamingId(null);
       setRenameValue("");
     } catch (err) {
       showError(`Failed to rename: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, renamingId, renameValue, showError, tree]);
+  }, [projectId, renamingId, renameValue, showError, tree, notifyFilesMutated]);
 
   const handleDelete = useCallback(async (item: TreeItem) => {
     if (!item.fileNode && !item.sourceDocument) return;
@@ -1891,6 +1915,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       if (item.sourceDocument) {
         await deleteSourceDocument(projectId, item.sourceDocument.id);
         setSourceDocuments((prev) => prev.filter((document) => document.id !== item.sourceDocument!.id));
+        notifyFilesMutated();
         if (selectedId === item.id) setSelectedId(null);
         setDeletingItem(null);
         return;
@@ -1912,13 +1937,14 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         }
       }
       setUserNodes((prev) => prev.filter((n) => !deletedIds.has(n.id)));
+      notifyFilesMutated();
       if (selectedId && deletedIds.has(selectedId)) setSelectedId(null);
       if (modelEditorFileNodeId === fileNode.id) setModelEditorFileNodeId(null);
       setDeletingItem(null);
     } catch (err) {
       showError(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [modelEditorFileNodeId, projectId, selectedId, showError, userNodes]);
+  }, [modelEditorFileNodeId, projectId, selectedId, showError, userNodes, notifyFilesMutated]);
 
   const handleCancelRename = useCallback(() => {
     setRenamingId(null);
@@ -2169,6 +2195,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       } else {
         savedNode = await uploadFile(projectId, file, activeFileParentId);
       }
+      notifyFilesMutated();
 
       const updatedNodes = await getFileTree(projectId);
       setUserNodes(updatedNodes);
@@ -2186,7 +2213,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } catch (err) {
       showError(`Failed to save: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [activeFileParentId, editingFileNodeId, projectId, showError]);
+  }, [activeFileParentId, editingFileNodeId, projectId, showError, notifyFilesMutated]);
 
   const handleEditFile = useCallback(async (item: TreeItem) => {
     if (!item.fileNode) return;
@@ -2273,6 +2300,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         metadata: { kind: "bidwright-model", native: true },
       });
       setUserNodes((prev) => [...prev, node]);
+      notifyFilesMutated();
       if (activeFileParentId) {
         setExpandedFolders((prev) => new Set([...prev, activeFileParentId]));
       }
@@ -2283,7 +2311,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } catch (err) {
       showError(`Failed to create model: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [activeFileParentId, projectId, showError, userNodes]);
+  }, [activeFileParentId, projectId, showError, userNodes, notifyFilesMutated]);
 
   const handleModelDocumentSave = useCallback(async (message: BidwrightModelDocumentSaveMessage) => {
     try {
@@ -2308,6 +2336,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       const savedNode = nativeNode
         ? await saveFileNodeContent(projectId, nativeNode.id, file)
         : await uploadFile(projectId, file, selectedItem?.fileNode?.parentId ?? null);
+      // Only treat the upload-new-node path as a tree mutation; an in-place
+      // save of an existing node doesn't change the file list shape.
+      if (!nativeNode) notifyFilesMutated();
 
       setUserNodes((prev) => {
         const exists = prev.some((node) => node.id === savedNode.id);
@@ -2319,7 +2350,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } catch (err) {
       showError(`Failed to save model: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [editorFileName, modelEditorFileNodeId, projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes]);
+  }, [editorFileName, modelEditorFileNodeId, projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes, notifyFilesMutated]);
 
   // Reset to file tab when selection changes
   useEffect(() => {

@@ -380,6 +380,7 @@ type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] })
   | (TakeoffSyncBase & { type: "takeoff-links-mutated" })
   | (TakeoffSyncBase & { type: "workspace-mutated" })
+  | (TakeoffSyncBase & { type: "files-mutated" })
   | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null });
 
 type TakeoffSyncPayload =
@@ -387,6 +388,7 @@ type TakeoffSyncPayload =
   | { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] }
   | { type: "takeoff-links-mutated" }
   | { type: "workspace-mutated" }
+  | { type: "files-mutated" }
   | { type: "calibration-change"; calibration: Calibration | null };
 
 function takeoffChannelName(projectId: string): string {
@@ -1705,6 +1707,14 @@ export function TakeoffTab({
 
       if (msg.type === "workspace-mutated") {
         onWorkspaceMutatedRef.current?.();
+        return;
+      }
+
+      if (msg.type === "files-mutated") {
+        // A sibling component (file browser, etc.) added/renamed/deleted a
+        // file. Refresh our copy of the project tree so the intake-card
+        // counts and source dropdowns reflect it.
+        void refreshFileTree();
         return;
       }
 
