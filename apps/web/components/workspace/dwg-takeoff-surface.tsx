@@ -1233,7 +1233,6 @@ export function DwgTakeoffSurface({
     if (annotation) pushHistory({ kind: "delete", annotation });
   }
 
-  const layerOptions = documents.map((document) => ({ value: document.id, label: document.label }));
   const visibleEntityCount = filteredEntities.length;
   const totalMeasured = annotations.reduce((sum, annotation) => sum + (annotation.measurement?.value ?? 0), 0);
 
@@ -1253,19 +1252,11 @@ export function DwgTakeoffSurface({
 
   return (
     <div className="flex h-full w-full min-h-0 flex-col bg-panel">
+      {/* The takeoff-tab toolbar above owns the document selector. This
+          internal toolbar only carries the DWG-specific controls (layout,
+          tools, color, zoom, layers, snap, undo/redo, export) so the two
+          rows don't render duplicate doc pickers. */}
       <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-        <div className="w-72">
-          <Select
-            value={activeDocument?.id ?? ""}
-            onValueChange={(value) => {
-              setDocumentId(value);
-              onSelectedDocumentChange?.(value);
-            }}
-            options={layerOptions}
-            size="sm"
-          />
-        </div>
-
         {layoutOptions.length > 1 && (
           <div className="w-44">
             <Select

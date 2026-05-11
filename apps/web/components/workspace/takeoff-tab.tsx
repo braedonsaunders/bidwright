@@ -4735,19 +4735,31 @@ export function TakeoffTab({
         ) : isDwgDocument ? (
           <DwgTakeoffSurface
             projectId={projectId}
+            // The DWG processing API keys off FileNode / SourceDocument ids,
+            // not the prefixed TakeoffDocument wrapper id ("file-…" /
+            // "model-asset-…"). Hand it the underlying backend id explicitly
+            // — fall back to doc.id when neither prefix applies (those are
+            // already raw SourceDocument ids).
             documents={dwgDocuments.map((doc) => ({
-              id: doc.id,
+              id: doc.fileNodeId ?? doc.id,
               label: doc.label,
               fileName: doc.fileName,
               fileUrl: buildPdfUrl(doc),
               sourceKind: doc.fileNodeId ? "file_node" as const : undefined,
             }))}
-            selectedDocumentId={selectedDoc?.kind === "dwg" ? selectedDoc.id : undefined}
+            selectedDocumentId={
+              selectedDoc?.kind === "dwg" ? (selectedDoc.fileNodeId ?? selectedDoc.id) : undefined
+            }
             workspace={workspace}
             selectedWorksheetId={selectedWorksheet?.id}
             defaultEstimateCategory={defaultCategory ? { id: defaultCategory.id, name: defaultCategory.name, entityType: defaultCategory.entityType } : null}
-            onSelectedDocumentChange={(docId) => {
-              setSelectedDocId(docId);
+            onSelectedDocumentChange={(apiDocId) => {
+              // Map the backend id back to the takeoff doc's wrapper id so
+              // the rest of TakeoffTab keeps working with its `selectedDocId`
+              // contract (which is the prefixed id).
+              const matched = dwgDocuments.find((d) => (d.fileNodeId ?? d.id) === apiDocId);
+              if (!matched) return;
+              setSelectedDocId(matched.id);
               setPage(1);
               setZoom(1);
               fitOnLoadRef.current = true;
