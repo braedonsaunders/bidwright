@@ -196,11 +196,14 @@ export function TakeoffInspectView({
   );
 }
 
-/** The bucket every + Add lands in. Persisted per-project on the takeoff-tab
- *  side; surfacing it here lets the estimator override at any point without
- *  leaving the entities list. Rate-schedule categories are dimmed because
- *  takeoff entities don't carry a rateScheduleItemId, so picking one would
- *  cause the API to reject the next + Add. */
+/** Horizontal chip strip — one click to switch which bucket the next + Add
+ *  lands in. Optimised for the workflow where an estimator pings between
+ *  Material / Subcontractor / Equipment etc. as they crawl an assembly,
+ *  potentially changing category between every row. A dropdown would force
+ *  two clicks per switch; the chip strip drops it to one.
+ *
+ *  Rate-schedule categories appear at the end greyed-out with a tooltip so
+ *  the user can see why they're not pickable without leaving the takeoff. */
 function TakeoffCategoryPicker({
   snapshot,
   actions,
@@ -209,7 +212,6 @@ function TakeoffCategoryPicker({
   actions: InspectActions | null;
 }) {
   const { availableCategories, takeoffCategoryId } = snapshot;
-  const selected = availableCategories.find((c) => c.id === takeoffCategoryId) ?? null;
 
   if (availableCategories.length === 0) {
     return (
@@ -219,26 +221,51 @@ function TakeoffCategoryPicker({
     );
   }
 
+  // Sort: pickable first (freeform / catalog), rate-schedule last so the
+  // disabled chips don't get in the way of the common click targets.
+  const sorted = availableCategories.slice().sort((a, b) => {
+    const aRs = a.itemSource === "rate_schedule" ? 1 : 0;
+    const bRs = b.itemSource === "rate_schedule" ? 1 : 0;
+    if (aRs !== bRs) return aRs - bRs;
+    return a.order - b.order;
+  });
+
   return (
-    <div className="shrink-0 flex items-center gap-1.5 rounded-md border border-line bg-panel/50 px-2 py-1 text-[10px]">
-      <span className="shrink-0 font-medium uppercase tracking-wider text-fg/45">
-        Add to
-      </span>
-      <select
-        value={takeoffCategoryId ?? ""}
-        onChange={(e) => actions?.setTakeoffCategoryId(e.target.value || null)}
-        className={cn(
-          "min-w-0 flex-1 rounded border border-line bg-bg/50 px-1.5 py-0.5 text-[11px] text-fg outline-none focus:border-accent/50",
-          !selected && "text-fg/45",
-        )}
-      >
-        {!selected && <option value="">Pick a category…</option>}
-        {availableCategories.map((c) => (
-          <option key={c.id} value={c.id} disabled={c.itemSource === "rate_schedule"}>
-            {c.name}{c.itemSource === "rate_schedule" ? " (rate schedule — needs items)" : ""}
-          </option>
-        ))}
-      </select>
+    <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2 py-1">
+      <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:thin]">
+        <span className="shrink-0 px-1 text-[9px] font-medium uppercase tracking-wider text-fg/45">
+          + Add to
+        </span>
+        {sorted.map((c) => {
+          const isSelected = c.id === takeoffCategoryId;
+          const isRateSchedule = c.itemSource === "rate_schedule";
+          return (
+            <button
+              key={c.id}
+              type="button"
+              disabled={isRateSchedule}
+              onClick={() => actions?.setTakeoffCategoryId(c.id)}
+              title={
+                isRateSchedule
+                  ? `${c.name} requires imported rate-schedule items; takeoff entities don't carry them.`
+                  : isSelected
+                    ? `Sticky bucket for + Add. Click another chip to switch.`
+                    : `Make ${c.name} the active + Add bucket.`
+              }
+              className={cn(
+                "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                isRateSchedule
+                  ? "cursor-not-allowed border-line/50 bg-fg/5 text-fg/35"
+                  : isSelected
+                    ? "border-accent bg-accent/15 text-accent shadow-sm"
+                    : "border-line bg-bg/50 text-fg/70 hover:border-accent/40 hover:text-fg",
+              )}
+            >
+              {c.name}
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }
