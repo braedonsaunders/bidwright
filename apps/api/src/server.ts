@@ -1821,7 +1821,13 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
 
 export function buildServer() {
   const app = Fastify({
-    logger: true
+    logger: true,
+    // 64MB. Photo-BOM and other vision endpoints send base64-encoded
+    // images inline as JSON, which blows through Fastify's 1MB default
+    // (multi-image payloads can easily hit 10–20MB after base64
+    // expansion). Caps high enough for 8 phone-quality JPEGs while
+    // still keeping a guard against runaway uploads.
+    bodyLimit: 64 * 1024 * 1024,
   });
 
   // Allow empty JSON body (sends {} instead of erroring with FST_ERR_CTP_EMPTY_JSON_BODY)

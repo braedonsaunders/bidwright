@@ -286,7 +286,7 @@ export function SitePhotoIntake({
                     No photos match this filter.
                   </p>
                 ) : (
-                  <div className="grid w-full grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
+                  <div className="grid w-full grid-cols-[repeat(auto-fill,160px)] justify-start gap-2">
                     {filteredPhotos.map((photo) => {
                       const selected = selectedIds.has(photo.id);
                       const disabled = !selected && selectionFull;
