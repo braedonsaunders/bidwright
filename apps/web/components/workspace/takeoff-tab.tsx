@@ -314,7 +314,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "bim" | "model" | "dwg";
+  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -395,7 +395,9 @@ function takeoffChannelName(projectId: string): string {
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
   if (isDwgFile(fileName)) return "dwg";
   if (isBimFile(fileName)) return "bim";
-  return isMeshFile(fileName) ? "model" : "pdf";
+  if (isMeshFile(fileName)) return "model";
+  if (isSpreadsheetFile(fileName)) return "spreadsheet";
+  return "pdf";
 }
 
 function takeoffDisplayFileName(fileName: string) {
@@ -403,7 +405,10 @@ function takeoffDisplayFileName(fileName: string) {
 }
 
 function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDocument | null {
-  if (node.type !== "file" || (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name))) {
+  if (
+    node.type !== "file" ||
+    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name))
+  ) {
     return null;
   }
   return {
@@ -421,6 +426,7 @@ function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
   if (kind === "dwg") return "DWG/DXF";
   if (kind === "bim") return "BIM";
   if (kind === "model") return "3D";
+  if (kind === "spreadsheet") return "Spreadsheet";
   return "PDF";
 }
 
@@ -1086,8 +1092,10 @@ export function TakeoffTab({
   const selectedDoc = takeoffDocuments.find((d) => d.id === selectedDocId);
   const pdfDocuments = takeoffDocuments.filter((d) => d.kind === "pdf");
   const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
+  const spreadsheetDocuments = takeoffDocuments.filter((d) => d.kind === "spreadsheet");
   const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
   const isBimDocument = selectedDocumentKind === "bim";
+  const isSpreadsheetDocument = selectedDocumentKind === "spreadsheet";
   // `isCadDocument` retains its historical "any 3D file" semantic so all the
   // PDF-only-UI guards (`!isCadDocument && !isDwgDocument && …`) keep working
   // for both BIM and mesh files. Branch on `isBimDocument` for BIM-specific UI.
@@ -1142,6 +1150,18 @@ export function TakeoffTab({
       setSelectedDocId(takeoffDocuments[0].id);
     }
   }, [selectedDocId, takeoffDocuments]);
+
+  // When the user opens a spreadsheet document in the main viewer, auto-load
+  // its preview the same way the old landing list did. Goes through a ref
+  // because the preview function is defined further down the component body.
+  const previewSpreadsheetNodeRef = useRef<((node: FileNode) => Promise<void>) | null>(null);
+  useEffect(() => {
+    if (!isSpreadsheetDocument || !selectedDoc?.fileNodeId) return;
+    if (selectedSpreadsheetNodeId === selectedDoc.fileNodeId) return;
+    const node = fileTreeNodes.find((n) => n.id === selectedDoc.fileNodeId);
+    if (!node) return;
+    void previewSpreadsheetNodeRef.current?.(node);
+  }, [isSpreadsheetDocument, selectedDoc?.fileNodeId, selectedSpreadsheetNodeId, fileTreeNodes]);
 
   const refreshModelTakeoffLinks = useCallback(async (modelId = selectedModelAsset?.id) => {
     if (!projectId || !modelId) {
@@ -3183,6 +3203,9 @@ export function TakeoffTab({
       setSpreadsheetPreviewLoading(false);
     }
   }
+  // Refresh the ref every render so the auto-preview effect sees the latest
+  // closure (projectId, setters, toast helpers).
+  previewSpreadsheetNodeRef.current = previewSpreadsheetNode;
 
   function openTakeoffSurface(docId?: string) {
     const nextDocId = docId ?? selectedDocId ?? takeoffDocuments[0]?.id;
@@ -3363,7 +3386,15 @@ export function TakeoffTab({
                 docs: modelDocuments,
                 icon: Boxes,
               }
-            : null;
+            : activeIntakeOption === "spreadsheet"
+              ? {
+                  title: "Spreadsheet sources",
+                  detail: sourceCountText(spreadsheetDocuments.length, "spreadsheet", "spreadsheets") || "CSV, XLS, and workbook files ready to preview and import",
+                  emptyLabel: "No spreadsheet sources",
+                  docs: spreadsheetDocuments,
+                  icon: FileSpreadsheet,
+                }
+              : null;
 
   /* ─── Render ─── */
 
@@ -3454,207 +3485,6 @@ export function TakeoffTab({
                   </Button>
                 </div>
                 <div className="flex min-h-0 flex-1 overflow-hidden rounded-lg border border-line bg-bg/35 shadow-sm">
-              {activeIntakeOption === "spreadsheet" && (
-                <div className="grid h-full min-h-0 flex-1 gap-4 p-4 xl:grid-cols-[310px_minmax(0,1fr)]">
-                  <div className="flex min-w-0 min-h-0 flex-col rounded-md border border-line bg-panel/65 p-3">
-                    <div className="flex items-center justify-between gap-2">
-                      <div>
-                        <p className="text-xs font-semibold text-fg/75">Spreadsheet sources</p>
-                        <p className="mt-1 text-xs text-fg/40">Available CSV, XLS, and workbook files.</p>
-                      </div>
-                      <Badge tone="default" className="shrink-0 text-[10px]">{spreadsheetSources.length}</Badge>
-                    </div>
-
-                    <div className="mt-3 min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
-                      {spreadsheetSources.length > 0 ? spreadsheetSources.map((node) => {
-                        const active = selectedSpreadsheetNodeId === node.id;
-                        return (
-                          <button
-                            key={node.id}
-                            type="button"
-                            onClick={() => void previewSpreadsheetNode(node)}
-                            className={cn(
-                              "flex w-full min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left text-xs transition-colors",
-                              active
-                                ? "border-accent/40 bg-accent/8 text-accent"
-                                : "border-transparent bg-bg/45 text-fg/65 hover:border-accent/30 hover:bg-accent/5 hover:text-accent"
-                            )}
-                          >
-                            <FileSpreadsheet className="h-3.5 w-3.5 shrink-0" />
-                            <span className="min-w-0 flex-1">
-                              <span className="block truncate font-medium">{node.name}</span>
-                              <span className="mt-0.5 block truncate text-[10px] text-fg/35">{node.fileType || getFileExtension(node.name).toUpperCase() || "file"}</span>
-                            </span>
-                            {spreadsheetPreviewLoading && active ? (
-                              <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-accent" />
-                            ) : (
-                              <ArrowRight className="h-3.5 w-3.5 shrink-0 text-fg/30" />
-                            )}
-                          </button>
-                        );
-                      }) : (
-                        <div className="flex w-full flex-col items-center justify-center rounded-md border border-dashed border-line bg-bg/35 px-3 py-8 text-center text-xs text-fg/40">
-                          <FileSpreadsheet className="mb-2 h-5 w-5" />
-                          No spreadsheet sources yet
-                          <span className="mt-1 text-[11px] text-fg/30">CSV and workbook files appear here.</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="relative flex min-w-0 min-h-0 flex-col overflow-hidden rounded-md border border-line bg-panel/70">
-                    <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-fg">{spreadsheetPreview?.sourceName ?? "Select a spreadsheet or CSV"}</p>
-                        <p className="mt-1 text-xs text-fg/40">
-	                          {spreadsheetPreview
-	                            ? `${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows · ${spreadsheetPreview.headers.length} columns`
-	                            : "Preview, pivot, and summarize selected source files."}
-                        </p>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        {spreadsheetPreview && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onOpenAgentChat?.(
-                              `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks.`
-                            )}
-                          >
-                            <BrainCircuit className="h-3.5 w-3.5" />
-                            Summarize
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-
-                    {spreadsheetPreview ? (
-                      <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
-                        <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-bg/40 p-1">
-                          {(["preview", "pivot"] as const).map((view) => (
-                            <button
-                              key={view}
-                              type="button"
-                              onClick={() => setSpreadsheetPanelView(view)}
-                              className={cn(
-                                "rounded px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
-                                spreadsheetPanelView === view ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
-                              )}
-                            >
-                              {view}
-                            </button>
-                          ))}
-                        </div>
-
-                        {spreadsheetPanelView === "preview" && (
-                          <div className="mt-4 flex min-h-0 flex-1 flex-col space-y-4">
-                            <div className="grid gap-2 md:grid-cols-2">
-                              <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-                                <p className="text-[10px] uppercase tracking-wide text-fg/35">Rows</p>
-                                <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length}</p>
-                              </div>
-                              <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-                                <p className="text-[10px] uppercase tracking-wide text-fg/35">Numeric Fields</p>
-                                <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetProfiles.filter((profile) => profile.numericCount > 0).length}</p>
-                              </div>
-                            </div>
-
-                            <div className="min-h-0 flex-1 overflow-auto rounded-md border border-line">
-                              <table className="min-w-full text-left text-xs">
-                                <thead className="sticky top-0 z-10 bg-panel2 text-[10px] uppercase tracking-wide text-fg/40">
-                                  <tr>
-                                    {spreadsheetPreview.headers.map((header) => (
-                                      <th key={header} className="whitespace-nowrap border-b border-line px-3 py-2 font-semibold">{header}</th>
-                                    ))}
-                                  </tr>
-                                </thead>
-                                <tbody>
-                                  {spreadsheetPreview.sampleRows.map((row, rowIndex) => (
-                                    <tr key={rowIndex} className="odd:bg-bg/25">
-                                      {spreadsheetPreview.headers.map((header, colIndex) => (
-                                        <td key={`${rowIndex}-${header}`} className="max-w-56 truncate border-b border-line/60 px-3 py-2 text-fg/65">
-                                          {row[colIndex] ?? ""}
-                                        </td>
-                                      ))}
-                                    </tr>
-                                  ))}
-                                </tbody>
-                              </table>
-                            </div>
-                          </div>
-                        )}
-
-                        {spreadsheetPanelView === "pivot" && (
-                          <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-                            <div className="space-y-3 rounded-md border border-line bg-bg/35 p-3">
-                              <div>
-                                <Label>Group by</Label>
-                                <Select
-                                  value={pivotGroupBy || activePivotSummary?.groupBy || ""}
-                                  onValueChange={setPivotGroupBy}
-                                  options={spreadsheetGroupOptions.length ? spreadsheetGroupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
-                                  size="sm"
-                                />
-                              </div>
-                              <div>
-                                <Label>Measure</Label>
-                                <Select
-                                  value={pivotMeasure}
-                                  onValueChange={setPivotMeasure}
-                                  options={spreadsheetMeasureOptions}
-                                  size="sm"
-                                />
-                              </div>
-                              <p className="text-xs text-fg/40">Pivot is built from the parsed file, not just the visible sample rows.</p>
-                            </div>
-
-                            <div className="min-h-0 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
-                              {activePivotSummary?.rows.length ? activePivotSummary.rows.map((row) => (
-                                <div key={row.label} className="mb-1.5 rounded-md bg-panel/70 p-2 last:mb-0">
-                                  <div className="flex items-center justify-between gap-3 text-xs">
-                                    <span className="min-w-0 flex-1 truncate font-medium text-fg/75">{row.label}</span>
-                                    <span className="font-mono text-fg/50">{numericFormat(row.total)}</span>
-                                  </div>
-                                  <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line/70">
-                                    <div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(4, Math.min(100, (row.total / maxPivotTotal) * 100))}%` }} />
-                                  </div>
-                                  <div className="mt-1 flex justify-between text-[10px] text-fg/35">
-                                    <span>{row.count} rows</span>
-                                    <span>Avg {numericFormat(row.average)}</span>
-                                  </div>
-                                </div>
-                              )) : (
-                                <div className="flex h-40 items-center justify-center text-xs text-fg/40">No pivotable fields were detected.</div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-
-                      </div>
-                    ) : (
-                      <div className="flex min-h-0 flex-1 items-center justify-center p-6">
-                        <div className="max-w-sm text-center">
-                          <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-line bg-bg/45 text-fg/45">
-                            <FileSpreadsheet className="h-6 w-6" />
-                          </div>
-                          <p className="mt-4 text-sm font-semibold text-fg/75">No spreadsheet selected</p>
-                          <p className="mt-1 text-xs text-fg/40">Choose a source from the list to preview and pivot.</p>
-                        </div>
-                      </div>
-                    )}
-
-                    {spreadsheetPreviewLoading && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-panel/70 backdrop-blur-sm">
-                        <div className="flex items-center gap-2 rounded-lg border border-line bg-bg px-3 py-2 text-xs text-fg/60 shadow-sm">
-                          <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
-                          Reading source
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              )}
-
               {activeIntakeOption === "photo" && (
                 <SitePhotoIntake
                   projectId={projectId}
@@ -4353,7 +4183,163 @@ export function TakeoffTab({
 
       {/* ─── Main Area ─── */}
       <div className="relative flex flex-1 overflow-hidden min-h-0">
-        {isDwgDocument ? (
+        {isSpreadsheetDocument ? (
+          <div className="relative flex h-full w-full min-h-0 flex-col bg-bg/50">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-panel px-4 py-3">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-semibold text-fg">{spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? "Spreadsheet"}</p>
+                <p className="mt-1 text-xs text-fg/40">
+                  {spreadsheetPreview
+                    ? `${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows · ${spreadsheetPreview.headers.length} columns`
+                    : "Preview, pivot, and summarize the selected source."}
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                {spreadsheetPreview && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => onOpenAgentChat?.(
+                      `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks.`
+                    )}
+                  >
+                    <BrainCircuit className="h-3.5 w-3.5" />
+                    Summarize
+                  </Button>
+                )}
+              </div>
+            </div>
+
+            {spreadsheetPreview ? (
+              <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
+                <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-bg/40 p-1 w-fit">
+                  {(["preview", "pivot"] as const).map((view) => (
+                    <button
+                      key={view}
+                      type="button"
+                      onClick={() => setSpreadsheetPanelView(view)}
+                      className={cn(
+                        "rounded px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
+                        spreadsheetPanelView === view ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
+                      )}
+                    >
+                      {view}
+                    </button>
+                  ))}
+                </div>
+
+                {spreadsheetPanelView === "preview" && (
+                  <div className="mt-4 flex min-h-0 flex-1 flex-col space-y-4">
+                    <div className="grid gap-2 md:grid-cols-2 lg:max-w-md">
+                      <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-fg/35">Rows</p>
+                        <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length}</p>
+                      </div>
+                      <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
+                        <p className="text-[10px] uppercase tracking-wide text-fg/35">Numeric Fields</p>
+                        <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetProfiles.filter((profile) => profile.numericCount > 0).length}</p>
+                      </div>
+                    </div>
+
+                    <div className="min-h-0 flex-1 overflow-auto rounded-md border border-line">
+                      <table className="min-w-full text-left text-xs">
+                        <thead className="sticky top-0 z-10 bg-panel2 text-[10px] uppercase tracking-wide text-fg/40">
+                          <tr>
+                            {spreadsheetPreview.headers.map((header) => (
+                              <th key={header} className="whitespace-nowrap border-b border-line px-3 py-2 font-semibold">{header}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {spreadsheetPreview.sampleRows.map((row, rowIndex) => (
+                            <tr key={rowIndex} className="odd:bg-bg/25">
+                              {spreadsheetPreview.headers.map((header, colIndex) => (
+                                <td key={`${rowIndex}-${header}`} className="max-w-56 truncate border-b border-line/60 px-3 py-2 text-fg/65">
+                                  {row[colIndex] ?? ""}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {spreadsheetPanelView === "pivot" && (
+                  <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
+                    <div className="space-y-3 rounded-md border border-line bg-bg/35 p-3">
+                      <div>
+                        <Label>Group by</Label>
+                        <Select
+                          value={pivotGroupBy || activePivotSummary?.groupBy || ""}
+                          onValueChange={setPivotGroupBy}
+                          options={spreadsheetGroupOptions.length ? spreadsheetGroupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
+                          size="sm"
+                        />
+                      </div>
+                      <div>
+                        <Label>Measure</Label>
+                        <Select
+                          value={pivotMeasure}
+                          onValueChange={setPivotMeasure}
+                          options={spreadsheetMeasureOptions}
+                          size="sm"
+                        />
+                      </div>
+                      <p className="text-xs text-fg/40">Pivot is built from the parsed file, not just the visible sample rows.</p>
+                    </div>
+
+                    <div className="min-h-0 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
+                      {activePivotSummary?.rows.length ? activePivotSummary.rows.map((row) => (
+                        <div key={row.label} className="mb-1.5 rounded-md bg-panel/70 p-2 last:mb-0">
+                          <div className="flex items-center justify-between gap-3 text-xs">
+                            <span className="min-w-0 flex-1 truncate font-medium text-fg/75">{row.label}</span>
+                            <span className="font-mono text-fg/50">{numericFormat(row.total)}</span>
+                          </div>
+                          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-line/70">
+                            <div className="h-full rounded-full bg-accent" style={{ width: `${Math.max(4, Math.min(100, (row.total / maxPivotTotal) * 100))}%` }} />
+                          </div>
+                          <div className="mt-1 flex justify-between text-[10px] text-fg/35">
+                            <span>{row.count} rows</span>
+                            <span>Avg {numericFormat(row.average)}</span>
+                          </div>
+                        </div>
+                      )) : (
+                        <div className="flex h-40 items-center justify-center text-xs text-fg/40">No pivotable fields were detected.</div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+                <div className="max-w-sm text-center">
+                  <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-lg border border-line bg-bg/45 text-fg/45">
+                    <FileSpreadsheet className="h-6 w-6" />
+                  </div>
+                  <p className="mt-4 text-sm font-semibold text-fg/75">
+                    {spreadsheetPreviewLoading ? "Reading source…" : "No spreadsheet selected"}
+                  </p>
+                  <p className="mt-1 text-xs text-fg/40">
+                    {spreadsheetPreviewLoading
+                      ? "Parsing rows and computing pivot summaries."
+                      : "Choose a source from the intake list to preview and pivot."}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {spreadsheetPreviewLoading && spreadsheetPreview && (
+              <div className="absolute inset-x-0 top-0 flex justify-center pt-3">
+                <div className="flex items-center gap-2 rounded-lg border border-line bg-bg px-3 py-2 text-xs text-fg/60 shadow-sm">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
+                  Reading source
+                </div>
+              </div>
+            )}
+          </div>
+        ) : isDwgDocument ? (
           <DwgTakeoffSurface
             projectId={projectId}
             documents={dwgDocuments.map((doc) => ({
