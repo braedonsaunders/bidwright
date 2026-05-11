@@ -1,5 +1,10 @@
 const DEFAULT_API_BASE_URL = "http://localhost:4001";
 const configuredApiBaseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
+// Desktop builds spawn the api as a child on a dynamic port; the browser
+// can't be told the URL via NEXT_PUBLIC_* (those are baked at build time),
+// so it routes every request through the web sidecar's `/proxy/` handler,
+// which reads `INTERNAL_API_BASE_URL` at runtime.
+const isDesktopBuild = process.env.NEXT_PUBLIC_BIDWRIGHT_DESKTOP === "1";
 
 // In production we front the API behind the same public origin via Traefik, so
 // the browser should prefer its current origin if no public build-time API URL
@@ -11,6 +16,11 @@ export const apiBaseUrl =
   DEFAULT_API_BASE_URL;
 
 function resolveBrowserProxyPath(path: string) {
+  // Desktop: every browser-side api call funnels through the web sidecar's
+  // /proxy/ route, which forwards to the spawned api on its dynamic port.
+  if (isDesktopBuild) {
+    return `/proxy${path}`;
+  }
   if (path.startsWith("/api/")) {
     return path;
   }
