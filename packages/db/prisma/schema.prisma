@@ -140,6 +140,12 @@ model SuperAdmin {
   name         String
   passwordHash String
   active       Boolean  @default(true)
+  // Personal credentials + preferences for the super admin's own
+  // session, mirroring UserSettings.integrations / preferences. Used
+  // when a super admin manages their own API keys / runtime defaults
+  // without first impersonating into an org.
+  integrations Json     @default("{}")
+  preferences  Json     @default("{}")
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 

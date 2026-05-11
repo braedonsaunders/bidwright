@@ -28,22 +28,26 @@ const userSettingsPatchSchema = z
 export async function userRoutes(app: FastifyInstance): Promise<void> {
   app.get("/user/settings", async (request, reply) => {
     const userId = request.user?.id;
-    if (!userId || request.user?.isSuperAdmin) {
-      // Super admins working in the global console don't have a UserSettings
-      // row of their own; they manage credentials per-org by impersonating.
-      return reply.code(404).send({ error: "User-scoped settings unavailable for this session" });
+    if (!userId) {
+      return reply.code(401).send({ error: "Unauthenticated" });
+    }
+    if (request.user?.isSuperAdmin) {
+      return request.store!.getSuperAdminSettings(userId);
     }
     return request.store!.getUserSettings(userId);
   });
 
   app.patch("/user/settings", async (request, reply) => {
     const userId = request.user?.id;
-    if (!userId || request.user?.isSuperAdmin) {
-      return reply.code(403).send({ error: "User-scoped settings cannot be modified from this session" });
+    if (!userId) {
+      return reply.code(401).send({ error: "Unauthenticated" });
     }
     const parsed = userSettingsPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    if (request.user?.isSuperAdmin) {
+      return request.store!.updateSuperAdminSettings(userId, parsed.data);
     }
     return request.store!.updateUserSettings(userId, parsed.data);
   });
@@ -63,10 +67,12 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     const orgIntegrations = ((orgSettings as any)?.integrations ?? {}) as Record<string, unknown>;
     let userIntegrations: Record<string, unknown> = {};
     try {
-      const userSettings = await request.store!.getUserSettings(userId);
-      userIntegrations = userSettings.integrations;
+      const personal = request.user?.isSuperAdmin
+        ? await request.store!.getSuperAdminSettings(userId)
+        : await request.store!.getUserSettings(userId);
+      userIntegrations = personal.integrations;
     } catch {
-      // No user row — fine, just report org-only.
+      // No personal settings row — fine, just report org-only.
     }
 
     const fields = [
