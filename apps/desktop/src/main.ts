@@ -25,7 +25,7 @@
 import { app, BrowserWindow, dialog, Menu, shell } from "electron";
 import { spawn, execSync, type ChildProcess } from "node:child_process";
 import { createWriteStream, existsSync, mkdirSync, type WriteStream } from "node:fs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -86,6 +86,40 @@ function openBootLog(name: string): { path: string; stream: WriteStream } {
  * SIGTERM to the process group (negative pid) which cascades to
  * descendants spawned without their own session.
  */
+/**
+ * Connect once and confirm the named database is on UTF8. Returns true
+ * if the connection succeeds AND the encoding is UTF8; false if the
+ * encoding is anything else (e.g. WIN1252 from a pre-rc22 Windows
+ * install). Errors during the probe also return false so the caller
+ * rebuilds rather than crashing.
+ */
+async function verifyClusterEncoding(password: string, port: number, dbName: string): Promise<boolean> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const pgMod = await import("pg") as any;
+    const Client = pgMod.default?.Client ?? pgMod.Client;
+    const client = new Client({
+      host: "127.0.0.1",
+      port,
+      user: "bidwright",
+      password,
+      database: dbName,
+    });
+    await client.connect();
+    try {
+      const result = await client.query(`SHOW server_encoding`);
+      const encoding = (result.rows[0]?.server_encoding ?? "") as string;
+      console.log(`[desktop] cluster encoding: ${encoding}`);
+      return encoding.toUpperCase() === "UTF8";
+    } finally {
+      try { await client.end(); } catch { /* ignore */ }
+    }
+  } catch (err) {
+    console.warn(`[desktop] cluster encoding probe failed:`, err);
+    return false;
+  }
+}
+
 function killProcessTree(child: ChildProcess | null): void {
   if (!child || child.killed || !child.pid) return;
   if (process.platform === "win32") {
@@ -173,13 +207,26 @@ async function bootPackaged(): Promise<BootedServers> {
 
   console.log(`[desktop] starting embedded postgres on 127.0.0.1:${pgPort}`);
   const { default: EmbeddedPostgres } = await import("embedded-postgres");
-  const pg = new EmbeddedPostgres({
-    databaseDir,
-    user: "bidwright",
-    password: pgPassword,
-    port: pgPort,
-    persistent: true,
-  });
+
+  // Force UTF8 + C locale on initdb. Default on Windows is the system
+  // locale (typically WIN1252) which can't store non-Latin-1 characters
+  // — our seed data contains arrow glyphs (→) that blow up with PG
+  // error 22P05 on first insert. Locale C avoids OS-specific collation
+  // surprises across platforms.
+  const initdbFlags = ["--encoding=UTF8", "--locale=C"];
+
+  async function makePg() {
+    return new EmbeddedPostgres({
+      databaseDir,
+      user: "bidwright",
+      password: pgPassword,
+      port: pgPort,
+      persistent: true,
+      initdbFlags,
+    });
+  }
+
+  let pg = await makePg();
 
   if (!existsSync(join(databaseDir, "PG_VERSION"))) {
     // First launch — initialise the cluster. ~2-5s on SSD.
@@ -191,6 +238,23 @@ async function bootPackaged(): Promise<BootedServers> {
     // Ignore "already exists" — createDatabase is idempotent in spirit
     // even if the underlying CREATE DATABASE isn't.
   });
+
+  // If this cluster was originally initialised under a non-UTF8 encoding
+  // (rc20 and earlier on Windows did this) it cannot store the seed
+  // payload. Detect and rebuild — desktop is single-user so the only
+  // thing lost is whatever the user might've stored in the broken
+  // cluster, which couldn't have been usable anyway.
+  const encodingOk = await verifyClusterEncoding(pgPassword, pgPort, "bidwright");
+  if (!encodingOk) {
+    console.warn(`[desktop] cluster is non-UTF8; rebuilding to recover from rc20-era encoding bug`);
+    await pg.stop().catch(() => {});
+    await rm(databaseDir, { recursive: true, force: true });
+    await mkdir(databaseDir, { recursive: true });
+    pg = await makePg();
+    await pg.initialise();
+    await pg.start();
+    await pg.createDatabase("bidwright").catch(() => {});
+  }
 
   const databaseUrl = `postgresql://bidwright:${encodeURIComponent(pgPassword)}@127.0.0.1:${pgPort}/bidwright`;
   process.env.DATABASE_URL = databaseUrl;
