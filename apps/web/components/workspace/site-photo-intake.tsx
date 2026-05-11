@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, FileImage, Loader2, Sparkles, Trash2, Upload, X } from "lucide-react";
+import { Camera, FileImage, Loader2, Sparkles, Upload, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Input, Textarea } from "@/components/ui";
 import {
@@ -366,36 +366,10 @@ export function SitePhotoIntake({
             />
           </div>
 
-          {/* Thumbnail strip */}
-          {images.length > 0 && (
-            <div className="grid shrink-0 grid-cols-3 gap-1.5">
-              {images.map((img) => (
-                <div
-                  key={img.id}
-                  className="group/thumb relative overflow-hidden rounded border border-line bg-panel/60"
-                  title={`${img.fileName} · ${formatBytes(img.bytes)}`}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={img.previewUrl}
-                    alt={img.fileName}
-                    className="aspect-square h-full w-full object-cover"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => removeImage(img.id)}
-                    className="absolute right-0.5 top-0.5 inline-flex h-5 w-5 items-center justify-center rounded-full bg-bg/80 text-fg/70 opacity-0 transition-opacity hover:text-rose-500 group-hover/thumb:opacity-100"
-                    title="Remove"
-                  >
-                    <X className="h-3 w-3" />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {/* Focus prompt */}
-          <div className="flex shrink-0 flex-col gap-1">
+          {/* Focus prompt — grows to fill the column so it dominates the
+              attention budget over the drop zone and the still-small Generate
+              button. */}
+          <div className="flex min-h-0 flex-1 flex-col gap-1">
             <label className="text-[10px] font-medium uppercase tracking-wider text-fg/45">
               Focus prompt (optional)
             </label>
@@ -403,8 +377,7 @@ export function SitePhotoIntake({
               value={focusPrompt}
               onChange={(e) => setFocusPrompt(e.target.value)}
               placeholder="e.g. Focus on demolition and finishes. The orange marker is 1 m for scale. Ignore the existing HVAC."
-              rows={4}
-              className="text-xs"
+              className="min-h-0 flex-1 resize-none text-xs"
             />
           </div>
 
@@ -438,13 +411,66 @@ export function SitePhotoIntake({
         {/* ── Result column ─────────────────────────────────────────── */}
         <div className="flex min-h-0 min-w-0 flex-col rounded-md border border-line bg-panel/40">
           {!result ? (
-            <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-fg/40">
-              <Camera className="h-6 w-6 text-fg/25" />
-              <p>Add photos, then generate a BOM.</p>
-              <p className="text-[10px] text-fg/30">
-                Runs against your selected AI runtime — see Settings &gt; Integrations.
-              </p>
-            </div>
+            images.length === 0 ? (
+              <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-fg/40">
+                <Camera className="h-6 w-6 text-fg/25" />
+                <p>Add photos, then generate a BOM.</p>
+                <p className="text-[10px] text-fg/30">
+                  Runs against your selected AI runtime — see Settings &gt; Integrations.
+                </p>
+              </div>
+            ) : (
+              // Pre-generate preview: thumbnails of the photos the user has
+              // queued up. Keeps the focus prompt to the left undisturbed and
+              // gives the photos the spatial real estate they deserve.
+              <div className="flex min-h-0 flex-1 flex-col">
+                <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line bg-bg/20 px-3 py-1.5">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-fg/50">
+                    {images.length} photo{images.length === 1 ? "" : "s"} queued · {MAX_IMAGES - images.length} more allowed
+                  </p>
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={images.length >= MAX_IMAGES}
+                  >
+                    <Upload className="h-3 w-3" />
+                    Add more
+                  </Button>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-3">
+                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                    {images.map((img) => (
+                      <div
+                        key={img.id}
+                        className="group/thumb relative overflow-hidden rounded-md border border-line bg-panel/60 shadow-sm"
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={img.previewUrl}
+                          alt={img.fileName}
+                          className="aspect-square h-full w-full object-cover"
+                        />
+                        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1 text-[9px] text-white/90">
+                          <span className="truncate" title={`${img.fileName} · ${formatBytes(img.bytes)}`}>
+                            {img.fileName}
+                          </span>
+                          <span className="shrink-0 opacity-70">{formatBytes(img.bytes)}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeImage(img.id)}
+                          className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-bg/90 text-fg/75 opacity-0 shadow transition-opacity hover:text-rose-500 group-hover/thumb:opacity-100"
+                          title="Remove"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )
           ) : (
             <div className="flex min-h-0 flex-1 flex-col">
               {result.summary && (
