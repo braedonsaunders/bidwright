@@ -3496,6 +3496,7 @@ export function TakeoffTab({
                     workspace.currentRevision.title,
                     workspace.currentRevision.description,
                   ].filter(Boolean).join("\n")}
+                  photoFiles={photoSources}
                   onApplyItem={async (input) => {
                     const ws = selectedWorksheet?.id;
                     if (!ws) throw new Error("No active worksheet to apply to.");

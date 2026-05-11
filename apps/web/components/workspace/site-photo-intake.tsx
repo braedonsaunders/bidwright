@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Camera, FileImage, Loader2, Sparkles, Upload, X } from "lucide-react";
+import { useCallback, useMemo, useState } from "react";
+import { Camera, Check, FileImage, Loader2, Search, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, Input, Textarea } from "@/components/ui";
 import {
   generatePhotoBom,
+  getFileDownloadUrl,
   type CreateWorksheetItemInput,
   type EntityCategory,
+  type FileNode,
   type PhotoTakeoffLineItem,
   type PhotoTakeoffResult,
 } from "@/lib/api";
@@ -15,41 +17,19 @@ import {
 /**
  * Site-Photo Intake
  *
- * Drag-and-drop multi-photo uploader → AI vision → editable BOM table →
- * one-click apply to the active worksheet as line items. Runs through the
- * user's configured LLM runtime (Anthropic / OpenAI / OpenRouter — server
- * enforces vision-capable). Tags rows with the org's EntityCategory
- * taxonomy, not Uniformat.
+ * Multi-photo selector backed by the project's existing file tree → AI
+ * vision → editable BOM table → one-click apply to the active worksheet as
+ * line items. Runs through the user's configured LLM runtime (Anthropic /
+ * OpenAI / Gemini / OpenRouter / LMStudio — server enforces vision-capable).
+ * Tags rows with the org's EntityCategory taxonomy, not Uniformat.
  *
- * Self-contained: owns its own upload / analysis / review / apply state.
- * The parent passes in the project + active worksheet + category list and
- * an apply callback that creates the worksheet items.
+ * The component does NOT do its own uploads — photos are added through the
+ * normal Documents intake, and this surface just points at the ones that
+ * already exist on the project. Selection cap exists to keep the vision
+ * call within reasonable token budgets.
  */
 
-const MAX_IMAGES = 8;
-const MAX_IMAGE_BYTES = 8 * 1024 * 1024; // 8 MB per image; matches typical phone photo size after JPEG compression.
-const ACCEPTED_TYPES = new Set([
-  "image/jpeg",
-  "image/png",
-  "image/webp",
-  "image/heic",
-  "image/heif",
-  "image/tiff",
-  "image/tif",
-]);
-
-interface PendingImage {
-  id: string;
-  /** Object URL for preview. Revoked on remove + on unmount. */
-  previewUrl: string;
-  /** Base64 payload (no data: prefix). */
-  data: string;
-  mimeType: string;
-  fileName: string;
-  caption: string;
-  /** Original byte size — surfaced in the thumbnail tooltip. */
-  bytes: number;
-}
+const MAX_SELECTED = 8;
 
 export interface SitePhotoIntakeProps {
   projectId: string;
@@ -64,6 +44,10 @@ export interface SitePhotoIntakeProps {
   /** Free-text project blurb to pass as system context (residential vs
    *  commercial, scope summary, etc). Trimmed and split per line. */
   projectContextText?: string;
+  /** Project file nodes that the caller has already filtered to image
+   *  files (jpg/png/webp/heic/tiff). The component renders them as a
+   *  selectable thumbnail grid. */
+  photoFiles: FileNode[];
   /** Called once for each row the user chooses to apply. Implementation
    *  lives in the parent (TakeoffTab) so it reuses the existing
    *  createWorksheetItem path with all its provenance plumbing. */
@@ -73,29 +57,39 @@ export interface SitePhotoIntakeProps {
   onApplyComplete?: (count: number) => void;
 }
 
-function readFileAsBase64(file: File): Promise<{ data: string; mimeType: string }> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") return reject(new Error("Unexpected reader result"));
-      const commaIdx = result.indexOf(",");
-      const data = commaIdx >= 0 ? result.slice(commaIdx + 1) : result;
-      resolve({ data, mimeType: file.type || "image/jpeg" });
-    };
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
-}
-
 function findCategoryById(categories: EntityCategory[], id: string): EntityCategory | undefined {
   return categories.find((c) => c.id === id);
 }
 
-function formatBytes(bytes: number) {
+function formatBytes(bytes: number | undefined) {
+  if (!bytes && bytes !== 0) return "";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+/** Pull a project photo from the inline-download endpoint and base64-encode
+ *  it for the vision API. The vision payload sends raw base64 (no data:
+ *  prefix), matching the shape the @bidwright/agent adapters expect. */
+async function fetchPhotoAsBase64(url: string): Promise<{ data: string; mimeType: string }> {
+  const response = await fetch(url, { credentials: "include", cache: "no-store" });
+  if (!response.ok) {
+    throw new Error(`Failed to load photo (${response.status})`);
+  }
+  const blob = await response.blob();
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const value = reader.result;
+      if (typeof value !== "string") return reject(new Error("Unexpected reader result"));
+      resolve(value);
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read photo"));
+    reader.readAsDataURL(blob);
+  });
+  const commaIdx = dataUrl.indexOf(",");
+  const data = commaIdx >= 0 ? dataUrl.slice(commaIdx + 1) : dataUrl;
+  return { data, mimeType: blob.type || "image/jpeg" };
 }
 
 export function SitePhotoIntake({
@@ -104,88 +98,48 @@ export function SitePhotoIntake({
   defaultMarkup,
   categories,
   projectContextText,
+  photoFiles,
   onApplyItem,
   onApplyComplete,
 }: SitePhotoIntakeProps) {
-  const [images, setImages] = useState<PendingImage[]>([]);
+  const [search, setSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [focusPrompt, setFocusPrompt] = useState("");
   const [analyzing, setAnalyzing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<PhotoTakeoffResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedRowIndexes, setSelectedRowIndexes] = useState<Set<number>>(new Set());
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Revoke any pending object URLs on unmount so we don't leak browser memory
-  // for selected-but-not-uploaded images.
-  useEffect(() => {
-    return () => {
-      images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-    };
-    // We intentionally don't re-run on `images` change; the helper below
-    // revokes individually when an image is removed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  const filteredPhotos = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return photoFiles;
+    return photoFiles.filter((p) => p.name.toLowerCase().includes(q));
+  }, [photoFiles, search]);
 
-  const addFiles = useCallback(
-    async (files: File[]) => {
-      setError(null);
-      const remainingSlots = MAX_IMAGES - images.length;
-      if (remainingSlots <= 0) {
-        setError(`At most ${MAX_IMAGES} photos per analysis. Remove one before adding another.`);
-        return;
-      }
-      const accepted: PendingImage[] = [];
-      for (const file of files.slice(0, remainingSlots)) {
-        if (!ACCEPTED_TYPES.has(file.type)) {
-          setError(`"${file.name}" isn't a supported image type. Use JPG, PNG, WebP, HEIC, or TIFF.`);
-          continue;
-        }
-        if (file.size > MAX_IMAGE_BYTES) {
-          setError(`"${file.name}" is ${formatBytes(file.size)} — over the ${formatBytes(MAX_IMAGE_BYTES)} per-image limit.`);
-          continue;
-        }
-        try {
-          const { data, mimeType } = await readFileAsBase64(file);
-          accepted.push({
-            id: `${file.name}-${file.size}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-            previewUrl: URL.createObjectURL(file),
-            data,
-            mimeType,
-            fileName: file.name,
-            caption: "",
-            bytes: file.size,
-          });
-        } catch (err) {
-          setError(err instanceof Error ? err.message : "Failed to read image");
-        }
-      }
-      if (accepted.length > 0) {
-        setImages((prev) => [...prev, ...accepted]);
-      }
-    },
-    [images.length],
+  // Photos the user has marked for analysis. Stable order matches photoFiles
+  // (project tree order) so the API payload + per-row sourceImageIndexes
+  // mapping below stays deterministic across re-renders.
+  const selectedPhotos = useMemo(
+    () => photoFiles.filter((p) => selectedIds.has(p.id)),
+    [photoFiles, selectedIds],
   );
 
-  const removeImage = useCallback((id: string) => {
-    setImages((prev) => {
-      const target = prev.find((img) => img.id === id);
-      if (target) URL.revokeObjectURL(target.previewUrl);
-      return prev.filter((img) => img.id !== id);
+  const toggleSelect = useCallback((id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        if (next.size >= MAX_SELECTED) return prev;
+        next.add(id);
+      }
+      return next;
     });
   }, []);
 
-  const handleDrop = useCallback(
-    async (event: React.DragEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const files = Array.from(event.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
-      if (files.length > 0) await addFiles(files);
-    },
-    [addFiles],
-  );
-
   const handleAnalyze = useCallback(async () => {
-    if (analyzing || images.length === 0) return;
+    if (analyzing || selectedPhotos.length === 0) return;
     setError(null);
     setAnalyzing(true);
     setResult(null);
@@ -198,12 +152,19 @@ export function SitePhotoIntake({
             .filter(Boolean)
             .slice(0, 20)
         : [];
+      const images = await Promise.all(
+        selectedPhotos.map(async (photo, idx) => {
+          const url = getFileDownloadUrl(projectId, photo.id, true);
+          const { data, mimeType } = await fetchPhotoAsBase64(url);
+          return {
+            data,
+            mimeType,
+            caption: `Photo ${idx + 1}: ${photo.name}`,
+          };
+        }),
+      );
       const response = await generatePhotoBom(projectId, {
-        images: images.map((img, idx) => ({
-          data: img.data,
-          mimeType: img.mimeType,
-          caption: img.caption.trim() || `Photo ${idx + 1}: ${img.fileName}`,
-        })),
+        images,
         focusPrompt: focusPrompt.trim() || undefined,
         projectContext: context.length > 0 ? context : undefined,
       });
@@ -221,7 +182,7 @@ export function SitePhotoIntake({
     } finally {
       setAnalyzing(false);
     }
-  }, [analyzing, images, focusPrompt, projectContextText, projectId]);
+  }, [analyzing, selectedPhotos, focusPrompt, projectContextText, projectId]);
 
   const updateRow = useCallback((idx: number, patch: Partial<PhotoTakeoffLineItem>) => {
     setResult((prev) => {
@@ -252,7 +213,7 @@ export function SitePhotoIntake({
         if (!row) continue;
         const category = findCategoryById(categories, row.categoryId);
         const sourceImages = row.sourceImageIndexes
-          .map((i) => images[i]?.fileName)
+          .map((i) => selectedPhotos[i]?.name)
           .filter(Boolean)
           .join(", ");
         const sourceNotes = [
@@ -281,11 +242,9 @@ export function SitePhotoIntake({
         created += 1;
       }
       onApplyComplete?.(created);
-      // Reset state so the user can run another batch without stale UI.
       setResult(null);
       setSelectedRowIndexes(new Set());
-      images.forEach((img) => URL.revokeObjectURL(img.previewUrl));
-      setImages([]);
+      setSelectedIds(new Set());
       setFocusPrompt("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to apply line items");
@@ -298,77 +257,45 @@ export function SitePhotoIntake({
     categories,
     defaultMarkup,
     focusPrompt,
-    images,
+    selectedPhotos,
     onApplyComplete,
     onApplyItem,
     result,
     selectedRowIndexes,
   ]);
 
-  // Drag-and-drop visual state. Tracked with a counter to handle nested
-  // dragenter/dragleave events (the standard React DnD quirk).
-  const [dragCounter, setDragCounter] = useState(0);
-  const isDragOver = dragCounter > 0;
+  const selectionFull = selectedPhotos.length >= MAX_SELECTED;
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 p-4">
-      {/* ── Upload + Focus column ─────────────────────────────────────── */}
       <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+        {/* ── Filter + Focus + Generate column ───────────────────────────── */}
         <div className="flex min-h-0 flex-col gap-2">
-          {/* Drop zone */}
-          <div
-            onDragEnter={(e) => {
-              e.preventDefault();
-              setDragCounter((c) => c + 1);
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault();
-              setDragCounter((c) => Math.max(0, c - 1));
-            }}
-            onDragOver={(e) => e.preventDefault()}
-            onDrop={(e) => {
-              setDragCounter(0);
-              void handleDrop(e);
-            }}
-            className={cn(
-              "flex shrink-0 flex-col items-center justify-center gap-1 rounded-md border-2 border-dashed px-4 py-5 text-center transition-colors",
-              isDragOver
-                ? "border-cyan-500 bg-cyan-500/8 text-cyan-500"
-                : "border-line bg-panel/40 text-fg/55 hover:border-cyan-500/40 hover:bg-cyan-500/5",
-            )}
-          >
-            <Upload className="h-5 w-5" />
-            <p className="text-xs font-medium text-fg/70">Drop site photos here</p>
-            <p className="text-[10px] text-fg/40">
-              or
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="ml-1 font-medium text-cyan-500 underline-offset-2 hover:underline"
-              >
-                browse files
-              </button>
-            </p>
-            <p className="text-[10px] text-fg/35">
-            Up to {MAX_IMAGES} · {formatBytes(MAX_IMAGE_BYTES)} each · JPG / PNG / WebP / HEIC / TIFF
-          </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              className="hidden"
-              onChange={(e) => {
-                const files = Array.from(e.target.files ?? []);
-                if (files.length > 0) void addFiles(files);
-                e.target.value = "";
-              }}
-            />
+          <div className="flex flex-col gap-1">
+            <label className="text-[10px] font-medium uppercase tracking-wider text-fg/45">
+              Filter photos
+            </label>
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-fg/30" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Filter by filename"
+                className="h-8 pl-8 text-xs"
+              />
+            </div>
           </div>
 
-          {/* Focus prompt — grows to fill the column so it dominates the
-              attention budget over the drop zone and the still-small Generate
-              button. */}
+          <div className="shrink-0 rounded-md border border-line bg-panel/60 px-3 py-2">
+            <p className="text-[10px] uppercase tracking-wider text-fg/40">Selected</p>
+            <p className="mt-0.5 text-sm font-semibold text-fg">
+              {selectedPhotos.length} / {MAX_SELECTED}
+            </p>
+            <p className="mt-0.5 text-[10px] text-fg/40">
+              Pick up to {MAX_SELECTED} photos. Upload more in the Documents tab.
+            </p>
+          </div>
+
           <div className="flex min-h-0 flex-1 flex-col gap-1">
             <label className="text-[10px] font-medium uppercase tracking-wider text-fg/45">
               Focus prompt (optional)
@@ -381,10 +308,9 @@ export function SitePhotoIntake({
             />
           </div>
 
-          {/* Analyze button */}
           <Button
             size="sm"
-            disabled={analyzing || images.length === 0}
+            disabled={analyzing || selectedPhotos.length === 0}
             onClick={handleAnalyze}
             className="shrink-0 justify-center"
           >
@@ -396,7 +322,7 @@ export function SitePhotoIntake({
             ) : (
               <>
                 <Sparkles className="h-3.5 w-3.5" />
-                Generate BOM from {images.length || "—"} photo{images.length === 1 ? "" : "s"}
+                Generate BOM from {selectedPhotos.length || "—"} photo{selectedPhotos.length === 1 ? "" : "s"}
               </>
             )}
           </Button>
@@ -408,66 +334,84 @@ export function SitePhotoIntake({
           )}
         </div>
 
-        {/* ── Result column ─────────────────────────────────────────── */}
+        {/* ── Photo grid / Result column ───────────────────────────────── */}
         <div className="flex min-h-0 min-w-0 flex-col rounded-md border border-line bg-panel/40">
           {!result ? (
-            images.length === 0 ? (
+            photoFiles.length === 0 ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 p-4 text-center text-xs text-fg/40">
                 <Camera className="h-6 w-6 text-fg/25" />
-                <p>Add photos, then generate a BOM.</p>
+                <p>No project photos yet.</p>
                 <p className="text-[10px] text-fg/30">
-                  Runs against your selected AI runtime — see Settings &gt; Integrations.
+                  Add JPG / PNG / WebP / HEIC / TIFF files in Documents — they'll appear here for analysis.
                 </p>
               </div>
             ) : (
-              // Pre-generate preview: thumbnails of the photos the user has
-              // queued up. Keeps the focus prompt to the left undisturbed and
-              // gives the photos the spatial real estate they deserve.
               <div className="flex min-h-0 flex-1 flex-col">
                 <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line bg-bg/20 px-3 py-1.5">
                   <p className="text-[10px] font-medium uppercase tracking-wider text-fg/50">
-                    {images.length} photo{images.length === 1 ? "" : "s"} queued · {MAX_IMAGES - images.length} more allowed
+                    {filteredPhotos.length} of {photoFiles.length} photo{photoFiles.length === 1 ? "" : "s"}
+                    {selectedPhotos.length > 0 && ` · ${selectedPhotos.length} selected`}
                   </p>
-                  <Button
-                    size="xs"
-                    variant="ghost"
-                    onClick={() => fileInputRef.current?.click()}
-                    disabled={images.length >= MAX_IMAGES}
-                  >
-                    <Upload className="h-3 w-3" />
-                    Add more
-                  </Button>
+                  {selectedPhotos.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSelectedIds(new Set())}
+                      className="text-[10px] font-medium uppercase tracking-wider text-fg/45 hover:text-fg/70"
+                    >
+                      Clear
+                    </button>
+                  )}
                 </div>
                 <div className="min-h-0 flex-1 overflow-y-auto p-3">
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-                    {images.map((img) => (
-                      <div
-                        key={img.id}
-                        className="group/thumb relative overflow-hidden rounded-md border border-line bg-panel/60 shadow-sm"
-                      >
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={img.previewUrl}
-                          alt={img.fileName}
-                          className="aspect-square h-full w-full object-cover"
-                        />
-                        <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1 text-[9px] text-white/90">
-                          <span className="truncate" title={`${img.fileName} · ${formatBytes(img.bytes)}`}>
-                            {img.fileName}
-                          </span>
-                          <span className="shrink-0 opacity-70">{formatBytes(img.bytes)}</span>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeImage(img.id)}
-                          className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-bg/90 text-fg/75 opacity-0 shadow transition-opacity hover:text-rose-500 group-hover/thumb:opacity-100"
-                          title="Remove"
-                        >
-                          <X className="h-3 w-3" />
-                        </button>
-                      </div>
-                    ))}
-                  </div>
+                  {filteredPhotos.length === 0 ? (
+                    <p className="rounded-md border border-dashed border-line bg-bg/30 px-3 py-8 text-center text-xs text-fg/40">
+                      No photos match this filter.
+                    </p>
+                  ) : (
+                    <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
+                      {filteredPhotos.map((photo) => {
+                        const selected = selectedIds.has(photo.id);
+                        const disabled = !selected && selectionFull;
+                        const url = getFileDownloadUrl(projectId, photo.id, true);
+                        return (
+                          <button
+                            key={photo.id}
+                            type="button"
+                            onClick={() => toggleSelect(photo.id)}
+                            disabled={disabled}
+                            title={disabled ? `Up to ${MAX_SELECTED} photos can be analyzed at once.` : photo.name}
+                            className={cn(
+                              "group/thumb relative overflow-hidden rounded-md border bg-panel/60 text-left shadow-sm transition-all disabled:cursor-not-allowed disabled:opacity-40",
+                              selected
+                                ? "border-cyan-500 ring-2 ring-cyan-500/30"
+                                : "border-line hover:border-cyan-500/40",
+                            )}
+                          >
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={url}
+                              alt={photo.name}
+                              loading="lazy"
+                              className="aspect-square h-full w-full object-cover"
+                            />
+                            <div className="absolute inset-x-0 bottom-0 flex items-center justify-between gap-1 bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1 text-[9px] text-white/90">
+                              <span className="truncate" title={photo.name}>
+                                {photo.name}
+                              </span>
+                              {photo.size != null && (
+                                <span className="shrink-0 opacity-70">{formatBytes(photo.size)}</span>
+                              )}
+                            </div>
+                            {selected && (
+                              <div className="absolute right-1 top-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-cyan-500 text-white shadow">
+                                <Check className="h-3 w-3" />
+                              </div>
+                            )}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
             )
@@ -491,24 +435,36 @@ export function SitePhotoIntake({
                   {result.items.length} {result.items.length === 1 ? "item" : "items"} ·{" "}
                   {selectedRowIndexes.size} selected
                 </p>
-                <Button
-                  size="xs"
-                  disabled={applying || !activeWorksheetId || selectedRowIndexes.size === 0}
-                  onClick={handleApply}
-                  title={!activeWorksheetId ? "Pick an active worksheet first." : undefined}
-                >
-                  {applying ? (
-                    <>
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      Adding…
-                    </>
-                  ) : (
-                    <>
-                      <FileImage className="h-3 w-3" />
-                      Add {selectedRowIndexes.size} to worksheet
-                    </>
-                  )}
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button
+                    size="xs"
+                    variant="ghost"
+                    onClick={() => {
+                      setResult(null);
+                      setSelectedRowIndexes(new Set());
+                    }}
+                  >
+                    Back to photos
+                  </Button>
+                  <Button
+                    size="xs"
+                    disabled={applying || !activeWorksheetId || selectedRowIndexes.size === 0}
+                    onClick={handleApply}
+                    title={!activeWorksheetId ? "Pick an active worksheet first." : undefined}
+                  >
+                    {applying ? (
+                      <>
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                        Adding…
+                      </>
+                    ) : (
+                      <>
+                        <FileImage className="h-3 w-3" />
+                        Add {selectedRowIndexes.size} to worksheet
+                      </>
+                    )}
+                  </Button>
+                </div>
               </div>
 
               <div className="min-h-0 flex-1 overflow-y-auto">
