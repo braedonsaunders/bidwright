@@ -15,7 +15,10 @@ COPY --from=deps /app ./
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN pnpm -r --filter "./packages/*" build
+# Web only depends on @bidwright/domain at runtime — building all
+# packages would pull in packages/db whose client.ts imports the
+# generated prisma client, which we don't generate in the web image.
+RUN pnpm --filter @bidwright/domain build
 RUN pnpm --filter @bidwright/web build
 
 # --- runtime stage ---
