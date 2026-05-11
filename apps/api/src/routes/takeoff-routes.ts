@@ -317,28 +317,65 @@ export async function takeoffRoutes(app: FastifyInstance) {
       const project = await request.store!.getProject(projectId);
       if (!project) return reply.code(404).send({ message: "Project not found" });
 
-      // Resolve the user's effective LLM credentials. Mirrors the canonical
-      // pattern (see server.ts plugin-builder endpoint).
+      // Resolve effective LLM credentials. Resolves the API key BY provider
+      // (anthropic→anthropicKey, gemini→geminiKey, ...) so a Gemini- or
+      // OpenRouter-only setup doesn't dead-end on the anthropic check. If
+      // the user only configured the agent runtime (claude-code / opencode
+      // CLI) with a shared anthropic key, fall back through that runtime
+      // to the matching direct adapter so the vision call still works
+      // without forcing a second key field.
       const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
-      const apiKey =
-        integrations.anthropicKey ??
-        process.env.ANTHROPIC_API_KEY ??
-        integrations.openaiKey ??
-        process.env.OPENAI_API_KEY ??
-        "";
-      const provider =
-        integrations.llmProvider ??
-        process.env.LLM_PROVIDER ??
-        (integrations.anthropicKey || process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai");
+      const directProviders = new Set(["anthropic", "openai", "openrouter", "gemini", "lmstudio"]);
+      const llmKeyByProvider: Record<string, string> = {
+        anthropic: (integrations.anthropicKey as string | undefined) ?? process.env.ANTHROPIC_API_KEY ?? "",
+        openai: (integrations.openaiKey as string | undefined) ?? process.env.OPENAI_API_KEY ?? "",
+        openrouter: (integrations.openrouterKey as string | undefined) ?? process.env.OPENROUTER_API_KEY ?? "",
+        gemini:
+          (integrations.geminiKey as string | undefined) ??
+          process.env.GEMINI_API_KEY ??
+          process.env.GOOGLE_GENAI_API_KEY ??
+          "",
+        lmstudio: "lm-studio",
+      };
+
+      let provider: string =
+        typeof integrations.llmProvider === "string" && directProviders.has(integrations.llmProvider)
+          ? integrations.llmProvider
+          : "";
+      if (!provider && typeof integrations.agentRuntime === "string") {
+        const runtimeMap: Record<string, string> = {
+          "claude-code": "anthropic",
+          "opencode": "anthropic",
+        };
+        provider = runtimeMap[integrations.agentRuntime] ?? "";
+      }
+      if (!provider) {
+        provider = process.env.LLM_PROVIDER ?? "";
+        if (provider && !directProviders.has(provider)) provider = "";
+      }
+      if (!provider) {
+        provider = (Object.entries(llmKeyByProvider).find(([, key]) => Boolean(key))?.[0]) ?? "anthropic";
+      }
+
+      const apiKey = llmKeyByProvider[provider] ?? "";
+      const defaultModelByProvider: Record<string, string> = {
+        anthropic: "claude-sonnet-4-20250514",
+        openai: "gpt-4o",
+        openrouter: "anthropic/claude-sonnet-4",
+        gemini: "gemini-2.0-flash",
+        lmstudio: "lmstudio-community/Llama-3.2-11B-Vision-Instruct-GGUF",
+      };
       const model =
-        integrations.llmModel ??
+        (integrations.llmModel as string | undefined) ??
         process.env.LLM_MODEL ??
-        (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+        defaultModelByProvider[provider] ??
+        "claude-sonnet-4-20250514";
 
       if (!apiKey) {
-        return reply
-          .code(400)
-          .send({ message: "No LLM API key configured. Set one in Settings > Integrations before running photo takeoff." });
+        return reply.code(400).send({
+          message:
+            `No API key found for provider "${provider}". Open Settings > Integrations and either add an API key for ${provider} or pick a different LLM provider that has one.`,
+        });
       }
 
       // Organization category taxonomy. Passed into the LLM so it tags rows
@@ -363,7 +400,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
         images: normalizedImages,
         focusPrompt: parsed.data.focusPrompt,
         projectContext: parsed.data.projectContext,
-        categories: categories.map((c) => ({
+        categories: (categories as Array<{ id: string; name: string; entityType: string; defaultUom?: string | null; shortform?: string | null }>).map((c) => ({
           id: c.id,
           name: c.name,
           entityType: c.entityType,

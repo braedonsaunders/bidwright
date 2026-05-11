@@ -108,6 +108,7 @@ import {
   type EntityCategory,
   type LegendEntryRecord,
   type WorkspaceStateRecord,
+  type PhotoTakeoffResult,
 } from "@/lib/api";
 import {
   Badge,
@@ -958,6 +959,13 @@ export function TakeoffTab({
   const [pivotGroupBy, setPivotGroupBy] = useState("");
   const [pivotMeasure, setPivotMeasure] = useState("__count");
 
+  // Photo-derived BOM result set surfaced into the side panel as entities.
+  // Tracks both the latest vision-API response and which row indexes the
+  // estimator has already + Added so the row dims in the panel.
+  const [photoBomResult, setPhotoBomResult] = useState<PhotoTakeoffResult | null>(null);
+  const [photoBomSourcePhotoNames, setPhotoBomSourcePhotoNames] = useState<string[]>([]);
+  const [photoBomLinkedRowIds, setPhotoBomLinkedRowIds] = useState<Set<string>>(new Set());
+
   useEffect(() => {
     if (!selectedDocId && drawings.length > 0) {
       setSelectedDocId(drawings[0].id);
@@ -1618,6 +1626,21 @@ export function TakeoffTab({
         },
         createLineItemsFromAllSpreadsheetRows: async (categoryId) => {
           await handleCreateAllSpreadsheetLineItems(categoryId);
+        },
+        createLineItemFromPhotoBomRow: async (rowId, categoryId) => {
+          // The row id surfaced to the side panel is "photo-bom-<index>"
+          // — peel the index back off before looking up the source row.
+          const rowIndex = Number(rowId.startsWith("photo-bom-") ? rowId.slice("photo-bom-".length) : NaN);
+          if (!Number.isFinite(rowIndex)) return;
+          await createLineItemFromPhotoBomRow(rowIndex, categoryId);
+        },
+        createLineItemsFromAllPhotoBomRows: async (categoryId) => {
+          await createLineItemsFromAllPhotoBomRows(categoryId);
+        },
+        clearPhotoBomResults: () => {
+          setPhotoBomResult(null);
+          setPhotoBomSourcePhotoNames([]);
+          setPhotoBomLinkedRowIds(new Set());
         },
         setTakeoffCategoryId: (categoryId) => {
           setTakeoffCategoryId(categoryId);
@@ -2967,6 +2990,29 @@ export function TakeoffTab({
       selectedModelElementId:
         selection?.kind === "model-element" ? selection.elementId : null,
       spreadsheet: inspectSpreadsheet,
+      photoBom: photoBomResult
+        ? {
+            photoCount: photoBomSourcePhotoNames.length,
+            summary: photoBomResult.summary,
+            warnings: photoBomResult.warnings,
+            rows: photoBomResult.items.map((row, idx) => {
+              const rowId = `photo-bom-${idx}`;
+              return {
+                id: rowId,
+                description: row.description,
+                quantity: row.quantity,
+                uom: row.uom,
+                suggestedCategoryId: row.categoryId,
+                confidence: row.confidence,
+                notes: row.notes,
+                sourcePhotoNames: row.sourceImageIndexes
+                  .map((i) => photoBomSourcePhotoNames[i])
+                  .filter((name): name is string => Boolean(name)),
+                isLinked: photoBomLinkedRowIds.has(rowId),
+              };
+            }),
+          }
+        : null,
       availableCategories: entityCategories
         .filter((c) => c.enabled)
         .map((c) => ({
@@ -3011,6 +3057,9 @@ export function TakeoffTab({
     spreadsheetPreview,
     entityCategories,
     takeoffCategory,
+    photoBomResult,
+    photoBomSourcePhotoNames,
+    photoBomLinkedRowIds,
   ]);
 
   async function resolveSelectedModelAsset() {
@@ -3606,6 +3655,84 @@ export function TakeoffTab({
     }
   }
 
+  /** Build a CreateWorksheetItemInput from one AI-suggested photo BOM row.
+   *  The category is whatever the user picked in the + Add popover; the
+   *  rest of the fields come straight off the model output. SourceNotes
+   *  cite the photos so the line stays traceable after creation. */
+  async function createLineItemFromPhotoBomRow(rowIndex: number, categoryId: string) {
+    if (!photoBomResult) return;
+    const row = photoBomResult.items[rowIndex];
+    if (!row) return;
+    const ws = selectedWorksheet;
+    if (!ws) {
+      setToastType("error");
+      setToastMessage("Pick an active worksheet before adding photo-BOM rows.");
+      return;
+    }
+    const category = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    if (!category) {
+      setToastType("error");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
+      return;
+    }
+    const sourcePhotoNames = row.sourceImageIndexes
+      .map((i) => photoBomSourcePhotoNames[i])
+      .filter((name): name is string => Boolean(name));
+    const sourceNotes = [
+      "From site-photo BOM (AI vision)",
+      row.notes,
+      sourcePhotoNames.length > 0 ? `Sourced from: ${sourcePhotoNames.join(", ")}` : "",
+      `Confidence: ${(row.confidence * 100).toFixed(0)}%`,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    const payload = {
+      categoryId: category.id,
+      category: category.name,
+      entityType: category.entityType,
+      entityName: row.description,
+      description: "",
+      quantity: row.quantity,
+      uom: row.uom || category.defaultUom || "EA",
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      sourceNotes,
+    };
+    try {
+      await createWorksheetItem(projectId, ws.id, payload);
+      setPhotoBomLinkedRowIds((prev) => {
+        const next = new Set(prev);
+        next.add(`photo-bom-${rowIndex}`);
+        return next;
+      });
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Imported photo BOM row to worksheet.");
+    } catch (error) {
+      console.error("[takeoff] Failed to add photo BOM row:", error);
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not add that photo BOM row."));
+    }
+  }
+
+  async function createLineItemsFromAllPhotoBomRows(categoryId: string) {
+    if (!photoBomResult) return;
+    const unlinked = photoBomResult.items
+      .map((row, idx) => ({ row, idx }))
+      .filter(({ idx }) => !photoBomLinkedRowIds.has(`photo-bom-${idx}`));
+    if (unlinked.length === 0) {
+      setToastType("error");
+      setToastMessage("No unlinked photo BOM rows to add.");
+      return;
+    }
+    for (const { idx } of unlinked) {
+      // Each call surfaces its own error toast; bail on the first failure
+      // so we don't fill the toast queue with the same complaint.
+      await createLineItemFromPhotoBomRow(idx, categoryId);
+    }
+  }
+
   async function handleCreateModelElementLineItem(element: ModelElementWithQuantities, categoryId: string) {
     try {
       const created = await createLineItemFromModelElement(element, categoryId);
@@ -4197,23 +4324,16 @@ export function TakeoffTab({
                 <SitePhotoIntake
                   projectId={projectId}
                   activeWorksheetId={selectedWorksheet?.id ?? null}
-                  defaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
-                  categories={entityCategories}
                   projectContextText={[
                     workspace.project.name,
                     workspace.currentRevision.title,
                     workspace.currentRevision.description,
                   ].filter(Boolean).join("\n")}
                   photoFiles={photoSources}
-                  onApplyItem={async (input) => {
-                    const ws = selectedWorksheet?.id;
-                    if (!ws) throw new Error("No active worksheet to apply to.");
-                    await createWorksheetItem(projectId, ws, input);
-                  }}
-                  onApplyComplete={(count) => {
-                    notifyWorkspaceMutated();
-                    setToastType("success");
-                    setToastMessage(`Added ${count} line item${count === 1 ? "" : "s"} from site photos.`);
+                  onResults={(result, sourceNames) => {
+                    setPhotoBomResult(result);
+                    setPhotoBomSourcePhotoNames(result ? sourceNames : []);
+                    setPhotoBomLinkedRowIds(new Set());
                   }}
                 />
               )}

@@ -13,7 +13,39 @@ import type { TakeoffLinkRecord } from "@/lib/api";
  *  to a metric summary without element semantics; `spreadsheet` treats each
  *  row as an entity that can be imported into a worksheet one click at a
  *  time, using a column-mapping heuristic. */
-export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "spreadsheet" | "empty";
+export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "spreadsheet" | "photo-bom" | "empty";
+
+export interface InspectPhotoBomRow {
+  id: string;
+  description: string;
+  quantity: number;
+  uom: string;
+  /** AI-suggested category id from the org's EntityCategory taxonomy.
+   *  Empty string when the model couldn't pick one. The estimator can
+   *  still pick any category via the + Add popover. */
+  suggestedCategoryId: string;
+  /** Model confidence in [0, 1]. Surfaced as a chip + sort hint. */
+  confidence: number;
+  /** Notes the model attached to the row, e.g. "approximate scale based
+   *  on the orange marker". */
+  notes: string;
+  /** Filenames of the source photos this row came from. */
+  sourcePhotoNames: string[];
+  /** Whether this row has already been turned into a worksheet line item.
+   *  Currently never true on first surface; the local Inspect view flips
+   *  this after + Add to dim the row. */
+  isLinked: boolean;
+}
+
+export interface InspectPhotoBom {
+  /** Total photos that contributed to this batch. */
+  photoCount: number;
+  /** AI's one-paragraph summary of what it found. */
+  summary: string;
+  /** Warnings from the model (low confidence, ambiguous photos, etc). */
+  warnings: string[];
+  rows: InspectPhotoBomRow[];
+}
 export type InspectModelBasis = "count" | "area" | "volume";
 
 /** A single spreadsheet row surfaced to the Entities tab. Carries enough
@@ -106,6 +138,11 @@ export interface InspectSnapshot {
   selectedModelElementId: string | null;
   // Spreadsheet — populated only when mode === "spreadsheet"
   spreadsheet: InspectSpreadsheet | null;
+  // Photo-derived BOM — populated when the photo intake just finished an
+  // analysis. Lives in the side panel regardless of which doc is currently
+  // open in the takeoff surface so the estimator can review/+add without
+  // losing what they were looking at.
+  photoBom: InspectPhotoBom | null;
   /** Available enabled categories for the takeoff-category picker; carried
    *  here so the side panel can render the picker without dragging the
    *  full workspace object in. */
@@ -145,6 +182,14 @@ export interface InspectActions {
   createLineItemFromSpreadsheetRow: (rowIndex: number, categoryId: string) => Promise<void> | void;
   /** "Σ Add" — import every spreadsheet row as its own line item. */
   createLineItemsFromAllSpreadsheetRows: (categoryId: string) => Promise<void> | void;
+  /** "+ Add" for a single AI-derived photo BOM row. Carries description /
+   *  quantity / uom / sourceNotes straight from the model output. */
+  createLineItemFromPhotoBomRow: (rowId: string, categoryId: string) => Promise<void> | void;
+  /** "Σ Add" — add every photo-BOM row at once. Each row lands in the
+   *  same category bucket. */
+  createLineItemsFromAllPhotoBomRows: (categoryId: string) => Promise<void> | void;
+  /** Clear the photo-BOM result set (e.g. after batch add or "Discard"). */
+  clearPhotoBomResults: () => void;
   /** Remember a category as the new "last used" so the next + Add popover
    *  pre-highlights it. Persisted per-project on the takeoff-tab side. */
   setTakeoffCategoryId: (categoryId: string | null) => void;
@@ -168,6 +213,13 @@ export function TakeoffInspectView({
   snapshot: InspectSnapshot | null;
   actions: InspectActions | null;
 }) {
+  // Photo-derived BOM has its own priority — when an analysis just landed,
+  // it stays visible in the panel even if the takeoff surface is on
+  // another document. The estimator can dismiss it from the panel header.
+  if (snapshot?.photoBom && snapshot.photoBom.rows.length > 0) {
+    return <PhotoBomInspect snapshot={snapshot} actions={actions} />;
+  }
+
   if (!snapshot || snapshot.mode === "empty") {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
@@ -1012,6 +1064,169 @@ function SpreadsheetInspect({
                   triggerTitle="Import this row as a worksheet line item — pick a category"
                   triggerIcon={<Plus className="h-3 w-3" />}
                 />
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** AI-derived photo-BOM rows surfaced as entities — one per scope item the
+ *  vision model called out. The estimator reviews them here and uses the
+ *  same + Add popover the other entity sources do; the row dims once it's
+ *  been + Added so it's obvious what's left. */
+function PhotoBomInspect({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const bom = snapshot.photoBom;
+  const [search, setSearch] = useState("");
+  if (!bom) return null;
+
+  const filteredRows = bom.rows.filter((row) => {
+    const q = search.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      row.description.toLowerCase().includes(q) ||
+      row.notes.toLowerCase().includes(q) ||
+      row.uom.toLowerCase().includes(q)
+    );
+  });
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2 text-xs">
+      {/* Header: source photo count + AI summary + dismiss */}
+      <div className="shrink-0 rounded-md border border-line bg-panel/60 px-2.5 py-1.5">
+        <div className="flex items-start justify-between gap-2">
+          <div className="min-w-0">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-fg/45">
+              Photo BOM · {bom.photoCount} photo{bom.photoCount === 1 ? "" : "s"} · {bom.rows.length} item
+              {bom.rows.length === 1 ? "" : "s"}
+            </p>
+            {bom.summary && (
+              <p className="mt-1 text-[11px] leading-relaxed text-fg/70">{bom.summary}</p>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => actions?.clearPhotoBomResults()}
+            className="shrink-0 rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg/70"
+            title="Discard these results — the photos stay selected and you can re-run."
+          >
+            <X className="h-3 w-3" />
+          </button>
+        </div>
+        {bom.warnings.length > 0 && (
+          <div className="mt-1.5 rounded-md border border-warning/30 bg-warning/5 px-2 py-1 text-[10px] text-warning">
+            {bom.warnings.map((w, i) => (
+              <p key={i}>· {w}</p>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="shrink-0 flex items-center gap-1">
+        <div className="relative flex-1">
+          <Input
+            className="h-7 text-xs"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Filter rows…"
+          />
+        </div>
+        <AddToCategoryPopover
+          snapshot={snapshot}
+          actions={actions}
+          onPick={(categoryId) => void actions?.createLineItemsFromAllPhotoBomRows(categoryId)}
+          triggerLabel={`Add all (${bom.rows.filter((r) => !r.isLinked).length})`}
+          triggerClassName="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-2 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent disabled:opacity-40"
+          triggerTitle="Add every unlinked row to the worksheet under one category"
+          triggerIcon={<Sigma className="h-3 w-3" />}
+        />
+      </div>
+
+      {/* Row list */}
+      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto pr-1">
+        {filteredRows.length === 0 ? (
+          <p className="rounded-md border border-dashed border-line bg-panel/40 px-3 py-4 text-center text-[11px] text-fg/40">
+            {bom.rows.length === 0
+              ? "No items returned."
+              : `No items match "${search}".`}
+          </p>
+        ) : (
+          filteredRows.map((row) => {
+            const confTone =
+              row.confidence >= 0.75
+                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
+                : row.confidence >= 0.5
+                  ? "border-amber-500/30 bg-amber-500/10 text-amber-600"
+                  : "border-rose-500/30 bg-rose-500/10 text-rose-600";
+            return (
+              <div
+                key={row.id}
+                className={cn(
+                  "group relative rounded-md border px-2 py-1.5 transition-colors",
+                  row.isLinked
+                    ? "border-success/30 bg-success/5 opacity-70"
+                    : "border-line bg-panel/60 hover:bg-panel2/40",
+                )}
+              >
+                <div className="flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-[11px] font-medium text-fg/85">{row.description}</p>
+                    <p className="mt-0.5 truncate text-[10px] text-fg/50">
+                      {[
+                        `${row.quantity} ${row.uom}`,
+                        row.sourcePhotoNames.length > 0
+                          ? `from ${row.sourcePhotoNames.join(", ")}`
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")}
+                    </p>
+                    {row.notes && (
+                      <p
+                        className="mt-1 text-[10px] italic text-fg/45"
+                        title={row.notes}
+                      >
+                        {row.notes.length > 110 ? `${row.notes.slice(0, 108)}…` : row.notes}
+                      </p>
+                    )}
+                  </div>
+                  <div className="flex shrink-0 flex-col items-end gap-1">
+                    <span
+                      className={cn(
+                        "shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium tabular-nums",
+                        confTone,
+                      )}
+                      title={`Model confidence ${(row.confidence * 100).toFixed(0)}%`}
+                    >
+                      {(row.confidence * 100).toFixed(0)}%
+                    </span>
+                    {row.isLinked ? (
+                      <span className="rounded-full bg-success/15 px-1.5 py-0.5 text-[9px] font-medium text-success">
+                        Linked
+                      </span>
+                    ) : (
+                      <AddToCategoryPopover
+                        snapshot={snapshot}
+                        actions={actions}
+                        onPick={(categoryId) =>
+                          void actions?.createLineItemFromPhotoBomRow(row.id, categoryId)
+                        }
+                        triggerLabel="Add"
+                        triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                        triggerTitle="Add this AI-suggested item to the worksheet under a category"
+                        triggerIcon={<Plus className="h-3 w-3" />}
+                      />
+                    )}
+                  </div>
+                </div>
               </div>
             );
           })
