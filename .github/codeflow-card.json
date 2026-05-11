@@ -2,108 +2,6 @@
   "version": 1,
   "runs": [
     {
-      "at": "2026-05-10T04:57:16.549Z",
-      "sha": "2a2a2e854427e26e29613ea5a173b2a4e7e779be",
-      "pr": null,
-      "actor": "braedonsaunders",
-      "files": 1132,
-      "functions": 6689,
-      "loc": 426705,
-      "languages": 22,
-      "topLanguages": [
-        {
-          "ext": "ts",
-          "pct": 41,
-          "lines": 175450
-        },
-        {
-          "ext": "json",
-          "pct": 26,
-          "lines": 111230
-        },
-        {
-          "ext": "tsx",
-          "pct": 25,
-          "lines": 104848
-        },
-        {
-          "ext": "yaml",
-          "pct": 3,
-          "lines": 14161
-        },
-        {
-          "ext": "py",
-          "pct": 1,
-          "lines": 3442
-        }
-      ],
-      "dead": 117,
-      "deadPct": 1.7,
-      "circular": 1,
-      "godObjects": 1,
-      "avgCoupling": 9.9,
-      "securityIssues": 86,
-      "patterns": 10,
-      "duplicates": 43,
-      "layerViolations": 2713,
-      "connections": 11155,
-      "avgFnLines": 15.6,
-      "longestFn": 16,
-      "testFiles": 95,
-      "testRatio": 8.4,
-      "topFolders": [
-        {
-          "name": "apps",
-          "count": 869
-        },
-        {
-          "name": "packages",
-          "count": 222
-        },
-        {
-          "name": "scripts",
-          "count": 21
-        },
-        {
-          "name": "root",
-          "count": 12
-        },
-        {
-          "name": "docs",
-          "count": 6
-        }
-      ],
-      "folders": 5,
-      "grade": "F",
-      "score": 57,
-      "topBlast": {
-        "path": "apps/model-editor/cpp/test/index.html",
-        "direct": 612,
-        "transitive": 865,
-        "total": 1477
-      },
-      "fragility": [
-        {
-          "path": "apps/model-editor/cpp/test/index.html",
-          "direct": 612,
-          "transitive": 865,
-          "total": 1477
-        },
-        {
-          "path": "apps/api/src/services/integrations-service.ts",
-          "direct": 357,
-          "transitive": 864,
-          "total": 1221
-        },
-        {
-          "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
-          "direct": 259,
-          "transitive": 866,
-          "total": 1125
-        }
-      ]
-    },
-    {
       "at": "2026-05-10T05:17:44.893Z",
       "sha": "cfeb8318ac5dc83f7e6316963ac7b528075ffd14",
       "pr": null,
@@ -2973,6 +2871,108 @@
           "ext": "ts",
           "pct": 41,
           "lines": 177185
+        },
+        {
+          "ext": "json",
+          "pct": 26,
+          "lines": 111273
+        },
+        {
+          "ext": "tsx",
+          "pct": 25,
+          "lines": 107534
+        },
+        {
+          "ext": "yaml",
+          "pct": 3,
+          "lines": 14226
+        },
+        {
+          "ext": "py",
+          "pct": 1,
+          "lines": 3442
+        }
+      ],
+      "dead": 122,
+      "deadPct": 1.8,
+      "circular": 1,
+      "godObjects": 1,
+      "avgCoupling": 10.3,
+      "securityIssues": 89,
+      "patterns": 10,
+      "duplicates": 44,
+      "layerViolations": 2758,
+      "connections": 11244,
+      "avgFnLines": 15.6,
+      "longestFn": 16,
+      "testFiles": 95,
+      "testRatio": 8.7,
+      "topFolders": [
+        {
+          "name": "apps",
+          "count": 874
+        },
+        {
+          "name": "packages",
+          "count": 182
+        },
+        {
+          "name": "scripts",
+          "count": 21
+        },
+        {
+          "name": "root",
+          "count": 12
+        },
+        {
+          "name": "docs",
+          "count": 4
+        }
+      ],
+      "folders": 5,
+      "grade": "F",
+      "score": 56,
+      "topBlast": {
+        "path": "apps/model-editor/cpp/test/index.html",
+        "direct": 618,
+        "transitive": 867,
+        "total": 1485
+      },
+      "fragility": [
+        {
+          "path": "apps/model-editor/cpp/test/index.html",
+          "direct": 618,
+          "transitive": 867,
+          "total": 1485
+        },
+        {
+          "path": "apps/api/src/services/integrations-service.ts",
+          "direct": 360,
+          "transitive": 866,
+          "total": 1226
+        },
+        {
+          "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
+          "direct": 261,
+          "transitive": 868,
+          "total": 1129
+        }
+      ]
+    },
+    {
+      "at": "2026-05-11T03:28:46.393Z",
+      "sha": "202e42fb36430dca757e0ef771a1ac19ecf3bdb0",
+      "pr": null,
+      "actor": "braedonsaunders",
+      "files": 1095,
+      "functions": 6747,
+      "loc": 431900,
+      "languages": 23,
+      "topLanguages": [
+        {
+          "ext": "ts",
+          "pct": 41,
+          "lines": 177195
         },
         {
           "ext": "json",
