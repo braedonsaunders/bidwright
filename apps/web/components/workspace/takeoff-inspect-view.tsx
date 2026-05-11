@@ -272,8 +272,14 @@ function AddToCategoryPopover({
 }) {
   const { availableCategories, takeoffCategoryId } = snapshot;
   const [open, setOpen] = useState(false);
-  const pickable = availableCategories.filter((c) => c.itemSource !== "rate_schedule");
-  const rateScheduleOnly = availableCategories.filter((c) => c.itemSource === "rate_schedule");
+  // Every enabled category is pickable — itemSource only changes the
+  // downstream entity-picker flow. Rate-schedule categories used to be
+  // greyed out here, but that broke the labor flow once the user
+  // imported a schedule (they need to be able to pick Labor → then pick
+  // a rate-schedule item from the entity dropdown). It also surfaced
+  // any mis-configured `itemSource: "rate_schedule"` setting as a flat
+  // disabled state with no recourse.
+  const pickable = availableCategories;
 
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
@@ -307,6 +313,7 @@ function AddToCategoryPopover({
               <div className="flex flex-col gap-0.5">
                 {pickable.map((c) => {
                   const isLast = c.id === takeoffCategoryId;
+                  const needsSchedule = c.itemSource === "rate_schedule";
                   return (
                     <button
                       key={c.id}
@@ -321,25 +328,17 @@ function AddToCategoryPopover({
                         "flex items-center justify-between rounded px-2 py-1 text-left text-[11px] transition-colors hover:bg-accent/10 focus:bg-accent/10 focus:outline-none",
                         isLast ? "text-accent" : "text-fg/75",
                       )}
+                      title={needsSchedule ? `${c.name} resolves cost from imported rate-schedule items — pick one from the row's entity dropdown after add.` : undefined}
                     >
                       <span className="truncate">{c.name}</span>
-                      {isLast && <span className="text-[9px] uppercase text-accent/70">last used</span>}
+                      {isLast ? (
+                        <span className="text-[9px] uppercase text-accent/70">last used</span>
+                      ) : needsSchedule ? (
+                        <span className="text-[9px] uppercase text-fg/35">schedule</span>
+                      ) : null}
                     </button>
                   );
                 })}
-                {rateScheduleOnly.length > 0 && (
-                  <div className="mt-1 border-t border-line pt-1">
-                    {rateScheduleOnly.map((c) => (
-                      <p
-                        key={c.id}
-                        className="px-2 py-1 text-[10px] text-fg/35"
-                        title={`${c.name} requires imported rate-schedule items; takeoff entities don't carry them.`}
-                      >
-                        {c.name} <span className="text-fg/25">— needs rate-schedule items</span>
-                      </p>
-                    ))}
-                  </div>
-                )}
               </div>
             </>
           )}
