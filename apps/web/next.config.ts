@@ -1,26 +1,35 @@
 import type { NextConfig } from "next";
+import path from "node:path";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  // Lock the standalone output's trace root to the monorepo root so paths
+  // stay predictable across local builds (where a parent worktree above
+  // confuses Next's auto-detection) and CI runs (single checkout).
+  // process.cwd() === apps/web because next runs from there.
+  outputFileTracingRoot: path.resolve(process.cwd(), "../.."),
   devIndicators: false,
-  // Next's tracer (@vercel/nft) misses several of next's runtime peer
-  // deps when packaging from a pnpm monorepo — @swc/helpers' proxy
-  // folders, @next/env, etc — because the .pnpm symlink layout
-  // confuses its file walk. The packaged Electron sidecar then crashes
-  // on launch with "Cannot find module ...". Pull the whole tree of
-  // next-runtime peers in explicitly via both the pnpm-virtual-store
-  // path and the apps-relative resolved path.
+  // Next's tracer (@vercel/nft) misses runtime peer deps from a pnpm
+  // monorepo — its file walk doesn't follow the `.pnpm/` virtual store
+  // reliably, and Windows installer extraction doesn't preserve the
+  // symlinks that pnpm uses to bridge that store to top-level
+  // node_modules. Result: Next dist code does `require("react")` and
+  // Node's walk from `apps/web/node_modules/next/dist/...` fails to
+  // find it because react only lives at `.pnpm/react@.../node_modules/`.
+  //
+  // Workaround: explicitly include every direct dep at the
+  // apps/web/node_modules/<dep> path AND the @next/@swc namespaces.
+  // Wildcard is safe — Next still tree-shakes used code, this just
+  // tells the tracer "don't drop these files."
   outputFileTracingIncludes: {
+    // With node-linker=hoisted, all deps live in the monorepo root
+    // node_modules. Pull each top-level dep whole — Node's require walk
+    // from next/dist needs to find sibling files (esm/*.js, _/<name>/,
+    // etc) that nft otherwise misses because nothing in the trace graph
+    // explicitly requires them.
     "/*": [
-      "../../node_modules/.pnpm/@swc+helpers@*/node_modules/@swc/helpers/**/*",
-      "../../node_modules/.pnpm/@next+env@*/node_modules/@next/env/**/*",
-      "../../node_modules/.pnpm/styled-jsx@*/node_modules/styled-jsx/**/*",
-      "../../node_modules/.pnpm/client-only@*/node_modules/client-only/**/*",
-      "../../node_modules/.pnpm/server-only@*/node_modules/server-only/**/*",
-      "../../node_modules/.pnpm/busboy@*/node_modules/busboy/**/*",
-      "../../node_modules/.pnpm/caniuse-lite@*/node_modules/caniuse-lite/**/*",
-      "./node_modules/@swc/helpers/**/*",
-      "./node_modules/@next/env/**/*",
+      "../../node_modules/*/**/*",
+      "../../node_modules/@*/*/**/*",
     ],
   },
   experimental: {
