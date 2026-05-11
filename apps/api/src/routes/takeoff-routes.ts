@@ -358,10 +358,16 @@ export async function takeoffRoutes(app: FastifyInstance) {
       }
 
       const apiKey = llmKeyByProvider[provider] ?? "";
+      // Vision-capable defaults per provider. The OpenRouter identifier
+      // matches what the opencode CLI adapter uses, which is the format
+      // OpenRouter actually serves (the older "anthropic/claude-sonnet-4"
+      // returned "404 No endpoints found that support image input"
+      // because it doesn't exist as a vision endpoint on the OpenRouter
+      // model catalog).
       const defaultModelByProvider: Record<string, string> = {
-        anthropic: "claude-sonnet-4-20250514",
+        anthropic: "claude-sonnet-4-5",
         openai: "gpt-4o",
-        openrouter: "anthropic/claude-sonnet-4",
+        openrouter: "anthropic/claude-sonnet-4-5",
         gemini: "gemini-2.0-flash",
         lmstudio: "lmstudio-community/Llama-3.2-11B-Vision-Instruct-GGUF",
       };
