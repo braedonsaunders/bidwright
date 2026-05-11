@@ -437,6 +437,33 @@ function sourceCountText(count: number, singular: string, plural = `${singular}s
 
 type SpreadsheetPanelView = "preview" | "pivot";
 
+/** Best-effort column mapping from header names → line-item fields. Drives
+ *  the per-row "+ Add" in the Entities tab so the resulting line item gets
+ *  reasonable defaults without the user having to do mapping setup. */
+function deriveSpreadsheetMapping(headers: string[]): {
+  name: string | null;
+  quantity: string | null;
+  uom: string | null;
+  cost: string | null;
+} {
+  const lowercase = headers.map((h) => h.toLowerCase().trim());
+  // Pick the first header whose normalized form matches any pattern.
+  // Longer / more-specific patterns first so "unit cost" wins over "cost".
+  const find = (patterns: string[]) => {
+    for (const pattern of patterns) {
+      const idx = lowercase.findIndex((h) => h === pattern || h.includes(pattern));
+      if (idx >= 0) return headers[idx];
+    }
+    return null;
+  };
+  return {
+    name: find(["description", "item", "scope", "name", "entity"]),
+    quantity: find(["quantity", "qty", "count", "amount"]),
+    uom: find(["uom", "unit of measure", "unit"]),
+    cost: find(["unit cost", "unit price", "cost", "price", "rate"]),
+  };
+}
+
 function numericFormat(value: number) {
   return Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
 }
@@ -1050,7 +1077,9 @@ export function TakeoffTab({
     | { kind: "create-single-element"; elementId: string }
     | { kind: "create-element-group"; elementIds: string[]; groupLabel: string }
     | { kind: "create-single-annotation"; annotationId: string }
-    | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string };
+    | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string }
+    | { kind: "create-spreadsheet-row"; rowIndex: number }
+    | { kind: "create-spreadsheet-all" };
   const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
   const [newWorksheetName, setNewWorksheetName] = useState("");
   const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
@@ -1507,6 +1536,12 @@ export function TakeoffTab({
             .filter((a): a is TakeoffAnnotation => Boolean(a));
           if (targets.length === 0) return;
           await handleCreateAnnotationGroupLineItem(targets, groupLabel);
+        },
+        createLineItemFromSpreadsheetRow: async (rowIndex) => {
+          await handleCreateSpreadsheetRowLineItem(rowIndex);
+        },
+        createLineItemsFromAllSpreadsheetRows: async () => {
+          await handleCreateAllSpreadsheetLineItems();
         },
         refreshModel: () => void refreshModelAssets(true),
       };
@@ -2756,7 +2791,9 @@ export function TakeoffTab({
           ? "bim"
           : isCadDocument
             ? "model"
-            : "pdf";
+            : isSpreadsheetDocument
+              ? "spreadsheet"
+              : "pdf";
     const inspectAnnotations =
       mode === "dwg" ? dwgAnnotationsCache : mode === "pdf" ? annotations : [];
     const inspectSelectedAnnotationId =
@@ -2786,6 +2823,32 @@ export function TakeoffTab({
             isLinked: linkedModelElementIds.has(element.id),
           }))
         : [];
+    // Spreadsheet rows surfaced as entities. Only populated when the active
+    // doc is a spreadsheet AND its preview has loaded; otherwise null so the
+    // side panel falls back to its empty state.
+    const inspectSpreadsheet =
+      mode === "spreadsheet" && spreadsheetPreview
+        ? {
+            sourceName: spreadsheetPreview.sourceName,
+            rowCount: spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length,
+            columnCount: spreadsheetPreview.headers.length,
+            headers: spreadsheetPreview.headers,
+            rows: spreadsheetPreview.sampleRows.map((row, index) => {
+              const values: Record<string, string> = {};
+              spreadsheetPreview.headers.forEach((header, colIdx) => {
+                const raw = row[colIdx];
+                values[header] = raw == null ? "" : String(raw);
+              });
+              return {
+                id: `${spreadsheetPreview.sourceNodeId ?? spreadsheetPreview.sourceName}::${index}`,
+                index,
+                values,
+              };
+            }),
+            mapping: deriveSpreadsheetMapping(spreadsheetPreview.headers),
+          }
+        : null;
+
     const nextSnapshot: InspectSnapshot = {
       mode,
       annotations: inspectAnnotations,
@@ -2816,6 +2879,7 @@ export function TakeoffTab({
           : null,
       selectedModelElementId:
         selection?.kind === "model-element" ? selection.elementId : null,
+      spreadsheet: inspectSpreadsheet,
     };
     const serialized = JSON.stringify(nextSnapshot);
     if (serialized === lastPublishedSnapshotRef.current) return;
@@ -2829,6 +2893,7 @@ export function TakeoffTab({
     isDwgDocument,
     isBimDocument,
     isCadDocument,
+    isSpreadsheetDocument,
     annotations,
     dwgAnnotationsCache,
     selection,
@@ -2845,6 +2910,7 @@ export function TakeoffTab({
     selectedModelIsEditable,
     linkedModelElementIds,
     linkedModelLineItems.length,
+    spreadsheetPreview,
   ]);
 
   async function resolveSelectedModelAsset() {
@@ -3306,6 +3372,128 @@ export function TakeoffTab({
     }
   }
 
+  /** Build a line-item payload from a single spreadsheet row using the
+   *  heuristic column mapping. Numeric fields are best-effort parsed; non-
+   *  numeric values fall through to sensible defaults so the row still
+   *  creates something the estimator can refine inline. */
+  function buildLineItemFromRow(
+    row: string[],
+    headers: string[],
+    mapping: ReturnType<typeof deriveSpreadsheetMapping>,
+  ) {
+    if (!defaultCategory) return null;
+    const col = (header: string | null) => (header ? headers.indexOf(header) : -1);
+    const readNum = (header: string | null) => {
+      const idx = col(header);
+      if (idx < 0) return null;
+      const raw = String(row[idx] ?? "").replace(/[$,%\s,]/g, "");
+      const parsed = Number(raw);
+      return Number.isFinite(parsed) ? parsed : null;
+    };
+    const readStr = (header: string | null) => {
+      const idx = col(header);
+      if (idx < 0) return "";
+      const raw = row[idx];
+      return raw == null ? "" : String(raw);
+    };
+
+    const entityName = readStr(mapping.name).trim() || "Imported row";
+    const quantity = readNum(mapping.quantity) ?? 1;
+    const uom = readStr(mapping.uom).trim().toUpperCase() || defaultCategory.defaultUom || "EA";
+    const cost = readNum(mapping.cost) ?? 0;
+
+    return {
+      categoryId: defaultCategory.id,
+      category: defaultCategory.name,
+      entityType: defaultCategory.entityType,
+      entityName,
+      description: "",
+      quantity,
+      uom,
+      cost,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: cost * quantity * (1 + (workspace.currentRevision.defaultMarkup ?? 0.2)),
+      sourceNotes: `From spreadsheet ${spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? ""}`.trim(),
+    };
+  }
+
+  async function createLineItemFromSpreadsheetRow(
+    rowIndex: number,
+    explicitWs?: { id: string; name: string },
+  ) {
+    if (!spreadsheetPreview) return null;
+    const row = spreadsheetPreview.sampleRows[rowIndex];
+    if (!row) return null;
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex });
+      return null;
+    }
+    if (!defaultCategory) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before importing rows.");
+      return null;
+    }
+    const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
+    const payload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping);
+    if (!payload) return null;
+    await createWorksheetItem(projectId, ws.id, payload);
+    return { ok: true as const };
+  }
+
+  async function handleCreateSpreadsheetRowLineItem(rowIndex: number) {
+    try {
+      const result = await createLineItemFromSpreadsheetRow(rowIndex);
+      if (!result) return;
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Imported row to worksheet.");
+    } catch (error) {
+      console.error("[takeoff] Failed to import spreadsheet row:", error);
+      setToastType("error");
+      setToastMessage("Could not import that row.");
+    }
+  }
+
+  async function createLineItemsFromAllSpreadsheetRows(
+    explicitWs?: { id: string; name: string },
+  ) {
+    if (!spreadsheetPreview || spreadsheetPreview.sampleRows.length === 0) return null;
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({ kind: "create-spreadsheet-all" });
+      return null;
+    }
+    if (!defaultCategory) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before importing rows.");
+      return null;
+    }
+    const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
+    let imported = 0;
+    for (const row of spreadsheetPreview.sampleRows) {
+      const payload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping);
+      if (!payload) continue;
+      await createWorksheetItem(projectId, ws.id, payload);
+      imported += 1;
+    }
+    return { imported };
+  }
+
+  async function handleCreateAllSpreadsheetLineItems() {
+    try {
+      const result = await createLineItemsFromAllSpreadsheetRows();
+      if (!result) return;
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(`Imported ${result.imported} row${result.imported === 1 ? "" : "s"} to worksheet.`);
+    } catch (error) {
+      console.error("[takeoff] Failed to import all spreadsheet rows:", error);
+      setToastType("error");
+      setToastMessage("Could not import all rows.");
+    }
+  }
+
   async function handleCreateModelElementLineItem(element: ModelElementWithQuantities) {
     try {
       const created = await createLineItemFromModelElement(element);
@@ -3459,6 +3647,16 @@ export function TakeoffTab({
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(`Created summed line item from ${targets.length} mark${targets.length === 1 ? "" : "s"}.`);
+    } else if (action.kind === "create-spreadsheet-row") {
+      await createLineItemFromSpreadsheetRow(action.rowIndex, ws);
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Imported row to worksheet.");
+    } else if (action.kind === "create-spreadsheet-all") {
+      const result = await createLineItemsFromAllSpreadsheetRows(ws);
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(`Imported ${result?.imported ?? 0} row${result?.imported === 1 ? "" : "s"} to worksheet.`);
     }
   }
 
@@ -4618,18 +4816,7 @@ export function TakeoffTab({
                 </div>
 
                 {spreadsheetPanelView === "preview" && (
-                  <div className="mt-4 flex min-h-0 flex-1 flex-col space-y-4">
-                    <div className="grid gap-2 md:grid-cols-2 lg:max-w-md">
-                      <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-fg/35">Rows</p>
-                        <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length}</p>
-                      </div>
-                      <div className="rounded-md border border-line bg-bg/35 px-3 py-2">
-                        <p className="text-[10px] uppercase tracking-wide text-fg/35">Numeric Fields</p>
-                        <p className="mt-1 text-lg font-semibold text-fg">{spreadsheetProfiles.filter((profile) => profile.numericCount > 0).length}</p>
-                      </div>
-                    </div>
-
+                  <div className="mt-4 flex min-h-0 flex-1 flex-col">
                     <div className="min-h-0 flex-1 overflow-auto rounded-md border border-line">
                       <table className="min-w-full text-left text-xs">
                         <thead className="sticky top-0 z-10 bg-panel2 text-[10px] uppercase tracking-wide text-fg/40">

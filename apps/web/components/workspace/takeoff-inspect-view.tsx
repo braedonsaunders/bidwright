@@ -9,9 +9,43 @@ import type { TakeoffLinkRecord } from "@/lib/api";
 
 /** `bim` is element-aware (IFC/Revit/Navisworks) and uses the BIM-specific
  *  inspect surface; `model` is geometry-only (STEP/glTF/OBJ/STL) and degrades
- *  to a metric summary without element semantics. */
-export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "empty";
+ *  to a metric summary without element semantics; `spreadsheet` treats each
+ *  row as an entity that can be imported into a worksheet one click at a
+ *  time, using a column-mapping heuristic. */
+export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "spreadsheet" | "empty";
 export type InspectModelBasis = "count" | "area" | "volume";
+
+/** A single spreadsheet row surfaced to the Entities tab. Carries enough
+ *  context that the per-row "+ Add" handler can build a worksheet line
+ *  item without re-fetching the source file. */
+export interface InspectSpreadsheetRow {
+  /** Stable id keyed off the source file + row index. Used to dedupe and
+   *  drive selection. */
+  id: string;
+  /** Numeric index into the source file's sampleRows array. */
+  index: number;
+  /** Display values keyed by header name. Strings only — the column profile
+   *  + mapping figure out which ones are numeric on the way to a line item. */
+  values: Record<string, string>;
+}
+
+export interface InspectSpreadsheet {
+  sourceName: string;
+  rowCount: number;
+  columnCount: number;
+  headers: string[];
+  rows: InspectSpreadsheetRow[];
+  /** Heuristic column → line-item field mapping derived from the header
+   *  names. Used by createLineItemFromSpreadsheetRow on the takeoff-tab
+   *  side; surfaced here so the Entities tab can render the row's preview
+   *  consistently with what's about to be created. */
+  mapping: {
+    name: string | null;
+    quantity: string | null;
+    uom: string | null;
+    cost: string | null;
+  };
+}
 
 export interface InspectModelElement {
   id: string;
@@ -58,6 +92,8 @@ export interface InspectSnapshot {
   modelBasis: InspectModelBasis;
   modelAsset: InspectAssetSummary | null;
   selectedModelElementId: string | null;
+  // Spreadsheet — populated only when mode === "spreadsheet"
+  spreadsheet: InspectSpreadsheet | null;
 }
 
 export interface InspectActions {
@@ -83,6 +119,14 @@ export interface InspectActions {
   /** "Σ Add" — one summed line item from N annotations. Each underlying
    *  annotation gets a TakeoffLink so revision diff still reconciles. */
   createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string) => Promise<void> | void;
+  /** "+ Add" for a single spreadsheet row. The implementation uses the
+   *  heuristic column mapping on the snapshot to populate entityName /
+   *  quantity / uom / cost; rows can still be re-edited inline on the
+   *  worksheet afterward. */
+  createLineItemFromSpreadsheetRow: (rowIndex: number) => Promise<void> | void;
+  /** "Σ Add" — import every spreadsheet row as its own line item in one
+   *  batch. Same mapping, same target worksheet. */
+  createLineItemsFromAllSpreadsheetRows: () => Promise<void> | void;
   refreshModel: () => void;
 }
 
@@ -115,6 +159,10 @@ export function TakeoffInspectView({
 
   if (snapshot.mode === "bim" || snapshot.mode === "model") {
     return <ModelInspect snapshot={snapshot} actions={actions} />;
+  }
+
+  if (snapshot.mode === "spreadsheet") {
+    return <SpreadsheetInspect snapshot={snapshot} actions={actions} />;
   }
 
   return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
@@ -717,6 +765,132 @@ function formatMeasurement(ann: TakeoffAnnotation): string {
   const { value, unit } = ann.measurement;
   if (unit === "count") return `${value}`;
   return `${value.toFixed(2)} ${unit}`;
+}
+
+/** Spreadsheet rows as entities. Each row gets a "+ Add" that creates a
+ *  worksheet line item using the heuristic column mapping; the group header
+ *  has a "Σ Add" that imports every row in one batch. The mapping is shown
+ *  inline so the estimator can see at a glance which columns are being read
+ *  as name / qty / uom / cost before they commit. */
+function SpreadsheetInspect({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const ss = snapshot.spreadsheet;
+  const [search, setSearch] = useState("");
+
+  const filteredRows = useMemo(() => {
+    if (!ss) return [];
+    const q = search.trim().toLowerCase();
+    if (!q) return ss.rows;
+    return ss.rows.filter((row) =>
+      Object.values(row.values).some((v) => v.toLowerCase().includes(q)),
+    );
+  }, [ss, search]);
+
+  if (!ss) {
+    return (
+      <p className="rounded-md border border-line bg-panel/40 px-3 py-4 text-center text-[11px] text-fg/40">
+        Open a spreadsheet to list its rows here.
+      </p>
+    );
+  }
+
+  const { mapping } = ss;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col gap-2 text-xs">
+      <div className="shrink-0 space-y-1.5">
+        <Input
+          className="h-7 text-xs"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Filter rows…"
+        />
+        <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-panel/40 p-1 text-[10px]">
+          <span className="font-medium uppercase tracking-wider text-fg/35">Mapped</span>
+          {(["name", "quantity", "uom", "cost"] as const).map((field) => {
+            const header = mapping[field];
+            return (
+              <span
+                key={field}
+                className={cn(
+                  "rounded px-1 py-px text-[9px] font-medium",
+                  header ? "bg-emerald-500/12 text-emerald-600" : "bg-fg/5 text-fg/35",
+                )}
+                title={header ? `${field} ← ${header}` : `${field}: no column matched`}
+              >
+                {field}{header ? `: ${header}` : ""}
+              </span>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto pr-1">
+        {/* Σ Add header — bulk import every visible row. */}
+        <div className="group/grouphdr sticky top-0 z-10 flex items-stretch gap-1 rounded-md border border-line bg-panel/90 backdrop-blur">
+          <div className="flex flex-1 items-center gap-1.5 px-2 py-1 text-[10px] font-medium text-fg/70">
+            <span className="min-w-0 flex-1 truncate">All rows</span>
+            <span className="shrink-0 text-fg/40">{filteredRows.length}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => void actions?.createLineItemsFromAllSpreadsheetRows()}
+            disabled={ss.rows.length === 0}
+            className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 transition-colors hover:bg-accent/10 hover:text-accent disabled:opacity-40"
+            title={`Import every row as its own worksheet line item`}
+          >
+            <Sigma className="h-3 w-3" />
+            Add all
+          </button>
+        </div>
+
+        {filteredRows.length === 0 ? (
+          <p className="rounded-md border border-line bg-panel/40 px-3 py-4 text-center text-[11px] text-fg/40">
+            {ss.rows.length === 0 ? "No rows in this spreadsheet yet." : "No rows match the filter."}
+          </p>
+        ) : (
+          filteredRows.map((row) => {
+            const displayName = mapping.name ? row.values[mapping.name] : "";
+            const qtyVal = mapping.quantity ? row.values[mapping.quantity] : "";
+            const uomVal = mapping.uom ? row.values[mapping.uom] : "";
+            const costVal = mapping.cost ? row.values[mapping.cost] : "";
+            return (
+              <div
+                key={row.id}
+                className="group flex items-start gap-2 rounded-md border border-line bg-panel/60 px-2 py-1.5 transition-colors hover:bg-panel2/40"
+              >
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-[11px] font-medium text-fg/80">
+                    {(displayName || "Row " + (row.index + 1)).toString().trim()}
+                  </p>
+                  <p className="mt-0.5 truncate text-[10px] text-fg/45">
+                    {[
+                      qtyVal && `${qtyVal}${uomVal ? ` ${uomVal}` : ""}`,
+                      costVal && `@ ${costVal}`,
+                    ].filter(Boolean).join(" · ") || "—"}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void actions?.createLineItemFromSpreadsheetRow(row.index)}
+                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 opacity-0 transition-all hover:border-accent/40 hover:bg-accent/10 hover:text-accent group-hover:opacity-100 focus:opacity-100"
+                  title="Import this row as a worksheet line item"
+                >
+                  <Plus className="h-3 w-3" />
+                  Add
+                </button>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
 }
 
 /** Pivot-style summary for a group of annotations — surfaces the dominant

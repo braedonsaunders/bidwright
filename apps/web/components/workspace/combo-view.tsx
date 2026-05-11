@@ -397,7 +397,32 @@ function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null })
     );
   }
 
-  // PDF / DWG / spreadsheet fallback — no modelAsset to lean on.
+  if (snapshot.mode === "spreadsheet") {
+    const ss = snapshot.spreadsheet;
+    return (
+      <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-[11px] font-semibold text-fg" title={ss?.sourceName}>
+            {ss?.sourceName ?? "Spreadsheet"}
+          </p>
+          <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">
+            Spreadsheet
+          </span>
+        </div>
+        {ss ? (
+          <div className="mt-1 grid grid-cols-3 gap-1 text-center text-[10px]">
+            <CardStat label="Rows" value={ss.rowCount} />
+            <CardStat label="Columns" value={ss.columnCount} />
+            <CardStat label="Mapped" value={[ss.mapping.name, ss.mapping.quantity, ss.mapping.uom, ss.mapping.cost].filter(Boolean).length} />
+          </div>
+        ) : (
+          <p className="mt-1 text-[10px] text-fg/45">Loading preview…</p>
+        )}
+      </div>
+    );
+  }
+
+  // PDF / DWG fallback — no modelAsset to lean on.
   const modeLabel =
     snapshot.mode === "pdf" ? "PDF takeoff"
       : snapshot.mode === "dwg" ? "DWG / DXF takeoff"
