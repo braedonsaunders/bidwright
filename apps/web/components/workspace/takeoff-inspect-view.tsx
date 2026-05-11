@@ -1098,34 +1098,77 @@ function PhotoBomInspect({
     );
   });
 
+  // Always show the row list — header content is height-capped and
+  // internally scrolling so a long summary or warning stack can't push the
+  // rows off-screen the way it did in the first cut.
+  const [showSummary, setShowSummary] = useState(true);
+  const [confirmingDiscard, setConfirmingDiscard] = useState(false);
+
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 text-xs">
-      {/* Header: source photo count + AI summary + dismiss */}
+      {/* Header: source photo count + collapsible AI summary / warnings.
+          shrink-0 + max-h so the row list below is always visible. */}
       <div className="shrink-0 rounded-md border border-line bg-panel/60 px-2.5 py-1.5">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-fg/45">
-              Photo BOM · {bom.photoCount} photo{bom.photoCount === 1 ? "" : "s"} · {bom.rows.length} item
-              {bom.rows.length === 1 ? "" : "s"}
-            </p>
-            {bom.summary && (
-              <p className="mt-1 text-[11px] leading-relaxed text-fg/70">{bom.summary}</p>
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-[10px] font-medium uppercase tracking-wider text-fg/45">
+            Photo BOM · {bom.photoCount} photo{bom.photoCount === 1 ? "" : "s"} · {bom.rows.length} item
+            {bom.rows.length === 1 ? "" : "s"}
+            {bom.warnings.length > 0 && (
+              <span className="ml-1 normal-case text-warning">· {bom.warnings.length} warning{bom.warnings.length === 1 ? "" : "s"}</span>
+            )}
+          </p>
+          <div className="flex shrink-0 items-center gap-1">
+            {(bom.summary || bom.warnings.length > 0) && (
+              <button
+                type="button"
+                onClick={() => setShowSummary((s) => !s)}
+                className="rounded px-1.5 py-0.5 text-[10px] font-medium text-fg/45 hover:bg-panel2 hover:text-fg/70"
+                title="Show or hide the AI summary"
+              >
+                {showSummary ? "Hide details" : "Show details"}
+              </button>
+            )}
+            {confirmingDiscard ? (
+              <>
+                <button
+                  type="button"
+                  onClick={() => actions?.clearPhotoBomResults()}
+                  className="rounded bg-danger/15 px-1.5 py-0.5 text-[10px] font-medium text-danger hover:bg-danger/25"
+                >
+                  Confirm discard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmingDiscard(false)}
+                  className="rounded px-1.5 py-0.5 text-[10px] font-medium text-fg/45 hover:text-fg/70"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setConfirmingDiscard(true)}
+                className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger"
+                title="Discard these results"
+              >
+                <X className="h-3 w-3" />
+              </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={() => actions?.clearPhotoBomResults()}
-            className="shrink-0 rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg/70"
-            title="Discard these results — the photos stay selected and you can re-run."
-          >
-            <X className="h-3 w-3" />
-          </button>
         </div>
-        {bom.warnings.length > 0 && (
-          <div className="mt-1.5 rounded-md border border-warning/30 bg-warning/5 px-2 py-1 text-[10px] text-warning">
-            {bom.warnings.map((w, i) => (
-              <p key={i}>· {w}</p>
-            ))}
+        {showSummary && (bom.summary || bom.warnings.length > 0) && (
+          <div className="mt-1.5 max-h-32 space-y-1.5 overflow-auto pr-1">
+            {bom.summary && (
+              <p className="text-[11px] leading-relaxed text-fg/70">{bom.summary}</p>
+            )}
+            {bom.warnings.length > 0 && (
+              <div className="rounded-md border border-warning/30 bg-warning/5 px-2 py-1 text-[10px] text-warning">
+                {bom.warnings.map((w, i) => (
+                  <p key={i}>· {w}</p>
+                ))}
+              </div>
+            )}
           </div>
         )}
       </div>
