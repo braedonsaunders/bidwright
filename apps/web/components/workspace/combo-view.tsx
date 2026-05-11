@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
-import { Compass, Link2, Maximize2, Minimize2 } from "lucide-react";
+import { Compass, FileText, Layers, Maximize2, Minimize2 } from "lucide-react";
 import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
@@ -13,7 +13,11 @@ import type { TakeoffAnnotation } from "./takeoff/annotation-canvas";
 import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
-type RightPanelTab = "inspect" | "link";
+/** Inspect = current document summary + details about the selected entity.
+ *  Entities = full scrolling list of every entity in the document, with
+ *  per-row "+ Add" to the active worksheet. The old "Link" tab folded into
+ *  Inspect's selection details since both were keyed off the same selection. */
+type RightPanelTab = "inspect" | "entities";
 
 export interface ComboViewProps {
   workspace: ProjectWorkspaceData;
@@ -271,7 +275,7 @@ function RightPanel({
 }) {
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "inspect", label: "Inspect", icon: Compass },
-    { id: "link", label: "Link", icon: Link2 },
+    { id: "entities", label: "Entities", icon: Layers },
   ];
 
   const FsIcon = fullscreen ? Minimize2 : Maximize2;
@@ -307,69 +311,96 @@ function RightPanel({
         </button>
       </div>
 
-      {/* Inspect view has its own internal scrolling on the element list so the
-          header / search / basis / group toggles stay sticky while the list
-          fills the remaining height. Anything else (Link tab content) gets
-          the old overflow-auto behaviour. */}
-      <div className={cn("flex-1 min-h-0 p-3", tab === "inspect" ? "flex flex-col" : "overflow-auto")}>
-        {tab === "inspect" && <TakeoffInspectView snapshot={inspectSnapshot} actions={inspectActionsRef.current} />}
-        {tab === "link" && (
-          <TakeoffLinkView
-            workspace={workspace}
-            selection={takeoffSelection}
-            annotations={annotationsCache}
-            activeWorksheetId={activeWorksheetId}
-            onLinksMutated={onLinksMutated}
-            onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
-            onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
-          />
+      {/* Inspect needs flex flex-col so the doc summary stays pinned at the top
+          and the selection-details pane below it scrolls on its own. Entities
+          is the same so the list header + group selector stay sticky while the
+          list scrolls. */}
+      <div className="flex-1 min-h-0 p-3 flex flex-col gap-2 overflow-hidden">
+        {tab === "inspect" && (
+          <>
+            <DocumentSummaryCard snapshot={inspectSnapshot} />
+            <div className="flex min-h-0 flex-1 flex-col overflow-auto rounded-md border border-line bg-panel/40 p-2">
+              <TakeoffLinkView
+                workspace={workspace}
+                selection={takeoffSelection}
+                annotations={annotationsCache}
+                activeWorksheetId={activeWorksheetId}
+                onLinksMutated={onLinksMutated}
+                onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
+                onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
+              />
+            </div>
+          </>
+        )}
+        {tab === "entities" && (
+          <TakeoffInspectView snapshot={inspectSnapshot} actions={inspectActionsRef.current} />
         )}
       </div>
     </>
   );
 }
 
-function InspectView({
-  workspace,
-  activeWorksheetId,
-}: {
-  workspace: ProjectWorkspaceData;
-  activeWorksheetId?: string;
-}) {
-  const activeWs =
-    activeWorksheetId && activeWorksheetId !== "all"
-      ? workspace.worksheets.find((w) => w.id === activeWorksheetId)
-      : undefined;
-  const itemCount = activeWs?.items?.length ?? workspace.worksheets.reduce((acc, w) => acc + (w.items?.length ?? 0), 0);
-  const wsCount = workspace.worksheets.length;
-
-  return (
-    <div className="space-y-5 text-xs">
-      <Section label="Active worksheet">
-        <div className="text-sm text-fg">
-          {activeWs?.name ?? <span className="text-fg/40 italic">All worksheets</span>}
+/** Compact one-row-per-fact header pinned above the Inspect selection
+ *  details. Pulls from whichever snapshot kind the takeoff is currently
+ *  in (PDF / DWG / BIM / 3D / spreadsheet via the empty fallback). */
+function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null }) {
+  if (!snapshot || snapshot.mode === "empty") {
+    return (
+      <div className="shrink-0 rounded-md border border-line bg-panel/50 px-3 py-2">
+        <div className="flex items-center gap-2 text-[11px] text-fg/45">
+          <FileText className="h-3.5 w-3.5 text-fg/30" />
+          <span>No document open</span>
         </div>
-        <Stat label={activeWs ? "Items" : "Worksheets"} value={activeWs ? itemCount : wsCount} />
-        {!activeWs && <Stat label="Items (total)" value={itemCount} />}
-      </Section>
-    </div>
-  );
-}
+      </div>
+    );
+  }
 
-function Section({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="space-y-1.5">
-      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/40">{label}</div>
-      {children}
-    </div>
-  );
-}
+  const modeLabel =
+    snapshot.mode === "pdf" ? "PDF takeoff"
+      : snapshot.mode === "dwg" ? "DWG / DXF takeoff"
+      : snapshot.mode === "bim" ? "BIM model"
+      : snapshot.mode === "model" ? "3D model"
+      : "Document";
 
-function Stat({ label, value }: { label: string; value: number | string }) {
+  const isAnnotationMode = snapshot.mode === "pdf" || snapshot.mode === "dwg";
+  const isModelMode = snapshot.mode === "bim" || snapshot.mode === "model";
+
+  const fileName = snapshot.modelAsset?.fileName;
+  const entityCount = isModelMode
+    ? snapshot.modelAsset?.counts.elements ?? snapshot.modelElements.length
+    : snapshot.annotations.length;
+  const entityLabel = isModelMode ? "elements" : "marks";
+  const linkCount = isModelMode
+    ? snapshot.modelAsset?.counts.links ?? 0
+    : snapshot.takeoffLinks.length;
+
   return (
-    <div className="flex items-center justify-between text-[11px]">
-      <div className="text-fg/40">{label}</div>
-      <div className="text-fg tabular-nums">{value}</div>
+    <div className="shrink-0 rounded-md border border-line bg-panel/50 px-3 py-2 text-[11px]">
+      <div className="flex items-center gap-2">
+        <FileText className="h-3.5 w-3.5 shrink-0 text-fg/40" />
+        <span className="min-w-0 truncate font-semibold text-fg/80" title={fileName ?? undefined}>
+          {fileName ?? modeLabel}
+        </span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-fg/55">
+        <span className="font-medium text-fg/70">{modeLabel}</span>
+        <span className="tabular-nums">
+          {entityCount.toLocaleString()} {entityLabel}
+        </span>
+        {linkCount > 0 && (
+          <span className="tabular-nums">
+            {linkCount.toLocaleString()} linked
+          </span>
+        )}
+        {isModelMode && snapshot.modelAsset && (
+          <span className="font-mono text-fg/45">{snapshot.modelAsset.status}</span>
+        )}
+        {isAnnotationMode && (
+          <span className="tabular-nums">
+            {snapshot.annotations.filter((a) => a.visible).length} visible
+          </span>
+        )}
+      </div>
     </div>
   );
 }
