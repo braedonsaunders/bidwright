@@ -6,10 +6,25 @@ import { cn } from "@/lib/utils";
 import { Button, Input, Textarea } from "@/components/ui";
 import {
   generatePhotoBom,
+  getDocumentDownloadUrl,
   getFileDownloadUrl,
-  type FileNode,
   type PhotoTakeoffResult,
 } from "@/lib/api";
+
+/**
+ * Photos can come into a project two ways: as a SourceDocument (uploaded
+ * through the project intake or dropped at the Documents tab root) or as
+ * a FileNode (uploaded into a user-created folder). Site Photos picks up
+ * both — we just need the origin so we can resolve the right download
+ * URL when fetching bytes for the vision call.
+ */
+export interface PhotoSource {
+  id: string;       // unique within the picker — origin-prefixed
+  rawId: string;    // underlying FileNode.id or SourceDocument.id
+  name: string;
+  size?: number;
+  origin: "fileNode" | "sourceDocument";
+}
 
 /**
  * Site-Photo Intake
@@ -35,8 +50,9 @@ export interface SitePhotoIntakeProps {
   activeWorksheetId: string | null;
   /** Free-text project blurb to pass as system context. */
   projectContextText?: string;
-  /** Project file nodes the caller has filtered to image files. */
-  photoFiles: FileNode[];
+  /** Image-typed entries from the project, drawn from both the file tree
+   *  and from source documents so both upload paths surface here. */
+  photoFiles: PhotoSource[];
   /** Hand results back to TakeoffTab so it can surface them as entities
    *  in the right side panel. Called on every successful analysis;
    *  passing null clears any previous results. */
@@ -130,7 +146,9 @@ export function SitePhotoIntake({
         : [];
       const images = await Promise.all(
         selectedPhotos.map(async (photo, idx) => {
-          const url = getFileDownloadUrl(projectId, photo.id, true);
+          const url = photo.origin === "sourceDocument"
+            ? getDocumentDownloadUrl(projectId, photo.rawId, true)
+            : getFileDownloadUrl(projectId, photo.rawId, true);
           const { data, mimeType } = await fetchPhotoAsBase64(url);
           return {
             data,
@@ -272,7 +290,9 @@ export function SitePhotoIntake({
                     {filteredPhotos.map((photo) => {
                       const selected = selectedIds.has(photo.id);
                       const disabled = !selected && selectionFull;
-                      const url = getFileDownloadUrl(projectId, photo.id, true);
+                      const url = photo.origin === "sourceDocument"
+                        ? getDocumentDownloadUrl(projectId, photo.rawId, true)
+                        : getFileDownloadUrl(projectId, photo.rawId, true);
                       return (
                         <button
                           key={photo.id}

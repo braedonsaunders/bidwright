@@ -331,7 +331,7 @@ import type { InspectActions, InspectSnapshot, InspectModelElement } from "./tak
 // federation concept is over-scoped for the everyday estimator workflow.
 // Schema, API endpoints, and the switcher component stay in the codebase
 // for future "advanced" surface; we just don't mount it in the BIM picker.
-import { SitePhotoIntake } from "./site-photo-intake";
+import { SitePhotoIntake, type PhotoSource } from "./site-photo-intake";
 import { CreateWorksheetModal } from "./modals";
 
 interface TakeoffTabProps {
@@ -3962,7 +3962,31 @@ export function TakeoffTab({
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
-  const photoSources = fileTreeNodes.filter((node) => node.type === "file" && isPhotoFile(node.name));
+  // Site Photos draws from both upload paths: FileNodes (Documents tab
+  // "Upload into folder" flow) AND SourceDocuments (project intake or a
+  // Documents-tab drop at the root, which becomes a `reference`-typed
+  // source doc). Without surfacing both, JPEGs dropped at the root were
+  // showing zero on the intake card.
+  const photoSources: PhotoSource[] = useMemo(() => {
+    const fromFileTree: PhotoSource[] = fileTreeNodes
+      .filter((node) => node.type === "file" && isPhotoFile(node.name))
+      .map((node) => ({
+        id: `fn-${node.id}`,
+        rawId: node.id,
+        name: node.name,
+        size: node.size,
+        origin: "fileNode" as const,
+      }));
+    const fromSourceDocs: PhotoSource[] = (workspace.sourceDocuments ?? [])
+      .filter((doc) => isPhotoFile(doc.fileName))
+      .map((doc) => ({
+        id: `src-${doc.id}`,
+        rawId: doc.id,
+        name: doc.fileName,
+        origin: "sourceDocument" as const,
+      }));
+    return [...fromFileTree, ...fromSourceDocs];
+  }, [fileTreeNodes, workspace.sourceDocuments]);
   const spreadsheetProfiles = spreadsheetPreview?.columnProfiles?.length
     ? spreadsheetPreview.columnProfiles
     : (spreadsheetPreview?.headers ?? []).map((header, index) => {
