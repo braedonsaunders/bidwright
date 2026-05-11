@@ -1509,10 +1509,6 @@ export function TakeoffTab({
           await handleCreateAnnotationGroupLineItem(targets, groupLabel);
         },
         refreshModel: () => void refreshModelAssets(true),
-        askAiAboutModel: () =>
-          onOpenAgentChat?.(
-            `Inspect the 3D model ${selectedDoc?.fileName ?? "the selected model"} using BidWright's model tools. Query model elements, quantities, linked worksheet items, and any unlinked scope, then prepare 5D takeoff recommendations for this estimate.`,
-          ),
       };
     }
   });

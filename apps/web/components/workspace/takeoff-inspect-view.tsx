@@ -1,8 +1,8 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, FilePlus, Link2, Loader2, Pencil, Plus, RefreshCw, Sigma, Trash2, X, BrainCircuit } from "lucide-react";
-import { Button, Input } from "@/components/ui";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Link2, Loader2, Pencil, Plus, RefreshCw, Sigma, Trash2, X } from "lucide-react";
+import { Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
 import type { TakeoffLinkRecord } from "@/lib/api";
@@ -84,7 +84,6 @@ export interface InspectActions {
    *  annotation gets a TakeoffLink so revision diff still reconciles. */
   createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string) => Promise<void> | void;
   refreshModel: () => void;
-  askAiAboutModel: () => void;
 }
 
 const TYPE_LABELS: Record<string, string> = {
@@ -426,7 +425,6 @@ function ModelInspect({
   actions: InspectActions | null;
 }) {
   const { modelElements, modelElementsLoading, modelError, modelSyncing, modelSearch, modelBasis, modelAsset, selectedModelElementId } = snapshot;
-  const isBim = snapshot.mode === "bim";
   const [groupBy, setGroupBy] = useState<InspectGroupBy>("none");
   const [collapsedElementGroups, setCollapsedElementGroups] = useState<Set<string>>(new Set());
 
@@ -484,46 +482,29 @@ function ModelInspect({
 
   return (
     <div className="flex h-full flex-col gap-2 text-xs">
-      {modelAsset && (
-        <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5">
-          <div className="flex items-center justify-between gap-2">
-            <p className="min-w-0 truncate text-[11px] font-semibold text-fg">{modelAsset.fileName}</p>
-            <div className="flex shrink-0 items-center gap-1">
-              <span
-                className={cn(
-                  "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
-                  isBim ? "bg-violet-500/15 text-violet-500" : "bg-rose-500/15 text-rose-500",
-                )}
-                title={isBim ? "Building Information Model" : "Geometry-only model"}
-              >
-                {isBim ? "BIM" : "3D"}
-              </span>
-              <span
-                className={cn(
-                  "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
-                  modelAsset.isEditable ? "bg-success/15 text-success" : "bg-warning/15 text-warning",
-                )}
-              >
-                {modelAsset.isEditable ? "Editable" : "Preview"}
-              </span>
-            </div>
-          </div>
-          <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[10px]">
-            <Stat label="Objects" value={modelAsset.counts.elements} />
-            <Stat label="Qty" value={modelAsset.counts.quantities} />
-            <Stat label="Links" value={modelAsset.counts.links} />
-            <Stat label="Issues" value={modelAsset.counts.issues} />
-          </div>
-        </div>
-      )}
-
+      {/* Document-level summary lives in the Inspect tab now; this list keeps
+          just the controls that drive what's shown and gives the rows the
+          rest of the vertical space. */}
       <div className="shrink-0 space-y-1.5">
-        <Input
-          className="h-7 text-xs"
-          value={modelSearch}
-          onChange={(e) => actions?.setModelSearch(e.target.value)}
-          placeholder="Search objects, classes, materials..."
-        />
+        <div className="flex items-center gap-1">
+          <Input
+            className="h-7 flex-1 text-xs"
+            value={modelSearch}
+            onChange={(e) => actions?.setModelSearch(e.target.value)}
+            placeholder="Search objects, classes, materials..."
+          />
+          <button
+            type="button"
+            disabled={modelSyncing}
+            onClick={() => actions?.refreshModel()}
+            title="Sync the model index from disk"
+            className={cn(
+              "inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md border border-line text-fg/55 transition-colors hover:border-accent/40 hover:text-accent disabled:opacity-50",
+            )}
+          >
+            {modelSyncing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+          </button>
+        </div>
         <div className="flex items-center gap-0.5 rounded-md border border-line bg-panel p-0.5">
           {(["count", "area", "volume"] as InspectModelBasis[]).map((basis) => (
             <button
@@ -634,23 +615,6 @@ function ModelInspect({
           {modelError}
         </div>
       )}
-
-      <div className="shrink-0 flex flex-col gap-1.5">
-        <Button
-          variant="ghost"
-          size="sm"
-          className="w-full justify-center"
-          disabled={modelSyncing}
-          onClick={() => actions?.refreshModel()}
-        >
-          {modelSyncing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-          Sync model index
-        </Button>
-        <Button variant="secondary" size="sm" className="w-full justify-center" onClick={() => actions?.askAiAboutModel()}>
-          <BrainCircuit className="h-3 w-3" />
-          Ask AI about this model
-        </Button>
-      </div>
     </div>
   );
 }
@@ -747,14 +711,6 @@ function renderElementRow(
   );
 }
 
-function Stat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded border border-line bg-bg/40 py-0.5">
-      <p className="text-[9px] text-fg/40">{label}</p>
-      <p className="text-[11px] font-semibold text-fg/80 tabular-nums">{value}</p>
-    </div>
-  );
-}
 
 function formatMeasurement(ann: TakeoffAnnotation): string {
   if (!ann.measurement) return "—";

@@ -415,66 +415,77 @@ function ModelElementLinkPane({
     .join(" · ");
 
   return (
-    <div className="flex h-full flex-col gap-3 text-xs">
-      <SelectionHeader title={selection.elementName} subtitle={subtitle || undefined} />
+    <div className="flex h-full min-h-0 flex-col gap-3 text-xs">
+      <div className="shrink-0">
+        <SelectionHeader title={selection.elementName} subtitle={subtitle || undefined} />
+      </div>
 
-      <Section label={`Linked items (${links.length})`}>
-        {loading && links.length === 0 ? (
-          <div className="flex items-center gap-2 text-fg/40">
-            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
-          </div>
-        ) : links.length === 0 ? (
-          <p className="text-[11px] italic text-fg/40">No links yet.</p>
-        ) : (
-          <ul className="space-y-1">
-            {links.map((link) => {
-              const meta = itemLookup.get(link.worksheetItemId);
-              return (
-                <li
-                  key={link.id}
-                  className="flex items-start gap-2 rounded-md border border-line bg-panel/60 px-2 py-1.5"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-fg">{meta?.name ?? link.worksheetItemId}</p>
-                    <p className="truncate text-[10px] text-fg/40">
-                      {meta?.worksheetName ?? "—"} · {link.quantityField} · ×{link.multiplier.toFixed(2)} ={" "}
-                      <span className="text-fg/60">
-                        {link.derivedQuantity.toFixed(2)} {meta?.uom ?? ""}
-                      </span>
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => void handleDelete(link.id)}
-                    className="rounded p-1 text-fg/30 transition-colors hover:bg-danger/10 hover:text-danger"
-                    title="Remove link"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {error && <p className="text-[11px] text-danger">{error}</p>}
-      </Section>
+      {/* Primary action is anchored high so it stays visible without scrolling
+          when the linked-items list grows long. The list itself scrolls
+          internally so the whole pane stays fit-to-panel-height. */}
+      {onCreateLineItem && (
+        <div className="shrink-0">
+          <ModelElementSendToEstimateButton
+            elementId={selection.elementId}
+            onCreate={onCreateLineItem}
+            onSent={handleSent}
+          />
+        </div>
+      )}
 
       {projectId && (
-        <CreateModelElementLinkForm
-          projectId={projectId}
-          selection={selection}
-          worksheets={workspace.worksheets}
-          onCreated={handleSent}
-        />
+        <div className="shrink-0">
+          <CreateModelElementLinkForm
+            projectId={projectId}
+            selection={selection}
+            worksheets={workspace.worksheets}
+            onCreated={handleSent}
+          />
+        </div>
       )}
 
-      {onCreateLineItem && (
-        <ModelElementSendToEstimateButton
-          elementId={selection.elementId}
-          onCreate={onCreateLineItem}
-          onSent={handleSent}
-        />
-      )}
+      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-auto">
+        <Section label={`Linked items (${links.length})`}>
+          {loading && links.length === 0 ? (
+            <div className="flex items-center gap-2 text-fg/40">
+              <Loader2 className="h-3 w-3 animate-spin" /> Loading…
+            </div>
+          ) : links.length === 0 ? (
+            <p className="text-[11px] italic text-fg/40">No links yet.</p>
+          ) : (
+            <ul className="space-y-1">
+              {links.map((link) => {
+                const meta = itemLookup.get(link.worksheetItemId);
+                return (
+                  <li
+                    key={link.id}
+                    className="flex items-start gap-2 rounded-md border border-line bg-panel/60 px-2 py-1.5"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-fg">{meta?.name ?? link.worksheetItemId}</p>
+                      <p className="truncate text-[10px] text-fg/40">
+                        {meta?.worksheetName ?? "—"} · {link.quantityField} · ×{link.multiplier.toFixed(2)} ={" "}
+                        <span className="text-fg/60">
+                          {link.derivedQuantity.toFixed(2)} {meta?.uom ?? ""}
+                        </span>
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleDelete(link.id)}
+                      className="rounded p-1 text-fg/30 transition-colors hover:bg-danger/10 hover:text-danger"
+                      title="Remove link"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+          {error && <p className="text-[11px] text-danger">{error}</p>}
+        </Section>
+      </div>
     </div>
   );
 }

@@ -312,14 +312,14 @@ function RightPanel({
       </div>
 
       {/* Inspect needs flex flex-col so the doc summary stays pinned at the top
-          and the selection-details pane below it scrolls on its own. Entities
-          is the same so the list header + group selector stay sticky while the
-          list scrolls. */}
+          and the selection-details pane below it owns its own internal scroll
+          on the linked-items list — the primary action button (Send to estimate)
+          must never fall off-screen, so the pane itself stays fit-to-height. */}
       <div className="flex-1 min-h-0 p-3 flex flex-col gap-2 overflow-hidden">
         {tab === "inspect" && (
           <>
             <DocumentSummaryCard snapshot={inspectSnapshot} />
-            <div className="flex min-h-0 flex-1 flex-col overflow-auto rounded-md border border-line bg-panel/40 p-2">
+            <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-panel/40 p-2">
               <TakeoffLinkView
                 workspace={workspace}
                 selection={takeoffSelection}
@@ -340,9 +340,11 @@ function RightPanel({
   );
 }
 
-/** Compact one-row-per-fact header pinned above the Inspect selection
- *  details. Pulls from whichever snapshot kind the takeoff is currently
- *  in (PDF / DWG / BIM / 3D / spreadsheet via the empty fallback). */
+/** Document summary header pinned at the top of the Inspect tab. For BIM /
+ *  3D model documents this carries the full KPI block (BIM / Editable badges
+ *  plus Objects / Qty / Links / Issues stats); for PDF / DWG it falls back to
+ *  a compact filename + counts row. The block used to live inside the
+ *  Entities list; surfacing it here gives the list its vertical space back. */
 function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null }) {
   if (!snapshot || snapshot.mode === "empty") {
     return (
@@ -355,24 +357,54 @@ function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null })
     );
   }
 
+  const isModelMode = snapshot.mode === "bim" || snapshot.mode === "model";
+  const isBim = snapshot.mode === "bim";
+
+  if (isModelMode && snapshot.modelAsset) {
+    return (
+      <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5 text-xs">
+        <div className="flex items-center justify-between gap-2">
+          <p className="min-w-0 truncate text-[11px] font-semibold text-fg" title={snapshot.modelAsset.fileName}>
+            {snapshot.modelAsset.fileName}
+          </p>
+          <div className="flex shrink-0 items-center gap-1">
+            <span
+              className={cn(
+                "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
+                isBim ? "bg-violet-500/15 text-violet-500" : "bg-rose-500/15 text-rose-500",
+              )}
+              title={isBim ? "Building Information Model" : "Geometry-only model"}
+            >
+              {isBim ? "BIM" : "3D"}
+            </span>
+            <span
+              className={cn(
+                "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
+                snapshot.modelAsset.isEditable ? "bg-success/15 text-success" : "bg-warning/15 text-warning",
+              )}
+            >
+              {snapshot.modelAsset.isEditable ? "Editable" : "Preview"}
+            </span>
+          </div>
+        </div>
+        <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[10px]">
+          <CardStat label="Objects" value={snapshot.modelAsset.counts.elements} />
+          <CardStat label="Qty" value={snapshot.modelAsset.counts.quantities} />
+          <CardStat label="Links" value={snapshot.modelAsset.counts.links} />
+          <CardStat label="Issues" value={snapshot.modelAsset.counts.issues} />
+        </div>
+      </div>
+    );
+  }
+
+  // PDF / DWG / spreadsheet fallback — no modelAsset to lean on.
   const modeLabel =
     snapshot.mode === "pdf" ? "PDF takeoff"
       : snapshot.mode === "dwg" ? "DWG / DXF takeoff"
-      : snapshot.mode === "bim" ? "BIM model"
-      : snapshot.mode === "model" ? "3D model"
       : "Document";
-
-  const isAnnotationMode = snapshot.mode === "pdf" || snapshot.mode === "dwg";
-  const isModelMode = snapshot.mode === "bim" || snapshot.mode === "model";
-
   const fileName = snapshot.modelAsset?.fileName;
-  const entityCount = isModelMode
-    ? snapshot.modelAsset?.counts.elements ?? snapshot.modelElements.length
-    : snapshot.annotations.length;
-  const entityLabel = isModelMode ? "elements" : "marks";
-  const linkCount = isModelMode
-    ? snapshot.modelAsset?.counts.links ?? 0
-    : snapshot.takeoffLinks.length;
+  const annotationCount = snapshot.annotations.length;
+  const linkCount = snapshot.takeoffLinks.length;
 
   return (
     <div className="shrink-0 rounded-md border border-line bg-panel/50 px-3 py-2 text-[11px]">
@@ -384,23 +416,25 @@ function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null })
       </div>
       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-fg/55">
         <span className="font-medium text-fg/70">{modeLabel}</span>
-        <span className="tabular-nums">
-          {entityCount.toLocaleString()} {entityLabel}
-        </span>
+        <span className="tabular-nums">{annotationCount.toLocaleString()} marks</span>
         {linkCount > 0 && (
-          <span className="tabular-nums">
-            {linkCount.toLocaleString()} linked
-          </span>
+          <span className="tabular-nums">{linkCount.toLocaleString()} linked</span>
         )}
-        {isModelMode && snapshot.modelAsset && (
-          <span className="font-mono text-fg/45">{snapshot.modelAsset.status}</span>
-        )}
-        {isAnnotationMode && (
-          <span className="tabular-nums">
-            {snapshot.annotations.filter((a) => a.visible).length} visible
-          </span>
-        )}
+        <span className="tabular-nums">
+          {snapshot.annotations.filter((a) => a.visible).length} visible
+        </span>
       </div>
+    </div>
+  );
+}
+
+/** Tiny KPI cell — same shape as ModelInspect's old Stat helper, kept local
+ *  to DocumentSummaryCard so the inspect-view rewrite can drop its copy. */
+function CardStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md bg-bg/30 py-1">
+      <p className="text-[9px] uppercase tracking-wider text-fg/40">{label}</p>
+      <p className="text-[12px] font-semibold tabular-nums text-fg">{value.toLocaleString()}</p>
     </div>
   );
 }
