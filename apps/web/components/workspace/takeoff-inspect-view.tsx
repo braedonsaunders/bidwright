@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Link2, Loader2, Pencil, Plus, RefreshCw, Sigma, Trash2, X } from "lucide-react";
+import * as Popover from "@radix-ui/react-popover";
 import { Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
@@ -125,30 +126,27 @@ export interface InspectActions {
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
-  /** One-click "+ Add" for a model element. Preserves classification
-   *  (Uniformat/MasterFormat/...) and the primary quantity; binds a
-   *  ModelTakeoffLink so the line stays in sync with the element on
-   *  revision diff. */
-  createLineItemFromElement: (id: string) => Promise<void> | void;
+  /** "+ Add" for a model element. The categoryId comes from the popover
+   *  the user just clicked — each + Add fires its own picker so the
+   *  estimator can switch categories every row without leaving the
+   *  context. The takeoff-tab side persists `categoryId` to localStorage
+   *  as the last-used, which the popover pre-highlights next time. */
+  createLineItemFromElement: (id: string, categoryId: string) => Promise<void> | void;
   /** "Σ Add" — one summed line item from N model elements, with each
    *  element bound to it via a ModelTakeoffLink for revision-diff sync. */
-  createLineItemFromElementGroup: (ids: string[], groupLabel: string) => Promise<void> | void;
-  /** One-click "+ Add" for a PDF / DWG annotation. Picks the right primary
-   *  quantity from the measurement (area > volume > length > count). */
-  createLineItemFromAnnotation: (id: string) => Promise<void> | void;
-  /** "Σ Add" — one summed line item from N annotations. Each underlying
-   *  annotation gets a TakeoffLink so revision diff still reconciles. */
-  createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string) => Promise<void> | void;
-  /** "+ Add" for a single spreadsheet row. The implementation uses the
-   *  heuristic column mapping on the snapshot to populate entityName /
-   *  quantity / uom / cost; rows can still be re-edited inline on the
-   *  worksheet afterward. */
-  createLineItemFromSpreadsheetRow: (rowIndex: number) => Promise<void> | void;
-  /** "Σ Add" — import every spreadsheet row as its own line item in one
-   *  batch. Same mapping, same target worksheet. */
-  createLineItemsFromAllSpreadsheetRows: () => Promise<void> | void;
-  /** Override which category every subsequent + Add lands in. Persisted
-   *  per-project on the takeoff-tab side via localStorage. */
+  createLineItemFromElementGroup: (ids: string[], groupLabel: string, categoryId: string) => Promise<void> | void;
+  /** "+ Add" for a PDF / DWG annotation. Picks the right primary quantity
+   *  from the measurement (area > volume > length > count). */
+  createLineItemFromAnnotation: (id: string, categoryId: string) => Promise<void> | void;
+  /** "Σ Add" — one summed line item from N annotations. */
+  createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string, categoryId: string) => Promise<void> | void;
+  /** "+ Add" for a single spreadsheet row using the heuristic column
+   *  mapping for everything except the category. */
+  createLineItemFromSpreadsheetRow: (rowIndex: number, categoryId: string) => Promise<void> | void;
+  /** "Σ Add" — import every spreadsheet row as its own line item. */
+  createLineItemsFromAllSpreadsheetRows: (categoryId: string) => Promise<void> | void;
+  /** Remember a category as the new "last used" so the next + Add popover
+   *  pre-highlights it. Persisted per-project on the takeoff-tab side. */
   setTakeoffCategoryId: (categoryId: string | null) => void;
   refreshModel: () => void;
 }
@@ -180,93 +178,122 @@ export function TakeoffInspectView({
     );
   }
 
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-2 text-xs">
-      <TakeoffCategoryPicker snapshot={snapshot} actions={actions} />
-      <div className="flex min-h-0 flex-1 flex-col">
-        {snapshot.mode === "bim" || snapshot.mode === "model" ? (
-          <ModelInspect snapshot={snapshot} actions={actions} />
-        ) : snapshot.mode === "spreadsheet" ? (
-          <SpreadsheetInspect snapshot={snapshot} actions={actions} />
-        ) : (
-          <AnnotationsInspect snapshot={snapshot} actions={actions} />
-        )}
-      </div>
-    </div>
-  );
+  if (snapshot.mode === "bim" || snapshot.mode === "model") {
+    return <ModelInspect snapshot={snapshot} actions={actions} />;
+  }
+
+  if (snapshot.mode === "spreadsheet") {
+    return <SpreadsheetInspect snapshot={snapshot} actions={actions} />;
+  }
+
+  return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
 }
 
-/** Horizontal chip strip — one click to switch which bucket the next + Add
- *  lands in. Optimised for the workflow where an estimator pings between
- *  Material / Subcontractor / Equipment etc. as they crawl an assembly,
- *  potentially changing category between every row. A dropdown would force
- *  two clicks per switch; the chip strip drops it to one.
+/** Per-click category picker — wraps a "+ Add"-style trigger and opens a
+ *  small popover listing every enabled category. Picking a chip immediately
+ *  fires onPick(categoryId), closes the popover, and remembers that
+ *  category as the last-used (pre-highlighted on the next open) via
+ *  setTakeoffCategoryId.
  *
- *  Rate-schedule categories appear at the end greyed-out with a tooltip so
- *  the user can see why they're not pickable without leaving the takeoff. */
-function TakeoffCategoryPicker({
+ *  This is the right shape when the estimator may switch categories on
+ *  every row — a sticky chip strip at the top would force them to traverse
+ *  back-and-forth between the strip and the row.
+ *
+ *  Rate-schedule categories are shown disabled with a hint so the estimator
+ *  can see why they're not pickable. */
+function AddToCategoryPopover({
   snapshot,
   actions,
+  onPick,
+  triggerLabel,
+  triggerClassName,
+  triggerTitle,
+  triggerIcon,
 }: {
   snapshot: InspectSnapshot;
   actions: InspectActions | null;
+  onPick: (categoryId: string) => void;
+  triggerLabel: React.ReactNode;
+  triggerClassName: string;
+  triggerTitle: string;
+  triggerIcon: React.ReactNode;
 }) {
   const { availableCategories, takeoffCategoryId } = snapshot;
-
-  if (availableCategories.length === 0) {
-    return (
-      <div className="shrink-0 rounded-md border border-warning/30 bg-warning/5 px-2.5 py-1.5 text-[11px] text-warning">
-        Enable at least one estimate category in Settings before importing takeoff items.
-      </div>
-    );
-  }
-
-  // Sort: pickable first (freeform / catalog), rate-schedule last so the
-  // disabled chips don't get in the way of the common click targets.
-  const sorted = availableCategories.slice().sort((a, b) => {
-    const aRs = a.itemSource === "rate_schedule" ? 1 : 0;
-    const bRs = b.itemSource === "rate_schedule" ? 1 : 0;
-    if (aRs !== bRs) return aRs - bRs;
-    return a.order - b.order;
-  });
+  const [open, setOpen] = useState(false);
+  const pickable = availableCategories.filter((c) => c.itemSource !== "rate_schedule");
+  const rateScheduleOnly = availableCategories.filter((c) => c.itemSource === "rate_schedule");
 
   return (
-    <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2 py-1">
-      <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:thin]">
-        <span className="shrink-0 px-1 text-[9px] font-medium uppercase tracking-wider text-fg/45">
-          + Add to
-        </span>
-        {sorted.map((c) => {
-          const isSelected = c.id === takeoffCategoryId;
-          const isRateSchedule = c.itemSource === "rate_schedule";
-          return (
-            <button
-              key={c.id}
-              type="button"
-              disabled={isRateSchedule}
-              onClick={() => actions?.setTakeoffCategoryId(c.id)}
-              title={
-                isRateSchedule
-                  ? `${c.name} requires imported rate-schedule items; takeoff entities don't carry them.`
-                  : isSelected
-                    ? `Sticky bucket for + Add. Click another chip to switch.`
-                    : `Make ${c.name} the active + Add bucket.`
-              }
-              className={cn(
-                "shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
-                isRateSchedule
-                  ? "cursor-not-allowed border-line/50 bg-fg/5 text-fg/35"
-                  : isSelected
-                    ? "border-accent bg-accent/15 text-accent shadow-sm"
-                    : "border-line bg-bg/50 text-fg/70 hover:border-accent/40 hover:text-fg",
-              )}
-            >
-              {c.name}
-            </button>
-          );
-        })}
-      </div>
-    </div>
+    <Popover.Root open={open} onOpenChange={setOpen}>
+      <Popover.Trigger asChild>
+        <button
+          type="button"
+          onClick={(e) => e.stopPropagation()}
+          className={triggerClassName}
+          title={triggerTitle}
+        >
+          {triggerIcon}
+          {triggerLabel}
+        </button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="end"
+          sideOffset={4}
+          className="z-[100] w-56 rounded-md border border-line bg-panel p-1.5 shadow-xl outline-none"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {availableCategories.length === 0 ? (
+            <p className="px-2 py-2 text-[11px] text-warning">
+              Enable an estimate category in Settings first.
+            </p>
+          ) : (
+            <>
+              <p className="px-1 pb-1 text-[9px] font-medium uppercase tracking-wider text-fg/40">
+                Add to category
+              </p>
+              <div className="flex flex-col gap-0.5">
+                {pickable.map((c) => {
+                  const isLast = c.id === takeoffCategoryId;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      autoFocus={isLast}
+                      onClick={() => {
+                        onPick(c.id);
+                        actions?.setTakeoffCategoryId(c.id);
+                        setOpen(false);
+                      }}
+                      className={cn(
+                        "flex items-center justify-between rounded px-2 py-1 text-left text-[11px] transition-colors hover:bg-accent/10 focus:bg-accent/10 focus:outline-none",
+                        isLast ? "text-accent" : "text-fg/75",
+                      )}
+                    >
+                      <span className="truncate">{c.name}</span>
+                      {isLast && <span className="text-[9px] uppercase text-accent/70">last used</span>}
+                    </button>
+                  );
+                })}
+                {rateScheduleOnly.length > 0 && (
+                  <div className="mt-1 border-t border-line pt-1">
+                    {rateScheduleOnly.map((c) => (
+                      <p
+                        key={c.id}
+                        className="px-2 py-1 text-[10px] text-fg/35"
+                        title={`${c.name} requires imported rate-schedule items; takeoff entities don't carry them.`}
+                      >
+                        {c.name} <span className="text-fg/25">— needs rate-schedule items</span>
+                      </p>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </>
+          )}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -355,21 +382,21 @@ function AnnotationsInspect({
                       )}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
+                  <AddToCategoryPopover
+                    snapshot={snapshot}
+                    actions={actions}
+                    onPick={(categoryId) =>
                       void actions?.createLineItemFromAnnotationGroup(
                         items.map((it) => it.id),
                         groupLabel,
-                      );
-                    }}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
-                    title={`Add one summed line item from all ${items.length} marks in ${groupLabel}`}
-                  >
-                    <Sigma className="h-3 w-3" />
-                    Add
-                  </button>
+                        categoryId,
+                      )
+                    }
+                    triggerLabel="Add"
+                    triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
+                    triggerTitle={`Add one summed line item from all ${items.length} marks in ${groupLabel} — pick a category`}
+                    triggerIcon={<Sigma className="h-3 w-3" />}
+                  />
                 </div>
                 {!collapsed && (
                   <div className="ml-2 mt-0.5 space-y-0.5">
@@ -389,6 +416,7 @@ function AnnotationsInspect({
                           linkCount={linkCountMap.get(ann.id) ?? 0}
                           actions={actions}
                           supportsInlineEdit={supportsInlineEdit}
+                          snapshot={snapshot}
                         />
                       ),
                     )}
@@ -409,12 +437,14 @@ function AnnotationRow({
   linkCount,
   actions,
   supportsInlineEdit,
+  snapshot,
 }: {
   ann: TakeoffAnnotation;
   isSelected: boolean;
   linkCount: number;
   actions: InspectActions | null;
   supportsInlineEdit: boolean;
+  snapshot: InspectSnapshot;
 }) {
   return (
     <div
@@ -440,18 +470,16 @@ function AnnotationRow({
         <p className="text-[10px] text-fg/40">{formatMeasurement(ann)}</p>
       </div>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
-        {linkCount === 0 && (
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              void actions?.createLineItemFromAnnotation(ann.id);
-            }}
-            className="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-            title="Add a worksheet line item from this annotation (carries quantity, keeps it linked)"
-          >
-            <Plus className="h-3 w-3" />
-            Add
-          </button>
+        {linkCount === 0 && snapshot && (
+          <AddToCategoryPopover
+            snapshot={snapshot}
+            actions={actions}
+            onPick={(categoryId) => void actions?.createLineItemFromAnnotation(ann.id, categoryId)}
+            triggerLabel="Add"
+            triggerClassName="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+            triggerTitle="Add this annotation to a worksheet — pick a category"
+            triggerIcon={<Plus className="h-3 w-3" />}
+          />
         )}
         <button
           onClick={(e) => {
@@ -731,32 +759,33 @@ function ModelInspect({
                       )}
                     </span>
                   </button>
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
+                  <AddToCategoryPopover
+                    snapshot={snapshot}
+                    actions={actions}
+                    onPick={(categoryId) =>
                       void actions?.createLineItemFromElementGroup(
                         group.elements.map((el) => el.id),
                         group.label,
-                      );
-                    }}
-                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
-                    title={`Add one summed line item from all ${group.elements.length} elements in ${group.label}`}
-                  >
-                    <Sigma className="h-3 w-3" />
-                    Add
-                  </button>
+                        categoryId,
+                      )
+                    }
+                    triggerLabel="Add"
+                    triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
+                    triggerTitle={`Add one summed line item from all ${group.elements.length} elements in ${group.label} — pick a category`}
+                    triggerIcon={<Sigma className="h-3 w-3" />}
+                  />
                 </div>
                 {!collapsed && group.elements.map((element) => renderElementRow(
                   element,
                   selectedModelElementId,
                   actions,
+                  snapshot,
                 ))}
               </div>
             );
           })
         ) : (
-          modelElements.map((element) => renderElementRow(element, selectedModelElementId, actions))
+          modelElements.map((element) => renderElementRow(element, selectedModelElementId, actions, snapshot))
         )}
       </div>
 
@@ -776,6 +805,7 @@ function renderElementRow(
   element: InspectModelElement,
   selectedModelElementId: string | null,
   actions: InspectActions | null,
+  snapshot: InspectSnapshot,
 ) {
   const isSelected = selectedModelElementId === element.id;
   const uniformat = element.classification?.uniformat?.trim();
@@ -842,18 +872,15 @@ function renderElementRow(
               Linked
             </span>
           ) : (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                void actions?.createLineItemFromElement(element.id);
-              }}
-              className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-              title="Add a worksheet line item from this element (carries classification + quantity, keeps it linked)"
-            >
-              <Plus className="h-3 w-3" />
-              Add
-            </button>
+            <AddToCategoryPopover
+              snapshot={snapshot}
+              actions={actions}
+              onPick={(categoryId) => void actions?.createLineItemFromElement(element.id, categoryId)}
+              triggerLabel="Add"
+              triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+              triggerTitle="Add this element to a worksheet — pick a category"
+              triggerIcon={<Plus className="h-3 w-3" />}
+            />
           )}
         </div>
       </div>
@@ -939,16 +966,15 @@ function SpreadsheetInspect({
             <span className="min-w-0 flex-1 truncate">All rows</span>
             <span className="shrink-0 text-fg/40">{filteredRows.length}</span>
           </div>
-          <button
-            type="button"
-            onClick={() => void actions?.createLineItemsFromAllSpreadsheetRows()}
-            disabled={ss.rows.length === 0}
-            className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 transition-colors hover:bg-accent/10 hover:text-accent disabled:opacity-40"
-            title={`Import every row as its own worksheet line item`}
-          >
-            <Sigma className="h-3 w-3" />
-            Add all
-          </button>
+          <AddToCategoryPopover
+            snapshot={snapshot}
+            actions={actions}
+            onPick={(categoryId) => void actions?.createLineItemsFromAllSpreadsheetRows(categoryId)}
+            triggerLabel="Add all"
+            triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 transition-colors hover:bg-accent/10 hover:text-accent disabled:opacity-40"
+            triggerTitle="Import every row as its own worksheet line item — pick a category"
+            triggerIcon={<Sigma className="h-3 w-3" />}
+          />
         </div>
 
         {filteredRows.length === 0 ? (
@@ -977,15 +1003,15 @@ function SpreadsheetInspect({
                     ].filter(Boolean).join(" · ") || "—"}
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void actions?.createLineItemFromSpreadsheetRow(row.index)}
-                  className="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 opacity-0 transition-all hover:border-accent/40 hover:bg-accent/10 hover:text-accent group-hover:opacity-100 focus:opacity-100"
-                  title="Import this row as a worksheet line item"
-                >
-                  <Plus className="h-3 w-3" />
-                  Add
-                </button>
+                <AddToCategoryPopover
+                  snapshot={snapshot}
+                  actions={actions}
+                  onPick={(categoryId) => void actions?.createLineItemFromSpreadsheetRow(row.index, categoryId)}
+                  triggerLabel="Add"
+                  triggerClassName="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 opacity-0 transition-all hover:border-accent/40 hover:bg-accent/10 hover:text-accent group-hover:opacity-100 focus:opacity-100"
+                  triggerTitle="Import this row as a worksheet line item — pick a category"
+                  triggerIcon={<Plus className="h-3 w-3" />}
+                />
               </div>
             );
           })
