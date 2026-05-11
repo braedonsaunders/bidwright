@@ -37,7 +37,7 @@ RUN pnpm install --frozen-lockfile
 # build instead of crashing the api in prod.
 RUN npm install -g node-gyp@^11
 RUN set -eux \
-    && PTY_DIR=$(find /app/node_modules/.pnpm -maxdepth 5 -type d -name "node-pty" | head -1) \
+    && PTY_DIR=$(find /app/node_modules -maxdepth 6 -type d -name "node-pty" 2>/dev/null | head -1) \
     && test -n "$PTY_DIR" \
     && cd "$PTY_DIR" \
     && node-gyp rebuild \
