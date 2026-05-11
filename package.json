@@ -39,7 +39,10 @@
     "onlyBuiltDependencies": [
       "argon2",
       "msgpackr-extract"
-    ]
+    ],
+    "overrides": {
+      "@swc/helpers": "^0.5.17"
+    }
   },
   "devDependencies": {
     "@types/node": "^22.15.30",
