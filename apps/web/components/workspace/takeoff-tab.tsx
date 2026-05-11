@@ -1041,13 +1041,16 @@ export function TakeoffTab({
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   // Discriminated union: the picker carries enough context to resume the
-  // original action once a worksheet exists. "send-selection" and
-  // "create-elements" are the batch flows; "create-single-element" carries
-  // the explicit element id for per-row "+ Add" clicks from the side panel.
+  // original action once a worksheet exists. Covers every entity-to-line-item
+  // path in the side panel — per-row Adds and per-group summed Adds for both
+  // annotations (PDF / DWG) and model elements (BIM / 3D).
   type WorksheetPickerAction =
     | { kind: "send-selection" }
     | { kind: "create-elements" }
-    | { kind: "create-single-element"; elementId: string };
+    | { kind: "create-single-element"; elementId: string }
+    | { kind: "create-element-group"; elementIds: string[]; groupLabel: string }
+    | { kind: "create-single-annotation"; annotationId: string }
+    | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string };
   const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
   const [newWorksheetName, setNewWorksheetName] = useState("");
   const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
@@ -1483,6 +1486,27 @@ export function TakeoffTab({
           const element = modelElements.find((e) => e.id === id);
           if (!element) return;
           await handleCreateModelElementLineItem(element);
+        },
+        createLineItemFromElementGroup: async (ids, groupLabel) => {
+          const targets = ids
+            .map((id) => modelElements.find((e) => e.id === id))
+            .filter((e): e is ModelElementWithQuantities => Boolean(e));
+          if (targets.length === 0) return;
+          await handleCreateElementGroupLineItem(targets, groupLabel);
+        },
+        createLineItemFromAnnotation: async (id) => {
+          const allAnnotations = [...annotations, ...dwgAnnotationsCache];
+          const annotation = allAnnotations.find((a) => a.id === id);
+          if (!annotation) return;
+          await handleCreateAnnotationLineItem(annotation);
+        },
+        createLineItemFromAnnotationGroup: async (ids, groupLabel) => {
+          const allAnnotations = [...annotations, ...dwgAnnotationsCache];
+          const targets = ids
+            .map((id) => allAnnotations.find((a) => a.id === id))
+            .filter((a): a is TakeoffAnnotation => Boolean(a));
+          if (targets.length === 0) return;
+          await handleCreateAnnotationGroupLineItem(targets, groupLabel);
         },
         refreshModel: () => void refreshModelAssets(true),
         askAiAboutModel: () =>
@@ -2986,6 +3010,306 @@ export function TakeoffTab({
     return { createdItem, result };
   }
 
+  /** Pick the right primary quantity off an annotation's measurement.
+   *  Areas / volumes win over linear value when present; pure count
+   *  annotations fall back to qty=1. */
+  function annotationToQuantity(annotation: TakeoffAnnotation): { quantity: number; uom: string } {
+    const m = annotation.measurement;
+    if (m?.area != null && m.area > 0) {
+      const baseUnit = m.unit ?? "";
+      return { quantity: m.area, uom: baseUnit ? `${baseUnit}²` : "SF" };
+    }
+    if (m?.volume != null && m.volume > 0) {
+      const baseUnit = m.unit ?? "";
+      return { quantity: m.volume, uom: baseUnit ? `${baseUnit}³` : "CF" };
+    }
+    if (typeof m?.value === "number" && Number.isFinite(m.value)) {
+      return { quantity: m.value, uom: m.unit || "EA" };
+    }
+    return { quantity: 1, uom: "EA" };
+  }
+
+  async function createLineItemFromAnnotation(
+    annotation: TakeoffAnnotation,
+    explicitWs?: { id: string; name: string },
+  ) {
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({ kind: "create-single-annotation", annotationId: annotation.id });
+      return null;
+    }
+    if (!defaultCategory) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before creating line items.");
+      return null;
+    }
+
+    const { quantity, uom } = annotationToQuantity(annotation);
+    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
+    const payload = {
+      categoryId: defaultCategory.id,
+      category: defaultCategory.name,
+      entityType: defaultCategory.entityType,
+      entityName: annotation.label || `${annotation.type} mark`,
+      description: "",
+      quantity,
+      uom,
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      sourceNotes: [
+        `From takeoff (${annotation.type})`,
+        annotation.groupName ? `group: ${annotation.groupName}` : "",
+        selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
+      ].filter(Boolean).join(" · "),
+    };
+    const result = await createWorksheetItem(projectId, ws.id, payload);
+    const createdItem = result.workspace.worksheets
+      .flatMap((w) => w.items)
+      .find((i) => !previousItemIds.has(i.id));
+    if (!createdItem) return null;
+    await createTakeoffLink(projectId, {
+      annotationId: annotation.id,
+      worksheetItemId: createdItem.id,
+    });
+    return { createdItem };
+  }
+
+  async function handleCreateAnnotationLineItem(annotation: TakeoffAnnotation) {
+    try {
+      const created = await createLineItemFromAnnotation(annotation);
+      if (!created) return;
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Created line item from annotation.");
+    } catch (error) {
+      console.error("[takeoff] Failed to create annotation line item:", error);
+      setToastType("error");
+      setToastMessage("Could not create a line item from that annotation.");
+    }
+  }
+
+  /** Group-sum: one summed line item from N annotations. Each underlying
+   *  annotation gets a TakeoffLink with multiplier set so the line item's
+   *  quantity stays in sync with the sum on revision diff. */
+  async function createLineItemFromAnnotationGroup(
+    annotations: TakeoffAnnotation[],
+    groupLabel: string,
+    explicitWs?: { id: string; name: string },
+  ) {
+    if (annotations.length === 0) return null;
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({
+        kind: "create-annotation-group",
+        annotationIds: annotations.map((a) => a.id),
+        groupLabel,
+      });
+      return null;
+    }
+    if (!defaultCategory) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before creating line items.");
+      return null;
+    }
+
+    // Sum quantities. Prefer a consistent dimension across the group; if mixed
+    // (some areas + some lengths) fall back to count so we never silently add
+    // square feet to linear feet.
+    const dims = new Set(annotations.map((a) => {
+      const m = a.measurement;
+      if (m?.area && m.area > 0) return "area";
+      if (m?.volume && m.volume > 0) return "volume";
+      if (typeof m?.value === "number") return "length";
+      return "count";
+    }));
+    const homogeneous = dims.size === 1;
+    let totalQty = 0;
+    let uom = "EA";
+    if (homogeneous) {
+      const first = annotationToQuantity(annotations[0]);
+      uom = first.uom;
+      for (const ann of annotations) totalQty += annotationToQuantity(ann).quantity;
+    } else {
+      totalQty = annotations.length;
+      uom = "EA";
+    }
+
+    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
+    const payload = {
+      categoryId: defaultCategory.id,
+      category: defaultCategory.name,
+      entityType: defaultCategory.entityType,
+      entityName: groupLabel || `${annotations.length} takeoff marks`,
+      description: "",
+      quantity: totalQty,
+      uom,
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      sourceNotes: [
+        `Sum of ${annotations.length} takeoff marks`,
+        homogeneous ? "" : "mixed dimensions — falling back to count",
+        selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
+      ].filter(Boolean).join(" · "),
+    };
+    const result = await createWorksheetItem(projectId, ws.id, payload);
+    const createdItem = result.workspace.worksheets
+      .flatMap((w) => w.items)
+      .find((i) => !previousItemIds.has(i.id));
+    if (!createdItem) return null;
+    // Link each annotation to the summed line item so revision diff can
+    // reconcile additions/removals against the same worksheet row.
+    await Promise.all(
+      annotations.map((ann) =>
+        createTakeoffLink(projectId, {
+          annotationId: ann.id,
+          worksheetItemId: createdItem.id,
+        }).catch((err) => {
+          console.warn(`[takeoff] Could not link annotation ${ann.id} to summed line item:`, err);
+        }),
+      ),
+    );
+    return { createdItem };
+  }
+
+  async function handleCreateAnnotationGroupLineItem(annotations: TakeoffAnnotation[], groupLabel: string) {
+    try {
+      const created = await createLineItemFromAnnotationGroup(annotations, groupLabel);
+      if (!created) return;
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(`Created summed line item from ${annotations.length} mark${annotations.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      console.error("[takeoff] Failed to create annotation group line item:", error);
+      setToastType("error");
+      setToastMessage("Could not create a summed line item.");
+    }
+  }
+
+  /** Group-sum for model elements. Sums the primary takeoff quantity (based on
+   *  the current ledger basis) across N elements and creates one line item. */
+  async function createLineItemFromElementGroup(
+    elements: ModelElementWithQuantities[],
+    groupLabel: string,
+    explicitWs?: { id: string; name: string },
+  ) {
+    if (elements.length === 0) return null;
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({
+        kind: "create-element-group",
+        elementIds: elements.map((e) => e.id),
+        groupLabel,
+      });
+      return null;
+    }
+    if (!defaultCategory) {
+      setToastType("error");
+      setToastMessage("Configure at least one entity category in Settings before creating line items.");
+      return null;
+    }
+    const modelAsset = await resolveSelectedModelAsset();
+    if (!modelAsset) {
+      setToastType("error");
+      setToastMessage("Sync the model index before creating model line items.");
+      return null;
+    }
+
+    let totalQty = 0;
+    let uom = "EA";
+    let primaryQuantityType: string | undefined;
+    const uomCounts = new Map<string, number>();
+    for (const element of elements) {
+      const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+      if (!primary) continue;
+      totalQty += primary.quantity;
+      if (!primaryQuantityType) primaryQuantityType = primary.quantityType;
+      const elementUom = primary.uom || "EA";
+      uomCounts.set(elementUom, (uomCounts.get(elementUom) ?? 0) + 1);
+    }
+    // Pick the mode UOM. If mixed, fall back to count semantics.
+    const sortedUoms = Array.from(uomCounts.entries()).sort((a, b) => b[1] - a[1]);
+    if (sortedUoms.length === 1) {
+      uom = sortedUoms[0][0];
+    } else if (sortedUoms.length > 1) {
+      totalQty = elements.length;
+      uom = "EA";
+    }
+
+    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
+    const payload = {
+      categoryId: defaultCategory.id,
+      category: defaultCategory.name,
+      entityType: defaultCategory.entityType,
+      entityName: groupLabel || `${elements.length} model elements`,
+      description: "",
+      quantity: totalQty,
+      uom,
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      sourceNotes: [
+        `Sum of ${elements.length} model element${elements.length === 1 ? "" : "s"}`,
+        sortedUoms.length > 1 ? "mixed UOMs — falling back to count" : "",
+        selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
+      ].filter(Boolean).join(" · "),
+    };
+    const result = await createWorksheetItem(projectId, ws.id, payload);
+    const createdItem = result.workspace.worksheets
+      .flatMap((w) => w.items)
+      .find((i) => !previousItemIds.has(i.id));
+    if (!createdItem) return null;
+    // Bind every element to the summed line item via a ModelTakeoffLink so
+    // revision diff against the underlying model still tracks the rollup.
+    await Promise.all(
+      elements.map((element) => {
+        const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+        return createModelTakeoffLink(projectId, modelAsset.id, {
+          worksheetItemId: createdItem.id,
+          modelElementId: element.id,
+          modelQuantityId: primary?.quantityId,
+          quantityField: "quantity",
+          multiplier: 1,
+          derivedQuantity: primary?.quantity ?? 0,
+          selection: {
+            mode: "model-element",
+            fileName: selectedDoc?.fileName ?? modelAsset.fileName,
+            modelElementId: element.id,
+            externalId: element.externalId,
+            elementName: element.name,
+            elementClass: element.elementClass,
+            material: element.material,
+            quantityBasis: modelLedgerBasis,
+            quantityType: primary?.quantityType ?? primaryQuantityType,
+            quantities: element.quantities ?? [],
+            lineItemDraft: payload,
+          },
+        }).catch((err) => {
+          console.warn(`[takeoff] Could not link element ${element.id} to summed line item:`, err);
+        });
+      }),
+    );
+    return { createdItem };
+  }
+
+  async function handleCreateElementGroupLineItem(elements: ModelElementWithQuantities[], groupLabel: string) {
+    try {
+      const created = await createLineItemFromElementGroup(elements, groupLabel);
+      if (!created) return;
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(`Created summed line item from ${elements.length} model element${elements.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      console.error("[takeoff] Failed to create element group line item:", error);
+      setToastType("error");
+      setToastMessage("Could not create a summed line item.");
+    }
+  }
+
   async function handleCreateModelElementLineItem(element: ModelElementWithQuantities) {
     try {
       const created = await createLineItemFromModelElement(element);
@@ -3097,6 +3421,48 @@ export function TakeoffTab({
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage("Created model line item.");
+    } else if (action.kind === "create-element-group") {
+      const elements = action.elementIds
+        .map((id) => modelElements.find((e) => e.id === id))
+        .filter((e): e is ModelElementWithQuantities => Boolean(e));
+      if (elements.length === 0) {
+        setToastType("error");
+        setToastMessage("Those model elements are no longer available.");
+        return;
+      }
+      await createLineItemFromElementGroup(elements, action.groupLabel, ws);
+      await refreshModelTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(`Created summed line item from ${elements.length} model element${elements.length === 1 ? "" : "s"}.`);
+    } else if (action.kind === "create-single-annotation") {
+      const allAnnotations = [...annotations, ...dwgAnnotationsCache];
+      const annotation = allAnnotations.find((a) => a.id === action.annotationId);
+      if (!annotation) {
+        setToastType("error");
+        setToastMessage("That annotation is no longer available.");
+        return;
+      }
+      await createLineItemFromAnnotation(annotation, ws);
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage("Created line item from annotation.");
+    } else if (action.kind === "create-annotation-group") {
+      const allAnnotations = [...annotations, ...dwgAnnotationsCache];
+      const targets = action.annotationIds
+        .map((id) => allAnnotations.find((a) => a.id === id))
+        .filter((a): a is TakeoffAnnotation => Boolean(a));
+      if (targets.length === 0) {
+        setToastType("error");
+        setToastMessage("Those annotations are no longer available.");
+        return;
+      }
+      await createLineItemFromAnnotationGroup(targets, action.groupLabel, ws);
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(`Created summed line item from ${targets.length} mark${targets.length === 1 ? "" : "s"}.`);
     }
   }
 

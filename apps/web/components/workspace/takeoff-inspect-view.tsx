@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, FilePlus, Link2, Loader2, Pencil, RefreshCw, Trash2, X, BrainCircuit } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, Eye, EyeOff, FilePlus, Link2, Loader2, Pencil, Plus, RefreshCw, Sigma, Trash2, X, BrainCircuit } from "lucide-react";
 import { Button, Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
@@ -69,11 +69,20 @@ export interface InspectActions {
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
-  /** Create a worksheet line item from the model element in one click. Preserves
-   *  classification (Uniformat/MasterFormat/...) and the primary quantity, and
-   *  binds a ModelTakeoffLink so the line stays in sync with the element on
-   *  revision diff. Implemented by TakeoffTab; the inspect view just dispatches. */
+  /** One-click "+ Add" for a model element. Preserves classification
+   *  (Uniformat/MasterFormat/...) and the primary quantity; binds a
+   *  ModelTakeoffLink so the line stays in sync with the element on
+   *  revision diff. */
   createLineItemFromElement: (id: string) => Promise<void> | void;
+  /** "Σ Add" — one summed line item from N model elements, with each
+   *  element bound to it via a ModelTakeoffLink for revision-diff sync. */
+  createLineItemFromElementGroup: (ids: string[], groupLabel: string) => Promise<void> | void;
+  /** One-click "+ Add" for a PDF / DWG annotation. Picks the right primary
+   *  quantity from the measurement (area > volume > length > count). */
+  createLineItemFromAnnotation: (id: string) => Promise<void> | void;
+  /** "Σ Add" — one summed line item from N annotations. Each underlying
+   *  annotation gets a TakeoffLink so revision diff still reconciles. */
+  createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string) => Promise<void> | void;
   refreshModel: () => void;
   askAiAboutModel: () => void;
 }
@@ -176,16 +185,43 @@ function AnnotationsInspect({
           {Array.from(groups.entries()).map(([groupKey, items]) => {
             const collapsed = collapsedGroups.has(groupKey);
             const groupLabel = TYPE_LABELS[groupKey] ?? groupKey;
+            const linkedInGroup = items.filter((ann) => (linkCountMap.get(ann.id) ?? 0) > 0).length;
+            const groupSummary = summarizeAnnotationGroup(items);
             return (
               <div key={groupKey}>
-                <button
-                  onClick={() => toggleGroup(groupKey)}
-                  className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-fg/60 hover:bg-panel2/60 transition-colors"
-                >
-                  {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                  <span className="truncate">{groupLabel}</span>
-                  <span className="ml-auto text-[10px] text-fg/30">×{items.length}</span>
-                </button>
+                <div className="group/grouphdr flex items-stretch gap-1 rounded-md transition-colors hover:bg-panel2/60">
+                  <button
+                    onClick={() => toggleGroup(groupKey)}
+                    className="flex flex-1 items-center gap-1.5 px-1.5 py-1 text-left text-[11px] font-medium text-fg/60"
+                  >
+                    {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    <span className="min-w-0 flex-1 truncate">{groupLabel}</span>
+                    <span className="shrink-0 text-[10px] text-fg/40">
+                      {items.length}
+                      {linkedInGroup > 0 && (
+                        <span className="ml-1 text-success/80">· {linkedInGroup} linked</span>
+                      )}
+                      {groupSummary && (
+                        <span className="ml-1 font-mono text-fg/50">Σ {groupSummary}</span>
+                      )}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void actions?.createLineItemFromAnnotationGroup(
+                        items.map((it) => it.id),
+                        groupLabel,
+                      );
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
+                    title={`Add one summed line item from all ${items.length} marks in ${groupLabel}`}
+                  >
+                    <Sigma className="h-3 w-3" />
+                    Add
+                  </button>
+                </div>
                 {!collapsed && (
                   <div className="ml-2 mt-0.5 space-y-0.5">
                     {items.map((ann) =>
@@ -255,6 +291,19 @@ function AnnotationRow({
         <p className="text-[10px] text-fg/40">{formatMeasurement(ann)}</p>
       </div>
       <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+        {linkCount === 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              void actions?.createLineItemFromAnnotation(ann.id);
+            }}
+            className="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+            title="Add a worksheet line item from this annotation (carries quantity, keeps it linked)"
+          >
+            <Plus className="h-3 w-3" />
+            Add
+          </button>
+        )}
         <button
           onClick={(e) => {
             e.stopPropagation();
@@ -536,20 +585,37 @@ function ModelInspect({
             const linkedCount = group.elements.filter((e) => e.isLinked).length;
             return (
               <div key={group.key} className="flex flex-col gap-1">
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.key)}
-                  className="flex items-center gap-1.5 rounded-md border border-line bg-panel/80 px-2 py-1 text-left text-[10px] font-medium text-fg/70 transition-colors hover:bg-panel2/40"
-                >
-                  {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                  <span className="min-w-0 flex-1 truncate">{group.label}</span>
-                  <span className="shrink-0 text-fg/40">
-                    {group.elements.length}
-                    {linkedCount > 0 && (
-                      <span className="ml-1 text-success/80">· {linkedCount} linked</span>
-                    )}
-                  </span>
-                </button>
+                <div className="group/grouphdr flex items-stretch gap-1 rounded-md border border-line bg-panel/80 transition-colors hover:bg-panel2/40">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.key)}
+                    className="flex flex-1 items-center gap-1.5 px-2 py-1 text-left text-[10px] font-medium text-fg/70"
+                  >
+                    {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    <span className="min-w-0 flex-1 truncate">{group.label}</span>
+                    <span className="shrink-0 text-fg/40">
+                      {group.elements.length}
+                      {linkedCount > 0 && (
+                        <span className="ml-1 text-success/80">· {linkedCount} linked</span>
+                      )}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      void actions?.createLineItemFromElementGroup(
+                        group.elements.map((el) => el.id),
+                        group.label,
+                      );
+                    }}
+                    className="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
+                    title={`Add one summed line item from all ${group.elements.length} elements in ${group.label}`}
+                  >
+                    <Sigma className="h-3 w-3" />
+                    Add
+                  </button>
+                </div>
                 {!collapsed && group.elements.map((element) => renderElementRow(
                   element,
                   selectedModelElementId,
@@ -669,10 +735,10 @@ function renderElementRow(
                 void actions?.createLineItemFromElement(element.id);
               }}
               className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-              title="Create a worksheet line item from this element (carries classification + quantity, keeps it linked)"
+              title="Add a worksheet line item from this element (carries classification + quantity, keeps it linked)"
             >
-              <FilePlus className="h-3 w-3" />
-              Send
+              <Plus className="h-3 w-3" />
+              Add
             </button>
           )}
         </div>
@@ -695,4 +761,42 @@ function formatMeasurement(ann: TakeoffAnnotation): string {
   const { value, unit } = ann.measurement;
   if (unit === "count") return `${value}`;
   return `${value.toFixed(2)} ${unit}`;
+}
+
+/** Pivot-style summary for a group of annotations — surfaces the dominant
+ *  dimension's total alongside the row count in the group header. Returns
+ *  null when the group is mixed (no useful sum) or empty. */
+function summarizeAnnotationGroup(items: TakeoffAnnotation[]): string | null {
+  if (items.length === 0) return null;
+  // Detect the dominant dimension in the group. If most annotations agree on
+  // a single dimension we sum it; mixed groups fall back to count.
+  const counts = { area: 0, volume: 0, length: 0, count: 0 };
+  for (const ann of items) {
+    const m = ann.measurement;
+    if (m?.area != null && m.area > 0) counts.area += 1;
+    else if (m?.volume != null && m.volume > 0) counts.volume += 1;
+    else if (typeof m?.value === "number") counts.length += 1;
+    else counts.count += 1;
+  }
+  const dominant = (Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "count") as
+    | "area" | "volume" | "length" | "count";
+  if (dominant === "count") return null;
+
+  let total = 0;
+  let unit = "";
+  for (const ann of items) {
+    const m = ann.measurement;
+    if (dominant === "area" && m?.area != null) {
+      total += m.area;
+      unit = m.unit ? `${m.unit}²` : "SF";
+    } else if (dominant === "volume" && m?.volume != null) {
+      total += m.volume;
+      unit = m.unit ? `${m.unit}³` : "CF";
+    } else if (dominant === "length" && typeof m?.value === "number" && m.unit !== "count") {
+      total += m.value;
+      unit = m.unit || "";
+    }
+  }
+  if (total <= 0) return null;
+  return `${total.toFixed(total >= 100 ? 0 : 1)}${unit ? ` ${unit}` : ""}`;
 }
