@@ -15914,6 +15914,69 @@ export class PrismaApiStore {
   }
 
   /**
+   * Read the SuperAdmin's personal credentials + preferences. SuperAdmin
+   * isn't scoped to an organization, so we look it up by id directly.
+   * Mirrors the UserSettings shape so the API layer can treat both
+   * session types uniformly.
+   */
+  async getSuperAdminSettings(superAdminId: string): Promise<{
+    integrations: Record<string, unknown>;
+    preferences: Record<string, unknown>;
+    updatedAt: string | null;
+  }> {
+    const admin = await this.db.superAdmin.findUnique({
+      where: { id: superAdminId },
+      select: { integrations: true, preferences: true, updatedAt: true },
+    });
+    if (!admin) {
+      throw new Error(`SuperAdmin ${superAdminId} not found`);
+    }
+    return {
+      integrations: ((admin.integrations as Record<string, unknown> | null) ?? {}),
+      preferences: ((admin.preferences as Record<string, unknown> | null) ?? {}),
+      updatedAt: admin.updatedAt.toISOString(),
+    };
+  }
+
+  async updateSuperAdminSettings(
+    superAdminId: string,
+    patch: { integrations?: Record<string, unknown>; preferences?: Record<string, unknown> },
+  ): Promise<{
+    integrations: Record<string, unknown>;
+    preferences: Record<string, unknown>;
+    updatedAt: string;
+  }> {
+    const existing = await this.db.superAdmin.findUnique({
+      where: { id: superAdminId },
+      select: { integrations: true, preferences: true },
+    });
+    if (!existing) {
+      throw new Error(`SuperAdmin ${superAdminId} not found`);
+    }
+    const existingIntegrations = (existing.integrations as Record<string, unknown> | null) ?? {};
+    const existingPreferences = (existing.preferences as Record<string, unknown> | null) ?? {};
+    const mergedIntegrations = patch.integrations
+      ? { ...existingIntegrations, ...patch.integrations }
+      : existingIntegrations;
+    const mergedPreferences = patch.preferences
+      ? { ...existingPreferences, ...patch.preferences }
+      : existingPreferences;
+    const saved = await this.db.superAdmin.update({
+      where: { id: superAdminId },
+      data: {
+        integrations: mergedIntegrations as any,
+        preferences: mergedPreferences as any,
+      },
+      select: { integrations: true, preferences: true, updatedAt: true },
+    });
+    return {
+      integrations: (saved.integrations as Record<string, unknown> | null) ?? {},
+      preferences: (saved.preferences as Record<string, unknown> | null) ?? {},
+      updatedAt: saved.updatedAt.toISOString(),
+    };
+  }
+
+  /**
    * Merged integrations blob (org defaults overlaid with the user's per-user
    * overrides). Use this anywhere you need the credentials that should
    * actually drive a CLI spawn or a model call for a given user. When no
