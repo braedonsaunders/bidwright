@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
-import { Compass, Link2, Maximize2, Minimize2, Sparkles } from "lucide-react";
+import { Compass, Link2, Maximize2, Minimize2 } from "lucide-react";
 import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
@@ -13,7 +13,7 @@ import type { TakeoffAnnotation } from "./takeoff/annotation-canvas";
 import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
-type RightPanelTab = "inspect" | "link" | "ai";
+type RightPanelTab = "inspect" | "link";
 
 export interface ComboViewProps {
   workspace: ProjectWorkspaceData;
@@ -272,7 +272,6 @@ function RightPanel({
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "inspect", label: "Inspect", icon: Compass },
     { id: "link", label: "Link", icon: Link2 },
-    { id: "ai", label: "AI", icon: Sparkles },
   ];
 
   const FsIcon = fullscreen ? Minimize2 : Maximize2;
@@ -308,7 +307,11 @@ function RightPanel({
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-auto p-3">
+      {/* Inspect view has its own internal scrolling on the element list so the
+          header / search / basis / group toggles stay sticky while the list
+          fills the remaining height. Anything else (Link tab content) gets
+          the old overflow-auto behaviour. */}
+      <div className={cn("flex-1 min-h-0 p-3", tab === "inspect" ? "flex flex-col" : "overflow-auto")}>
         {tab === "inspect" && <TakeoffInspectView snapshot={inspectSnapshot} actions={inspectActionsRef.current} />}
         {tab === "link" && (
           <TakeoffLinkView
@@ -321,7 +324,6 @@ function RightPanel({
             onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
           />
         )}
-        {tab === "ai" && <AIView onOpenAgentChat={onOpenAgentChat} />}
       </div>
     </>
   );
@@ -350,23 +352,6 @@ function InspectView({
         <Stat label={activeWs ? "Items" : "Worksheets"} value={activeWs ? itemCount : wsCount} />
         {!activeWs && <Stat label="Items (total)" value={itemCount} />}
       </Section>
-    </div>
-  );
-}
-
-function AIView({ onOpenAgentChat }: { onOpenAgentChat?: (prefill?: string) => void }) {
-  return (
-    <div className="space-y-2">
-      <p className="text-[11px] leading-relaxed text-fg/60">Open the agent chat to ask about this estimate.</p>
-      {onOpenAgentChat && (
-        <button
-          type="button"
-          onClick={() => onOpenAgentChat()}
-          className="w-full rounded-md border border-line bg-panel px-2 py-1.5 text-xs font-medium text-fg/80 hover:bg-panel2"
-        >
-          Open agent chat
-        </button>
-      )}
     </div>
   );
 }
