@@ -1435,11 +1435,29 @@ export function TakeoffTab({
     }
   });
 
-  // Publish 3D model-editor selection up to the parent so the side-panel link view can render it.
+  // Publish 3D model-editor selection up to the parent so the side-panel
+  // link view can render it. The parent's onSelectionChange triggers a
+  // setState upstream; that re-renders us with a new `selection` prop. If
+  // `selection` is in the effect's dep array, the effect re-fires, builds a
+  // brand-new object literal, and we publish again — infinite loop the moment
+  // the user clicks anything in the model editor.
+  //
+  // Fix: dedupe via a last-emitted-signature ref and keep `selection` out of
+  // the dep array. The clear-on-loss branch checks the same ref instead of
+  // the bouncy `selection` prop.
+  const lastModelSelectionSignatureRef = useRef<string | null>(null);
   useEffect(() => {
     if (!onSelectionChange) return;
     if (modelSelection && modelSelection.modelId) {
       const selectedNodeIds = modelSelection.nodes.map((node) => node.id);
+      const signature = JSON.stringify({
+        modelId: modelSelection.modelId,
+        modelDocumentId: modelSelection.modelDocumentId,
+        selectedNodeIds,
+        selectedCount: modelSelection.selectedCount,
+      });
+      if (signature === lastModelSelectionSignatureRef.current) return;
+      lastModelSelectionSignatureRef.current = signature;
       onSelectionChange({
         kind: "model-selection",
         modelId: modelSelection.modelId,
@@ -1449,10 +1467,11 @@ export function TakeoffTab({
         selectedNodeIds,
         totals: modelSelection.totals,
       });
-    } else if (selection?.kind === "model-selection") {
+    } else if (lastModelSelectionSignatureRef.current !== null) {
+      lastModelSelectionSignatureRef.current = null;
       onSelectionChange(null);
     }
-  }, [modelSelection, onSelectionChange, selection]);
+  }, [modelSelection, onSelectionChange]);
 
   useEffect(() => {
     if (!projectId || typeof BroadcastChannel === "undefined") return;
@@ -3757,25 +3776,37 @@ export function TakeoffTab({
                       ))}
                     </RadixSelect.Group>
                   )}
-                  {projectFileTakeoffDocuments.length > 0 && (
-                    <RadixSelect.Group>
-                      <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
-                        Project Files
-                      </RadixSelect.Label>
-                      {projectFileTakeoffDocuments.map((d) => (
-                        <RadixSelect.Item
-                          key={d.id}
-                          value={d.id}
-                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
-                        >
-                          <RadixSelect.ItemIndicator className="shrink-0">
-                            <Check className="h-3 w-3 text-accent" />
-                          </RadixSelect.ItemIndicator>
-                          <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
-                        </RadixSelect.Item>
-                      ))}
-                    </RadixSelect.Group>
-                  )}
+                  {(() => {
+                    // Render from the deduped `takeoffDocuments` so the ids
+                    // shown here match what `selectedDoc.find()` looks up.
+                    // Filter out anything already shown in the PDF + knowledge
+                    // groups so each doc appears exactly once.
+                    const projectPdfIds = new Set(projectPdfs.map((d) => d.id));
+                    const knowledgeIds = new Set(knowledgePdfs.map((d) => d.id));
+                    const projectFiles = takeoffDocuments.filter(
+                      (d) => d.source === "project" && !projectPdfIds.has(d.id) && !knowledgeIds.has(d.id),
+                    );
+                    if (projectFiles.length === 0) return null;
+                    return (
+                      <RadixSelect.Group>
+                        <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
+                          Project Files
+                        </RadixSelect.Label>
+                        {projectFiles.map((d) => (
+                          <RadixSelect.Item
+                            key={d.id}
+                            value={d.id}
+                            className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
+                          >
+                            <RadixSelect.ItemIndicator className="shrink-0">
+                              <Check className="h-3 w-3 text-accent" />
+                            </RadixSelect.ItemIndicator>
+                            <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
+                          </RadixSelect.Item>
+                        ))}
+                      </RadixSelect.Group>
+                    );
+                  })()}
                   {knowledgePdfs.length > 0 && (
                     <RadixSelect.Group>
                       <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
