@@ -15,6 +15,7 @@ COPY --from=deps /app ./
 COPY . .
 
 ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm -r --filter "./packages/*" build
 RUN pnpm --filter @bidwright/web build
 
 # --- runtime stage ---
