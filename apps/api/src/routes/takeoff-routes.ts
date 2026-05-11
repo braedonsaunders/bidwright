@@ -311,6 +311,10 @@ export async function takeoffRoutes(app: FastifyInstance) {
       return reply.code(400).send({ message: parsed.error.message });
     }
 
+    // Declared outside the try so the catch block can echo them in the
+    // error message. Populated by the resolution chain below.
+    let provider = "";
+    let model = "";
     try {
       // Verify the project exists / the user can see it before spending
       // tokens on the LLM.
@@ -338,7 +342,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
         lmstudio: "lm-studio",
       };
 
-      let provider: string =
+      provider =
         typeof integrations.llmProvider === "string" && directProviders.has(integrations.llmProvider)
           ? integrations.llmProvider
           : "";
@@ -371,11 +375,30 @@ export async function takeoffRoutes(app: FastifyInstance) {
         gemini: "gemini-2.0-flash",
         lmstudio: "lmstudio-community/Llama-3.2-11B-Vision-Instruct-GGUF",
       };
-      const model =
-        (integrations.llmModel as string | undefined) ??
+      model =
+        ((integrations.llmModel as string | undefined)?.trim() ||
+          undefined) ??
         process.env.LLM_MODEL ??
         defaultModelByProvider[provider] ??
-        "claude-sonnet-4-20250514";
+        "claude-sonnet-4-5";
+
+      // OpenRouter requires `<provider>/<model-id>`. If the user's saved
+      // model is just `claude-sonnet-4-5` (the anthropic-direct format),
+      // OpenRouter returns "404 No endpoints found that support image
+      // input" because the bare id doesn't resolve. Prefix sensibly so the
+      // call goes through.
+      if (provider === "openrouter" && !model.includes("/")) {
+        const inferredPrefix = model.startsWith("claude")
+          ? "anthropic"
+          : model.startsWith("gpt") || model.startsWith("o1") || model.startsWith("o3")
+            ? "openai"
+            : model.startsWith("gemini")
+              ? "google"
+              : model.startsWith("llama")
+                ? "meta-llama"
+                : null;
+        if (inferredPrefix) model = `${inferredPrefix}/${model}`;
+      }
 
       if (!apiKey) {
         return reply.code(400).send({
@@ -383,6 +406,8 @@ export async function takeoffRoutes(app: FastifyInstance) {
             `No API key found for provider "${provider}". Open Settings > Integrations and either add an API key for ${provider} or pick a different LLM provider that has one.`,
         });
       }
+
+      request.log.info({ provider, model }, "photo-bom resolved LLM config");
 
       // Organization category taxonomy. Passed into the LLM so it tags rows
       // with the user's actual category buckets instead of inventing one
@@ -417,9 +442,15 @@ export async function takeoffRoutes(app: FastifyInstance) {
       });
       return result;
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Photo takeoff failed";
-      const status = message.includes("not configured") || message.includes("Settings >") ? 400 : 500;
-      request.log.error({ err: error }, "photo-bom failed");
+      const rawMessage = error instanceof Error ? error.message : "Photo takeoff failed";
+      // Echo the resolved provider + model so the user can see what the
+      // server actually sent without rummaging through server logs. The
+      // OpenRouter "no endpoints support image input" failure mode in
+      // particular is opaque without it.
+      const llmContext = `provider=${provider}, model=${model}`;
+      const message = rawMessage.includes(llmContext) ? rawMessage : `${rawMessage} (${llmContext})`;
+      const status = rawMessage.includes("not configured") || rawMessage.includes("Settings >") ? 400 : 500;
+      request.log.error({ err: error, provider, model }, "photo-bom failed");
       return reply.code(status).send({ message });
     }
   });
