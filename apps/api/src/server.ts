@@ -5490,7 +5490,7 @@ export function buildServer() {
 
     // User-overlaid integrations: a user's personal API key wins over the
     // org default, so plugin generation bills against the right account.
-    const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
+    const integrations = await request.store!.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
     const apiKey = integrations.anthropicKey ?? process.env.ANTHROPIC_API_KEY ?? integrations.openaiKey ?? process.env.OPENAI_API_KEY ?? "";
     const provider = integrations.llmProvider ?? process.env.LLM_PROVIDER ?? (apiKey ? "anthropic" : "openai");
     const model = integrations.llmModel ?? process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
