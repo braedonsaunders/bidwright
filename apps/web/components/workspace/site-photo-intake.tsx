@@ -267,8 +267,8 @@ export function SitePhotoIntake({
   const selectionFull = selectedPhotos.length >= MAX_SELECTED;
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-3 p-4">
-      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
+    <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col gap-3 p-4">
+      <div className="grid min-h-0 w-full flex-1 gap-3 xl:grid-cols-[minmax(0,320px)_minmax(0,1fr)]">
         {/* ── Filter + Focus + Generate column ───────────────────────────── */}
         <div className="flex min-h-0 flex-col gap-2">
           <div className="flex flex-col gap-1">
