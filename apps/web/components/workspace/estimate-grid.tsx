@@ -2580,11 +2580,22 @@ export function EstimateGrid({
     if (rowId) setEntityDropdownClosingRowId(rowId);
     setEntityDropdownVisible(false);
     setEntityDropdownRowId(null);
+    // If the dropdown was opened for a brand-new draft row (createDraftItem)
+    // and the user dismissed without picking anything, the row never got
+    // upgraded from its temp id to a real one — the entity-picker close
+    // paths that commit a selection replace the temp row first, so any
+    // remaining temp id here means "nothing was picked." Strip it instead
+    // of leaving an unusable shell row that can't be right-clicked or
+    // edited.
+    if (rowId && isTemporaryWorksheetItemId(rowId)) {
+      onApply((current) => applyWorksheetItemDelete(current, rowId));
+      if (selectedRowId === rowId) setSelectedRowId(null);
+    }
     entityDropdownCloseTimerRef.current = window.setTimeout(() => {
       entityDropdownCloseTimerRef.current = null;
       resetEntityDropdownState();
     }, 260);
-  }, [clearEntityDropdownTimers, entityDropdownRowId, resetEntityDropdownState]);
+  }, [clearEntityDropdownTimers, entityDropdownRowId, onApply, resetEntityDropdownState, selectedRowId]);
 
   const openEntityDropdown = useCallback((
     rowId: string,
@@ -5137,9 +5148,12 @@ export function EstimateGrid({
 
   function handleContextMenu(e: React.MouseEvent, rowId: string) {
     e.preventDefault();
-    if (isTemporaryWorksheetItemId(rowId)) return;
+    // Temp rows still need a context menu — the "Delete row" item is the
+    // user's escape hatch if a draft row got left behind. We just skip
+    // the classification-tracking setup since temps have no real
+    // classification to read.
     const row = visibleRows.find((entry) => entry.id === rowId);
-    if (row) {
+    if (row && !isTemporaryWorksheetItemId(rowId)) {
       const preferredKey: ClassificationKey = getClassificationCode(row.classification, "costCode", row.costCode)
         ? "costCode"
         : getClassificationCode(row.classification, "masterformat")
