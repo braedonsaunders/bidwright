@@ -437,6 +437,26 @@ function sourceCountText(count: number, singular: string, plural = `${singular}s
 
 type SpreadsheetPanelView = "preview" | "pivot";
 
+/** Extract a human-readable error message from an apiRequest failure. The
+ *  thrown Error.message embeds the response body as `"...: { ... }"`, so we
+ *  pull out the JSON tail and return its `message` field when present. Used
+ *  by the takeoff-line-item creators so the toast surfaces the real reason
+ *  (e.g. "Category Labour requires rate schedule items…") instead of a
+ *  generic fallback. */
+function takeoffApiErrorMessage(error: unknown, fallback: string): string {
+  if (!(error instanceof Error)) return fallback;
+  const tail = /:\s*(\{[\s\S]*\})\s*$/.exec(error.message);
+  if (tail) {
+    try {
+      const body = JSON.parse(tail[1]) as { message?: unknown };
+      if (typeof body.message === "string" && body.message.length > 0) return body.message;
+    } catch {
+      // fall through to fallback
+    }
+  }
+  return error.message || fallback;
+}
+
 /** Best-effort column mapping from header names → line-item fields. Drives
  *  the per-row "+ Add" in the Entities tab so the resulting line item gets
  *  reasonable defaults without the user having to do mapping setup. */
@@ -820,8 +840,20 @@ export function TakeoffTab({
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
+  /** Default category for takeoff-derived line items (BIM elements,
+   *  annotations, spreadsheet rows). Excludes rate-schedule categories
+   *  because takeoff entities don't carry a rateScheduleItemId — the API
+   *  rejects rate-schedule line items without one, so we'd get a 400 if
+   *  the first enabled category happened to be "Labour" or similar. Falls
+   *  through to the first plain-enabled category only if no freeform /
+   *  catalog category exists. */
   const defaultCategory = useMemo(() => {
-    return entityCategories.filter((c) => c.enabled).slice().sort((a, b) => a.order - b.order)[0];
+    const enabled = entityCategories
+      .filter((c) => c.enabled)
+      .slice()
+      .sort((a, b) => a.order - b.order);
+    const takeoffSafe = enabled.find((c) => c.itemSource !== "rate_schedule");
+    return takeoffSafe ?? enabled[0];
   }, [entityCategories]);
   const rateScheduleCategory = useMemo(() => {
     return entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule").slice().sort((a, b) => a.order - b.order)[0];
@@ -3148,7 +3180,7 @@ export function TakeoffTab({
     } catch (error) {
       console.error("[takeoff] Failed to create annotation line item:", error);
       setToastType("error");
-      setToastMessage("Could not create a line item from that annotation.");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that annotation."));
     }
   }
 
@@ -3247,7 +3279,7 @@ export function TakeoffTab({
     } catch (error) {
       console.error("[takeoff] Failed to create annotation group line item:", error);
       setToastType("error");
-      setToastMessage("Could not create a summed line item.");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a summed line item."));
     }
   }
 
@@ -3368,7 +3400,7 @@ export function TakeoffTab({
     } catch (error) {
       console.error("[takeoff] Failed to create element group line item:", error);
       setToastType("error");
-      setToastMessage("Could not create a summed line item.");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a summed line item."));
     }
   }
 
@@ -3451,7 +3483,7 @@ export function TakeoffTab({
     } catch (error) {
       console.error("[takeoff] Failed to import spreadsheet row:", error);
       setToastType("error");
-      setToastMessage("Could not import that row.");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not import that row."));
     }
   }
 
@@ -3490,7 +3522,7 @@ export function TakeoffTab({
     } catch (error) {
       console.error("[takeoff] Failed to import all spreadsheet rows:", error);
       setToastType("error");
-      setToastMessage("Could not import all rows.");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not import all rows."));
     }
   }
 
@@ -3507,7 +3539,7 @@ export function TakeoffTab({
     } catch (error) {
       console.error("[takeoff] Failed to create model element line item:", error);
       setToastType("error");
-      setToastMessage("Could not create a line item from that model element.");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that model element."));
     }
   }
 

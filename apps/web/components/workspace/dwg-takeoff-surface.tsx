@@ -662,6 +662,15 @@ export function DwgTakeoffSurface({
   // in sync.
 
   // Publish entity selection to parent so the shared link panel can render it.
+  //
+  // Dedup via a JSON-signature ref so the publish only runs when the payload
+  // actually changes. Without this, the parent's takeoff-tab inlines
+  // `onSelectedEntityChange` in its JSX, so its callback identity churns on
+  // every render — and that re-fired this effect, which dispatched a fresh
+  // object literal back upstream, which re-rendered, which produced a fresh
+  // callback identity again. Clicking any DWG entity blew up the React update
+  // depth instantly.
+  const lastEntitySelectionSignatureRef = useRef<string | null>(null);
   useEffect(() => {
     if (!onSelectedEntityChange) return;
     if (selectedEntity && selectedDocumentId) {
@@ -669,6 +678,15 @@ export function DwgTakeoffSurface({
       const summary = measurement
         ? `${measurement.value.toFixed(2)} ${measurement.unit}`
         : selectedEntity.text || undefined;
+      const signature = JSON.stringify({
+        documentId: selectedDocumentId,
+        entityId: selectedEntity.id,
+        entityType: selectedEntity.type,
+        layer: selectedEntity.layer,
+        summary,
+      });
+      if (signature === lastEntitySelectionSignatureRef.current) return;
+      lastEntitySelectionSignatureRef.current = signature;
       onSelectedEntityChange({
         documentId: selectedDocumentId,
         entityId: selectedEntity.id,
@@ -677,7 +695,8 @@ export function DwgTakeoffSurface({
         label: selectedEntity.text || `${selectedEntity.type} on ${selectedEntity.layer}`,
         summary,
       });
-    } else {
+    } else if (lastEntitySelectionSignatureRef.current !== null) {
+      lastEntitySelectionSignatureRef.current = null;
       onSelectedEntityChange(null);
     }
   }, [selectedEntity, selectedDocumentId, calibration, onSelectedEntityChange]);
