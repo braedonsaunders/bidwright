@@ -393,7 +393,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
     // User-overlaid integrations: org admin's defaults + this estimator's
     // personal OAuth / API key, so the review CLI spawn picks up subscription
     // billing when the user has connected one.
-    const integrationsEarly = await store.getEffectiveIntegrations(request.user?.id);
+    const integrationsEarly = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
 
     // Generate review-specific instruction files for the active runtime
     await generateReviewInstructionFiles(runtime, {
@@ -471,7 +471,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
 CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or delete any line items. Only ANALYZE and REPORT via the saveReview* tools. Be thorough — read every page of every document. Missing scope = missing findings.`;
 
-    const integrations = await store.getEffectiveIntegrations(request.user?.id);
+    const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
     const reasoningEffort = typeof integrations.agentReasoningEffort === "string" && integrations.agentReasoningEffort
       ? integrations.agentReasoningEffort
       : "extra_high";

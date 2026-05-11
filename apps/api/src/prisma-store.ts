@@ -15986,15 +15986,20 @@ export class PrismaApiStore {
    * without ceremony — matches the historical shape of
    * `(settings as any).integrations` that this method replaces.
    */
-  async getEffectiveIntegrations(userId: string | null | undefined): Promise<Record<string, any>> {
+  async getEffectiveIntegrations(
+    userId: string | null | undefined,
+    options: { isSuperAdmin?: boolean } = {},
+  ): Promise<Record<string, any>> {
     const orgSettings = await this.getSettings();
     const orgIntegrations = ((orgSettings as any)?.integrations ?? {}) as Record<string, any>;
     if (!userId) return orgIntegrations;
     try {
-      const userSettings = await this.getUserSettings(userId);
-      return mergeIntegrations(orgIntegrations, userSettings.integrations) as Record<string, any>;
+      const personal = options.isSuperAdmin
+        ? await this.getSuperAdminSettings(userId)
+        : await this.getUserSettings(userId);
+      return mergeIntegrations(orgIntegrations, personal.integrations) as Record<string, any>;
     } catch {
-      // User row missing or out-of-org — fall back to org defaults rather
+      // Row missing or out-of-org — fall back to org defaults rather
       // than leaking an error to a CLI spawn / model call.
       return orgIntegrations;
     }

@@ -197,7 +197,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       }
 
       const settings = await request.store?.getSettings().catch(() => null);
-      const integrations = (await request.store?.getEffectiveIntegrations(request.user?.id).catch(() => null)) ?? {};
+      const integrations = (await request.store?.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin }).catch(() => null)) ?? {};
       const defaultCurrency = String((settings as any)?.defaults?.currency ?? "USD").trim().toUpperCase().slice(0, 3) || "USD";
       const azureConfig = {
         endpoint: process.env.AZURE_DI_ENDPOINT ?? integrations.azureDiEndpoint ?? "",
@@ -287,7 +287,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
         await rm(resolve(reviewFolder, "agent-reviewed-candidates.json"), { force: true });
       }
       const integrations =
-        ((await request.store?.getEffectiveIntegrations(request.user?.id).catch(() => null)) ?? {}) as Record<string, unknown>;
+        ((await request.store?.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin }).catch(() => null)) ?? {}) as Record<string, unknown>;
       const runtime = resolveCostAgentRuntime(integrations);
       const adapter = tryGetAdapter(runtime);
       if (!adapter) return reply.code(400).send({ error: `No CLI runtime is registered for ${runtime}` });
@@ -389,7 +389,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       }
 
       const settings = await request.store?.getSettings().catch(() => null);
-      const integrations = (await request.store?.getEffectiveIntegrations(request.user?.id).catch(() => null)) ?? {};
+      const integrations = (await request.store?.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin }).catch(() => null)) ?? {};
       const defaultCurrency = String((settings as any)?.defaults?.currency ?? "USD").trim().toUpperCase().slice(0, 3) || "USD";
       const azureConfig = {
         endpoint: process.env.AZURE_DI_ENDPOINT ?? integrations.azureDiEndpoint ?? "",

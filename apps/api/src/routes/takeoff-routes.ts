@@ -328,7 +328,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
       // CLI) with a shared anthropic key, fall back through that runtime
       // to the matching direct adapter so the vision call still works
       // without forcing a second key field.
-      const integrations = await request.store!.getEffectiveIntegrations(request.user?.id);
+      const integrations = await request.store!.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
       const directProviders = new Set(["anthropic", "openai", "openrouter", "gemini", "lmstudio"]);
       const llmKeyByProvider: Record<string, string> = {
         anthropic: (integrations.anthropicKey as string | undefined) ?? process.env.ANTHROPIC_API_KEY ?? "",
