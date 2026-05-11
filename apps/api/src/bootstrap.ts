@@ -248,29 +248,41 @@ export async function applyPendingMigrations(): Promise<{ applied: boolean; reas
 
   console.warn(
     `[bootstrap] Dirty migration history detected. Dropping _prisma_migrations and ` +
-      `rebaselining against the v0.1.0 init migration.`,
+      `reconciling schema via prisma db push.`,
   );
   await dropPrismaMigrationsTable();
 
+  // `prisma db push` reconciles the live schema with schema.prisma without
+  // touching migration history. Idempotent: creates missing tables, alters
+  // mismatched columns, drops removed columns/tables (with
+  // --accept-data-loss). Critical for users upgrading from an rc that had
+  // a partial schema — just marking the baseline migration applied would
+  // leave Prisma believing things are in sync when half the tables are
+  // missing.
+  const push = await runPrismaCommand(["db", "push", "--accept-data-loss", "--skip-generate"]);
+  if (!push.ok) {
+    const detail = `\n${push.lastErr?.stdout.trim() ?? ""}\n${push.lastErr?.stderr.trim() ?? ""}`;
+    throw new Error(`prisma db push failed during rebaseline.${detail}`);
+  }
+  const pushOut = push.result?.stdout.trim() ?? "";
+  if (pushOut) console.log(`[bootstrap] prisma db push:\n${pushOut}`);
+
+  // Mark the baseline as applied so future `migrate deploy` invocations
+  // (in case the user later moves to a server install) see clean state.
   const migrationsDir = path.resolve(path.dirname(locatePrismaSchema()), "migrations");
   const baseline = (await listMigrationDirs(migrationsDir))[0];
-  if (!baseline) {
-    throw new Error(`No migrations found under ${migrationsDir} — cannot rebaseline.`);
-  }
-  const resolved = await resolveMigrationApplied(baseline);
-  if (!resolved) {
-    throw new Error(`Failed to mark baseline migration "${baseline}" as applied.`);
+  if (baseline) {
+    const resolved = await resolveMigrationApplied(baseline);
+    if (!resolved) {
+      console.warn(
+        `[bootstrap] Schema reconciled via db push, but failed to mark "${baseline}" ` +
+          `as applied. Future migrate deploy may need manual intervention.`,
+      );
+    }
   }
 
-  const retry = await runPrismaCommand(["migrate", "deploy"]);
-  if (retry.ok) {
-    const retryOut = retry.result?.stdout.trim() ?? "";
-    if (retryOut) console.log(`[bootstrap] prisma migrate deploy (after rebaseline):\n${retryOut}`);
-    console.log(`[bootstrap] migrate deploy succeeded after rebaselining on "${baseline}".`);
-    return { applied: true };
-  }
-  const detail = `\n${retry.lastErr?.stdout.trim() ?? ""}\n${retry.lastErr?.stderr.trim() ?? ""}`;
-  throw new Error(`prisma migrate deploy failed even after rebaselining.${detail}`);
+  console.log(`[bootstrap] schema reconciled via db push after dirty-history recovery.`);
+  return { applied: true };
 }
 
 /**
