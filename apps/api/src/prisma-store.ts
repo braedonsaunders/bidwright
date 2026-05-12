@@ -11092,6 +11092,15 @@ export class PrismaApiStore {
     return false;
   }
 
+  private metadataContainsRateBookComponents(metadata: unknown): boolean {
+    if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return false;
+    const record = metadata as Record<string, unknown>;
+    return ["costComponents", "rateComponents", "pricingComponents"].some((key) => {
+      const components = record[key];
+      return Array.isArray(components) && components.length > 0;
+    });
+  }
+
   private assertRevisionRateBookItemPatchIsSellSideOnly(
     schedule: { scope: string },
     patch: { costRates?: unknown; burden?: unknown; perDiem?: unknown; metadata?: unknown },
@@ -11104,6 +11113,18 @@ export class PrismaApiStore {
       this.metadataTouchesRateBookCostSide(patch.metadata)
     ) {
       throw badRequestError("Imported quote Ratebooks can only modify sell rates. Cost rates and cost-side components remain locked to the imported cost basis.");
+    }
+  }
+
+  private assertRateBookItemCostFieldsAreClean(input: { burden?: unknown; perDiem?: unknown; metadata?: unknown }) {
+    if (input.burden !== undefined && Number(input.burden) !== 0) {
+      throw badRequestError("Ratebook item variable costs belong on ratebook-level Components, not item burden fields.");
+    }
+    if (input.perDiem !== undefined && Number(input.perDiem) !== 0) {
+      throw badRequestError("Ratebook item variable costs belong on ratebook-level Components, not item per-diem fields.");
+    }
+    if (this.metadataContainsRateBookComponents(input.metadata)) {
+      throw badRequestError("Ratebook item components are not supported. Add cost or sell components to the ratebook Components section.");
     }
   }
 
@@ -11231,6 +11252,7 @@ export class PrismaApiStore {
     if (input.costRates !== undefined && Object.keys(input.costRates).length > 0) {
       throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
     }
+    this.assertRateBookItemCostFieldsAreClean(input);
     if (resource && input.catalogItemId && resource.catalogItemId && resource.catalogItemId !== input.catalogItemId) {
       throw new Error(`Resource ${resource.id} is linked to catalog item ${resource.catalogItemId}, not ${input.catalogItemId}.`);
     }
@@ -11257,7 +11279,7 @@ export class PrismaApiStore {
         unit: resource?.defaultUom || catalogItem?.unit || "EA",
         rates: (input.rates ?? seedByTier(basePrice)) as any,
         costRates: {},
-        burden: input.burden ?? 0, perDiem: input.perDiem ?? 0,
+        burden: 0, perDiem: 0,
         metadata: (input.metadata ?? {}) as any,
         sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
       },
@@ -11280,10 +11302,11 @@ export class PrismaApiStore {
     if (patch.costRates !== undefined) {
       throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
     }
+    this.assertRateBookItemCostFieldsAreClean(patch);
     const data: any = {};
     if (patch.rates !== undefined) data.rates = patch.rates;
-    if (patch.burden !== undefined) data.burden = patch.burden;
-    if (patch.perDiem !== undefined) data.perDiem = patch.perDiem;
+    if (patch.burden !== undefined) data.burden = 0;
+    if (patch.perDiem !== undefined) data.perDiem = 0;
     if (patch.metadata !== undefined) data.metadata = patch.metadata;
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     await this.db.rateScheduleItem.update({ where: { id: itemId }, data });

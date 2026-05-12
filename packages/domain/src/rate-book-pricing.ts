@@ -99,7 +99,8 @@ function numberValue(value: unknown, fallback = 0) {
 }
 
 function money(value: number) {
-  return Math.round(value * 100) / 100;
+  const sign = value < 0 ? -1 : 1;
+  return sign * Number(`${Math.round(Number(`${Math.abs(value)}e2`))}e-2`);
 }
 
 function ratio(value: number) {
@@ -321,34 +322,8 @@ export function resolveRateBookLine(
     totalTierUnits += units;
   }
 
-  const rules = [
-    ...componentRulesFromMetadata(rateBook.metadata),
-    ...componentRulesFromMetadata(rateBookItem.metadata),
-  ].filter((rule) => ruleMatchesLine(rule, item, category));
-
-  if (numberValue(rateBookItem.burden, 0) > 0) {
-    rules.push({
-      code: "legacy_burden",
-      label: "Burden",
-      kind: "burden",
-      target: "cost",
-      basis: "per_hour",
-      amount: numberValue(rateBookItem.burden, 0),
-      metadata: { sourceField: "RateScheduleItem.burden" },
-    });
-  }
-
-  if (numberValue(rateBookItem.perDiem, 0) > 0) {
-    rules.push({
-      code: "legacy_per_diem",
-      label: "Per diem",
-      kind: "per_diem",
-      target: "cost",
-      basis: "per_day",
-      amount: numberValue(rateBookItem.perDiem, 0),
-      metadata: { sourceField: "RateScheduleItem.perDiem" },
-    });
-  }
+  const rules = componentRulesFromMetadata(rateBook.metadata)
+    .filter((rule) => ruleMatchesLine(rule, item, category));
 
   for (const rule of rules) {
     const basis = rule.basis ?? "per_line";

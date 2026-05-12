@@ -406,7 +406,8 @@ function finiteNumber(value: unknown) {
 }
 
 function roundMoney(value: number) {
-  return Math.round(value * 100) / 100;
+  const sign = value < 0 ? -1 : 1;
+  return sign * Number(`${Math.round(Number(`${Math.abs(value)}e2`))}e-2`);
 }
 
 function catalogBaseCost(item: Item) {
@@ -1940,7 +1941,7 @@ export function RateScheduleManager({
                                       <div className="flex flex-col items-end">
                                         <span
                                           className="block w-16 rounded px-0.5 py-0.5 text-right text-[11px] text-fg/65"
-                                          title="Read-only: catalog item cost plus ratebook cost components."
+                                          title="Read-only: catalog item cost with tier multiplier plus ratebook cost components."
                                         >
                                           {fmt(loadedCostForTierUnit(item, tier, ratebookComponents) ?? undefined)}
                                         </span>

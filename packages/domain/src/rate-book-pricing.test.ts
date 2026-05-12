@@ -49,6 +49,14 @@ test("rate book resolves resource cost and sell sides without tier units", () =>
         id: "rb-1",
         name: "Acme customer rates",
         category: "mechanical",
+        metadata: {
+          costComponents: [
+            { code: "travel", label: "Travel", kind: "travel", target: "cost", basis: "per_line", amount: 25 },
+          ],
+          pricingComponents: [
+            { code: "margin-adder", label: "Margin adder", kind: "markup", target: "price", basis: "per_line", amount: 10 },
+          ],
+        },
         tiers: [{ id: "tier-ea", name: "Each", multiplier: 1, sortOrder: 1, uom: "EA" }],
         items: [{
           id: "rsi-1",
@@ -59,14 +67,6 @@ test("rate book resolves resource cost and sell sides without tier units", () =>
           code: "PMP",
           unit: "EA",
           rates: { "tier-ea": 150 },
-          metadata: {
-            costComponents: [
-              { code: "travel", label: "Travel", kind: "travel", target: "cost", basis: "per_line", amount: 25 },
-            ],
-            pricingComponents: [
-              { code: "margin-adder", label: "Margin adder", kind: "markup", target: "price", basis: "per_line", amount: 10 },
-            ],
-          },
         }],
       }],
       customerId: "customer-1",
@@ -124,4 +124,67 @@ test("resource identity wins over name fallback when resolving rate book items",
   assert.equal(resolution.snapshot.rateBookItemId, "rsi-resource");
   assert.equal(resolution.cost, 20);
   assert.equal(resolution.price, 25);
+});
+
+test("rate book cost uses generic tier multipliers and schedule-level components", () => {
+  const resolution = resolveRateBookLine(
+    worksheetItem({
+      costResourceId: "res-tech",
+      entityName: "Technician",
+      quantity: 2,
+      tierUnits: { regular: 4, overtime: 3, doubletime: 1 },
+      uom: "HR",
+    }),
+    { ...category, defaultUom: "HR", validUoms: ["HR"] },
+    {
+      rateBooks: [{
+        id: "rb-labour",
+        name: "Flexible labour rates",
+        metadata: {
+          costComponents: [
+            { code: "burden", label: "Burden", kind: "burden", target: "cost", basis: "per_tier_unit", amount: 12 },
+          ],
+        },
+        tiers: [
+          { id: "regular", name: "Regular", multiplier: 1, sortOrder: 1, uom: "HR" },
+          { id: "overtime", name: "Overtime", multiplier: 1.5, sortOrder: 2, uom: "HR" },
+          { id: "doubletime", name: "Double Time", multiplier: 2, sortOrder: 3, uom: "HR" },
+        ],
+        items: [{
+          id: "rsi-tech",
+          resourceId: "res-tech",
+          catalogItemId: "ci-tech",
+          catalogUnitCost: 40,
+          name: "Technician",
+          code: "TECH",
+          unit: "HR",
+          rates: { regular: 100, overtime: 150, doubletime: 200 },
+          metadata: {
+            costComponents: [
+              { code: "ignored-item-delta", label: "Ignored item delta", kind: "other", target: "cost", basis: "per_tier_unit", amount: 999 },
+            ],
+          },
+          burden: 999,
+          perDiem: 999,
+        }],
+      }],
+    },
+  );
+
+  assert.ok(resolution);
+  assert.equal(resolution.snapshot.baseCost, 840);
+  assert.equal(resolution.snapshot.totalCost, 1032);
+  assert.equal(resolution.cost, 516);
+  assert.equal(resolution.price, 2100);
+  assert.deepEqual(
+    resolution.snapshot.components
+      .filter((component) => component.target === "cost")
+      .map((component) => [component.code, component.amount]),
+    [
+      ["Regular", 320],
+      ["Overtime", 360],
+      ["Double Time", 160],
+      ["burden", 192],
+    ],
+  );
 });
