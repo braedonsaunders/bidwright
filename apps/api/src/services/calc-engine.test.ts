@@ -97,10 +97,11 @@ const labourRateSchedule: RateScheduleContext = {
   items: [
     {
       id: "rsi-test",
+      catalogUnitCost: 50,
       name: "MECH:Trade Labour",
       code: "TL",
       rates: { "tier-reg": 100, "tier-ot": 150, "tier-dt": 200 },
-      costRates: { "tier-reg": 50, "tier-ot": 75, "tier-dt": 100 },
+      costRates: {},
       burden: 0,
       perDiem: 0,
     },

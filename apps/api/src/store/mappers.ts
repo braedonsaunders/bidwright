@@ -611,6 +611,9 @@ export function mapRateScheduleTier(t: any): RateScheduleTier {
 export function mapRateScheduleItem(i: any): RateScheduleItem {
   return {
     id: i.id, scheduleId: i.scheduleId, catalogItemId: i.catalogItemId ?? null, resourceId: i.resourceId ?? null,
+    catalogUnitCost: i.catalogUnitCost ?? i.catalogItem?.unitCost ?? null,
+    catalogUnitPrice: i.catalogUnitPrice ?? i.catalogItem?.unitPrice ?? null,
+    catalogUnit: i.catalogUnit ?? i.catalogItem?.unit ?? null,
     code: i.code, name: i.name, unit: i.unit,
     rates: (i.rates as Record<string, number>) ?? {},
     costRates: (i.costRates as Record<string, number>) ?? {},

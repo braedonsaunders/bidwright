@@ -1488,6 +1488,27 @@ function toPrismaJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value ?? {})) as Prisma.InputJsonValue;
 }
 
+const rateScheduleItemCatalogSelect = {
+  unitCost: true,
+  unitPrice: true,
+  unit: true,
+} as const;
+
+const rateScheduleItemsWithCatalog = {
+  orderBy: { sortOrder: "asc" as const },
+  include: { catalogItem: { select: rateScheduleItemCatalogSelect } },
+} as const;
+
+const rateScheduleWithChildrenInclude = {
+  tiers: { orderBy: { sortOrder: "asc" as const } },
+  items: rateScheduleItemsWithCatalog,
+} as const;
+
+const rateScheduleCalcInclude = {
+  tiers: true,
+  items: { include: { catalogItem: { select: rateScheduleItemCatalogSelect } } },
+} as const;
+
 function toRateScheduleCalcContext(schedules: Array<{
   id?: string;
   name?: string;
@@ -1500,6 +1521,8 @@ function toRateScheduleCalcContext(schedules: Array<{
     scheduleId?: string;
     catalogItemId?: string | null;
     resourceId?: string | null;
+    catalogUnitCost?: number | null;
+    catalogItem?: { unitCost?: number | null; unitPrice?: number | null; unit?: string | null } | null;
     name: string;
     code: string;
     unit?: string;
@@ -1530,6 +1553,7 @@ function toRateScheduleCalcContext(schedules: Array<{
       scheduleId: item.scheduleId ?? schedule.id ?? "",
       catalogItemId: item.catalogItemId ?? null,
       resourceId: item.resourceId ?? null,
+      catalogUnitCost: item.catalogUnitCost ?? item.catalogItem?.unitCost ?? null,
       name: item.name,
       code: item.code,
       unit: item.unit ?? "HR",
@@ -3129,7 +3153,7 @@ export class PrismaApiStore {
     // Rate schedules: both revision-scoped and org-level
     const rateSchedules = await this.db.rateSchedule.findMany({
       where: { OR: [{ revisionId: { in: revisionIds } }, { organizationId: this.organizationId, scope: "global" }] },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const mappedAdjustments = adjustments.map(mapAdjustment);
     const mappedModifiers = mappedAdjustments
@@ -3220,7 +3244,7 @@ export class PrismaApiStore {
       }),
       this.db.rateSchedule.findMany({
         where: { revisionId: revision.id },
-        include: { tiers: true, items: true },
+        include: rateScheduleCalcInclude,
       }),
       this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } }),
     ]);
@@ -3309,7 +3333,7 @@ export class PrismaApiStore {
         ? Promise.resolve(options.revisionSchedules)
         : this.db.rateSchedule.findMany({
             where: { revisionId: revision.id },
-            include: { tiers: true, items: true },
+            include: rateScheduleCalcInclude,
           }).then((rows) => rows.map(mapRateScheduleWithChildren)),
       this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } }),
     ]);
@@ -7924,7 +7948,7 @@ export class PrismaApiStore {
 
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
     const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
@@ -8311,7 +8335,7 @@ export class PrismaApiStore {
 
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
     const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
@@ -8542,7 +8566,7 @@ export class PrismaApiStore {
     // Re-run the standard calc engine.
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
     const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
@@ -8625,7 +8649,7 @@ export class PrismaApiStore {
 
     const revisionSchedules = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
     const mappedRev = mapRevision(revision);
@@ -8739,7 +8763,7 @@ export class PrismaApiStore {
     await this.pushActivity(projectId, revision.id, "item_deleted", { itemId, entityName: item.entityName, before: mappedDeleted, after: null });
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
       previousItem: mappedDeleted,
@@ -11018,7 +11042,7 @@ export class PrismaApiStore {
     if (scope) where.scope = scope;
     const schedules = await this.db.rateSchedule.findMany({
       where,
-      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      include: rateScheduleWithChildrenInclude,
       orderBy: { name: "asc" },
     });
     return schedules.map(mapRateScheduleWithChildren);
@@ -11027,7 +11051,7 @@ export class PrismaApiStore {
   async getRateSchedule(id: string): Promise<RateScheduleWithChildren> {
     const schedule = await this.db.rateSchedule.findFirst({
       where: { id, organizationId: this.organizationId },
-      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      include: rateScheduleWithChildrenInclude,
     });
     if (!schedule) throw new Error(`Rate schedule ${id} not found`);
     return mapRateScheduleWithChildren(schedule);
@@ -11102,7 +11126,7 @@ export class PrismaApiStore {
         autoCalculate: input.autoCalculate ?? true,
         metadata: (input.metadata ?? {}) as any,
       },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     return mapRateScheduleWithChildren(created);
   }
@@ -11129,7 +11153,7 @@ export class PrismaApiStore {
     }
     const updated = await this.db.rateSchedule.update({
       where: { id }, data,
-      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      include: rateScheduleWithChildrenInclude,
     });
     if (existing.scope === "revision" && existing.projectId) {
       await this.syncProjectEstimate(existing.projectId);
@@ -11201,6 +11225,12 @@ export class PrismaApiStore {
     const resource = input.resourceId ? await this.requireRateBookResource(input.resourceId) : null;
     const catalogItemId = input.catalogItemId ?? resource?.catalogItemId ?? null;
     const catalogItem = catalogItemId ? await this.requireCatalogItem(catalogItemId) : null;
+    if (!catalogItem) {
+      throw badRequestError("Ratebook items must be linked to a catalog item. Set base cost on Resources > Catalogue > Item, then add the resource to the ratebook.");
+    }
+    if (input.costRates !== undefined && Object.keys(input.costRates).length > 0) {
+      throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
+    }
     if (resource && input.catalogItemId && resource.catalogItemId && resource.catalogItemId !== input.catalogItemId) {
       throw new Error(`Resource ${resource.id} is linked to catalog item ${resource.catalogItemId}, not ${input.catalogItemId}.`);
     }
@@ -11208,7 +11238,6 @@ export class PrismaApiStore {
     const resourceMetadata = (resource?.metadata && typeof resource.metadata === "object" && !Array.isArray(resource.metadata)
       ? resource.metadata
       : {}) as Record<string, unknown>;
-    const baseCost = Number(resourceMetadata.unitCost ?? resourceMetadata.cost ?? catalogItem?.unitCost ?? 0) || 0;
     const basePrice = Number(resourceMetadata.unitPrice ?? resourceMetadata.price ?? catalogItem?.unitPrice ?? 0) || 0;
     const seedByTier = (base: number) => {
       if (base <= 0) return {};
@@ -11227,7 +11256,7 @@ export class PrismaApiStore {
         name: resource?.name || catalogItem?.name || "",
         unit: resource?.defaultUom || catalogItem?.unit || "EA",
         rates: (input.rates ?? seedByTier(basePrice)) as any,
-        costRates: (input.costRates ?? seedByTier(baseCost)) as any,
+        costRates: {},
         burden: input.burden ?? 0, perDiem: input.perDiem ?? 0,
         metadata: (input.metadata ?? {}) as any,
         sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
@@ -11248,9 +11277,11 @@ export class PrismaApiStore {
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
     this.assertRevisionRateBookItemPatchIsSellSideOnly(schedule, patch);
+    if (patch.costRates !== undefined) {
+      throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
+    }
     const data: any = {};
     if (patch.rates !== undefined) data.rates = patch.rates;
-    if (patch.costRates !== undefined) data.costRates = patch.costRates;
     if (patch.burden !== undefined) data.burden = patch.burden;
     if (patch.perDiem !== undefined) data.perDiem = patch.perDiem;
     if (patch.metadata !== undefined) data.metadata = patch.metadata;
@@ -11280,14 +11311,14 @@ export class PrismaApiStore {
     if (!revision) throw new Error(`No active revision for project ${projectId}`);
     const source = await this.db.rateSchedule.findFirst({
       where: { id: scheduleId, organizationId: this.organizationId, scope: "global" },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     if (!source) throw new Error(`Rate schedule ${scheduleId} not found`);
 
     // Prevent duplicate imports — if this schedule was already imported for this revision, return the existing copy
     const existing = await this.db.rateSchedule.findFirst({
       where: { revisionId: revision.id, sourceScheduleId: scheduleId },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     if (existing) {
       return mapRateScheduleWithChildren(existing);
@@ -11317,19 +11348,15 @@ export class PrismaApiStore {
 
       for (const item of source.items) {
         const remappedRates: Record<string, number> = {};
-        const remappedCostRates: Record<string, number> = {};
         for (const [oldTierId, val] of Object.entries((item.rates as Record<string, number>) ?? {})) {
           remappedRates[tierIdMap.get(oldTierId) ?? oldTierId] = val;
-        }
-        for (const [oldTierId, val] of Object.entries((item.costRates as Record<string, number>) ?? {})) {
-          remappedCostRates[tierIdMap.get(oldTierId) ?? oldTierId] = val;
         }
         await (tx as any).rateScheduleItem.create({
           data: {
             id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
             resourceId: (item as any).resourceId ?? null,
             code: item.code, name: item.name, unit: item.unit,
-            rates: remappedRates, costRates: remappedCostRates,
+            rates: remappedRates, costRates: {},
             burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
           },
         });
@@ -11337,7 +11364,7 @@ export class PrismaApiStore {
 
       const result = await tx.rateSchedule.findFirst({
         where: { id: newSchedId },
-        include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+        include: rateScheduleWithChildrenInclude,
       });
       return mapRateScheduleWithChildren(result);
     });
@@ -11349,7 +11376,7 @@ export class PrismaApiStore {
     if (!revision) return [];
     const schedules = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: { orderBy: { sortOrder: "asc" } }, items: { orderBy: { sortOrder: "asc" } } },
+      include: rateScheduleWithChildrenInclude,
       orderBy: { name: "asc" },
     });
     return schedules.map(mapRateScheduleWithChildren);
@@ -11491,18 +11518,14 @@ export class PrismaApiStore {
     const baseTier = schedule.tiers[0];
     for (const item of schedule.items) {
       const rates = (item.rates as Record<string, number>) ?? {};
-      const costRates = (item.costRates as Record<string, number>) ?? {};
       const baseRate = rates[baseTier.id] ?? 0;
-      const baseCost = costRates[baseTier.id] ?? 0;
       const newRates: Record<string, number> = {};
-      const newCostRates: Record<string, number> = {};
       for (const tier of schedule.tiers) {
         newRates[tier.id] = Math.round(baseRate * tier.multiplier * 100) / 100;
-        newCostRates[tier.id] = Math.round(baseCost * tier.multiplier * 100) / 100;
       }
       await this.db.rateScheduleItem.update({
         where: { id: item.id },
-        data: schedule.scope === "revision" ? { rates: newRates } : { rates: newRates, costRates: newCostRates },
+        data: { rates: newRates },
       });
     }
 
@@ -11743,7 +11766,7 @@ export class PrismaApiStore {
       // Copy rate schedules (deep copy with tier ID remapping)
       const oldSchedules = await tx.rateSchedule.findMany({
         where: { revisionId: currentRevision.id },
-        include: { tiers: true, items: true },
+        include: rateScheduleCalcInclude,
       });
       for (const sched of oldSchedules) {
         const newSchedId = createId("rs");
@@ -11767,21 +11790,16 @@ export class PrismaApiStore {
         }
         for (const item of sched.items) {
           const remappedRates: Record<string, number> = {};
-          const remappedCostRates: Record<string, number> = {};
           for (const [oldTierId, val] of Object.entries((item.rates as Record<string, number>) ?? {})) {
             const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
             remappedRates[newTierId] = val;
-          }
-          for (const [oldTierId, val] of Object.entries((item.costRates as Record<string, number>) ?? {})) {
-            const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
-            remappedCostRates[newTierId] = val;
           }
           await (tx as any).rateScheduleItem.create({
             data: {
               id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
               resourceId: (item as any).resourceId ?? null,
               code: item.code, name: item.name, unit: item.unit,
-              rates: remappedRates, costRates: remappedCostRates,
+              rates: remappedRates, costRates: {},
               burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
             },
           });
@@ -14954,7 +14972,7 @@ export class PrismaApiStore {
 
     const revisionSchedules = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
 
@@ -15200,7 +15218,7 @@ export class PrismaApiStore {
 
     const revisionSchedules = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
-      include: { tiers: true, items: true },
+      include: rateScheduleCalcInclude,
     });
     const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
     const entityCategories = await this.db.entityCategory.findMany({

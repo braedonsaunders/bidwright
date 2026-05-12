@@ -400,6 +400,52 @@ function formatComponentAmount(component: Pick<RatebookComponentRule, "amount" |
   return component.amount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+function finiteNumber(value: unknown) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function roundMoney(value: number) {
+  return Math.round(value * 100) / 100;
+}
+
+function catalogBaseCost(item: Item) {
+  return finiteNumber(item.catalogUnitCost);
+}
+
+function costComponentAppliesToTier(component: RatebookComponentRule, tier: Tier) {
+  if (component.appliesToTierId && component.appliesToTierId !== tier.id) return false;
+  if (component.appliesToTierName && categoryLookupValue(component.appliesToTierName) !== categoryLookupValue(tier.name)) return false;
+  return true;
+}
+
+function loadedCostForTierUnit(item: Item, tier: Tier, components: RatebookComponentRule[]) {
+  const unitCost = catalogBaseCost(item);
+  if (unitCost === null) return null;
+
+  const baseCost = roundMoney(unitCost * (finiteNumber(tier.multiplier) ?? 1));
+  const basePrice = finiteNumber(item.rates?.[tier.id]) ?? 0;
+  return components
+    .filter((component) => component.target === "cost" || component.target === "both")
+    .filter((component) => costComponentAppliesToTier(component, tier))
+    .reduce((total, component) => {
+      const amount = finiteNumber(component.amount) ?? 0;
+      switch (component.basis) {
+        case "percent_of_base_cost":
+          return total + baseCost * amount;
+        case "percent_of_base_price":
+          return total + basePrice * amount;
+        case "per_line":
+        case "per_quantity":
+        case "per_tier_unit":
+        case "per_hour":
+        case "per_day":
+        default:
+          return total + amount;
+      }
+    }, baseCost);
+}
+
 function componentCodeFromLabel(label: string) {
   return label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "");
 }
@@ -581,7 +627,7 @@ export function RateScheduleManager({
   }, []);
 
   // Inline editing
-  const [editingCell, setEditingCell] = useState<{ itemId: string; tierId: string; side: "cost" | "sell" } | null>(null);
+  const [editingCell, setEditingCell] = useState<{ itemId: string; tierId: string } | null>(null);
   const [editValue, setEditValue] = useState("");
 
   // New tier/item forms
@@ -973,7 +1019,7 @@ export function RateScheduleManager({
   }, [resourceQuery, resources]);
 
   const handleAddItem = useCallback(async () => {
-    if (!detail || (!newItemForm.resourceId && !newItemForm.catalogItemId)) return;
+    if (!detail || !newItemForm.catalogItemId) return;
     try {
       const updated = await addRateScheduleItem(detail.id, {
         resourceId: newItemForm.resourceId,
@@ -1016,18 +1062,16 @@ export function RateScheduleManager({
     [detail, applyScheduleUpdate]
   );
 
-  const startRateEdit = (item: Item, tierId: string, side: "cost" | "sell") => {
-    setEditingCell({ itemId: item.id, tierId, side });
-    setEditValue(String(side === "cost" ? item.costRates?.[tierId] ?? 0 : item.rates?.[tierId] ?? 0));
+  const startSellRateEdit = (item: Item, tierId: string) => {
+    setEditingCell({ itemId: item.id, tierId });
+    setEditValue(String(item.rates?.[tierId] ?? 0));
   };
 
   const saveRateEdit = useCallback(
     async (item: Item) => {
       if (!detail || !editingCell) return;
       const val = parseFloat(editValue) || 0;
-      const patch = editingCell.side === "cost"
-        ? { costRates: { ...item.costRates, [editingCell.tierId]: val } }
-        : { rates: { ...item.rates, [editingCell.tierId]: val } };
+      const patch = { rates: { ...item.rates, [editingCell.tierId]: val } };
       try {
         const updated = await updateRateScheduleItem(detail.id, item.id, patch);
         applyScheduleUpdate(updated);
@@ -1876,7 +1920,7 @@ export function RateScheduleManager({
                                 {detail.tiers
                                   .sort((a, b) => a.sortOrder - b.sortOrder)
                                   .flatMap((tier) => [
-                                    <th key={`${tier.id}:cost`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Base Cost</th>,
+                                    <th key={`${tier.id}:cost`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Cost</th>,
                                     <th key={`${tier.id}:sell`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Sell</th>,
                                   ])}
                                 <th />
@@ -1894,33 +1938,17 @@ export function RateScheduleManager({
                                   .flatMap((tier) => [
                                     <td key={`${tier.id}:cost`} className="py-1 px-0.5">
                                       <div className="flex flex-col items-end">
-                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id && editingCell.side === "cost" ? (
-                                          <input
-                                            type="number"
-                                            step="0.01"
-                                            className="w-16 text-right px-1 py-0.5 rounded bg-panel2 border border-accent/30 text-fg text-[11px] focus:outline-none focus:ring-1 focus:ring-accent/50"
-                                            value={editValue}
-                                            onChange={(e) => setEditValue(e.target.value)}
-                                            onBlur={() => saveRateEdit(item)}
-                                            onKeyDown={(e) => {
-                                              if (e.key === "Enter") saveRateEdit(item);
-                                              if (e.key === "Escape") setEditingCell(null);
-                                            }}
-                                            autoFocus
-                                          />
-                                        ) : (
-                                          <button
-                                            onClick={() => startRateEdit(item, tier.id, "cost")}
-                                            className="text-right text-[11px] text-fg/80 hover:text-accent px-0.5 py-0.5 rounded hover:bg-accent/5 transition-colors w-16"
-                                          >
-                                            {fmt(item.costRates?.[tier.id])}
-                                          </button>
-                                        )}
+                                        <span
+                                          className="block w-16 rounded px-0.5 py-0.5 text-right text-[11px] text-fg/65"
+                                          title="Read-only: catalog item cost plus ratebook cost components."
+                                        >
+                                          {fmt(loadedCostForTierUnit(item, tier, ratebookComponents) ?? undefined)}
+                                        </span>
                                       </div>
                                     </td>,
                                     <td key={`${tier.id}:sell`} className="py-1 px-0.5">
                                       <div className="flex flex-col items-end">
-                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id && editingCell.side === "sell" ? (
+                                        {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
                                           <input
                                             type="number"
                                             step="0.01"
@@ -1936,7 +1964,7 @@ export function RateScheduleManager({
                                           />
                                         ) : (
                                           <button
-                                            onClick={() => startRateEdit(item, tier.id, "sell")}
+                                            onClick={() => startSellRateEdit(item, tier.id)}
                                             className="text-right text-[11px] text-fg/80 hover:text-accent px-0.5 py-0.5 rounded hover:bg-accent/5 transition-colors w-16"
                                           >
                                             {fmt(item.rates?.[tier.id])}
@@ -1991,10 +2019,11 @@ export function RateScheduleManager({
                                 <p className="mt-1 text-[10px] text-fg/40">
                                   {newItemForm.code && <span className="font-mono mr-1">{newItemForm.code}</span>}
                                   {newItemForm.name} · {newItemForm.unit}
+                                  {!newItemForm.catalogItemId && <span className="ml-1 text-danger">No catalog item cost source</span>}
                                 </p>
                               )}
                             </div>
-                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.resourceId && !newItemForm.catalogItemId}>Add</Button>
+                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.catalogItemId}>Add</Button>
                             <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setResourceQuery(""); setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
                           </div>
                         </motion.div>

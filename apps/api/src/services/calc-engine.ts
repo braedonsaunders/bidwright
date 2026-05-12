@@ -42,6 +42,7 @@ export interface RateScheduleContext {
     scheduleId?: string;
     catalogItemId?: string | null;
     resourceId?: string | null;
+    catalogUnitCost?: number | null;
     name: string;
     code: string;
     unit?: string;

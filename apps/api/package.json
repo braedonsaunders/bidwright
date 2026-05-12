@@ -10,6 +10,8 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.715.0",
+    "@aws-sdk/lib-storage": "^3.715.0",
     "@bidwright/agent": "workspace:*",
     "@bidwright/db": "workspace:*",
     "@bidwright/domain": "workspace:*",
@@ -17,8 +19,6 @@
     "@bidwright/integrations": "workspace:*",
     "@bidwright/vector": "workspace:*",
     "@bidwright/vision": "workspace:*",
-    "@aws-sdk/client-s3": "^3.715.0",
-    "@aws-sdk/lib-storage": "^3.715.0",
     "@fastify/cors": "^10.0.2",
     "@fastify/multipart": "^9.3.0",
     "@fastify/rate-limit": "^10.2.1",
@@ -31,20 +31,21 @@
     "fastify-plugin": "^5.0.1",
     "ioredis": "^5.4.2",
     "jszip": "^3.10.1",
-    "node-pty": "^1.0.0",
-    "tar": "^7.4.3",
     "libarchive.js": "^2.0.2",
+    "node-pty": "^1.0.0",
     "nodemailer": "^6.9.16",
     "occt-import-js": "^0.0.23",
     "pdfjs-dist": "^5.5.207",
     "playwright": "^1.58.2",
     "postal-mime": "^2.7.4",
+    "tar": "^7.4.3",
     "web-ifc": "^0.0.77",
     "xlsx": "^0.18.5",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/nodemailer": "^6.4.17",
+    "@types/pg": "8.20.0",
     "tsx": "^4.19.2"
   }
 }

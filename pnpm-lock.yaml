@@ -126,6 +126,9 @@ importers:
       '@types/nodemailer':
         specifier: ^6.4.17
         version: 6.4.23
+      '@types/pg':
+        specifier: 8.20.0
+        version: 8.20.0
       tsx:
         specifier: ^4.19.2
         version: 4.21.0

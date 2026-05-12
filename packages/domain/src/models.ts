@@ -1097,6 +1097,9 @@ export interface RateScheduleItem {
   scheduleId: string;
   catalogItemId: string | null;
   resourceId?: string | null;
+  catalogUnitCost?: number | null;
+  catalogUnitPrice?: number | null;
+  catalogUnit?: string | null;
   code: string;
   name: string;
   unit: string;

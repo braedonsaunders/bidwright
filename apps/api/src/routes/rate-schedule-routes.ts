@@ -194,7 +194,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
         sortOrder: body.sortOrder,
       });
     } catch (e: any) {
-      reply.code(e.message?.includes("not found") ? 404 : 500);
+      reply.code(e.statusCode ?? (e.message?.includes("not found") ? 404 : 500));
       return { error: e.message ?? "Internal error" };
     }
   });
@@ -205,7 +205,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
       const patch = request.body as Record<string, unknown>;
       return await request.store!.updateRateScheduleItem(itemId, patch);
     } catch (e: any) {
-      reply.code(e.message?.includes("not found") ? 404 : 500);
+      reply.code(e.statusCode ?? (e.message?.includes("not found") ? 404 : 500));
       return { error: e.message ?? "Internal error" };
     }
   });

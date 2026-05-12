@@ -80,7 +80,7 @@ export interface RateBookItemLike extends Partial<RateScheduleItem> {
   code?: string;
   unit?: string;
   rates?: Record<string, number>;
-  costRates?: Record<string, number>;
+  catalogUnitCost?: number | null;
   burden?: number;
   perDiem?: number;
   metadata?: Record<string, unknown>;
@@ -161,6 +161,10 @@ function resolveTierId(rawTierId: string, validKeys: string[]): string {
 function findTier(rateBook: RateBookLike, rawTierId: string) {
   const tiers = rateBook.tiers ?? [];
   return tiers.find((tier) => tier.id === rawTierId || tier.id.startsWith(rawTierId)) ?? null;
+}
+
+function tierMultiplier(tier: (Partial<RateScheduleTier> & { id: string }) | null) {
+  return numberValue(tier?.multiplier, 1);
 }
 
 function defaultTierForItem(rateBook: RateBookLike, item: WorksheetItem) {
@@ -245,9 +249,8 @@ export function resolveRateBookLine(
 
   const quantity = numberValue(item.quantity, 1);
   const rates = rateBookItem.rates ?? {};
-  const costRates = rateBookItem.costRates ?? {};
   const validRateKeys = Object.keys(rates);
-  const validCostKeys = Object.keys(costRates);
+  const catalogUnitCost = numberValue(rateBookItem.catalogUnitCost, Number.NaN);
   const components: RateResolutionComponent[] = [];
   const warnings: string[] = [];
   let totalPrice = 0;
@@ -262,10 +265,9 @@ export function resolveRateBookLine(
 
     const tier = findTier(rateBook, rawTierId) ?? (rawTierId === "__unit" ? defaultTier : null);
     const priceKey = resolveTierId(rawTierId, validRateKeys);
-    const costKey = resolveTierId(rawTierId, validCostKeys);
     const fallbackKey = defaultTier?.id ?? "";
     const unitPrice = numberValue(rates[priceKey] ?? rates[fallbackKey], Number.NaN);
-    const unitCost = numberValue(costRates[costKey] ?? costRates[fallbackKey], Number.NaN);
+    const unitCost = Number.isFinite(catalogUnitCost) ? money(catalogUnitCost * tierMultiplier(tier)) : Number.NaN;
     const extendedUnits = units * quantity;
 
     if (!Number.isFinite(unitPrice)) {
@@ -293,7 +295,7 @@ export function resolveRateBookLine(
     }
 
     if (!Number.isFinite(unitCost)) {
-      warnings.push(`Missing cost rate for ${tier?.name ?? rawTierId}.`);
+      warnings.push(`Missing catalog item cost for ${rateBookItem.name ?? item.entityName}.`);
     } else {
       const amount = unitCost * extendedUnits;
       totalCost += amount;
