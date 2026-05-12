@@ -182,6 +182,7 @@ type ComponentBasis =
   | "per_line"
   | "per_quantity"
   | "per_tier_unit"
+  | "per_hour"
   | "per_day"
   | "percent_of_base_cost"
   | "percent_of_base_price";
@@ -232,6 +233,7 @@ const componentBasisOptions = [
   { value: "per_line", label: "Per line" },
   { value: "per_quantity", label: "Per quantity" },
   { value: "per_tier_unit", label: "Per tier unit" },
+  { value: "per_hour", label: "Per hour" },
   { value: "per_day", label: "Per day" },
   { value: "percent_of_base_cost", label: "% base cost" },
   { value: "percent_of_base_price", label: "% base sell" },
@@ -592,6 +594,8 @@ export function RateScheduleManager({
   const [showAddItem, setShowAddItem] = useState(false);
   const [resourceQuery, setResourceQuery] = useState("");
   const [componentDraft, setComponentDraft] = useState<RatebookComponentRule>(emptyComponentDraft);
+  const [componentTemplatesOpen, setComponentTemplatesOpen] = useState(false);
+  const [componentEditorOpen, setComponentEditorOpen] = useState(false);
   const [newItemForm, setNewItemForm] = useState({
     name: "",
     code: "",
@@ -835,6 +839,7 @@ export function RateScheduleManager({
       });
       applyScheduleUpdate(updated);
       setComponentDraft(emptyComponentDraft());
+      setComponentEditorOpen(false);
     } catch (err) {
       console.error("Failed to add ratebook component:", err);
     }
@@ -855,6 +860,7 @@ export function RateScheduleManager({
       entityTypes: [],
     });
     setDrawerTab("components");
+    setComponentEditorOpen(true);
   }, []);
 
   const handleEditComponent = useCallback((component: RatebookComponentRule) => {
@@ -864,6 +870,7 @@ export function RateScheduleManager({
       entityTypes: [...component.entityTypes],
     });
     setDrawerTab("components");
+    setComponentEditorOpen(true);
   }, []);
 
   const handleDeleteComponent = useCallback(async (componentId: string) => {
@@ -1475,216 +1482,35 @@ export function RateScheduleManager({
               ) : loadingDetail || !detail ? (
                 <div className="flex items-center justify-center py-12 text-xs text-fg/30">Loading...</div>
               ) : drawerTab === "components" ? (
-                <div className="space-y-5">
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
-                      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Cost Rules</div>
-                      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
-                        {formatCount(ratebookComponents.filter((component) => component.target === "cost" || component.target === "both").length)}
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
-                      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Sell Rules</div>
-                      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">
-                        {formatCount(ratebookComponents.filter((component) => component.target === "price" || component.target === "both").length)}
-                      </div>
-                    </div>
-                    <div className="rounded-lg border border-line bg-bg/35 px-3 py-2">
-                      <div className="text-[10px] font-medium uppercase tracking-wider text-fg/35">Currency</div>
-                      <div className="mt-1 text-lg font-semibold uppercase text-fg">
-                        {normalizeCurrency(metadataText(detail.metadata, "currency"), organizationCurrency)}
-                      </div>
-                    </div>
-                  </div>
-
+                <div className="space-y-4">
                   <div>
-                    <div className="mb-3 flex items-center justify-between gap-3">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                       <div>
-                        <h3 className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Templates</h3>
+                        <h3 className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Active Rules</h3>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] text-fg/35">
+                          <span>{formatCount(ratebookComponents.filter((component) => component.target === "cost" || component.target === "both").length)} cost</span>
+                          <span>{formatCount(ratebookComponents.filter((component) => component.target === "price" || component.target === "both").length)} sell</span>
+                          <span>{normalizeCurrency(metadataText(detail.metadata, "currency"), organizationCurrency)}</span>
+                        </div>
                       </div>
-                    </div>
-                    <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-                      {componentTemplates.map((template) => (
-                        <button
-                          key={template.code}
-                          type="button"
-                          onClick={() => handleUseComponentTemplate(template)}
-                          className="rounded-lg border border-line bg-bg/25 p-3 text-left transition-colors hover:border-accent/40 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                      <div className="flex flex-wrap items-center gap-2">
+                        <Button
+                          size="xs"
+                          variant={componentTemplatesOpen ? "secondary" : "ghost"}
+                          onClick={() => setComponentTemplatesOpen((open) => !open)}
                         >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-xs font-semibold text-fg">{template.label}</span>
-                            <Badge tone={template.target === "cost" ? "warning" : template.target === "price" ? "success" : "info"} className="shrink-0 text-[10px]">
-                              {template.target === "price" ? "Sell" : template.target === "both" ? "Both" : "Cost"}
-                            </Badge>
-                          </div>
-                          <div className="mt-1 text-[11px] text-fg/45">{template.description}</div>
-                          <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-fg/35">
-                            <span>{componentOptionLabel(componentBasisOptions, template.basis)}</span>
-                            <span className="font-mono tabular-nums">{formatComponentAmount(template)}</span>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  <div className="rounded-lg border border-line bg-bg/20 p-3">
-                    <div className="mb-3 flex items-center justify-between gap-3">
-                      <div>
-                        <div className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Rule Editor</div>
-                      </div>
-                      {componentDraft.id ? (
-                        <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
-                          <X className="h-3 w-3" />
-                          Clear
+                          <ChevronRight className={cn("h-3 w-3 transition-transform", componentTemplatesOpen && "rotate-90")} />
+                          Templates
                         </Button>
-                      ) : null}
-                    </div>
-                    <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
-                      <div className="grid gap-2 sm:grid-cols-2">
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Label</label>
-                          <Input
-                            className="mt-1 h-8 text-xs"
-                            value={componentDraft.label}
-                            onChange={(event) => {
-                              const label = event.target.value;
-                              setComponentDraft((current) => ({
-                                ...current,
-                                label,
-                                code: !current.code || current.code === componentCodeFromLabel(current.label)
-                                  ? componentCodeFromLabel(label)
-                                  : current.code,
-                              }));
-                            }}
-                            placeholder="Travel zone A"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Code</label>
-                          <Input
-                            className="mt-1 h-8 font-mono text-xs"
-                            value={componentDraft.code}
-                            onChange={(event) => setComponentDraft((current) => ({ ...current, code: event.target.value }))}
-                            placeholder="travel_zone_a"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Kind</label>
-                          <Select
-                            className="mt-1"
-                            size="xs"
-                            value={componentDraft.kind}
-                            onValueChange={(kind) => setComponentDraft((current) => ({ ...current, kind }))}
-                            options={componentKindOptions}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Side</label>
-                          <Select
-                            className="mt-1"
-                            size="xs"
-                            value={componentDraft.target}
-                            onValueChange={(target) => setComponentDraft((current) => ({ ...current, target: target as ComponentTarget }))}
-                            options={componentTargetOptions}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Basis</label>
-                          <Select
-                            className="mt-1"
-                            size="xs"
-                            value={componentDraft.basis}
-                            onValueChange={(basis) => {
-                              const nextBasis = basis as ComponentBasis;
-                              setComponentDraft((current) => {
-                                const wasPercent = isPercentComponentBasis(current.basis);
-                                const isPercent = isPercentComponentBasis(nextBasis);
-                                const amount = wasPercent === isPercent
-                                  ? current.amount
-                                  : isPercent
-                                    ? current.amount / 100
-                                    : current.amount * 100;
-                                return { ...current, basis: nextBasis, amount };
-                              });
-                            }}
-                            options={componentBasisOptions}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">
-                            Amount{isPercentComponentBasis(componentDraft.basis) ? " %" : ""}
-                          </label>
-                          <Input
-                            className="mt-1 h-8 text-right text-xs"
-                            type="number"
-                            step="0.01"
-                            value={componentAmountInputValue(componentDraft)}
-                            onChange={(event) => setComponentDraft((current) => ({
-                              ...current,
-                              amount: componentAmountFromInput(event.target.value, current.basis),
-                            }))}
-                          />
-                        </div>
+                        <Button
+                          size="xs"
+                          variant={componentEditorOpen ? "secondary" : "ghost"}
+                          onClick={() => setComponentEditorOpen((open) => !open)}
+                        >
+                          <ChevronRight className={cn("h-3 w-3 transition-transform", componentEditorOpen && "rotate-90")} />
+                          {componentDraft.id ? "Editing Rule" : "New Rule"}
+                        </Button>
                       </div>
-                      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Tier Scope</label>
-                          <Select
-                            className="mt-1"
-                            size="xs"
-                            value={componentDraft.appliesToTierId ?? "__all__"}
-                            onValueChange={(tierId) => {
-                              const tier = detail.tiers.find((candidate) => candidate.id === tierId);
-                              setComponentDraft((current) => ({
-                                ...current,
-                                appliesToTierId: tierId === "__all__" ? null : tierId,
-                                appliesToTierName: tierId === "__all__" ? null : tier?.name ?? null,
-                              }));
-                            }}
-                            options={[
-                              { value: "__all__", label: "All tiers" },
-                              ...detail.tiers
-                                .slice()
-                                .sort((left, right) => left.sortOrder - right.sortOrder)
-                                .map((tier) => ({ value: tier.id, label: tier.name })),
-                            ]}
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Category Filters</label>
-                          <Input
-                            className="mt-1 h-8 text-xs"
-                            value={listInputValue(componentDraft.categoryNames)}
-                            onChange={(event) => setComponentDraft((current) => ({ ...current, categoryNames: listInputValues(event.target.value) }))}
-                            placeholder="Optional, comma separated"
-                          />
-                        </div>
-                        <div>
-                          <label className="text-[10px] font-medium uppercase text-fg/40">Entity Type Filters</label>
-                          <Input
-                            className="mt-1 h-8 text-xs"
-                            value={listInputValue(componentDraft.entityTypes)}
-                            onChange={(event) => setComponentDraft((current) => ({ ...current, entityTypes: listInputValues(event.target.value) }))}
-                            placeholder="Optional, comma separated"
-                          />
-                        </div>
-                        <div className="flex items-end justify-end gap-2 pt-1">
-                          <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
-                            Reset
-                          </Button>
-                          <Button size="xs" onClick={handleAddComponent} disabled={!componentDraft.label.trim()}>
-                            <Plus className="h-3 w-3" />
-                            {componentDraft.id ? "Save Rule" : "Add Rule"}
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <div className="mb-3 flex items-center justify-between">
-                      <h3 className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Active Rules</h3>
-                      <Badge tone="info" className="text-[10px]">{formatCount(ratebookComponents.length)} active</Badge>
                     </div>
                     {ratebookComponents.length === 0 ? (
                       <div className="rounded-lg border border-dashed border-line px-4 py-10 text-center text-sm text-fg/35">
@@ -1755,6 +1581,190 @@ export function RateScheduleManager({
                       </div>
                     )}
                   </div>
+
+                  {componentTemplatesOpen ? (
+                    <div>
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <h3 className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Templates</h3>
+                      </div>
+                      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                        {componentTemplates.map((template) => (
+                          <button
+                            key={template.code}
+                            type="button"
+                            onClick={() => handleUseComponentTemplate(template)}
+                            className="rounded-lg border border-line bg-bg/25 p-3 text-left transition-colors hover:border-accent/40 hover:bg-accent/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/30"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-xs font-semibold text-fg">{template.label}</span>
+                              <Badge tone={template.target === "cost" ? "warning" : template.target === "price" ? "success" : "info"} className="shrink-0 text-[10px]">
+                                {template.target === "price" ? "Sell" : template.target === "both" ? "Both" : "Cost"}
+                              </Badge>
+                            </div>
+                            <div className="mt-1 text-[11px] text-fg/45">{template.description}</div>
+                            <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-fg/35">
+                              <span>{componentOptionLabel(componentBasisOptions, template.basis)}</span>
+                              <span className="font-mono tabular-nums">{formatComponentAmount(template)}</span>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {componentEditorOpen ? (
+                    <div className="rounded-lg border border-line bg-bg/20 p-3">
+                      <div className="mb-3 flex items-center justify-between gap-3">
+                        <div className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Rule Editor</div>
+                        {componentDraft.id ? (
+                          <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
+                            <X className="h-3 w-3" />
+                            Clear
+                          </Button>
+                        ) : null}
+                      </div>
+                      <div className="grid gap-3 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Label</label>
+                            <Input
+                              className="mt-1 h-8 text-xs"
+                              value={componentDraft.label}
+                              onChange={(event) => {
+                                const label = event.target.value;
+                                setComponentDraft((current) => ({
+                                  ...current,
+                                  label,
+                                  code: !current.code || current.code === componentCodeFromLabel(current.label)
+                                    ? componentCodeFromLabel(label)
+                                    : current.code,
+                                }));
+                              }}
+                              placeholder="Travel zone A"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Code</label>
+                            <Input
+                              className="mt-1 h-8 font-mono text-xs"
+                              value={componentDraft.code}
+                              onChange={(event) => setComponentDraft((current) => ({ ...current, code: event.target.value }))}
+                              placeholder="travel_zone_a"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Kind</label>
+                            <Select
+                              className="mt-1"
+                              size="xs"
+                              value={componentDraft.kind}
+                              onValueChange={(kind) => setComponentDraft((current) => ({ ...current, kind }))}
+                              options={componentKindOptions}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Side</label>
+                            <Select
+                              className="mt-1"
+                              size="xs"
+                              value={componentDraft.target}
+                              onValueChange={(target) => setComponentDraft((current) => ({ ...current, target: target as ComponentTarget }))}
+                              options={componentTargetOptions}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Basis</label>
+                            <Select
+                              className="mt-1"
+                              size="xs"
+                              value={componentDraft.basis}
+                              onValueChange={(basis) => {
+                                const nextBasis = basis as ComponentBasis;
+                                setComponentDraft((current) => {
+                                  const wasPercent = isPercentComponentBasis(current.basis);
+                                  const isPercent = isPercentComponentBasis(nextBasis);
+                                  const amount = wasPercent === isPercent
+                                    ? current.amount
+                                    : isPercent
+                                      ? current.amount / 100
+                                      : current.amount * 100;
+                                  return { ...current, basis: nextBasis, amount };
+                                });
+                              }}
+                              options={componentBasisOptions}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">
+                              Amount{isPercentComponentBasis(componentDraft.basis) ? " %" : ""}
+                            </label>
+                            <Input
+                              className="mt-1 h-8 text-right text-xs"
+                              type="number"
+                              step={isPercentComponentBasis(componentDraft.basis) ? "0.01" : "0.001"}
+                              value={componentAmountInputValue(componentDraft)}
+                              onChange={(event) => setComponentDraft((current) => ({
+                                ...current,
+                                amount: componentAmountFromInput(event.target.value, current.basis),
+                              }))}
+                            />
+                          </div>
+                        </div>
+                        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Tier Scope</label>
+                            <Select
+                              className="mt-1"
+                              size="xs"
+                              value={componentDraft.appliesToTierId ?? "__all__"}
+                              onValueChange={(tierId) => {
+                                const tier = detail.tiers.find((candidate) => candidate.id === tierId);
+                                setComponentDraft((current) => ({
+                                  ...current,
+                                  appliesToTierId: tierId === "__all__" ? null : tierId,
+                                  appliesToTierName: tierId === "__all__" ? null : tier?.name ?? null,
+                                }));
+                              }}
+                              options={[
+                                { value: "__all__", label: "All tiers" },
+                                ...detail.tiers
+                                  .slice()
+                                  .sort((left, right) => left.sortOrder - right.sortOrder)
+                                  .map((tier) => ({ value: tier.id, label: tier.name })),
+                              ]}
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Category Filters</label>
+                            <Input
+                              className="mt-1 h-8 text-xs"
+                              value={listInputValue(componentDraft.categoryNames)}
+                              onChange={(event) => setComponentDraft((current) => ({ ...current, categoryNames: listInputValues(event.target.value) }))}
+                              placeholder="Optional, comma separated"
+                            />
+                          </div>
+                          <div>
+                            <label className="text-[10px] font-medium uppercase text-fg/40">Entity Type Filters</label>
+                            <Input
+                              className="mt-1 h-8 text-xs"
+                              value={listInputValue(componentDraft.entityTypes)}
+                              onChange={(event) => setComponentDraft((current) => ({ ...current, entityTypes: listInputValues(event.target.value) }))}
+                              placeholder="Optional, comma separated"
+                            />
+                          </div>
+                          <div className="flex items-end justify-end gap-2 pt-1">
+                            <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
+                              Reset
+                            </Button>
+                            <Button size="xs" onClick={handleAddComponent} disabled={!componentDraft.label.trim()}>
+                              <Plus className="h-3 w-3" />
+                              {componentDraft.id ? "Save Rule" : "Add Rule"}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : (
                 <>
@@ -1866,7 +1876,7 @@ export function RateScheduleManager({
                                 {detail.tiers
                                   .sort((a, b) => a.sortOrder - b.sortOrder)
                                   .flatMap((tier) => [
-                                    <th key={`${tier.id}:cost`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Cost</th>,
+                                    <th key={`${tier.id}:cost`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Base Cost</th>,
                                     <th key={`${tier.id}:sell`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Sell</th>,
                                   ])}
                                 <th />
