@@ -326,7 +326,13 @@ interface TakeoffDocument {
 }
 
 import type { TakeoffSelection } from "./takeoff-link-view";
-import type { InspectActions, InspectSnapshot, InspectModelElement } from "./takeoff-inspect-view";
+import type {
+  InspectActions,
+  InspectCategoryPick,
+  InspectModelElement,
+  InspectRateScheduleItemOption,
+  InspectSnapshot,
+} from "./takeoff-inspect-view";
 // BimFederationSwitcher + ModelFederation schema/API ship dormant — the
 // federation concept is over-scoped for the everyday estimator workflow.
 // Schema, API endpoints, and the switcher component stay in the codebase
@@ -650,6 +656,41 @@ function toLinkedModelLineItem(link: ModelTakeoffLinkRecord): BidwrightModelLink
 
 type ModelQuantityBasis = "count" | "area" | "volume";
 type ModelElementWithQuantities = ModelElement & { quantities?: ModelQuantity[] };
+type WorkspaceRateSchedule = ProjectWorkspaceData["rateSchedules"][number];
+type WorkspaceRateScheduleItem = WorkspaceRateSchedule["items"][number];
+
+function normalizeTakeoffCategoryPick(pick: string | InspectCategoryPick): InspectCategoryPick {
+  return typeof pick === "string" ? { categoryId: pick } : pick;
+}
+
+function normalizeCategoryLookup(value: string | null | undefined) {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function rateScheduleMatchesCategory(schedule: WorkspaceRateSchedule, category: EntityCategory) {
+  const scheduleKey = normalizeCategoryLookup(schedule.category);
+  if (!scheduleKey) return false;
+  return [category.entityType, category.name, category.id]
+    .map(normalizeCategoryLookup)
+    .filter(Boolean)
+    .includes(scheduleKey);
+}
+
+function defaultRateTier(schedule: WorkspaceRateSchedule, item?: WorkspaceRateScheduleItem) {
+  const sortedTiers = [...(schedule.tiers ?? [])].sort((a, b) => a.sortOrder - b.sortOrder);
+  const tier = sortedTiers.find((candidate) => Number(candidate.multiplier) === 1) ?? sortedTiers[0] ?? null;
+  const rateKey = tier?.id ?? Object.keys(item?.rates ?? {})[0] ?? Object.keys(item?.costRates ?? {})[0] ?? "__unit";
+  const rateValue = rateKey ? Number(item?.rates?.[rateKey]) : Number.NaN;
+  return {
+    tier,
+    tierUnits: { [rateKey]: 1 },
+    rate: Number.isFinite(rateValue) ? rateValue : null,
+  };
+}
+
+function hasPositiveTierUnits(tierUnits: Record<string, number> | undefined) {
+  return Object.values(tierUnits ?? {}).some((value) => Number(value) > 0);
+}
 
 function findModelElementQuantity(element: ModelElementWithQuantities, types: string[]) {
   return (element.quantities ?? []).find((quantity) => types.includes(quantity.quantityType) && quantity.value > 0);
@@ -843,9 +884,32 @@ export function TakeoffTab({
       .catch(() => {});
     return () => { cancelled = true; };
   }, []);
-  const rateScheduleCategory = useMemo(() => {
-    return entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule").slice().sort((a, b) => a.order - b.order)[0];
-  }, [entityCategories]);
+  const rateScheduleItemsByCategoryId = useMemo(() => {
+    const map = new Map<string, InspectRateScheduleItemOption[]>();
+    for (const category of entityCategories.filter((c) => c.enabled && c.itemSource === "rate_schedule")) {
+      const items: InspectRateScheduleItemOption[] = [];
+      for (const schedule of workspace.rateSchedules ?? []) {
+        if (!rateScheduleMatchesCategory(schedule, category)) continue;
+        for (const item of schedule.items ?? []) {
+          const fallback = defaultRateTier(schedule, item);
+          items.push({
+            id: item.id,
+            scheduleId: schedule.id,
+            scheduleName: schedule.name,
+            code: item.code ?? "",
+            name: item.name,
+            unit: item.unit || category.defaultUom || "EA",
+            tierUnits: fallback.tierUnits,
+            rate: fallback.rate,
+            tierName: fallback.tier?.name ?? null,
+          });
+        }
+      }
+      items.sort((a, b) => a.name.localeCompare(b.name) || a.scheduleName.localeCompare(b.scheduleName));
+      map.set(category.id, items);
+    }
+    return map;
+  }, [entityCategories, workspace.rateSchedules]);
 
   /** User-controlled override for which category takeoff-derived line items
    *  land in. Persisted per-project in localStorage so the estimator only
@@ -896,6 +960,46 @@ export function TakeoffTab({
       window.localStorage.removeItem(takeoffCategoryStorageKey);
     }
   }, [takeoffCategoryStorageKey]);
+
+  function findRateScheduleSelection(pick: InspectCategoryPick) {
+    if (!pick.rateScheduleItemId) return null;
+    for (const schedule of workspace.rateSchedules ?? []) {
+      const item = (schedule.items ?? []).find((candidate) => candidate.id === pick.rateScheduleItemId);
+      if (item) return { schedule, item };
+    }
+    return null;
+  }
+
+  function applyCategoryPickToPayload(
+    payload: CreateWorksheetItemInput,
+    category: EntityCategory,
+    pickInput: string | InspectCategoryPick,
+  ): CreateWorksheetItemInput | null {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
+    if (category.itemSource !== "rate_schedule") return payload;
+
+    const selection = findRateScheduleSelection(pick);
+    if (!selection) {
+      setToastType("error");
+      setToastMessage(`Choose an imported ${category.name} ratebook item before adding this row.`);
+      return null;
+    }
+
+    const fallback = defaultRateTier(selection.schedule, selection.item);
+    const tierUnits = hasPositiveTierUnits(pick.tierUnits) && pick.tierUnits
+      ? pick.tierUnits
+      : fallback.tierUnits;
+    return {
+      ...payload,
+      entityName: pick.rateScheduleItemName || selection.item.name || payload.entityName,
+      uom: pick.rateScheduleItemUnit || selection.item.unit || payload.uom,
+      cost: 0,
+      markup: 0,
+      price: 0,
+      rateScheduleItemId: selection.item.id,
+      tierUnits,
+    };
+  }
 
   /* Project source documents that are PDFs or CAD files.
    * Memoized: without this, .map() returned fresh objects every render, which
@@ -1151,12 +1255,12 @@ export function TakeoffTab({
   type WorksheetPickerAction =
     | { kind: "send-selection" }
     | { kind: "create-elements" }
-    | { kind: "create-single-element"; elementId: string; categoryId: string }
-    | { kind: "create-element-group"; elementIds: string[]; groupLabel: string; categoryId: string }
-    | { kind: "create-single-annotation"; annotationId: string; categoryId: string }
-    | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string; categoryId: string }
-    | { kind: "create-spreadsheet-row"; rowIndex: number; categoryId: string }
-    | { kind: "create-spreadsheet-all"; categoryId: string };
+    | { kind: "create-single-element"; elementId: string; pick: InspectCategoryPick }
+    | { kind: "create-element-group"; elementIds: string[]; groupLabel: string; pick: InspectCategoryPick }
+    | { kind: "create-single-annotation"; annotationId: string; pick: InspectCategoryPick }
+    | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string; pick: InspectCategoryPick }
+    | { kind: "create-spreadsheet-row"; rowIndex: number; pick: InspectCategoryPick }
+    | { kind: "create-spreadsheet-all"; pick: InspectCategoryPick };
   const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
   const [newWorksheetName, setNewWorksheetName] = useState("");
   const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
@@ -1568,6 +1672,9 @@ export function TakeoffTab({
             handleEditAnnotation(id);
           }
         },
+        cancelAnnotationEdit: () => {
+          setEditingAnnotationId(null);
+        },
         saveAnnotationEdit: (id, updates) => {
           handleSaveAnnotationEdit(id, updates);
         },
@@ -1592,50 +1699,50 @@ export function TakeoffTab({
             quantitySummary: formatElementQuantity(element, modelLedgerBasis),
           });
         },
-        createLineItemFromElement: async (id, categoryId) => {
-          // categoryId is picked in the per-click popover that wraps each
+        createLineItemFromElement: async (id, pick) => {
+          // The pick is selected in the per-click popover that wraps each
           // + Add button — see AddToCategoryPopover. We don't fall back to
           // the sticky here; the popover always presents a choice.
           const element = modelElements.find((e) => e.id === id);
           if (!element) return;
-          await handleCreateModelElementLineItem(element, categoryId);
+          await handleCreateModelElementLineItem(element, pick);
         },
-        createLineItemFromElementGroup: async (ids, groupLabel, categoryId) => {
+        createLineItemFromElementGroup: async (ids, groupLabel, pick) => {
           const targets = ids
             .map((id) => modelElements.find((e) => e.id === id))
             .filter((e): e is ModelElementWithQuantities => Boolean(e));
           if (targets.length === 0) return;
-          await handleCreateElementGroupLineItem(targets, groupLabel, categoryId);
+          await handleCreateElementGroupLineItem(targets, groupLabel, pick);
         },
-        createLineItemFromAnnotation: async (id, categoryId) => {
+        createLineItemFromAnnotation: async (id, pick) => {
           const allAnnotations = [...annotations, ...dwgAnnotationsCache];
           const annotation = allAnnotations.find((a) => a.id === id);
           if (!annotation) return;
-          await handleCreateAnnotationLineItem(annotation, categoryId);
+          await handleCreateAnnotationLineItem(annotation, pick);
         },
-        createLineItemFromAnnotationGroup: async (ids, groupLabel, categoryId) => {
+        createLineItemFromAnnotationGroup: async (ids, groupLabel, pick) => {
           const allAnnotations = [...annotations, ...dwgAnnotationsCache];
           const targets = ids
             .map((id) => allAnnotations.find((a) => a.id === id))
             .filter((a): a is TakeoffAnnotation => Boolean(a));
           if (targets.length === 0) return;
-          await handleCreateAnnotationGroupLineItem(targets, groupLabel, categoryId);
+          await handleCreateAnnotationGroupLineItem(targets, groupLabel, pick);
         },
-        createLineItemFromSpreadsheetRow: async (rowIndex, categoryId) => {
-          await handleCreateSpreadsheetRowLineItem(rowIndex, categoryId);
+        createLineItemFromSpreadsheetRow: async (rowIndex, pick) => {
+          await handleCreateSpreadsheetRowLineItem(rowIndex, pick);
         },
-        createLineItemsFromAllSpreadsheetRows: async (categoryId) => {
-          await handleCreateAllSpreadsheetLineItems(categoryId);
+        createLineItemsFromAllSpreadsheetRows: async (pick) => {
+          await handleCreateAllSpreadsheetLineItems(pick);
         },
-        createLineItemFromPhotoBomRow: async (rowId, categoryId) => {
+        createLineItemFromPhotoBomRow: async (rowId, pick) => {
           // The row id surfaced to the side panel is "photo-bom-<index>"
           // — peel the index back off before looking up the source row.
           const rowIndex = Number(rowId.startsWith("photo-bom-") ? rowId.slice("photo-bom-".length) : NaN);
           if (!Number.isFinite(rowIndex)) return;
-          await createLineItemFromPhotoBomRow(rowIndex, categoryId);
+          await createLineItemFromPhotoBomRow(rowIndex, pick);
         },
-        createLineItemsFromAllPhotoBomRows: async (categoryId) => {
-          await createLineItemsFromAllPhotoBomRows(categoryId);
+        createLineItemsFromAllPhotoBomRows: async (pick) => {
+          await createLineItemsFromAllPhotoBomRows(pick);
         },
         clearPhotoBomResults: () => {
           setPhotoBomResult(null);
@@ -3021,6 +3128,7 @@ export function TakeoffTab({
           itemSource: c.itemSource,
           enabled: c.enabled,
           order: c.order,
+          rateScheduleItems: rateScheduleItemsByCategoryId.get(c.id) ?? [],
         }))
         .sort((a, b) => a.order - b.order),
       takeoffCategoryId: takeoffCategory?.id ?? null,
@@ -3056,6 +3164,7 @@ export function TakeoffTab({
     linkedModelLineItems.length,
     spreadsheetPreview,
     entityCategories,
+    rateScheduleItemsByCategoryId,
     takeoffCategory,
     photoBomResult,
     photoBomSourcePhotoNames,
@@ -3165,16 +3274,17 @@ export function TakeoffTab({
 
   async function createLineItemFromModelElement(
     element: ModelElementWithQuantities,
-    categoryId: string,
+    pickInput: string | InspectCategoryPick,
     previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id)),
     explicitWs?: { id: string; name: string },
   ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-single-element", elementId: element.id, categoryId });
+      setWorksheetPickerAction({ kind: "create-single-element", elementId: element.id, pick });
       return null;
     }
-    const takeoffCategory = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!takeoffCategory) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
@@ -3188,11 +3298,13 @@ export function TakeoffTab({
     }
 
     const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
-    const payload = buildModelElementLineItem(element, primary, {
+    const basePayload = buildModelElementLineItem(element, primary, {
       fileName: selectedDoc?.fileName,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       category: takeoffCategory,
     });
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
     const result = await createWorksheetItem(projectId, ws.id, payload);
     const createdItem = result.workspace.worksheets
       .flatMap((worksheet) => worksheet.items)
@@ -3244,15 +3356,16 @@ export function TakeoffTab({
 
   async function createLineItemFromAnnotation(
     annotation: TakeoffAnnotation,
-    categoryId: string,
+    pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-single-annotation", annotationId: annotation.id, categoryId });
+      setWorksheetPickerAction({ kind: "create-single-annotation", annotationId: annotation.id, pick });
       return null;
     }
-    const takeoffCategory = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!takeoffCategory) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
@@ -3261,7 +3374,7 @@ export function TakeoffTab({
 
     const { quantity, uom } = annotationToQuantity(annotation);
     const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
-    const payload = {
+    const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
       entityType: takeoffCategory.entityType,
@@ -3278,6 +3391,8 @@ export function TakeoffTab({
         selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
       ].filter(Boolean).join(" · "),
     };
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
     const result = await createWorksheetItem(projectId, ws.id, payload);
     const createdItem = result.workspace.worksheets
       .flatMap((w) => w.items)
@@ -3290,9 +3405,9 @@ export function TakeoffTab({
     return { createdItem };
   }
 
-  async function handleCreateAnnotationLineItem(annotation: TakeoffAnnotation, categoryId: string) {
+  async function handleCreateAnnotationLineItem(annotation: TakeoffAnnotation, pick: string | InspectCategoryPick) {
     try {
-      const created = await createLineItemFromAnnotation(annotation, categoryId);
+      const created = await createLineItemFromAnnotation(annotation, pick);
       if (!created) return;
       await loadTakeoffLinks();
       notifyWorkspaceMutated();
@@ -3311,9 +3426,10 @@ export function TakeoffTab({
   async function createLineItemFromAnnotationGroup(
     annotations: TakeoffAnnotation[],
     groupLabel: string,
-    categoryId: string,
+    pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     if (annotations.length === 0) return null;
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
@@ -3321,11 +3437,11 @@ export function TakeoffTab({
         kind: "create-annotation-group",
         annotationIds: annotations.map((a) => a.id),
         groupLabel,
-        categoryId,
+        pick,
       });
       return null;
     }
-    const takeoffCategory = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!takeoffCategory) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
@@ -3355,7 +3471,7 @@ export function TakeoffTab({
     }
 
     const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
-    const payload = {
+    const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
       entityType: takeoffCategory.entityType,
@@ -3372,6 +3488,8 @@ export function TakeoffTab({
         selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
       ].filter(Boolean).join(" · "),
     };
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
     const result = await createWorksheetItem(projectId, ws.id, payload);
     const createdItem = result.workspace.worksheets
       .flatMap((w) => w.items)
@@ -3392,9 +3510,9 @@ export function TakeoffTab({
     return { createdItem };
   }
 
-  async function handleCreateAnnotationGroupLineItem(annotations: TakeoffAnnotation[], groupLabel: string, categoryId: string) {
+  async function handleCreateAnnotationGroupLineItem(annotations: TakeoffAnnotation[], groupLabel: string, pick: string | InspectCategoryPick) {
     try {
-      const created = await createLineItemFromAnnotationGroup(annotations, groupLabel, categoryId);
+      const created = await createLineItemFromAnnotationGroup(annotations, groupLabel, pick);
       if (!created) return;
       await loadTakeoffLinks();
       notifyWorkspaceMutated();
@@ -3412,9 +3530,10 @@ export function TakeoffTab({
   async function createLineItemFromElementGroup(
     elements: ModelElementWithQuantities[],
     groupLabel: string,
-    categoryId: string,
+    pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     if (elements.length === 0) return null;
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
@@ -3422,11 +3541,11 @@ export function TakeoffTab({
         kind: "create-element-group",
         elementIds: elements.map((e) => e.id),
         groupLabel,
-        categoryId,
+        pick,
       });
       return null;
     }
-    const takeoffCategory = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!takeoffCategory) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
@@ -3461,7 +3580,7 @@ export function TakeoffTab({
     }
 
     const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
-    const payload = {
+    const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
       entityType: takeoffCategory.entityType,
@@ -3478,6 +3597,8 @@ export function TakeoffTab({
         selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
       ].filter(Boolean).join(" · "),
     };
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
     const result = await createWorksheetItem(projectId, ws.id, payload);
     const createdItem = result.workspace.worksheets
       .flatMap((w) => w.items)
@@ -3516,9 +3637,9 @@ export function TakeoffTab({
     return { createdItem };
   }
 
-  async function handleCreateElementGroupLineItem(elements: ModelElementWithQuantities[], groupLabel: string, categoryId: string) {
+  async function handleCreateElementGroupLineItem(elements: ModelElementWithQuantities[], groupLabel: string, pick: string | InspectCategoryPick) {
     try {
-      const created = await createLineItemFromElementGroup(elements, groupLabel, categoryId);
+      const created = await createLineItemFromElementGroup(elements, groupLabel, pick);
       if (!created) return;
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
@@ -3578,32 +3699,35 @@ export function TakeoffTab({
 
   async function createLineItemFromSpreadsheetRow(
     rowIndex: number,
-    categoryId: string,
+    pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     if (!spreadsheetPreview) return null;
     const row = spreadsheetPreview.sampleRows[rowIndex];
     if (!row) return null;
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex, categoryId });
+      setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex, pick });
       return null;
     }
-    const takeoffCategory = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!takeoffCategory) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before importing rows.");
       return null;
     }
     const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
-    const payload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping, takeoffCategory);
+    const basePayload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping, takeoffCategory);
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
     await createWorksheetItem(projectId, ws.id, payload);
     return { ok: true as const };
   }
 
-  async function handleCreateSpreadsheetRowLineItem(rowIndex: number, categoryId: string) {
+  async function handleCreateSpreadsheetRowLineItem(rowIndex: number, pick: string | InspectCategoryPick) {
     try {
-      const result = await createLineItemFromSpreadsheetRow(rowIndex, categoryId);
+      const result = await createLineItemFromSpreadsheetRow(rowIndex, pick);
       if (!result) return;
       notifyWorkspaceMutated();
       setToastType("success");
@@ -3616,16 +3740,17 @@ export function TakeoffTab({
   }
 
   async function createLineItemsFromAllSpreadsheetRows(
-    categoryId: string,
+    pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     if (!spreadsheetPreview || spreadsheetPreview.sampleRows.length === 0) return null;
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-spreadsheet-all", categoryId });
+      setWorksheetPickerAction({ kind: "create-spreadsheet-all", pick });
       return null;
     }
-    const takeoffCategory = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!takeoffCategory) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before importing rows.");
@@ -3634,16 +3759,18 @@ export function TakeoffTab({
     const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
     let imported = 0;
     for (const row of spreadsheetPreview.sampleRows) {
-      const payload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping, takeoffCategory);
+      const basePayload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping, takeoffCategory);
+      const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+      if (!payload) return null;
       await createWorksheetItem(projectId, ws.id, payload);
       imported += 1;
     }
     return { imported };
   }
 
-  async function handleCreateAllSpreadsheetLineItems(categoryId: string) {
+  async function handleCreateAllSpreadsheetLineItems(pick: string | InspectCategoryPick) {
     try {
-      const result = await createLineItemsFromAllSpreadsheetRows(categoryId);
+      const result = await createLineItemsFromAllSpreadsheetRows(pick);
       if (!result) return;
       notifyWorkspaceMutated();
       setToastType("success");
@@ -3659,7 +3786,8 @@ export function TakeoffTab({
    *  The category is whatever the user picked in the + Add popover; the
    *  rest of the fields come straight off the model output. SourceNotes
    *  cite the photos so the line stays traceable after creation. */
-  async function createLineItemFromPhotoBomRow(rowIndex: number, categoryId: string) {
+  async function createLineItemFromPhotoBomRow(rowIndex: number, pickInput: string | InspectCategoryPick) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
     if (!photoBomResult) return;
     const row = photoBomResult.items[rowIndex];
     if (!row) return;
@@ -3669,7 +3797,7 @@ export function TakeoffTab({
       setToastMessage("Pick an active worksheet before adding photo-BOM rows.");
       return;
     }
-    const category = entityCategories.find((c) => c.id === categoryId && c.enabled);
+    const category = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
     if (!category) {
       setToastType("error");
       setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
@@ -3686,7 +3814,7 @@ export function TakeoffTab({
     ]
       .filter(Boolean)
       .join("\n");
-    const payload = {
+    const basePayload: CreateWorksheetItemInput = {
       categoryId: category.id,
       category: category.name,
       entityType: category.entityType,
@@ -3699,6 +3827,8 @@ export function TakeoffTab({
       price: 0,
       sourceNotes,
     };
+    const payload = applyCategoryPickToPayload(basePayload, category, pick);
+    if (!payload) return;
     try {
       await createWorksheetItem(projectId, ws.id, payload);
       setPhotoBomLinkedRowIds((prev) => {
@@ -3716,7 +3846,7 @@ export function TakeoffTab({
     }
   }
 
-  async function createLineItemsFromAllPhotoBomRows(categoryId: string) {
+  async function createLineItemsFromAllPhotoBomRows(pick: string | InspectCategoryPick) {
     if (!photoBomResult) return;
     const unlinked = photoBomResult.items
       .map((row, idx) => ({ row, idx }))
@@ -3729,13 +3859,13 @@ export function TakeoffTab({
     for (const { idx } of unlinked) {
       // Each call surfaces its own error toast; bail on the first failure
       // so we don't fill the toast queue with the same complaint.
-      await createLineItemFromPhotoBomRow(idx, categoryId);
+      await createLineItemFromPhotoBomRow(idx, pick);
     }
   }
 
-  async function handleCreateModelElementLineItem(element: ModelElementWithQuantities, categoryId: string) {
+  async function handleCreateModelElementLineItem(element: ModelElementWithQuantities, pick: string | InspectCategoryPick) {
     try {
-      const created = await createLineItemFromModelElement(element, categoryId);
+      const created = await createLineItemFromModelElement(element, pick);
       // null = the call short-circuited (e.g. no worksheet → picker opened).
       // Don't celebrate; the resumed flow after the picker emits its own toast.
       if (!created) return;
@@ -3849,7 +3979,7 @@ export function TakeoffTab({
         setToastMessage("That model element is no longer available.");
         return;
       }
-      await createLineItemFromModelElement(element, action.categoryId, undefined, ws);
+      await createLineItemFromModelElement(element, action.pick, undefined, ws);
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
       setToastType("success");
@@ -3863,7 +3993,7 @@ export function TakeoffTab({
         setToastMessage("Those model elements are no longer available.");
         return;
       }
-      await createLineItemFromElementGroup(elements, action.groupLabel, action.categoryId, ws);
+      await createLineItemFromElementGroup(elements, action.groupLabel, action.pick, ws);
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
       setToastType("success");
@@ -3876,7 +4006,7 @@ export function TakeoffTab({
         setToastMessage("That annotation is no longer available.");
         return;
       }
-      await createLineItemFromAnnotation(annotation, action.categoryId, ws);
+      await createLineItemFromAnnotation(annotation, action.pick, ws);
       await loadTakeoffLinks();
       notifyWorkspaceMutated();
       setToastType("success");
@@ -3891,18 +4021,18 @@ export function TakeoffTab({
         setToastMessage("Those annotations are no longer available.");
         return;
       }
-      await createLineItemFromAnnotationGroup(targets, action.groupLabel, action.categoryId, ws);
+      await createLineItemFromAnnotationGroup(targets, action.groupLabel, action.pick, ws);
       await loadTakeoffLinks();
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(`Created summed line item from ${targets.length} mark${targets.length === 1 ? "" : "s"}.`);
     } else if (action.kind === "create-spreadsheet-row") {
-      await createLineItemFromSpreadsheetRow(action.rowIndex, action.categoryId, ws);
+      await createLineItemFromSpreadsheetRow(action.rowIndex, action.pick, ws);
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage("Imported row to worksheet.");
     } else if (action.kind === "create-spreadsheet-all") {
-      const result = await createLineItemsFromAllSpreadsheetRows(action.categoryId, ws);
+      const result = await createLineItemsFromAllSpreadsheetRows(action.pick, ws);
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(`Imported ${result?.imported ?? 0} row${result?.imported === 1 ? "" : "s"} to worksheet.`);

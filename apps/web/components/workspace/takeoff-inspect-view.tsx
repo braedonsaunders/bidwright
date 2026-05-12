@@ -109,6 +109,27 @@ export interface InspectCategoryOption {
   itemSource: "rate_schedule" | "catalog" | "freeform";
   enabled: boolean;
   order: number;
+  rateScheduleItems?: InspectRateScheduleItemOption[];
+}
+
+export interface InspectRateScheduleItemOption {
+  id: string;
+  scheduleId: string;
+  scheduleName: string;
+  code: string;
+  name: string;
+  unit: string;
+  tierUnits: Record<string, number>;
+  rate: number | null;
+  tierName: string | null;
+}
+
+export interface InspectCategoryPick {
+  categoryId: string;
+  rateScheduleItemId?: string;
+  rateScheduleItemName?: string;
+  rateScheduleItemUnit?: string;
+  tierUnits?: Record<string, number>;
 }
 
 export interface InspectAssetSummary {
@@ -159,6 +180,7 @@ export interface InspectActions {
   toggleAnnotationVisibility: (id: string) => void;
   deleteAnnotation: (id: string) => void;
   editAnnotation: (id: string) => void;
+  cancelAnnotationEdit: () => void;
   saveAnnotationEdit: (id: string, updates: { label?: string; color?: string; groupName?: string }) => void;
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
@@ -168,26 +190,26 @@ export interface InspectActions {
    *  estimator can switch categories every row without leaving the
    *  context. The takeoff-tab side persists `categoryId` to localStorage
    *  as the last-used, which the popover pre-highlights next time. */
-  createLineItemFromElement: (id: string, categoryId: string) => Promise<void> | void;
+  createLineItemFromElement: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   /** "Σ Add" — one summed line item from N model elements, with each
    *  element bound to it via a ModelTakeoffLink for revision-diff sync. */
-  createLineItemFromElementGroup: (ids: string[], groupLabel: string, categoryId: string) => Promise<void> | void;
+  createLineItemFromElementGroup: (ids: string[], groupLabel: string, pick: InspectCategoryPick) => Promise<void> | void;
   /** "+ Add" for a PDF / DWG annotation. Picks the right primary quantity
    *  from the measurement (area > volume > length > count). */
-  createLineItemFromAnnotation: (id: string, categoryId: string) => Promise<void> | void;
+  createLineItemFromAnnotation: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   /** "Σ Add" — one summed line item from N annotations. */
-  createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string, categoryId: string) => Promise<void> | void;
+  createLineItemFromAnnotationGroup: (ids: string[], groupLabel: string, pick: InspectCategoryPick) => Promise<void> | void;
   /** "+ Add" for a single spreadsheet row using the heuristic column
    *  mapping for everything except the category. */
-  createLineItemFromSpreadsheetRow: (rowIndex: number, categoryId: string) => Promise<void> | void;
+  createLineItemFromSpreadsheetRow: (rowIndex: number, pick: InspectCategoryPick) => Promise<void> | void;
   /** "Σ Add" — import every spreadsheet row as its own line item. */
-  createLineItemsFromAllSpreadsheetRows: (categoryId: string) => Promise<void> | void;
+  createLineItemsFromAllSpreadsheetRows: (pick: InspectCategoryPick) => Promise<void> | void;
   /** "+ Add" for a single AI-derived photo BOM row. Carries description /
    *  quantity / uom / sourceNotes straight from the model output. */
-  createLineItemFromPhotoBomRow: (rowId: string, categoryId: string) => Promise<void> | void;
+  createLineItemFromPhotoBomRow: (rowId: string, pick: InspectCategoryPick) => Promise<void> | void;
   /** "Σ Add" — add every photo-BOM row at once. Each row lands in the
    *  same category bucket. */
-  createLineItemsFromAllPhotoBomRows: (categoryId: string) => Promise<void> | void;
+  createLineItemsFromAllPhotoBomRows: (pick: InspectCategoryPick) => Promise<void> | void;
   /** Clear the photo-BOM result set (e.g. after batch add or "Discard"). */
   clearPhotoBomResults: () => void;
   /** Remember a category as the new "last used" so the next + Add popover
@@ -242,17 +264,16 @@ export function TakeoffInspectView({
 }
 
 /** Per-click category picker — wraps a "+ Add"-style trigger and opens a
- *  small popover listing every enabled category. Picking a chip immediately
- *  fires onPick(categoryId), closes the popover, and remembers that
+ *  small popover listing every enabled category. Picking a freeform/catalog
+ *  chip immediately fires onPick({ categoryId }), closes the popover, and remembers that
  *  category as the last-used (pre-highlighted on the next open) via
- *  setTakeoffCategoryId.
+ *  setTakeoffCategoryId. Ratebook-backed categories expand in place so the
+ *  estimator can pick the imported schedule item before the row is created.
  *
  *  This is the right shape when the estimator may switch categories on
  *  every row — a sticky chip strip at the top would force them to traverse
  *  back-and-forth between the strip and the row.
- *
- *  Rate-schedule categories are shown disabled with a hint so the estimator
- *  can see why they're not pickable. */
+ */
 function AddToCategoryPopover({
   snapshot,
   actions,
@@ -264,7 +285,7 @@ function AddToCategoryPopover({
 }: {
   snapshot: InspectSnapshot;
   actions: InspectActions | null;
-  onPick: (categoryId: string) => void;
+  onPick: (pick: InspectCategoryPick) => void;
   triggerLabel: React.ReactNode;
   triggerClassName: string;
   triggerTitle: string;
@@ -272,6 +293,7 @@ function AddToCategoryPopover({
 }) {
   const { availableCategories, takeoffCategoryId } = snapshot;
   const [open, setOpen] = useState(false);
+  const [expandedCategoryId, setExpandedCategoryId] = useState<string | null>(null);
   // Every enabled category is pickable — itemSource only changes the
   // downstream entity-picker flow. Rate-schedule categories used to be
   // greyed out here, but that broke the labor flow once the user
@@ -280,9 +302,20 @@ function AddToCategoryPopover({
   // any mis-configured `itemSource: "rate_schedule"` setting as a flat
   // disabled state with no recourse.
   const pickable = availableCategories;
+  const handleOpenChange = (nextOpen: boolean) => {
+    setOpen(nextOpen);
+    if (!nextOpen) return;
+    const current = availableCategories.find((c) => c.id === takeoffCategoryId);
+    setExpandedCategoryId(current?.itemSource === "rate_schedule" ? current.id : null);
+  };
+  const handlePick = (pick: InspectCategoryPick) => {
+    onPick(pick);
+    actions?.setTakeoffCategoryId(pick.categoryId);
+    setOpen(false);
+  };
 
   return (
-    <Popover.Root open={open} onOpenChange={setOpen}>
+    <Popover.Root open={open} onOpenChange={handleOpenChange}>
       <Popover.Trigger asChild>
         <button
           type="button"
@@ -310,33 +343,81 @@ function AddToCategoryPopover({
               <p className="px-1 pb-1 text-[9px] font-medium uppercase tracking-wider text-fg/40">
                 Add to category
               </p>
-              <div className="flex flex-col gap-0.5">
+              <div className="flex max-h-80 flex-col gap-0.5 overflow-y-auto">
                 {pickable.map((c) => {
                   const isLast = c.id === takeoffCategoryId;
                   const needsSchedule = c.itemSource === "rate_schedule";
+                  const items = c.rateScheduleItems ?? [];
+                  const expanded = expandedCategoryId === c.id;
                   return (
-                    <button
-                      key={c.id}
-                      type="button"
-                      autoFocus={isLast}
-                      onClick={() => {
-                        onPick(c.id);
-                        actions?.setTakeoffCategoryId(c.id);
-                        setOpen(false);
-                      }}
-                      className={cn(
-                        "flex items-center justify-between rounded px-2 py-1 text-left text-[11px] transition-colors hover:bg-accent/10 focus:bg-accent/10 focus:outline-none",
-                        isLast ? "text-accent" : "text-fg/75",
-                      )}
-                      title={needsSchedule ? `${c.name} resolves cost from imported rate-schedule items — pick one from the row's entity dropdown after add.` : undefined}
-                    >
-                      <span className="truncate">{c.name}</span>
-                      {isLast ? (
-                        <span className="text-[9px] uppercase text-accent/70">last used</span>
-                      ) : needsSchedule ? (
-                        <span className="text-[9px] uppercase text-fg/35">schedule</span>
+                    <div key={c.id}>
+                      <button
+                        type="button"
+                        autoFocus={isLast}
+                        onClick={() => {
+                          if (needsSchedule) {
+                            setExpandedCategoryId(expanded ? null : c.id);
+                            return;
+                          }
+                          handlePick({ categoryId: c.id });
+                        }}
+                        className={cn(
+                          "flex w-full items-center justify-between rounded px-2 py-1 text-left text-[11px] transition-colors hover:bg-accent/10 focus:bg-accent/10 focus:outline-none",
+                          isLast ? "text-accent" : "text-fg/75",
+                        )}
+                        title={needsSchedule ? `${c.name} resolves cost from imported ratebook items.` : undefined}
+                      >
+                        <span className="truncate">{c.name}</span>
+                        <span className="ml-2 flex shrink-0 items-center gap-1">
+                          {isLast ? (
+                            <span className="text-[9px] uppercase text-accent/70">last used</span>
+                          ) : needsSchedule ? (
+                            <span className="text-[9px] uppercase text-fg/35">ratebook</span>
+                          ) : null}
+                          {needsSchedule ? (
+                            <ChevronRight className={cn("h-3 w-3 text-fg/30 transition-transform", expanded && "rotate-90")} />
+                          ) : null}
+                        </span>
+                      </button>
+                      {needsSchedule && expanded ? (
+                        <div className="ml-2 mt-0.5 border-l border-line/70 pl-1">
+                          {items.length === 0 ? (
+                            <p className="px-2 py-1 text-[10px] text-warning">
+                              Import a {c.name} ratebook before adding this category.
+                            </p>
+                          ) : (
+                            items.map((item) => (
+                              <button
+                                key={item.id}
+                                type="button"
+                                className="flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-[11px] text-fg/70 transition-colors hover:bg-accent/10 focus:bg-accent/10 focus:outline-none"
+                                onClick={() =>
+                                  handlePick({
+                                    categoryId: c.id,
+                                    rateScheduleItemId: item.id,
+                                    rateScheduleItemName: item.name,
+                                    rateScheduleItemUnit: item.unit,
+                                    tierUnits: item.tierUnits,
+                                  })
+                                }
+                                title={`${item.scheduleName}${item.code ? ` · ${item.code}` : ""}`}
+                              >
+                                <span className="min-w-0">
+                                  <span className="block truncate">{item.name}</span>
+                                  <span className="block truncate text-[9px] text-fg/35">
+                                    {item.scheduleName}
+                                    {item.code ? ` · ${item.code}` : ""}
+                                  </span>
+                                </span>
+                                <span className="shrink-0 text-[10px] text-fg/35">
+                                  {item.rate != null ? `$${item.rate.toFixed(2)}` : item.unit}
+                                </span>
+                              </button>
+                            ))
+                          )}
+                        </div>
                       ) : null}
-                    </button>
+                    </div>
                   );
                 })}
               </div>
@@ -436,11 +517,11 @@ function AnnotationsInspect({
                   <AddToCategoryPopover
                     snapshot={snapshot}
                     actions={actions}
-                    onPick={(categoryId) =>
+                    onPick={(pick) =>
                       void actions?.createLineItemFromAnnotationGroup(
                         items.map((it) => it.id),
                         groupLabel,
-                        categoryId,
+                        pick,
                       )
                     }
                     triggerLabel="Add"
@@ -457,7 +538,7 @@ function AnnotationsInspect({
                           key={ann.id}
                           ann={ann}
                           onSave={(updates) => actions.saveAnnotationEdit(ann.id, updates)}
-                          onCancel={() => actions.editAnnotation(ann.id)}
+                          onCancel={() => actions.cancelAnnotationEdit()}
                         />
                       ) : (
                         <AnnotationRow
@@ -505,7 +586,7 @@ function AnnotationRow({
         isSelected ? "bg-accent/10 ring-1 ring-accent/30" : "hover:bg-panel2/40",
       )}
     >
-      <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ann.color }} />
+      <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ann.color || EDIT_COLORS[0] }} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
           <p className="truncate font-medium text-fg/80">
@@ -525,7 +606,7 @@ function AnnotationRow({
           <AddToCategoryPopover
             snapshot={snapshot}
             actions={actions}
-            onPick={(categoryId) => void actions?.createLineItemFromAnnotation(ann.id, categoryId)}
+            onPick={(pick) => void actions?.createLineItemFromAnnotation(ann.id, pick)}
             triggerLabel="Add"
             triggerClassName="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
             triggerTitle="Add this annotation to a worksheet — pick a category"
@@ -578,8 +659,8 @@ function EditAnnotationRow({
   onSave: (updates: { label?: string; color?: string; groupName?: string }) => void;
   onCancel: () => void;
 }) {
-  const [label, setLabel] = useState(ann.label);
-  const [color, setColor] = useState(ann.color);
+  const [label, setLabel] = useState(ann.label ?? "");
+  const [color, setColor] = useState(ann.color || EDIT_COLORS[0]);
   const [group, setGroup] = useState(ann.groupName ?? "");
 
   return (
@@ -813,11 +894,11 @@ function ModelInspect({
                   <AddToCategoryPopover
                     snapshot={snapshot}
                     actions={actions}
-                    onPick={(categoryId) =>
+                    onPick={(pick) =>
                       void actions?.createLineItemFromElementGroup(
                         group.elements.map((el) => el.id),
                         group.label,
-                        categoryId,
+                        pick,
                       )
                     }
                     triggerLabel="Add"
@@ -926,7 +1007,7 @@ function renderElementRow(
             <AddToCategoryPopover
               snapshot={snapshot}
               actions={actions}
-              onPick={(categoryId) => void actions?.createLineItemFromElement(element.id, categoryId)}
+              onPick={(pick) => void actions?.createLineItemFromElement(element.id, pick)}
               triggerLabel="Add"
               triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
               triggerTitle="Add this element to a worksheet — pick a category"
@@ -1020,7 +1101,7 @@ function SpreadsheetInspect({
           <AddToCategoryPopover
             snapshot={snapshot}
             actions={actions}
-            onPick={(categoryId) => void actions?.createLineItemsFromAllSpreadsheetRows(categoryId)}
+            onPick={(pick) => void actions?.createLineItemsFromAllSpreadsheetRows(pick)}
             triggerLabel="Add all"
             triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 transition-colors hover:bg-accent/10 hover:text-accent disabled:opacity-40"
             triggerTitle="Import every row as its own worksheet line item — pick a category"
@@ -1057,7 +1138,7 @@ function SpreadsheetInspect({
                 <AddToCategoryPopover
                   snapshot={snapshot}
                   actions={actions}
-                  onPick={(categoryId) => void actions?.createLineItemFromSpreadsheetRow(row.index, categoryId)}
+                  onPick={(pick) => void actions?.createLineItemFromSpreadsheetRow(row.index, pick)}
                   triggerLabel="Add"
                   triggerClassName="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 opacity-0 transition-all hover:border-accent/40 hover:bg-accent/10 hover:text-accent group-hover:opacity-100 focus:opacity-100"
                   triggerTitle="Import this row as a worksheet line item — pick a category"
@@ -1184,7 +1265,7 @@ function PhotoBomInspect({
         <AddToCategoryPopover
           snapshot={snapshot}
           actions={actions}
-          onPick={(categoryId) => void actions?.createLineItemsFromAllPhotoBomRows(categoryId)}
+          onPick={(pick) => void actions?.createLineItemsFromAllPhotoBomRows(pick)}
           triggerLabel={`Add all (${bom.rows.filter((r) => !r.isLinked).length})`}
           triggerClassName="inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-2 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent disabled:opacity-40"
           triggerTitle="Add every unlinked row to the worksheet under one category"
@@ -1258,8 +1339,8 @@ function PhotoBomInspect({
                       <AddToCategoryPopover
                         snapshot={snapshot}
                         actions={actions}
-                        onPick={(categoryId) =>
-                          void actions?.createLineItemFromPhotoBomRow(row.id, categoryId)
+                        onPick={(pick) =>
+                          void actions?.createLineItemFromPhotoBomRow(row.id, pick)
                         }
                         triggerLabel="Add"
                         triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
