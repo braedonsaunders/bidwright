@@ -43,11 +43,19 @@ const PRESET_COLORS = [
   "#a855f7", // purple
 ];
 
+type AnnotationTypeValue = (typeof ANNOTATION_TYPES)[number]["value"];
+const ANNOTATION_TYPE_VALUES = new Set<string>(ANNOTATION_TYPES.map((type) => type.value));
+
+function annotationTypeOrDefault(value: string | undefined): AnnotationTypeValue {
+  return ANNOTATION_TYPE_VALUES.has(value ?? "") ? (value as AnnotationTypeValue) : "linear";
+}
+
 interface CreateAnnotationModalProps {
   open: boolean;
   onClose: () => void;
   onConfirm: (config: AnnotationConfig) => void;
   initialType?: string;
+  lockType?: boolean;
 }
 
 export interface AnnotationConfig {
@@ -69,8 +77,10 @@ export function CreateAnnotationModal({
   onClose,
   onConfirm,
   initialType,
+  lockType = false,
 }: CreateAnnotationModalProps) {
-  const [type, setType] = useState(initialType ?? "linear");
+  const defaultType = annotationTypeOrDefault(initialType);
+  const [type, setType] = useState(defaultType);
   const [label, setLabel] = useState("");
   const [color, setColor] = useState(PRESET_COLORS[0]);
   const [customColor, setCustomColor] = useState("");
@@ -84,7 +94,14 @@ export function CreateAnnotationModal({
   const [spacing, setSpacing] = useState(1);
 
   useEffect(() => {
-    if (open && initialType) setType(initialType);
+    if (!open) return;
+    setType(annotationTypeOrDefault(initialType));
+    setLabel("");
+    setGroupName("");
+    setDropDistance(0);
+    setWallHeight(8);
+    setHeight(0);
+    setSpacing(1);
   }, [open, initialType]);
 
   const selectedType = ANNOTATION_TYPES.find((t) => t.value === type);
@@ -132,23 +149,25 @@ export function CreateAnnotationModal({
     <ModalBackdrop open={open} onClose={onClose} size="md">
       <Card>
         <CardHeader>
-          <CardTitle>New Takeoff Mark</CardTitle>
+          <CardTitle>New {selectedType?.label ?? "Takeoff"} Mark</CardTitle>
         </CardHeader>
         <CardBody>
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Type selector */}
-            <div>
-              <Label htmlFor="ann-type">Measurement Type</Label>
-              <Select
-                id="ann-type"
-                value={type}
-                onValueChange={setType}
-                options={ANNOTATION_TYPES.map((t) => ({ value: t.value, label: t.label }))}
-              />
-              {selectedType && (
-                <p className="mt-1 text-[11px] text-fg/40">{selectedType.description}</p>
-              )}
-            </div>
+            {!lockType && (
+              <div>
+                <Label htmlFor="ann-type">Measurement Type</Label>
+                <Select
+                  id="ann-type"
+                  value={type}
+                  onValueChange={(next) => setType(annotationTypeOrDefault(next))}
+                  options={ANNOTATION_TYPES.map((t) => ({ value: t.value, label: t.label }))}
+                />
+                {selectedType && (
+                  <p className="mt-1 text-[11px] text-fg/40">{selectedType.description}</p>
+                )}
+              </div>
+            )}
 
             {/* Label */}
             <div>

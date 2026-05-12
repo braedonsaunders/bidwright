@@ -1473,8 +1473,14 @@ function formatAnnotationMeasurement(ann: TakeoffAnnotation): string | undefined
   const m = ann.measurement;
   if (!m) return undefined;
   const parts: string[] = [];
-  if (m.value !== undefined) parts.push(`${m.value.toFixed(2)} ${m.unit ?? ""}`.trim());
-  if (m.area !== undefined && m.area > 0) parts.push(`${m.area.toFixed(2)} ${m.unit ?? ""}²`.trim());
-  if (m.volume !== undefined && m.volume > 0) parts.push(`${m.volume.toFixed(2)} ${m.unit ?? ""}³`.trim());
+  if (typeof m.value === "number" && Number.isFinite(m.value)) {
+    parts.push(`${m.value.toFixed(2)} ${m.unit ?? ""}`.trim());
+  }
+  if (typeof m.area === "number" && Number.isFinite(m.area) && m.area > 0) {
+    parts.push(`${m.area.toFixed(2)} ${m.unit ?? ""}²`.trim());
+  }
+  if (typeof m.volume === "number" && Number.isFinite(m.volume) && m.volume > 0) {
+    parts.push(`${m.volume.toFixed(2)} ${m.unit ?? ""}³`.trim());
+  }
   return parts.join(" · ");
 }

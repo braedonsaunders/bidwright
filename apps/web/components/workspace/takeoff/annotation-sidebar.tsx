@@ -50,8 +50,9 @@ function groupAnnotations(
 function formatMeasurement(ann: TakeoffAnnotation): string {
   if (!ann.measurement) return "--";
   const { value, unit } = ann.measurement;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "--";
   if (unit === "count") return `${value}`;
-  return `${value.toFixed(2)} ${unit}`;
+  return `${value.toFixed(2)} ${unit || ""}`.trim();
 }
 
 /* Roll up a list of annotations into a single summary string. Linear ones

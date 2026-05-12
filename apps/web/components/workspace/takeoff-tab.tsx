@@ -777,6 +777,55 @@ function buildPdfUrl(doc: TakeoffDocument): string {
   return "";
 }
 
+function objectRecord(value: unknown): Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function finiteNumberValue(value: unknown): number | undefined {
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  return Number.isFinite(numeric) ? numeric : undefined;
+}
+
+function normalizeAnnotationPoints(value: unknown): Point[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((point) => {
+      const record = objectRecord(point);
+      const x = finiteNumberValue(record.x);
+      const y = finiteNumberValue(record.y);
+      return x === undefined || y === undefined ? null : { x, y };
+    })
+    .filter((point): point is Point => Boolean(point));
+}
+
+function normalizeAnnotationMeasurement(value: unknown): TakeoffAnnotation["measurement"] | undefined {
+  const record = objectRecord(value);
+  const measurement: NonNullable<TakeoffAnnotation["measurement"]> = {
+    value: finiteNumberValue(record.value) ?? 0,
+    unit: typeof record.unit === "string" && record.unit.length > 0 ? record.unit : "",
+  };
+  const area = finiteNumberValue(record.area);
+  const volume = finiteNumberValue(record.volume);
+  if (area !== undefined) measurement.area = area;
+  if (volume !== undefined) measurement.volume = volume;
+  if (measurement.value === 0 && !measurement.unit && area === undefined && volume === undefined) {
+    return undefined;
+  }
+  return measurement;
+}
+
+function canvasDimensionFromMetadata(metadata: Record<string, unknown>, key: "canvasWidth" | "canvasHeight") {
+  const value = finiteNumberValue(metadata[key]);
+  return value && value > 0 ? value : undefined;
+}
+
+function annotationOptsFromMetadata(metadata: Record<string, unknown>): TakeoffAnnotation["opts"] | undefined {
+  const { canvasWidth: _canvasWidth, canvasHeight: _canvasHeight, ...opts } = metadata;
+  return Object.keys(opts).length > 0 ? opts as TakeoffAnnotation["opts"] : undefined;
+}
+
 /* ─── CSV Export Helper ─── */
 
 function exportAnnotationsCsv(annotations: TakeoffAnnotation[], calibration: Calibration | null) {
@@ -1522,28 +1571,36 @@ export function TakeoffTab({
 
   const loadAnnotations = useCallback(async () => {
     if (!projectId || !selectedDocId) return;
+    const annotationDocumentId = selectedDoc?.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDocId;
     try {
-      const data = await listTakeoffAnnotations(projectId, selectedDocId, page);
+      const data = await listTakeoffAnnotations(projectId, annotationDocumentId, page);
       if (Array.isArray(data)) {
         setAnnotations(
-          data.map((a: Record<string, unknown>) => ({
-            id: a.id as string,
-            type: a.type as string,
-            label: (a.label as string) ?? "",
-            color: (a.color as string) ?? "#3b82f6",
-            thickness: (a.thickness as number) ?? 3,
-            points: (a.points as Point[]) ?? [],
-            visible: a.visible !== false,
-            groupName: a.groupName as string | undefined,
-            opts: a.opts as TakeoffAnnotation["opts"],
-            measurement: a.measurement as TakeoffAnnotation["measurement"],
-          }))
+          data.map((a: Record<string, unknown>) => {
+            const metadata = objectRecord(a.metadata);
+            return {
+              id: String(a.id),
+              type: String(a.annotationType ?? a.type ?? "linear"),
+              label: typeof a.label === "string" ? a.label : "",
+              color: typeof a.color === "string" && a.color.length > 0 ? a.color : "#3b82f6",
+              thickness: finiteNumberValue(a.lineThickness ?? a.thickness) ?? 3,
+              points: normalizeAnnotationPoints(a.points),
+              visible: a.visible !== false,
+              groupName: typeof a.groupName === "string" && a.groupName.length > 0 ? a.groupName : undefined,
+              opts: annotationOptsFromMetadata(metadata),
+              measurement: normalizeAnnotationMeasurement(a.measurement),
+              canvasWidth: canvasDimensionFromMetadata(metadata, "canvasWidth"),
+              canvasHeight: canvasDimensionFromMetadata(metadata, "canvasHeight"),
+            };
+          })
         );
       }
     } catch {
       /* API may not be available yet; use local state */
     }
-  }, [projectId, selectedDocId, page]);
+  }, [projectId, selectedDoc?.bookId, selectedDoc?.source, selectedDocId, page]);
 
   useEffect(() => {
     loadAnnotationsRef.current = loadAnnotations;
@@ -2167,9 +2224,9 @@ export function TakeoffTab({
     }
 
     /* For any drawing tool, open the config modal first */
-    setShowCreateModal(true);
-    setPendingConfig(null);
     setActiveTool(tool);
+    setPendingConfig(null);
+    setShowCreateModal(true);
   }
 
   /* When user confirms annotation config in modal */
@@ -2194,8 +2251,14 @@ export function TakeoffTab({
   }
 
   function annotationToApiPayload(annotation: TakeoffAnnotation) {
+    const metadata: Record<string, unknown> = { ...(annotation.opts ?? {}) };
+    if (Number.isFinite(annotation.canvasWidth)) metadata.canvasWidth = annotation.canvasWidth;
+    if (Number.isFinite(annotation.canvasHeight)) metadata.canvasHeight = annotation.canvasHeight;
+    const annotationDocumentId = selectedDoc?.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDocId;
     return {
-      documentId: selectedDocId,
+      documentId: annotationDocumentId,
       pageNumber: page,
       annotationType: annotation.type || activeTool || "unknown",
       label: annotation.label || "",
@@ -2205,11 +2268,12 @@ export function TakeoffTab({
       groupName: annotation.groupName || "",
       points: annotation.points || [],
       measurement: annotation.measurement ?? {},
-      metadata: annotation.opts ?? {},
+      metadata,
     };
   }
 
   function mapSavedAnnotation(saved: any, fallback: TakeoffAnnotation): TakeoffAnnotation {
+    const metadata = objectRecord(saved?.metadata);
     return {
       ...fallback,
       id: String(saved?.id ?? fallback.id),
@@ -2219,11 +2283,11 @@ export function TakeoffTab({
       thickness: Number(saved?.lineThickness ?? saved?.thickness ?? fallback.thickness ?? 4),
       visible: saved?.visible !== false,
       groupName: String(saved?.groupName ?? fallback.groupName ?? ""),
-      points: Array.isArray(saved?.points) ? saved.points : fallback.points,
-      measurement: saved?.measurement ?? fallback.measurement,
-      opts: saved?.metadata ?? fallback.opts,
-      canvasWidth: fallback.canvasWidth,
-      canvasHeight: fallback.canvasHeight,
+      points: Array.isArray(saved?.points) ? normalizeAnnotationPoints(saved.points) : fallback.points,
+      measurement: normalizeAnnotationMeasurement(saved?.measurement) ?? fallback.measurement,
+      opts: annotationOptsFromMetadata(metadata) ?? fallback.opts,
+      canvasWidth: canvasDimensionFromMetadata(metadata, "canvasWidth") ?? fallback.canvasWidth,
+      canvasHeight: canvasDimensionFromMetadata(metadata, "canvasHeight") ?? fallback.canvasHeight,
     };
   }
 
@@ -2630,6 +2694,10 @@ export function TakeoffTab({
           groupName: annotation.groupName ?? "",
           points: annotation.points,
           measurement: annotation.measurement ?? {},
+          metadata: {
+            canvasWidth: annotation.canvasWidth,
+            canvasHeight: annotation.canvasHeight,
+          },
         });
         if (saved?.id) {
           setAnnotations((prev) =>
@@ -2732,6 +2800,10 @@ export function TakeoffTab({
           groupName,
           points: ann.points,
           measurement: ann.measurement ?? {},
+          metadata: {
+            canvasWidth: ann.canvasWidth,
+            canvasHeight: ann.canvasHeight,
+          },
         });
         if (saved?.id) {
           setAnnotations((prev) =>
@@ -5538,6 +5610,7 @@ export function TakeoffTab({
         }}
         onConfirm={handleAnnotationConfigConfirm}
         initialType={activeTool}
+        lockType={activeTool !== "select"}
       />
 
       {/* ─── Calibration Prompt ─── */}
