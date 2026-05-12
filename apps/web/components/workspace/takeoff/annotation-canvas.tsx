@@ -333,13 +333,19 @@ function renderAnnotation(
   }
 
   /* Draw measurement label */
-  if (calibration && ann.measurement && points.length >= 2) {
+  if (
+    calibration &&
+    ann.measurement &&
+    typeof ann.measurement.value === "number" &&
+    Number.isFinite(ann.measurement.value) &&
+    points.length >= 2
+  ) {
     const midX = points.reduce((s, p) => s + p.x, 0) / points.length;
     const midY = points.reduce((s, p) => s + p.y, 0) / points.length;
     const label =
       ann.measurement.unit === "count"
         ? `${ann.measurement.value}`
-        : `${ann.measurement.value.toFixed(2)} ${ann.measurement.unit}`;
+        : `${ann.measurement.value.toFixed(2)} ${ann.measurement.unit || ""}`.trim();
     drawMeasurementLabel(ctx, label, { x: midX, y: midY }, color);
   }
 

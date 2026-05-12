@@ -1024,8 +1024,9 @@ function renderElementRow(
 function formatMeasurement(ann: TakeoffAnnotation): string {
   if (!ann.measurement) return "—";
   const { value, unit } = ann.measurement;
+  if (typeof value !== "number" || !Number.isFinite(value)) return "—";
   if (unit === "count") return `${value}`;
-  return `${value.toFixed(2)} ${unit}`;
+  return `${value.toFixed(2)} ${unit || ""}`.trim();
 }
 
 /** Spreadsheet rows as entities. Each row gets a "+ Add" that creates a
