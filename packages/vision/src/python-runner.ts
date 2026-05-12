@@ -5,9 +5,6 @@ import { spawnPythonCommand } from "./python-runtime.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
 
-// Old script kept for backwards compatibility.
-const AUTO_COUNT_SCRIPT = path.join(PYTHON_DIR, "auto_count.py");
-
 // New optimized counter (threshold=0.75, single-scale TM_CCOEFF_NORMED).
 const COUNT_SYMBOLS_SCRIPT = path.join(PYTHON_DIR, "tools", "count_symbols.py");
 
@@ -117,80 +114,6 @@ export async function runCountSymbols(request: SymbolCountRequest): Promise<Symb
       snippetImage: result.templateImage ?? undefined,
       imageWidth: result.imageWidth,
       imageHeight: result.imageHeight,
-      errors: [],
-    };
-  } catch {
-    return {
-      matches: [],
-      totalCount: 0,
-      pagesSearched: 1,
-      duration_ms,
-      errors: [`Failed to parse Python output: ${stdout.slice(0, 500)}`],
-    };
-  }
-}
-
-export async function runAutoCount(request: SymbolCountRequest): Promise<SymbolCountResult> {
-  const start = Date.now();
-
-  const payload = JSON.stringify({
-    pdfPath: request.pdfPath,
-    templateImagePath: request.templateImagePath ?? null,
-    pageNumber: request.pageNumber ?? 1,
-    boundingBox: request.boundingBox ?? null,
-    threshold: request.threshold ?? 0.65,
-    methods: request.methods ?? [],
-    documentId: request.documentId ?? null,
-  });
-
-  const { stdout, stderr, code } = await spawnPythonCommand({
-    scriptArgs: [AUTO_COUNT_SCRIPT, "--json"],
-    cwd: PYTHON_DIR,
-    timeoutMs: 120_000,
-    env: buildPythonEnv(),
-    stdin: payload,
-  });
-  const duration_ms = Date.now() - start;
-
-  if (code !== 0) {
-    return {
-      matches: [],
-      totalCount: 0,
-      pagesSearched: 1,
-      duration_ms,
-      errors: [stderr || `Process exited with code ${code}`],
-    };
-  }
-
-  try {
-    const parsed = JSON.parse(stdout);
-    const result = parsed.result ?? parsed;
-
-    if (result.error) {
-      return {
-        matches: [],
-        totalCount: 0,
-        pagesSearched: 1,
-        duration_ms,
-        errors: [result.error],
-      };
-    }
-
-    const matches: SymbolMatch[] = (result.final_matches ?? result.matches ?? []).map((match: any) => ({
-      rect: match.rect ?? { x: match.x ?? 0, y: match.y ?? 0, width: match.width ?? 0, height: match.height ?? 0 },
-      confidence: match.confidence ?? 0,
-      image: match.image ?? undefined,
-      text: match.text ?? undefined,
-      detection_method: match.detection_method ?? match.method ?? "unknown",
-      vector_count: match.vector_count ?? 0,
-    }));
-
-    return {
-      matches,
-      totalCount: matches.length,
-      pagesSearched: 1,
-      duration_ms,
-      snippetImage: result.pdf_snippet_image ?? undefined,
       errors: [],
     };
   } catch {
