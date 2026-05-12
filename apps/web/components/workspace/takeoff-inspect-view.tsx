@@ -180,6 +180,7 @@ export interface InspectActions {
   toggleAnnotationVisibility: (id: string) => void;
   deleteAnnotation: (id: string) => void;
   editAnnotation: (id: string) => void;
+  cancelAnnotationEdit: () => void;
   saveAnnotationEdit: (id: string, updates: { label?: string; color?: string; groupName?: string }) => void;
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
@@ -537,7 +538,7 @@ function AnnotationsInspect({
                           key={ann.id}
                           ann={ann}
                           onSave={(updates) => actions.saveAnnotationEdit(ann.id, updates)}
-                          onCancel={() => actions.editAnnotation(ann.id)}
+                          onCancel={() => actions.cancelAnnotationEdit()}
                         />
                       ) : (
                         <AnnotationRow
@@ -585,7 +586,7 @@ function AnnotationRow({
         isSelected ? "bg-accent/10 ring-1 ring-accent/30" : "hover:bg-panel2/40",
       )}
     >
-      <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ann.color }} />
+      <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: ann.color || EDIT_COLORS[0] }} />
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1">
           <p className="truncate font-medium text-fg/80">
@@ -658,8 +659,8 @@ function EditAnnotationRow({
   onSave: (updates: { label?: string; color?: string; groupName?: string }) => void;
   onCancel: () => void;
 }) {
-  const [label, setLabel] = useState(ann.label);
-  const [color, setColor] = useState(ann.color);
+  const [label, setLabel] = useState(ann.label ?? "");
+  const [color, setColor] = useState(ann.color || EDIT_COLORS[0]);
   const [group, setGroup] = useState(ann.groupName ?? "");
 
   return (

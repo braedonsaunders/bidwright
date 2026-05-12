@@ -1672,6 +1672,9 @@ export function TakeoffTab({
             handleEditAnnotation(id);
           }
         },
+        cancelAnnotationEdit: () => {
+          setEditingAnnotationId(null);
+        },
         saveAnnotationEdit: (id, updates) => {
           handleSaveAnnotationEdit(id, updates);
         },
