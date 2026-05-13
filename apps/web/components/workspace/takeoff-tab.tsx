@@ -9,7 +9,6 @@ import {
   ChevronRight,
   ArrowLeft,
   ArrowRight,
-  Download,
   Expand,
   Shrink,
   ExternalLink,
@@ -122,7 +121,6 @@ import {
 } from "@/components/ui";
 import * as RadixSelect from "@radix-ui/react-select";
 import dynamic from "next/dynamic";
-import { buildCsv } from "@/lib/csv";
 import { cn } from "@/lib/utils";
 import { postWorkspaceMutation } from "@/lib/workspace-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
@@ -826,43 +824,6 @@ function annotationOptsFromMetadata(metadata: Record<string, unknown>): TakeoffA
   return Object.keys(opts).length > 0 ? opts as TakeoffAnnotation["opts"] : undefined;
 }
 
-/* ─── CSV Export Helper ─── */
-
-function exportAnnotationsCsv(annotations: TakeoffAnnotation[], calibration: Calibration | null) {
-  const rows: string[][] = [
-    ["Label", "Type", "Group", "Value", "Unit", "Area", "Volume", "Color", "Points"],
-  ];
-
-  for (const ann of annotations) {
-    const m = ann.measurement;
-    rows.push([
-      ann.label || "",
-      ann.type,
-      ann.groupName || "",
-      m?.value?.toString() ?? "",
-      m?.unit ?? "",
-      m?.area?.toString() ?? "",
-      m?.volume?.toString() ?? "",
-      ann.color,
-      ann.points.map((p) => `(${p.x.toFixed(1)},${p.y.toFixed(1)})`).join(" "),
-    ]);
-  }
-
-  if (calibration) {
-    rows.push([]);
-    rows.push(["Calibration", `1 ${calibration.unit} = ${calibration.pixelsPerUnit.toFixed(2)} px`]);
-  }
-
-  const csv = buildCsv(rows[0] ?? [], rows.slice(1));
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = "takeoff-marks.csv";
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 /* ─── JSON Export Helper ─── */
 
 function exportAnnotationsJson(annotations: TakeoffAnnotation[], calibration: Calibration | null) {
@@ -1270,10 +1231,6 @@ export function TakeoffTab({
   /* Toast state */
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [toastType, setToastType] = useState<"success" | "error">("success");
-
-  /* Export dropdown */
-  const [exportDropdownOpen, setExportDropdownOpen] = useState(false);
-  const exportDropdownRef = useRef<HTMLDivElement>(null);
 
   /* Canvas dimensions */
   const [canvasSize, setCanvasSize] = useState({ width: 800, height: 600 });
@@ -1944,18 +1901,6 @@ export function TakeoffTab({
       });
     }
   }, []);
-
-  /* Close export dropdown on outside click */
-  useEffect(() => {
-    if (!exportDropdownOpen) return;
-    function handleClick(e: MouseEvent) {
-      if (exportDropdownRef.current && !exportDropdownRef.current.contains(e.target as Node)) {
-        setExportDropdownOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, [exportDropdownOpen]);
 
   /* Toast auto-dismiss */
   useEffect(() => {
@@ -4632,21 +4577,24 @@ export function TakeoffTab({
       )}
     >
       {/* ─── Top Toolbar ─── */}
-      {/* `overflow-x-auto` lets controls scroll horizontally instead of squishing
-          when the takeoff panel is narrow (e.g. 13" laptop with side panels open).
-          Inner items use `shrink-0` so they keep intrinsic widths and the row scrolls. */}
-      <div className="flex min-w-0 items-center gap-2 overflow-x-auto overflow-y-hidden border-b border-line bg-panel px-2 py-1.5 shrink-0 [scrollbar-width:thin]">
+      <div className="flex min-w-0 items-center gap-1 overflow-hidden border-b border-line bg-panel px-1.5 py-1.5 shrink-0">
         {!detached && (
           <>
-            <Button variant="ghost" size="xs" onClick={() => setShowLanding(true)} title="Back to takeoff intake" className="shrink-0">
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => setShowLanding(true)}
+              title="Back to takeoff intake"
+              aria-label="Back to takeoff intake"
+              className="h-7 w-7 shrink-0 px-0"
+            >
               <FolderOpen className="h-3.5 w-3.5" />
-              <span className="hidden 2xl:inline">Intake</span>
             </Button>
-            <Separator className="!h-6 !w-px shrink-0" />
+            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
           </>
         )}
         {/* Document selector */}
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex min-w-0 shrink items-center gap-1">
           <RadixSelect.Root
             value={selectedDocId}
             onValueChange={(v) => {
@@ -4659,7 +4607,7 @@ export function TakeoffTab({
               setAutoCountSnippet(null);
             }}
           >
-            <RadixSelect.Trigger className="inline-flex h-8 w-36 shrink-0 items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2.5 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 lg:w-44 2xl:w-56">
+            <RadixSelect.Trigger className="inline-flex h-8 w-32 min-w-0 shrink items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 sm:w-40 xl:w-48 2xl:w-56">
               <RadixSelect.Value placeholder="No drawings available" />
               <RadixSelect.Icon className="ml-auto shrink-0">
                 <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
@@ -4752,31 +4700,24 @@ export function TakeoffTab({
 
         {!isCadDocument && !isDwgDocument && (
           <>
-            <Separator className="!h-6 !w-px shrink-0" />
-            {onOpenRevisionDiff && !detached && (
-              <>
-                <Button
-                  variant="secondary"
-                  size="xs"
-                  onClick={onOpenRevisionDiff}
-                  title="Compare drawing revisions and re-takeoff"
-                  className="shrink-0"
-                >
-                  <GitCompare className="h-3.5 w-3.5" />
-                  <span className="hidden 2xl:inline">Compare</span>
-                </Button>
-                <Separator className="!h-6 !w-px shrink-0" />
-              </>
-            )}
+            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
 
             {/* Page navigation */}
-            <div className="flex shrink-0 items-center gap-1">
-              <Button variant="ghost" size="xs" onClick={handlePrevPage} disabled={page <= 1}>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handlePrevPage}
+                disabled={page <= 1}
+                className="h-7 w-7 px-0"
+                aria-label="Previous page"
+                title="Previous page"
+              >
                 <ChevronLeft className="h-3.5 w-3.5" />
               </Button>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-0.5">
                 <Input
-                  className="h-7 w-12 px-1 text-center text-xs"
+                  className="h-7 w-10 px-1 text-center text-xs"
                   type="number"
                   min={1}
                   max={totalPages}
@@ -4788,23 +4729,52 @@ export function TakeoffTab({
                 />
                 <span className="text-xs text-fg/40">/ {totalPages}</span>
               </div>
-              <Button variant="ghost" size="xs" onClick={handleNextPage} disabled={page >= totalPages}>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleNextPage}
+                disabled={page >= totalPages}
+                className="h-7 w-7 px-0"
+                aria-label="Next page"
+                title="Next page"
+              >
                 <ChevronRight className="h-3.5 w-3.5" />
               </Button>
             </div>
 
-            <Separator className="!h-6 !w-px shrink-0" />
+            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
 
             {/* Zoom controls */}
-            <div className="flex shrink-0 items-center gap-1">
-              <Button variant="ghost" size="xs" onClick={handleZoomOut}>
+            <div className="flex shrink-0 items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleZoomOut}
+                className="h-7 w-7 px-0"
+                aria-label="Zoom out"
+                title="Zoom out"
+              >
                 <Minus className="h-3.5 w-3.5" />
               </Button>
-              <span className="w-12 text-center text-xs text-fg/60">{zoomPercent}%</span>
-              <Button variant="ghost" size="xs" onClick={handleZoomIn}>
+              <span className="w-10 text-center text-xs text-fg/60">{zoomPercent}%</span>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleZoomIn}
+                className="h-7 w-7 px-0"
+                aria-label="Zoom in"
+                title="Zoom in"
+              >
                 <Plus className="h-3.5 w-3.5" />
               </Button>
-              <Button variant="ghost" size="xs" onClick={handleFitToWidth} title="Fit to width">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleFitToWidth}
+                title="Fit to width"
+                aria-label="Fit to width"
+                className="h-7 w-7 px-0"
+              >
                 <StretchHorizontal className="h-3.5 w-3.5" />
               </Button>
               <Button
@@ -4812,12 +4782,14 @@ export function TakeoffTab({
                 size="xs"
                 onClick={handleFitToPage}
                 title="Fit to page"
+                aria-label="Fit to page"
+                className="h-7 w-7 px-0"
               >
                 <Scan className="h-3.5 w-3.5" />
               </Button>
             </div>
 
-            <Separator className="!h-6 !w-px shrink-0" />
+            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
 
             {/* Calibration indicator — click to set/reset scale */}
             {calibration ? (
@@ -4872,113 +4844,103 @@ export function TakeoffTab({
           </>
         )}
 
-        <div className="flex-1" />
+        <div className="min-w-2 flex-1" />
 
         {!isCadDocument && !isDwgDocument && (
           <>
             {/* Active tool indicator */}
-            <Badge tone="info" className="h-7 gap-1 px-2 text-[11px]" title={`${activeToolDef?.label ?? "Select"} tool`}>
+            <Badge tone="info" className="h-7 min-w-7 shrink-0 gap-1 px-1.5 text-[11px] 2xl:px-2" title={`${activeToolDef?.label ?? "Select"} tool`}>
               {activeToolDef && <activeToolDef.icon className="h-3 w-3" />}
               <span className="hidden 2xl:inline">{activeToolDef?.label ?? "Select"}</span>
             </Badge>
 
             <Button
               variant={snapEnabled ? "secondary" : "ghost"}
-              size="sm"
+              size="xs"
               onClick={() => setSnapEnabled((value) => !value)}
               title="Toggle PDF edge and vertex snap"
+              aria-label="Toggle PDF edge and vertex snap"
+              className="h-7 w-7 shrink-0 px-0"
             >
               <Crosshair className="h-3.5 w-3.5" />
             </Button>
             <Button
               variant="ghost"
-              size="sm"
+              size="xs"
               onClick={() => void undoTakeoffAction()}
               disabled={!canUndoTakeoff}
               title="Undo takeoff edit"
+              aria-label="Undo takeoff edit"
+              className="h-7 w-7 shrink-0 px-0"
             >
               <Undo2 className="h-3.5 w-3.5" />
             </Button>
             <Button
               variant="ghost"
-              size="sm"
+              size="xs"
               onClick={() => void redoTakeoffAction()}
               disabled={!canRedoTakeoff}
               title="Redo takeoff edit"
+              aria-label="Redo takeoff edit"
+              className="h-7 w-7 shrink-0 px-0"
             >
               <Redo2 className="h-3.5 w-3.5" />
             </Button>
 
             {/* Clear all */}
             {annotations.length > 0 && (
-              <Button variant="ghost" size="sm" onClick={handleClearAll} title="Clear all takeoff marks">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleClearAll}
+                title="Clear all takeoff marks"
+                aria-label="Clear all takeoff marks"
+                className="h-7 w-7 shrink-0 px-0"
+              >
                 <RotateCcw className="h-3.5 w-3.5" />
               </Button>
             )}
 
-            {/* Export with dropdown */}
-            <div className="relative" ref={exportDropdownRef}>
-              <div className="flex items-center">
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => exportAnnotationsCsv(annotations, calibration)}
-                  disabled={annotations.length === 0}
-                  className="rounded-r-none"
-                  title={
-                    annotations.length === 0
-                      ? "No takeoff marks to export"
-                      : `Export ${annotations.length} takeoff mark${annotations.length === 1 ? "" : "s"} as CSV`
-                  }
-                >
-                  <Download className="h-3.5 w-3.5" />
-                </Button>
-                <Button
-                  variant="secondary"
-                  size="sm"
-                  onClick={() => setExportDropdownOpen((v) => !v)}
-                  disabled={annotations.length === 0}
-                  className="rounded-l-none border-l border-line/50 px-1.5"
-                  title={annotations.length === 0 ? "No takeoff marks to export" : "Export options"}
-                >
-                  <ChevronDown className="h-3 w-3" />
-                </Button>
-              </div>
-              {exportDropdownOpen && (
-                <div className="absolute right-0 top-full mt-1 z-50 rounded-lg border border-line bg-panel shadow-xl p-1 min-w-[120px]">
-                  <button
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                    onClick={() => {
-                      exportAnnotationsCsv(annotations, calibration);
-                      setExportDropdownOpen(false);
-                    }}
-                  >
-                    <Download className="h-3 w-3" />
-                    Export CSV
-                  </button>
-                  <button
-                    className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-xs text-fg/70 hover:bg-panel2 transition-colors"
-                    onClick={() => {
-                      exportAnnotationsJson(annotations, calibration);
-                      setExportDropdownOpen(false);
-                    }}
-                  >
-                    <FileJson className="h-3 w-3" />
-                    Export JSON
-                  </button>
-                </div>
-              )}
-            </div>
+            <Button
+              variant="ghost"
+              size="xs"
+              onClick={() => exportAnnotationsJson(annotations, calibration)}
+              disabled={annotations.length === 0}
+              title={
+                annotations.length === 0
+                  ? "No takeoff marks to export"
+                  : `Export ${annotations.length} takeoff mark${annotations.length === 1 ? "" : "s"} as JSON`
+              }
+              aria-label="Export takeoff marks as JSON"
+              className="h-7 w-7 shrink-0 px-0"
+            >
+              <FileJson className="h-3.5 w-3.5" />
+            </Button>
+
+            {onOpenRevisionDiff && !detached && (
+              <Button
+                variant="secondary"
+                size="xs"
+                onClick={onOpenRevisionDiff}
+                title="Compare drawing revisions and re-takeoff"
+                aria-label="Compare drawing revisions and re-takeoff"
+                className="h-7 w-7 shrink-0 px-0"
+              >
+                <GitCompare className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </>
         )}
 
         {/* ─── Fullscreen / Detach ─── */}
-        <Separator className="!h-6 !w-px" />
+        <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
         <Button
           variant="ghost"
           size="xs"
           onClick={handleFullscreen}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          className="h-7 w-7 shrink-0 px-0"
         >
           {isFullscreen ? (
             <Shrink className="h-3.5 w-3.5" />
@@ -4991,7 +4953,9 @@ export function TakeoffTab({
           size="xs"
           onClick={handleDetach}
           title="Open in new window"
+          aria-label="Open in new window"
           disabled={!selectedDocId}
+          className="h-7 w-7 shrink-0 px-0"
         >
           <ExternalLink className="h-3.5 w-3.5" />
         </Button>
