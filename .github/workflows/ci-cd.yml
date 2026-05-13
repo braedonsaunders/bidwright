@@ -164,7 +164,7 @@ jobs:
       - changes
     # Deploys run from a self-hosted runner that can reach the configured target host.
     runs-on: [self-hosted, linux, x64, bidwright-prod]
-    timeout-minutes: 40
+    timeout-minutes: 180
     environment: production
     if: >
       (github.event_name == 'workflow_dispatch' ||
