@@ -1144,6 +1144,20 @@ export function TakeoffTab({
   const undoStackRef = useRef<TakeoffHistoryCommand[]>([]);
   const redoStackRef = useRef<TakeoffHistoryCommand[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
+  const externalAnnotationSelectionId = selection?.kind === "annotation" ? selection.annotationId : null;
+  const updateAnnotationSelection = useCallback((id: string | null) => {
+    setSelectedAnnotationId((prev) => (prev === id ? prev : id));
+    if (!onSelectionChange) return;
+    if (id) {
+      if (externalAnnotationSelectionId !== id) {
+        onSelectionChange({ kind: "annotation", annotationId: id });
+      }
+      return;
+    }
+    if (externalAnnotationSelectionId) {
+      onSelectionChange(null);
+    }
+  }, [externalAnnotationSelectionId, onSelectionChange]);
 
   /* ─── Takeoff Link state ─── */
   const [takeoffLinks, setTakeoffLinks] = useState<TakeoffLinkRecord[]>([]);
@@ -1647,29 +1661,16 @@ export function TakeoffTab({
     onAnnotationsChange?.([...annotations, ...dwgAnnotationsCache]);
   }, [annotations, dwgAnnotationsCache, onAnnotationsChange]);
 
-  // Mirror the externally-controlled annotation selection into local state.
+  // Mirror externally-controlled annotation selection into local state. Clearing
+  // is done by updateAnnotationSelection so local clicks cannot race a stale
+  // parent null and bounce forever.
   useEffect(() => {
-    if (selection?.kind === "annotation") {
-      if (selection.annotationId !== selectedAnnotationId) {
-        setSelectedAnnotationId(selection.annotationId);
-      }
-    } else if (selection === null && selectedAnnotationId !== null) {
-      setSelectedAnnotationId(null);
+    if (externalAnnotationSelectionId) {
+      setSelectedAnnotationId((prev) => (
+        prev === externalAnnotationSelectionId ? prev : externalAnnotationSelectionId
+      ));
     }
-    // For non-annotation kinds, leave the local annotation selection alone.
-  }, [selection, selectedAnnotationId]);
-
-  // Publish local annotation selection up to the parent.
-  useEffect(() => {
-    if (!onSelectionChange) return;
-    if (selectedAnnotationId) {
-      if (selection?.kind !== "annotation" || selection.annotationId !== selectedAnnotationId) {
-        onSelectionChange({ kind: "annotation", annotationId: selectedAnnotationId });
-      }
-    } else if (selection?.kind === "annotation") {
-      onSelectionChange(null);
-    }
-  }, [selectedAnnotationId, onSelectionChange, selection]);
+  }, [externalAnnotationSelectionId]);
 
   // Bridge for dispatching DWG annotation actions (delete) from the side panel.
   // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
@@ -1707,7 +1708,7 @@ export function TakeoffTab({
             if (id) onSelectionChange?.({ kind: "annotation", annotationId: id });
             else if (selection?.kind === "annotation") onSelectionChange?.(null);
           } else {
-            setSelectedAnnotationId(id);
+            updateAnnotationSelection(id);
           }
         },
         toggleAnnotationVisibility: (id) => {
@@ -2380,7 +2381,7 @@ export function TakeoffTab({
 
     /* Auto-open edit panel for notes so user can type text */
     if (newAnnotation.type === "markup-note") {
-      setSelectedAnnotationId(newAnnotation.id);
+      updateAnnotationSelection(newAnnotation.id);
       setEditingAnnotationId(newAnnotation.id);
     }
 
@@ -3022,6 +3023,9 @@ export function TakeoffTab({
     const annotation = annotations.find((a) => a.id === id);
     const nextAnnotations = annotations.filter((a) => a.id !== id);
     setAnnotations(nextAnnotations);
+    if (selectedAnnotationId === id) {
+      updateAnnotationSelection(null);
+    }
     try {
       await deleteTakeoffAnnotation(projectId, id);
     } catch {
@@ -3034,7 +3038,7 @@ export function TakeoffTab({
   const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
 
   function handleEditAnnotation(id: string) {
-    setSelectedAnnotationId(id);
+    updateAnnotationSelection(id);
     setEditingAnnotationId(id);
   }
 
@@ -5415,7 +5419,7 @@ export function TakeoffTab({
               setZoom(1);
               fitOnLoadRef.current = true;
               setAnnotations([]);
-              setSelectedAnnotationId(null);
+              updateAnnotationSelection(null);
               setAutoCountResults(null);
               setAutoCountSnippet(null);
             }}

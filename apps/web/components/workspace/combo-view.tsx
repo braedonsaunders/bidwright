@@ -47,6 +47,10 @@ export interface ComboViewProps {
   }>;
 }
 
+function serializeTakeoffSelection(selection: TakeoffSelection | null) {
+  return selection ? JSON.stringify(selection) : "null";
+}
+
 export function ComboView({
   workspace,
   onApply,
@@ -71,6 +75,18 @@ export function ComboView({
   const [annotationsCache, setAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
   const [linksReloadSignal, setLinksReloadSignal] = useState(0);
   const handleLinksMutated = useCallback(() => setLinksReloadSignal((k) => k + 1), []);
+  const handleTakeoffSelectionChange = useCallback((next: TakeoffSelection | null) => {
+    setTakeoffSelection((prev) => (
+      serializeTakeoffSelection(prev) === serializeTakeoffSelection(next) ? prev : next
+    ));
+  }, []);
+  const annotationsCacheSignatureRef = useRef<string | null>(null);
+  const handleAnnotationsChange = useCallback((next: TakeoffAnnotation[]) => {
+    const signature = JSON.stringify(next);
+    if (signature === annotationsCacheSignatureRef.current) return;
+    annotationsCacheSignatureRef.current = signature;
+    setAnnotationsCache(next);
+  }, []);
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Bridge: TakeoffTab populates these refs with its action handlers so the
@@ -95,6 +111,13 @@ export function ComboView({
   // so the side-panel Inspect tab can drive everything.
   const [inspectSnapshot, setInspectSnapshot] = useState<InspectSnapshot | null>(null);
   const inspectActionsRef = useRef<InspectActions | null>(null);
+  const inspectSnapshotSignatureRef = useRef<string | null>(null);
+  const handleInspectSnapshotChange = useCallback((next: InspectSnapshot) => {
+    const signature = JSON.stringify(next);
+    if (signature === inspectSnapshotSignatureRef.current) return;
+    inspectSnapshotSignatureRef.current = signature;
+    setInspectSnapshot(next);
+  }, []);
 
   const toggleFullscreen = useCallback(() => {
     if (typeof document === "undefined") return;
@@ -165,14 +188,14 @@ export function ComboView({
                   selectedWorksheetId={selectedWorksheetId ?? null}
                   initialDocumentId={initialDocumentId}
                   selection={takeoffSelection}
-                  onSelectionChange={setTakeoffSelection}
-                  onAnnotationsChange={setAnnotationsCache}
+                  onSelectionChange={handleTakeoffSelectionChange}
+                  onAnnotationsChange={handleAnnotationsChange}
                   linksReloadSignal={linksReloadSignal}
                   onLinksMutated={handleLinksMutated}
                   modelSendToEstimateRef={modelSendToEstimateRef}
                   modelElementCreateLineItemRef={modelElementCreateLineItemRef}
                   inspectActionsRef={inspectActionsRef}
-                  onInspectSnapshotChange={setInspectSnapshot}
+                  onInspectSnapshotChange={handleInspectSnapshotChange}
                 />
               </div>
             </Panel>
