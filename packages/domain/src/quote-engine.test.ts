@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { computeItemCost } from "./quote-engine";
+import { calculateTotals, computeItemCost } from "./quote-engine";
+import { mockStore } from "./mock-data";
 import type { WorksheetItem } from "./models";
 
 const baseItem: WorksheetItem = {
@@ -54,4 +55,30 @@ test("computeItemCost: zero quantity returns 0 (does not throw)", () => {
     computeItemCost({ ...baseItem, category: "Labour", quantity: 0, cost: 100 }),
     0,
   );
+});
+
+test("mock demo project totals use per-unit worksheet costs", () => {
+  const revision = mockStore.revisions.find((entry) => entry.id === "rev-0");
+  assert.ok(revision);
+
+  const worksheets = mockStore.worksheets
+    .filter((worksheet) => worksheet.revisionId === revision.id)
+    .map((worksheet) => ({
+      ...worksheet,
+      items: mockStore.worksheetItems.filter((item) => item.worksheetId === worksheet.id),
+    }));
+  const phases = mockStore.phases.filter((phase) => phase.revisionId === revision.id);
+  const adjustments = mockStore.adjustments.filter((adjustment) => adjustment.revisionId === revision.id);
+
+  const totals = calculateTotals(revision, worksheets, phases, adjustments);
+
+  assert.equal(totals.cost, 969040);
+  assert.equal(totals.lineSubtotalBeforeFactors, 1239854);
+  assert.equal(totals.subtotal, 1330268.12);
+  assert.equal(totals.estimatedProfit, 361228.12);
+  assert.equal(totals.estimatedMargin, 0.27);
+
+  const labour = totals.costBreakdown.find((entry) => entry.id === "labour");
+  assert.equal(labour?.cost, 229040);
+  assert.equal(labour?.value, 330714);
 });

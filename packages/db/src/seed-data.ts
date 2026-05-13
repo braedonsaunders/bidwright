@@ -52,7 +52,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
     {
       name: "Rental Equipment", entityType: "RentalEquipment", shortform: "R", defaultUom: "DAY",
       validUoms: ["DAY", "WK", "MO", "HR"], color: "#ec4899", order: 6,
-      calculationType: "duration_rate", itemSource: "rate_schedule" as const,
+      calculationType: "duration_rate", itemSource: "freeform" as const,
       analyticsBucket: "equipment" as string | null,
       editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: true },
       unitLabels: {},
