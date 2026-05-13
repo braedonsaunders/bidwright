@@ -411,16 +411,23 @@ export function AnnotationCanvas({
   const redraw = useCallback(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    const canvasWidth = Math.max(0, Math.floor(width));
+    const canvasHeight = Math.max(0, Math.floor(height));
+    if (canvasWidth <= 0 || canvasHeight <= 0) return;
+    if (canvas.width !== canvasWidth) canvas.width = canvasWidth;
+    if (canvas.height !== canvasHeight) canvas.height = canvasHeight;
+    canvas.style.width = `${canvasWidth}px`;
+    canvas.style.height = `${canvasHeight}px`;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    ctx.clearRect(0, 0, width, height);
+    ctx.clearRect(0, 0, canvasWidth, canvasHeight);
 
     /* Render stored annotations — scale points if created at different canvas size */
     for (const ann of annotations) {
-      if (ann.canvasWidth && ann.canvasHeight && (ann.canvasWidth !== width || ann.canvasHeight !== height)) {
-        const sx = width / ann.canvasWidth;
-        const sy = height / ann.canvasHeight;
+      if (ann.canvasWidth && ann.canvasHeight && (ann.canvasWidth !== canvasWidth || ann.canvasHeight !== canvasHeight)) {
+        const sx = canvasWidth / ann.canvasWidth;
+        const sy = canvasHeight / ann.canvasHeight;
         const scaled: TakeoffAnnotation = {
           ...ann,
           points: ann.points.map((p) => ({ x: p.x * sx, y: p.y * sy })),
@@ -571,16 +578,6 @@ export function AnnotationCanvas({
   useEffect(() => {
     redraw();
   }, [redraw]);
-
-  /* Resize canvas */
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = width;
-    canvas.height = height;
-    canvas.style.width = `${width}px`;
-    canvas.style.height = `${height}px`;
-  }, [width, height]);
 
   /* ─── Mouse Event Helpers ─── */
 
