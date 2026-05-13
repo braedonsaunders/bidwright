@@ -7,11 +7,43 @@ import { emitSessionEvent, interruptAndResumeSession } from "../services/cli-run
 /** Helper: resolve a document's absolute PDF path from its storagePath. */
 async function resolveDocPdf(store: any, projectId: string, documentId: string): Promise<{ absPath: string; doc: any } | { error: string; status: number }> {
   const doc = await store.getDocument(projectId, documentId);
-  if (!doc) return { error: "Document not found", status: 404 };
-  if (!doc.storagePath) return { error: "Document has no file on disk", status: 400 };
-  const absPath = resolveApiPath(doc.storagePath);
-  try { await access(absPath); } catch { return { error: `PDF not on disk: ${doc.storagePath}`, status: 404 }; }
-  return { absPath, doc };
+  if (doc) {
+    if (!doc.storagePath) return { error: "Document has no file on disk", status: 400 };
+    const absPath = resolveApiPath(doc.storagePath);
+    try { await access(absPath); } catch { return { error: `PDF not on disk: ${doc.storagePath}`, status: 404 }; }
+    return { absPath, doc };
+  }
+
+  const fileNodeId = documentId.startsWith("file-") ? documentId.slice(5) : documentId;
+  if (typeof store.getFileNode === "function") {
+    const node = await store.getFileNode(fileNodeId);
+    if (node?.projectId === projectId && node.type !== "directory") {
+      if (node.documentId) {
+        const nodeDoc = await store.getDocument(projectId, node.documentId);
+        if (nodeDoc?.storagePath) {
+          const absPath = resolveApiPath(nodeDoc.storagePath);
+          try { await access(absPath); } catch { return { error: `PDF not on disk: ${nodeDoc.storagePath}`, status: 404 }; }
+          return { absPath, doc: nodeDoc };
+        }
+      }
+      if (node.storagePath) {
+        const absPath = resolveApiPath(node.storagePath);
+        try { await access(absPath); } catch { return { error: `PDF not on disk: ${node.storagePath}`, status: 404 }; }
+        return { absPath, doc: { id: node.id, fileName: node.name, storagePath: node.storagePath, source: "file_node" } };
+      }
+    }
+  }
+
+  if (typeof store.getKnowledgeBook === "function") {
+    const book = await store.getKnowledgeBook(documentId);
+    if (book?.storagePath && (!book.projectId || book.projectId === projectId)) {
+      const absPath = resolveApiPath(book.storagePath);
+      try { await access(absPath); } catch { return { error: `PDF not on disk: ${book.storagePath}`, status: 404 }; }
+      return { absPath, doc: { id: book.id, fileName: book.sourceFileName ?? book.name, storagePath: book.storagePath, source: "knowledge_book" } };
+    }
+  }
+
+  return { error: "Document not found", status: 404 };
 }
 
 async function repairStoredNativePdfPageCount(doc: any, nativePageCount: unknown) {
@@ -130,6 +162,66 @@ function sanitizeJsonForPostgres(value: unknown, seen = new WeakSet<object>()): 
   }
   seen.delete(value);
   return output;
+}
+
+function normalizeDetectionPoint(value: unknown): { x: number; y: number } | null {
+  const point = asRecord(value);
+  const x = Number(point.x);
+  const y = Number(point.y);
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+  return { x, y };
+}
+
+function normalizeDetectionPoints(detection: Record<string, unknown>): { x: number; y: number }[] {
+  const rawPoints = Array.isArray(detection.points) ? detection.points : null;
+  if (rawPoints) {
+    return rawPoints
+      .map(normalizeDetectionPoint)
+      .filter((point): point is { x: number; y: number } => Boolean(point));
+  }
+
+  const x1 = Number(detection.x1);
+  const y1 = Number(detection.y1);
+  const x2 = Number(detection.x2);
+  const y2 = Number(detection.y2);
+  if ([x1, y1, x2, y2].every(Number.isFinite)) {
+    return [{ x: x1, y: y1 }, { x: x2, y: y2 }];
+  }
+
+  const cx = Number(detection.cx ?? detection.x);
+  const cy = Number(detection.cy ?? detection.y);
+  if (Number.isFinite(cx) && Number.isFinite(cy)) {
+    return [{ x: cx, y: cy }];
+  }
+
+  const rect = asRecord(detection.rect ?? detection.bbox);
+  const rx = Number(rect.x);
+  const ry = Number(rect.y);
+  const width = Number(rect.width ?? rect.w ?? 0);
+  const height = Number(rect.height ?? rect.h ?? 0);
+  if (Number.isFinite(rx) && Number.isFinite(ry)) {
+    return [{ x: rx + (Number.isFinite(width) ? width / 2 : 0), y: ry + (Number.isFinite(height) ? height / 2 : 0) }];
+  }
+
+  return [];
+}
+
+function distanceBetweenPoints(a: { x: number; y: number }, b: { x: number; y: number }) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function normalizeDetectionMeasurement(
+  detection: Record<string, unknown>,
+  annotationType: string,
+  points: { x: number; y: number }[],
+) {
+  const provided = asRecord(detection.measurement);
+  if (Object.keys(provided).length > 0) return sanitizeJsonForPostgres(provided);
+  if (annotationType === "count" || points.length === 1) {
+    return { value: Number(detection.count ?? 1) || 1, unit: "count" };
+  }
+  const length = points.slice(1).reduce((sum, point, index) => sum + distanceBetweenPoints(points[index]!, point), 0);
+  return { value: Math.round(length * 100) / 100, length: Math.round(length * 100) / 100, unit: "px" };
 }
 
 async function safeJson(response: Response) {
@@ -1101,6 +1193,204 @@ export async function visionRoutes(app: FastifyInstance) {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+  });
+
+  // ── POST /api/vision/analyze-geometry ────────────────────────────────────
+  // Generic OpenCV drawing intelligence pass. Detects linework, circles,
+  // symbol candidates, text regions, and optional connected linear systems.
+  // Body: { projectId, documentId, pageNumber?, preset?, traceSystems?, ... }
+  app.post("/api/vision/analyze-geometry", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const documentId = body.documentId as string;
+    const pageNumber = (body.pageNumber as number) ?? 1;
+
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    let runAnalyzeDrawingGeometry: typeof import("@bidwright/vision")["runAnalyzeDrawingGeometry"];
+    try {
+      const vision = await import("@bidwright/vision");
+      runAnalyzeDrawingGeometry = vision.runAnalyzeDrawingGeometry;
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Vision package not available",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const result = await runAnalyzeDrawingGeometry({
+        pdfPath: resolved.absPath,
+        pageNumber,
+        dpi: (body.dpi as number) ?? 150,
+        preset: String(body.preset ?? "generic"),
+        includeSymbols: body.includeSymbols !== false,
+        includeTextRegions: body.includeTextRegions !== false,
+        includeCircles: body.includeCircles !== false,
+        traceSystems: body.traceSystems !== false,
+        minLineLength: typeof body.minLineLength === "number" ? body.minLineLength : undefined,
+        snapTolerance: typeof body.snapTolerance === "number" ? body.snapTolerance : undefined,
+        maxLines: typeof body.maxLines === "number" ? body.maxLines : undefined,
+        maxRegions: typeof body.maxRegions === "number" ? body.maxRegions : undefined,
+      });
+
+      if (!result.success) {
+        return reply.code(500).send({ ...result, success: false, message: result.error ?? "Geometry analysis failed" });
+      }
+
+      return {
+        ...result,
+        success: true,
+        projectId,
+        documentId,
+        fileName: resolved.doc.fileName,
+        pageNumber,
+      };
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Geometry analysis failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── POST /api/vision/trace-systems ────────────────────────────────────────
+  // Convenience route for linear-system tracing presets. Uses the same engine
+  // as analyze-geometry but returns the topology-focused subset first.
+  app.post("/api/vision/trace-systems", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = body.projectId as string;
+    const documentId = body.documentId as string;
+    const pageNumber = (body.pageNumber as number) ?? 1;
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    let runAnalyzeDrawingGeometry: typeof import("@bidwright/vision")["runAnalyzeDrawingGeometry"];
+    try {
+      const vision = await import("@bidwright/vision");
+      runAnalyzeDrawingGeometry = vision.runAnalyzeDrawingGeometry;
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Vision package not available",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    try {
+      const result = await runAnalyzeDrawingGeometry({
+        pdfPath: resolved.absPath,
+        pageNumber,
+        dpi: (body.dpi as number) ?? 150,
+        preset: String(body.preset ?? "generic"),
+        includeSymbols: body.includeSymbols === true,
+        includeTextRegions: body.includeTextRegions === true,
+        includeCircles: body.includeCircles === true,
+        traceSystems: true,
+        minLineLength: typeof body.minLineLength === "number" ? body.minLineLength : undefined,
+        snapTolerance: typeof body.snapTolerance === "number" ? body.snapTolerance : undefined,
+        maxLines: typeof body.maxLines === "number" ? body.maxLines : undefined,
+        maxRegions: typeof body.maxRegions === "number" ? body.maxRegions : undefined,
+      });
+      if (!result.success) {
+        return reply.code(500).send({ ...result, success: false, message: result.error ?? "Trace systems failed" });
+      }
+      return {
+        ...result,
+        success: true,
+        projectId,
+        documentId,
+        fileName: resolved.doc.fileName,
+        pageNumber,
+      };
+    } catch (err) {
+      return reply.code(500).send({
+        message: "Trace systems failed",
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── POST /api/vision/save-detections-as-annotations ──────────────────────
+  // Persist reviewed geometry/system detections as normal TakeoffAnnotation
+  // rows so the rest of Bidwright can link, price, and audit them.
+  app.post("/api/vision/save-detections-as-annotations", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = String(body.projectId ?? "");
+    const documentId = String(body.documentId ?? "");
+    const pageNumber = Number(body.pageNumber ?? 1);
+    const imageWidth = Number(body.imageWidth ?? 0);
+    const imageHeight = Number(body.imageHeight ?? 0);
+    const defaultGroupName = String(body.groupName ?? "Drawing Intelligence");
+    const detections = Array.isArray(body.detections) ? body.detections as Record<string, unknown>[] : [];
+
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+    if (detections.length === 0) {
+      return { success: true, savedCount: 0, annotations: [], errors: [] };
+    }
+
+    const annotations: unknown[] = [];
+    const errors: string[] = [];
+
+    for (const [index, detection] of detections.entries()) {
+      try {
+        const points = normalizeDetectionPoints(detection);
+        if (points.length === 0) {
+          errors.push(`Detection ${index + 1} has no valid points.`);
+          continue;
+        }
+        const annotationType = String(
+          detection.annotationType ??
+            (points.length === 1 ? "count" : points.length > 2 ? "linear-polyline" : "linear"),
+        );
+        const measurement = normalizeDetectionMeasurement(detection, annotationType, points);
+        const label = String(detection.label ?? detection.id ?? `Detection ${index + 1}`);
+        const metadata = sanitizeJsonForPostgres({
+          ...(asRecord(detection.metadata)),
+          canvasWidth: imageWidth || undefined,
+          canvasHeight: imageHeight || undefined,
+          detectionId: detection.id,
+          detectionKind: detection.kind,
+          detectionSource: detection.source,
+          confidence: detection.confidence,
+          createdBy: "drawing-intelligence",
+        });
+
+        const annotation = await request.store!.createTakeoffAnnotation(projectId, {
+          documentId,
+          pageNumber,
+          annotationType,
+          label,
+          color: String(detection.color ?? body.color ?? "#0ea5e9"),
+          lineThickness: Number(detection.lineThickness ?? 3),
+          visible: detection.visible !== false,
+          groupName: String(detection.groupName ?? defaultGroupName),
+          points,
+          measurement,
+          metadata,
+          createdBy: "drawing-intelligence",
+        } as any);
+        annotations.push(annotation);
+      } catch (err) {
+        errors.push(`Detection ${index + 1}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    return {
+      success: errors.length === 0,
+      savedCount: annotations.length,
+      annotations,
+      errors,
+    };
   });
 
   // ── POST /api/vision/crop-region ───────────────────────────────────────

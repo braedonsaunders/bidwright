@@ -24,6 +24,17 @@ const boundingBoxSchema = {
   imageHeight: z.coerce.number().describe("Total height of the rendered image this bbox refers to"),
 };
 
+const drawingAnalysisPresetSchema = z.enum([
+  "generic",
+  "mechanical_piping",
+  "plumbing",
+  "fire_protection",
+  "ductwork",
+  "electrical",
+  "civil_linear",
+  "structural",
+]);
+
 function isIgnoredSourceDocument(fileName: unknown) {
   const name = String(fileName ?? "").toLowerCase();
   return /(^|\/)__macosx(\/|$)|(^|\/)\._|(^|\/)\.ds_store$|(^|\/)thumbs\.db$/.test(name);
@@ -648,6 +659,171 @@ Avg scan time 2-5 seconds per page.`,
       });
 
       return { content };
+    }
+  );
+
+  // ── analyzeDrawingGeometry ────────────────────────────────
+  server.tool(
+    "analyzeDrawingGeometry",
+    `Run Bidwright's generic OpenCV drawing-intelligence pass on a PDF page.
+
+WHEN TO USE: Use this when linework, circles, candidate symbols, text regions, or connected drawing topology matter. This is the broad CV pass; it is not trade-specific unless you select a preset.
+
+INPUTS:
+- documentId: Document ID from listDrawingPages
+- pageNumber: Page to analyze
+- preset: generic by default; use mechanical_piping/plumbing/fire_protection/ductwork/electrical/civil_linear/structural to tune line filtering and system labels
+- traceSystems: true to group connected linework into candidate runs/systems
+- maxLines/maxRegions: caps to keep output manageable
+
+OUTPUT: Compact JSON with summary, coordinate space, top line segments, circles, symbol candidates, text regions, and systems. Coordinates are in the returned imageWidth/imageHeight coordinate space and can be saved as takeoff marks after human/agent review.`,
+    {
+      documentId: z.string().describe("Document ID of the PDF drawing"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number to analyze"),
+      preset: drawingAnalysisPresetSchema.default("generic").describe("Trade/use-case preset for the generic CV engine"),
+      traceSystems: z.boolean().default(true).describe("Group connected linework into candidate systems/runs"),
+      includeSymbols: z.boolean().default(true).describe("Include symbol-like connected-component candidates"),
+      includeTextRegions: z.boolean().default(true).describe("Include dense text-region candidates"),
+      includeCircles: z.boolean().default(true).describe("Include circular detections"),
+      maxLines: z.coerce.number().min(50).max(3000).default(800).describe("Maximum line segments to return"),
+      maxRegions: z.coerce.number().min(20).max(500).default(120).describe("Maximum candidates per non-line category"),
+      minLineLength: z.coerce.number().min(5).optional().describe("Optional minimum detected line length in pixels"),
+      snapTolerance: z.coerce.number().min(2).optional().describe("Optional endpoint snap tolerance in pixels for topology"),
+    },
+    async (args) => {
+      const result = await apiPost("/api/vision/analyze-geometry", {
+        projectId: getProjectId(),
+        ...args,
+      });
+
+      if (!result.success) {
+        return { content: [{ type: "text" as const, text: `Geometry analysis failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
+      }
+
+      const compact = {
+        documentId: args.documentId,
+        pageNumber: args.pageNumber,
+        preset: result.preset,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
+        preprocessing: result.preprocessing,
+        summary: result.summary,
+        warnings: result.warnings,
+        lines: (result.lines ?? []).slice(0, 80),
+        systems: (result.systems ?? []).slice(0, 40),
+        circles: (result.circles ?? []).slice(0, 40),
+        symbolCandidates: (result.symbolCandidates ?? []).slice(0, 40),
+        textRegions: (result.textRegions ?? []).slice(0, 40),
+        omitted: {
+          lines: Math.max(0, Number(result.lines?.length ?? 0) - 80),
+          systems: Math.max(0, Number(result.systems?.length ?? 0) - 40),
+          circles: Math.max(0, Number(result.circles?.length ?? 0) - 40),
+          symbolCandidates: Math.max(0, Number(result.symbolCandidates?.length ?? 0) - 40),
+          textRegions: Math.max(0, Number(result.textRegions?.length ?? 0) - 40),
+        },
+        note: "Review detections visually before saving. Use saveDetectionsAsTakeoffMarks only for accepted detections.",
+      };
+
+      return {
+        content: [{ type: "text" as const, text: JSON.stringify(compact, null, 2) }],
+      };
+    }
+  );
+
+  // ── traceDrawingSystems ───────────────────────────────────
+  server.tool(
+    "traceDrawingSystems",
+    `Trace connected linear systems/runs from drawing linework.
+
+WHEN TO USE: Use this for pipe runs, conduit/cable tray paths, ducts, civil utilities, structural member runs, or any connected linear takeoff. This is intentionally generic; choose the preset that best matches the trade, then review the overlay/coordinates before saving.
+
+OUTPUT: Candidate systems with segment IDs, total length in pixels, inferred topology counts (open ends, elbows, tees, crosses), confidence, and warnings.`,
+    {
+      documentId: z.string().describe("Document ID of the PDF drawing"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number to trace"),
+      preset: drawingAnalysisPresetSchema.default("mechanical_piping").describe("System-tracing preset"),
+      maxLines: z.coerce.number().min(50).max(3000).default(1200).describe("Maximum line segments to consider"),
+      minLineLength: z.coerce.number().min(5).optional().describe("Optional minimum line length in pixels"),
+      snapTolerance: z.coerce.number().min(2).optional().describe("Optional endpoint snap tolerance in pixels"),
+    },
+    async (args) => {
+      const result = await apiPost("/api/vision/trace-systems", {
+        projectId: getProjectId(),
+        ...args,
+      });
+
+      if (!result.success) {
+        return { content: [{ type: "text" as const, text: `Trace failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
+      }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            documentId: args.documentId,
+            pageNumber: args.pageNumber,
+            preset: result.preset,
+            imageWidth: result.imageWidth,
+            imageHeight: result.imageHeight,
+            preprocessing: result.preprocessing,
+            summary: result.summary,
+            warnings: result.warnings,
+            systems: (result.systems ?? []).slice(0, 60),
+            lines: (result.lines ?? []).slice(0, 120),
+            note: "System lengths are pixel lengths until calibrated or reviewed. Save accepted systems/segments as takeoff marks before linking them to estimate rows.",
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── saveDetectionsAsTakeoffMarks ──────────────────────────
+  server.tool(
+    "saveDetectionsAsTakeoffMarks",
+    `Persist reviewed drawing-intelligence detections as normal Bidwright takeoff marks.
+
+WHEN TO USE: After analyzeDrawingGeometry or traceDrawingSystems returns detections and you have reviewed/selected the ones to keep. This creates TakeoffAnnotation rows so the user can see, edit, group, and link them to worksheet items.
+
+INPUT DETECTION SHAPES:
+- Linear detection: {id, kind:"line", label, points:[{x,y},{x,y}], measurement?}
+- Count detection: {id, kind:"symbol"|"circle"|"device", label, points:[{x,y}], measurement:{value:1,unit:"count"}}
+- System segment: save each accepted segment as a linear detection under a shared groupName
+
+COMMON PITFALLS: Do not save every raw detection automatically. Save accepted detections with descriptive labels and groups.`,
+    {
+      documentId: z.string().describe("Document ID where detections were found"),
+      pageNumber: z.coerce.number().min(1).describe("Page number where detections were found"),
+      imageWidth: z.coerce.number().positive().describe("Image coordinate-space width returned by analyzeDrawingGeometry"),
+      imageHeight: z.coerce.number().positive().describe("Image coordinate-space height returned by analyzeDrawingGeometry"),
+      groupName: z.string().default("Drawing Intelligence").describe("Group name for saved annotations"),
+      color: z.string().default("#0ea5e9").describe("Default annotation color"),
+      detections: z.array(z.object({}).passthrough()).describe("Reviewed detections to persist as takeoff marks"),
+    },
+    async ({ documentId, pageNumber, imageWidth, imageHeight, groupName, color, detections }) => {
+      const result = await apiPost("/api/vision/save-detections-as-annotations", {
+        projectId: getProjectId(),
+        documentId,
+        pageNumber,
+        imageWidth,
+        imageHeight,
+        groupName,
+        color,
+        detections,
+      });
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            savedCount: result.savedCount ?? 0,
+            requestedCount: detections.length,
+            groupName,
+            documentId,
+            pageNumber,
+            errors: result.errors?.length ? result.errors : undefined,
+          }, null, 2),
+        }],
+      };
     }
   );
 

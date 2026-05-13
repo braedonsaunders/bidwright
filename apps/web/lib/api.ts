@@ -4887,6 +4887,212 @@ export async function runVisionCountAllPages(input: {
   });
 }
 
+// ── Vision / Drawing Intelligence ─────────────────────────────────────────
+
+export type DrawingAnalysisPreset =
+  | "generic"
+  | "mechanical_piping"
+  | "plumbing"
+  | "fire_protection"
+  | "ductwork"
+  | "electrical"
+  | "civil_linear"
+  | "structural";
+
+export interface DrawingGeometryBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DrawingLineSegment {
+  id: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  lengthPx: number;
+  angleDeg: number;
+  bbox: DrawingGeometryBounds;
+  source: string;
+  confidence: number;
+}
+
+export interface DrawingCircleDetection {
+  id: string;
+  cx: number;
+  cy: number;
+  radius: number;
+  bbox: DrawingGeometryBounds;
+  confidence: number;
+  source: string;
+}
+
+export interface DrawingSymbolCandidate {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  area: number;
+  cx: number;
+  cy: number;
+  aspect: number;
+  confidence: number;
+  source: string;
+}
+
+export interface DrawingTextRegion {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  area: number;
+  aspect: number;
+  confidence: number;
+  source: string;
+}
+
+export interface DrawingTracedSystem {
+  id: string;
+  label: string;
+  preset: DrawingAnalysisPreset | string;
+  source: string;
+  segmentIds: string[];
+  segmentCount: number;
+  nodeCount: number;
+  lengthPx: number;
+  bbox: DrawingGeometryBounds;
+  counts: {
+    openEnds: number;
+    elbows45: number;
+    elbows90: number;
+    bends: number;
+    tees: number;
+    crosses: number;
+    transitions: number;
+  };
+  confidence: number;
+  warnings: string[];
+}
+
+export interface DrawingGeometryAnalysisResult {
+  success: boolean;
+  projectId?: string;
+  documentId: string;
+  fileName?: string;
+  schemaVersion: number;
+  preset: DrawingAnalysisPreset | string;
+  pageNumber: number;
+  dpi: number;
+  imageWidth: number;
+  imageHeight: number;
+  pageWidth?: number;
+  pageHeight?: number;
+  preprocessing?: Record<string, unknown>;
+  summary: {
+    lineCount: number;
+    circleCount: number;
+    symbolCandidateCount: number;
+    textRegionCount: number;
+    systemCount: number;
+    totalSystemLengthPx: number;
+  };
+  lines: DrawingLineSegment[];
+  circles: DrawingCircleDetection[];
+  symbolCandidates: DrawingSymbolCandidate[];
+  textRegions: DrawingTextRegion[];
+  systems: DrawingTracedSystem[];
+  warnings: string[];
+  duration_ms: number;
+  error?: string;
+}
+
+export interface DrawingDetectionToSave {
+  id?: string;
+  kind?: string;
+  label?: string;
+  annotationType?: string;
+  groupName?: string;
+  color?: string;
+  lineThickness?: number;
+  points?: Array<{ x: number; y: number }>;
+  x1?: number;
+  y1?: number;
+  x2?: number;
+  y2?: number;
+  cx?: number;
+  cy?: number;
+  x?: number;
+  y?: number;
+  count?: number;
+  confidence?: number;
+  source?: string;
+  measurement?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+export async function analyzeDrawingGeometry(input: {
+  projectId: string;
+  documentId: string;
+  pageNumber?: number;
+  preset?: DrawingAnalysisPreset;
+  traceSystems?: boolean;
+  includeSymbols?: boolean;
+  includeTextRegions?: boolean;
+  includeCircles?: boolean;
+  maxLines?: number;
+  maxRegions?: number;
+  minLineLength?: number;
+  snapTolerance?: number;
+}) {
+  return apiRequest<DrawingGeometryAnalysisResult>("/api/vision/analyze-geometry", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function traceDrawingSystems(input: {
+  projectId: string;
+  documentId: string;
+  pageNumber?: number;
+  preset?: DrawingAnalysisPreset;
+  maxLines?: number;
+  minLineLength?: number;
+  snapTolerance?: number;
+}) {
+  return apiRequest<DrawingGeometryAnalysisResult>("/api/vision/trace-systems", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function saveDrawingDetectionsAsAnnotations(input: {
+  projectId: string;
+  documentId: string;
+  pageNumber: number;
+  imageWidth: number;
+  imageHeight: number;
+  groupName?: string;
+  color?: string;
+  detections: DrawingDetectionToSave[];
+}) {
+  return apiRequest<{
+    success: boolean;
+    savedCount: number;
+    annotations: unknown[];
+    errors: string[];
+  }>("/api/vision/save-detections-as-annotations", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 // ---------------------------------------------------------------------------
 // CLI Agent Runtime
 // ---------------------------------------------------------------------------

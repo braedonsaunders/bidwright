@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useMemo } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Check,
@@ -55,6 +55,8 @@ import {
   Camera,
   Undo2,
   Redo2,
+  GitBranch,
+  Save,
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
@@ -68,6 +70,11 @@ import type {
   ModelElement,
   ModelQuantity,
   ModelTakeoffLinkRecord,
+  DrawingAnalysisPreset,
+  DrawingGeometryAnalysisResult,
+  DrawingLineSegment,
+  DrawingSymbolCandidate,
+  DrawingTracedSystem,
 } from "@/lib/api";
 import {
   listTakeoffAnnotations,
@@ -98,6 +105,9 @@ import {
   updateWorksheetItem,
   updateWorkspaceState,
   apiRequest,
+  analyzeDrawingGeometry,
+  saveDrawingDetectionsAsAnnotations,
+  traceDrawingSystems,
   detectTitleBlockScale,
   extractLegendFromPage,
   getFileTree,
@@ -176,6 +186,25 @@ const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
  *  so the count on the intake card matches the number of photos a user could
  *  actually feed into a BOM run. */
 const PHOTO_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "heic", "heif", "tif", "tiff"]);
+
+const DRAWING_ANALYSIS_PRESETS: Array<{ value: DrawingAnalysisPreset; label: string }> = [
+  { value: "generic", label: "General" },
+  { value: "mechanical_piping", label: "Piping" },
+  { value: "plumbing", label: "Plumbing" },
+  { value: "fire_protection", label: "Fire protection" },
+  { value: "ductwork", label: "Ductwork" },
+  { value: "electrical", label: "Electrical" },
+  { value: "civil_linear", label: "Civil linear" },
+  { value: "structural", label: "Structural" },
+];
+
+type DrawingAnalysisOverlayState = {
+  lines: boolean;
+  systems: boolean;
+  symbols: boolean;
+  circles: boolean;
+  text: boolean;
+};
 
 type TakeoffHistoryCommand =
   | { kind: "create"; annotation: TakeoffAnnotation }
@@ -1157,6 +1186,21 @@ export function TakeoffTab({
   const [legendEntries, setLegendEntries] = useState<LegendEntryRecord[] | null>(null);
   const [legendWarnings, setLegendWarnings] = useState<string[]>([]);
 
+  /* Drawing intelligence state */
+  const [drawingAnalysisOpen, setDrawingAnalysisOpen] = useState(false);
+  const [drawingAnalysisPreset, setDrawingAnalysisPreset] = useState<DrawingAnalysisPreset>("generic");
+  const [drawingAnalysisResult, setDrawingAnalysisResult] = useState<DrawingGeometryAnalysisResult | null>(null);
+  const [drawingAnalysisRunning, setDrawingAnalysisRunning] = useState(false);
+  const [drawingAnalysisSavingId, setDrawingAnalysisSavingId] = useState<string | null>(null);
+  const [drawingAnalysisError, setDrawingAnalysisError] = useState<string | null>(null);
+  const [drawingAnalysisOverlay, setDrawingAnalysisOverlay] = useState<DrawingAnalysisOverlayState>({
+    lines: true,
+    systems: true,
+    symbols: true,
+    circles: false,
+    text: false,
+  });
+
   /* Verify-scale flow: when user clicks "Verify" they re-enter the calibrate
      two-point flow but with verifyMode set, so the completion handler shows
      a measurement-vs-expected panel instead of a calibration setter. */
@@ -1352,6 +1396,7 @@ export function TakeoffTab({
   const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
   const spreadsheetDocuments = takeoffDocuments.filter((d) => d.kind === "spreadsheet");
   const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
+  const isPdfDocument = selectedDocumentKind === "pdf";
   const isBimDocument = selectedDocumentKind === "bim";
   const isSpreadsheetDocument = selectedDocumentKind === "spreadsheet";
   // `isCadDocument` retains its historical "any 3D file" semantic so all the
@@ -3020,11 +3065,177 @@ export function TakeoffTab({
     }
   }
 
+  function selectedVisionDocumentId() {
+    if (!selectedDoc) return "";
+    return selectedDoc.source === "knowledge" && selectedDoc.bookId ? selectedDoc.bookId : selectedDoc.id;
+  }
+
+  async function handleRunDrawingAnalysis(mode: "geometry" | "systems" = "geometry") {
+    if (!selectedDoc || !isPdfDocument) return;
+    const docId = selectedVisionDocumentId();
+    if (!docId) return;
+
+    setDrawingAnalysisOpen(true);
+    setDrawingAnalysisRunning(true);
+    setDrawingAnalysisError(null);
+
+    try {
+      const result = mode === "systems"
+        ? await traceDrawingSystems({
+            projectId,
+            documentId: docId,
+            pageNumber: page,
+            preset: drawingAnalysisPreset,
+            maxLines: 1600,
+          })
+        : await analyzeDrawingGeometry({
+            projectId,
+            documentId: docId,
+            pageNumber: page,
+            preset: drawingAnalysisPreset,
+            traceSystems: true,
+            includeSymbols: true,
+            includeTextRegions: true,
+            includeCircles: true,
+            maxLines: 1600,
+            maxRegions: 180,
+          });
+
+      setDrawingAnalysisResult(result);
+      if (result.warnings.length > 0) {
+        setDrawingAnalysisError(result.warnings[0]);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Drawing analysis failed";
+      setDrawingAnalysisError(message);
+      setToastMessage(message);
+      setToastType("error");
+    } finally {
+      setDrawingAnalysisRunning(false);
+    }
+  }
+
+  function drawingSystemSegments(system: DrawingTracedSystem, result = drawingAnalysisResult): DrawingLineSegment[] {
+    if (!result) return [];
+    const ids = new Set(system.segmentIds);
+    return result.lines.filter((line) => ids.has(line.id));
+  }
+
+  async function handleSaveDrawingSystem(system: DrawingTracedSystem) {
+    if (!drawingAnalysisResult || !selectedDoc) return;
+    const docId = selectedVisionDocumentId();
+    const segments = drawingSystemSegments(system).slice(0, 750);
+    if (segments.length === 0) return;
+
+    setDrawingAnalysisSavingId(system.id);
+    try {
+      const groupName = `${system.label} (${drawingAnalysisPreset})`;
+      const result = await saveDrawingDetectionsAsAnnotations({
+        projectId,
+        documentId: docId,
+        pageNumber: page,
+        imageWidth: drawingAnalysisResult.imageWidth,
+        imageHeight: drawingAnalysisResult.imageHeight,
+        groupName,
+        color: "#0ea5e9",
+        detections: segments.map((segment) => ({
+          id: segment.id,
+          kind: "line_segment",
+          label: system.label,
+          annotationType: "linear",
+          groupName,
+          color: "#0ea5e9",
+          lineThickness: 3,
+          points: [
+            { x: segment.x1, y: segment.y1 },
+            { x: segment.x2, y: segment.y2 },
+          ],
+          confidence: Math.min(system.confidence, segment.confidence),
+          source: "drawing-intelligence",
+          measurement: { value: segment.lengthPx, unit: "px" },
+          metadata: {
+            sourceTool: "drawing-intelligence",
+            preset: drawingAnalysisPreset,
+            systemId: system.id,
+            systemLengthPx: system.lengthPx,
+            systemCounts: system.counts,
+            savedSegmentCount: segments.length,
+          },
+        })),
+      });
+      await loadAnnotationsRef.current();
+      notifyAnnotationsMutated();
+      setToastMessage(`Saved ${result.savedCount} traced line segments to takeoff.`);
+      setToastType("success");
+      if (segments.length < drawingSystemSegments(system).length) {
+        setDrawingAnalysisError("Saved the first 750 segments from this system to keep the takeoff responsive.");
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save traced system";
+      setToastMessage(message);
+      setToastType("error");
+    } finally {
+      setDrawingAnalysisSavingId(null);
+    }
+  }
+
+  async function handleSaveDrawingSymbol(candidate: DrawingSymbolCandidate) {
+    if (!drawingAnalysisResult || !selectedDoc) return;
+    const docId = selectedVisionDocumentId();
+
+    setDrawingAnalysisSavingId(candidate.id);
+    try {
+      const result = await saveDrawingDetectionsAsAnnotations({
+        projectId,
+        documentId: docId,
+        pageNumber: page,
+        imageWidth: drawingAnalysisResult.imageWidth,
+        imageHeight: drawingAnalysisResult.imageHeight,
+        groupName: "Drawing Intelligence Symbols",
+        color: "#f59e0b",
+        detections: [{
+          id: candidate.id,
+          kind: "symbol_candidate",
+          label: "Symbol candidate",
+          annotationType: "count",
+          groupName: "Drawing Intelligence Symbols",
+          color: "#f59e0b",
+          points: [{ x: candidate.cx, y: candidate.cy }],
+          count: 1,
+          confidence: candidate.confidence,
+          source: "drawing-intelligence",
+          measurement: { value: 1, unit: "count" },
+          metadata: {
+            sourceTool: "drawing-intelligence",
+            preset: drawingAnalysisPreset,
+            bounds: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
+          },
+        }],
+      });
+      await loadAnnotationsRef.current();
+      notifyAnnotationsMutated();
+      setToastMessage(`Saved ${result.savedCount} symbol mark to takeoff.`);
+      setToastType("success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save symbol candidate";
+      setToastMessage(message);
+      setToastType("error");
+    } finally {
+      setDrawingAnalysisSavingId(null);
+    }
+  }
+
   // Reset legend when the user switches doc or page — entries are page-specific.
   useEffect(() => {
     setLegendOpen(false);
     setLegendEntries(null);
     setLegendWarnings([]);
+  }, [selectedDocId, page]);
+
+  useEffect(() => {
+    setDrawingAnalysisResult(null);
+    setDrawingAnalysisError(null);
+    setDrawingAnalysisSavingId(null);
   }, [selectedDocId, page]);
 
   function handleCalibrationConfirm() {
@@ -4946,6 +5157,33 @@ export function TakeoffTab({
                 <span className="text-[10px] text-fg/45 ml-0.5">{legendEntries.length}</span>
               )}
             </button>
+            {isPdfDocument && (
+              <button
+                type="button"
+                onClick={() => {
+                  const nextOpen = !drawingAnalysisOpen;
+                  setDrawingAnalysisOpen(nextOpen);
+                  if (nextOpen && !drawingAnalysisResult && !drawingAnalysisRunning) {
+                    void handleRunDrawingAnalysis("geometry");
+                  }
+                }}
+                disabled={drawingAnalysisRunning || !selectedDoc}
+                className={cn(
+                  "inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md border px-1.5 transition-colors disabled:opacity-50",
+                  drawingAnalysisOpen
+                    ? "border-sky-500/40 bg-sky-500/10 text-sky-500"
+                    : "border-line bg-panel2/40 text-fg/70 hover:bg-panel2"
+                )}
+                title="Analyze drawing geometry, trace connected systems, and save reviewed detections"
+                aria-label="Drawing intelligence"
+              >
+                <GitBranch className="h-3 w-3" />
+                {drawingAnalysisRunning && <Loader2 className="ml-1 h-3 w-3 animate-spin" />}
+                {drawingAnalysisResult && !drawingAnalysisRunning && (
+                  <span className="text-[10px] text-fg/45 ml-0.5">{drawingAnalysisResult.summary.systemCount}</span>
+                )}
+              </button>
+            )}
           </>
         )}
 
@@ -5649,18 +5887,32 @@ export function TakeoffTab({
                     snapEnabled={snapEnabled}
                     zoom={zoom}
                   />
+                  <DrawingIntelligenceOverlay
+                    analysis={drawingAnalysisResult}
+                    width={canvasSize.width}
+                    height={canvasSize.height}
+                    visible={drawingAnalysisOverlay}
+                  />
 
                   {/* Processing overlay */}
-                  {(autoCountRunning || askAiRunning) && (
+                  {(autoCountRunning || askAiRunning || drawingAnalysisRunning) && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg backdrop-blur-sm z-10">
                       <div className="flex items-center gap-3 rounded-xl bg-panel px-5 py-3 shadow-xl border border-line">
                         <Loader2 className="h-5 w-5 animate-spin text-accent" />
                         <div>
                           <p className="text-sm font-medium text-fg">
-                            {autoCountRunning ? "Running symbol detection..." : "Cropping region for AI analysis..."}
+                            {drawingAnalysisRunning
+                              ? "Analyzing drawing geometry..."
+                              : autoCountRunning
+                                ? "Running symbol detection..."
+                                : "Cropping region for AI analysis..."}
                           </p>
                           <p className="text-xs text-fg/40">
-                            {autoCountRunning ? "OpenCV template matching + feature detection" : "Preparing image crop"}
+                            {drawingAnalysisRunning
+                              ? "Tracing linework, symbols, text zones, and connected systems"
+                              : autoCountRunning
+                                ? "OpenCV template matching + feature detection"
+                                : "Preparing image crop"}
                           </p>
                         </div>
                       </div>
@@ -5669,6 +5921,24 @@ export function TakeoffTab({
             </div>
           )}
         </div>
+
+        {drawingAnalysisOpen && isPdfDocument && (
+          <DrawingIntelligencePanel
+            preset={drawingAnalysisPreset}
+            onPresetChange={setDrawingAnalysisPreset}
+            analysis={drawingAnalysisResult}
+            running={drawingAnalysisRunning}
+            savingId={drawingAnalysisSavingId}
+            error={drawingAnalysisError}
+            overlay={drawingAnalysisOverlay}
+            onOverlayChange={setDrawingAnalysisOverlay}
+            onAnalyze={() => void handleRunDrawingAnalysis("geometry")}
+            onTrace={() => void handleRunDrawingAnalysis("systems")}
+            onClose={() => setDrawingAnalysisOpen(false)}
+            onSaveSystem={(system) => void handleSaveDrawingSystem(system)}
+            onSaveSymbol={(candidate) => void handleSaveDrawingSymbol(candidate)}
+          />
+        )}
 
           </>
         )}
@@ -6521,5 +6791,325 @@ export function TakeoffTab({
         </div>
       )}
     </div>
+  );
+}
+
+function DrawingIntelligenceOverlay({
+  analysis,
+  width,
+  height,
+  visible,
+}: {
+  analysis: DrawingGeometryAnalysisResult | null;
+  width: number;
+  height: number;
+  visible: DrawingAnalysisOverlayState;
+}) {
+  if (!analysis || width <= 0 || height <= 0) return null;
+
+  const sx = width / Math.max(analysis.imageWidth, 1);
+  const sy = height / Math.max(analysis.imageHeight, 1);
+  const lineById = new Map(analysis.lines.map((line) => [line.id, line]));
+  const systemColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#a855f7", "#ef4444", "#14b8a6"];
+
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 z-[3]"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      aria-hidden="true"
+    >
+      {visible.lines && analysis.lines.slice(0, 700).map((line) => (
+        <line
+          key={`line-${line.id}`}
+          x1={line.x1 * sx}
+          y1={line.y1 * sy}
+          x2={line.x2 * sx}
+          y2={line.y2 * sy}
+          stroke="#38bdf8"
+          strokeWidth={1.2}
+          opacity={0.32}
+          strokeLinecap="round"
+        />
+      ))}
+
+      {visible.systems && analysis.systems.slice(0, 10).map((system, systemIndex) => {
+        const color = systemColors[systemIndex % systemColors.length];
+        return system.segmentIds.slice(0, 450).map((segmentId) => {
+          const line = lineById.get(segmentId);
+          if (!line) return null;
+          return (
+            <line
+              key={`system-${system.id}-${segmentId}`}
+              x1={line.x1 * sx}
+              y1={line.y1 * sy}
+              x2={line.x2 * sx}
+              y2={line.y2 * sy}
+              stroke={color}
+              strokeWidth={2.6}
+              opacity={0.72}
+              strokeLinecap="round"
+            />
+          );
+        });
+      })}
+
+      {visible.symbols && analysis.symbolCandidates.slice(0, 120).map((candidate) => (
+        <rect
+          key={`symbol-${candidate.id}`}
+          x={candidate.x * sx}
+          y={candidate.y * sy}
+          width={candidate.w * sx}
+          height={candidate.h * sy}
+          fill="none"
+          stroke="#f59e0b"
+          strokeWidth={1.5}
+          opacity={0.8}
+          rx={3}
+        />
+      ))}
+
+      {visible.circles && analysis.circles.slice(0, 120).map((circle) => (
+        <circle
+          key={`circle-${circle.id}`}
+          cx={circle.cx * sx}
+          cy={circle.cy * sy}
+          r={Math.max(circle.radius * ((sx + sy) / 2), 2)}
+          fill="none"
+          stroke="#ec4899"
+          strokeWidth={1.5}
+          opacity={0.75}
+        />
+      ))}
+
+      {visible.text && analysis.textRegions.slice(0, 80).map((region) => (
+        <rect
+          key={`text-${region.id}`}
+          x={region.x * sx}
+          y={region.y * sy}
+          width={region.w * sx}
+          height={region.h * sy}
+          fill="#111827"
+          fillOpacity={0.05}
+          stroke="#64748b"
+          strokeDasharray="4 3"
+          strokeWidth={1}
+          opacity={0.65}
+        />
+      ))}
+    </svg>
+  );
+}
+
+function DrawingIntelligencePanel({
+  preset,
+  onPresetChange,
+  analysis,
+  running,
+  savingId,
+  error,
+  overlay,
+  onOverlayChange,
+  onAnalyze,
+  onTrace,
+  onClose,
+  onSaveSystem,
+  onSaveSymbol,
+}: {
+  preset: DrawingAnalysisPreset;
+  onPresetChange: (preset: DrawingAnalysisPreset) => void;
+  analysis: DrawingGeometryAnalysisResult | null;
+  running: boolean;
+  savingId: string | null;
+  error: string | null;
+  overlay: DrawingAnalysisOverlayState;
+  onOverlayChange: Dispatch<SetStateAction<DrawingAnalysisOverlayState>>;
+  onAnalyze: () => void;
+  onTrace: () => void;
+  onClose: () => void;
+  onSaveSystem: (system: DrawingTracedSystem) => void;
+  onSaveSymbol: (candidate: DrawingSymbolCandidate) => void;
+}) {
+  const overlayOptions: Array<{ key: keyof DrawingAnalysisOverlayState; label: string }> = [
+    { key: "systems", label: "Systems" },
+    { key: "lines", label: "Lines" },
+    { key: "symbols", label: "Symbols" },
+    { key: "circles", label: "Circles" },
+    { key: "text", label: "Text" },
+  ];
+
+  const stats = analysis
+    ? [
+        { label: "Lines", value: analysis.summary.lineCount },
+        { label: "Systems", value: analysis.summary.systemCount },
+        { label: "Symbols", value: analysis.summary.symbolCandidateCount },
+        { label: "Circles", value: analysis.summary.circleCount },
+      ]
+    : [];
+
+  return (
+    <aside className="flex w-[340px] shrink-0 flex-col border-l border-line bg-panel">
+      <div className="flex items-center gap-2 border-b border-line px-3 py-2.5">
+        <GitBranch className="h-4 w-4 shrink-0 text-sky-500" />
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-semibold text-fg">Drawing intelligence</div>
+          {analysis && (
+            <div className="text-[11px] text-fg/40">
+              Page {analysis.pageNumber} / {Math.round(analysis.duration_ms)} ms
+            </div>
+          )}
+        </div>
+        {running && <Loader2 className="h-3.5 w-3.5 animate-spin text-sky-500" />}
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+          aria-label="Close drawing intelligence"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <div className="flex-1 space-y-3 overflow-y-auto p-3">
+        <div className="grid grid-cols-[1fr_auto_auto] gap-2">
+          <Select
+            value={preset}
+            onValueChange={(value) => onPresetChange(value as DrawingAnalysisPreset)}
+            options={DRAWING_ANALYSIS_PRESETS}
+            size="xs"
+            ariaLabel="Drawing analysis preset"
+            triggerClassName="h-7"
+          />
+          <Button size="xs" variant="secondary" onClick={onAnalyze} disabled={running}>
+            {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <ScanSearch className="h-3 w-3" />}
+            Analyze
+          </Button>
+          <Button size="xs" variant="secondary" onClick={onTrace} disabled={running}>
+            <GitBranch className="h-3 w-3" />
+            Trace
+          </Button>
+        </div>
+
+        <div className="grid grid-cols-5 gap-1">
+          {overlayOptions.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              onClick={() => onOverlayChange((prev) => ({ ...prev, [item.key]: !prev[item.key] }))}
+              className={cn(
+                "h-7 rounded-md border text-[10px] transition-colors",
+                overlay[item.key]
+                  ? "border-sky-500/35 bg-sky-500/10 text-sky-600"
+                  : "border-line bg-panel2/30 text-fg/45 hover:text-fg/70"
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+
+        {error && (
+          <div className="rounded-md border border-amber-500/25 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-700">
+            {error}
+          </div>
+        )}
+
+        {analysis ? (
+          <>
+            <div className="grid grid-cols-4 gap-1.5">
+              {stats.map((stat) => (
+                <div key={stat.label} className="rounded-md border border-line bg-panel2/35 px-2 py-1.5">
+                  <div className="text-[11px] font-semibold text-fg">{stat.value.toLocaleString()}</div>
+                  <div className="text-[10px] text-fg/40">{stat.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <section className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-fg/60">Traced systems</span>
+                <span className="text-[10px] text-fg/35">{Math.round(analysis.summary.totalSystemLengthPx).toLocaleString()} px</span>
+              </div>
+              {analysis.systems.length === 0 ? (
+                <div className="rounded-md border border-line bg-panel2/25 px-3 py-2 text-[11px] text-fg/45">
+                  No connected systems found on this page.
+                </div>
+              ) : (
+                analysis.systems.slice(0, 8).map((system) => (
+                  <div key={system.id} className="rounded-md border border-line bg-panel2/25 px-2.5 py-2">
+                    <div className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium text-fg">{system.label}</div>
+                        <div className="mt-0.5 text-[10px] text-fg/40">
+                          {system.segmentCount} segments / {Math.round(system.lengthPx).toLocaleString()} px / {Math.round(system.confidence * 100)}%
+                        </div>
+                        <div className="mt-1 flex flex-wrap gap-1 text-[10px] text-fg/45">
+                          <span>{system.counts.openEnds} ends</span>
+                          <span>{system.counts.tees} tees</span>
+                          <span>{system.counts.elbows90 + system.counts.elbows45} elbows</span>
+                          <span>{system.counts.crosses} crosses</span>
+                        </div>
+                      </div>
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className="h-7 w-7 px-0"
+                        onClick={() => onSaveSystem(system)}
+                        disabled={savingId === system.id}
+                        aria-label={`Save ${system.label}`}
+                        title="Save traced system as takeoff marks"
+                      >
+                        {savingId === system.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </section>
+
+            <section className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-semibold text-fg/60">Symbol candidates</span>
+                <span className="text-[10px] text-fg/35">{analysis.symbolCandidates.length.toLocaleString()}</span>
+              </div>
+              {analysis.symbolCandidates.length === 0 ? (
+                <div className="rounded-md border border-line bg-panel2/25 px-3 py-2 text-[11px] text-fg/45">
+                  No symbol-like marks found on this page.
+                </div>
+              ) : (
+                analysis.symbolCandidates.slice(0, 10).map((candidate, index) => (
+                  <div key={candidate.id} className="flex items-center gap-2 rounded-md border border-line bg-panel2/25 px-2.5 py-1.5">
+                    <CircleDashed className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                    <div className="min-w-0 flex-1">
+                      <div className="truncate text-xs text-fg">Candidate {index + 1}</div>
+                      <div className="text-[10px] text-fg/40">
+                        {Math.round(candidate.w)} x {Math.round(candidate.h)} px / {Math.round(candidate.confidence * 100)}%
+                      </div>
+                    </div>
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className="h-7 w-7 px-0"
+                      onClick={() => onSaveSymbol(candidate)}
+                      disabled={savingId === candidate.id}
+                      aria-label={`Save symbol candidate ${index + 1}`}
+                      title="Save symbol candidate as a count mark"
+                    >
+                      {savingId === candidate.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                    </Button>
+                  </div>
+                ))
+              )}
+            </section>
+          </>
+        ) : (
+          <div className="flex min-h-40 flex-col items-center justify-center rounded-md border border-dashed border-line bg-panel2/20 px-5 py-8 text-center">
+            <ScanSearch className="mb-2 h-7 w-7 text-fg/25" />
+            <div className="text-xs font-medium text-fg/65">No analysis for this page</div>
+          </div>
+        )}
+      </div>
+    </aside>
   );
 }
