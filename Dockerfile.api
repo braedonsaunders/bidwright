@@ -55,6 +55,11 @@ RUN pnpm --filter @bidwright/db db:generate
 RUN pnpm -r --filter "./packages/*" build
 RUN pnpm --filter @bidwright/api build
 
+# Runtime images copy dependencies separately from app source so normal
+# source edits do not force prod to pull a fresh node_modules-sized layer.
+FROM builder AS app
+RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules
+
 # --- LibreDWG builder stage ---
 FROM debian:bookworm-slim AS libredwg-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -113,15 +118,20 @@ RUN wget -q -O /tmp/mpxj.zip "https://downloads.sourceforge.net/project/mpxj/mpx
 ENV VIRTUAL_ENV=/opt/vision-venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 ENV PYTHON_PATH="${VIRTUAL_ENV}/bin/python"
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 COPY packages/vision/python/requirements.txt /tmp/vision-requirements.txt
 RUN python3 -m venv "${VIRTUAL_ENV}" \
   && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel \
   && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir -r /tmp/vision-requirements.txt
 # Install the agent CLIs the production app shells out to.
 RUN npm install -g @anthropic-ai/claude-code @openai/codex
+RUN npm install -g playwright@1.58.2 \
+  && playwright install --with-deps chromium \
+  && npm uninstall -g playwright \
+  && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=builder /app .
+COPY --from=deps /app ./
+COPY --from=app /app ./
 RUN javac -cp "/opt/mpxj/*:/opt/mpxj/lib/*" apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java
-RUN pnpm --filter @bidwright/api exec playwright install --with-deps chromium
 EXPOSE 3001
 CMD ["pnpm", "--filter", "@bidwright/api", "exec", "tsx", "src/index.ts"]
