@@ -338,6 +338,21 @@ import type {
 import { SitePhotoIntake, type PhotoSource } from "./site-photo-intake";
 import { CreateWorksheetModal } from "./modals";
 
+const MIN_PDF_ZOOM = 0.25;
+const MAX_PDF_ZOOM = 5;
+
+function roundPdfZoom(value: number) {
+  if (!Number.isFinite(value)) return 1;
+  const clamped = Math.max(MIN_PDF_ZOOM, Math.min(MAX_PDF_ZOOM, value));
+  return Math.round(clamped * 100) / 100;
+}
+
+type WebKitGestureEvent = Event & {
+  scale?: number;
+  clientX?: number;
+  clientY?: number;
+};
+
 interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
   onOpenAgentChat?: (prefill?: string) => void;
@@ -1247,6 +1262,7 @@ export function TakeoffTab({
   const selectedDocIdRef = useRef(selectedDocId);
   const pageRef = useRef(page);
   const zoomRef = useRef(zoom);
+  const zoomScrollSerialRef = useRef(0);
   const loadAnnotationsRef = useRef<() => Promise<void>>(async () => {});
   const loadTakeoffLinksRef = useRef<() => Promise<void>>(async () => {});
   const onWorkspaceMutatedRef = useRef(onWorkspaceMutated);
@@ -1511,6 +1527,47 @@ export function TakeoffTab({
   useEffect(() => {
     zoomRef.current = zoom;
   }, [zoom]);
+
+  const applyPdfZoom = useCallback((
+    nextZoomValue: number | ((currentZoom: number) => number),
+    focusPoint?: { clientX: number; clientY: number },
+  ) => {
+    const currentZoom = Number.isFinite(zoomRef.current) && zoomRef.current > 0 ? zoomRef.current : 1;
+    const nextZoom = roundPdfZoom(
+      typeof nextZoomValue === "function" ? nextZoomValue(currentZoom) : nextZoomValue,
+    );
+    if (Math.abs(nextZoom - currentZoom) < 0.005) return;
+
+    const container = viewerContainerRef.current;
+    let restoreScroll: (() => void) | null = null;
+
+    if (container && focusPoint) {
+      const rect = container.getBoundingClientRect();
+      const offsetX = focusPoint.clientX - rect.left;
+      const offsetY = focusPoint.clientY - rect.top;
+      const contentX = container.scrollLeft + offsetX;
+      const contentY = container.scrollTop + offsetY;
+      const ratio = nextZoom / currentZoom;
+      const serial = ++zoomScrollSerialRef.current;
+
+      restoreScroll = () => {
+        if (zoomScrollSerialRef.current !== serial) return;
+        container.scrollLeft = contentX * ratio - offsetX;
+        container.scrollTop = contentY * ratio - offsetY;
+      };
+    } else {
+      zoomScrollSerialRef.current += 1;
+    }
+
+    zoomRef.current = nextZoom;
+    setZoom(nextZoom);
+
+    if (restoreScroll) {
+      requestAnimationFrame(restoreScroll);
+      window.setTimeout(restoreScroll, 50);
+      window.setTimeout(restoreScroll, 150);
+    }
+  }, []);
 
   useEffect(() => {
     onWorkspaceMutatedRef.current = onWorkspaceMutated;
@@ -1830,7 +1887,9 @@ export function TakeoffTab({
           setPage(Math.max(1, Math.floor(msg.page)));
         }
         if (Number.isFinite(msg.zoom) && msg.zoom > 0 && msg.zoom !== zoomRef.current) {
-          setZoom(Math.max(0.25, Math.min(msg.zoom, 5)));
+          const nextZoom = roundPdfZoom(msg.zoom);
+          zoomRef.current = nextZoom;
+          setZoom(nextZoom);
         }
         return;
       }
@@ -1896,11 +1955,10 @@ export function TakeoffTab({
         const ch = container.clientHeight - 32;
         if (cw <= 0 || ch <= 0) return;
         /* w/h are base dimensions (canvas renders at zoom=1 after doc change resets zoom) */
-        const fitZ = Math.round(Math.min(cw / w, ch / h) * 100) / 100;
-        setZoom(Math.max(0.25, Math.min(fitZ, 5)));
+        applyPdfZoom(Math.min(cw / w, ch / h));
       });
     }
-  }, []);
+  }, [applyPdfZoom]);
 
   /* Toast auto-dismiss */
   useEffect(() => {
@@ -2011,34 +2069,81 @@ export function TakeoffTab({
     setCalibration(cached);
   }, [selectedDocId, page]);
 
-  /* Mouse-wheel zoom while the cursor is inside the 2D PDF viewer.
-     Native listener (passive: false) so we can preventDefault and stop the
-     page from scrolling. CAD documents have their own zoom controls so we
-     skip them. */
+  /* Wheel and pinch zoom while the cursor is inside the 2D PDF viewer.
+     Chromium reports macOS trackpad pinches as ctrl+wheel; Safari reports
+     gesture* events. Native passive:false listeners let us keep browser/page
+     zoom out of the takeoff canvas and zoom around the pointer instead. */
   useEffect(() => {
     const container = viewerContainerRef.current;
     if (!container) return;
     if (isCadDocument || isDwgDocument) return;
 
-    function onWheel(e: WheelEvent) {
-      // Ignore horizontal-wheel devices and keep ctrl-zoom intact (browser default).
-      if (e.ctrlKey) return;
-      // Ignore if no PDF is rendered (avoid intercepting on the empty state).
+    const hasRenderedPdfCanvas = () => {
       const canvas = pdfCanvasRef.current;
-      if (!canvas || canvas.width === 0) return;
+      return Boolean(canvas && canvas.width > 0 && canvas.height > 0);
+    };
+
+    const normalizeWheelDelta = (e: WheelEvent) => {
+      if (e.deltaMode === 1) return e.deltaY * 16;
+      if (e.deltaMode === 2) return e.deltaY * Math.max(container.clientHeight, 1);
+      return e.deltaY;
+    };
+
+    function onWheel(e: WheelEvent) {
+      if (!hasRenderedPdfCanvas()) return;
+      if (!e.ctrlKey && Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+
       e.preventDefault();
-      // deltaY positive = scroll down = zoom out. Step ~10% per notch.
-      const direction = e.deltaY > 0 ? -1 : 1;
-      const factor = 1 + direction * 0.1;
-      setZoom((z) => {
-        const next = Math.max(0.25, Math.min(5, z * factor));
-        return Math.round(next * 100) / 100;
-      });
+      e.stopPropagation();
+
+      const delta = normalizeWheelDelta(e);
+      if (!Number.isFinite(delta) || delta === 0) return;
+      const sensitivity = e.ctrlKey ? 0.01 : 0.0015;
+      const factor = Math.exp(-delta * sensitivity);
+      applyPdfZoom((currentZoom) => currentZoom * factor, { clientX: e.clientX, clientY: e.clientY });
     }
 
-    container.addEventListener("wheel", onWheel, { passive: false });
-    return () => container.removeEventListener("wheel", onWheel);
-  }, [isCadDocument, isDwgDocument, selectedDocId]);
+    let gestureStartZoom = zoomRef.current;
+    const gestureFocusPoint = (e: WebKitGestureEvent) => {
+      const rect = container.getBoundingClientRect();
+      return {
+        clientX: typeof e.clientX === "number" ? e.clientX : rect.left + rect.width / 2,
+        clientY: typeof e.clientY === "number" ? e.clientY : rect.top + rect.height / 2,
+      };
+    };
+
+    function onGestureStart(event: Event) {
+      if (!hasRenderedPdfCanvas()) return;
+      event.preventDefault();
+      gestureStartZoom = zoomRef.current;
+    }
+
+    function onGestureChange(event: Event) {
+      if (!hasRenderedPdfCanvas()) return;
+      const e = event as WebKitGestureEvent;
+      if (!Number.isFinite(e.scale) || !e.scale || e.scale <= 0) return;
+      event.preventDefault();
+      applyPdfZoom(gestureStartZoom * e.scale, gestureFocusPoint(e));
+    }
+
+    function onGestureEnd(event: Event) {
+      if (!hasRenderedPdfCanvas()) return;
+      event.preventDefault();
+      gestureStartZoom = zoomRef.current;
+    }
+
+    const listenerOptions = { passive: false } as AddEventListenerOptions;
+    container.addEventListener("wheel", onWheel, listenerOptions);
+    container.addEventListener("gesturestart", onGestureStart, listenerOptions);
+    container.addEventListener("gesturechange", onGestureChange, listenerOptions);
+    container.addEventListener("gestureend", onGestureEnd, listenerOptions);
+    return () => {
+      container.removeEventListener("wheel", onWheel);
+      container.removeEventListener("gesturestart", onGestureStart);
+      container.removeEventListener("gesturechange", onGestureChange);
+      container.removeEventListener("gestureend", onGestureEnd);
+    };
+  }, [applyPdfZoom, isCadDocument, isDwgDocument, selectedDocId]);
 
   /* ─── Handlers ─── */
 
@@ -2051,18 +2156,18 @@ export function TakeoffTab({
   }
 
   function handleZoomIn() {
-    setZoom((z) => Math.min(4, z + 0.25));
+    applyPdfZoom((z) => z + 0.25);
   }
 
   function handleZoomOut() {
-    setZoom((z) => Math.max(0.25, z - 0.25));
+    applyPdfZoom((z) => z - 0.25);
   }
 
   function handleFitToWidth() {
     const container = viewerContainerRef.current;
     const canvas = pdfCanvasRef.current;
     if (!container || !canvas || canvas.width === 0) {
-      setZoom(1);
+      applyPdfZoom(1);
       return;
     }
     /* Container inner width minus the m-4 (16px) padding on each side of the inline-block wrapper */
@@ -2070,7 +2175,7 @@ export function TakeoffTab({
     /* PDF page width at zoom=1 */
     const baseWidth = canvas.width / zoom;
     const fitZoom = Math.round((containerWidth / baseWidth) * 100) / 100;
-    setZoom(Math.max(0.25, Math.min(fitZoom, 5)));
+    applyPdfZoom(fitZoom);
     /* Scroll to top-left after fitting */
     container.scrollTo({ top: 0, left: 0 });
   }
@@ -2079,7 +2184,7 @@ export function TakeoffTab({
     const container = viewerContainerRef.current;
     const canvas = pdfCanvasRef.current;
     if (!container || !canvas || canvas.width === 0) {
-      setZoom(1);
+      applyPdfZoom(1);
       return;
     }
     const containerWidth = container.clientWidth - 32;
@@ -2087,7 +2192,7 @@ export function TakeoffTab({
     const baseWidth = canvas.width / zoom;
     const baseHeight = canvas.height / zoom;
     const fitZoom = Math.round(Math.min(containerWidth / baseWidth, containerHeight / baseHeight) * 100) / 100;
-    setZoom(Math.max(0.25, Math.min(fitZoom, 5)));
+    applyPdfZoom(fitZoom);
     container.scrollTo({ top: 0, left: 0 });
   }
 
