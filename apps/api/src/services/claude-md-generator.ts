@@ -360,6 +360,7 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 - Project-wide search: \`queryProjectFile\` (ranked hits across THIS project's PDFs/spreadsheets/Azure tables/key-values in one call — drop-in replacement for looping \`readDocumentText\` to find which doc mentions X).
 - Read/state: \`getWorkspace\`, \`getEstimateStrategy\`, \`readMemory\`, \`readDocumentText\`, \`readSpreadsheet\`, \`getDocumentStructured\`.
 - User/progress: \`reportProgress\`, \`askUser\`.
+- Scratch math: \`calculateMath\` for arithmetic, percentages, markups, ratios, extensions, and simple unit conversions. Do not use it to calculate or overwrite committed estimate rows; Bidwright worksheet tools and \`recalculateTotals\` remain authoritative.
 - Strategy: \`saveEstimateScopeGraph\`, \`saveEstimateExecutionPlan\`, \`saveEstimateAssumptions\`, \`saveEstimatePackagePlan\`, \`saveEstimateAdjustments\`, \`saveEstimateReconcile\`, \`finalizeEstimateStrategy\`.
 - Pricing evidence: \`getItemConfig\`, \`recommendEstimateBasis\`, \`queryLibrary\`, \`recommendCostSource\`, \`listLaborUnitTree\`, \`listLaborUnits\`, \`getLaborUnit\`, \`previewAssembly\`, \`listRateSchedules\`, \`getRateSchedule\`, \`importRateSchedule\`, \`listRateScheduleItems\`.
 - Estimate edits: \`updateQuote\`, \`createWorksheet\`, \`createRateScheduleWorksheetItem\`, \`createWorksheetItem\`, \`updateWorksheetItem\`, \`createCondition\`, \`createPhase\`, \`applySummaryPreset\`, \`recalculateTotals\`.
@@ -606,6 +607,7 @@ ${benchmarkToolLine}
 - **getLaborUnit** â€” Inspect one labor productivity candidate in more detail after \`listLaborUnits\`.
 - **previewAssembly** â€” Preview assembly expansion and resource rollup before inserting assembly-backed scope.
 - **getWorkspace** â€” Get the full workspace: revision, worksheets (with items), phases (with IDs), modifiers, conditions, totals. Use this to retrieve phase IDs after creating phases.
+- **calculateMath** â€” Read-only scratch calculator for arithmetic, percentages, markups, ratios, extensions, and simple unit conversions. Use worksheet tools and recalculateTotals, not calculateMath, for committed Bidwright line-item/total calculations.
 - **createWorksheet** â€” Create a worksheet (cost section) in the quote
 - **createRateScheduleWorksheetItem** â€” Preferred for Labour, Equipment, Rental Equipment, and General Conditions rate-card rows. Provide \`worksheetId\`, concrete \`rateScheduleItemId\`, positive \`tierUnits\`, description/source/evidence; Bidwright derives category/name and calculates cost/sell.
 - **createWorksheetItem** â€” Add a non-rate-schedule or custom line item to a worksheet. Set phaseId to assign to a phase. When drawings exist, include \`evidenceBasis.quantity\` and \`evidenceBasis.pricing\`; drawing-derived quantity axes need Drawing Evidence Engine claim IDs.

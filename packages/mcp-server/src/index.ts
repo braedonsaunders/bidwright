@@ -26,6 +26,7 @@ import { registerModelTools } from "./tools/model-tools.js";
 import { registerFileIngestTools } from "./tools/file-ingest-tools.js";
 import { registerIntegrationTools } from "./tools/integration-tools.js";
 import { registerResourceTools } from "./tools/resource-tools.js";
+import { registerCalculatorTools } from "./tools/calculator-tools.js";
 
 const server = new McpServer({
   name: "bidwright",
@@ -43,6 +44,7 @@ registerFileIngestTools(server);
 registerReviewTools(server);
 registerEstimateTools(server);
 registerResourceTools(server);
+registerCalculatorTools(server);
 await registerIntegrationTools(server);
 
 // Start stdio transport (Claude Code / Codex communicate via stdin/stdout)
