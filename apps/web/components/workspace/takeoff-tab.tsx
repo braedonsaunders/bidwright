@@ -75,6 +75,7 @@ import type {
   DrawingLineSegment,
   DrawingSymbolCandidate,
   DrawingTracedSystem,
+  DwgEntityLinkRecord,
 } from "@/lib/api";
 import {
   listTakeoffAnnotations,
@@ -92,6 +93,8 @@ import {
   askAi,
   listTakeoffLinks,
   createTakeoffLink,
+  listDwgEntityLinks,
+  createDwgEntityLink,
   createModelTakeoffLink,
   deleteModelTakeoffLink,
   deleteWorksheetItem,
@@ -1537,6 +1540,7 @@ export function TakeoffTab({
   const zoomScrollSerialRef = useRef(0);
   const loadAnnotationsRef = useRef<() => Promise<void>>(async () => {});
   const loadTakeoffLinksRef = useRef<() => Promise<void>>(async () => {});
+  const loadDwgEntityLinksRef = useRef<() => Promise<void>>(async () => {});
   const onWorkspaceMutatedRef = useRef(onWorkspaceMutated);
   const calibrationRef = useRef(calibration);
   const initialDocumentAppliedRef = useRef(!initialDocumentId);
@@ -1567,6 +1571,7 @@ export function TakeoffTab({
     | { kind: "create-element-group"; elementIds: string[]; groupLabel: string; pick: InspectCategoryPick }
     | { kind: "create-single-annotation"; annotationId: string; pick: InspectCategoryPick }
     | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string; pick: InspectCategoryPick }
+    | { kind: "create-dwg-row"; rowId: string; rowType: "entity" | "autoCount" | "system"; pick: InspectCategoryPick }
     | { kind: "create-spreadsheet-row"; rowIndex: number; pick: InspectCategoryPick }
     | { kind: "create-spreadsheet-all"; pick: InspectCategoryPick };
   const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
@@ -1961,8 +1966,62 @@ export function TakeoffTab({
 
   // Bridge for dispatching DWG annotation actions (delete) from the side panel.
   // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
-  const dwgActionsRef = useRef<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>(null);
+  const dwgActionsRef = useRef<{
+    deleteAnnotation: (id: string) => Promise<void> | void;
+    selectEntity: (id: string | null) => void;
+    selectEntities: (ids: string[]) => void;
+  } | null>(null);
   const [dwgIntelligence, setDwgIntelligence] = useState<InspectDwgIntelligenceSnapshot | null>(null);
+  const [dwgEntityLinks, setDwgEntityLinks] = useState<DwgEntityLinkRecord[]>([]);
+  const [dwgEntitySavingId, setDwgEntitySavingId] = useState<string | null>(null);
+
+  const loadDwgEntityLinks = useCallback(async (documentId = dwgIntelligence?.documentId) => {
+    if (!projectId || !documentId) {
+      setDwgEntityLinks([]);
+      return;
+    }
+    try {
+      const links = await listDwgEntityLinks(projectId, { documentId });
+      setDwgEntityLinks(Array.isArray(links) ? links : []);
+    } catch (error) {
+      console.error("[takeoff] Failed to load DWG entity links:", error);
+      setDwgEntityLinks([]);
+    }
+  }, [dwgIntelligence?.documentId, projectId]);
+
+  useEffect(() => {
+    loadDwgEntityLinksRef.current = () => loadDwgEntityLinks();
+  }, [loadDwgEntityLinks]);
+
+  useEffect(() => {
+    void loadDwgEntityLinks();
+  }, [loadDwgEntityLinks]);
+
+  const enrichedDwgIntelligence = useMemo<InspectDwgIntelligenceSnapshot | null>(() => {
+    if (!dwgIntelligence) return null;
+    const linkCountByEntity = new Map<string, number>();
+    for (const link of dwgEntityLinks) {
+      linkCountByEntity.set(link.entityId, (linkCountByEntity.get(link.entityId) ?? 0) + 1);
+    }
+    const rollupLinkCount = (ids: string[]) =>
+      ids.reduce((total, id) => total + (linkCountByEntity.get(id) ?? 0), 0);
+    return {
+      ...dwgIntelligence,
+      savingEntityId: dwgEntitySavingId,
+      entities: dwgIntelligence.entities.map((row) => {
+        const linkCount = linkCountByEntity.get(row.id) ?? 0;
+        return { ...row, linkCount, isLinked: linkCount > 0 };
+      }),
+      autoCounts: dwgIntelligence.autoCounts.map((row) => {
+        const linkCount = rollupLinkCount(row.sourceEntityIds);
+        return { ...row, linkCount, isLinked: linkCount > 0 };
+      }),
+      systems: dwgIntelligence.systems.map((row) => {
+        const linkCount = rollupLinkCount(row.sourceEntityIds);
+        return { ...row, linkCount, isLinked: linkCount > 0 };
+      }),
+    };
+  }, [dwgEntityLinks, dwgEntitySavingId, dwgIntelligence]);
 
   // Expose action handlers to the parent via mutable refs. Runs on every render
   // so refs always point at the latest closure.
@@ -2110,6 +2169,56 @@ export function TakeoffTab({
           if (targets.length === 0) return;
           await handleCreateAnnotationGroupLineItem(targets, groupLabel, pick);
         },
+        selectDwgEntity: (id) => {
+          dwgActionsRef.current?.selectEntity(id);
+          if (!onSelectionChange) return;
+          if (!id) {
+            if (selection?.kind === "cad-entity") onSelectionChange(null);
+            return;
+          }
+          const intel = enrichedDwgIntelligence ?? dwgIntelligence;
+          const row = intel?.entities.find((candidate) => candidate.id === id);
+          if (!intel || !row) return;
+          onSelectionChange({
+            kind: "cad-entity",
+            documentId: intel.documentId,
+            entityId: row.id,
+            entityType: row.type,
+            layer: row.layer,
+            label: row.label,
+            summary: row.measurementLabel,
+          });
+        },
+        selectDwgEntities: (ids) => {
+          dwgActionsRef.current?.selectEntities(ids);
+          if (!onSelectionChange) return;
+          const firstId = ids.find(Boolean);
+          if (!firstId) {
+            if (selection?.kind === "cad-entity") onSelectionChange(null);
+            return;
+          }
+          const intel = enrichedDwgIntelligence ?? dwgIntelligence;
+          const row = intel?.entities.find((candidate) => candidate.id === firstId);
+          if (!intel || !row) return;
+          onSelectionChange({
+            kind: "cad-entity",
+            documentId: intel.documentId,
+            entityId: row.id,
+            entityType: row.type,
+            layer: row.layer,
+            label: row.label,
+            summary: row.measurementLabel,
+          });
+        },
+        createLineItemFromDwgEntity: async (id, pick) => {
+          await handleCreateDwgRowLineItem("entity", id, pick);
+        },
+        createLineItemFromDwgAutoCount: async (id, pick) => {
+          await handleCreateDwgRowLineItem("autoCount", id, pick);
+        },
+        createLineItemFromDwgSystem: async (id, pick) => {
+          await handleCreateDwgRowLineItem("system", id, pick);
+        },
         createLineItemFromSpreadsheetRow: async (rowIndex, pick) => {
           await handleCreateSpreadsheetRowLineItem(rowIndex, pick);
         },
@@ -2216,6 +2325,7 @@ export function TakeoffTab({
 
       if (msg.type === "takeoff-links-mutated") {
         void loadTakeoffLinksRef.current();
+        void loadDwgEntityLinksRef.current();
         return;
       }
 
@@ -4298,7 +4408,7 @@ export function TakeoffTab({
             selectedItemId: selectedSmartCountItemId,
           }
         : null,
-      dwgIntelligence: mode === "dwg" ? dwgIntelligence : null,
+      dwgIntelligence: mode === "dwg" ? enrichedDwgIntelligence : null,
       modelElements: inspectModelElements,
       modelElementsLoading,
       modelError,
@@ -4395,7 +4505,7 @@ export function TakeoffTab({
     smartCountIncluded,
     smartCountError,
     selectedSmartCountItemId,
-    dwgIntelligence,
+    enrichedDwgIntelligence,
     calibration,
     canvasSize.width,
     canvasSize.height,
@@ -4657,6 +4767,173 @@ export function TakeoffTab({
       worksheetItemId: createdItem.id,
     });
     return { createdItem };
+  }
+
+  type DwgInspectableRowType = "entity" | "autoCount" | "system";
+
+  function findDwgLineItemDraft(
+    rowType: DwgInspectableRowType,
+    rowId: string,
+    intel: InspectDwgIntelligenceSnapshot | null = enrichedDwgIntelligence ?? dwgIntelligence,
+  ) {
+    if (!intel) return null;
+    if (rowType === "entity") {
+      const row = intel.entities.find((candidate) => candidate.id === rowId);
+      if (!row) return null;
+      return {
+        rowType,
+        id: row.id,
+        label: row.label,
+        entityType: row.type,
+        layer: row.layer,
+        quantity: row.quantity,
+        uom: row.uom,
+        sourceEntityIds: row.sourceEntityIds,
+      };
+    }
+    if (rowType === "autoCount") {
+      const row = intel.autoCounts.find((candidate) => candidate.id === rowId);
+      if (!row) return null;
+      return {
+        rowType,
+        id: row.id,
+        label: row.label,
+        entityType: row.type,
+        layer: row.layer,
+        quantity: row.count,
+        uom: "EA",
+        sourceEntityIds: row.sourceEntityIds,
+      };
+    }
+    const row = intel.systems.find((candidate) => candidate.id === rowId);
+    if (!row) return null;
+    return {
+      rowType,
+      id: row.id,
+      label: row.label,
+      entityType: "LINEAR_SYSTEM",
+      layer: row.layer,
+      quantity: row.quantity,
+      uom: row.uom,
+      sourceEntityIds: row.sourceEntityIds,
+    };
+  }
+
+  async function createLineItemFromDwgRow(
+    rowType: DwgInspectableRowType,
+    rowId: string,
+    pickInput: string | InspectCategoryPick,
+    explicitWs?: { id: string; name: string },
+  ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
+    const intel = enrichedDwgIntelligence ?? dwgIntelligence;
+    const draft = findDwgLineItemDraft(rowType, rowId, intel);
+    if (!intel || !draft) {
+      setToastType("error");
+      setToastMessage("That DWG/DXF entity is no longer available.");
+      return null;
+    }
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({ kind: "create-dwg-row", rowId, rowType, pick });
+      return null;
+    }
+    const normalizedUom = draft.uom.toLowerCase();
+    if (normalizedUom === "du" || normalizedUom === "du2") {
+      setToastType("error");
+      setToastMessage("Set the DWG/DXF scale before adding measured vector entities to a worksheet.");
+      return null;
+    }
+    const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
+    if (!takeoffCategory) {
+      setToastType("error");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
+      return null;
+    }
+
+    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
+    const basePayload: CreateWorksheetItemInput = {
+      categoryId: takeoffCategory.id,
+      category: takeoffCategory.name,
+      entityType: takeoffCategory.entityType,
+      entityName: draft.label,
+      description: "",
+      quantity: draft.quantity,
+      uom: draft.uom,
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      sourceNotes: [
+        `From DWG/DXF ${rowType === "autoCount" ? "Auto Count" : rowType === "system" ? "system trace" : "native entity"}`,
+        selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
+        `layer: ${draft.layer}`,
+        draft.sourceEntityIds.length > 1 ? `${draft.sourceEntityIds.length} source entities` : "",
+      ].filter(Boolean).join(" · "),
+    };
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
+
+    setDwgEntitySavingId(rowId);
+    try {
+      const result = await createWorksheetItem(projectId, ws.id, payload);
+      const createdItem = result.workspace.worksheets
+        .flatMap((w) => w.items)
+        .find((i) => !previousItemIds.has(i.id));
+      if (!createdItem) return null;
+
+      const entityLookup = new Map((intel.entities ?? []).map((row) => [row.id, row]));
+      const perEntityFallback = draft.sourceEntityIds.length > 0
+        ? draft.quantity / draft.sourceEntityIds.length
+        : draft.quantity;
+      for (const entityId of draft.sourceEntityIds) {
+        const source = entityLookup.get(entityId);
+        const quantity =
+          rowType === "autoCount"
+            ? 1
+            : source && source.uom === draft.uom && Number.isFinite(source.quantity) && source.quantity > 0
+              ? source.quantity
+              : perEntityFallback;
+        await createDwgEntityLink(projectId, {
+          documentId: intel.documentId,
+          entityId,
+          entityType: source?.type ?? draft.entityType,
+          layer: source?.layer ?? draft.layer,
+          worksheetItemId: createdItem.id,
+          quantity,
+          multiplier: 1,
+          selection: {
+            mode: rowType,
+            rowId,
+            label: draft.label,
+            fileName: intel.fileName,
+            selectedLayout: intel.selectedLayout,
+            sourceEntityCount: draft.sourceEntityIds.length,
+            lineItemDraft: payload,
+          },
+        });
+      }
+
+      return { createdItem };
+    } finally {
+      setDwgEntitySavingId(null);
+    }
+  }
+
+  async function handleCreateDwgRowLineItem(rowType: DwgInspectableRowType, rowId: string, pick: string | InspectCategoryPick) {
+    try {
+      const created = await createLineItemFromDwgRow(rowType, rowId, pick);
+      if (!created) return;
+      await loadDwgEntityLinks();
+      notifyWorkspaceMutated();
+      notifyTakeoffLinksMutated();
+      setToastType("success");
+      setToastMessage("Created line item from DWG/DXF entity.");
+    } catch (error) {
+      console.error("[takeoff] Failed to create DWG/DXF line item:", error);
+      setDwgEntitySavingId(null);
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that DWG/DXF entity."));
+    }
   }
 
   async function handleCreateAnnotationLineItem(annotation: TakeoffAnnotation, pick: string | InspectCategoryPick) {
@@ -5280,6 +5557,14 @@ export function TakeoffTab({
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(`Created summed line item from ${targets.length} mark${targets.length === 1 ? "" : "s"}.`);
+    } else if (action.kind === "create-dwg-row") {
+      const created = await createLineItemFromDwgRow(action.rowType, action.rowId, action.pick, ws);
+      if (!created) return;
+      await loadDwgEntityLinks();
+      notifyWorkspaceMutated();
+      notifyTakeoffLinksMutated();
+      setToastType("success");
+      setToastMessage("Created line item from DWG/DXF entity.");
     } else if (action.kind === "create-spreadsheet-row") {
       await createLineItemFromSpreadsheetRow(action.rowIndex, action.pick, ws);
       notifyWorkspaceMutated();
@@ -6464,6 +6749,7 @@ export function TakeoffTab({
               fitOnLoadRef.current = true;
               setAnnotations([]);
               setDwgIntelligence(null);
+              setDwgEntityLinks([]);
               updateAnnotationSelection(null);
               setAutoCountResults(null);
               setAutoCountSnippet(null);

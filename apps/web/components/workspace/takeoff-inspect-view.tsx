@@ -107,16 +107,59 @@ export interface InspectDwgLayoutSummary {
   entityCount: number;
 }
 
+export interface InspectDwgEntityRow {
+  id: string;
+  type: string;
+  layer: string;
+  layoutName: string;
+  label: string;
+  color: string;
+  measurementLabel: string;
+  quantity: number;
+  uom: string;
+  sourceEntityIds: string[];
+  isLinked: boolean;
+  linkCount: number;
+}
+
+export interface InspectDwgAutoCountRow {
+  id: string;
+  label: string;
+  type: string;
+  layer: string;
+  count: number;
+  sourceEntityIds: string[];
+  isLinked: boolean;
+  linkCount: number;
+}
+
+export interface InspectDwgSystemRow {
+  id: string;
+  label: string;
+  layer: string;
+  segmentCount: number;
+  quantity: number;
+  uom: string;
+  sourceEntityIds: string[];
+  isLinked: boolean;
+  linkCount: number;
+}
+
 export interface InspectDwgIntelligenceSnapshot {
   documentId: string;
   fileName: string;
   selectedLayout: string;
+  selectedEntityId: string | null;
+  savingEntityId: string | null;
   entityCount: number;
   visibleEntityCount: number;
   layerCount: number;
   annotationCount: number;
   layouts: InspectDwgLayoutSummary[];
   layers: InspectDwgLayerSummary[];
+  entities: InspectDwgEntityRow[];
+  autoCounts: InspectDwgAutoCountRow[];
+  systems: InspectDwgSystemRow[];
   status: string | null;
   processedAt: string | null;
 }
@@ -303,6 +346,11 @@ export interface InspectActions {
   createLineItemFromSmartCountItem: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   saveSelectedSmartCountItems: () => Promise<void> | void;
   clearSmartCountResults: () => void;
+  selectDwgEntity: (id: string | null) => void;
+  selectDwgEntities: (ids: string[]) => void;
+  createLineItemFromDwgEntity: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
+  createLineItemFromDwgAutoCount: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
+  createLineItemFromDwgSystem: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
@@ -609,9 +657,83 @@ function DwgEntitiesInspect({
   actions: InspectActions | null;
 }) {
   const intel = snapshot.dwgIntelligence;
+  const [query, setQuery] = useState("");
   if (!intel) return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
-  const visibleLayers = intel.layers.filter((layer) => layer.visible).length;
-  const topLayers = intel.layers.slice(0, 18);
+  const q = query.trim().toLowerCase();
+  const matches = (values: Array<string | number | null | undefined>) => {
+    if (!q) return true;
+    return values.some((value) => String(value ?? "").toLowerCase().includes(q));
+  };
+  const systems = intel.systems.filter((row) => matches([row.label, row.layer, row.uom, row.segmentCount]));
+  const autoCounts = intel.autoCounts.filter((row) => matches([row.label, row.type, row.layer, row.count]));
+  const entities = intel.entities.filter((row) => matches([row.label, row.type, row.layer, row.layoutName, row.measurementLabel]));
+  const shownEntities = entities.slice(0, 500);
+
+  const RowShell = ({
+    id,
+    selected,
+    color,
+    title,
+    subtitle,
+    value,
+    linked,
+    linkCount,
+    onSelect,
+    onAdd,
+  }: {
+    id: string;
+    selected: boolean;
+    color?: string;
+    title: string;
+    subtitle: string;
+    value: string;
+    linked: boolean;
+    linkCount: number;
+    onSelect: () => void;
+    onAdd: (pick: InspectCategoryPick) => void;
+  }) => (
+    <div
+      key={id}
+      onClick={onSelect}
+      className={cn(
+        "group flex cursor-pointer items-center gap-2 rounded-md border px-1.5 py-1.5 transition-colors",
+        selected
+          ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
+          : linked
+            ? "border-success/25 bg-success/5 hover:bg-panel2/35"
+            : "border-transparent hover:border-line hover:bg-panel2/35",
+      )}
+    >
+      <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color || "#38bdf8" }} />
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-1">
+          <p className="truncate text-[11px] font-medium text-fg/80">{title}</p>
+          {linked && (
+            <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent">
+              <Link2 className="h-2 w-2" />
+              {linkCount}
+            </span>
+          )}
+        </div>
+        <p className="truncate text-[10px] text-fg/40">{subtitle}</p>
+      </div>
+      <span className="shrink-0 font-mono text-[10px] text-fg/50">{value}</span>
+      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+        {!linked && (
+          <AddToCategoryPopover
+            snapshot={snapshot}
+            actions={actions}
+            onPick={onAdd}
+            triggerLabel="Add"
+            triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+            triggerTitle="Add this DWG/DXF entity to a worksheet — pick a category"
+            triggerIcon={<Plus className="h-3 w-3" />}
+          />
+        )}
+        <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex h-full flex-col gap-2 text-xs">
@@ -629,42 +751,105 @@ function DwgEntitiesInspect({
 
         <div className="mt-2 grid grid-cols-4 gap-1">
           <AnalysisStat label="Entities" value={intel.entityCount} />
-          <AnalysisStat label="Visible" value={intel.visibleEntityCount} />
-          <AnalysisStat label="Layers" value={intel.layerCount} />
+          <AnalysisStat label="Systems" value={intel.systems.length} />
+          <AnalysisStat label="Counts" value={intel.autoCounts.length} />
           <AnalysisStat label="Marks" value={intel.annotationCount} />
         </div>
 
-        <div className="mt-2 rounded-md border border-line/70 bg-bg/35 p-2">
-          <div className="flex items-center justify-between gap-2">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-fg/40">
-              Layer intelligence
-            </p>
-            <span className="text-[10px] text-fg/35">{visibleLayers}/{intel.layerCount} visible</span>
-          </div>
-          <div className="mt-2 max-h-48 space-y-1 overflow-auto pr-1">
-            {topLayers.length === 0 ? (
-              <p className="rounded-md border border-line bg-panel/40 px-2 py-3 text-center text-[11px] text-fg/40">
-                No parsed layers yet.
-              </p>
-            ) : topLayers.map((layer) => (
-              <div
-                key={layer.name}
-                className={cn(
-                  "flex items-center gap-2 rounded-md border px-2 py-1.5",
-                  layer.visible ? "border-line/70 bg-panel/60" : "border-transparent bg-panel/30 opacity-55",
-                )}
-              >
-                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: layer.color }} />
-                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-fg/70">{layer.name}</span>
-                <span className="font-mono text-[10px] text-fg/40">{layer.count}</span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <Input
+          className="mt-2 h-7 text-xs"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Filter DWG entities, layers, systems..."
+        />
       </div>
 
-      <div className="min-h-0 flex-1 border-t border-line/70 pt-2">
-        <AnnotationsInspect snapshot={snapshot} actions={actions} />
+      <div className="min-h-0 flex-1 space-y-2 overflow-auto pr-1">
+        <DetectionGroup
+          title="Traced systems"
+          count={intel.systems.length}
+          rows={systems.map((system) => ({
+            id: system.id,
+            kind: "line" as const,
+            title: system.label,
+            subtitle: `${system.segmentCount} segments · layer ${system.layer}`,
+            detail: `${system.quantity.toFixed(system.quantity >= 100 ? 0 : 2)} ${system.uom}`,
+            selected: Boolean(system.sourceEntityIds.includes(intel.selectedEntityId ?? "")),
+            saving: intel.savingEntityId === system.id,
+            savedCount: system.linkCount,
+            linkCount: system.linkCount,
+            color: "#0ea5e9",
+          }))}
+          snapshot={snapshot}
+          actions={actions}
+          onSelect={(id) => {
+            const targets = intel.systems.find((system) => system.id === id)?.sourceEntityIds ?? [];
+            actions?.selectDwgEntities(targets);
+          }}
+          onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgSystem(id, pick)}
+        />
+
+        <DetectionGroup
+          title="Auto Count groups"
+          count={intel.autoCounts.length}
+          icon={<CircleDashed className="h-3 w-3 text-emerald-500" />}
+          rows={autoCounts.map((row) => ({
+            id: row.id,
+            kind: "symbol" as const,
+            title: row.label,
+            subtitle: `${row.count.toLocaleString()} found · ${row.type} · layer ${row.layer}`,
+            selected: Boolean(row.sourceEntityIds.includes(intel.selectedEntityId ?? "")),
+            saving: intel.savingEntityId === row.id,
+            savedCount: row.linkCount,
+            linkCount: row.linkCount,
+            color: "#10b981",
+          }))}
+          snapshot={snapshot}
+          actions={actions}
+          onSelect={(id) => {
+            const targets = intel.autoCounts.find((row) => row.id === id)?.sourceEntityIds ?? [];
+            actions?.selectDwgEntities(targets);
+          }}
+          onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgAutoCount(id, pick)}
+        />
+
+        <section>
+          <div className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-fg/60">
+            <ChevronDown className="h-3 w-3" />
+            <span className="min-w-0 flex-1 truncate">Native entities</span>
+            <span className="font-mono text-[10px] text-fg/35">
+              {entities.length === intel.entities.length ? intel.entities.length.toLocaleString() : `${entities.length.toLocaleString()}/${intel.entities.length.toLocaleString()}`}
+            </span>
+          </div>
+          <div className="ml-2 space-y-0.5">
+            {shownEntities.length === 0 ? (
+              <p className="rounded-md border border-line bg-bg/25 px-2 py-2 text-center text-[10px] text-fg/35">No entities match</p>
+            ) : shownEntities.map((entity) => (
+              <RowShell
+                key={entity.id}
+                id={entity.id}
+                selected={intel.selectedEntityId === entity.id}
+                color={entity.color}
+                title={entity.label}
+                subtitle={`${entity.type} · layer ${entity.layer} · ${entity.layoutName}`}
+                value={entity.measurementLabel}
+                linked={entity.isLinked}
+                linkCount={entity.linkCount}
+                onSelect={() => actions?.selectDwgEntity(intel.selectedEntityId === entity.id ? null : entity.id)}
+                onAdd={(pick) => void actions?.createLineItemFromDwgEntity(entity.id, pick)}
+              />
+            ))}
+            {entities.length > shownEntities.length && (
+              <p className="rounded-md border border-line/70 bg-bg/25 px-2 py-1.5 text-center text-[10px] text-fg/35">
+                Showing first {shownEntities.length.toLocaleString()} matches. Filter to narrow the native entity list.
+              </p>
+            )}
+          </div>
+        </section>
+
+        <div className="border-t border-line/70 pt-2">
+          <AnnotationsInspect snapshot={snapshot} actions={actions} />
+        </div>
       </div>
     </div>
   );

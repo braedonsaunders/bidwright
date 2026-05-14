@@ -13,12 +13,12 @@ import {
   Hand,
   Layers,
   Loader2,
-  Maximize2,
   MousePointer2,
   PanelRightOpen,
   PenTool,
   RefreshCw,
   Ruler,
+  Scan,
   Square,
   Tally5,
   Type,
@@ -37,8 +37,6 @@ import {
 } from "@/components/ui";
 import {
   createTakeoffAnnotation,
-  createTakeoffLink,
-  createWorksheetItem,
   deleteTakeoffAnnotation,
   getDwgTakeoffMetadata,
   listTakeoffAnnotations,
@@ -152,6 +150,44 @@ type DwgToolDef = {
   section?: string;
 };
 
+type DwgInspectEntityRow = {
+  id: string;
+  type: string;
+  layer: string;
+  layoutName: string;
+  label: string;
+  color: string;
+  measurementLabel: string;
+  quantity: number;
+  uom: string;
+  sourceEntityIds: string[];
+  isLinked: boolean;
+  linkCount: number;
+};
+
+type DwgInspectAutoCountRow = {
+  id: string;
+  label: string;
+  type: string;
+  layer: string;
+  count: number;
+  sourceEntityIds: string[];
+  isLinked: boolean;
+  linkCount: number;
+};
+
+type DwgInspectSystemRow = {
+  id: string;
+  label: string;
+  layer: string;
+  segmentCount: number;
+  quantity: number;
+  uom: string;
+  sourceEntityIds: string[];
+  isLinked: boolean;
+  linkCount: number;
+};
+
 const TOOL_OPTIONS: DwgToolDef[] = [
   { id: "select", label: "Select", icon: MousePointer2, shortcut: "V" },
   { id: "pan", label: "Pan", icon: Hand, shortcut: "H" },
@@ -240,12 +276,37 @@ function DwgToolGroupMenus({
 function DwgAiMenu({
   entityCount,
   layerCount,
+  autoCountGroupCount,
+  systemCount,
   onOpenDrawingIntelligence,
 }: {
   entityCount: number;
   layerCount: number;
+  autoCountGroupCount: number;
+  systemCount: number;
   onOpenDrawingIntelligence?: () => void;
 }) {
+  const rows = [
+    {
+      label: "Drawing Intelligence",
+      description: `${entityCount.toLocaleString()} entities · ${layerCount.toLocaleString()} layers`,
+      icon: GitBranch,
+      color: "text-sky-500",
+    },
+    {
+      label: "Auto Count",
+      description: `${autoCountGroupCount.toLocaleString()} symbol groups`,
+      icon: Tally5,
+      color: "text-emerald-500",
+    },
+    {
+      label: "Trace Systems",
+      description: `${systemCount.toLocaleString()} traced runs`,
+      icon: Sparkles,
+      color: "text-violet-500",
+    },
+  ];
+
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
@@ -266,21 +327,24 @@ function DwgAiMenu({
           sideOffset={6}
           className="z-[1000] max-h-[min(70vh,28rem)] w-72 overflow-y-auto rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none"
         >
-          <Popover.Close asChild>
-            <button
-              type="button"
-              onClick={onOpenDrawingIntelligence}
-              disabled={!onOpenDrawingIntelligence}
-              className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
-              title="Review parsed DWG/DXF entities, layers, layouts, and measurements"
-            >
-              <GitBranch className="h-3.5 w-3.5 shrink-0 text-sky-500" />
-              <span className="min-w-0 flex-1 truncate font-medium">Drawing Intelligence</span>
-              <span className="shrink-0 text-[10px] text-fg/45">
-                {entityCount.toLocaleString()} · {layerCount.toLocaleString()}
-              </span>
-            </button>
-          </Popover.Close>
+          {rows.map((row) => {
+            const Icon = row.icon;
+            return (
+              <Popover.Close key={row.label} asChild>
+                <button
+                  type="button"
+                  onClick={onOpenDrawingIntelligence}
+                  disabled={!onOpenDrawingIntelligence}
+                  className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+                  title={`${row.label} results in the Entities panel`}
+                >
+                  <Icon className={cn("h-3.5 w-3.5 shrink-0", row.color)} />
+                  <span className="min-w-0 flex-1 truncate font-medium">{row.label}</span>
+                  <span className="shrink-0 text-[10px] text-fg/45">{row.description}</span>
+                </button>
+              </Popover.Close>
+            );
+          })}
         </Popover.Content>
       </Popover.Portal>
     </Popover.Root>
@@ -625,6 +689,259 @@ function mapUom(unit: string | undefined): string {
   return unit || "EA";
 }
 
+function rawString(raw: Record<string, unknown>, keys: string[]): string | null {
+  for (const key of keys) {
+    const value = raw[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+    if (typeof value === "number" && Number.isFinite(value)) return String(value);
+  }
+  return null;
+}
+
+function compactEntityLabel(entity: DwgEntity): string {
+  const text = entity.text?.replace(/\s+/g, " ").trim();
+  if (text) return text.slice(0, 96);
+  const symbolName = rawString(entity.raw, [
+    "name",
+    "blockName",
+    "block",
+    "symbolName",
+    "insertName",
+    "xref",
+  ]);
+  if (symbolName) return symbolName.slice(0, 96);
+  return `${entity.type} on ${entity.layer}`;
+}
+
+function sanitizeIdPart(value: string): string {
+  return value.replace(/[^a-z0-9_.:-]+/gi, "-").replace(/(^-|-$)/g, "").slice(0, 80) || "item";
+}
+
+function formatDwgQuantity(value: number, uom: string): string {
+  const digits = Math.abs(value) >= 100 ? 0 : value >= 10 ? 1 : 2;
+  return `${formatNumber(value, digits)} ${uom}`;
+}
+
+function dwgEntityTakeoffQuantity(entity: DwgEntity, calibration: CalibrationState | null): {
+  measurementLabel: string;
+  quantity: number;
+  uom: string;
+} {
+  const measurement = measureEntity(entity, calibration);
+  if (!measurement || !Number.isFinite(measurement.value) || measurement.value <= 0) {
+    return { measurementLabel: "1 EA", quantity: 1, uom: "EA" };
+  }
+  const uom = mapUom(measurement.unit);
+  return {
+    measurementLabel: formatDwgQuantity(measurement.value, uom),
+    quantity: measurement.value,
+    uom,
+  };
+}
+
+function buildDwgEntityRows(entities: DwgEntity[], calibration: CalibrationState | null): DwgInspectEntityRow[] {
+  return entities.map((entity) => {
+    const quantity = dwgEntityTakeoffQuantity(entity, calibration);
+    return {
+      id: entity.id,
+      type: entity.type,
+      layer: entity.layer,
+      layoutName: entity.layoutName || "Model",
+      label: compactEntityLabel(entity),
+      color: entity.color,
+      measurementLabel: quantity.measurementLabel,
+      quantity: quantity.quantity,
+      uom: quantity.uom,
+      sourceEntityIds: [entity.id],
+      isLinked: false,
+      linkCount: 0,
+    };
+  });
+}
+
+function countGroupKey(entity: DwgEntity): string | null {
+  if (entity.type === "INSERT") {
+    return ["INSERT", entity.layer, rawString(entity.raw, ["name", "blockName", "block", "symbolName", "insertName"]) ?? "Block"].join("|");
+  }
+  if (entity.type === "CIRCLE") {
+    const radius = Number.isFinite(entity.radius) ? Number(entity.radius).toFixed(3) : "unknown";
+    return ["CIRCLE", entity.layer, radius].join("|");
+  }
+  if (entity.type === "ARC") {
+    const radius = Number.isFinite(entity.radius) ? Number(entity.radius).toFixed(3) : "unknown";
+    return ["ARC", entity.layer, radius].join("|");
+  }
+  if (entity.type === "POINT") {
+    return ["POINT", entity.layer, "Point"].join("|");
+  }
+  if (entity.type === "TEXT" || entity.type === "MTEXT") {
+    const text = entity.text?.replace(/\s+/g, " ").trim().slice(0, 60);
+    if (!text) return null;
+    return [entity.type, entity.layer, text].join("|");
+  }
+  return null;
+}
+
+function countGroupLabel(type: string, layer: string, token: string): string {
+  if (type === "INSERT") return token;
+  if (type === "CIRCLE") return `Circle symbol r ${token}`;
+  if (type === "ARC") return `Arc symbol r ${token}`;
+  if (type === "POINT") return `Point mark on ${layer}`;
+  if (type === "TEXT" || type === "MTEXT") return `Text: ${token}`;
+  return `${type} on ${layer}`;
+}
+
+function buildDwgAutoCountRows(entities: DwgEntity[]): DwgInspectAutoCountRow[] {
+  const groups = new Map<string, { type: string; layer: string; token: string; ids: string[] }>();
+  for (const entity of entities) {
+    const key = countGroupKey(entity);
+    if (!key) continue;
+    const parts = key.split("|");
+    const type = parts[0] ?? entity.type;
+    const layer = parts[1] ?? entity.layer;
+    const token = parts.slice(2).join("|") || compactEntityLabel(entity);
+    const group = groups.get(key);
+    if (group) {
+      group.ids.push(entity.id);
+    } else {
+      groups.set(key, { type, layer, token, ids: [entity.id] });
+    }
+  }
+  return Array.from(groups.entries())
+    .map(([key, group]) => ({
+      id: `count:${sanitizeIdPart(key)}`,
+      label: countGroupLabel(group.type, group.layer, group.token),
+      type: group.type,
+      layer: group.layer,
+      count: group.ids.length,
+      sourceEntityIds: group.ids,
+      isLinked: false,
+      linkCount: 0,
+    }))
+    .sort((a, b) => b.count - a.count || a.label.localeCompare(b.label));
+}
+
+function isLinearDwgEntity(entity: DwgEntity): boolean {
+  if (entity.type === "LINE") return Boolean(entity.start && entity.end);
+  if (entity.type === "LWPOLYLINE" || entity.type === "POLYLINE") {
+    return Boolean(entity.vertices && entity.vertices.length >= 2 && !entity.closed);
+  }
+  return false;
+}
+
+function linearEndpointKeys(entity: DwgEntity): string[] {
+  const points: DwgPoint[] = [];
+  if (entity.type === "LINE" && entity.start && entity.end) {
+    points.push(entity.start, entity.end);
+  } else if ((entity.type === "LWPOLYLINE" || entity.type === "POLYLINE") && entity.vertices?.length) {
+    points.push(entity.vertices[0], entity.vertices[entity.vertices.length - 1]);
+  }
+  return points.map((point) => `${Math.round(point.x * 100) / 100}:${Math.round(point.y * 100) / 100}`);
+}
+
+function likelySystemLayer(layer: string): boolean {
+  const value = layer.toLowerCase();
+  return [
+    "pipe",
+    "piping",
+    "plumb",
+    "water",
+    "gas",
+    "san",
+    "storm",
+    "drain",
+    "fire",
+    "sprink",
+    "duct",
+    "conduit",
+    "elec",
+    "main",
+    "system",
+  ].some((needle) => value.includes(needle));
+}
+
+function buildDwgSystemRows(entities: DwgEntity[], calibration: CalibrationState | null): DwgInspectSystemRow[] {
+  const byLayer = new Map<string, DwgEntity[]>();
+  for (const entity of entities) {
+    if (!isLinearDwgEntity(entity)) continue;
+    const current = byLayer.get(entity.layer);
+    if (current) current.push(entity);
+    else byLayer.set(entity.layer, [entity]);
+  }
+
+  const rows: DwgInspectSystemRow[] = [];
+  for (const [layer, layerEntities] of byLayer.entries()) {
+    const adjacency = new Map<string, Set<string>>();
+    const pointIndex = new Map<string, string[]>();
+    for (const entity of layerEntities) {
+      adjacency.set(entity.id, new Set());
+      for (const key of linearEndpointKeys(entity)) {
+        const list = pointIndex.get(key);
+        if (list) list.push(entity.id);
+        else pointIndex.set(key, [entity.id]);
+      }
+    }
+
+    for (const ids of pointIndex.values()) {
+      if (ids.length < 2) continue;
+      for (let index = 1; index < ids.length; index += 1) {
+        adjacency.get(ids[0])?.add(ids[index]);
+        adjacency.get(ids[index])?.add(ids[0]);
+      }
+    }
+
+    const entityLookup = new Map(layerEntities.map((entity) => [entity.id, entity]));
+    const visited = new Set<string>();
+    let componentIndex = 0;
+    for (const entity of layerEntities) {
+      if (visited.has(entity.id)) continue;
+      const stack = [entity.id];
+      const componentIds: string[] = [];
+      visited.add(entity.id);
+      while (stack.length) {
+        const id = stack.pop();
+        if (!id) continue;
+        componentIds.push(id);
+        for (const neighbor of adjacency.get(id) ?? []) {
+          if (visited.has(neighbor)) continue;
+          visited.add(neighbor);
+          stack.push(neighbor);
+        }
+      }
+      if (componentIds.length < 2 && !likelySystemLayer(layer)) continue;
+      let total = 0;
+      let uom = "EA";
+      for (const id of componentIds) {
+        const target = entityLookup.get(id);
+        if (!target) continue;
+        const measured = dwgEntityTakeoffQuantity(target, calibration);
+        if (measured.uom !== "EA") {
+          total += measured.quantity;
+          uom = measured.uom;
+        }
+      }
+      if (total <= 0) {
+        total = componentIds.length;
+        uom = "EA";
+      }
+      componentIndex += 1;
+      rows.push({
+        id: `system:${sanitizeIdPart(layer)}:${componentIndex}`,
+        label: `${likelySystemLayer(layer) ? "System" : "Linear run"} ${componentIndex} · ${layer}`,
+        layer,
+        segmentCount: componentIds.length,
+        quantity: total,
+        uom,
+        sourceEntityIds: componentIds,
+        isLinked: false,
+        linkCount: 0,
+      });
+    }
+  }
+
+  return rows.sort((a, b) => b.segmentCount - a.segmentCount || a.label.localeCompare(b.label));
+}
+
 function exportAnnotationsCsv(documentName: string, annotations: DwgMeasurementAnnotation[]) {
   const headers = ["Label", "Type", "Quantity", "Unit", "Points"];
   const rows = annotations.map((annotation) => [
@@ -685,7 +1002,11 @@ interface DwgTakeoffSurfaceProps {
   onAnnotationsChange?: (annotations: DwgPublishedAnnotation[]) => void;
   /** A ref the parent populates so it can dispatch annotation actions
    *  (delete, etc.) to this surface from the unified Inspect view. */
-  actionsRef?: React.MutableRefObject<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>;
+  actionsRef?: React.MutableRefObject<{
+    deleteAnnotation: (id: string) => Promise<void> | void;
+    selectEntity: (id: string | null) => void;
+    selectEntities: (ids: string[]) => void;
+  } | null>;
   /** Slots from the parent takeoff shell so DWG uses one unified header. */
   toolbarStart?: ReactNode;
   toolbarEnd?: ReactNode;
@@ -702,6 +1023,11 @@ interface DwgTakeoffSurfaceProps {
     layers: { name: string; color: string; count: number; visible: boolean }[];
     status: string | null;
     processedAt: string | null;
+    selectedEntityId: string | null;
+    savingEntityId: string | null;
+    entities: DwgInspectEntityRow[];
+    autoCounts: DwgInspectAutoCountRow[];
+    systems: DwgInspectSystemRow[];
   } | null) => void;
 }
 
@@ -709,11 +1035,7 @@ export function DwgTakeoffSurface({
   projectId,
   documents,
   selectedDocumentId,
-  workspace,
-  selectedWorksheetId,
-  defaultEstimateCategory,
   onSelectedDocumentChange,
-  onWorkspaceMutated,
   onSelectedEntityChange,
   onSelectedAnnotationChange,
   onAnnotationsChange,
@@ -741,6 +1063,7 @@ export function DwgTakeoffSurface({
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(() => new Set());
   const [selectedLayout, setSelectedLayout] = useState<string>("__all__");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
+  const [highlightedEntityIds, setHighlightedEntityIds] = useState<Set<string>>(() => new Set());
 
   // Publish entity selection to parent so the shared link panel can render it.
   // Effect lives further down so it can read `selectedEntity` once that memo is set up.
@@ -756,11 +1079,6 @@ export function DwgTakeoffSurface({
   const [layerSearch, setLayerSearch] = useState("");
   const [calibration, setCalibration] = useState<CalibrationState | null>(null);
   const [status, setStatus] = useState<{ tone: "success" | "danger" | "info"; message: string } | null>(null);
-
-  const targetWorksheet = useMemo(
-    () => workspace.worksheets.find((worksheet) => worksheet.id === selectedWorksheetId) ?? workspace.worksheets[0] ?? null,
-    [selectedWorksheetId, workspace.worksheets],
-  );
 
   const layoutOptions = useMemo(() => {
     const fromMetadata = metadata?.layouts?.filter((layout) => layout.entityCount > 0).map((layout) => layout.name) ?? [];
@@ -810,7 +1128,11 @@ export function DwgTakeoffSurface({
   // can drive deletions (and future actions) on DWG annotations.
   useEffect(() => {
     if (actionsRef) {
-      actionsRef.current = { deleteAnnotation };
+      actionsRef.current = {
+        deleteAnnotation,
+        selectEntity: selectEntityById,
+        selectEntities: selectEntitiesByIds,
+      };
     }
   });
 
@@ -875,6 +1197,18 @@ export function DwgTakeoffSurface({
   const filteredEntities = useMemo(() => {
     return layoutEntities.filter((entity) => visibleLayers.has(entity.layer));
   }, [layoutEntities, visibleLayers]);
+  const inspectEntityRows = useMemo(
+    () => buildDwgEntityRows(filteredEntities, calibration),
+    [filteredEntities, calibration],
+  );
+  const inspectAutoCountRows = useMemo(
+    () => buildDwgAutoCountRows(filteredEntities),
+    [filteredEntities],
+  );
+  const inspectSystemRows = useMemo(
+    () => buildDwgSystemRows(filteredEntities, calibration),
+    [filteredEntities, calibration],
+  );
   const canUndo = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedo = historyVersion >= 0 && redoStackRef.current.length > 0;
   const lastIntelligenceSignatureRef = useRef<string | null>(null);
@@ -908,8 +1242,26 @@ export function DwgTakeoffSurface({
       })),
       status: metadata?.status ?? null,
       processedAt: metadata?.processedAt ?? null,
+      selectedEntityId,
+      savingEntityId: null,
+      entities: inspectEntityRows,
+      autoCounts: inspectAutoCountRows,
+      systems: inspectSystemRows,
     };
-    const signature = JSON.stringify(snapshot);
+    const signature = JSON.stringify({
+      documentId: snapshot.documentId,
+      selectedLayout,
+      selectedEntityId,
+      entityCount: snapshot.entityCount,
+      visibleEntityCount: snapshot.visibleEntityCount,
+      layerState: snapshot.layers.map((layer) => `${layer.name}:${layer.visible}:${layer.count}`).join(","),
+      annotationCount: snapshot.annotationCount,
+      autoCountGroupCount: inspectAutoCountRows.length,
+      systemCount: inspectSystemRows.length,
+      calibration: calibration ? `${calibration.unitsPerWorld}:${calibration.unit}` : "none",
+      status: snapshot.status,
+      processedAt: snapshot.processedAt,
+    });
     if (signature === lastIntelligenceSignatureRef.current) return;
     lastIntelligenceSignatureRef.current = signature;
     onIntelligenceChange(snapshot);
@@ -917,13 +1269,18 @@ export function DwgTakeoffSurface({
     activeDocument?.fileName,
     activeDocument?.id,
     annotations.length,
+    calibration,
     filteredEntities.length,
+    inspectAutoCountRows,
+    inspectEntityRows,
+    inspectSystemRows,
     layers,
     layoutEntities.length,
     metadata?.layouts,
     metadata?.processedAt,
     metadata?.status,
     onIntelligenceChange,
+    selectedEntityId,
     selectedLayout,
     visibleLayers,
   ]);
@@ -1008,6 +1365,54 @@ export function DwgTakeoffSurface({
     updateViewport(makeFitViewport(allBounds(nextEntities), container.clientWidth || 800, container.clientHeight || 600));
   }, []);
 
+  function selectEntityById(id: string | null) {
+    if (!id) {
+      setSelectedEntityId(null);
+      setHighlightedEntityIds(new Set());
+      return;
+    }
+    const entity = entities.find((candidate) => candidate.id === id);
+    if (!entity) return;
+    if (!visibleLayers.has(entity.layer)) {
+      setVisibleLayers((current) => new Set(current).add(entity.layer));
+    }
+    const entityLayout = entity.layoutName || "Model";
+    if (selectedLayout !== "__all__" && selectedLayout !== entityLayout) {
+      setSelectedLayout(entityLayout);
+    }
+    setSelectedEntityId(id);
+    setHighlightedEntityIds(new Set([id]));
+    window.requestAnimationFrame(() => fitToEntities([entity]));
+  }
+
+  function selectEntitiesByIds(ids: string[]) {
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    if (uniqueIds.length === 0) {
+      selectEntityById(null);
+      return;
+    }
+    const targets = uniqueIds
+      .map((id) => entities.find((candidate) => candidate.id === id))
+      .filter((entity): entity is DwgEntity => Boolean(entity));
+    if (targets.length === 0) return;
+    setSelectedEntityId(targets[0].id);
+    setHighlightedEntityIds(new Set(targets.map((entity) => entity.id)));
+    setVisibleLayers((current) => {
+      const next = new Set(current);
+      targets.forEach((entity) => next.add(entity.layer));
+      return next;
+    });
+    const layouts = new Set(targets.map((entity) => entity.layoutName || "Model"));
+    if (selectedLayout !== "__all__") {
+      if (layouts.size === 1 && !layouts.has(selectedLayout)) {
+        setSelectedLayout(Array.from(layouts)[0]);
+      } else if (layouts.size > 1) {
+        setSelectedLayout("__all__");
+      }
+    }
+    window.requestAnimationFrame(() => fitToEntities(targets));
+  }
+
   // Track id + sourceKind as primitives so callback identity is stable when
   // the parent re-maps the `documents` prop on every render (which it does —
   // takeoff-tab .map()s into a fresh array each time). Using `activeDocument`
@@ -1031,6 +1436,7 @@ export function DwgTakeoffSurface({
     setLoading(true);
     setError(null);
     setSelectedEntityId(null);
+    setHighlightedEntityIds(new Set());
     setDrawPoints([]);
     setSnapCandidate(null);
     try {
@@ -1142,11 +1548,12 @@ export function DwgTakeoffSurface({
     }
 
     filteredEntities.forEach((entity) => {
-      ctx.strokeStyle = entity.id === selectedEntityId ? "#38bdf8" : entity.color;
-      ctx.fillStyle = entity.id === selectedEntityId ? "#38bdf8" : entity.color;
-      ctx.lineWidth = entity.id === selectedEntityId ? 2.5 : 1;
-      ctx.shadowColor = entity.id === selectedEntityId ? "rgba(56, 189, 248, 0.35)" : "transparent";
-      ctx.shadowBlur = entity.id === selectedEntityId ? 9 : 0;
+      const highlighted = entity.id === selectedEntityId || highlightedEntityIds.has(entity.id);
+      ctx.strokeStyle = highlighted ? "#38bdf8" : entity.color;
+      ctx.fillStyle = highlighted ? "#38bdf8" : entity.color;
+      ctx.lineWidth = highlighted ? 2.5 : 1;
+      ctx.shadowColor = highlighted ? "rgba(56, 189, 248, 0.35)" : "transparent";
+      ctx.shadowBlur = highlighted ? 9 : 0;
 
       if (entity.type === "LINE" && entity.start && entity.end) {
         renderPolyline([entity.start, entity.end]);
@@ -1246,7 +1653,7 @@ export function DwgTakeoffSurface({
       ctx.fillText(snapCandidate.kind, screen.x + 10, screen.y - 10);
       ctx.restore();
     }
-  }, [activeColor, activeTool, annotations, cursorWorld, drawPoints, filteredEntities, selectedEntityId, snapCandidate, viewportVersion]);
+  }, [activeColor, activeTool, annotations, cursorWorld, drawPoints, filteredEntities, highlightedEntityIds, selectedEntityId, snapCandidate, viewportVersion]);
 
   useEffect(() => {
     draw();
@@ -1351,7 +1758,9 @@ export function DwgTakeoffSurface({
   async function handleCanvasClick(event: ReactMouseEvent<HTMLDivElement>) {
     const world = snappedWorld(event);
     if (activeTool === "select") {
-      setSelectedEntityId(hitTest(event)?.id ?? null);
+      const hit = hitTest(event);
+      setSelectedEntityId(hit?.id ?? null);
+      setHighlightedEntityIds(hit ? new Set([hit.id]) : new Set());
       return;
     }
     if (activeTool === "pan") return;
@@ -1483,6 +1892,36 @@ export function DwgTakeoffSurface({
       <div className="grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 overflow-hidden border-b border-line bg-panel px-1.5 py-1.5">
         <div className="flex min-w-0 items-center gap-1">
           {toolbarStart}
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 0.8 })}
+            title="Zoom out"
+            aria-label="Zoom out"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 1.2 })}
+            title="Zoom in"
+            aria-label="Zoom in"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => fitToEntities()}
+            title="Fit drawing"
+            aria-label="Fit drawing"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <Scan className="h-3.5 w-3.5" />
+          </Button>
           <span className="hidden min-w-0 truncate px-1 text-[11px] font-medium text-fg/45 md:block">
             {activeDocument?.fileName ?? "DWG/DXF"}
           </span>
@@ -1493,6 +1932,8 @@ export function DwgTakeoffSurface({
           <DwgAiMenu
             entityCount={layoutEntities.length}
             layerCount={layers.length}
+            autoCountGroupCount={inspectAutoCountRows.length}
+            systemCount={inspectSystemRows.length}
             onOpenDrawingIntelligence={onOpenDrawingIntelligence}
           />
         </div>
@@ -1613,38 +2054,6 @@ export function DwgTakeoffSurface({
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
-
-          <div className="my-px h-px w-full bg-line/60" />
-
-          <button
-            type="button"
-            onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 1.2 })}
-            title="Zoom in"
-            aria-label="Zoom in"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
-          >
-            <ZoomIn className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 0.8 })}
-            title="Zoom out"
-            aria-label="Zoom out"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
-          >
-            <ZoomOut className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => fitToEntities()}
-            title="Fit drawing"
-            aria-label="Fit drawing"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
-          >
-            <Maximize2 className="h-3.5 w-3.5" />
-          </button>
-
-          <div className="my-px h-px w-full bg-line/60" />
 
           {layoutOptions.length > 1 && (
             <Popover.Root>
