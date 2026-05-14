@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, Save, ScanSearch, Settings2, Sigma, Trash2, Wand2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, ScanSearch, Settings2, Sigma, Trash2, Wand2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import { Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -357,17 +357,22 @@ export interface InspectActions {
   selectDrawingDetection: (id: string | null, kind?: InspectDrawingDetectionKind) => void;
   saveDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line") => Promise<void> | void;
   createLineItemFromDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line", pick: InspectCategoryPick) => Promise<void> | void;
+  deleteDrawingDetection: (id: string, kind: InspectDrawingDetectionKind) => void;
   selectSmartCountItem: (id: string | null) => void;
   toggleSmartCountItem: (id: string) => void;
   saveSmartCountItem: (id: string) => Promise<void> | void;
   createLineItemFromSmartCountItem: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   saveSelectedSmartCountItems: () => Promise<void> | void;
+  deleteSmartCountItem: (id: string) => void;
   clearSmartCountResults: () => void;
   selectDwgEntity: (id: string | null) => void;
   selectDwgEntities: (ids: string[]) => void;
   createLineItemFromDwgEntity: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   createLineItemFromDwgAutoCount: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   createLineItemFromDwgSystem: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
+  deleteDwgEntity: (id: string) => void;
+  deleteDwgAutoCount: (id: string) => void;
+  deleteDwgSystem: (id: string) => void;
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
@@ -504,7 +509,6 @@ function SmartCountInspect({
   if (!smart) return null;
 
   const totalSelected = smart.items.reduce((sum, item) => sum + (item.included ? item.count : 0), 0);
-  const selectedUnsaved = smart.items.some((item) => item.included && !item.isSaved);
   const confidenceClass = (confidence: InspectSmartCountItem["confidence"]) =>
     confidence === "high"
       ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
@@ -530,16 +534,6 @@ function SmartCountInspect({
           </p>
         </div>
         {smart.running && <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin text-emerald-500" />}
-        <button
-          type="button"
-          onClick={() => void actions?.saveSelectedSmartCountItems()}
-          disabled={!selectedUnsaved || smart.running}
-          title="Save selected Smart Count rows as takeoff marks"
-          className="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-bg/40 px-2 text-[10px] font-medium text-fg/70 transition-colors hover:border-emerald-500/35 hover:text-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          <Save className="h-3 w-3" />
-          Save selected
-        </button>
         <button
           type="button"
           onClick={() => actions?.clearSmartCountResults()}
@@ -637,24 +631,21 @@ function SmartCountInspect({
                       onPick={(pick) => void actions?.createLineItemFromSmartCountItem(item.id, pick)}
                       triggerLabel="Add"
                       triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-                      triggerTitle="Add this Smart Count row to a worksheet — pick a category"
+                      triggerTitle="Add this Smart Count row to a worksheet and link it automatically"
                       triggerIcon={<Plus className="h-3 w-3" />}
                     />
                   )}
-                  {!item.isSaved && (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        void actions?.saveSmartCountItem(item.id);
-                      }}
-                      disabled={smart.savingId === item.id}
-                      title="Save as takeoff mark"
-                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-emerald-500/10 hover:text-emerald-500 disabled:cursor-wait"
-                    >
-                      {smart.savingId === item.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      actions?.deleteSmartCountItem(item.id);
+                    }}
+                    title="Delete Smart Count row"
+                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
                   <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
                 </div>
               </div>
@@ -697,6 +688,7 @@ function DwgEntitiesInspect({
     linkCount,
     onSelect,
     onAdd,
+    onDelete,
   }: {
     id: string;
     selected: boolean;
@@ -708,6 +700,7 @@ function DwgEntitiesInspect({
     linkCount: number;
     onSelect: () => void;
     onAdd: (pick: InspectCategoryPick) => void;
+    onDelete: () => void;
   }) => (
     <div
       key={id}
@@ -747,6 +740,17 @@ function DwgEntitiesInspect({
             triggerIcon={<Plus className="h-3 w-3" />}
           />
         )}
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete();
+          }}
+          title="Delete entity row"
+          className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger"
+        >
+          <Trash2 className="h-3 w-3" />
+        </button>
         <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
       </div>
     </div>
@@ -804,6 +808,7 @@ function DwgEntitiesInspect({
             actions?.selectDwgEntities(targets);
           }}
           onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgSystem(id, pick)}
+          onDelete={(id) => actions?.deleteDwgSystem(id)}
         />
 
         <DetectionGroup
@@ -828,6 +833,7 @@ function DwgEntitiesInspect({
             actions?.selectDwgEntities(targets);
           }}
           onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgAutoCount(id, pick)}
+          onDelete={(id) => actions?.deleteDwgAutoCount(id)}
         />
 
         <section>
@@ -854,6 +860,7 @@ function DwgEntitiesInspect({
                 linkCount={entity.linkCount}
                 onSelect={() => actions?.selectDwgEntity(intel.selectedEntityId === entity.id ? null : entity.id)}
                 onAdd={(pick) => void actions?.createLineItemFromDwgEntity(entity.id, pick)}
+                onDelete={() => actions?.deleteDwgEntity(entity.id)}
               />
             ))}
             {entities.length > shownEntities.length && (
@@ -1095,8 +1102,8 @@ function DrawingAnalysisInspect({
             snapshot={snapshot}
             actions={actions}
             onSelect={(id) => actions?.selectDrawingDetection(id, "system")}
-            onSave={(id) => void actions?.saveDrawingDetection(id, "system")}
             onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "system", pick)}
+            onDelete={(id) => actions?.deleteDrawingDetection(id, "system")}
           />
           <DetectionGroup
             title="Symbol candidates"
@@ -1118,8 +1125,8 @@ function DrawingAnalysisInspect({
             snapshot={snapshot}
             actions={actions}
             onSelect={(id) => actions?.selectDrawingDetection(id, "symbol")}
-            onSave={(id) => void actions?.saveDrawingDetection(id, "symbol")}
             onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "symbol", pick)}
+            onDelete={(id) => actions?.deleteDrawingDetection(id, "symbol")}
           />
           {circles.length > 0 && (
             <DetectionGroup
@@ -1141,8 +1148,8 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "circle")}
-              onSave={(id) => void actions?.saveDrawingDetection(id, "circle")}
               onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "circle", pick)}
+              onDelete={(id) => actions?.deleteDrawingDetection(id, "circle")}
             />
           )}
           {lines.length > 0 && (
@@ -1166,8 +1173,8 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "line")}
-              onSave={(id) => void actions?.saveDrawingDetection(id, "line")}
               onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "line", pick)}
+              onDelete={(id) => actions?.deleteDrawingDetection(id, "line")}
             />
           )}
           {texts.length > 0 && (
@@ -1188,6 +1195,7 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "text")}
+              onDelete={(id) => actions?.deleteDrawingDetection(id, "text")}
             />
           )}
         </div>
@@ -1281,8 +1289,8 @@ function DetectionGroup({
   snapshot,
   actions,
   onSelect,
-  onSave,
   onAdd,
+  onDelete,
 }: {
   title: string;
   count: number;
@@ -1291,8 +1299,8 @@ function DetectionGroup({
   snapshot: InspectSnapshot;
   actions: InspectActions | null;
   onSelect: (id: string) => void;
-  onSave?: (id: string) => void;
   onAdd?: (id: string, kind: Exclude<InspectDrawingDetectionKind, "text">, pick: InspectCategoryPick) => void;
+  onDelete?: (id: string, kind: InspectDrawingDetectionKind) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
   const shownCount = rows.length;
@@ -1364,24 +1372,22 @@ function DetectionGroup({
                   onPick={(pick) => onAdd(row.id, row.kind as Exclude<InspectDrawingDetectionKind, "text">, pick)}
                   triggerLabel="Add"
                   triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-                  triggerTitle="Add this detected entity to a worksheet — pick a category"
+                  triggerTitle="Add this detected entity to a worksheet and link it automatically"
                   triggerIcon={<Plus className="h-3 w-3" />}
                 />
                 )
               )}
-              {onSave && row.kind !== "text" && row.savedCount === 0 && (
+              {onDelete && (
                 <button
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
-                    if (row.requiresCalibration) return;
-                    onSave(row.id);
+                    onDelete(row.id, row.kind);
                   }}
-                  disabled={row.saving || row.requiresCalibration}
-                  title={row.requiresCalibration ? "Set drawing scale before saving linear detections" : "Save as takeoff mark"}
-                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-sky-500/10 hover:text-sky-500 disabled:cursor-not-allowed disabled:text-warning/45"
+                  title="Delete entity row"
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger"
                 >
-                  {row.saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                  <Trash2 className="h-3 w-3" />
                 </button>
               )}
               <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />

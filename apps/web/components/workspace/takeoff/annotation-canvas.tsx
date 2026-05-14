@@ -681,8 +681,8 @@ export function AnnotationCanvas({
 
   function findPdfSnapPoint(point: Point): Point | null {
     if (!pdfCanvas) return null;
-    const searchRadius = 8;
-    const darknessThreshold = 112;
+    const searchRadius = 5;
+    const darknessThreshold = 96;
     const srcX = Math.max(0, Math.round(point.x - searchRadius));
     const srcY = Math.max(0, Math.round(point.y - searchRadius));
     const size = searchRadius * 2 + 1;
@@ -715,7 +715,7 @@ export function AnnotationCanvas({
   }
 
   function findAnnotationSnapPoint(point: Point): Point | null {
-    const snapDistance = 10;
+    const snapDistance = 6;
     let best: { point: Point; distance: number } | null = null;
     for (const annotation of annotations) {
       for (const candidate of annotation.points) {
@@ -737,7 +737,7 @@ export function AnnotationCanvas({
     if (!snapEnabled) return point;
     const candidate = snapPointRef.current ?? findSnapPoint(point);
     if (!candidate) return point;
-    return Math.hypot(candidate.x - point.x, candidate.y - point.y) <= 14 ? candidate : point;
+    return Math.hypot(candidate.x - point.x, candidate.y - point.y) <= 7 ? candidate : point;
   }
 
   /* Determine if the active tool needs multi-click (polyline/polygon) */
@@ -843,7 +843,7 @@ export function AnnotationCanvas({
     if (panStateRef.current) return; // window listener handles it
     if (!activeTool || activeTool === "select") return;
     const pt = getCanvasPoint(e);
-    const snap = activeTool === "calibrate" ? snapPointRef.current : findSnapPoint(pt);
+    const snap = activeTool === "calibrate" ? null : findSnapPoint(pt);
     if (activeTool !== "calibrate") setSnapPoint(snap);
     setCursorPos(snap ?? pt);
     if (activeTool === "calibrate") {
@@ -867,8 +867,8 @@ export function AnnotationCanvas({
     const SRC_SIZE = 60;
     const MAGNIFY = 4;
     const DEST_SIZE = SRC_SIZE * MAGNIFY;
-    const SEARCH_RADIUS = 10;
-    const DARKNESS_THRESHOLD = 110;
+    const SEARCH_RADIUS = 5;
+    const DARKNESS_THRESHOLD = 96;
     loupe.width = DEST_SIZE;
     loupe.height = DEST_SIZE;
     ctx.imageSmoothingEnabled = false;

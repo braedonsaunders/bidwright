@@ -214,6 +214,78 @@ type DrawingAnalysisOverlayState = {
   text: boolean;
 };
 
+function lineSegmentBounds(lines: DrawingLineSegment[]): DrawingLineSegment["bbox"] {
+  if (lines.length === 0) return { x: 0, y: 0, width: 1, height: 1 };
+  const xs = lines.flatMap((line) => [line.x1, line.x2]);
+  const ys = lines.flatMap((line) => [line.y1, line.y2]);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
+function updateDrawingAnalysisSummary(result: DrawingGeometryAnalysisResult): DrawingGeometryAnalysisResult {
+  return {
+    ...result,
+    summary: {
+      ...result.summary,
+      lineCount: result.lines.length,
+      circleCount: result.circles.length,
+      symbolCandidateCount: result.symbolCandidates.length,
+      textRegionCount: result.textRegions.length,
+      systemCount: result.systems.length,
+      totalSystemLengthPx: result.systems.reduce((sum, system) => sum + system.lengthPx, 0),
+    },
+  };
+}
+
+function removeDrawingAnalysisEntity(
+  result: DrawingGeometryAnalysisResult | null,
+  id: string,
+  kind: InspectDrawingDetectionKind,
+): DrawingGeometryAnalysisResult | null {
+  if (!result) return result;
+  if (kind === "system") {
+    const systems = result.systems.filter((system) => system.id !== id);
+    return systems.length === result.systems.length ? result : updateDrawingAnalysisSummary({ ...result, systems });
+  }
+  if (kind === "line") {
+    const lines = result.lines.filter((line) => line.id !== id);
+    if (lines.length === result.lines.length) return result;
+    const lineById = new Map(lines.map((line) => [line.id, line]));
+    const systems = result.systems
+      .map((system) => {
+        if (!system.segmentIds.includes(id)) return system;
+        const segmentIds = system.segmentIds.filter((segmentId) => segmentId !== id);
+        const segments = segmentIds
+          .map((segmentId) => lineById.get(segmentId))
+          .filter((line): line is DrawingLineSegment => Boolean(line));
+        return {
+          ...system,
+          segmentIds,
+          segmentCount: segments.length,
+          lengthPx: segments.reduce((sum, segment) => sum + segment.lengthPx, 0),
+          bbox: lineSegmentBounds(segments),
+        };
+      })
+      .filter((system) => system.segmentIds.length > 0);
+    return updateDrawingAnalysisSummary({ ...result, lines, systems });
+  }
+  if (kind === "symbol") {
+    const symbolCandidates = result.symbolCandidates.filter((candidate) => candidate.id !== id);
+    return symbolCandidates.length === result.symbolCandidates.length
+      ? result
+      : updateDrawingAnalysisSummary({ ...result, symbolCandidates });
+  }
+  if (kind === "circle") {
+    const circles = result.circles.filter((circle) => circle.id !== id);
+    return circles.length === result.circles.length ? result : updateDrawingAnalysisSummary({ ...result, circles });
+  }
+  const textRegions = result.textRegions.filter((region) => region.id !== id);
+  return textRegions.length === result.textRegions.length ? result : updateDrawingAnalysisSummary({ ...result, textRegions });
+}
+
 type TakeoffHistoryCommand =
   | { kind: "create"; annotation: TakeoffAnnotation }
   | { kind: "delete"; annotation: TakeoffAnnotation }
@@ -860,6 +932,7 @@ import type {
   InspectCategoryPick,
   InspectDwgIntelligenceSnapshot,
   InspectDrawingAnalysisSettings,
+  InspectDrawingDetectionKind,
   InspectModelElement,
   InspectRateScheduleItemOption,
   InspectSpreadsheetRow,
@@ -2490,6 +2563,9 @@ export function TakeoffTab({
         createLineItemFromDrawingDetection: async (id, kind, pick) => {
           await handleCreateDrawingDetectionLineItem(id, kind, pick);
         },
+        deleteDrawingDetection: (id, kind) => {
+          handleDeleteDrawingDetection(id, kind);
+        },
         selectSmartCountItem: (id) => {
           handleSelectSmartCountItem(id);
         },
@@ -2504,6 +2580,9 @@ export function TakeoffTab({
         },
         saveSelectedSmartCountItems: async () => {
           await handleSaveSelectedSmartCountItems();
+        },
+        deleteSmartCountItem: (id) => {
+          handleDeleteSmartCountItem(id);
         },
         clearSmartCountResults: () => {
           handleClearSmartCountResults();
@@ -2607,6 +2686,15 @@ export function TakeoffTab({
         },
         createLineItemFromDwgSystem: async (id, pick) => {
           await handleCreateDwgRowLineItem("system", id, pick);
+        },
+        deleteDwgEntity: (id) => {
+          handleDeleteDwgEntityRow(id);
+        },
+        deleteDwgAutoCount: (id) => {
+          handleDeleteDwgAutoCountRow(id);
+        },
+        deleteDwgSystem: (id) => {
+          handleDeleteDwgSystemRow(id);
         },
         createLineItemFromSpreadsheetRow: async (rowIndex, pick) => {
           await handleCreateSpreadsheetRowLineItem(rowIndex, pick);
@@ -3783,6 +3871,17 @@ export function TakeoffTab({
     setSmartCountSavingId(null);
   }
 
+  function handleDeleteSmartCountItem(id: string) {
+    const index = smartCountItems?.findIndex((item) => item.id === id) ?? -1;
+    if (index < 0) return;
+    setSmartCountItems((current) => current?.filter((item) => item.id !== id) ?? null);
+    setSmartCountIncluded((included) => included.filter((_, includedIndex) => includedIndex !== index));
+    if (selectedSmartCountItemId === id) setSelectedSmartCountItemId(null);
+    if (smartCountSavingId === id) setSmartCountSavingId(null);
+    setToastType("success");
+    setToastMessage("Deleted Smart Count row from the review list.");
+  }
+
   function smartCountSnapshotItems() {
     if (!smartCountItems) return [];
     return smartCountItems.map((item, index) => {
@@ -4285,6 +4384,23 @@ export function TakeoffTab({
     if (bounds) focusDrawingBounds(bounds);
   }
 
+  function handleDeleteDrawingDetection(id: string, kind: InspectDrawingDetectionKind) {
+    const next = removeDrawingAnalysisEntity(drawingAnalysisResult, id, kind);
+    if (next === drawingAnalysisResult) return;
+    setDrawingAnalysisResult(next);
+    if (selectedDrawingDetectionId === id) {
+      setSelectedDrawingDetectionId(null);
+      if (selectedDocId) {
+        postTakeoffMessage({ type: "drawing-detection-selection", docId: selectedDocId, page, detectionId: null });
+      }
+    }
+    if (selectedDocId) {
+      postTakeoffMessage({ type: "drawing-analysis-result", docId: selectedDocId, page, analysis: next });
+    }
+    setToastType("success");
+    setToastMessage("Deleted detected entity from this analysis run.");
+  }
+
   useEffect(() => {
     const id = pendingDrawingFocusRef.current;
     if (!id || selectedDrawingDetectionId !== id || !drawingAnalysisResult) return;
@@ -4562,7 +4678,14 @@ export function TakeoffTab({
           confidence: circle.confidence,
           source: "drawing-intelligence",
           measurement: { value: 1, unit: "count" },
-          metadata: { sourceTool: "drawing-intelligence", analysisId: drawingAnalysisResult.analysisId, preset: drawingAnalysisPreset, radius: circle.radius, bounds: circle.bbox },
+          metadata: {
+            sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
+            preset: drawingAnalysisPreset,
+            detectionId: circle.id,
+            radius: circle.radius,
+            bounds: circle.bbox,
+          },
         }],
       });
       const saved = mapSavedDrawingAnnotations(result.annotations, [fallback]);
@@ -4634,6 +4757,7 @@ export function TakeoffTab({
             sourceTool: "drawing-intelligence",
             analysisId: drawingAnalysisResult.analysisId,
             preset: drawingAnalysisPreset,
+            detectionId: candidate.id,
             bounds: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
           },
         }],
@@ -4673,7 +4797,7 @@ export function TakeoffTab({
       }
       if (targets.length === 0) {
         setToastType("error");
-        setToastMessage("Save the detected entity before adding it to a worksheet.");
+        setToastMessage("Could not save and link that detected entity automatically.");
         return;
       }
 
@@ -5455,6 +5579,64 @@ export function TakeoffTab({
       setToastType("error");
       setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that DWG/DXF entity."));
     }
+  }
+
+  function clearDwgSelectionIf(sourceEntityIds: string[]) {
+    const selectedEntityId = (enrichedDwgIntelligence ?? dwgIntelligence)?.selectedEntityId;
+    if (!selectedEntityId || !sourceEntityIds.includes(selectedEntityId)) return;
+    dwgActionsRef.current?.selectEntity(null);
+    if (selection?.kind === "cad-entity") onSelectionChange?.(null);
+  }
+
+  function handleDeleteDwgEntityRow(id: string) {
+    const row = dwgIntelligence?.entities.find((candidate) => candidate.id === id);
+    if (!row) return;
+    clearDwgSelectionIf([id]);
+    setDwgIntelligence((current) => {
+      if (!current) return current;
+      const entities = current.entities.filter((candidate) => candidate.id !== id);
+      return {
+        ...current,
+        selectedEntityId: current.selectedEntityId === id ? null : current.selectedEntityId,
+        entityCount: entities.length,
+        visibleEntityCount: entities.length,
+        entities,
+      };
+    });
+    setToastType("success");
+    setToastMessage("Deleted DWG/DXF entity row from the review list.");
+  }
+
+  function handleDeleteDwgAutoCountRow(id: string) {
+    const row = dwgIntelligence?.autoCounts.find((candidate) => candidate.id === id);
+    if (!row) return;
+    clearDwgSelectionIf(row.sourceEntityIds);
+    setDwgIntelligence((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        selectedEntityId: row.sourceEntityIds.includes(current.selectedEntityId ?? "") ? null : current.selectedEntityId,
+        autoCounts: current.autoCounts.filter((candidate) => candidate.id !== id),
+      };
+    });
+    setToastType("success");
+    setToastMessage("Deleted DWG/DXF Auto Count row from the review list.");
+  }
+
+  function handleDeleteDwgSystemRow(id: string) {
+    const row = dwgIntelligence?.systems.find((candidate) => candidate.id === id);
+    if (!row) return;
+    clearDwgSelectionIf(row.sourceEntityIds);
+    setDwgIntelligence((current) => {
+      if (!current) return current;
+      return {
+        ...current,
+        selectedEntityId: row.sourceEntityIds.includes(current.selectedEntityId ?? "") ? null : current.selectedEntityId,
+        systems: current.systems.filter((candidate) => candidate.id !== id),
+      };
+    });
+    setToastType("success");
+    setToastMessage("Deleted DWG/DXF traced system from the review list.");
   }
 
   async function handleCreateAnnotationLineItem(annotation: TakeoffAnnotation, pick: string | InspectCategoryPick) {
