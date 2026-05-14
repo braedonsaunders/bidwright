@@ -1,0 +1,37 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "bidwright-demo-api",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-05-13",
+  "compatibility_flags": [
+    "nodejs_compat"
+  ],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "DEMO_ALLOWED_ORIGINS": "https://demo.bidwright.app,http://localhost:3000,http://localhost:3737"
+  },
+  "containers": [
+    {
+      "class_name": "BidwrightDemoApiContainer",
+      "image": "../../Dockerfile.demo-api",
+      "max_instances": 1,
+      "instance_type": "standard-1"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "BIDWRIGHT_API",
+        "class_name": "BidwrightDemoApiContainer"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["BidwrightDemoApiContainer"]
+    }
+  ]
+}

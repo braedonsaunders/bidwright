@@ -11,6 +11,7 @@ coverage
 playwright-report/
 test-results/
 .turbo
+.vercel
 .prisma
 packages/db/generated/
 .codex/

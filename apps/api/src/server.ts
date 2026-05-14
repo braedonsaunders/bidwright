@@ -108,6 +108,7 @@ import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, generateSnapPdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { sendQuoteEmail } from "./services/email-service.js";
+import { DEMO_DISABLED_MESSAGE, isApiDemoMode } from "./demo-mode.js";
 import { parseImportFile } from "./services/catalog-import-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
 import {
@@ -1935,6 +1936,12 @@ export function buildServer() {
     status: "ok",
     service: "bidwright-api",
     dataRoot: resolveApiPath()
+  }));
+
+  app.get("/api/demo/status", async () => ({
+    ok: true,
+    demo: isApiDemoMode(),
+    disabledMessage: DEMO_DISABLED_MESSAGE,
   }));
 
   const stringOrStringArray = z.union([z.string(), z.array(z.string())]).optional();
@@ -4839,6 +4846,34 @@ export function buildServer() {
     pmxml: "application/xml",
   };
 
+  function isRemoteStoragePath(storagePath: string) {
+    try {
+      const url = new URL(storagePath);
+      return url.protocol === "https:" || url.protocol === "http:";
+    } catch {
+      return false;
+    }
+  }
+
+  async function sendRemoteStoredFile(
+    reply: FastifyReply,
+    storagePath: string,
+    fileName: string,
+    inline: boolean,
+    fallbackMime: string,
+  ) {
+    const response = await fetch(storagePath, { redirect: "follow" });
+    if (!response.ok) {
+      return reply.code(404).send({ message: `Remote file not available (${response.status})` });
+    }
+
+    const bytes = Buffer.from(await response.arrayBuffer());
+    reply.header("Content-Type", response.headers.get("content-type") || fallbackMime);
+    reply.header("Content-Length", String(bytes.byteLength));
+    reply.header("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${sanitizeFileName(fileName)}"`);
+    return reply.send(bytes);
+  }
+
   app.get("/projects/:projectId/files/:nodeId/download", async (request, reply) => {
     const { projectId, nodeId } = request.params as { projectId: string; nodeId: string };
     const node = await request.store!.getFileNode(nodeId);
@@ -4852,16 +4887,20 @@ export function buildServer() {
       return reply.code(404).send({ message: "File has no stored content" });
     }
 
+    const ext = path.extname(node.name).replace(/^\./, "").toLowerCase();
+    const mime = MIME_MAP[ext] || "application/octet-stream";
+    const inline = (request.query as Record<string, string> | undefined)?.inline === "1";
+
+    if (isRemoteStoragePath(node.storagePath)) {
+      return sendRemoteStoredFile(reply, node.storagePath, node.name, inline, mime);
+    }
+
     const absPath = resolveApiPath(node.storagePath);
     try {
       await access(absPath);
     } catch {
       return reply.code(404).send({ message: "File not found on disk" });
     }
-
-    const ext = path.extname(node.name).replace(/^\./, "").toLowerCase();
-    const mime = MIME_MAP[ext] || "application/octet-stream";
-    const inline = request.query && (request.query as Record<string, string>).inline === "1";
 
     reply.header("Content-Type", mime);
     reply.header("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${sanitizeFileName(node.name)}"`);
@@ -4879,12 +4918,16 @@ export function buildServer() {
 
     // Try to serve the original file from storagePath
     if (doc.storagePath) {
+      const ext = path.extname(doc.fileName).replace(/^\./, "").toLowerCase();
+      const mime = MIME_MAP[ext] || "application/octet-stream";
+      const inline = (request.query as Record<string, string> | undefined)?.inline === "1";
+      if (isRemoteStoragePath(doc.storagePath)) {
+        return sendRemoteStoredFile(reply, doc.storagePath, doc.fileName, inline, mime);
+      }
+
       const absPath = resolveApiPath(doc.storagePath);
       try {
         await access(absPath);
-        const ext = path.extname(doc.fileName).replace(/^\./, "").toLowerCase();
-        const mime = MIME_MAP[ext] || "application/octet-stream";
-        const inline = request.query && (request.query as Record<string, string>).inline === "1";
         reply.header("Content-Type", mime);
         reply.header("Content-Disposition", `${inline ? "inline" : "attachment"}; filename="${sanitizeFileName(doc.fileName)}"`);
         return reply.send(createReadStream(absPath));

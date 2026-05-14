@@ -50,11 +50,13 @@ test("schedule harness supports gantt, baseline, calendar, resource, and task ed
   const splitter = page.getByTestId("gantt-splitter");
   await expect(splitter).toHaveCount(1);
 
+  await page.getByTestId("schedule-timeline-menu").click();
   await page.getByTestId("schedule-zoom-month").click();
   const monthHeaders = await page.locator('[data-testid^="gantt-header-column-"]').allTextContents();
   expect(monthHeaders.length).toBeGreaterThanOrEqual(12);
   expect(monthHeaders.some((label) => label.includes("Sep") || label.includes("Oct") || label.includes("Jan"))).toBeTruthy();
 
+  await page.getByTestId("schedule-timeline-menu").click();
   await page.getByTestId("schedule-zoom-day").click();
   const closeoutBar = page.getByTestId("gantt-bar-task-closeout");
   await expect(closeoutBar).toBeVisible();
@@ -74,6 +76,7 @@ test("schedule harness supports gantt, baseline, calendar, resource, and task ed
   await dragBy(page.getByTestId("gantt-bar-end-task-closeout"), page, 60);
   await expect(page.getByText("Schedule action failed")).toHaveCount(0);
 
+  await page.getByTestId("schedule-actions-menu").click();
   await page.getByTestId("schedule-manage").click();
   const managementModal = page.getByTestId("schedule-management-modal");
   await expect(managementModal).toBeVisible();
@@ -95,6 +98,7 @@ test("schedule harness supports gantt, baseline, calendar, resource, and task ed
   await page.getByTestId("schedule-management-close").click();
   await expect(page.getByTestId("schedule-management-modal")).toHaveCount(0);
 
+  await page.getByTestId("schedule-view-menu").click();
   await page.getByTestId("schedule-view-list").click();
   await expect(page.getByTestId("schedule-list")).toBeVisible();
   await expect(page.getByTestId("schedule-list-row-task-curbs")).toContainText("Crew A");
@@ -105,6 +109,7 @@ test("schedule harness supports gantt, baseline, calendar, resource, and task ed
   await page.getByText("Add Child Task", { exact: true }).click();
   await expect(page.getByTestId("schedule-list")).toContainText("New Child Task");
 
+  await page.getByTestId("schedule-view-menu").click();
   await page.getByTestId("schedule-view-board").click();
   await expect(page.getByTestId("schedule-board")).toBeVisible();
   await page.getByTestId("schedule-board-card-task-closeout").dragTo(page.getByTestId("schedule-board-column-complete"));

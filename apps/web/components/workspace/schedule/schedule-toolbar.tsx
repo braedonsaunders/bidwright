@@ -1,8 +1,10 @@
 "use client";
 
+import type { ReactNode } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import {
   Calendar,
+  Check,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -13,13 +15,15 @@ import {
   LayoutGrid,
   List,
   Minus,
+  MoreHorizontal,
   Plus,
   Save,
   Settings2,
+  SlidersHorizontal,
   Trash2,
   Upload,
 } from "lucide-react";
-import { Badge, Button, CompactSelect, Select } from "@/components/ui";
+import { Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { ScheduleBaseline } from "@/lib/api";
 import type { ScheduleInsights, ScheduleQuickFilter, ZoomLevel } from "@/lib/schedule-utils";
@@ -76,14 +80,21 @@ const VIEW_OPTIONS: Array<{
 
 const HEALTH_OPTIONS: Array<{
   value: ScheduleQuickFilter;
+  label: string;
   shortLabel: string;
 }> = [
-  { value: "all", shortLabel: "All" },
-  { value: "lookahead_14", shortLabel: "2W" },
-  { value: "critical", shortLabel: "Critical" },
-  { value: "overdue", shortLabel: "Late" },
-  { value: "variance", shortLabel: "Slip" },
-  { value: "issues", shortLabel: "Issues" },
+  { value: "all", label: "All Tasks", shortLabel: "All" },
+  { value: "lookahead_14", label: "Next 2 Weeks", shortLabel: "2W" },
+  { value: "critical", label: "Critical Path", shortLabel: "Critical" },
+  { value: "overdue", label: "Late Tasks", shortLabel: "Late" },
+  { value: "variance", label: "Baseline Slip", shortLabel: "Slip" },
+  { value: "issues", label: "Needs Attention", shortLabel: "Issues" },
+];
+
+const ZOOM_OPTIONS: Array<{ value: ZoomLevel; label: string }> = [
+  { value: "day", label: "Day" },
+  { value: "week", label: "Week" },
+  { value: "month", label: "Month" },
 ];
 
 function formatCompactDate(date: Date | null) {
@@ -132,8 +143,12 @@ export function ScheduleToolbar({
 }: ScheduleToolbarProps) {
   const parsedStart = parseDate(dateStart);
   const parsedEnd = parseDate(dateEnd);
-  const activeBaseline = baselines.find((baseline) => baseline.id === activeBaselineId) ?? null;
-  const baselineLabel = activeBaseline?.name ?? (hasBaseline ? "Primary" : "None");
+  const activeBaseline =
+    baselines.find((baseline) => baseline.id === activeBaselineId) ??
+    baselines.find((baseline) => baseline.isPrimary) ??
+    baselines[0] ??
+    null;
+  const baselineLabel = activeBaseline?.name ?? "None";
   const compactDateRange = `${formatCompactDate(parsedStart)}-${formatCompactDate(parsedEnd)}`;
   const healthCounts: Record<ScheduleQuickFilter, number> = {
     all: insights.totalTasks,
@@ -144,317 +159,342 @@ export function ScheduleToolbar({
     variance: insights.behindBaselineTaskIds.size,
     issues: insights.attentionTaskIds.size,
   };
+  const activeView = VIEW_OPTIONS.find((option) => option.value === view) ?? VIEW_OPTIONS[0];
+  const activeHealth = HEALTH_OPTIONS.find((option) => option.value === quickFilter) ?? HEALTH_OPTIONS[0];
 
   return (
     <div className="rounded-t-lg rounded-b-none border border-line bg-panel shadow-sm" data-testid="schedule-toolbar">
-      <div className="grid w-full min-w-0 grid-cols-5 items-center gap-1 px-1 py-1">
-        <div className="flex min-w-0 gap-1 rounded-md bg-bg/45 p-0.5">
+      <div className="flex w-full min-w-0 flex-wrap items-center gap-1.5 px-2 py-1.5">
+        <ScheduleMenu
+          label={activeView.label}
+          icon={activeView.icon}
+          testId="schedule-view-menu"
+          title="Schedule view"
+        >
           {VIEW_OPTIONS.map(({ value, label, icon: Icon }) => (
-            <button
+            <ScheduleMenuItem
               key={value}
-              type="button"
-              title={label}
-              aria-label={label}
+              icon={Icon}
+              label={label}
+              selected={view === value}
               onClick={() => onViewChange(value)}
-              data-testid={`schedule-view-${value}`}
-              className={cn(
-                "flex h-6 min-w-0 flex-1 items-center justify-center gap-1 rounded-md px-1.5 text-[10px] font-semibold transition-colors",
-                view === value ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:bg-panel/70 hover:text-fg/70"
-              )}
-            >
-              <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline truncate">{label}</span>
-            </button>
+              testId={`schedule-view-${value}`}
+            />
           ))}
-        </div>
+        </ScheduleMenu>
 
-        <div className="min-w-0 rounded-md bg-bg/45 p-0.5">
-          {view === "gantt" ? (
-            <div className="grid grid-cols-8 gap-1">
-              <Button
-                variant="ghost"
-                size="xs"
-                title="Scroll earlier"
-                aria-label="Scroll earlier"
-                onClick={onScrollPrev}
-                data-testid="schedule-scroll-prev"
-                className="h-6 w-full rounded-md px-0 text-[10px]"
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                title="Jump to today"
-                aria-label="Jump to today"
-                onClick={onScrollToday}
-                data-testid="schedule-scroll-today"
-                className="h-6 w-full rounded-md px-0 text-[10px]"
-              >
-                <Calendar className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                title="Scroll later"
-                aria-label="Scroll later"
-                onClick={onScrollNext}
-                data-testid="schedule-scroll-next"
-                className="h-6 w-full rounded-md px-0 text-[10px]"
-              >
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-              <Button
-                variant="ghost"
-                size="xs"
-                title="Zoom out"
-                aria-label="Zoom out"
-                onClick={onZoomOut}
-                disabled={!canZoomOut}
-                data-testid="schedule-zoom-out"
-                className="h-6 w-full rounded-md px-0 text-[10px]"
-              >
-                <Minus className="h-3.5 w-3.5" />
-              </Button>
-              {(["day", "week", "month"] as const).map((level) => (
-                <button
-                  key={level}
-                  type="button"
-                  title={`Zoom ${level}`}
-                  onClick={() => onZoomChange(level)}
-                  data-testid={`schedule-zoom-${level}`}
-                  className={cn(
-                    "h-6 rounded-md px-0 text-[10px] font-semibold uppercase transition-colors",
-                    zoomLevel === level ? "bg-panel text-fg shadow-sm" : "text-fg/45 hover:bg-panel/70 hover:text-fg/70"
-                  )}
-                >
-                  {level.charAt(0)}
-                </button>
-              ))}
-              <Button
-                variant="ghost"
-                size="xs"
-                title="Zoom in"
-                aria-label="Zoom in"
-                onClick={onZoomIn}
-                disabled={!canZoomIn}
-                data-testid="schedule-zoom-in"
-                className="h-6 w-full rounded-md px-0 text-[10px]"
-              >
-                <Plus className="h-3.5 w-3.5" />
-              </Button>
+        {view === "gantt" ? (
+          <ScheduleMenu
+            label={`Timeline: ${ZOOM_OPTIONS.find((option) => option.value === zoomLevel)?.label ?? "Week"}`}
+            icon={SlidersHorizontal}
+            testId="schedule-timeline-menu"
+            title="Timeline controls"
+          >
+            <MenuSectionLabel>Move Timeline</MenuSectionLabel>
+            <div className="grid grid-cols-3 gap-1">
+              <ScheduleMenuIconButton icon={ChevronLeft} label="Earlier" onClick={onScrollPrev} testId="schedule-scroll-prev" />
+              <ScheduleMenuIconButton icon={Calendar} label="Today" onClick={onScrollToday} testId="schedule-scroll-today" />
+              <ScheduleMenuIconButton icon={ChevronRight} label="Later" onClick={onScrollNext} testId="schedule-scroll-next" />
             </div>
-          ) : (
-            <div className="flex h-6 items-center justify-between rounded-md bg-panel/60 px-2 text-[10px] text-fg/50">
-              <span className="font-medium text-fg/65">{view === "list" ? "List Mode" : "Board Mode"}</span>
-              <span>{insights.totalTasks} tasks</span>
+            <MenuSeparator />
+            <MenuSectionLabel>Zoom</MenuSectionLabel>
+            <div className="grid grid-cols-[28px_1fr_28px] gap-1">
+              <ScheduleMenuIconButton icon={Minus} label="Out" onClick={onZoomOut} disabled={!canZoomOut} testId="schedule-zoom-out" />
+              <div className="grid grid-cols-3 gap-1">
+                {ZOOM_OPTIONS.map((option) => (
+                  <ScheduleMenuPill
+                    key={option.value}
+                    label={option.label}
+                    selected={zoomLevel === option.value}
+                    onClick={() => onZoomChange(option.value)}
+                    testId={`schedule-zoom-${option.value}`}
+                  />
+                ))}
+              </div>
+              <ScheduleMenuIconButton icon={Plus} label="In" onClick={onZoomIn} disabled={!canZoomIn} testId="schedule-zoom-in" />
             </div>
-          )}
-        </div>
-
-        <div className="grid min-w-0 grid-cols-4 gap-1 rounded-md bg-bg/45 p-0.5">
-          <Button
-            variant="secondary"
-            size="xs"
-            title="Add task"
-            aria-label="Add task"
-            onClick={onAddTask}
-            data-testid="schedule-add-task"
-            className="h-6 w-full rounded-md px-1.5 text-[10px]"
-          >
-            <Calendar className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline truncate">Task</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            title="Import schedule"
-            aria-label="Import schedule"
-            onClick={onOpenImport}
-            className="h-6 w-full rounded-md px-1.5 text-[10px]"
-          >
-            <Upload className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline truncate">Import</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="xs"
-            title="Toggle filters"
-            aria-label="Toggle filters"
-            onClick={onToggleFilters}
-            className={cn("h-6 w-full rounded-md px-1.5 text-[10px]", filtersActive && "text-accent")}
-          >
-            <Filter className="h-3.5 w-3.5 shrink-0" />
-            <span className="hidden sm:inline truncate">Filter</span>
-          </Button>
-          {view === "gantt" ? (
-            <Button
-              variant="ghost"
-              size="xs"
-              title="Toggle critical path"
-              aria-label="Toggle critical path"
+            <MenuSeparator />
+            <ScheduleMenuItem
+              icon={GitBranch}
+              label="Critical Path"
+              selected={showCriticalPath}
               onClick={onToggleCriticalPath}
-              className={cn("h-6 w-full rounded-md px-1.5 text-[10px]", showCriticalPath && "text-accent")}
-            >
-              <GitBranch className="h-3.5 w-3.5 shrink-0" />
-              <span className="hidden sm:inline truncate">Path</span>
-            </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="xs"
-              title={showBaseline ? "Hide baseline" : "Show baseline"}
-              aria-label={showBaseline ? "Hide baseline" : "Show baseline"}
-              onClick={onToggleBaseline}
-              disabled={!hasBaseline}
-              data-testid="schedule-toggle-baseline"
-              className={cn("h-6 w-full rounded-md px-1.5 text-[10px]", showBaseline && "text-accent")}
-            >
-              {showBaseline ? <EyeOff className="h-3.5 w-3.5 shrink-0" /> : <Eye className="h-3.5 w-3.5 shrink-0" />}
-              <span className="hidden sm:inline truncate">Base</span>
-            </Button>
-          )}
-        </div>
+            />
+          </ScheduleMenu>
+        ) : null}
 
-        <div className="flex min-w-0 items-center gap-1 rounded-md bg-bg/45 p-0.5">
-          <CompactSelect
-            value={quickFilter}
-            onValueChange={(value) => onQuickFilterChange(value as ScheduleQuickFilter)}
-            options={HEALTH_OPTIONS.map((option) => ({
-              value: option.value,
-              label: `${option.shortLabel} ${healthCounts[option.value]}`,
-              disabled: option.value === "variance" && !hasBaseline,
-            }))}
-            className="h-6 min-w-0 flex-[1.4] text-[10px]"
-            data-testid="schedule-health-select"
-            title="Schedule health filter"
-            aria-label="Schedule health filter"
-          />
+        <ScheduleMenu
+          label={`${activeHealth.shortLabel} ${healthCounts[activeHealth.value]}`}
+          icon={Filter}
+          active={quickFilter !== "all"}
+          testId="schedule-health-menu"
+          title="Schedule health filter"
+        >
+          {HEALTH_OPTIONS.map((option) => (
+            <ScheduleMenuItem
+              key={option.value}
+              icon={Filter}
+              label={option.label}
+              detail={`${healthCounts[option.value]} task${healthCounts[option.value] === 1 ? "" : "s"}`}
+              selected={quickFilter === option.value}
+              disabled={option.value === "variance" && !hasBaseline}
+              onClick={() => onQuickFilterChange(option.value)}
+              testId={`schedule-health-${option.value}`}
+            />
+          ))}
+        </ScheduleMenu>
+
+        <div className="hidden min-w-0 items-center gap-1 rounded-md bg-bg/45 p-0.5 md:flex">
           <Badge
             tone={insights.deadlineMissTaskIds.size > 0 ? "danger" : "default"}
-            className="h-6 min-w-0 flex-1 justify-center px-1 py-0 text-[10px]"
+            className="h-6 justify-center px-1.5 py-0 text-[10px]"
             title={`${insights.deadlineMissTaskIds.size} deadline misses`}
           >
             D {insights.deadlineMissTaskIds.size}
           </Badge>
           <Badge
             tone={insights.resourceConflictTaskIds.size > 0 ? "warning" : "default"}
-            className="h-6 min-w-0 flex-1 justify-center px-1 py-0 text-[10px]"
+            className="h-6 justify-center px-1.5 py-0 text-[10px]"
             title={`${insights.resourceConflictTaskIds.size} resource conflicts`}
           >
             R {insights.resourceConflictTaskIds.size}
           </Badge>
           <Badge
             tone={insights.constraintViolationTaskIds.size > 0 ? "warning" : "default"}
-            className="h-6 min-w-0 flex-1 justify-center px-1 py-0 text-[10px]"
+            className="h-6 justify-center px-1.5 py-0 text-[10px]"
             title={`${insights.constraintViolationTaskIds.size} constraint violations`}
           >
             C {insights.constraintViolationTaskIds.size}
           </Badge>
-        </div>
-
-        <div className="flex min-w-0 items-center gap-1 rounded-md bg-bg/45 p-0.5">
-          <Popover.Root>
-            <Popover.Trigger asChild>
-              <Button
-                variant="ghost"
-                size="xs"
-                className="h-6 min-w-0 flex-[0.95] rounded-md px-1.5 text-[10px]"
-                title={`Baseline controls. Active: ${baselineLabel}`}
-                aria-label={`Baseline controls. Active: ${baselineLabel}`}
-              >
-                <Save className="h-3.5 w-3.5" />
-                <span className="truncate">Baseline</span>
-              </Button>
-            </Popover.Trigger>
-            <Popover.Portal>
-              <Popover.Content
-                sideOffset={6}
-                align="end"
-                className="z-50 w-72 rounded-xl border border-line bg-panel p-3 shadow-xl"
-              >
-                <div className="space-y-3">
-                  <div>
-                    <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-fg/35">Baseline</p>
-                    <p className="mt-1 text-xs text-fg/55">
-                      Active: <span className="font-medium text-fg/75">{baselineLabel}</span>
-                    </p>
-                  </div>
-
-                  <div>
-                    <Select
-                      data-testid="schedule-baseline-select"
-                      value={activeBaselineId || "__none__"}
-                      onValueChange={(v) => onActiveBaselineChange(v === "__none__" ? "" : v)}
-                      disabled={baselines.length === 0}
-                      className="h-8 text-xs"
-                      size="sm"
-                      options={[
-                        { value: "__none__", label: "No Baseline" },
-                        ...baselines.map((baseline) => ({
-                          value: baseline.id,
-                          label: `${baseline.isPrimary ? "[Primary] " : ""}${baseline.name}`,
-                        })),
-                      ]}
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <Button variant="secondary" size="xs" onClick={onSaveBaseline} data-testid="schedule-save-baseline">
-                      <Save className="h-3.5 w-3.5" />
-                      Save
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="xs"
-                      onClick={onClearBaseline}
-                      disabled={!hasBaseline}
-                      data-testid="schedule-clear-baseline"
-                    >
-                      <Trash2 className="h-3.5 w-3.5" />
-                      Clear
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      size="xs"
-                      onClick={onToggleBaseline}
-                      disabled={!hasBaseline}
-                      data-testid="schedule-toggle-baseline"
-                    >
-                      {showBaseline ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                      {showBaseline ? "Hide" : "Show"}
-                    </Button>
-                    <Button variant="secondary" size="xs" onClick={onExportPdf}>
-                      <Download className="h-3.5 w-3.5" />
-                      PDF
-                    </Button>
-                  </div>
-                </div>
-              </Popover.Content>
-            </Popover.Portal>
-          </Popover.Root>
-
-          <Button
-            variant="ghost"
-            size="xs"
-            onClick={onOpenManage}
-            data-testid="schedule-manage"
-            title="Manage schedule calendars, resources, and baselines"
-            aria-label="Manage schedule calendars, resources, and baselines"
-            className="h-6 min-w-0 flex-[0.95] rounded-md px-1.5 text-[10px]"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            Control
-          </Button>
-
-          <div className="min-w-0 flex-[1.2] rounded-md bg-panel/60 px-2 py-1 text-center text-[10px] font-medium leading-tight text-fg/45">
+          <div className="min-w-0 rounded-md bg-panel/60 px-2 py-1 text-[10px] font-medium leading-tight text-fg/45">
             <span className="block truncate">{compactDateRange}</span>
             <span className="block truncate">
               {calendarCount}C / {resourceCount}R
             </span>
           </div>
         </div>
+
+        <div className="min-w-0 flex-1" />
+
+        <Button
+          variant="secondary"
+          size="xs"
+          title="Add task"
+          aria-label="Add task"
+          onClick={onAddTask}
+          data-testid="schedule-add-task"
+          className="h-7 shrink-0 rounded-md px-2 text-[11px]"
+        >
+          <Calendar className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate">Task</span>
+        </Button>
+
+        <ScheduleMenu
+          label="Baseline"
+          icon={Save}
+          active={showBaseline}
+          align="end"
+          testId="schedule-baseline-menu"
+          title={`Baseline controls. Active: ${baselineLabel}`}
+        >
+          <MenuSectionLabel>Active Baseline</MenuSectionLabel>
+          {baselines.length === 0 ? (
+            <div className="rounded-md px-2 py-2 text-[11px] text-fg/40">No baselines saved yet.</div>
+          ) : (
+            baselines.map((baseline) => (
+              <ScheduleMenuItem
+                key={baseline.id}
+                icon={Save}
+                label={baseline.name}
+                detail={baseline.isPrimary ? "Primary" : "Snapshot"}
+                selected={baseline.id === activeBaseline?.id}
+                onClick={() => onActiveBaselineChange(baseline.id)}
+              />
+            ))
+          )}
+          <MenuSeparator />
+          <ScheduleMenuItem icon={Save} label="Save Baseline" onClick={onSaveBaseline} testId="schedule-save-baseline" />
+          <ScheduleMenuItem
+            icon={showBaseline ? EyeOff : Eye}
+            label={showBaseline ? "Hide Baseline" : "Show Baseline"}
+            disabled={!hasBaseline}
+            selected={showBaseline}
+            onClick={onToggleBaseline}
+            testId="schedule-toggle-baseline"
+          />
+          <ScheduleMenuItem
+            icon={Trash2}
+            label="Clear Primary Baseline"
+            disabled={!hasBaseline}
+            onClick={onClearBaseline}
+            testId="schedule-clear-baseline"
+          />
+          <ScheduleMenuItem icon={Download} label="Export Schedule PDF" onClick={onExportPdf} />
+        </ScheduleMenu>
+
+        <ScheduleMenu label="More" icon={MoreHorizontal} align="end" testId="schedule-actions-menu" title="Schedule actions">
+          <ScheduleMenuItem icon={Upload} label="Import Schedule" onClick={onOpenImport} />
+          <ScheduleMenuItem
+            icon={Filter}
+            label={filtersActive ? "Hide Filters" : "Show Filters"}
+            selected={filtersActive}
+            onClick={onToggleFilters}
+          />
+          <ScheduleMenuItem icon={Settings2} label="Manage Schedule" onClick={onOpenManage} testId="schedule-manage" />
+        </ScheduleMenu>
       </div>
     </div>
   );
+}
+
+type ScheduleToolbarIcon = typeof Calendar;
+
+function ScheduleMenu({
+  label,
+  icon: Icon,
+  active = false,
+  align = "start",
+  testId,
+  title,
+  children,
+}: {
+  label: string;
+  icon: ScheduleToolbarIcon;
+  active?: boolean;
+  align?: "start" | "center" | "end";
+  testId?: string;
+  title?: string;
+  children: ReactNode;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button
+          variant={active ? "secondary" : "ghost"}
+          size="xs"
+          data-testid={testId}
+          title={title ?? label}
+          aria-label={title ?? label}
+          className="h-7 min-w-0 shrink-0 gap-1.5 rounded-md px-2 text-[11px]"
+        >
+          <Icon className="h-3.5 w-3.5 shrink-0" />
+          <span className="max-w-28 truncate">{label}</span>
+          <ChevronRight className="h-3 w-3 rotate-90 text-fg/35" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align={align}
+          sideOffset={6}
+          className="z-[1000] w-56 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none"
+        >
+          {children}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function ScheduleMenuItem({
+  icon: Icon,
+  label,
+  detail,
+  selected = false,
+  disabled = false,
+  onClick,
+  testId,
+}: {
+  icon: ScheduleToolbarIcon;
+  label: string;
+  detail?: string;
+  selected?: boolean;
+  disabled?: boolean;
+  onClick?: () => void;
+  testId?: string;
+}) {
+  return (
+    <Popover.Close asChild>
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        data-testid={testId}
+        className={cn(
+          "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors disabled:pointer-events-none disabled:opacity-35",
+          selected ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg"
+        )}
+      >
+        <Icon className="h-3.5 w-3.5 shrink-0" />
+        <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
+        {detail ? <span className="shrink-0 text-[10px] text-fg/35">{detail}</span> : null}
+        {selected ? <Check className="h-3 w-3 shrink-0" /> : null}
+      </button>
+    </Popover.Close>
+  );
+}
+
+function ScheduleMenuIconButton({
+  icon: Icon,
+  label,
+  disabled = false,
+  onClick,
+  testId,
+}: {
+  icon: ScheduleToolbarIcon;
+  label: string;
+  disabled?: boolean;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <Popover.Close asChild>
+      <button
+        type="button"
+        title={label}
+        aria-label={label}
+        disabled={disabled}
+        onClick={onClick}
+        data-testid={testId}
+        className="flex h-7 items-center justify-center rounded-md text-fg/60 transition-colors hover:bg-panel2 hover:text-fg disabled:pointer-events-none disabled:opacity-35"
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </button>
+    </Popover.Close>
+  );
+}
+
+function ScheduleMenuPill({
+  label,
+  selected,
+  onClick,
+  testId,
+}: {
+  label: string;
+  selected: boolean;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <Popover.Close asChild>
+      <button
+        type="button"
+        onClick={onClick}
+        data-testid={testId}
+        className={cn(
+          "h-7 rounded-md px-1 text-[10px] font-semibold uppercase transition-colors",
+          selected ? "bg-accent/10 text-accent" : "text-fg/55 hover:bg-panel2 hover:text-fg"
+        )}
+      >
+        {label}
+      </button>
+    </Popover.Close>
+  );
+}
+
+function MenuSectionLabel({ children }: { children: ReactNode }) {
+  return <p className="px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.14em] text-fg/35">{children}</p>;
+}
+
+function MenuSeparator() {
+  return <div className="my-1 h-px bg-line/70" />;
 }

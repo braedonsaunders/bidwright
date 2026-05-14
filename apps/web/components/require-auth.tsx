@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { useAuth } from "./auth-provider";
+import { isDemoMode } from "@/lib/demo-mode";
 
 const PUBLIC_PATHS = ["/login", "/signup", "/setup"];
 
@@ -12,9 +13,21 @@ export function RequireAuth({ children, requireSuperAdmin }: { children: ReactNo
   const { user, loading, initialized, isSuperAdmin } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const demoMode = isDemoMode;
 
   useEffect(() => {
     if (loading) return;
+
+    if (demoMode) {
+      if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) {
+        router.replace("/");
+        return;
+      }
+      if (requireSuperAdmin && !isSuperAdmin) {
+        router.replace("/");
+      }
+      return;
+    }
 
     // If system not initialized, redirect to setup
     if (initialized === false && pathname !== "/setup") {
@@ -36,7 +49,7 @@ export function RequireAuth({ children, requireSuperAdmin }: { children: ReactNo
       router.replace("/");
       return;
     }
-  }, [user, loading, initialized, isSuperAdmin, requireSuperAdmin, pathname, router]);
+  }, [user, loading, initialized, isSuperAdmin, requireSuperAdmin, pathname, router, demoMode]);
 
   if (loading) {
     return (
@@ -45,6 +58,10 @@ export function RequireAuth({ children, requireSuperAdmin }: { children: ReactNo
       </div>
     );
   }
+
+  if (demoMode && PUBLIC_PATHS.some((p) => pathname.startsWith(p))) return null;
+
+  if (demoMode && !user) return null;
 
   // On public paths, always render
   if (PUBLIC_PATHS.some((p) => pathname.startsWith(p))) return <>{children}</>;

@@ -1,0 +1,19 @@
+{
+  "name": "@bidwright/demo-api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@cloudflare/containers": "^0.0.29"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260511.1",
+    "typescript": "^5.9.2",
+    "wrangler": "^4.90.1"
+  }
+}

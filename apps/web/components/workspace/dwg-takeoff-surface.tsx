@@ -1533,6 +1533,12 @@ export function DwgTakeoffSurface({
     const viewport = viewportRef.current;
     const drawingContext = ctx;
     const point = (world: DwgPoint) => worldToScreen(world, viewport, height);
+    const spotlightEntityIds = highlightedEntityIds.size > 0
+      ? highlightedEntityIds
+      : selectedEntityId
+        ? new Set([selectedEntityId])
+        : new Set<string>();
+    const spotlightActive = spotlightEntityIds.size > 0 || Boolean(selectedAnnotationId);
 
     function renderPolyline(points: DwgPoint[], closed = false) {
       if (points.length < 2) return;
@@ -1548,9 +1554,12 @@ export function DwgTakeoffSurface({
     }
 
     filteredEntities.forEach((entity) => {
-      const highlighted = entity.id === selectedEntityId || highlightedEntityIds.has(entity.id);
-      ctx.strokeStyle = highlighted ? "#38bdf8" : entity.color;
-      ctx.fillStyle = highlighted ? "#38bdf8" : entity.color;
+      const highlighted = spotlightEntityIds.has(entity.id);
+      const muted = spotlightActive && !highlighted;
+      ctx.save();
+      ctx.globalAlpha = muted ? 0.18 : 1;
+      ctx.strokeStyle = highlighted ? "#38bdf8" : muted ? "#64748b" : entity.color;
+      ctx.fillStyle = highlighted ? "#38bdf8" : muted ? "#64748b" : entity.color;
       ctx.lineWidth = highlighted ? 2.5 : 1;
       ctx.shadowColor = highlighted ? "rgba(56, 189, 248, 0.35)" : "transparent";
       ctx.shadowBlur = highlighted ? 9 : 0;
@@ -1576,14 +1585,21 @@ export function DwgTakeoffSurface({
         ctx.font = `${Math.max(8, Math.min(24, 2.5 * viewport.scale))}px monospace`;
         ctx.fillText(entity.text.slice(0, 80), screen.x, screen.y);
       }
+      ctx.restore();
     });
     ctx.shadowColor = "transparent";
     ctx.shadowBlur = 0;
 
     annotations.forEach((annotation) => {
-      ctx.strokeStyle = annotation.color;
-      ctx.fillStyle = annotation.color;
-      ctx.lineWidth = 2.5;
+      const selected = selectedAnnotationId === annotation.id;
+      const muted = spotlightActive && !selected;
+      ctx.save();
+      ctx.globalAlpha = muted ? 0.22 : 1;
+      ctx.strokeStyle = selected ? "#f97316" : muted ? "#64748b" : annotation.color;
+      ctx.fillStyle = selected ? "#f97316" : muted ? "#64748b" : annotation.color;
+      ctx.lineWidth = selected ? 3.5 : 2.5;
+      ctx.shadowColor = selected ? "rgba(249, 115, 22, 0.35)" : "transparent";
+      ctx.shadowBlur = selected ? 10 : 0;
       const points = annotation.points.map(point);
       if (annotation.annotationType === "count" && points[0]) {
         ctx.beginPath();
@@ -1610,6 +1626,7 @@ export function DwgTakeoffSurface({
         ctx.font = "12px sans-serif";
         ctx.fillText(`${formatNumber(annotation.measurement.value)} ${annotation.measurement.unit ?? ""}`, points[0].x + 8, points[0].y - 8);
       }
+      ctx.restore();
     });
 
     const previewPoints = [...drawPoints, ...(cursorWorld && drawPoints.length > 0 ? [cursorWorld] : [])];
@@ -1653,7 +1670,7 @@ export function DwgTakeoffSurface({
       ctx.fillText(snapCandidate.kind, screen.x + 10, screen.y - 10);
       ctx.restore();
     }
-  }, [activeColor, activeTool, annotations, cursorWorld, drawPoints, filteredEntities, highlightedEntityIds, selectedEntityId, snapCandidate, viewportVersion]);
+  }, [activeColor, activeTool, annotations, cursorWorld, drawPoints, filteredEntities, highlightedEntityIds, selectedAnnotationId, selectedEntityId, snapCandidate, viewportVersion]);
 
   useEffect(() => {
     draw();

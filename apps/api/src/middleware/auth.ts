@@ -4,6 +4,7 @@ import { prisma } from "@bidwright/db";
 import { createApiStore, type PrismaApiStore } from "../prisma-store.js";
 import { validateSession } from "../services/auth-service.js";
 import { getSessionCookieToken } from "../services/session-cookie.js";
+import { demoDisabledPayload, ensureDemoIdentity, isApiDemoMode, isDemoDisabledRequest } from "../demo-mode.js";
 
 // ---------------------------------------------------------------------------
 // Type augmentation — every request gets user + org-scoped store
@@ -69,6 +70,27 @@ async function authPluginImpl(fastify: FastifyInstance): Promise<void> {
   fastify.decorateRequest("store", null);
 
   fastify.addHook("onRequest", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      if (isDemoDisabledRequest(request.method, request.url)) {
+        return reply.code(403).send(demoDisabledPayload(request.url.split("?")[0]));
+      }
+
+      const { user } = await ensureDemoIdentity(prisma);
+      request.user = {
+        id: user.id,
+        role: user.role,
+        email: user.email,
+        name: user.name,
+        organizationId: user.organizationId,
+        isSuperAdmin: false,
+        impersonating: false,
+      };
+      request.store = createApiStore(user.organizationId);
+      request.store.setUserId(user.id);
+      request.store.setActivityActor({ id: user.id, name: user.name, type: "user" });
+      return;
+    }
+
     // Skip authentication for public routes
     if (isPublicRoute(request.url)) {
       return;

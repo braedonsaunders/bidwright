@@ -15,6 +15,7 @@ import {
   adminStopImpersonation,
   adminGetMyMemberships,
 } from "@/lib/api";
+import { isDemoMode } from "@/lib/demo-mode";
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -55,6 +56,10 @@ export function useAuth(): AuthContextValue {
 const PUBLIC_PATHS = ["/login", "/signup", "/setup"];
 const COOKIE_SESSION_TOKEN = "cookie-session";
 
+function isPublicPath(pathname: string): boolean {
+  return PUBLIC_PATHS.some((path) => pathname.startsWith(path));
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -94,6 +99,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const m = await adminGetMyMemberships();
             setMyOrgIds(m.organizationIds);
           } catch { /* ignore */ }
+        }
+        if (isDemoMode && isPublicPath(pathname)) {
+          router.replace("/");
         }
       } catch {
         // Session invalid or API unreachable
@@ -141,6 +149,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = useCallback(async (email: string, password: string, orgSlug?: string) => {
+    if (isDemoMode) {
+      await refreshUser();
+      router.push("/");
+      return;
+    }
+
     const result = await apiLogin(email, password, orgSlug);
     setToken(COOKIE_SESSION_TOKEN);
     setUser(result.user);
@@ -154,7 +168,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     } else {
       router.push("/");
     }
-  }, [router]);
+  }, [refreshUser, router]);
 
   const signupFn = useCallback(async (data: { orgName: string; orgSlug: string; email: string; name: string; password: string }) => {
     const result = await apiSignup(data);
@@ -165,7 +179,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setImpersonating(false);
     setInitialized(true);
     router.push("/");
-  }, [router]);
+  }, [refreshUser, router]);
 
   const superLoginFn = useCallback(async (email: string, password: string) => {
     const result = await apiSuperLogin(email, password);
@@ -182,6 +196,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [router]);
 
   const logoutFn = useCallback(async () => {
+    if (isDemoMode) {
+      await refreshUser();
+      router.push("/");
+      return;
+    }
+
     try { await apiLogout(); } catch { /* ignore */ }
     localStorage.removeItem("bw_user");
     localStorage.removeItem("bw_org");

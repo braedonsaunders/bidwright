@@ -111,6 +111,7 @@ import {
 } from "@/lib/api";
 import { getClientDisplayName } from "@/lib/client-display";
 import { formatDateTime, formatMoney, formatPercent } from "@/lib/format";
+import { DEMO_DISABLED_MESSAGE, isDemoMode } from "@/lib/demo-mode";
 import {
   modelEditorChannelName,
   postWorkspaceMutation,
@@ -678,6 +679,14 @@ function isEstimateSubTab(value: string | null): value is EstimateSubTab {
   return estimateSubTabs.some((tab) => tab === value);
 }
 
+function isDemoAllowedWorkspaceTab(tab: WorkspaceTab) {
+  return !isDemoMode || tabs.some((item) => item.id === tab);
+}
+
+function isDemoAllowedEstimateSubTab(tab: EstimateSubTab) {
+  return !isDemoMode || estimateSubTabs.includes(tab);
+}
+
 /* ─── Status Dropdown ─── */
 function StatusDropdown({ value, onChange, options }: {
   value: string;
@@ -1118,11 +1127,11 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     initialData.workspaceState?.state.snapUpgraded !== true;
   const [tab, setTab] = useState<WorkspaceTab>(() => {
     const urlTab = searchParams.get("tab");
-    return isWorkspaceTab(urlTab) ? urlTab : initialIsSnap ? "estimate" : "setup";
+    return isWorkspaceTab(urlTab) && isDemoAllowedWorkspaceTab(urlTab) ? urlTab : initialIsSnap ? "estimate" : "setup";
   });
   const [estimateSubTab, setEstimateSubTab] = useState<EstimateSubTab>(() => {
     const urlSubTab = searchParams.get("subtab");
-    return isEstimateSubTab(urlSubTab) ? urlSubTab : initialIsSnap ? "worksheets" : "takeoff";
+    return isEstimateSubTab(urlSubTab) && isDemoAllowedEstimateSubTab(urlSubTab) ? urlSubTab : initialIsSnap ? "worksheets" : "takeoff";
   });
   const [data, setData] = useState(initialData);
   const [searchTerm, setSearchTerm] = useState("");
@@ -1169,6 +1178,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     },
   });
   useEffect(() => {
+    if (isDemoMode) {
+      setRevisionImpactByItem({});
+      return;
+    }
     let cancelled = false;
     getLatestRevisionImpactByItem(data.workspace.project.id)
       .then((report) => {
@@ -1220,6 +1233,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const [searchHighlight, setSearchHighlight] = useState<SearchNavigationTarget | null>(null);
 
   const openPluginTools = useCallback((target?: PluginToolsTarget) => {
+    if (isDemoMode) {
+      setError(DEMO_DISABLED_MESSAGE);
+      return;
+    }
     setPluginToolsTarget(target ?? null);
     setPluginToolsOpen(true);
   }, []);
@@ -1230,6 +1247,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, []);
 
   const openAgentChat = useCallback((prefill?: string) => {
+    if (isDemoMode) {
+      setError(DEMO_DISABLED_MESSAGE);
+      return;
+    }
     setAgentPrefill(prefill ?? null);
     setChatOpen(true);
   }, []);
@@ -1250,11 +1271,19 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, [pathname, router, searchParams]);
 
   const handleTabChange = useCallback((nextTab: WorkspaceTab) => {
+    if (!isDemoAllowedWorkspaceTab(nextTab)) {
+      setError(DEMO_DISABLED_MESSAGE);
+      return;
+    }
     setTab(nextTab);
     updateWorkspaceUrl(nextTab, nextTab === "estimate" ? estimateSubTab : undefined);
   }, [estimateSubTab, updateWorkspaceUrl]);
 
   const handleEstimateSubTabChange = useCallback((nextSubTab: EstimateSubTab) => {
+    if (!isDemoAllowedEstimateSubTab(nextSubTab)) {
+      setError(DEMO_DISABLED_MESSAGE);
+      nextSubTab = "worksheets";
+    }
     setTab("estimate");
     setEstimateSubTab(nextSubTab);
     updateWorkspaceUrl("estimate", nextSubTab);
@@ -1292,6 +1321,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const isSnap =
     data.workspaceState?.state.quoteMode === "snap" &&
     data.workspaceState?.state.snapUpgraded !== true;
+  const visibleTabs = tabs;
+  const visibleEstimateSubTabs = estimateSubTabs;
   const snapWorksheetId =
     typeof data.workspaceState?.state.selectedWorksheetId === "string"
       ? data.workspaceState.state.selectedWorksheetId
@@ -1354,17 +1385,25 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   // Keep UI state in sync with URL changes/back-forward navigation.
   useEffect(() => {
-    const nextTab = isWorkspaceTab(urlTab) ? urlTab : isSnap ? "estimate" : "setup";
+    const rawNextTab = isWorkspaceTab(urlTab) ? urlTab : isSnap ? "estimate" : "setup";
+    const nextTab = isDemoAllowedWorkspaceTab(rawNextTab) ? rawNextTab : "estimate";
     if (nextTab === "estimate" && urlSubTab === "quality") {
-      setTab("review");
-      updateWorkspaceUrl("review");
+      if (isDemoMode) {
+        setTab("estimate");
+        setEstimateSubTab("worksheets");
+        updateWorkspaceUrl("estimate", "worksheets");
+      } else {
+        setTab("review");
+        updateWorkspaceUrl("review");
+      }
       return;
     }
     if (nextTab !== tab) {
       setTab(nextTab);
     }
     if (nextTab === "estimate") {
-      const nextSubTab = isEstimateSubTab(urlSubTab) ? urlSubTab : isSnap ? "worksheets" : "takeoff";
+      const rawNextSubTab = isEstimateSubTab(urlSubTab) ? urlSubTab : isSnap ? "worksheets" : "takeoff";
+      const nextSubTab = isDemoAllowedEstimateSubTab(rawNextSubTab) ? rawNextSubTab : "worksheets";
       if (nextSubTab !== estimateSubTab) {
         setEstimateSubTab(nextSubTab);
       }
@@ -1826,6 +1865,13 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
   function handleAction(action: string) {
     setShowActions(false);
+    if (
+      isDemoMode &&
+      ["sendQuote", "importBOM", "aiDescription", "aiNotes", "aiPhases", "aiEquipment", "pdf"].includes(action)
+    ) {
+      setError(DEMO_DISABLED_MESSAGE);
+      return;
+    }
     switch (action) {
       case "createRevision": setModal("createRevision"); break;
       case "deleteRevision": setModal("deleteRevision"); break;
@@ -2074,13 +2120,15 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
               <>
                 <div className="fixed inset-0 z-40" onClick={() => setShowActions(false)} />
                 <div className="absolute right-0 top-full z-50 mt-1 w-52 rounded-lg border border-line bg-panel shadow-lg py-1 text-xs">
+                  {!isDemoMode && (
                   <MenuSection label="PDF">
                     <MenuItem onClick={() => handleAction("pdf")}>
                       Generate PDF
                     </MenuItem>
                   </MenuSection>
+                  )}
                   <MenuSection label="Actions">
-                    <MenuItem onClick={() => handleAction("sendQuote")}>Send Quote</MenuItem>
+                    {!isDemoMode && <MenuItem onClick={() => handleAction("sendQuote")}>Send Quote</MenuItem>}
                     <MenuItem onClick={() => handleAction("copyQuote")}>Copy Quote</MenuItem>
                   </MenuSection>
                   <MenuSection label="Revisions">
@@ -2102,7 +2150,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       {/* ─── Tab bar ─── */}
       {!isSnap && (
       <div className="flex items-center gap-1 border-b border-line pb-px overflow-x-auto">
-        {tabs.map((t) => {
+        {visibleTabs.map((t) => {
           const Icon = t.icon;
           return (
             <button
@@ -2144,7 +2192,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           {/* ─── Estimate section (always mounted for takeoff state persistence) ─── */}
           <div className={cn("flex-1 min-h-0 flex flex-col gap-3", tab !== "estimate" && "hidden")}>
             <div className="flex items-center gap-1 shrink-0">
-              {estimateSubTabs.map((st) => {
+              {visibleEstimateSubTabs.map((st) => {
                 const isActive = estimateSubTab === st;
                 return (
                   <button
@@ -2457,6 +2505,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
       <RevisionCompare workspace={workspace} open={modal === "compare"} onClose={closeModal} />
 
+      {!isDemoMode && (
       <AgentChat
         projectId={workspace.project.id}
         open={chatOpen}
@@ -2469,6 +2518,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         onAgentNavigate={handleAgentNavigate}
         onRunStateChange={setAgentRunState}
       />
+      )}
 
       <RevisionDiffModal
         open={revisionDiffOpen}
@@ -2486,7 +2536,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       />
 
       <AnimatePresence>
-      {pluginToolsOpen && (
+      {!isDemoMode && pluginToolsOpen && (
       <PluginToolsPanel
         projectId={workspace.project.id}
         revisionId={workspace.currentRevision.id}

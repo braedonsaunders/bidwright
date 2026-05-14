@@ -44,6 +44,8 @@ interface AnnotationCanvasProps {
   /** Source canvas the loupe samples from when calibrating. */
   pdfCanvas?: HTMLCanvasElement | null;
   snapEnabled?: boolean;
+  selectedAnnotationId?: string | null;
+  spotlightActive?: boolean;
 }
 
 /* ─── Drawing Helpers ─── */
@@ -241,15 +243,18 @@ function drawMeasurementLabel(
 function renderAnnotation(
   ctx: CanvasRenderingContext2D,
   ann: TakeoffAnnotation,
-  calibration: Calibration | null
+  calibration: Calibration | null,
+  options: { muted?: boolean; selected?: boolean } = {},
 ) {
   if (!ann.visible || ann.points.length === 0) return;
 
-  const color = ann.color;
-  const alpha = "40";
+  const color = options.muted ? "#64748b" : ann.color;
+  const alpha = options.muted ? "18" : "40";
 
+  ctx.save();
+  ctx.globalAlpha = options.muted ? 0.26 : 1;
   ctx.strokeStyle = color;
-  ctx.lineWidth = ann.thickness;
+  ctx.lineWidth = options.selected ? ann.thickness + 1.5 : ann.thickness;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.fillStyle = color + alpha;
@@ -358,6 +363,76 @@ function renderAnnotation(
       ctx.fill();
     }
   }
+  ctx.restore();
+
+  if (options.selected) {
+    drawAnnotationSelectionBox(ctx, points);
+  }
+}
+
+function annotationBounds(points: Point[]) {
+  if (points.length === 0) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  return {
+    x: minX,
+    y: minY,
+    width: Math.max(12, maxX - minX),
+    height: Math.max(12, maxY - minY),
+  };
+}
+
+function drawAnnotationSelectionBox(ctx: CanvasRenderingContext2D, points: Point[]) {
+  const bounds = annotationBounds(points);
+  if (!bounds) return;
+  const pad = 10;
+  const box = {
+    x: bounds.x - pad,
+    y: bounds.y - pad,
+    width: bounds.width + pad * 2,
+    height: bounds.height + pad * 2,
+  };
+  const corner = Math.min(22, Math.max(9, Math.min(box.width, box.height) * 0.2));
+  const segments = [
+    [box.x, box.y, box.x + corner, box.y],
+    [box.x, box.y, box.x, box.y + corner],
+    [box.x + box.width, box.y, box.x + box.width - corner, box.y],
+    [box.x + box.width, box.y, box.x + box.width, box.y + corner],
+    [box.x, box.y + box.height, box.x + corner, box.y + box.height],
+    [box.x, box.y + box.height, box.x, box.y + box.height - corner],
+    [box.x + box.width, box.y + box.height, box.x + box.width - corner, box.y + box.height],
+    [box.x + box.width, box.y + box.height, box.x + box.width, box.y + box.height - corner],
+  ];
+
+  ctx.save();
+  ctx.fillStyle = "rgba(249, 115, 22, 0.06)";
+  ctx.strokeStyle = "rgba(249, 115, 22, 0.6)";
+  ctx.lineWidth = 1.5;
+  ctx.setLineDash([7, 4]);
+  ctx.roundRect(box.x, box.y, box.width, box.height, 5);
+  ctx.fill();
+  ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.lineCap = "round";
+  for (const [x1, y1, x2, y2] of segments) {
+    ctx.strokeStyle = "rgba(255,255,255,0.86)";
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+    ctx.strokeStyle = "#f97316";
+    ctx.lineWidth = 2.4;
+    ctx.beginPath();
+    ctx.moveTo(x1, y1);
+    ctx.lineTo(x2, y2);
+    ctx.stroke();
+  }
+  ctx.restore();
 }
 
 /* ─── Component ─── */
@@ -375,6 +450,8 @@ export function AnnotationCanvas({
   onCalibrationRequest,
   pdfCanvas,
   snapEnabled = true,
+  selectedAnnotationId = null,
+  spotlightActive = false,
 }: AnnotationCanvasProps) {
   // Scale the stored (zoom-1) calibration by the current zoom for use in math.
   const effectiveCalibration = useMemo<Calibration | null>(
@@ -441,9 +518,15 @@ export function AnnotationCanvas({
           points: ann.points.map((p) => ({ x: p.x * sx, y: p.y * sy })),
           thickness: ann.thickness * Math.min(sx, sy),
         };
-        renderAnnotation(ctx, scaled, calibration);
+        renderAnnotation(ctx, scaled, calibration, {
+          muted: spotlightActive && selectedAnnotationId !== ann.id,
+          selected: selectedAnnotationId === ann.id,
+        });
       } else {
-        renderAnnotation(ctx, ann, calibration);
+        renderAnnotation(ctx, ann, calibration, {
+          muted: spotlightActive && selectedAnnotationId !== ann.id,
+          selected: selectedAnnotationId === ann.id,
+        });
       }
     }
 
@@ -581,6 +664,8 @@ export function AnnotationCanvas({
     calibration,
     snapEnabled,
     snapPoint,
+    selectedAnnotationId,
+    spotlightActive,
   ]);
 
   useEffect(() => {

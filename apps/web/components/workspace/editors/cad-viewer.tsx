@@ -210,6 +210,30 @@ async function createScene(container: HTMLDivElement) {
 
 /* ─── Loaders ─── */
 
+function toFloat32AttributeArray(input: unknown): Float32Array {
+  if (input instanceof Float32Array) return input;
+  if (ArrayBuffer.isView(input) || Array.isArray(input)) {
+    return new Float32Array(input as ArrayLike<number>);
+  }
+  return new Float32Array();
+}
+
+function toIndexAttributeArray(input: unknown, vertexCount: number): Uint16Array | Uint32Array | null {
+  if (!ArrayBuffer.isView(input) && !Array.isArray(input)) return null;
+  const source = input as ArrayLike<number>;
+  if (source.length === 0) return null;
+  let needsUint32 = vertexCount > 65535;
+  if (!needsUint32) {
+    for (let i = 0; i < source.length; i += 1) {
+      if (Number(source[i]) > 65535) {
+        needsUint32 = true;
+        break;
+      }
+    }
+  }
+  return needsUint32 ? new Uint32Array(source) : new Uint16Array(source);
+}
+
 async function loadSTEP(
   sceneCtx: Awaited<ReturnType<typeof createScene>>,
   data: ArrayBuffer,
@@ -222,18 +246,28 @@ async function loadSTEP(
 
   const buffer = new Uint8Array(data);
   const result = occt.ReadStepFile(buffer, null);
+  if (!result?.meshes?.length) {
+    throw new Error("The STEP/IGES importer did not return any mesh geometry.");
+  }
 
   const { THREE, scene } = sceneCtx;
   const group = new THREE.Group();
 
   for (const mesh of result.meshes) {
+    const positions = toFloat32AttributeArray(mesh.attributes?.position?.array);
+    if (positions.length < 3) continue;
+    const vertexCount = positions.length / 3;
+    const normals = toFloat32AttributeArray(mesh.attributes?.normal?.array);
+    const indices = toIndexAttributeArray(mesh.index?.array, vertexCount);
     const geo = new THREE.BufferGeometry();
-    geo.setAttribute("position", new THREE.Float32BufferAttribute(mesh.attributes.position.array, 3));
-    if (mesh.attributes.normal) {
-      geo.setAttribute("normal", new THREE.Float32BufferAttribute(mesh.attributes.normal.array, 3));
+    geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    if (normals.length === positions.length) {
+      geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+    } else {
+      geo.computeVertexNormals();
     }
-    if (mesh.index) {
-      geo.setIndex(new THREE.BufferAttribute(mesh.index.array, 1));
+    if (indices) {
+      geo.setIndex(new THREE.BufferAttribute(indices, 1));
     }
     geo.computeBoundingBox();
 
@@ -245,10 +279,14 @@ async function loadSTEP(
     const mat = new THREE.MeshPhongMaterial({
       color,
       side: THREE.DoubleSide,
-      flatShading: !mesh.attributes.normal,
+      flatShading: normals.length !== positions.length,
     });
     const obj = new THREE.Mesh(geo, mat);
     group.add(obj);
+  }
+
+  if (group.children.length === 0) {
+    throw new Error("The STEP/IGES importer returned mesh records without drawable geometry.");
   }
 
   scene.add(group);

@@ -55,9 +55,10 @@ interface GanttViewProps {
 }
 
 const COL_MIN_WIDTH: Record<ZoomLevel, number> = { day: 56, week: 88, month: 120 };
-const DEFAULT_LEFT_PANEL_WIDTH = 620;
-const MIN_LEFT_PANEL_WIDTH = 360;
-const MAX_LEFT_PANEL_WIDTH = 860;
+const DEFAULT_LEFT_PANEL_WIDTH = 480;
+const MIN_LEFT_PANEL_WIDTH = 320;
+const MAX_LEFT_PANEL_WIDTH = 720;
+const MIN_TIMELINE_WIDTH = 280;
 const SPLITTER_WIDTH = 4;
 const HEADER_BAND_HEIGHT = 34;
 const HEADER_ROW_HEIGHT = 40;
@@ -66,6 +67,7 @@ const TASK_ROW_HEIGHT = 56;
 const FOOTER_HEIGHT = 44;
 const TREE_INDENT = 18;
 const TREE_DROP_OFFSET = 20;
+const LEFT_GRID_COLUMNS = "minmax(0,1fr) 64px 64px 42px";
 
 export function GanttView({
   tasks,
@@ -97,6 +99,7 @@ export function GanttView({
     depth: number;
   } | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const leftScrollRef = useRef<HTMLDivElement>(null);
   const scrollRegionRef = useRef<HTMLDivElement>(null);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(DEFAULT_LEFT_PANEL_WIDTH);
@@ -104,11 +107,12 @@ export function GanttView({
   const panStartScrollLeft = useRef(0);
   const suppressTimelineClickRef = useRef(false);
   const draggingTaskIdRef = useRef<string | null>(null);
+  const isSyncingVerticalScrollRef = useRef(false);
 
   const clampLeftPanelWidth = useCallback((nextWidth: number) => {
     const containerWidth = containerRef.current?.clientWidth ?? 0;
     const maxFromContainer =
-      containerWidth > 0 ? Math.min(MAX_LEFT_PANEL_WIDTH, Math.max(MIN_LEFT_PANEL_WIDTH, containerWidth - 320)) : MAX_LEFT_PANEL_WIDTH;
+      containerWidth > 0 ? Math.min(MAX_LEFT_PANEL_WIDTH, Math.max(MIN_LEFT_PANEL_WIDTH, containerWidth - MIN_TIMELINE_WIDTH)) : MAX_LEFT_PANEL_WIDTH;
     return Math.max(MIN_LEFT_PANEL_WIDTH, Math.min(maxFromContainer, nextWidth));
   }, []);
 
@@ -347,14 +351,35 @@ export function GanttView({
     [togglePhase]
   );
 
+  const syncVerticalScroll = useCallback((source: "left" | "timeline") => {
+    if (isSyncingVerticalScrollRef.current) return;
+
+    const sourceElement = source === "left" ? leftScrollRef.current : scrollRegionRef.current;
+    const targetElement = source === "left" ? scrollRegionRef.current : leftScrollRef.current;
+    if (!sourceElement || !targetElement) return;
+
+    if (Math.abs(targetElement.scrollTop - sourceElement.scrollTop) < 1) return;
+
+    isSyncingVerticalScrollRef.current = true;
+    targetElement.scrollTop = sourceElement.scrollTop;
+    requestAnimationFrame(() => {
+      isSyncingVerticalScrollRef.current = false;
+    });
+  }, []);
+
   return (
-    <div className="overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel">
+    <div className="min-h-[420px] flex-1 overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel">
       <div
         ref={containerRef}
-        className="grid min-w-0"
+        className="grid h-full min-w-0"
         style={{ gridTemplateColumns: `${leftPanelWidth}px ${SPLITTER_WIDTH}px minmax(0, 1fr)` }}
       >
-        <div className="bg-panel" data-testid="gantt-left-panel">
+        <div
+          ref={leftScrollRef}
+          className="min-h-0 overflow-y-auto overflow-x-hidden bg-panel"
+          data-testid="gantt-left-panel"
+          onScroll={() => syncVerticalScroll("left")}
+        >
           <div className="sticky top-0 z-30 bg-panel">
             <div
               className="flex items-center border-b border-line bg-panel2/40 px-4"
@@ -367,14 +392,13 @@ export function GanttView({
               style={{ height: HEADER_ROW_HEIGHT }}
             >
               <div
-                className="grid w-full items-center gap-3"
-                style={{ gridTemplateColumns: "minmax(0,2.3fr) 78px 78px 54px 60px" }}
+                className="grid w-full items-center gap-2"
+                style={{ gridTemplateColumns: LEFT_GRID_COLUMNS }}
               >
                 <span className="text-xs font-medium text-fg/55">Task</span>
                 <span className="text-xs font-medium text-fg/45">Start</span>
                 <span className="text-xs font-medium text-fg/45">Finish</span>
                 <span className="text-xs font-medium text-fg/45">Dur</span>
-                <span className="text-xs font-medium text-fg/45">Float</span>
               </div>
             </div>
           </div>
@@ -435,13 +459,13 @@ export function GanttView({
                         <div
                           key={task.id}
                           className={cn(
-                            "grid cursor-pointer items-center gap-3 border-b border-line/30 bg-panel px-4 py-2 transition-colors hover:bg-panel2/10",
+                            "grid cursor-pointer items-center gap-2 border-b border-line/30 bg-panel px-4 py-2 transition-colors hover:bg-panel2/10",
                             draggingTaskId === task.id && "opacity-55",
                             isDropBefore && "border-t-2 border-t-accent",
                             isDropAfter && "border-b-2 border-b-accent",
                             isDropInside && "bg-accent/5 shadow-[inset_3px_0_0_0_theme(colors.accent.DEFAULT)]"
                           )}
-                          style={{ height: TASK_ROW_HEIGHT, gridTemplateColumns: "minmax(0,2.3fr) 78px 78px 54px 60px" }}
+                          style={{ height: TASK_ROW_HEIGHT, gridTemplateColumns: LEFT_GRID_COLUMNS }}
                           onClick={() => onClickTask(task)}
                           onContextMenu={onContextMenu ? (event) => onContextMenu(event, task) : undefined}
                           onDragOver={(event) => handleRowDragOver(event, task.id, depth)}
@@ -508,18 +532,18 @@ export function GanttView({
 
                               <div className="min-w-0 flex-1">
                                 <span className="block truncate text-xs text-fg/70">{task.name || "Untitled"}</span>
-                                <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-fg/35">
-                                  {isSummaryTask ? <span className="rounded-full bg-panel2 px-1.5 py-0.5">Summary</span> : null}
+                                <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-[10px] text-fg/35">
+                                  {isSummaryTask ? <span className="shrink-0 rounded-full bg-panel2 px-1.5 py-0.5">Summary</span> : null}
                                   {hierarchy?.hasChildren ? (
-                                    <span className="rounded-full bg-panel2 px-1.5 py-0.5">
+                                    <span className="shrink-0 rounded-full bg-panel2 px-1.5 py-0.5">
                                       {hierarchy.childCount} child{hierarchy.childCount === 1 ? "" : "ren"}
                                     </span>
                                   ) : null}
-                                  {task.assignee ? <span className="truncate">{task.assignee}</span> : null}
+                                  {task.assignee ? <span className="min-w-0 truncate">{task.assignee}</span> : null}
                                   {typeof totalFloat === "number" && Number.isFinite(totalFloat) ? (
                                     <span
                                       className={cn(
-                                        "rounded-full px-1.5 py-0.5",
+                                        "shrink-0 rounded-full px-1.5 py-0.5",
                                         totalFloat <= 0 ? "bg-danger/10 text-danger" : "bg-panel2 text-fg/45"
                                       )}
                                     >
@@ -527,21 +551,21 @@ export function GanttView({
                                     </span>
                                   ) : null}
                                   {variance.isBehind ? (
-                                    <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">
+                                    <span className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">
                                       +{Math.max(variance.finishDays ?? 0, variance.startDays ?? 0)}d slip
                                     </span>
                                   ) : null}
                                   {variance.isAhead ? (
-                                    <span className="rounded-full bg-success/10 px-1.5 py-0.5 text-success">
+                                    <span className="shrink-0 rounded-full bg-success/10 px-1.5 py-0.5 text-success">
                                       {Math.min(variance.finishDays ?? 0, variance.startDays ?? 0)}d ahead
                                     </span>
                                   ) : null}
-                                  {isOverdue ? <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-danger">Overdue</span> : null}
-                                  {hasLogicIssue ? <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">Logic</span> : null}
-                                  {hasDeadlineRisk ? <span className="rounded-full bg-danger/10 px-1.5 py-0.5 text-danger">Deadline</span> : null}
-                                  {hasConstraintRisk ? <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">Constraint</span> : null}
-                                  {hasResourceRisk ? <span className="rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">Resource</span> : null}
-                                  {isCriticalTask ? <span className="rounded-full bg-accent/10 px-1.5 py-0.5 text-accent">Critical</span> : null}
+                                  {isOverdue ? <span className="shrink-0 rounded-full bg-danger/10 px-1.5 py-0.5 text-danger">Overdue</span> : null}
+                                  {hasLogicIssue ? <span className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">Logic</span> : null}
+                                  {hasDeadlineRisk ? <span className="shrink-0 rounded-full bg-danger/10 px-1.5 py-0.5 text-danger">Deadline</span> : null}
+                                  {hasConstraintRisk ? <span className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">Constraint</span> : null}
+                                  {hasResourceRisk ? <span className="shrink-0 rounded-full bg-warning/10 px-1.5 py-0.5 text-warning">Resource</span> : null}
+                                  {isCriticalTask ? <span className="shrink-0 rounded-full bg-accent/10 px-1.5 py-0.5 text-accent">Critical</span> : null}
                                 </div>
                               </div>
                             </div>
@@ -550,9 +574,6 @@ export function GanttView({
                           <div className="text-xs text-fg/55">{start ? formatShortDate(start) : "\u2014"}</div>
                           <div className="text-xs text-fg/55">{end ? formatShortDate(end) : "\u2014"}</div>
                           <div className="text-xs text-fg/55">{duration > 0 ? `${duration}d` : task.taskType === "milestone" ? "MS" : "\u2014"}</div>
-                          <div className="text-xs text-fg/55">
-                            {typeof totalFloat === "number" && Number.isFinite(totalFloat) ? `${Math.round(totalFloat)}d` : "\u2014"}
-                          </div>
                         </div>
                       );
                     })}
@@ -577,7 +598,6 @@ export function GanttView({
           aria-orientation="vertical"
           aria-label="Resize schedule split"
           className="group relative self-stretch cursor-col-resize"
-          style={{ minHeight: timelineLayout.bodyHeight + HEADER_BAND_HEIGHT + HEADER_ROW_HEIGHT + FOOTER_HEIGHT }}
           onPointerDown={handleSplitPointerDown}
         >
           <div
@@ -592,9 +612,10 @@ export function GanttView({
           ref={scrollRegionRef}
           data-testid="gantt-scroll-region"
           className={cn(
-            "min-w-0 overflow-x-scroll overflow-y-hidden select-none",
+            "min-h-0 min-w-0 overflow-x-scroll overflow-y-auto select-none",
             isPanning ? "cursor-grabbing" : "cursor-grab"
           )}
+          onScroll={() => syncVerticalScroll("timeline")}
           onPointerDown={handleTimelinePointerDown}
         >
           <div style={{ width: timelineWidth }}>

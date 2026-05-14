@@ -622,6 +622,7 @@ function SpreadsheetTransformMenu({
                 }}
                 options={groupOptions.length ? groupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
                 size="sm"
+                contentClassName="z-[1100]"
               />
             </div>
             <div>
@@ -634,6 +635,7 @@ function SpreadsheetTransformMenu({
                 }}
                 options={measureOptions}
                 size="sm"
+                contentClassName="z-[1100]"
               />
             </div>
           </div>
@@ -860,6 +862,7 @@ import type {
   InspectDrawingAnalysisSettings,
   InspectModelElement,
   InspectRateScheduleItemOption,
+  InspectSpreadsheetRow,
   InspectSnapshot,
 } from "./takeoff-inspect-view";
 // BimFederationSwitcher + ModelFederation schema/API ship dormant — the
@@ -1049,6 +1052,79 @@ function deriveSpreadsheetMapping(headers: string[]): {
 
 function numericFormat(value: number) {
   return Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
+}
+
+type SpreadsheetPreviewState = ImportPreviewResponse & { sourceName: string; sourceNodeId?: string };
+type SpreadsheetPivotSummary = NonNullable<ImportPreviewResponse["pivotSummaries"]>[number];
+type SpreadsheetPivotSummaryRow = SpreadsheetPivotSummary["rows"][number];
+
+function parseSpreadsheetNumber(value: unknown): number | null {
+  const raw = String(value ?? "").replace(/[$,%\s,]/g, "");
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function spreadsheetMeasureLabel(measure: string | null | undefined) {
+  return measure === "__count" ? "Row count" : (measure || "Quantity");
+}
+
+function activeSpreadsheetPivotSummary(
+  preview: SpreadsheetPreviewState | null,
+  groupBy: string,
+  measure: string,
+): SpreadsheetPivotSummary | null {
+  if (!preview?.pivotSummaries?.length) return null;
+  return (
+    preview.pivotSummaries.find((summary) => summary.groupBy === groupBy && summary.measure === measure) ??
+    preview.pivotSummaries.find((summary) => summary.groupBy === groupBy) ??
+    preview.pivotSummaries[0] ??
+    null
+  );
+}
+
+function spreadsheetPivotInspectRows(
+  preview: SpreadsheetPreviewState,
+  summary: SpreadsheetPivotSummary,
+): InspectSpreadsheetRow[] {
+  const measureLabel = spreadsheetMeasureLabel(summary.measure);
+  return summary.rows.map((row, index) => {
+    const label = row.label || "(blank)";
+    return {
+      kind: "pivot" as const,
+      id: `${preview.sourceNodeId ?? preview.sourceName}::pivot::${summary.groupBy}::${summary.measure}::${index}`,
+      index,
+      values: {
+        [summary.groupBy]: label,
+        [measureLabel]: numericFormat(row.total),
+        Rows: row.count.toLocaleString(),
+        Average: numericFormat(row.average),
+      },
+      pivot: {
+        groupBy: summary.groupBy,
+        measure: summary.measure,
+        measureLabel,
+        sourceRowCount: row.count,
+        total: row.total,
+        average: row.average,
+      },
+    };
+  });
+}
+
+function spreadsheetRawInspectRows(preview: SpreadsheetPreviewState): InspectSpreadsheetRow[] {
+  return preview.sampleRows.map((row, index) => {
+    const values: Record<string, string> = {};
+    preview.headers.forEach((header, colIdx) => {
+      const raw = row[colIdx];
+      values[header] = raw == null ? "" : String(raw);
+    });
+    return {
+      kind: "raw" as const,
+      id: `${preview.sourceNodeId ?? preview.sourceName}::${index}`,
+      index,
+      values,
+    };
+  });
 }
 
 function mergeFileNodes(current: FileNode[], nextNodes: FileNode[]) {
@@ -1626,7 +1702,7 @@ export function TakeoffTab({
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
   const [selectedSpreadsheetNodeId, setSelectedSpreadsheetNodeId] = useState<string | null>(null);
-  const [spreadsheetPreview, setSpreadsheetPreview] = useState<(ImportPreviewResponse & { sourceName: string; sourceNodeId?: string }) | null>(null);
+  const [spreadsheetPreview, setSpreadsheetPreview] = useState<SpreadsheetPreviewState | null>(null);
   const [spreadsheetPanelView, setSpreadsheetPanelView] = useState<SpreadsheetPanelView>("preview");
   const [pivotGroupBy, setPivotGroupBy] = useState("");
   const [pivotMeasure, setPivotMeasure] = useState("__count");
@@ -1878,8 +1954,8 @@ export function TakeoffTab({
     | { kind: "create-single-annotation"; annotationId: string; pick: InspectCategoryPick }
     | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string; pick: InspectCategoryPick }
     | { kind: "create-dwg-row"; rowId: string; rowType: "entity" | "autoCount" | "system"; pick: InspectCategoryPick }
-    | { kind: "create-spreadsheet-row"; rowIndex: number; pick: InspectCategoryPick }
-    | { kind: "create-spreadsheet-all"; pick: InspectCategoryPick };
+    | { kind: "create-spreadsheet-row"; rowIndex: number; mode: SpreadsheetPanelView; pick: InspectCategoryPick }
+    | { kind: "create-spreadsheet-all"; mode: SpreadsheetPanelView; pick: InspectCategoryPick };
   const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
   const [newWorksheetName, setNewWorksheetName] = useState("");
   const fileManagerModelDocuments = useMemo<TakeoffDocument[]>(
@@ -4148,6 +4224,57 @@ export function TakeoffTab({
     window.setTimeout(scroll, 120);
   }
 
+  function focusAnnotationSelection(id: string) {
+    const annotation = annotations.find((item) => item.id === id);
+    const container = viewerContainerRef.current;
+    if (!annotation || !container || canvasSize.width <= 0 || canvasSize.height <= 0) return;
+    const scaleX = annotation.canvasWidth ? canvasSize.width / annotation.canvasWidth : 1;
+    const scaleY = annotation.canvasHeight ? canvasSize.height / annotation.canvasHeight : 1;
+    const points = annotation.points.map((point) => ({ x: point.x * scaleX, y: point.y * scaleY }));
+    if (points.length === 0) return;
+    const xs = points.map((point) => point.x);
+    const ys = points.map((point) => point.y);
+    const minX = Math.min(...xs);
+    const maxX = Math.max(...xs);
+    const minY = Math.min(...ys);
+    const maxY = Math.max(...ys);
+    const box = {
+      x: minX,
+      y: minY,
+      width: Math.max(28, maxX - minX),
+      height: Math.max(28, maxY - minY),
+    };
+    const currentZoom = Math.max(zoomRef.current, 0.01);
+    const targetZoom = roundPdfZoom(
+      Math.min(
+        6,
+        Math.max(
+          0.35,
+          currentZoom * Math.min(
+            (container.clientWidth * 0.58) / Math.max(box.width, 1),
+            (container.clientHeight * 0.58) / Math.max(box.height, 1),
+          ),
+        ),
+      ),
+    );
+    const ratio = targetZoom / currentZoom;
+    const scroll = () => {
+      container.scrollTo({
+        left: Math.max(0, (box.x + box.width / 2) * ratio - container.clientWidth / 2),
+        top: Math.max(0, (box.y + box.height / 2) * ratio - container.clientHeight / 2),
+        behavior: "smooth",
+      });
+    };
+    applyPdfZoom(targetZoom);
+    requestAnimationFrame(scroll);
+    window.setTimeout(scroll, 120);
+  }
+
+  useEffect(() => {
+    if (!selectedAnnotationId || !isPdfDocument) return;
+    focusAnnotationSelection(selectedAnnotationId);
+  }, [selectedAnnotationId, annotations, isPdfDocument, canvasSize.width, canvasSize.height]);
+
   function handleSelectDrawingDetection(id: string | null) {
     setSelectedDrawingDetectionId(id);
     if (selectedDocId) {
@@ -4733,25 +4860,35 @@ export function TakeoffTab({
     // side panel falls back to its empty state.
     const inspectSpreadsheet =
       mode === "spreadsheet" && spreadsheetPreview
-        ? {
-            sourceName: spreadsheetPreview.sourceName,
-            rowCount: spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length,
-            columnCount: spreadsheetPreview.headers.length,
-            headers: spreadsheetPreview.headers,
-            rows: spreadsheetPreview.sampleRows.map((row, index) => {
-              const values: Record<string, string> = {};
-              spreadsheetPreview.headers.forEach((header, colIdx) => {
-                const raw = row[colIdx];
-                values[header] = raw == null ? "" : String(raw);
-              });
-              return {
-                id: `${spreadsheetPreview.sourceNodeId ?? spreadsheetPreview.sourceName}::${index}`,
-                index,
-                values,
-              };
-            }),
-            mapping: deriveSpreadsheetMapping(spreadsheetPreview.headers),
-          }
+        ? (() => {
+            const summary = activeSpreadsheetPivotSummary(spreadsheetPreview, pivotGroupBy, pivotMeasure);
+            const pivotMode = spreadsheetPanelView === "pivot" && Boolean(summary);
+            const measureLabel = spreadsheetMeasureLabel(summary?.measure ?? pivotMeasure);
+            return {
+              sourceName: spreadsheetPreview.sourceName,
+              mode: pivotMode ? "pivot" as const : "raw" as const,
+              rowCount: spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length,
+              columnCount: spreadsheetPreview.headers.length,
+              headers: pivotMode && summary
+                ? [summary.groupBy, measureLabel, "Rows", "Average"]
+                : spreadsheetPreview.headers,
+              rows: pivotMode && summary
+                ? spreadsheetPivotInspectRows(spreadsheetPreview, summary)
+                : spreadsheetRawInspectRows(spreadsheetPreview),
+              pivot: pivotMode && summary
+                ? {
+                    groupBy: summary.groupBy,
+                    measure: summary.measure,
+                    measureLabel,
+                    groupCount: summary.rows.length,
+                    sourceRowCount: summary.rows.reduce((sum, row) => sum + row.count, 0),
+                  }
+                : null,
+              mapping: pivotMode && summary
+                ? { name: summary.groupBy, quantity: measureLabel, uom: null, cost: null }
+                : deriveSpreadsheetMapping(spreadsheetPreview.headers),
+            };
+          })()
         : null;
 
     const nextSnapshot: InspectSnapshot = {
@@ -4902,6 +5039,9 @@ export function TakeoffTab({
     linkedModelElementIds,
     linkedModelLineItems.length,
     spreadsheetPreview,
+    spreadsheetPanelView,
+    pivotGroupBy,
+    pivotMeasure,
     entityCategories,
     rateScheduleItemsByCategoryId,
     takeoffCategory,
@@ -5578,9 +5718,7 @@ export function TakeoffTab({
     const readNum = (header: string | null) => {
       const idx = col(header);
       if (idx < 0) return null;
-      const raw = String(row[idx] ?? "").replace(/[$,%\s,]/g, "");
-      const parsed = Number(raw);
-      return Number.isFinite(parsed) ? parsed : null;
+      return parseSpreadsheetNumber(row[idx]);
     };
     const readStr = (header: string | null) => {
       const idx = col(header);
@@ -5609,18 +5747,70 @@ export function TakeoffTab({
     };
   }
 
+  function buildLineItemFromPivotRow(
+    row: SpreadsheetPivotSummaryRow,
+    summary: SpreadsheetPivotSummary,
+    category: EntityCategory,
+  ): CreateWorksheetItemInput {
+    const mapping = deriveSpreadsheetMapping(spreadsheetPreview?.headers ?? []);
+    const groupIndex = spreadsheetPreview?.headers.indexOf(summary.groupBy) ?? -1;
+    const uomIndex = mapping.uom && spreadsheetPreview ? spreadsheetPreview.headers.indexOf(mapping.uom) : -1;
+    const costIndex = mapping.cost && spreadsheetPreview ? spreadsheetPreview.headers.indexOf(mapping.cost) : -1;
+    const sourceRows =
+      groupIndex >= 0 && spreadsheetPreview
+        ? spreadsheetPreview.sampleRows.filter((sourceRow) => String(sourceRow[groupIndex] ?? "").trim() === row.label)
+        : [];
+    const uomCounts = new Map<string, number>();
+    for (const sourceRow of sourceRows) {
+      const uom = uomIndex >= 0 ? String(sourceRow[uomIndex] ?? "").trim().toUpperCase() : "";
+      if (uom) uomCounts.set(uom, (uomCounts.get(uom) ?? 0) + 1);
+    }
+    const inferredUom = Array.from(uomCounts.entries()).sort((a, b) => b[1] - a[1])[0]?.[0];
+    const costValues = sourceRows
+      .map((sourceRow) => (costIndex >= 0 ? parseSpreadsheetNumber(sourceRow[costIndex]) : null))
+      .filter((value): value is number => value !== null);
+    const cost = costValues.length > 0
+      ? costValues.reduce((sum, value) => sum + value, 0) / costValues.length
+      : 0;
+    const quantity = summary.measure === "__count" ? row.count : row.total;
+    const uom = summary.measure === "__count"
+      ? category.defaultUom || "EA"
+      : inferredUom || category.defaultUom || "EA";
+    const markup = workspace.currentRevision.defaultMarkup ?? 0.2;
+    const sourceName = spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? "";
+    return {
+      categoryId: category.id,
+      category: category.name,
+      entityType: category.entityType,
+      entityName: row.label || `${summary.groupBy} group`,
+      description: `Pivoted by ${summary.groupBy}`,
+      quantity,
+      uom,
+      cost,
+      markup,
+      price: cost * quantity * (1 + markup),
+      sourceNotes: [
+        `From spreadsheet pivot ${sourceName}`.trim(),
+        `Grouped by: ${summary.groupBy}`,
+        `Measure: ${spreadsheetMeasureLabel(summary.measure)}`,
+        `Source rows: ${row.count.toLocaleString()}`,
+        `Pivot total: ${numericFormat(row.total)}`,
+        sourceRows.length > 0 ? `Unit/cost inferred from ${sourceRows.length} preview row${sourceRows.length === 1 ? "" : "s"}.` : "",
+      ].filter(Boolean).join("\n"),
+    };
+  }
+
   async function createLineItemFromSpreadsheetRow(
     rowIndex: number,
     pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
+    modeOverride: SpreadsheetPanelView = spreadsheetPanelView,
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
     if (!spreadsheetPreview) return null;
-    const row = spreadsheetPreview.sampleRows[rowIndex];
-    if (!row) return null;
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex, pick });
+      setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex, mode: modeOverride, pick });
       return null;
     }
     const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
@@ -5629,12 +5819,18 @@ export function TakeoffTab({
       setToastMessage("Pick a takeoff category in the Entities panel before importing rows.");
       return null;
     }
+    const summary = activeSpreadsheetPivotSummary(spreadsheetPreview, pivotGroupBy, pivotMeasure);
+    const pivotMode = modeOverride === "pivot" && Boolean(summary);
+    const row = pivotMode ? summary?.rows[rowIndex] : spreadsheetPreview.sampleRows[rowIndex];
+    if (!row) return null;
     const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
-    const basePayload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping, takeoffCategory);
+    const basePayload = pivotMode && summary
+      ? buildLineItemFromPivotRow(row as SpreadsheetPivotSummaryRow, summary, takeoffCategory)
+      : buildLineItemFromRow(row as string[], spreadsheetPreview.headers, mapping, takeoffCategory);
     const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
     if (!payload) return null;
     await createWorksheetItem(projectId, ws.id, payload);
-    return { ok: true as const };
+    return { ok: true as const, mode: pivotMode ? "pivot" as const : "raw" as const };
   }
 
   async function handleCreateSpreadsheetRowLineItem(rowIndex: number, pick: string | InspectCategoryPick) {
@@ -5643,7 +5839,7 @@ export function TakeoffTab({
       if (!result) return;
       notifyWorkspaceMutated();
       setToastType("success");
-      setToastMessage("Imported row to worksheet.");
+      setToastMessage(result.mode === "pivot" ? "Imported pivot group to worksheet." : "Imported row to worksheet.");
     } catch (error) {
       console.error("[takeoff] Failed to import spreadsheet row:", error);
       setToastType("error");
@@ -5654,12 +5850,13 @@ export function TakeoffTab({
   async function createLineItemsFromAllSpreadsheetRows(
     pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
+    modeOverride: SpreadsheetPanelView = spreadsheetPanelView,
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
-    if (!spreadsheetPreview || spreadsheetPreview.sampleRows.length === 0) return null;
+    if (!spreadsheetPreview) return null;
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-spreadsheet-all", pick });
+      setWorksheetPickerAction({ kind: "create-spreadsheet-all", mode: modeOverride, pick });
       return null;
     }
     const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
@@ -5669,15 +5866,21 @@ export function TakeoffTab({
       return null;
     }
     const mapping = deriveSpreadsheetMapping(spreadsheetPreview.headers);
+    const summary = activeSpreadsheetPivotSummary(spreadsheetPreview, pivotGroupBy, pivotMeasure);
+    const pivotMode = modeOverride === "pivot" && Boolean(summary);
     let imported = 0;
-    for (const row of spreadsheetPreview.sampleRows) {
-      const basePayload = buildLineItemFromRow(row, spreadsheetPreview.headers, mapping, takeoffCategory);
+    const rows = pivotMode && summary ? summary.rows : spreadsheetPreview.sampleRows;
+    if (rows.length === 0) return null;
+    for (const row of rows) {
+      const basePayload = pivotMode && summary
+        ? buildLineItemFromPivotRow(row as SpreadsheetPivotSummaryRow, summary, takeoffCategory)
+        : buildLineItemFromRow(row as string[], spreadsheetPreview.headers, mapping, takeoffCategory);
       const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
       if (!payload) return null;
       await createWorksheetItem(projectId, ws.id, payload);
       imported += 1;
     }
-    return { imported };
+    return { imported, mode: pivotMode ? "pivot" as const : "raw" as const };
   }
 
   async function handleCreateAllSpreadsheetLineItems(pick: string | InspectCategoryPick) {
@@ -5686,7 +5889,11 @@ export function TakeoffTab({
       if (!result) return;
       notifyWorkspaceMutated();
       setToastType("success");
-      setToastMessage(`Imported ${result.imported} row${result.imported === 1 ? "" : "s"} to worksheet.`);
+      setToastMessage(
+        result.mode === "pivot"
+          ? `Imported ${result.imported} pivot group${result.imported === 1 ? "" : "s"} to worksheet.`
+          : `Imported ${result.imported} row${result.imported === 1 ? "" : "s"} to worksheet.`,
+      );
     } catch (error) {
       console.error("[takeoff] Failed to import all spreadsheet rows:", error);
       setToastType("error");
@@ -5947,15 +6154,19 @@ export function TakeoffTab({
       setToastType("success");
       setToastMessage("Created line item from DWG/DXF entity.");
     } else if (action.kind === "create-spreadsheet-row") {
-      await createLineItemFromSpreadsheetRow(action.rowIndex, action.pick, ws);
+      const result = await createLineItemFromSpreadsheetRow(action.rowIndex, action.pick, ws, action.mode);
       notifyWorkspaceMutated();
       setToastType("success");
-      setToastMessage("Imported row to worksheet.");
+      setToastMessage(result?.mode === "pivot" ? "Imported pivot group to worksheet." : "Imported row to worksheet.");
     } else if (action.kind === "create-spreadsheet-all") {
-      const result = await createLineItemsFromAllSpreadsheetRows(action.pick, ws);
+      const result = await createLineItemsFromAllSpreadsheetRows(action.pick, ws, action.mode);
       notifyWorkspaceMutated();
       setToastType("success");
-      setToastMessage(`Imported ${result?.imported ?? 0} row${result?.imported === 1 ? "" : "s"} to worksheet.`);
+      setToastMessage(
+        result?.mode === "pivot"
+          ? `Imported ${result?.imported ?? 0} pivot group${result?.imported === 1 ? "" : "s"} to worksheet.`
+          : `Imported ${result?.imported ?? 0} row${result?.imported === 1 ? "" : "s"} to worksheet.`,
+      );
     }
   }
 
@@ -6063,11 +6274,9 @@ export function TakeoffTab({
       .filter((profile) => profile.numericCount > 0)
       .map((profile) => ({ value: profile.header, label: profile.header })),
   ];
-  const activePivotSummary =
-    spreadsheetPreview?.pivotSummaries?.find((summary) => summary.groupBy === pivotGroupBy && summary.measure === pivotMeasure) ??
-    spreadsheetPreview?.pivotSummaries?.find((summary) => summary.groupBy === pivotGroupBy) ??
-    spreadsheetPreview?.pivotSummaries?.[0];
+  const activePivotSummary = activeSpreadsheetPivotSummary(spreadsheetPreview, pivotGroupBy, pivotMeasure);
   const maxPivotTotal = Math.max(...(activePivotSummary?.rows.map((row) => row.total) ?? [0]), 1);
+  const pdfSpotlightActive = Boolean(selectedAnnotationId || selectedDrawingDetectionId || selectedSmartCountItemId);
 
   async function previewSpreadsheetFile(file: File, source: { nodeId?: string; name: string }) {
     setSpreadsheetPreviewLoading(true);
@@ -7434,14 +7643,16 @@ export function TakeoffTab({
           ) : (
             <div className="relative mx-auto my-4 inline-block shrink-0">
                   {/* PDF canvas */}
-                  <PdfCanvasViewer
-                    documentUrl={documentUrl}
-                    pageNumber={page}
-                    zoom={zoom}
-                    onPageCount={handlePageCount}
-                    onCanvasResize={handleCanvasResize}
-                    canvasRef={pdfCanvasRef}
-                  />
+                  <div className={cn("relative transition-[filter] duration-150", pdfSpotlightActive && "grayscale contrast-125 brightness-75")}>
+                    <PdfCanvasViewer
+                      documentUrl={documentUrl}
+                      pageNumber={page}
+                      zoom={zoom}
+                      onPageCount={handlePageCount}
+                      onCanvasResize={handleCanvasResize}
+                      canvasRef={pdfCanvasRef}
+                    />
+                  </div>
                   {/* Annotation overlay */}
                   <AnnotationCanvas
                     width={canvasSize.width}
@@ -7475,6 +7686,8 @@ export function TakeoffTab({
                     pdfCanvas={pdfCanvasRef.current}
                     snapEnabled={snapEnabled}
                     zoom={zoom}
+                    selectedAnnotationId={selectedAnnotationId}
+                    spotlightActive={pdfSpotlightActive}
                   />
                   <DrawingIntelligenceOverlay
                     analysis={drawingAnalysisResult}
@@ -7482,12 +7695,14 @@ export function TakeoffTab({
                     height={canvasSize.height}
                     visible={drawingAnalysisOverlay}
                     selectedId={selectedDrawingDetectionId}
+                    spotlightActive={pdfSpotlightActive}
                   />
                   <SmartCountOverlay
                     bbox={smartCountBbox}
                     width={canvasSize.width}
                     height={canvasSize.height}
                     active={Boolean(selectedSmartCountItemId)}
+                    muted={pdfSpotlightActive && !selectedSmartCountItemId}
                   />
 
                   {/* Processing overlay */}
@@ -8153,7 +8368,9 @@ export function TakeoffTab({
         )}
         {isSpreadsheetDocument && spreadsheetPreview && (
           <span className="text-[11px] text-fg/30">
-            {spreadsheetPanelView === "pivot" ? "Pivot Summary" : "Table Preview"} · {(spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length).toLocaleString()} rows
+            {spreadsheetPanelView === "pivot" && activePivotSummary
+              ? `Pivot Summary · ${activePivotSummary.rows.length.toLocaleString()} groups · ${(spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length).toLocaleString()} rows`
+              : `Table Preview · ${(spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length).toLocaleString()} rows`}
           </span>
         )}
         {isCadDocument && selectedModelIsEditable && (
@@ -8214,11 +8431,13 @@ function SmartCountOverlay({
   width,
   height,
   active,
+  muted = false,
 }: {
   bbox: VisionBoundingBox | null;
   width: number;
   height: number;
   active: boolean;
+  muted?: boolean;
 }) {
   if (!bbox || width <= 0 || height <= 0) return null;
   const sx = width / Math.max(1, bbox.imageWidth);
@@ -8244,13 +8463,13 @@ function SmartCountOverlay({
         y={box.y}
         width={box.width}
         height={box.height}
-        fill="#10b981"
-        fillOpacity={active ? 0.08 : 0.04}
-        stroke={active ? "#f97316" : "#10b981"}
+        fill={muted ? "#64748b" : "#10b981"}
+        fillOpacity={active ? 0.08 : muted ? 0.025 : 0.04}
+        stroke={active ? "#f97316" : muted ? "#64748b" : "#10b981"}
         strokeWidth={active ? 2.5 : 1.5}
         strokeDasharray="8 4"
         rx={5}
-        opacity={active ? 0.96 : 0.72}
+        opacity={active ? 0.96 : muted ? 0.2 : 0.72}
       />
       {active && [
         [box.x, box.y, box.x + corner, box.y],
@@ -8277,12 +8496,14 @@ function DrawingIntelligenceOverlay({
   height,
   visible,
   selectedId,
+  spotlightActive = false,
 }: {
   analysis: DrawingGeometryAnalysisResult | null;
   width: number;
   height: number;
   visible: DrawingAnalysisOverlayState;
   selectedId?: string | null;
+  spotlightActive?: boolean;
 }) {
   if (!analysis || width <= 0 || height <= 0) return null;
 
@@ -8295,6 +8516,7 @@ function DrawingIntelligenceOverlay({
   const selectedSymbol = selectedId ? analysis.symbolCandidates.find((candidate) => candidate.id === selectedId) : null;
   const selectedCircle = selectedId ? analysis.circles.find((circle) => circle.id === selectedId) : null;
   const selectedText = selectedId ? analysis.textRegions.find((region) => region.id === selectedId) : null;
+  const muted = (id: string) => spotlightActive && selectedId !== id;
   const selectedBounds = selectedSystem?.bbox
     ?? selectedLine?.bbox
     ?? (selectedSymbol ? { x: selectedSymbol.x, y: selectedSymbol.y, width: selectedSymbol.w, height: selectedSymbol.h } : null)
@@ -8325,9 +8547,9 @@ function DrawingIntelligenceOverlay({
           y1={line.y1 * sy}
           x2={line.x2 * sx}
           y2={line.y2 * sy}
-          stroke={selectedId === line.id ? "#f97316" : "#38bdf8"}
+          stroke={selectedId === line.id ? "#f97316" : muted(line.id) ? "#64748b" : "#38bdf8"}
           strokeWidth={selectedId === line.id ? 4 : 1.2}
-          opacity={selectedId === line.id ? 0.95 : 0.32}
+          opacity={selectedId === line.id ? 0.95 : muted(line.id) ? 0.14 : 0.32}
           strokeLinecap="round"
         />
       ))}
@@ -8344,9 +8566,9 @@ function DrawingIntelligenceOverlay({
               y1={line.y1 * sy}
               x2={line.x2 * sx}
               y2={line.y2 * sy}
-              stroke={selectedId === system.id ? "#f97316" : color}
+              stroke={selectedId === system.id ? "#f97316" : muted(system.id) ? "#64748b" : color}
               strokeWidth={selectedId === system.id ? 4.5 : 2.6}
-              opacity={selectedId === system.id ? 0.95 : 0.72}
+              opacity={selectedId === system.id ? 0.95 : muted(system.id) ? 0.18 : 0.72}
               strokeLinecap="round"
             />
           );
@@ -8361,9 +8583,9 @@ function DrawingIntelligenceOverlay({
           width={candidate.w * sx}
           height={candidate.h * sy}
           fill="none"
-          stroke={selectedId === candidate.id ? "#f97316" : "#f59e0b"}
+          stroke={selectedId === candidate.id ? "#f97316" : muted(candidate.id) ? "#64748b" : "#f59e0b"}
           strokeWidth={selectedId === candidate.id ? 3 : 1.5}
-          opacity={selectedId === candidate.id ? 0.98 : 0.8}
+          opacity={selectedId === candidate.id ? 0.98 : muted(candidate.id) ? 0.18 : 0.8}
           rx={3}
         />
       ))}
@@ -8375,9 +8597,9 @@ function DrawingIntelligenceOverlay({
           cy={circle.cy * sy}
           r={Math.max(circle.radius * ((sx + sy) / 2), 2)}
           fill="none"
-          stroke={selectedId === circle.id ? "#f97316" : "#ec4899"}
+          stroke={selectedId === circle.id ? "#f97316" : muted(circle.id) ? "#64748b" : "#ec4899"}
           strokeWidth={selectedId === circle.id ? 3 : 1.5}
-          opacity={selectedId === circle.id ? 0.98 : 0.75}
+          opacity={selectedId === circle.id ? 0.98 : muted(circle.id) ? 0.18 : 0.75}
         />
       ))}
 
@@ -8389,11 +8611,11 @@ function DrawingIntelligenceOverlay({
           width={region.w * sx}
           height={region.h * sy}
           fill="#111827"
-          fillOpacity={0.05}
+          fillOpacity={muted(region.id) ? 0.02 : 0.05}
           stroke={selectedId === region.id ? "#f97316" : "#64748b"}
           strokeDasharray="4 3"
           strokeWidth={selectedId === region.id ? 2.5 : 1}
-          opacity={selectedId === region.id ? 0.95 : 0.65}
+          opacity={selectedId === region.id ? 0.95 : muted(region.id) ? 0.16 : 0.65}
         />
       ))}
 

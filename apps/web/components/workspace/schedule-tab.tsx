@@ -736,7 +736,7 @@ export function ScheduleTab({
   }, [rawStartDate]);
 
   return (
-    <div className="space-y-0" data-testid="schedule-tab">
+    <div className="flex h-full min-h-0 flex-col space-y-0" data-testid="schedule-tab">
       <ScheduleToolbar
         view={view}
         onViewChange={setView}

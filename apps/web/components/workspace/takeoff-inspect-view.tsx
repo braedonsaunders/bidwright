@@ -201,22 +201,39 @@ export type InspectModelBasis = "count" | "area" | "volume";
  *  context that the per-row "+ Add" handler can build a worksheet line
  *  item without re-fetching the source file. */
 export interface InspectSpreadsheetRow {
+  kind?: "raw" | "pivot";
   /** Stable id keyed off the source file + row index. Used to dedupe and
    *  drive selection. */
   id: string;
-  /** Numeric index into the source file's sampleRows array. */
+  /** Numeric index into the active raw row list or active pivot row list. */
   index: number;
   /** Display values keyed by header name. Strings only — the column profile
    *  + mapping figure out which ones are numeric on the way to a line item. */
   values: Record<string, string>;
+  pivot?: {
+    groupBy: string;
+    measure: string;
+    measureLabel: string;
+    sourceRowCount: number;
+    total: number;
+    average: number;
+  };
 }
 
 export interface InspectSpreadsheet {
   sourceName: string;
+  mode?: "raw" | "pivot";
   rowCount: number;
   columnCount: number;
   headers: string[];
   rows: InspectSpreadsheetRow[];
+  pivot?: {
+    groupBy: string;
+    measure: string;
+    measureLabel: string;
+    groupCount: number;
+    sourceRowCount: number;
+  } | null;
   /** Heuristic column → line-item field mapping derived from the header
    *  names. Used by createLineItemFromSpreadsheetRow on the takeoff-tab
    *  side; surfaced here so the Entities tab can render the row's preview
@@ -371,7 +388,7 @@ export interface InspectActions {
   /** "+ Add" for a single spreadsheet row using the heuristic column
    *  mapping for everything except the category. */
   createLineItemFromSpreadsheetRow: (rowIndex: number, pick: InspectCategoryPick) => Promise<void> | void;
-  /** "Σ Add" — import every spreadsheet row as its own line item. */
+  /** "Σ Add" — in raw mode, import rows; in pivot mode, import one line per rollup group. */
   createLineItemsFromAllSpreadsheetRows: (pick: InspectCategoryPick) => Promise<void> | void;
   /** "+ Add" for a single AI-derived photo BOM row. Carries description /
    *  quantity / uom / sourceNotes straight from the model output. */
@@ -2143,6 +2160,10 @@ function formatMeasurement(ann: TakeoffAnnotation): string {
   return `${value.toFixed(2)} ${unit || ""}`.trim();
 }
 
+function numericFormat(value: number) {
+  return Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
+}
+
 /** Spreadsheet rows as entities. Each row gets a "+ Add" that creates a
  *  worksheet line item using the heuristic column mapping; the group header
  *  has a "Σ Add" that imports every row in one batch. The mapping is shown
@@ -2176,6 +2197,7 @@ function SpreadsheetInspect({
   }
 
   const { mapping } = ss;
+  const isPivotMode = ss.mode === "pivot";
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-2 text-xs">
@@ -2186,6 +2208,16 @@ function SpreadsheetInspect({
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter rows…"
         />
+        {ss.pivot && (
+          <div className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-2 py-1.5 text-[10px] text-emerald-700">
+            <div className="font-medium">
+              Pivoted by {ss.pivot.groupBy} / {ss.pivot.measureLabel}
+            </div>
+            <div className="mt-0.5 text-emerald-700/70">
+              {ss.pivot.groupCount.toLocaleString()} groups from {ss.pivot.sourceRowCount.toLocaleString()} source rows
+            </div>
+          </div>
+        )}
         <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-panel/40 p-1 text-[10px]">
           <span className="font-medium uppercase tracking-wider text-fg/35">Mapped</span>
           {(["name", "quantity", "uom", "cost"] as const).map((field) => {
@@ -2207,19 +2239,19 @@ function SpreadsheetInspect({
       </div>
 
       <div className="flex min-h-0 flex-1 flex-col gap-1 overflow-auto pr-1">
-        {/* Σ Add header — bulk import every visible row. */}
+        {/* Σ Add header — raw mode imports rows; pivot mode imports one summarized item per group. */}
         <div className="group/grouphdr sticky top-0 z-10 flex items-stretch gap-1 rounded-md border border-line bg-panel/90 backdrop-blur">
           <div className="flex flex-1 items-center gap-1.5 px-2 py-1 text-[10px] font-medium text-fg/70">
-            <span className="min-w-0 flex-1 truncate">All rows</span>
+            <span className="min-w-0 flex-1 truncate">{isPivotMode ? "All pivot groups" : "All rows"}</span>
             <span className="shrink-0 text-fg/40">{filteredRows.length}</span>
           </div>
           <AddToCategoryPopover
             snapshot={snapshot}
             actions={actions}
             onPick={(pick) => void actions?.createLineItemsFromAllSpreadsheetRows(pick)}
-            triggerLabel="Add all"
+            triggerLabel={isPivotMode ? "Add groups" : "Add all"}
             triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 transition-colors hover:bg-accent/10 hover:text-accent disabled:opacity-40"
-            triggerTitle="Import every row as its own worksheet line item — pick a category"
+            triggerTitle={isPivotMode ? "Create one worksheet line item per pivot group" : "Import every row as its own worksheet line item — pick a category"}
             triggerIcon={<Sigma className="h-3 w-3" />}
           />
         </div>
@@ -2234,6 +2266,7 @@ function SpreadsheetInspect({
             const qtyVal = mapping.quantity ? row.values[mapping.quantity] : "";
             const uomVal = mapping.uom ? row.values[mapping.uom] : "";
             const costVal = mapping.cost ? row.values[mapping.cost] : "";
+            const pivot = row.pivot;
             return (
               <div
                 key={row.id}
@@ -2244,10 +2277,16 @@ function SpreadsheetInspect({
                     {(displayName || "Row " + (row.index + 1)).toString().trim()}
                   </p>
                   <p className="mt-0.5 truncate text-[10px] text-fg/45">
-                    {[
-                      qtyVal && `${qtyVal}${uomVal ? ` ${uomVal}` : ""}`,
-                      costVal && `@ ${costVal}`,
-                    ].filter(Boolean).join(" · ") || "—"}
+                    {pivot
+                      ? [
+                          qtyVal && `${qtyVal}`,
+                          `${pivot.sourceRowCount.toLocaleString()} rows`,
+                          `avg ${numericFormat(pivot.average)}`,
+                        ].filter(Boolean).join(" · ")
+                      : [
+                          qtyVal && `${qtyVal}${uomVal ? ` ${uomVal}` : ""}`,
+                          costVal && `@ ${costVal}`,
+                        ].filter(Boolean).join(" · ") || "—"}
                   </p>
                 </div>
                 <AddToCategoryPopover
@@ -2256,7 +2295,7 @@ function SpreadsheetInspect({
                   onPick={(pick) => void actions?.createLineItemFromSpreadsheetRow(row.index, pick)}
                   triggerLabel="Add"
                   triggerClassName="inline-flex h-6 shrink-0 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 opacity-0 transition-all hover:border-accent/40 hover:bg-accent/10 hover:text-accent group-hover:opacity-100 focus:opacity-100"
-                  triggerTitle="Import this row as a worksheet line item — pick a category"
+                  triggerTitle={pivot ? "Create one worksheet line item for this pivot group" : "Import this row as a worksheet line item — pick a category"}
                   triggerIcon={<Plus className="h-3 w-3" />}
                 />
               </div>

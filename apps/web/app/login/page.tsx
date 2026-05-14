@@ -1,14 +1,16 @@
 "use client";
 
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
 import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
 import { Button, Input, Label } from "@/components/ui";
+import { isDemoMode } from "@/lib/demo-mode";
 
 const sweepLines = [
   { top: "12%", delay: 0, duration: 8.4 },
@@ -30,12 +32,27 @@ const nodePoints = [
 
 export default function LoginPage() {
   const t = useTranslations("Auth.login");
-  const { login } = useAuth();
+  const router = useRouter();
+  const { login, refreshUser } = useAuth();
+  const demoMode = isDemoMode;
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!demoMode) return;
+
+    let mounted = true;
+    refreshUser().finally(() => {
+      if (mounted) router.replace("/");
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, [demoMode, refreshUser, router]);
 
   async function handleSubmit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
@@ -49,6 +66,20 @@ export default function LoginPage() {
     } finally {
       setLoading(false);
     }
+  }
+
+  if (demoMode) {
+    return (
+      <main className="flex h-screen items-center justify-center bg-[#090b0b] px-4 text-[#f4f1e8]">
+        <div className="w-full max-w-sm rounded-xl border border-white/10 bg-white/[0.06] p-6 text-center shadow-2xl shadow-black/35 backdrop-blur">
+          <BidwrightMark className="mx-auto mb-4 h-11 w-11" variant="light" />
+          <h1 className="text-xl font-semibold text-white">Opening the public demo</h1>
+          <p className="mt-2 text-sm leading-6 text-white/62">
+            No login is needed. We are connecting you to the seeded Bidwright demo workspace.
+          </p>
+        </div>
+      </main>
+    );
   }
 
   return (

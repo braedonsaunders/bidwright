@@ -33,8 +33,9 @@ import { formatCompactMoney } from "@/lib/format";
 import { Input } from "@/components/ui";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
+import { isDemoMode } from "@/lib/demo-mode";
 
-const navItems = [
+const baseNavItems = [
   { href: "/", labelKey: "dashboard", icon: LayoutDashboard },
   { href: "/intake", labelKey: "intake", icon: PackageOpen },
   { href: "/quotes", labelKey: "quotes", icon: FileText },
@@ -135,6 +136,8 @@ export function AppShell({
   // Self-fetch projects so sidebar always has data regardless of page
   const [selfProjects, setSelfProjects] = useState<ProjectListItem[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
+  const navItems = baseNavItems;
+
   useEffect(() => {
     import("@/lib/api").then(({ getProjects }) =>
       getProjects().then(setSelfProjects).catch(() => {})
@@ -493,35 +496,54 @@ export function AppShell({
 
         </nav>
 
-        {!sidebarCollapsed && projects.length > 0 && (
-          <div className="border-t border-line px-3 pt-3 pb-1">
-            <span className="px-1 text-[11px] font-medium uppercase tracking-wider text-fg/30">
-              Recent
-            </span>
-            <div className="mt-1.5 space-y-0.5">
-              {projects.slice(0, 5).map((p) => {
-                const isActive = pathname.startsWith(`/projects/${p.id}`);
-                return (
-                  <Link
-                    key={p.id}
-                    href={`/projects/${p.id}`}
-                    className={cn(
-                      "flex flex-col rounded-lg px-2.5 py-2 transition-colors",
-                      isActive
-                        ? "bg-accent/10 text-accent"
-                        : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
-                    )}
-                  >
-                    <span className="truncate text-xs font-medium">{p.name}</span>
-                    <span className="truncate text-[10px] text-fg/30">
-                      {p.clientName}
-                      {p.latestRevision ? ` · ${formatCompactMoney(p.latestRevision.subtotal)}` : ""}
-                    </span>
-                  </Link>
-                );
-              })}
+        {!sidebarCollapsed && (
+          isDemoMode ? (
+            <div className="flex min-h-[230px] basis-1/3 flex-col border-t border-line px-3 py-3">
+              <div className="flex flex-1 flex-col rounded-xl border border-warning/20 bg-warning/10 p-3">
+                <div className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider text-warning">
+                  <Shield className="h-3.5 w-3.5 shrink-0" />
+                  Public demo
+                </div>
+                <p className="mt-3 text-xs leading-5 text-fg/70">
+                  Database-backed editing is enabled for quotes, clients, libraries, documents, worksheets, phases,
+                  factors, conditions, and manual takeoff.
+                </p>
+                <div className="mt-auto pt-3 text-[11px] leading-4 text-fg/45">
+                  Disabled: AI/agent CLI, uploads, package ingest, vision and auto-takeoff processing, email,
+                  external integrations, plugin execution, and PDF generation.
+                </div>
+              </div>
             </div>
-          </div>
+          ) : projects.length > 0 ? (
+            <div className="border-t border-line px-3 pt-3 pb-1">
+              <span className="px-1 text-[11px] font-medium uppercase tracking-wider text-fg/30">
+                Recent
+              </span>
+              <div className="mt-1.5 space-y-0.5">
+                {projects.slice(0, 5).map((p) => {
+                  const isActive = pathname.startsWith(`/projects/${p.id}`);
+                  return (
+                    <Link
+                      key={p.id}
+                      href={`/projects/${p.id}`}
+                      className={cn(
+                        "flex flex-col rounded-lg px-2.5 py-2 transition-colors",
+                        isActive
+                          ? "bg-accent/10 text-accent"
+                          : "text-fg/55 hover:bg-panel2 hover:text-fg/80"
+                      )}
+                    >
+                      <span className="truncate text-xs font-medium">{p.name}</span>
+                      <span className="truncate text-[10px] text-fg/30">
+                        {p.clientName}
+                        {p.latestRevision ? ` · ${formatCompactMoney(p.latestRevision.subtotal)}` : ""}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null
         )}
 
         {sidebarCollapsed && (
@@ -615,23 +637,31 @@ export function AppShell({
 
             {userMenuOpen && (
               <div className="absolute bottom-full left-3 right-3 z-50 mb-1 rounded-lg border border-line bg-panel py-1 shadow-lg">
-                <Link
-                  href="/profile"
-                  onClick={() => setUserMenuOpen(false)}
-                  className="flex items-center gap-2 px-3 py-2 text-xs text-fg/60 transition-colors hover:bg-panel2 hover:text-fg"
-                >
-                  <User className="h-3.5 w-3.5" />
-                  {t("profile")}
-                </Link>
-                <div className="my-1 border-t border-line" />
-                <button
-                  type="button"
-                  onClick={() => { setUserMenuOpen(false); logout(); }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-xs text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
-                >
-                  <LogOut className="h-3.5 w-3.5" />
-                  {t("signOut")}
-                </button>
+                {isDemoMode ? (
+                  <div className="px-3 py-2 text-xs leading-5 text-fg/50">
+                    Public demo user. Login, logout, and account changes are disabled.
+                  </div>
+                ) : (
+                  <>
+                    <Link
+                      href="/profile"
+                      onClick={() => setUserMenuOpen(false)}
+                      className="flex items-center gap-2 px-3 py-2 text-xs text-fg/60 transition-colors hover:bg-panel2 hover:text-fg"
+                    >
+                      <User className="h-3.5 w-3.5" />
+                      {t("profile")}
+                    </Link>
+                    <div className="my-1 border-t border-line" />
+                    <button
+                      type="button"
+                      onClick={() => { setUserMenuOpen(false); logout(); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      {t("signOut")}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -655,23 +685,31 @@ export function AppShell({
 
             {userMenuOpen && (
               <div className="absolute bottom-3 left-full z-50 ml-2 w-44 rounded-lg border border-line bg-panel py-1 shadow-lg">
-                <Link
-                  href="/profile"
-                  onClick={() => setUserMenuOpen(false)}
-                  className="flex items-center gap-2 px-3 py-2 text-xs text-fg/60 transition-colors hover:bg-panel2 hover:text-fg"
-                >
-                  <User className="h-3.5 w-3.5" />
-                  {t("profile")}
-                </Link>
-                <div className="my-1 border-t border-line" />
-                <button
-                  type="button"
-                  onClick={() => { setUserMenuOpen(false); logout(); }}
-                  className="flex w-full items-center gap-2 px-3 py-2 text-xs text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
-                >
-                  <LogOut className="h-3.5 w-3.5" />
-                  {t("signOut")}
-                </button>
+                {isDemoMode ? (
+                  <div className="px-3 py-2 text-xs leading-5 text-fg/50">
+                    Public demo user. Account changes are disabled.
+                  </div>
+                ) : (
+                  <>
+                    <Link
+                      href="/profile"
+                      onClick={() => setUserMenuOpen(false)}
+                      className="flex items-center gap-2 px-3 py-2 text-xs text-fg/60 transition-colors hover:bg-panel2 hover:text-fg"
+                    >
+                      <User className="h-3.5 w-3.5" />
+                      {t("profile")}
+                    </Link>
+                    <div className="my-1 border-t border-line" />
+                    <button
+                      type="button"
+                      onClick={() => { setUserMenuOpen(false); logout(); }}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-xs text-danger/70 transition-colors hover:bg-danger/10 hover:text-danger"
+                    >
+                      <LogOut className="h-3.5 w-3.5" />
+                      {t("signOut")}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>

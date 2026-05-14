@@ -10,6 +10,7 @@ import {
 } from "../services/auth-service.js";
 import { clearSessionCookie, getSessionCookieToken, setSessionCookie } from "../services/session-cookie.js";
 import { organizationInfo, organizationInfoSelect } from "../organization-info.js";
+import { demoDisabledPayload, ensureDemoIdentity, isApiDemoMode } from "../demo-mode.js";
 
 // ---------------------------------------------------------------------------
 // Helper: strip passwordHash from user records
@@ -31,6 +32,17 @@ function orgSettingsPayload(orgName: string) {
 export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // ── POST /api/auth/login ───────────────────────────────────────────────
   fastify.post("/api/auth/login", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      const demo = await ensureDemoIdentity(prisma);
+      return {
+        token: "demo-session",
+        user: demo.user,
+        organization: organizationInfo(demo.organization),
+        isSuperAdmin: false,
+        impersonating: false,
+      };
+    }
+
     const { email, password } = request.body as { email: string; password?: string };
     if (!email) return reply.code(400).send({ error: "Email is required" });
     if (!password) return reply.code(400).send({ error: "Password is required" });
@@ -139,6 +151,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
       },
     },
   }, async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      return reply.code(403).send(demoDisabledPayload("/api/auth/signup"));
+    }
+
     const { orgName, orgSlug, email, name, password } = request.body as {
       orgName: string;
       orgSlug: string;
@@ -208,6 +224,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── POST /api/auth/super-login ─────────────────────────────────────────
   fastify.post("/api/auth/super-login", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      return reply.code(403).send(demoDisabledPayload("/api/auth/super-login"));
+    }
+
     const { email, password } = request.body as { email: string; password: string };
     if (!email || !password) {
       return reply.code(400).send({ error: "Email and password are required" });
@@ -237,6 +257,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── POST /api/auth/logout ──────────────────────────────────────────────
   fastify.post("/api/auth/logout", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      return { ok: true };
+    }
+
     const headerToken = (request.headers.authorization ?? "").replace("Bearer ", "");
     const cookieToken = getSessionCookieToken(request);
     const { token: bodyToken } = (request.body as { token?: string }) ?? {};
@@ -249,6 +273,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
 
   // ── GET /api/auth/me ───────────────────────────────────────────────────
   fastify.get("/api/auth/me", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      const demo = await ensureDemoIdentity(prisma);
+      return {
+        user: demo.user,
+        organization: organizationInfo(demo.organization),
+        isSuperAdmin: false,
+        impersonating: false,
+      };
+    }
+
     const token =
       getSessionCookieToken(request) ||
       (request.headers.authorization ?? "").replace("Bearer ", "");
@@ -307,6 +341,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // ── POST /api/auth/setup ──────────────────────────────────────────────
   // First-run endpoint: only works when no super admin exists yet
   fastify.post("/api/setup/init", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      return reply.code(403).send(demoDisabledPayload("/api/setup/init"));
+    }
+
     const adminCount = await prisma.superAdmin.count();
     if (adminCount > 0) {
       return reply.code(403).send({ error: "System already initialized" });
@@ -382,6 +420,10 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // ── PATCH /api/auth/profile ─────────────────────────────────────────
   // Update current user's profile (name, password)
   fastify.patch("/api/auth/profile", async (request: FastifyRequest, reply: FastifyReply) => {
+    if (isApiDemoMode()) {
+      return reply.code(403).send(demoDisabledPayload("/api/auth/profile"));
+    }
+
     if (!request.user) return reply.code(401).send({ error: "Not authenticated" });
 
     const { name, currentPassword, newPassword } = request.body as {
@@ -498,6 +540,16 @@ export async function authRoutes(fastify: FastifyInstance): Promise<void> {
   // ── GET /api/setup/status ─────────────────────────────────────────────
   // Check if system has been initialized
   fastify.get("/api/setup/status", async () => {
+    if (isApiDemoMode()) {
+      await ensureDemoIdentity(prisma);
+      return {
+        initialized: true,
+        hasOrganizations: true,
+        superAdminCount: 0,
+        organizationCount: 1,
+      };
+    }
+
     const adminCount = await prisma.superAdmin.count();
     const orgCount = await prisma.organization.count();
     return {

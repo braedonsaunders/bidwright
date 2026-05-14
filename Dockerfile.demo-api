@@ -1,0 +1,63 @@
+FROM node:22-bookworm-slim AS base
+ARG PNPM_VERSION=10.30.3
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
+RUN npm install -g pnpm@${PNPM_VERSION}
+WORKDIR /app
+
+FROM base AS deps
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    python3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY packages/db/package.json packages/db/
+COPY packages/domain/package.json packages/domain/
+COPY packages/agent/package.json packages/agent/
+COPY packages/ai/package.json packages/ai/
+COPY packages/ingestion/package.json packages/ingestion/
+COPY packages/integrations/package.json packages/integrations/
+COPY packages/vector/package.json packages/vector/
+COPY packages/mcp-server/package.json packages/mcp-server/
+COPY packages/vision/package.json packages/vision/
+COPY apps/api/package.json apps/api/
+COPY apps/worker/package.json apps/worker/
+RUN pnpm install --frozen-lockfile
+RUN npm install -g node-gyp@^11
+RUN set -eux \
+    && PTY_DIR=$(find /app/node_modules -maxdepth 6 -type d -name "node-pty" 2>/dev/null | head -1) \
+    && test -n "$PTY_DIR" \
+    && cd "$PTY_DIR" \
+    && node-gyp rebuild \
+    && test -f build/Release/pty.node
+
+FROM base AS builder
+COPY --from=deps /app ./
+COPY . .
+RUN pnpm --filter @bidwright/db db:generate
+RUN pnpm -r --filter "./packages/*" build
+RUN pnpm --filter @bidwright/api build
+
+FROM node:22-bookworm-slim AS runner
+ARG PNPM_VERSION=10.30.3
+RUN npm install -g pnpm@${PNPM_VERSION}
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    openssl \
+    python3 \
+    poppler-utils \
+    tesseract-ocr \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    git \
+    wget \
+    unzip \
+    ripgrep \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=deps /app ./
+COPY --from=builder /app ./
+EXPOSE 3001
+CMD ["/bin/sh", "-lc", "pnpm --filter @bidwright/api exec tsx src/index.ts"]

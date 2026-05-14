@@ -13,6 +13,8 @@
     "dev:web": "pnpm --filter @bidwright/web dev",
     "dev:api": "pnpm --filter @bidwright/api dev",
     "dev:worker": "pnpm --filter @bidwright/worker dev",
+    "dev:demo-api": "pnpm --filter @bidwright/demo-api dev",
+    "deploy:demo-api": "pnpm --filter @bidwright/demo-api run deploy",
     "dev:desktop": "pnpm --filter @bidwright/desktop dev",
     "dist:desktop": "pnpm --filter @bidwright/desktop dist",
     "dist:desktop:dir": "pnpm --filter @bidwright/desktop dist:dir",
