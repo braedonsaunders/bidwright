@@ -967,12 +967,16 @@ interface TakeoffTabProps {
   onWorkspaceMutated?: () => void;
   initialDocumentId?: string | null;
   initialPage?: number;
+  initialZoom?: number;
   detached?: boolean;
   workspaceSyncOriginId?: string;
   selectedWorksheetId?: string | null;
   /** Externally-controlled selection (e.g. when a parent renders the link UI). */
   selection?: TakeoffSelection | null;
   onSelectionChange?: (selection: TakeoffSelection | null) => void;
+  /** Publishes the active takeoff surface so detached/merged layouts remount
+   *  into the same drawing instead of falling back to the first document. */
+  onViewStateChange?: (state: { documentId: string; page: number; zoom: number }) => void;
   /** Mirror of the current annotations array, for parents that need to render them. */
   onAnnotationsChange?: (annotations: TakeoffAnnotation[]) => void;
   /** Incrementing counter — when it changes, takeoff reloads its links from the server. */
@@ -1008,6 +1012,7 @@ interface TakeoffSyncBase {
 
 type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "view-change"; docId: string; page: number; zoom: number })
+  | (TakeoffSyncBase & { type: "selection-change"; selection: TakeoffSelection | null })
   | (TakeoffSyncBase & { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] })
   | (TakeoffSyncBase & { type: "takeoff-links-mutated" })
   | (TakeoffSyncBase & { type: "workspace-mutated" })
@@ -1019,6 +1024,7 @@ type TakeoffSyncMessage =
 
 type TakeoffSyncPayload =
   | { type: "view-change"; docId: string; page: number; zoom: number }
+  | { type: "selection-change"; selection: TakeoffSelection | null }
   | { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] }
   | { type: "takeoff-links-mutated" }
   | { type: "workspace-mutated" }
@@ -1568,11 +1574,13 @@ export function TakeoffTab({
   onWorkspaceMutated,
   initialDocumentId,
   initialPage = 1,
+  initialZoom = 1,
   detached = false,
   workspaceSyncOriginId,
   selectedWorksheetId,
   selection,
   onSelectionChange,
+  onViewStateChange,
   onAnnotationsChange,
   linksReloadSignal,
   onLinksMutated,
@@ -1590,6 +1598,7 @@ export function TakeoffTab({
     workspace.worksheets[0] ??
     null;
   const safeInitialPage = Number.isFinite(initialPage) ? Math.max(1, Math.floor(initialPage)) : 1;
+  const safeInitialZoom = roundPdfZoom(initialZoom);
 
   // Org-configured categories. Used to pick a sensible default when creating
   // line items from takeoff annotations / agent suggestions, instead of
@@ -1799,7 +1808,7 @@ export function TakeoffTab({
     }
   }, [detached, initialDocumentId]);
   const [page, setPage] = useState(safeInitialPage);
-  const [zoom, setZoom] = useState(1);
+  const [zoom, setZoom] = useState(safeInitialZoom);
   const [totalPages, setTotalPages] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
 
@@ -1814,17 +1823,26 @@ export function TakeoffTab({
   const redoStackRef = useRef<TakeoffHistoryCommand[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
   const externalAnnotationSelectionId = selection?.kind === "annotation" ? selection.annotationId : null;
+  const lastPublishedSelectionSignatureRef = useRef<string | null>(null);
+
+  function publishTakeoffSelection(next: TakeoffSelection | null) {
+    const signature = next ? JSON.stringify(next) : "null";
+    if (signature === lastPublishedSelectionSignatureRef.current) return;
+    lastPublishedSelectionSignatureRef.current = signature;
+    onSelectionChange?.(next);
+    postTakeoffMessage({ type: "selection-change", selection: next });
+  }
+
   const updateAnnotationSelection = useCallback((id: string | null) => {
     setSelectedAnnotationId((prev) => (prev === id ? prev : id));
-    if (!onSelectionChange) return;
     if (id) {
-      if (externalAnnotationSelectionId !== id) {
-        onSelectionChange({ kind: "annotation", annotationId: id });
+      if (externalAnnotationSelectionId !== id || !onSelectionChange) {
+        publishTakeoffSelection({ kind: "annotation", annotationId: id });
       }
       return;
     }
-    if (externalAnnotationSelectionId) {
-      onSelectionChange(null);
+    if (externalAnnotationSelectionId || !onSelectionChange) {
+      publishTakeoffSelection(null);
     }
   }, [externalAnnotationSelectionId, onSelectionChange]);
 
@@ -2226,9 +2244,9 @@ export function TakeoffTab({
   // model-element selection so the side-panel Link view populates.
   const handleIfcElementSelect = useCallback(
     (sel: { expressID: number; elementClass: string }) => {
-      if (!onSelectionChange || !selectedModelAsset) return;
+      if (!selectedModelAsset) return;
       if (sel.expressID < 0) {
-        if (selection?.kind === "model-element") onSelectionChange(null);
+        if (selection?.kind === "model-element" || !onSelectionChange) publishTakeoffSelection(null);
         return;
       }
       const wanted = `#${sel.expressID}`;
@@ -2237,7 +2255,7 @@ export function TakeoffTab({
         return props.expressId === wanted;
       });
       if (!element) return;
-      onSelectionChange({
+      publishTakeoffSelection({
         kind: "model-element",
         assetId: selectedModelAsset.id,
         elementId: element.id,
@@ -2325,8 +2343,10 @@ export function TakeoffTab({
     initialDocumentAppliedRef.current = true;
     setSelectedDocId(initialDocumentId);
     setPage(safeInitialPage);
+    zoomRef.current = safeInitialZoom;
+    setZoom(safeInitialZoom);
     fitOnLoadRef.current = true;
-  }, [takeoffDocuments, initialDocumentId, safeInitialPage]);
+  }, [takeoffDocuments, initialDocumentId, safeInitialPage, safeInitialZoom]);
 
   const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
     if (!broadcastRef.current || !projectId) return;
@@ -2516,8 +2536,8 @@ export function TakeoffTab({
           // For DWG, route through onSelectionChange so DwgTakeoffSurface picks
           // it up via the `selection` prop; for PDF, mutate local state directly.
           if (isDwg) {
-            if (id) onSelectionChange?.({ kind: "annotation", annotationId: id });
-            else if (selection?.kind === "annotation") onSelectionChange?.(null);
+            if (id) publishTakeoffSelection({ kind: "annotation", annotationId: id });
+            else if (selection?.kind === "annotation" || !onSelectionChange) publishTakeoffSelection(null);
           } else {
             updateAnnotationSelection(id);
           }
@@ -2592,14 +2612,13 @@ export function TakeoffTab({
         setModelSearch: (s) => setModelElementSearch(s),
         setModelBasis: (b) => setModelLedgerBasis(b),
         selectModelElement: (id) => {
-          if (!onSelectionChange) return;
           if (!id || !selectedModelAsset) {
-            if (selection?.kind === "model-element") onSelectionChange(null);
+            if (selection?.kind === "model-element" || !onSelectionChange) publishTakeoffSelection(null);
             return;
           }
           const element = modelElements.find((e) => e.id === id);
           if (!element) return;
-          onSelectionChange({
+          publishTakeoffSelection({
             kind: "model-element",
             assetId: selectedModelAsset.id,
             elementId: element.id,
@@ -2641,15 +2660,14 @@ export function TakeoffTab({
         },
         selectDwgEntity: (id) => {
           dwgActionsRef.current?.selectEntity(id);
-          if (!onSelectionChange) return;
           if (!id) {
-            if (selection?.kind === "cad-entity") onSelectionChange(null);
+            if (selection?.kind === "cad-entity" || !onSelectionChange) publishTakeoffSelection(null);
             return;
           }
           const intel = enrichedDwgIntelligence ?? dwgIntelligence;
           const row = intel?.entities.find((candidate) => candidate.id === id);
           if (!intel || !row) return;
-          onSelectionChange({
+          publishTakeoffSelection({
             kind: "cad-entity",
             documentId: intel.documentId,
             entityId: row.id,
@@ -2661,16 +2679,15 @@ export function TakeoffTab({
         },
         selectDwgEntities: (ids) => {
           dwgActionsRef.current?.selectEntities(ids);
-          if (!onSelectionChange) return;
           const firstId = ids.find(Boolean);
           if (!firstId) {
-            if (selection?.kind === "cad-entity") onSelectionChange(null);
+            if (selection?.kind === "cad-entity" || !onSelectionChange) publishTakeoffSelection(null);
             return;
           }
           const intel = enrichedDwgIntelligence ?? dwgIntelligence;
           const row = intel?.entities.find((candidate) => candidate.id === firstId);
           if (!intel || !row) return;
-          onSelectionChange({
+          publishTakeoffSelection({
             kind: "cad-entity",
             documentId: intel.documentId,
             entityId: row.id,
@@ -2739,7 +2756,6 @@ export function TakeoffTab({
   // the bouncy `selection` prop.
   const lastModelSelectionSignatureRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!onSelectionChange) return;
     if (modelSelection && modelSelection.modelId) {
       const selectedNodeIds = modelSelection.nodes.map((node) => node.id);
       const signature = JSON.stringify({
@@ -2750,7 +2766,7 @@ export function TakeoffTab({
       });
       if (signature === lastModelSelectionSignatureRef.current) return;
       lastModelSelectionSignatureRef.current = signature;
-      onSelectionChange({
+      publishTakeoffSelection({
         kind: "model-selection",
         modelId: modelSelection.modelId,
         modelDocumentId: modelSelection.modelDocumentId,
@@ -2761,9 +2777,98 @@ export function TakeoffTab({
       });
     } else if (lastModelSelectionSignatureRef.current !== null) {
       lastModelSelectionSignatureRef.current = null;
-      onSelectionChange(null);
+      publishTakeoffSelection(null);
     }
   }, [modelSelection, onSelectionChange]);
+
+  const applyExternalTakeoffSelectionRef = useRef<(next: TakeoffSelection | null) => void>(() => {});
+
+  function applyExternalTakeoffSelection(next: TakeoffSelection | null) {
+    lastPublishedSelectionSignatureRef.current = next ? JSON.stringify(next) : "null";
+    onSelectionChange?.(next);
+
+    if (!next) {
+      setSelectedAnnotationId(null);
+      setSelectedDrawingDetectionId(null);
+      setSelectedSmartCountItemId(null);
+      setSelectedModelElementIds(new Set());
+      setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
+      dwgActionsRef.current?.selectEntity(null);
+      return;
+    }
+
+    if (next.kind === "annotation") {
+      setSelectedAnnotationId((prev) => (prev === next.annotationId ? prev : next.annotationId));
+      setSelectedDrawingDetectionId(null);
+      setSelectedSmartCountItemId(null);
+      setSelectedModelElementIds(new Set());
+      return;
+    }
+
+    if (next.kind === "cad-entity") {
+      const matched = dwgDocuments.find((doc) => (doc.fileNodeId ?? doc.id) === next.documentId);
+      if (matched && matched.id !== selectedDocIdRef.current) {
+        selectedDocIdRef.current = matched.id;
+        pageRef.current = 1;
+        setSelectedDocId(matched.id);
+        setPage(1);
+        setAnnotations([]);
+        fitOnLoadRef.current = true;
+      }
+      setSelectedAnnotationId(null);
+      setSelectedDrawingDetectionId(null);
+      setSelectedSmartCountItemId(null);
+      setSelectedModelElementIds(new Set());
+      setDwgIntelligence((current) => (
+        current && current.documentId === next.documentId
+          ? { ...current, selectedEntityId: next.entityId }
+          : current
+      ));
+      dwgActionsRef.current?.selectEntity(next.entityId);
+      return;
+    }
+
+    if (next.kind === "model-element") {
+      const matched = takeoffDocuments.find((doc) => doc.modelAssetId === next.assetId);
+      if (matched && matched.id !== selectedDocIdRef.current) {
+        selectedDocIdRef.current = matched.id;
+        pageRef.current = 1;
+        setSelectedDocId(matched.id);
+        setPage(1);
+        fitOnLoadRef.current = true;
+      }
+      setSelectedAnnotationId(null);
+      setSelectedDrawingDetectionId(null);
+      setSelectedSmartCountItemId(null);
+      setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
+      dwgActionsRef.current?.selectEntity(null);
+      setSelectedModelElementIds(new Set([next.elementId]));
+      return;
+    }
+
+    if (next.kind === "model-selection") {
+      const matched = next.modelDocumentId
+        ? takeoffDocuments.find((doc) => doc.id === next.modelDocumentId || doc.modelAssetId === next.modelId)
+        : takeoffDocuments.find((doc) => doc.modelAssetId === next.modelId);
+      if (matched && matched.id !== selectedDocIdRef.current) {
+        selectedDocIdRef.current = matched.id;
+        pageRef.current = 1;
+        setSelectedDocId(matched.id);
+        setPage(1);
+        fitOnLoadRef.current = true;
+      }
+      setSelectedAnnotationId(null);
+      setSelectedDrawingDetectionId(null);
+      setSelectedSmartCountItemId(null);
+      setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
+      dwgActionsRef.current?.selectEntity(null);
+      setSelectedModelElementIds(new Set());
+    }
+  }
+
+  useEffect(() => {
+    applyExternalTakeoffSelectionRef.current = applyExternalTakeoffSelection;
+  });
 
   useEffect(() => {
     if (!projectId || typeof BroadcastChannel === "undefined") return;
@@ -2789,6 +2894,11 @@ export function TakeoffTab({
           zoomRef.current = nextZoom;
           setZoom(nextZoom);
         }
+        return;
+      }
+
+      if (msg.type === "selection-change") {
+        applyExternalTakeoffSelectionRef.current(msg.selection);
         return;
       }
 
@@ -2896,10 +3006,11 @@ export function TakeoffTab({
 
   /* BroadcastChannel sync — broadcast annotation/page changes to detached window */
   useEffect(() => {
-    if (isDetachedMirror) return;
     if (!selectedDocId) return;
+    onViewStateChange?.({ documentId: selectedDocId, page, zoom });
+    if (isDetachedMirror) return;
     postTakeoffMessage({ type: "view-change", docId: selectedDocId, page, zoom });
-  }, [isDetachedMirror, page, postTakeoffMessage, selectedDocId, zoom]);
+  }, [isDetachedMirror, onViewStateChange, page, postTakeoffMessage, selectedDocId, zoom]);
 
   useEffect(() => {
     postTakeoffMessage({ type: "calibration-change", calibration });
@@ -3148,7 +3259,7 @@ export function TakeoffTab({
       return;
     }
     const src = selectedDoc?.source ?? "project";
-    const url = `/takeoff-viewer?projectId=${encodeURIComponent(projectId)}&docId=${encodeURIComponent(selectedDocId)}&source=${encodeURIComponent(src)}&page=${page}`;
+    const url = `/takeoff-viewer?projectId=${encodeURIComponent(projectId)}&docId=${encodeURIComponent(selectedDocId)}&source=${encodeURIComponent(src)}&page=${page}&zoom=${zoom}`;
     const nextWindow = window.open(url, `bw-takeoff-${projectId}`, "width=1400,height=900,resizable=yes");
     if (!nextWindow) {
       setToastType("error");
@@ -5626,7 +5737,7 @@ export function TakeoffTab({
     const selectedEntityId = (enrichedDwgIntelligence ?? dwgIntelligence)?.selectedEntityId;
     if (!selectedEntityId || !sourceEntityIds.includes(selectedEntityId)) return;
     dwgActionsRef.current?.selectEntity(null);
-    if (selection?.kind === "cad-entity") onSelectionChange?.(null);
+    if (selection?.kind === "cad-entity" || !onSelectionChange) publishTakeoffSelection(null);
   }
 
   function handleDeleteDwgEntityRow(id: string) {
@@ -7648,9 +7759,8 @@ export function TakeoffTab({
             }}
             onWorkspaceMutated={notifyWorkspaceMutated}
             onSelectedEntityChange={(entitySelection) => {
-              if (!onSelectionChange) return;
               if (entitySelection) {
-                onSelectionChange({
+                publishTakeoffSelection({
                   kind: "cad-entity",
                   documentId: entitySelection.documentId,
                   entityId: entitySelection.entityId,
@@ -7659,16 +7769,15 @@ export function TakeoffTab({
                   label: entitySelection.label,
                   summary: entitySelection.summary,
                 });
-              } else if (selection?.kind === "cad-entity") {
-                onSelectionChange(null);
+              } else if (selection?.kind === "cad-entity" || !onSelectionChange) {
+                publishTakeoffSelection(null);
               }
             }}
             onSelectedAnnotationChange={(annotationId) => {
-              if (!onSelectionChange) return;
               if (annotationId) {
-                onSelectionChange({ kind: "annotation", annotationId });
-              } else if (selection?.kind === "annotation") {
-                onSelectionChange(null);
+                publishTakeoffSelection({ kind: "annotation", annotationId });
+              } else if (selection?.kind === "annotation" || !onSelectionChange) {
+                publishTakeoffSelection(null);
               }
             }}
             onAnnotationsChange={setDwgAnnotationsCache}

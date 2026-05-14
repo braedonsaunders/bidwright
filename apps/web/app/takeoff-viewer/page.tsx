@@ -13,6 +13,8 @@ function TakeoffViewerInner() {
   const docId = searchParams.get("docId") ?? "";
   const pageParam = Number.parseInt(searchParams.get("page") ?? "1", 10);
   const initialPage = Number.isFinite(pageParam) ? Math.max(1, pageParam) : 1;
+  const zoomParam = Number.parseFloat(searchParams.get("zoom") ?? "1");
+  const initialZoom = Number.isFinite(zoomParam) ? Math.max(0.25, Math.min(5, zoomParam)) : 1;
 
   const [workspacePayload, setWorkspacePayload] = useState<WorkspaceResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -99,6 +101,7 @@ function TakeoffViewerInner() {
           workspace={workspacePayload.workspace}
           initialDocumentId={docId || undefined}
           initialPage={initialPage}
+          initialZoom={initialZoom}
           detached
           onWorkspaceMutated={() => void loadWorkspace()}
         />

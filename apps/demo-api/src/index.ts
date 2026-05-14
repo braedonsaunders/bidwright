@@ -1,7 +1,7 @@
 import { Container } from "@cloudflare/containers";
 import type { DurableObject } from "cloudflare:workers";
 
-const CONTAINER_NAME = "public-demo";
+const CONTAINER_NAME = "public-demo-v2";
 const API_PORT = 3001;
 const ENTRYPOINT = ["/bin/sh", "-lc", "pnpm --filter @bidwright/api exec tsx src/index.ts"];
 

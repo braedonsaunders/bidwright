@@ -2,10 +2,15 @@ node_modules
 **/node_modules
 .git
 .github
+.codex
+.playwright-cli
+.vercel
+.bidwright
 .next
 **/.next
 .turbo
 dist
+output
 coverage
 playwright-report
 test-results
@@ -23,4 +28,7 @@ temp
 .claude
 docs
 *.md
+apps/desktop
+apps/model-editor
+apps/web
 packages/vision/test-sandbox

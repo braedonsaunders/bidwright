@@ -51,6 +51,12 @@ function serializeTakeoffSelection(selection: TakeoffSelection | null) {
   return selection ? JSON.stringify(selection) : "null";
 }
 
+type TakeoffViewState = { documentId: string; page: number; zoom: number };
+
+function serializeTakeoffViewState(state: TakeoffViewState | null) {
+  return state ? JSON.stringify(state) : "null";
+}
+
 export function ComboView({
   workspace,
   onApply,
@@ -73,6 +79,9 @@ export function ComboView({
   const [fullscreen, setFullscreen] = useState(false);
   const [takeoffDetached, setTakeoffDetached] = useState(false);
   const [takeoffSelection, setTakeoffSelection] = useState<TakeoffSelection | null>(null);
+  const [takeoffViewState, setTakeoffViewState] = useState<TakeoffViewState | null>(
+    initialDocumentId ? { documentId: initialDocumentId, page: 1, zoom: 1 } : null,
+  );
   const [annotationsCache, setAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
   const [linksReloadSignal, setLinksReloadSignal] = useState(0);
   const handleLinksMutated = useCallback(() => setLinksReloadSignal((k) => k + 1), []);
@@ -81,6 +90,21 @@ export function ComboView({
       serializeTakeoffSelection(prev) === serializeTakeoffSelection(next) ? prev : next
     ));
   }, []);
+  const takeoffViewStateSignatureRef = useRef<string | null>(serializeTakeoffViewState(takeoffViewState));
+  const handleTakeoffViewStateChange = useCallback((next: TakeoffViewState) => {
+    const signature = serializeTakeoffViewState(next);
+    if (signature === takeoffViewStateSignatureRef.current) return;
+    takeoffViewStateSignatureRef.current = signature;
+    setTakeoffViewState(next);
+  }, []);
+  useEffect(() => {
+    if (!initialDocumentId) return;
+    const next = { documentId: initialDocumentId, page: 1, zoom: 1 };
+    const signature = serializeTakeoffViewState(next);
+    if (signature === takeoffViewStateSignatureRef.current) return;
+    takeoffViewStateSignatureRef.current = signature;
+    setTakeoffViewState(next);
+  }, [initialDocumentId]);
   const annotationsCacheSignatureRef = useRef<string | null>(null);
   const handleAnnotationsChange = useCallback((next: TakeoffAnnotation[]) => {
     const signature = JSON.stringify(next);
@@ -200,9 +224,12 @@ export function ComboView({
       detached={takeoffDetached}
       workspaceSyncOriginId={takeoffOriginId}
       selectedWorksheetId={selectedWorksheetId ?? null}
-      initialDocumentId={initialDocumentId}
+      initialDocumentId={takeoffViewState?.documentId ?? initialDocumentId}
+      initialPage={takeoffViewState?.page ?? 1}
+      initialZoom={takeoffViewState?.zoom ?? 1}
       selection={takeoffSelection}
       onSelectionChange={handleTakeoffSelectionChange}
+      onViewStateChange={handleTakeoffViewStateChange}
       onAnnotationsChange={handleAnnotationsChange}
       linksReloadSignal={linksReloadSignal}
       onLinksMutated={handleLinksMutated}
