@@ -30,5 +30,4 @@ docs
 *.md
 apps/desktop
 apps/model-editor
-apps/web
 packages/vision/test-sandbox
