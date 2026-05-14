@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Badge } from "@/components/ui";
+import { Badge, Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type {
   ProjectPhase,
@@ -12,7 +12,7 @@ import type {
   ScheduleTaskStatus,
 } from "@/lib/api";
 import type { ScheduleInsights } from "@/lib/schedule-utils";
-import { formatShortDate, getTaskVariance, parseDate, PHASE_COLORS, STATUS_LABELS } from "@/lib/schedule-utils";
+import { formatShortDate, getTaskVariance, normalizeScheduleProgress, parseDate, PHASE_COLORS, STATUS_LABELS } from "@/lib/schedule-utils";
 
 interface BoardViewProps {
   tasks: ScheduleTask[];
@@ -131,14 +131,15 @@ export function BoardView({
 
     const task = tasks.find((item) => item.id === taskId);
     if (task && task.status !== nextStatus) {
+      const currentProgress = normalizeScheduleProgress(task.progress);
       const nextProgress =
         nextStatus === "complete"
           ? 1
           : nextStatus === "not_started"
             ? 0
-            : task.progress >= 1
+            : currentProgress >= 1
               ? 0.85
-              : Math.max(task.progress, 0.1);
+              : Math.max(currentProgress, 0.1);
       void onUpdateTask(taskId, {
         status: nextStatus,
         progress: nextProgress,
@@ -148,20 +149,42 @@ export function BoardView({
     setDraggingId(null);
   };
 
+  const handleQuickStatus = (
+    event: React.MouseEvent,
+    task: ScheduleTask,
+    nextStatus: ScheduleTaskStatus
+  ) => {
+    event.stopPropagation();
+    const currentProgress = normalizeScheduleProgress(task.progress);
+    const nextProgress =
+      nextStatus === "complete"
+        ? 1
+        : nextStatus === "not_started"
+          ? 0
+          : nextStatus === "in_progress"
+            ? Math.max(currentProgress, 0.1)
+            : currentProgress;
+    void onUpdateTask(task.id, { status: nextStatus, progress: nextProgress });
+  };
+
   return (
-    <div className="grid gap-3 xl:grid-cols-4" data-testid="schedule-board">
-      {COLUMNS.map((status) => (
-        <div
-          key={status}
-          data-testid={`schedule-board-column-${status}`}
-          className={cn(
-            "min-h-[300px] rounded-lg border border-line border-t-4 bg-panel2/20",
-            COLUMN_COLORS[status]
-          )}
-          onDragOver={handleDragOver}
-          onDrop={(event) => handleDrop(event, status)}
-        >
-          <div className="border-b border-line/50 px-3 py-2.5">
+    <div
+      className="flex min-h-0 flex-1 overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel p-3"
+      data-testid="schedule-board"
+    >
+      <div className="grid min-h-0 flex-1 grid-cols-[repeat(4,minmax(240px,1fr))] gap-3 overflow-x-auto">
+        {COLUMNS.map((status) => (
+          <div
+            key={status}
+            data-testid={`schedule-board-column-${status}`}
+            className={cn(
+              "flex min-h-0 flex-col rounded-lg border border-line border-t-4 bg-panel2/20",
+              COLUMN_COLORS[status]
+            )}
+            onDragOver={handleDragOver}
+            onDrop={(event) => handleDrop(event, status)}
+          >
+          <div className="shrink-0 border-b border-line/50 px-3 py-2.5">
             <div className="flex items-center justify-between">
               <span className="text-xs font-semibold text-fg/70">{STATUS_LABELS[status]}</span>
               <span className="rounded-full bg-bg/50 px-1.5 py-0.5 text-[11px] text-fg/30">
@@ -181,7 +204,7 @@ export function BoardView({
             </div>
           </div>
 
-          <div className="space-y-2 p-2">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-2">
             {(groupedTasksByStatus.get(status) ?? []).map((group) => (
               <div key={`${status}-${group.key}`} className="space-y-2">
                 <div className="flex items-center justify-between px-1">
@@ -216,6 +239,7 @@ export function BoardView({
                   const variance = getTaskVariance(task);
                   const floatDays = insights.totalFloatByTask.get(task.id);
                   const assignments = taskAssignmentsByTaskId.get(task.id) ?? [];
+                  const progress = normalizeScheduleProgress(task.progress);
 
                   return (
                     <div
@@ -291,12 +315,12 @@ export function BoardView({
                         </div>
                       ) : null}
 
-                      {task.progress > 0 && (
+                      {progress > 0 && (
                         <div className="mb-2">
                           <div className="h-1 w-full overflow-hidden rounded-full bg-line">
                             <div
                               className="h-full rounded-full bg-accent"
-                              style={{ width: `${task.progress * 100}%` }}
+                              style={{ width: `${progress * 100}%` }}
                             />
                           </div>
                         </div>
@@ -322,6 +346,50 @@ export function BoardView({
                           <span className="truncate text-[10px] text-fg/40">{task.assignee}</span>
                         </div>
                       )}
+
+                      {!isRollupSummary ? (
+                        <div className="mt-3 flex items-center gap-1 border-t border-line/50 pt-2">
+                          {task.status !== "in_progress" ? (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={(event) => handleQuickStatus(event, task, "in_progress")}
+                            >
+                              Start
+                            </Button>
+                          ) : null}
+                          {task.status !== "complete" ? (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={(event) => handleQuickStatus(event, task, "complete")}
+                            >
+                              Done
+                            </Button>
+                          ) : (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="h-6 px-2 text-[10px]"
+                              onClick={(event) => handleQuickStatus(event, task, "in_progress")}
+                            >
+                              Reopen
+                            </Button>
+                          )}
+                          {task.status !== "on_hold" ? (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              className="ml-auto h-6 px-2 text-[10px]"
+                              onClick={(event) => handleQuickStatus(event, task, "on_hold")}
+                            >
+                              Hold
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -332,8 +400,9 @@ export function BoardView({
               <div className="py-8 text-center text-xs text-fg/20">Drop tasks here</div>
             )}
           </div>
-        </div>
-      ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

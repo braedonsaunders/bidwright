@@ -846,18 +846,16 @@ export function ScheduleTab({
           onContextMenu={handleScheduleContextMenu}
         />
       ) : (
-        <div className="rounded-b-lg border border-line border-t-0 bg-panel p-3">
-          <BoardView
-            tasks={tasks}
-            insights={scheduleInsights}
-            phases={phases}
-            resources={resources}
-            taskAssignmentsByTaskId={taskAssignmentsByTaskId}
-            onUpdateTask={handleUpdateTask}
-            onClickTask={handleClickTask}
-            onContextMenu={handleScheduleContextMenu}
-          />
-        </div>
+        <BoardView
+          tasks={tasks}
+          insights={scheduleInsights}
+          phases={phases}
+          resources={resources}
+          taskAssignmentsByTaskId={taskAssignmentsByTaskId}
+          onUpdateTask={handleUpdateTask}
+          onClickTask={handleClickTask}
+          onContextMenu={handleScheduleContextMenu}
+        />
       )}
 
       <ScheduleContextMenu

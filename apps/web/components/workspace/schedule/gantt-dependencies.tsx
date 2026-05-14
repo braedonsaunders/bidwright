@@ -10,6 +10,7 @@ interface GanttDependenciesProps {
   taskRowCenters: Map<string, number>;
   timelineStartMs: number;
   timelineEndMs: number;
+  timelineWidth: number;
   svgHeight: number;
   criticalTaskIds: Set<string>;
   violatingDependencyIds: Set<string>;
@@ -22,6 +23,7 @@ export function GanttDependencies({
   taskRowCenters,
   timelineStartMs,
   timelineEndMs,
+  timelineWidth,
   svgHeight,
   criticalTaskIds,
   violatingDependencyIds,
@@ -50,8 +52,12 @@ export function GanttDependencies({
       if (!anchorDates) continue;
 
       const span = timelineEndMs - timelineStartMs || 1;
-      const fromX = ((anchorDates.from.getTime() - timelineStartMs) / span) * 100;
-      const toX = ((anchorDates.to.getTime() - timelineStartMs) / span) * 100;
+      const rawFromX = ((anchorDates.from.getTime() - timelineStartMs) / span) * timelineWidth;
+      const rawToX = ((anchorDates.to.getTime() - timelineStartMs) / span) * timelineWidth;
+      if ((rawFromX < 0 && rawToX < 0) || (rawFromX > timelineWidth && rawToX > timelineWidth)) continue;
+
+      const fromX = Math.max(0, Math.min(timelineWidth, rawFromX));
+      const toX = Math.max(0, Math.min(timelineWidth, rawToX));
       const midX = fromX + (toX - fromX) * 0.5;
 
       const path = `M ${fromX} ${fromY} L ${midX} ${fromY} L ${midX} ${toY} L ${toX} ${toY}`;
@@ -69,6 +75,7 @@ export function GanttDependencies({
     taskRowCenters,
     timelineStartMs,
     timelineEndMs,
+    timelineWidth,
     criticalTaskIds,
     violatingDependencyIds,
     showCriticalPath,
@@ -80,39 +87,39 @@ export function GanttDependencies({
     <svg
       className="pointer-events-none absolute inset-0 z-10"
       style={{ height: svgHeight }}
-      viewBox={`0 0 100 ${svgHeight}`}
+      viewBox={`0 0 ${Math.max(timelineWidth, 1)} ${svgHeight}`}
       preserveAspectRatio="none"
     >
       <defs>
         <marker
           id="arrowhead"
-          markerWidth="6"
-          markerHeight="4"
-          refX="6"
-          refY="2"
+          markerWidth="8"
+          markerHeight="6"
+          refX="8"
+          refY="3"
           orient="auto"
         >
-          <polygon points="0 0, 6 2, 0 4" fill="currentColor" className="text-fg/30" />
+          <polygon points="0 0, 8 3, 0 6" fill="currentColor" className="text-fg/30" />
         </marker>
         <marker
           id="arrowhead-critical"
-          markerWidth="6"
-          markerHeight="4"
-          refX="6"
-          refY="2"
+          markerWidth="10"
+          markerHeight="8"
+          refX="10"
+          refY="4"
           orient="auto"
         >
-          <polygon points="0 0, 6 2, 0 4" fill="currentColor" className="text-red-400" />
+          <polygon points="0 0, 10 4, 0 8" fill="currentColor" className="text-red-500" />
         </marker>
         <marker
           id="arrowhead-warning"
-          markerWidth="6"
-          markerHeight="4"
-          refX="6"
-          refY="2"
+          markerWidth="9"
+          markerHeight="7"
+          refX="9"
+          refY="3.5"
           orient="auto"
         >
-          <polygon points="0 0, 6 2, 0 4" fill="currentColor" className="text-amber-400" />
+          <polygon points="0 0, 9 3.5, 0 7" fill="currentColor" className="text-amber-400" />
         </marker>
       </defs>
       {lines.map((line) => (
@@ -122,13 +129,15 @@ export function GanttDependencies({
           fill="none"
           stroke={
             line.isCritical
-              ? "rgb(248 113 113)"
+              ? "rgb(220 38 38)"
               : line.hasViolation
                 ? "rgb(245 158 11 / 0.8)"
-                : "rgb(148 163 184 / 0.4)"
+                : "rgb(148 163 184 / 0.32)"
           }
-          strokeWidth={line.isCritical ? 0.3 : 0.2}
-          strokeDasharray={line.hasViolation && !line.isCritical ? "1 0.6" : undefined}
+          strokeWidth={line.isCritical ? 2.4 : line.hasViolation ? 1.8 : 1.15}
+          strokeDasharray={line.hasViolation && !line.isCritical ? "6 4" : undefined}
+          strokeLinecap="round"
+          strokeLinejoin="round"
           markerEnd={`url(#arrowhead${line.isCritical ? "-critical" : line.hasViolation ? "-warning" : ""})`}
           vectorEffect="non-scaling-stroke"
         />

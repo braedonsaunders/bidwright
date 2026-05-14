@@ -55,10 +55,10 @@ interface GanttViewProps {
 }
 
 const COL_MIN_WIDTH: Record<ZoomLevel, number> = { day: 56, week: 88, month: 120 };
-const DEFAULT_LEFT_PANEL_WIDTH = 480;
-const MIN_LEFT_PANEL_WIDTH = 320;
-const MAX_LEFT_PANEL_WIDTH = 720;
-const MIN_TIMELINE_WIDTH = 280;
+const DEFAULT_LEFT_PANEL_WIDTH = 360;
+const MIN_LEFT_PANEL_WIDTH = 260;
+const MAX_LEFT_PANEL_WIDTH = 560;
+const MIN_TIMELINE_WIDTH = 420;
 const SPLITTER_WIDTH = 4;
 const HEADER_BAND_HEIGHT = 34;
 const HEADER_ROW_HEIGHT = 40;
@@ -67,7 +67,7 @@ const TASK_ROW_HEIGHT = 56;
 const FOOTER_HEIGHT = 44;
 const TREE_INDENT = 18;
 const TREE_DROP_OFFSET = 20;
-const LEFT_GRID_COLUMNS = "minmax(0,1fr) 64px 64px 42px";
+const LEFT_GRID_COLUMNS = "minmax(0,1fr) 54px 54px 34px";
 
 export function GanttView({
   tasks,
@@ -131,17 +131,25 @@ export function GanttView({
     const rawEnd = parseDate(dateWorkEnd) ?? addDays(rawStart, 90);
     if (zoomLevel === "month") {
       const monthAnchor = startOfMonth(addDays(rawStart, scrollOffset));
-      const monthStart = startOfMonth(addDays(monthAnchor, -31));
+      const monthStart = startOfMonth(addDays(monthAnchor, -62));
       const projectEnd = new Date(rawEnd.getFullYear(), rawEnd.getMonth() + 1, 1, 12, 0, 0, 0);
       const todayFutureEnd = new Date(todayDate().getFullYear(), todayDate().getMonth() + 13, 1, 12, 0, 0, 0);
-      const minimumFutureEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 18, 1, 12, 0, 0, 0);
+      const minimumFutureEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 30, 1, 12, 0, 0, 0);
       const monthEnd = [projectEnd, todayFutureEnd, minimumFutureEnd].reduce((latest, candidate) =>
         candidate.getTime() > latest.getTime() ? candidate : latest
       );
       return { start: monthStart, end: monthEnd };
     }
-    const start = addDays(rawStart, -7 + scrollOffset);
-    const end = addDays(rawEnd, 14 + scrollOffset);
+    if (zoomLevel === "week") {
+      const start = addDays(rawStart, -56 + scrollOffset);
+      const projectEnd = addDays(rawEnd, 180 + scrollOffset);
+      const minimumEnd = addDays(start, 420);
+      return { start, end: projectEnd.getTime() > minimumEnd.getTime() ? projectEnd : minimumEnd };
+    }
+    const start = addDays(rawStart, -21 + scrollOffset);
+    const projectEnd = addDays(rawEnd, 90 + scrollOffset);
+    const minimumEnd = addDays(start, 120);
+    const end = projectEnd.getTime() > minimumEnd.getTime() ? projectEnd : minimumEnd;
     return { start, end };
   }, [dateWorkEnd, dateWorkStart, scrollOffset, zoomLevel]);
 
@@ -221,6 +229,7 @@ export function GanttView({
 
   const minColWidth = COL_MIN_WIDTH[zoomLevel];
   const timelineWidth = columns.length * minColWidth;
+  const isCompactLeftPanel = leftPanelWidth < 380;
 
   const handleDragEnd = useCallback(
     (taskId: string, newStart: Date, newEnd: Date) => {
@@ -368,10 +377,10 @@ export function GanttView({
   }, []);
 
   return (
-    <div className="min-h-[420px] flex-1 overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel">
+    <div className="min-h-0 flex-1 overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel">
       <div
         ref={containerRef}
-        className="grid h-full min-w-0"
+        className="grid h-full min-h-0 min-w-0"
         style={{ gridTemplateColumns: `${leftPanelWidth}px ${SPLITTER_WIDTH}px minmax(0, 1fr)` }}
       >
         <div
@@ -459,7 +468,7 @@ export function GanttView({
                         <div
                           key={task.id}
                           className={cn(
-                            "grid cursor-pointer items-center gap-2 border-b border-line/30 bg-panel px-4 py-2 transition-colors hover:bg-panel2/10",
+                            "grid cursor-pointer items-center gap-1.5 border-b border-line/30 bg-panel px-3 py-2 transition-colors hover:bg-panel2/10",
                             draggingTaskId === task.id && "opacity-55",
                             isDropBefore && "border-t-2 border-t-accent",
                             isDropAfter && "border-b-2 border-b-accent",
@@ -532,15 +541,15 @@ export function GanttView({
 
                               <div className="min-w-0 flex-1">
                                 <span className="block truncate text-xs text-fg/70">{task.name || "Untitled"}</span>
-                                <div className="mt-1 flex min-w-0 items-center gap-1.5 overflow-hidden text-[10px] text-fg/35">
-                                  {isSummaryTask ? <span className="shrink-0 rounded-full bg-panel2 px-1.5 py-0.5">Summary</span> : null}
-                                  {hierarchy?.hasChildren ? (
+                                <div className="mt-1 flex max-h-5 min-w-0 flex-wrap items-center gap-1.5 overflow-hidden text-[10px] text-fg/35">
+                                  {!isCompactLeftPanel && isSummaryTask ? <span className="shrink-0 rounded-full bg-panel2 px-1.5 py-0.5">Summary</span> : null}
+                                  {!isCompactLeftPanel && hierarchy?.hasChildren ? (
                                     <span className="shrink-0 rounded-full bg-panel2 px-1.5 py-0.5">
                                       {hierarchy.childCount} child{hierarchy.childCount === 1 ? "" : "ren"}
                                     </span>
                                   ) : null}
                                   {task.assignee ? <span className="min-w-0 truncate">{task.assignee}</span> : null}
-                                  {typeof totalFloat === "number" && Number.isFinite(totalFloat) ? (
+                                  {!isCompactLeftPanel && typeof totalFloat === "number" && Number.isFinite(totalFloat) ? (
                                     <span
                                       className={cn(
                                         "shrink-0 rounded-full px-1.5 py-0.5",
@@ -571,9 +580,9 @@ export function GanttView({
                             </div>
                           </div>
 
-                          <div className="text-xs text-fg/55">{start ? formatShortDate(start) : "\u2014"}</div>
-                          <div className="text-xs text-fg/55">{end ? formatShortDate(end) : "\u2014"}</div>
-                          <div className="text-xs text-fg/55">{duration > 0 ? `${duration}d` : task.taskType === "milestone" ? "MS" : "\u2014"}</div>
+                          <div className="truncate text-[11px] text-fg/55">{start ? formatShortDate(start) : "\u2014"}</div>
+                          <div className="truncate text-[11px] text-fg/55">{end ? formatShortDate(end) : "\u2014"}</div>
+                          <div className="truncate text-[11px] text-fg/55">{duration > 0 ? `${duration}d` : task.taskType === "milestone" ? "MS" : "\u2014"}</div>
                         </div>
                       );
                     })}
@@ -618,7 +627,7 @@ export function GanttView({
           onScroll={() => syncVerticalScroll("timeline")}
           onPointerDown={handleTimelinePointerDown}
         >
-          <div style={{ width: timelineWidth }}>
+          <div style={{ width: timelineWidth, minWidth: "100%" }}>
             <div className="sticky top-0 z-20 bg-panel">
               <div
                 className="flex border-b border-line bg-panel2/40"
@@ -752,6 +761,7 @@ export function GanttView({
                 taskRowCenters={timelineLayout.taskRowCenters}
                 timelineStartMs={timelineBounds.startMs}
                 timelineEndMs={timelineBounds.endMs}
+                timelineWidth={timelineWidth}
                 svgHeight={timelineLayout.bodyHeight}
                 criticalTaskIds={criticalTaskIds}
                 violatingDependencyIds={insights.violatingDependencyIds}

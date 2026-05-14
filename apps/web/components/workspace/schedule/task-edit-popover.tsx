@@ -24,6 +24,7 @@ import {
   diffDays,
   getTaskDescendantIds,
   getTaskVariance,
+  normalizeScheduleProgress,
   parseDate,
   sortTasksByOrder,
   wouldCreateDependencyCycle,
@@ -88,7 +89,7 @@ export function TaskEditPopover({
   const [status, setStatus] = useState<ScheduleTaskStatus>(task.status);
   const [startDate, setStartDate] = useState(task.startDate?.slice(0, 10) ?? "");
   const [endDate, setEndDate] = useState(task.endDate?.slice(0, 10) ?? "");
-  const [progress, setProgress] = useState(task.progress);
+  const [progress, setProgress] = useState(normalizeScheduleProgress(task.progress));
   const [assignee, setAssignee] = useState(task.assignee);
   const [phaseId, setPhaseId] = useState(task.phaseId ?? "");
   const [calendarId, setCalendarId] = useState(task.calendarId ?? "");
@@ -122,7 +123,7 @@ export function TaskEditPopover({
     setStatus(task.status);
     setStartDate(task.startDate?.slice(0, 10) ?? "");
     setEndDate(task.endDate?.slice(0, 10) ?? "");
-    setProgress(task.progress);
+    setProgress(normalizeScheduleProgress(task.progress));
     setAssignee(task.assignee);
     setPhaseId(task.phaseId ?? "");
     setCalendarId(task.calendarId ?? "");

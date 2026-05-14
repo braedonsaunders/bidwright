@@ -354,9 +354,14 @@ export function getBarPosition(
   timelineEndMs: number
 ): { left: number; width: number } {
   const span = timelineEndMs - timelineStartMs || 1;
-  const barStart = Math.max(0, (startDate.getTime() - timelineStartMs) / span);
-  const barEnd = Math.min(1, (endDate.getTime() - timelineStartMs) / span);
-  const barWidth = Math.max(0.02, barEnd - barStart);
+  const rawStart = (startDate.getTime() - timelineStartMs) / span;
+  const rawEnd = (endDate.getTime() - timelineStartMs) / span;
+  if (rawEnd < 0 || rawStart > 1) {
+    return { left: Math.max(0, Math.min(1, rawStart)), width: 0 };
+  }
+  const barStart = Math.max(0, Math.min(1, rawStart));
+  const barEnd = Math.max(0, Math.min(1, rawEnd));
+  const barWidth = Math.max(0.004, barEnd - barStart);
   return { left: barStart, width: barWidth };
 }
 
@@ -416,6 +421,12 @@ export function getTaskVariance(task: ScheduleTask): ScheduleTaskVariance {
     isBehind: largestVariance > 0,
     isAhead: smallestVariance < 0,
   };
+}
+
+export function normalizeScheduleProgress(value: number | null | undefined) {
+  if (typeof value !== "number" || !Number.isFinite(value)) return 0;
+  const fraction = value > 1 ? value / 100 : value;
+  return Math.max(0, Math.min(1, fraction));
 }
 
 export function isTaskOverdue(task: ScheduleTask, referenceDate = todayDate()) {

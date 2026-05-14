@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
-import { applyDragDelta, formatShortDate, getBarPosition } from "@/lib/schedule-utils";
+import { applyDragDelta, formatShortDate, getBarPosition, normalizeScheduleProgress } from "@/lib/schedule-utils";
 
 interface GanttBarProps {
   taskId: string;
@@ -50,9 +50,10 @@ export function GanttBar({
   const currentStart = previewDates?.startDate ?? startDate;
   const currentEnd = previewDates?.endDate ?? endDate;
   const { left, width } = getBarPosition(currentStart, currentEnd, timelineStartMs, timelineEndMs);
-  const summaryFill = isCritical ? "#3b82f6" : "#60a5fa";
-  const summaryTopEdge = isCritical ? "#1d4ed8" : "#3b82f6";
-  const summaryShadow = isCritical ? "rgba(29, 78, 216, 0.24)" : "rgba(59, 130, 246, 0.22)";
+  const progressRatio = normalizeScheduleProgress(progress);
+  const summaryFill = isCritical ? "#dc2626" : "#60a5fa";
+  const summaryTopEdge = isCritical ? "#991b1b" : "#3b82f6";
+  const summaryShadow = isCritical ? "rgba(220, 38, 38, 0.28)" : "rgba(59, 130, 246, 0.22)";
 
   useEffect(() => {
     if (!previewDates) return;
@@ -149,7 +150,7 @@ export function GanttBar({
         "absolute top-1/2 z-20 -translate-y-1/2 group/bar",
         variant === "summary" ? "h-8 overflow-visible" : "h-5 rounded-md",
         isDraggable ? (dragMode ? "cursor-grabbing" : "cursor-grab") : "cursor-pointer",
-        isCritical && "ring-2 ring-red-400/60"
+        isCritical && "shadow-[0_0_0_2px_rgba(248,113,113,0.72),0_4px_10px_rgba(220,38,38,0.22)]"
       )}
       style={{
         left: `${(left * 100).toFixed(2)}%`,
@@ -183,12 +184,17 @@ export function GanttBar({
         </div>
       ) : (
         <>
-          <div className={cn("absolute inset-0 rounded-md opacity-80 hover:opacity-100 transition-opacity", color.bg)} />
+          <div
+            className={cn(
+              "absolute inset-0 rounded-md opacity-85 transition-opacity hover:opacity-100",
+              isCritical ? "bg-red-500" : color.bg
+            )}
+          />
 
-          {progress > 0 && (
+          {progressRatio > 0 && (
             <div
               className="absolute inset-y-0 left-0 rounded-l-md bg-white/20"
-              style={{ width: `${(progress * 100).toFixed(0)}%` }}
+              style={{ width: `${(progressRatio * 100).toFixed(0)}%` }}
             />
           )}
 

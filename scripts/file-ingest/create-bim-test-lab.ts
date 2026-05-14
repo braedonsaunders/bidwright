@@ -51,6 +51,66 @@ interface Fixture {
   notes?: string;
 }
 
+interface LabPhaseSpec {
+  id: string;
+  number: string;
+  name: string;
+  description: string;
+  order: number;
+  startDate: string;
+  endDate: string;
+  color: string;
+}
+
+interface LabScheduleTaskSpec {
+  id: string;
+  phaseId: string;
+  parentTaskId?: string | null;
+  outlineLevel: number;
+  name: string;
+  description: string;
+  taskType: "summary" | "task" | "milestone";
+  status: "not_started" | "in_progress" | "complete";
+  startDate: string;
+  endDate: string;
+  duration: number;
+  progress: number;
+  assignee: string;
+  order: number;
+  baselineStart?: string;
+  baselineEnd?: string;
+  deadlineDate?: string | null;
+  actualStart?: string | null;
+  actualEnd?: string | null;
+}
+
+interface LabScheduleResourceSpec {
+  id: string;
+  name: string;
+  role: string;
+  kind: "labor" | "equipment" | "subcontractor" | "material";
+  color: string;
+  defaultUnits: number;
+  capacityPerDay: number;
+  costRate: number;
+}
+
+interface LabScheduleDependencySpec {
+  id: string;
+  predecessorId: string;
+  successorId: string;
+  type: "FS" | "SS" | "FF" | "SF";
+  lagDays: number;
+}
+
+interface LabScheduleAssignmentSpec {
+  id: string;
+  taskId: string;
+  resourceId: string;
+  units: number;
+  role: string;
+}
+
 const GROUP_FOLDERS: Record<FixtureGroup, string> = {
   bim: "01-bim",
   dwg: "02-dwg",
@@ -58,6 +118,447 @@ const GROUP_FOLDERS: Record<FixtureGroup, string> = {
   photos: "04-photos",
   spreadsheets: "05-spreadsheets",
 };
+
+const LAB_SCHEDULE_CALENDAR_ID = "cal-bim-lab-standard";
+const LAB_SCHEDULE_BASELINE_ID = "baseline-bim-lab-target";
+
+const LAB_PHASES: LabPhaseSpec[] = [
+  {
+    id: "phase-bim-lab-010",
+    number: "01",
+    name: "Intake Setup",
+    description: "Fixture intake, model sync, and first-pass BIM review.",
+    order: 1,
+    startDate: "2026-06-01",
+    endDate: "2026-06-05",
+    color: "#2563eb",
+  },
+  {
+    id: "phase-bim-lab-020",
+    number: "02",
+    name: "Quantity Validation",
+    description: "Cross-check model, drawing, spreadsheet, and photo evidence.",
+    order: 2,
+    startDate: "2026-06-08",
+    endDate: "2026-06-12",
+    color: "#16a34a",
+  },
+  {
+    id: "phase-bim-lab-030",
+    number: "03",
+    name: "Evidence Reconciliation",
+    description: "Resolve quantity, classification, and source-link mismatches.",
+    order: 3,
+    startDate: "2026-06-15",
+    endDate: "2026-06-19",
+    color: "#f59e0b",
+  },
+  {
+    id: "phase-bim-lab-040",
+    number: "04",
+    name: "Handoff & QA",
+    description: "Estimator handoff, QA checkpoint, and lab reset notes.",
+    order: 4,
+    startDate: "2026-06-22",
+    endDate: "2026-06-26",
+    color: "#dc2626",
+  },
+];
+
+const LAB_SCHEDULE_RESOURCES: LabScheduleResourceSpec[] = [
+  {
+    id: "res-bim-lab-coordinator",
+    name: "BIM coordinator",
+    role: "Coordination",
+    kind: "labor",
+    color: "#2563eb",
+    defaultUnits: 1,
+    capacityPerDay: 1,
+    costRate: 118,
+  },
+  {
+    id: "res-bim-lab-estimator",
+    name: "Estimator",
+    role: "Takeoff",
+    kind: "labor",
+    color: "#16a34a",
+    defaultUnits: 1,
+    capacityPerDay: 1,
+    costRate: 105,
+  },
+  {
+    id: "res-bim-lab-qa",
+    name: "QA reviewer",
+    role: "Review",
+    kind: "labor",
+    color: "#dc2626",
+    defaultUnits: 0.5,
+    capacityPerDay: 1,
+    costRate: 126,
+  },
+  {
+    id: "res-bim-lab-field",
+    name: "Field reviewer",
+    role: "Photos",
+    kind: "labor",
+    color: "#ea580c",
+    defaultUnits: 0.5,
+    capacityPerDay: 1,
+    costRate: 94,
+  },
+  {
+    id: "res-bim-lab-processor",
+    name: "Model processor",
+    role: "Ingest",
+    kind: "equipment",
+    color: "#7c3aed",
+    defaultUnits: 1,
+    capacityPerDay: 1,
+    costRate: 35,
+  },
+];
+
+const LAB_SCHEDULE_TASKS: LabScheduleTaskSpec[] = [
+  {
+    id: "task-bim-lab-010",
+    phaseId: "phase-bim-lab-010",
+    outlineLevel: 0,
+    name: "BIM coordination and intake",
+    description: "Summary task for fixture intake, model ingest, and first-pass BIM workspace checks.",
+    taskType: "summary",
+    status: "in_progress",
+    startDate: "2026-06-01",
+    endDate: "2026-06-05",
+    duration: 5,
+    progress: 0.45,
+    assignee: "BIM coordinator",
+    order: 1,
+  },
+  {
+    id: "task-bim-lab-011",
+    phaseId: "phase-bim-lab-010",
+    parentTaskId: "task-bim-lab-010",
+    outlineLevel: 1,
+    name: "Kickoff with estimating, BIM, and takeoff owners",
+    description: "Confirm fixture scope and acceptance criteria for the lab run.",
+    taskType: "milestone",
+    status: "complete",
+    startDate: "2026-06-01",
+    endDate: "2026-06-01",
+    duration: 0,
+    progress: 1,
+    assignee: "BIM coordinator",
+    order: 2,
+    actualStart: "2026-06-01",
+    actualEnd: "2026-06-01",
+  },
+  {
+    id: "task-bim-lab-012",
+    phaseId: "phase-bim-lab-010",
+    parentTaskId: "task-bim-lab-010",
+    outlineLevel: 1,
+    name: "Load Duplex IFC and sync model assets",
+    description: "Run model ingest and confirm assets, elements, classifications, and LOD rows populate.",
+    taskType: "task",
+    status: "complete",
+    startDate: "2026-06-01",
+    endDate: "2026-06-02",
+    duration: 2,
+    progress: 1,
+    assignee: "Model processor",
+    order: 3,
+    actualStart: "2026-06-01",
+    actualEnd: "2026-06-02",
+  },
+  {
+    id: "task-bim-lab-013",
+    phaseId: "phase-bim-lab-010",
+    parentTaskId: "task-bim-lab-010",
+    outlineLevel: 1,
+    name: "Review model tree, spaces, and element classifications",
+    description: "Exercise the BIM workspace tree and classification panes with a moderately long task title.",
+    taskType: "task",
+    status: "in_progress",
+    startDate: "2026-06-02",
+    endDate: "2026-06-04",
+    duration: 3,
+    progress: 0.65,
+    assignee: "BIM coordinator",
+    order: 4,
+  },
+  {
+    id: "task-bim-lab-014",
+    phaseId: "phase-bim-lab-010",
+    parentTaskId: "task-bim-lab-010",
+    outlineLevel: 1,
+    name: "Publish intake-card QA notes for BIM/3D/photo/spreadsheet",
+    description: "Capture cross-card QA notes and source provenance for downstream review.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-04",
+    endDate: "2026-06-05",
+    duration: 2,
+    progress: 0,
+    assignee: "QA reviewer",
+    order: 5,
+    baselineStart: "2026-06-03",
+    baselineEnd: "2026-06-04",
+  },
+  {
+    id: "task-bim-lab-020",
+    phaseId: "phase-bim-lab-020",
+    outlineLevel: 0,
+    name: "Model quantity validation",
+    description: "Summary task for cross-source quantity validation.",
+    taskType: "summary",
+    status: "not_started",
+    startDate: "2026-06-08",
+    endDate: "2026-06-12",
+    duration: 5,
+    progress: 0,
+    assignee: "Estimator",
+    order: 6,
+  },
+  {
+    id: "task-bim-lab-021",
+    phaseId: "phase-bim-lab-020",
+    parentTaskId: "task-bim-lab-020",
+    outlineLevel: 1,
+    name: "Spot-check walls, slabs, doors, and windows against takeoff rules",
+    description: "Use element classifications to verify major model quantity buckets.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-08",
+    endDate: "2026-06-10",
+    duration: 3,
+    progress: 0,
+    assignee: "Estimator",
+    order: 7,
+    baselineStart: "2026-06-08",
+    baselineEnd: "2026-06-09",
+  },
+  {
+    id: "task-bim-lab-022",
+    phaseId: "phase-bim-lab-020",
+    parentTaskId: "task-bim-lab-020",
+    outlineLevel: 1,
+    name: "Review DXF wall, door, and window layers in drawing takeoff",
+    description: "Confirm the synthetic room DXF opens and the layer controls have usable data.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-09",
+    endDate: "2026-06-10",
+    duration: 2,
+    progress: 0,
+    assignee: "Estimator",
+    order: 8,
+  },
+  {
+    id: "task-bim-lab-023",
+    phaseId: "phase-bim-lab-020",
+    parentTaskId: "task-bim-lab-020",
+    outlineLevel: 1,
+    name: "Compare CSV allowance rows to modeled quantities",
+    description: "Check spreadsheet quantities and markup rows against the model-derived review set.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-10",
+    endDate: "2026-06-11",
+    duration: 2,
+    progress: 0,
+    assignee: "Estimator",
+    order: 9,
+  },
+  {
+    id: "task-bim-lab-024",
+    phaseId: "phase-bim-lab-020",
+    parentTaskId: "task-bim-lab-020",
+    outlineLevel: 1,
+    name: "Site photo BOM dry run and exception log",
+    description: "Exercise the photo intake count and expected exception handling with placeholder images.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-11",
+    endDate: "2026-06-12",
+    duration: 2,
+    progress: 0,
+    assignee: "Field reviewer",
+    order: 10,
+  },
+  {
+    id: "task-bim-lab-030",
+    phaseId: "phase-bim-lab-030",
+    outlineLevel: 0,
+    name: "Evidence reconciliation",
+    description: "Summary task for resolving mismatches between BIM, DXF, spreadsheet, and photo evidence.",
+    taskType: "summary",
+    status: "not_started",
+    startDate: "2026-06-15",
+    endDate: "2026-06-19",
+    duration: 5,
+    progress: 0,
+    assignee: "QA reviewer",
+    order: 11,
+  },
+  {
+    id: "task-bim-lab-031",
+    phaseId: "phase-bim-lab-030",
+    parentTaskId: "task-bim-lab-030",
+    outlineLevel: 1,
+    name: "Reconcile BIM/DXF/spreadsheet evidence links",
+    description: "Attach a test review narrative to each source family and compare quantities.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-15",
+    endDate: "2026-06-17",
+    duration: 3,
+    progress: 0,
+    assignee: "QA reviewer",
+    order: 12,
+    baselineStart: "2026-06-15",
+    baselineEnd: "2026-06-16",
+  },
+  {
+    id: "task-bim-lab-032",
+    phaseId: "phase-bim-lab-030",
+    parentTaskId: "task-bim-lab-030",
+    outlineLevel: 1,
+    name: "Resolve mismatched classifications and units",
+    description: "Close the loop on mismatches found during source reconciliation.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-17",
+    endDate: "2026-06-18",
+    duration: 2,
+    progress: 0,
+    assignee: "BIM coordinator",
+    order: 13,
+  },
+  {
+    id: "task-bim-lab-033",
+    phaseId: "phase-bim-lab-030",
+    parentTaskId: "task-bim-lab-030",
+    outlineLevel: 1,
+    name: "QA checkpoint: estimator signoff",
+    description: "Milestone for estimator acceptance of BIM lab schedule and source evidence.",
+    taskType: "milestone",
+    status: "not_started",
+    startDate: "2026-06-19",
+    endDate: "2026-06-19",
+    duration: 0,
+    progress: 0,
+    assignee: "QA reviewer",
+    order: 14,
+    deadlineDate: "2026-06-19",
+  },
+  {
+    id: "task-bim-lab-040",
+    phaseId: "phase-bim-lab-040",
+    outlineLevel: 0,
+    name: "Handoff and closeout",
+    description: "Summary task for estimator handoff, QA notes, and closeout.",
+    taskType: "summary",
+    status: "not_started",
+    startDate: "2026-06-22",
+    endDate: "2026-06-26",
+    duration: 5,
+    progress: 0,
+    assignee: "Estimator",
+    order: 15,
+  },
+  {
+    id: "task-bim-lab-041",
+    phaseId: "phase-bim-lab-040",
+    parentTaskId: "task-bim-lab-040",
+    outlineLevel: 1,
+    name: "Package estimate handoff with fixture provenance",
+    description: "Prepare the schedule, model counts, file list, and source notes for review.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-22",
+    endDate: "2026-06-24",
+    duration: 3,
+    progress: 0,
+    assignee: "Estimator",
+    order: 16,
+    baselineStart: "2026-06-22",
+    baselineEnd: "2026-06-23",
+  },
+  {
+    id: "task-bim-lab-042",
+    phaseId: "phase-bim-lab-040",
+    parentTaskId: "task-bim-lab-040",
+    outlineLevel: 1,
+    name: "Archive lab findings and reset checklist",
+    description: "Capture expected counts, fixture provenance, and reset guidance.",
+    taskType: "task",
+    status: "not_started",
+    startDate: "2026-06-24",
+    endDate: "2026-06-25",
+    duration: 2,
+    progress: 0,
+    assignee: "QA reviewer",
+    order: 17,
+  },
+  {
+    id: "task-bim-lab-043",
+    phaseId: "phase-bim-lab-040",
+    parentTaskId: "task-bim-lab-040",
+    outlineLevel: 1,
+    name: "Close BIM lab smoke run",
+    description: "Final schedule milestone for the seeded BIM workspace lab.",
+    taskType: "milestone",
+    status: "not_started",
+    startDate: "2026-06-26",
+    endDate: "2026-06-26",
+    duration: 0,
+    progress: 0,
+    assignee: "BIM coordinator",
+    order: 18,
+    deadlineDate: "2026-06-26",
+  },
+];
+
+const LAB_SCHEDULE_DEPENDENCIES: LabScheduleDependencySpec[] = [
+  { id: "dep-bim-lab-001", predecessorId: "task-bim-lab-011", successorId: "task-bim-lab-012", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-002", predecessorId: "task-bim-lab-012", successorId: "task-bim-lab-013", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-003", predecessorId: "task-bim-lab-013", successorId: "task-bim-lab-014", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-004", predecessorId: "task-bim-lab-014", successorId: "task-bim-lab-021", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-005", predecessorId: "task-bim-lab-021", successorId: "task-bim-lab-022", type: "SS", lagDays: 1 },
+  { id: "dep-bim-lab-006", predecessorId: "task-bim-lab-022", successorId: "task-bim-lab-023", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-007", predecessorId: "task-bim-lab-023", successorId: "task-bim-lab-024", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-008", predecessorId: "task-bim-lab-024", successorId: "task-bim-lab-031", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-009", predecessorId: "task-bim-lab-031", successorId: "task-bim-lab-032", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-010", predecessorId: "task-bim-lab-032", successorId: "task-bim-lab-033", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-011", predecessorId: "task-bim-lab-033", successorId: "task-bim-lab-041", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-012", predecessorId: "task-bim-lab-041", successorId: "task-bim-lab-042", type: "FS", lagDays: 0 },
+  { id: "dep-bim-lab-013", predecessorId: "task-bim-lab-042", successorId: "task-bim-lab-043", type: "FS", lagDays: 0 },
+];
+
+const LAB_SCHEDULE_ASSIGNMENTS: LabScheduleAssignmentSpec[] = [
+  { id: "asg-bim-lab-011a", taskId: "task-bim-lab-011", resourceId: "res-bim-lab-coordinator", units: 0.5, role: "Kickoff lead" },
+  { id: "asg-bim-lab-011b", taskId: "task-bim-lab-011", resourceId: "res-bim-lab-estimator", units: 0.5, role: "Estimator owner" },
+  { id: "asg-bim-lab-012a", taskId: "task-bim-lab-012", resourceId: "res-bim-lab-processor", units: 1, role: "Model ingest" },
+  { id: "asg-bim-lab-012b", taskId: "task-bim-lab-012", resourceId: "res-bim-lab-coordinator", units: 0.5, role: "Ingest review" },
+  { id: "asg-bim-lab-013a", taskId: "task-bim-lab-013", resourceId: "res-bim-lab-coordinator", units: 1, role: "Classification review" },
+  { id: "asg-bim-lab-013b", taskId: "task-bim-lab-013", resourceId: "res-bim-lab-qa", units: 0.35, role: "QA spot-check" },
+  { id: "asg-bim-lab-014a", taskId: "task-bim-lab-014", resourceId: "res-bim-lab-qa", units: 0.5, role: "QA notes" },
+  { id: "asg-bim-lab-021a", taskId: "task-bim-lab-021", resourceId: "res-bim-lab-estimator", units: 1, role: "Quantity check" },
+  { id: "asg-bim-lab-021b", taskId: "task-bim-lab-021", resourceId: "res-bim-lab-coordinator", units: 0.5, role: "Model support" },
+  { id: "asg-bim-lab-022a", taskId: "task-bim-lab-022", resourceId: "res-bim-lab-estimator", units: 0.75, role: "Drawing review" },
+  { id: "asg-bim-lab-023a", taskId: "task-bim-lab-023", resourceId: "res-bim-lab-estimator", units: 0.75, role: "Spreadsheet compare" },
+  { id: "asg-bim-lab-024a", taskId: "task-bim-lab-024", resourceId: "res-bim-lab-field", units: 0.5, role: "Photo review" },
+  { id: "asg-bim-lab-024b", taskId: "task-bim-lab-024", resourceId: "res-bim-lab-estimator", units: 0.25, role: "BOM review" },
+  { id: "asg-bim-lab-031a", taskId: "task-bim-lab-031", resourceId: "res-bim-lab-qa", units: 0.75, role: "Evidence owner" },
+  { id: "asg-bim-lab-031b", taskId: "task-bim-lab-031", resourceId: "res-bim-lab-estimator", units: 0.5, role: "Quantity owner" },
+  { id: "asg-bim-lab-031c", taskId: "task-bim-lab-031", resourceId: "res-bim-lab-coordinator", units: 0.5, role: "Model owner" },
+  { id: "asg-bim-lab-032a", taskId: "task-bim-lab-032", resourceId: "res-bim-lab-coordinator", units: 0.75, role: "Classification fixes" },
+  { id: "asg-bim-lab-033a", taskId: "task-bim-lab-033", resourceId: "res-bim-lab-qa", units: 0.5, role: "Checkpoint" },
+  { id: "asg-bim-lab-041a", taskId: "task-bim-lab-041", resourceId: "res-bim-lab-estimator", units: 1, role: "Handoff package" },
+  { id: "asg-bim-lab-041b", taskId: "task-bim-lab-041", resourceId: "res-bim-lab-qa", units: 0.5, role: "Handoff review" },
+  { id: "asg-bim-lab-042a", taskId: "task-bim-lab-042", resourceId: "res-bim-lab-qa", units: 0.5, role: "Archive notes" },
+  { id: "asg-bim-lab-043a", taskId: "task-bim-lab-043", resourceId: "res-bim-lab-coordinator", units: 0.25, role: "Closeout" },
+];
 
 // ── Fixture content generators ──────────────────────────────────────────
 
@@ -337,6 +838,170 @@ async function deleteExistingByName(name: string) {
   console.log(`  · removed ${existing.length} prior copy(s).`);
 }
 
+async function seedTestSchedule(projectId: string, revisionId: string) {
+  const now = new Date();
+  const scopedId = (id: string) => `${id}-${projectId}`;
+  const calendarId = scopedId(LAB_SCHEDULE_CALENDAR_ID);
+  const baselineId = scopedId(LAB_SCHEDULE_BASELINE_ID);
+  const topLevelTasks = LAB_SCHEDULE_TASKS.filter((task) => !task.parentTaskId);
+  const childTasks = LAB_SCHEDULE_TASKS.filter((task) => task.parentTaskId);
+  const taskData = (task: LabScheduleTaskSpec) => ({
+    id: scopedId(task.id),
+    projectId,
+    revisionId,
+    phaseId: scopedId(task.phaseId),
+    calendarId,
+    parentTaskId: task.parentTaskId ? scopedId(task.parentTaskId) : null,
+    outlineLevel: task.outlineLevel,
+    name: task.name,
+    description: task.description,
+    taskType: task.taskType,
+    status: task.status,
+    startDate: task.startDate,
+    endDate: task.endDate,
+    duration: task.duration,
+    progress: task.progress,
+    assignee: task.assignee,
+    order: task.order,
+    constraintType: "asap",
+    constraintDate: null,
+    deadlineDate: task.deadlineDate ?? null,
+    actualStart: task.actualStart ?? null,
+    actualEnd: task.actualEnd ?? null,
+    baselineStart: task.baselineStart ?? task.startDate,
+    baselineEnd: task.baselineEnd ?? task.endDate,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await prisma.$transaction(async (tx) => {
+    await tx.quoteRevision.update({
+      where: { id: revisionId },
+      data: {
+        dateDue: "2026-06-30",
+        dateWorkStart: "2026-06-01",
+        dateWorkEnd: "2026-06-26",
+        updatedAt: now,
+      },
+    });
+
+    await tx.phase.createMany({
+      data: LAB_PHASES.map((phase) => ({
+        id: scopedId(phase.id),
+        revisionId,
+        parentId: null,
+        number: phase.number,
+        name: phase.name,
+        description: phase.description,
+        order: phase.order,
+        startDate: phase.startDate,
+        endDate: phase.endDate,
+        color: phase.color,
+      })),
+    });
+
+    await tx.scheduleCalendar.create({
+      data: {
+        id: calendarId,
+        projectId,
+        revisionId,
+        name: "BIM lab 5-day",
+        description: "Seeded Monday-Friday calendar for the BIM workspace test schedule.",
+        isDefault: true,
+        workingDays: {
+          mon: true,
+          tue: true,
+          wed: true,
+          thu: true,
+          fri: true,
+          sat: false,
+          sun: false,
+          exceptions: [],
+        } as any,
+        shiftStartMinutes: 480,
+        shiftEndMinutes: 1020,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    await tx.scheduleResource.createMany({
+      data: LAB_SCHEDULE_RESOURCES.map((resource) => ({
+        id: scopedId(resource.id),
+        projectId,
+        revisionId,
+        calendarId,
+        name: resource.name,
+        role: resource.role,
+        kind: resource.kind,
+        color: resource.color,
+        defaultUnits: resource.defaultUnits,
+        capacityPerDay: resource.capacityPerDay,
+        costRate: resource.costRate,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    });
+
+    await tx.scheduleTask.createMany({ data: topLevelTasks.map(taskData) });
+    await tx.scheduleTask.createMany({ data: childTasks.map(taskData) });
+
+    await tx.scheduleDependency.createMany({
+      data: LAB_SCHEDULE_DEPENDENCIES.map((dependency) => ({
+        id: scopedId(dependency.id),
+        predecessorId: scopedId(dependency.predecessorId),
+        successorId: scopedId(dependency.successorId),
+        type: dependency.type,
+        lagDays: dependency.lagDays,
+      })),
+    });
+
+    await tx.scheduleTaskAssignment.createMany({
+      data: LAB_SCHEDULE_ASSIGNMENTS.map((assignment) => ({
+        id: scopedId(assignment.id),
+        taskId: scopedId(assignment.taskId),
+        resourceId: scopedId(assignment.resourceId),
+        units: assignment.units,
+        role: assignment.role,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    });
+
+    await tx.scheduleBaseline.create({
+      data: {
+        id: baselineId,
+        projectId,
+        revisionId,
+        name: "BIM lab target baseline",
+        description: "Primary baseline seeded with the BIM lab test schedule.",
+        kind: "primary",
+        isPrimary: true,
+        createdAt: now,
+        updatedAt: now,
+      },
+    });
+
+    await tx.scheduleBaselineTask.createMany({
+      data: LAB_SCHEDULE_TASKS.map((task) => ({
+        id: scopedId(`blt-${task.id}`),
+        baselineId,
+        taskId: scopedId(task.id),
+        taskName: task.name,
+        phaseId: scopedId(task.phaseId),
+        startDate: task.baselineStart ?? task.startDate,
+        endDate: task.baselineEnd ?? task.endDate,
+        duration: task.duration,
+        createdAt: now,
+        updatedAt: now,
+      })),
+    });
+
+    await tx.project.update({ where: { id: projectId }, data: { updatedAt: now } });
+    await tx.quote.updateMany({ where: { projectId }, data: { updatedAt: now } });
+  });
+}
+
 async function main() {
   const store = new PrismaApiStore(prisma, ORG_ID);
   store.setUserId(USER_ID);
@@ -357,6 +1022,12 @@ async function main() {
     creationMode: "manual",
   } as any);
   const projectId = created.project.id;
+  if (!created.revision) {
+    throw new Error(`Project ${projectId} was created without an active quote revision`);
+  }
+
+  console.log("[bim-test-lab] Creating test schedule…");
+  await seedTestSchedule(projectId, created.revision.id);
 
   console.log("[bim-test-lab] Creating folder tree…");
   const root = await store.createFileNode(projectId, {
@@ -425,6 +1096,15 @@ async function main() {
   const fileNodeCount = await prisma.fileNode.count({ where: { projectId } });
   const modelAssetCount = await prisma.modelAsset.count({ where: { projectId } });
   const elementCount = await prisma.modelElement.count({ where: { model: { projectId } } });
+  const scheduleTaskCount = await prisma.scheduleTask.count({ where: { projectId } });
+  const scheduleResourceCount = await prisma.scheduleResource.count({ where: { projectId } });
+  const scheduleTaskIds = await prisma.scheduleTask.findMany({
+    where: { projectId },
+    select: { id: true },
+  });
+  const scheduleDependencyCount = await prisma.scheduleDependency.count({
+    where: { predecessorId: { in: scheduleTaskIds.map((task) => task.id) } },
+  });
 
   console.log("");
   console.log("✓ BIM Workspace Test Lab ready.");
@@ -432,9 +1112,12 @@ async function main() {
   console.log(`  file nodes   : ${fileNodeCount}`);
   console.log(`  model assets : ${modelAssetCount}`);
   console.log(`  model elements: ${elementCount}`);
+  console.log(`  schedule tasks: ${scheduleTaskCount}`);
+  console.log(`  schedule resources: ${scheduleResourceCount}`);
+  console.log(`  schedule dependencies: ${scheduleDependencyCount}`);
   console.log("");
   console.log("Open the project in the workspace and click through each intake card —");
-  console.log("counts should be > 0 for BIM, 3D Geometry, Photos, and Spreadsheets.");
+  console.log("counts should be > 0 for BIM, 3D Geometry, Photos, Spreadsheets, and Schedule.");
 }
 
 main()

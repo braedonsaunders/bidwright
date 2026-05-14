@@ -24,6 +24,7 @@ import {
   getTaskVariance,
   getVisibleTasks,
   groupTasksByPhase,
+  normalizeScheduleProgress,
   parseDate,
   PHASE_COLORS,
 } from "@/lib/schedule-utils";
@@ -228,8 +229,8 @@ export function ListView({
   );
 
   return (
-    <div className="overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel" data-testid="schedule-list">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-line bg-panel2/20 px-4 py-2">
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-b-lg rounded-t-none border border-line border-t-0 bg-panel" data-testid="schedule-list">
+      <div className="shrink-0 flex flex-wrap items-center justify-between gap-2 border-b border-line bg-panel2/20 px-4 py-2">
         <div className="flex flex-wrap items-center gap-2 text-[11px] text-fg/45">
           <span className="rounded-full bg-bg/50 px-2 py-1">{tasks.length} visible</span>
           <span className="rounded-full bg-bg/50 px-2 py-1">{visibleSummary.critical} critical</span>
@@ -243,7 +244,7 @@ export function ListView({
       </div>
 
       {selectedIds.size > 0 && (
-        <div className="flex items-center gap-2 border-b border-line bg-accent/5 px-4 py-2">
+        <div className="shrink-0 flex items-center gap-2 border-b border-line bg-accent/5 px-4 py-2">
           <span className="text-xs text-fg/60">{selectedIds.size} selected</span>
           <Button variant="ghost" size="xs" onClick={() => void handleBulkStatusChange("in_progress")} data-testid="schedule-list-bulk-in-progress">
             Mark In Progress
@@ -257,9 +258,28 @@ export function ListView({
         </div>
       )}
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full">
-          <thead>
+      <div className="min-h-0 flex-1 overflow-auto">
+        <table className="w-full table-fixed">
+          <colgroup>
+            <col style={{ width: 30 }} />
+            <col style={{ width: 34 }} />
+            <col style={{ width: 48 }} />
+            <col style={{ width: "22%" }} />
+            <col style={{ width: "9%" }} />
+            <col style={{ width: 92 }} />
+            <col style={{ width: 70 }} />
+            <col style={{ width: 70 }} />
+            <col style={{ width: 74 }} />
+            <col style={{ width: 70 }} />
+            <col style={{ width: 82 }} />
+            <col style={{ width: 54 }} />
+            <col style={{ width: "13%" }} />
+            <col style={{ width: 92 }} />
+            <col style={{ width: "8%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: 92 }} />
+          </colgroup>
+          <thead className="sticky top-0 z-20">
             <tr className="border-b border-line bg-panel2/30">
               <th className="w-8 px-2 py-2" />
               <th className="w-8 px-3 py-2">
@@ -331,6 +351,7 @@ export function ListView({
                       const variance = getTaskVariance(task);
                       const floatDays = insights.totalFloatByTask.get(task.id);
                       const resourceCount = (taskAssignmentsByTaskId.get(task.id) ?? []).length;
+                      const progress = normalizeScheduleProgress(task.progress);
                       const hierarchy = group.hierarchyInfo.get(task.id);
                       const depth = hierarchy?.depth ?? task.outlineLevel ?? 0;
                       const isSummaryTask = group.summaryTaskIds.has(task.id);
@@ -396,16 +417,16 @@ export function ListView({
                               className="rounded border-line"
                             />
                           </td>
-                          <td className="px-3 py-2 text-[11px] text-fg/45">
+                          <td className="truncate px-3 py-2 text-[11px] text-fg/45">
                             {depth === 0 ? `${task.order}` : `${task.order}.L${depth}`}
                           </td>
                           <td
-                            className="max-w-[280px] px-3 py-2 text-xs text-fg/80 transition-colors hover:text-accent"
+                            className="min-w-0 px-3 py-2 text-xs text-fg/80 transition-colors hover:text-accent"
                             onClick={() => onClickTask(task)}
                           >
                             <div
                               data-schedule-tree-cell="true"
-                              className="flex cursor-pointer items-start gap-2"
+                              className="flex min-w-0 cursor-pointer items-start gap-2"
                               style={{ paddingLeft: `${depth * TREE_INDENT}px` }}
                             >
                               {hierarchy?.hasChildren ? (
@@ -442,11 +463,11 @@ export function ListView({
                               </div>
                             </div>
                           </td>
-                          <td className="px-3 py-2">
+                          <td className="min-w-0 px-3 py-2">
                             {group.phase && (
-                              <div className="flex items-center gap-1.5">
-                                <div className={cn("h-2 w-2 rounded-full", color.bg)} />
-                                <span className="max-w-24 truncate text-[11px] text-fg/40">{group.phase.name}</span>
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                <div className={cn("h-2 w-2 shrink-0 rounded-full", color.bg)} />
+                                <span className="truncate text-[11px] text-fg/40">{group.phase.name}</span>
                               </div>
                             )}
                           </td>
@@ -455,10 +476,10 @@ export function ListView({
                               {STATUS_LABELS[task.status]}
                             </Badge>
                           </td>
-                          <td className="px-3 py-2 text-xs text-fg/60">{start ? formatShortDate(start) : "\u2014"}</td>
-                          <td className="px-3 py-2 text-xs text-fg/60">{end ? formatShortDate(end) : "\u2014"}</td>
-                          <td className="px-3 py-2 text-xs text-fg/60">{deadline ? formatShortDate(deadline) : "\u2014"}</td>
-                          <td className="px-3 py-2 text-xs text-fg/60">{duration > 0 ? `${duration}d` : task.taskType === "milestone" ? "MS" : "\u2014"}</td>
+                          <td className="truncate px-3 py-2 text-xs text-fg/60">{start ? formatShortDate(start) : "\u2014"}</td>
+                          <td className="truncate px-3 py-2 text-xs text-fg/60">{end ? formatShortDate(end) : "\u2014"}</td>
+                          <td className="truncate px-3 py-2 text-xs text-fg/60">{deadline ? formatShortDate(deadline) : "\u2014"}</td>
+                          <td className="truncate px-3 py-2 text-xs text-fg/60">{duration > 0 ? `${duration}d` : task.taskType === "milestone" ? "MS" : "\u2014"}</td>
                           <td className="px-3 py-2 text-xs text-fg/60">
                             {variance.isBehind ? (
                               <span className="rounded-full bg-warning/10 px-2 py-1 text-warning">
@@ -477,9 +498,9 @@ export function ListView({
                           <td className="px-3 py-2 text-xs text-fg/60">
                             {typeof floatDays === "number" && Number.isFinite(floatDays) ? `${Math.round(floatDays)}d` : "\u2014"}
                           </td>
-                          <td className="px-3 py-2 text-xs text-fg/60">
+                          <td className="min-w-0 px-3 py-2 text-xs text-fg/60">
                             {resourceCount > 0 ? (
-                              <div className="flex flex-wrap gap-1">
+                              <div className="flex max-h-7 min-w-0 flex-wrap gap-1 overflow-hidden">
                                 {(taskAssignmentsByTaskId.get(task.id) ?? []).slice(0, 3).map((assignment) => {
                                   const resource = resourceById.get(assignment.resourceId);
                                   return (
@@ -504,17 +525,17 @@ export function ListView({
                           <td className="px-3 py-2">
                             <div className="flex items-center gap-2">
                               <div className="h-1.5 w-16 overflow-hidden rounded-full bg-line">
-                                <div
+                                  <div
                                   className="h-full rounded-full bg-accent"
-                                  style={{ width: `${task.progress * 100}%` }}
+                                  style={{ width: `${progress * 100}%` }}
                                 />
                               </div>
-                              <span className="text-[11px] text-fg/40">{Math.round(task.progress * 100)}%</span>
+                              <span className="text-[11px] text-fg/40">{Math.round(progress * 100)}%</span>
                             </div>
                           </td>
-                          <td className="max-w-24 truncate px-3 py-2 text-xs text-fg/60">{task.assignee || "\u2014"}</td>
-                          <td className="px-3 py-2">
-                            <div className="flex flex-wrap gap-1">
+                          <td className="truncate px-3 py-2 text-xs text-fg/60">{task.assignee || "\u2014"}</td>
+                          <td className="min-w-0 px-3 py-2">
+                            <div className="flex max-h-7 flex-wrap gap-1 overflow-hidden">
                               {insights.criticalTaskIds.has(task.id) && <Badge tone="info">Critical</Badge>}
                               {insights.overdueTaskIds.has(task.id) && <Badge tone="danger">Overdue</Badge>}
                               {insights.violatingTaskIds.has(task.id) && <Badge tone="warning">Logic</Badge>}
