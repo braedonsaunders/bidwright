@@ -128,7 +128,7 @@ import {
   Select,
   Separator,
 } from "@/components/ui";
-import * as RadixSelect from "@radix-ui/react-select";
+import * as Popover from "@radix-ui/react-popover";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
 import { postWorkspaceMutation } from "@/lib/workspace-sync";
@@ -269,47 +269,49 @@ interface ToolDef {
   id: ToolId;
   label: string;
   icon: typeof Ruler;
-  group: "nav" | "setup" | "measure" | "area" | "count" | "markup" | "ai";
+  group: "nav" | "setup" | "measure" | "count" | "markup" | "ai";
+  section?: string;
 }
 
 const TOOLS: ToolDef[] = [
   /* Navigate */
   { id: "select",             label: "Select",            icon: MousePointer2,    group: "nav" },
   /* Setup */
-  { id: "calibrate",          label: "Calibrate",         icon: Scaling,          group: "setup" },
+  { id: "calibrate",          label: "Set Scale",         icon: Scaling,          group: "measure", section: "Scale" },
   /* Measure */
-  { id: "linear",             label: "Linear",            icon: Ruler,            group: "measure" },
-  { id: "linear-polyline",    label: "Polyline",          icon: Spline,           group: "measure" },
-  { id: "linear-drop",        label: "Linear Drop",       icon: ArrowDownToLine,  group: "measure" },
+  { id: "linear",             label: "Linear",            icon: Ruler,            group: "measure", section: "Length" },
+  { id: "linear-polyline",    label: "Polyline",          icon: Spline,           group: "measure", section: "Length" },
+  { id: "linear-drop",        label: "Linear Drop",       icon: ArrowDownToLine,  group: "measure", section: "Length" },
   /* Area */
-  { id: "area-rectangle",     label: "Rectangle",         icon: Square,           group: "area" },
-  { id: "area-polygon",       label: "Polygon",           icon: Pentagon,         group: "area" },
-  { id: "area-triangle",      label: "Triangle",          icon: Triangle,         group: "area" },
-  { id: "area-ellipse",       label: "Ellipse",           icon: CircleDashed,     group: "area" },
-  { id: "area-vertical-wall", label: "Vertical Wall",     icon: RectangleVertical, group: "area" },
+  { id: "area-rectangle",     label: "Rectangle",         icon: Square,           group: "measure", section: "Area" },
+  { id: "area-polygon",       label: "Polygon",           icon: Pentagon,         group: "measure", section: "Area" },
+  { id: "area-triangle",      label: "Triangle",          icon: Triangle,         group: "measure", section: "Area" },
+  { id: "area-ellipse",       label: "Ellipse",           icon: CircleDashed,     group: "measure", section: "Area" },
+  { id: "area-vertical-wall", label: "Vertical Wall",     icon: RectangleVertical, group: "measure", section: "Area" },
   /* Count */
-  { id: "count",              label: "Count",             icon: Target,           group: "count" },
-  { id: "count-by-distance",  label: "Count by Distance", icon: Tally5,           group: "count" },
-  { id: "auto-count",         label: "Auto Count",        icon: ScanSearch,       group: "count" },
+  { id: "count",              label: "Count",             icon: Target,           group: "count", section: "Manual" },
+  { id: "count-by-distance",  label: "Count by Distance", icon: Tally5,           group: "count", section: "Manual" },
+  { id: "smart-count",        label: "Smart Count",       icon: Wand2,            group: "count", section: "Assisted" },
   /* Markup */
   { id: "markup-note",        label: "Note",              icon: MessageSquarePlus, group: "markup" },
   { id: "markup-cloud",       label: "Cloud",             icon: Cloud,            group: "markup" },
   { id: "markup-arrow",       label: "Arrow",             icon: MoveRight,        group: "markup" },
   { id: "markup-highlight",   label: "Highlight",         icon: Highlighter,      group: "markup" },
   /* AI */
+  { id: "auto-count",         label: "Auto Count",        icon: ScanSearch,       group: "ai" },
   { id: "ask-ai",             label: "Ask AI",            icon: BrainCircuit,     group: "ai" },
-  { id: "smart-count",        label: "Smart Count",       icon: Wand2,            group: "ai" },
 ];
 
-const TOOL_GROUPS = [
-  { key: "nav",     label: "Navigate" },
-  { key: "setup",   label: "Setup" },
-  { key: "measure", label: "Measure" },
-  { key: "area",    label: "Area" },
-  { key: "count",   label: "Count" },
-  { key: "markup",  label: "Markup" },
-  { key: "ai",      label: "AI" },
-] as const;
+const PDF_TOOL_MENU_GROUPS: ReadonlyArray<{
+  key: ToolDef["group"];
+  label: string;
+  icon: typeof Ruler;
+}> = [
+  { key: "measure", label: "Measure", icon: Ruler },
+  { key: "count",   label: "Count",   icon: Target },
+  { key: "markup",  label: "Markup",  icon: MessageSquarePlus },
+  { key: "ai",      label: "AI",      icon: Sparkles },
+];
 
 /* ─── Status bar text for each tool ─── */
 
@@ -335,6 +337,201 @@ const TOOL_STATUS_TEXT: Record<string, string> = {
   "smart-count": "Draw a rectangle around a room or zone — AI counts every distinct symbol inside.",
 };
 
+function PdfToolGroupMenus({
+  activeTool,
+  onSelect,
+  onReadLegend,
+  onOpenDrawingIntelligence,
+  legendOpen,
+  legendLoading,
+  legendEntries,
+  legendWarnings,
+  legendCount,
+  onCloseLegend,
+  drawingAnalysisRunning,
+  drawingAnalysisCount,
+  canRunDocumentAi,
+  canRunDrawingIntelligence,
+}: {
+  activeTool: ToolId;
+  onSelect: (tool: ToolId) => void;
+  onReadLegend: () => void;
+  onOpenDrawingIntelligence: () => void;
+  legendOpen: boolean;
+  legendLoading: boolean;
+  legendEntries: LegendEntryRecord[] | null;
+  legendWarnings: string[];
+  legendCount: number;
+  onCloseLegend: () => void;
+  drawingAnalysisRunning: boolean;
+  drawingAnalysisCount: number | null;
+  canRunDocumentAi: boolean;
+  canRunDrawingIntelligence: boolean;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-line bg-bg/35 p-0.5">
+      {PDF_TOOL_MENU_GROUPS.map((group) => {
+        const tools = TOOLS.filter((tool) => tool.group === group.key);
+        const activeInGroup = tools.some((tool) => tool.id === activeTool) || (group.key === "ai" && (legendLoading || drawingAnalysisRunning));
+        const GroupIcon = group.icon;
+        return (
+          <Popover.Root key={group.key}>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                className={cn(
+                  "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors",
+                  activeInGroup
+                    ? "bg-accent/15 text-accent"
+                    : "text-fg/55 hover:bg-panel2 hover:text-fg/80",
+                )}
+                title={`${group.label} tools`}
+              >
+                <GroupIcon className="h-3.5 w-3.5" />
+                <span className="hidden xl:inline">{group.label}</span>
+                <ChevronDown className="h-3 w-3 opacity-55" />
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="start"
+                side="bottom"
+                avoidCollisions
+                collisionPadding={12}
+                sideOffset={6}
+                className={cn(
+                  "z-[1000] max-h-[min(78vh,34rem)] overflow-y-auto rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none",
+                  group.key === "ai" ? "w-72" : "w-60",
+                )}
+              >
+                <div className="grid gap-1">
+                  {Array.from(new Set(tools.map((tool) => tool.section ?? group.label))).map((section) => {
+                    const sectionTools = tools.filter((tool) => (tool.section ?? group.label) === section);
+                    return (
+                      <div key={section} className="grid gap-0.5">
+                        {tools.length > 1 && (
+                          <div className="px-2 pb-0.5 pt-1 text-[9px] font-medium uppercase tracking-wider text-fg/35">
+                            {section}
+                          </div>
+                        )}
+                        {sectionTools.map((tool) => {
+                          const Icon = tool.icon;
+                          const active = tool.id === activeTool;
+                          return (
+                            <Popover.Close asChild key={tool.id}>
+                              <button
+                                type="button"
+                                onClick={() => onSelect(tool.id)}
+                                className={cn(
+                                  "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors",
+                                  active
+                                    ? "bg-accent/15 text-accent"
+                                    : "text-fg/70 hover:bg-panel2 hover:text-fg",
+                                )}
+                                title={TOOL_STATUS_TEXT[tool.id] ?? tool.label}
+                              >
+                                <Icon className="h-3.5 w-3.5 shrink-0" />
+                                <span className="min-w-0 flex-1 truncate font-medium">{tool.label}</span>
+                                {active && <Check className="h-3 w-3 shrink-0" />}
+                              </button>
+                            </Popover.Close>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                  {group.key === "ai" && (
+                    <>
+                      <div className="my-1 h-px bg-line/70" />
+                      <button
+                        type="button"
+                        onClick={onReadLegend}
+                        disabled={!canRunDocumentAi || legendLoading}
+                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+                        title="Read legend or symbol schedule"
+                      >
+                        {legendLoading ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <BookOpen className="h-3.5 w-3.5 shrink-0" />}
+                        <span className="min-w-0 flex-1 truncate font-medium">Page Legend</span>
+                        {legendCount > 0 && <span className="text-[10px] text-fg/45">{legendCount}</span>}
+                      </button>
+                      <Popover.Close asChild>
+                        <button
+                          type="button"
+                          onClick={onOpenDrawingIntelligence}
+                          disabled={!canRunDrawingIntelligence || drawingAnalysisRunning}
+                          className={cn(
+                            "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors disabled:cursor-not-allowed disabled:opacity-45",
+                            drawingAnalysisCount != null
+                              ? "bg-sky-500/10 text-sky-500 hover:bg-sky-500/15"
+                              : "text-fg/70 hover:bg-panel2 hover:text-fg",
+                          )}
+                          title="Analyze drawing geometry and review detected entities"
+                        >
+                          {drawingAnalysisRunning ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" /> : <GitBranch className="h-3.5 w-3.5 shrink-0" />}
+                          <span className="min-w-0 flex-1 truncate font-medium">Drawing Intelligence</span>
+                          {drawingAnalysisCount != null && <span className="text-[10px] text-fg/45">{drawingAnalysisCount}</span>}
+                        </button>
+                      </Popover.Close>
+                      {legendOpen && (
+                        <div className="mt-1.5 rounded-md border border-amber-500/20 bg-amber-500/5">
+                          <div className="flex items-center gap-2 border-b border-amber-500/15 px-2.5 py-2">
+                            <BookOpen className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                            <span className="min-w-0 flex-1 truncate text-[11px] font-semibold text-fg">
+                              Page legend
+                              {legendCount > 0 && <span className="ml-1.5 font-normal text-fg/45">{legendCount}</span>}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={onCloseLegend}
+                              className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded text-fg/35 transition-colors hover:bg-panel2 hover:text-fg"
+                              aria-label="Close page legend"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                          <div className="max-h-72 space-y-1 overflow-y-auto p-2">
+                            {legendLoading && (
+                              <div className="flex items-center gap-2 py-1 text-[11px] text-fg/60">
+                                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-amber-500" />
+                                Reading legend table on this page...
+                              </div>
+                            )}
+                            {!legendLoading && legendEntries && legendEntries.length === 0 && (
+                              <div className="py-1 text-[11px] leading-relaxed text-fg/50">
+                                {legendWarnings[0] ?? "No legend table or symbol list found on this page."}
+                              </div>
+                            )}
+                            {legendEntries?.map((entry, i) => (
+                              <div
+                                key={`${entry.symbol}-${i}`}
+                                className="flex items-start gap-2 rounded border border-line/70 bg-panel/80 px-2 py-1.5"
+                              >
+                                <div className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-amber-500/35 bg-amber-500/10 font-mono text-[10px] font-semibold text-amber-500">
+                                  {entry.symbol}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <div className="break-words text-[11px] leading-snug text-fg/80">{entry.label}</div>
+                                  {entry.confidence < 0.7 && (
+                                    <div className="mt-0.5 text-[10px] text-fg/35">low confidence</div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ─── Unified document entry for the takeoff selector ─── */
 
 interface TakeoffDocument {
@@ -355,6 +552,7 @@ import type { TakeoffSelection } from "./takeoff-link-view";
 import type {
   InspectActions,
   InspectCategoryPick,
+  InspectDwgIntelligenceSnapshot,
   InspectDrawingAnalysisSettings,
   InspectModelElement,
   InspectRateScheduleItemOption,
@@ -419,6 +617,8 @@ interface TakeoffTabProps {
   /** Called whenever the inspect-relevant state changes so the parent can
    *  re-render the Inspect tab. */
   onInspectSnapshotChange?: (snapshot: InspectSnapshot) => void;
+  /** Signals the combo shell that this takeoff surface is currently popped out. */
+  onDetachedWindowChange?: (open: boolean, win?: Window | null) => void;
 }
 
 interface TakeoffSyncBase {
@@ -432,7 +632,10 @@ type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "takeoff-links-mutated" })
   | (TakeoffSyncBase & { type: "workspace-mutated" })
   | (TakeoffSyncBase & { type: "files-mutated" })
-  | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null });
+  | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null })
+  | (TakeoffSyncBase & { type: "open-inspect-entities" })
+  | (TakeoffSyncBase & { type: "drawing-analysis-result"; docId: string; page: number; analysis: DrawingGeometryAnalysisResult | null })
+  | (TakeoffSyncBase & { type: "drawing-detection-selection"; docId: string; page: number; detectionId: string | null });
 
 type TakeoffSyncPayload =
   | { type: "view-change"; docId: string; page: number; zoom: number }
@@ -440,7 +643,10 @@ type TakeoffSyncPayload =
   | { type: "takeoff-links-mutated" }
   | { type: "workspace-mutated" }
   | { type: "files-mutated" }
-  | { type: "calibration-change"; calibration: Calibration | null };
+  | { type: "calibration-change"; calibration: Calibration | null }
+  | { type: "open-inspect-entities" }
+  | { type: "drawing-analysis-result"; docId: string; page: number; analysis: DrawingGeometryAnalysisResult | null }
+  | { type: "drawing-detection-selection"; docId: string; page: number; detectionId: string | null };
 
 function takeoffChannelName(projectId: string): string {
   return `bw-takeoff-${projectId}`;
@@ -922,6 +1128,7 @@ export function TakeoffTab({
   inspectActionsRef,
   onOpenInspectEntities,
   onInspectSnapshotChange,
+  onDetachedWindowChange,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
   const selectedWorksheet =
@@ -1209,6 +1416,7 @@ export function TakeoffTab({
   const [drawingAnalysisSavingId, setDrawingAnalysisSavingId] = useState<string | null>(null);
   const [drawingAnalysisError, setDrawingAnalysisError] = useState<string | null>(null);
   const [selectedDrawingDetectionId, setSelectedDrawingDetectionId] = useState<string | null>(null);
+  const pendingDrawingFocusRef = useRef<string | null>(null);
   const [drawingAnalysisOverlay, setDrawingAnalysisOverlay] = useState<DrawingAnalysisOverlayState>({
     lines: true,
     systems: true,
@@ -1282,18 +1490,21 @@ export function TakeoffTab({
 
   /* Smart count-by-region state */
   interface SmartCountItem {
+    id: string;
     label: string;
     count: number;
     confidence: "high" | "medium" | "low";
-    notes?: string;
+    notes: string;
+    annotationId?: string | null;
   }
   const [smartCountRunning, setSmartCountRunning] = useState(false);
-  const [smartCountModalOpen, setSmartCountModalOpen] = useState(false);
   const [smartCountBbox, setSmartCountBbox] = useState<VisionBoundingBox | null>(null);
   const [smartCountCropImage, setSmartCountCropImage] = useState<string | null>(null);
   const [smartCountItems, setSmartCountItems] = useState<SmartCountItem[] | null>(null);
   const [smartCountIncluded, setSmartCountIncluded] = useState<boolean[]>([]);
   const [smartCountError, setSmartCountError] = useState<string | null>(null);
+  const [smartCountSavingId, setSmartCountSavingId] = useState<string | null>(null);
+  const [selectedSmartCountItemId, setSelectedSmartCountItemId] = useState<string | null>(null);
 
   /* Cross-page / cross-document search state */
   const [crossPageRunning, setCrossPageRunning] = useState(false);
@@ -1314,6 +1525,7 @@ export function TakeoffTab({
 
   /* Unified card / fullscreen / detach */
   const cardRef = useRef<HTMLDivElement>(null);
+  const detachedWindowRef = useRef<Window | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   /** True on first render of a new document so we auto-fit to page */
   const fitOnLoadRef = useRef(true);
@@ -1750,6 +1962,7 @@ export function TakeoffTab({
   // Bridge for dispatching DWG annotation actions (delete) from the side panel.
   // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
   const dwgActionsRef = useRef<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>(null);
+  const [dwgIntelligence, setDwgIntelligence] = useState<InspectDwgIntelligenceSnapshot | null>(null);
 
   // Expose action handlers to the parent via mutable refs. Runs on every render
   // so refs always point at the latest closure.
@@ -1825,6 +2038,27 @@ export function TakeoffTab({
         },
         saveDrawingDetection: async (id, kind) => {
           await handleSaveDrawingDetection(id, kind);
+        },
+        createLineItemFromDrawingDetection: async (id, kind, pick) => {
+          await handleCreateDrawingDetectionLineItem(id, kind, pick);
+        },
+        selectSmartCountItem: (id) => {
+          handleSelectSmartCountItem(id);
+        },
+        toggleSmartCountItem: (id) => {
+          handleToggleSmartCountItem(id);
+        },
+        saveSmartCountItem: async (id) => {
+          await saveSmartCountItemAsAnnotation(id);
+        },
+        createLineItemFromSmartCountItem: async (id, pick) => {
+          await handleCreateSmartCountItemLineItem(id, pick);
+        },
+        saveSelectedSmartCountItems: async () => {
+          await handleSaveSelectedSmartCountItems();
+        },
+        clearSmartCountResults: () => {
+          handleClearSmartCountResults();
         },
         setModelSearch: (s) => setModelElementSearch(s),
         setModelBasis: (b) => setModelLedgerBasis(b),
@@ -2002,6 +2236,25 @@ export function TakeoffTab({
         if (!sameCalibration(msg.calibration, calibrationRef.current)) {
           setCalibration(msg.calibration);
         }
+        return;
+      }
+
+      if (msg.type === "open-inspect-entities") {
+        onOpenInspectEntities?.();
+        return;
+      }
+
+      if (msg.type === "drawing-analysis-result") {
+        if (msg.docId !== selectedDocIdRef.current || msg.page !== pageRef.current) return;
+        setDrawingAnalysisResult(msg.analysis);
+        setDrawingAnalysisError(msg.analysis?.warnings?.[0] ?? null);
+        return;
+      }
+
+      if (msg.type === "drawing-detection-selection") {
+        if (msg.docId !== selectedDocIdRef.current || msg.page !== pageRef.current) return;
+        pendingDrawingFocusRef.current = msg.detectionId;
+        setSelectedDrawingDetectionId(msg.detectionId);
       }
     };
 
@@ -2061,6 +2314,18 @@ export function TakeoffTab({
   useEffect(() => {
     postTakeoffMessage({ type: "calibration-change", calibration });
   }, [calibration, postTakeoffMessage]);
+
+  useEffect(() => {
+    if (detached || !onDetachedWindowChange) return;
+    const interval = window.setInterval(() => {
+      const win = detachedWindowRef.current;
+      if (win && win.closed) {
+        detachedWindowRef.current = null;
+        onDetachedWindowChange(false);
+      }
+    }, 900);
+    return () => window.clearInterval(interval);
+  }, [detached, onDetachedWindowChange]);
 
   /* Escape key: cancel drawing and return to Select */
   useEffect(() => {
@@ -2282,9 +2547,21 @@ export function TakeoffTab({
 
   function handleDetach() {
     if (!selectedDocId || !projectId) return;
+    if (detachedWindowRef.current && !detachedWindowRef.current.closed) {
+      detachedWindowRef.current.focus();
+      onDetachedWindowChange?.(true, detachedWindowRef.current);
+      return;
+    }
     const src = selectedDoc?.source ?? "project";
     const url = `/takeoff-viewer?projectId=${encodeURIComponent(projectId)}&docId=${encodeURIComponent(selectedDocId)}&source=${encodeURIComponent(src)}&page=${page}`;
-    window.open(url, `bw-takeoff-${projectId}`, "width=1400,height=900,resizable=yes");
+    const nextWindow = window.open(url, `bw-takeoff-${projectId}`, "width=1400,height=900,resizable=yes");
+    if (!nextWindow) {
+      setToastType("error");
+      setToastMessage("The browser blocked the detached takeoff window.");
+      return;
+    }
+    detachedWindowRef.current = nextWindow;
+    onDetachedWindowChange?.(true, nextWindow);
   }
 
   function notifyAnnotationsMutated(nextAnnotations?: TakeoffAnnotation[]) {
@@ -2700,7 +2977,9 @@ export function TakeoffTab({
     setSmartCountBbox(bbox);
     setSmartCountItems(null);
     setSmartCountError(null);
-    setSmartCountModalOpen(true);
+    setSelectedSmartCountItemId(null);
+    onOpenInspectEntities?.();
+    postTakeoffMessage({ type: "open-inspect-entities" });
 
     try {
       const cropResult = await runVisionCropRegion({
@@ -2750,14 +3029,17 @@ export function TakeoffTab({
       }
       const cleanItems = parsed.items
         .filter((i) => i && typeof i.label === "string" && Number.isFinite(i.count) && i.count > 0)
-        .map((i) => ({
+        .map((i, index) => ({
+          id: crypto.randomUUID?.() ?? `smart-count-${Date.now()}-${index}`,
           label: i.label.trim(),
           count: Math.round(i.count),
           confidence: (i.confidence as SmartCountItem["confidence"]) ?? "medium",
-          notes: typeof i.notes === "string" ? i.notes : undefined,
+          notes: typeof i.notes === "string" ? i.notes : "",
+          annotationId: null,
         }));
       setSmartCountItems(cleanItems);
       setSmartCountIncluded(cleanItems.map(() => true));
+      setSelectedSmartCountItemId(cleanItems[0]?.id ?? null);
       if (cleanItems.length === 0) {
         setSmartCountError("AI didn't find any countable items in this region.");
       }
@@ -2766,94 +3048,196 @@ export function TakeoffTab({
       setSmartCountError(err instanceof Error ? err.message : "Smart count failed.");
     } finally {
       setSmartCountRunning(false);
+      setActiveTool("select");
     }
   }
 
-  async function handleAcceptSmartCount() {
-    if (!smartCountItems || !smartCountBbox || !selectedDoc) return;
+  function focusVisionBoundingBox(bbox: VisionBoundingBox) {
+    const container = viewerContainerRef.current;
+    if (!container || canvasSize.width <= 0 || canvasSize.height <= 0) return;
+    const scaleX = canvasSize.width / Math.max(1, bbox.imageWidth);
+    const scaleY = canvasSize.height / Math.max(1, bbox.imageHeight);
+    const box = {
+      x: bbox.x * scaleX,
+      y: bbox.y * scaleY,
+      width: Math.max(28, bbox.width * scaleX),
+      height: Math.max(28, bbox.height * scaleY),
+    };
+    const currentZoom = Math.max(zoomRef.current, 0.01);
+    const targetZoom = roundPdfZoom(
+      Math.min(
+        6,
+        Math.max(
+          0.35,
+          currentZoom * Math.min(
+            (container.clientWidth * 0.62) / Math.max(box.width, 1),
+            (container.clientHeight * 0.62) / Math.max(box.height, 1),
+          ),
+        ),
+      ),
+    );
+    const ratio = targetZoom / currentZoom;
+    const scroll = () => {
+      container.scrollTo({
+        left: Math.max(0, (box.x + box.width / 2) * ratio - container.clientWidth / 2),
+        top: Math.max(0, (box.y + box.height / 2) * ratio - container.clientHeight / 2),
+        behavior: "smooth",
+      });
+    };
+    applyPdfZoom(targetZoom);
+    requestAnimationFrame(scroll);
+    window.setTimeout(scroll, 120);
+  }
+
+  function smartCountItemPoint(itemIndex: number, placedOffset = itemIndex): Point | null {
+    if (!smartCountBbox) return null;
     const center: Point = {
       x: smartCountBbox.x + smartCountBbox.width / 2,
       y: smartCountBbox.y + smartCountBbox.height / 2,
     };
-    let placedOffset = 0;
-    for (let i = 0; i < smartCountItems.length; i++) {
-      if (!smartCountIncluded[i]) continue;
-      const item = smartCountItems[i]!;
-      const color = COLOR_CYCLE[(colorIndexRef.current + i) % COLOR_CYCLE.length];
-      // Stagger the visual marker around the bbox centre so multiple
-      // smart-count summaries don't overlap perfectly.
-      const offsetPoint: Point = {
-        x: center.x + (placedOffset % 4) * 18 - 27,
-        y: center.y + Math.floor(placedOffset / 4) * 18 - 18,
-      };
-      const annotation: TakeoffAnnotation = {
-        id: crypto.randomUUID(),
-        type: "count",
-        label: `${item.label} (×${item.count})`,
-        color,
-        thickness: 5,
-        points: [offsetPoint],
-        visible: true,
-        groupName: "Smart Count",
-        canvasWidth: canvasSize.width,
-        canvasHeight: canvasSize.height,
-        measurement: { value: item.count, unit: "count" },
-      };
-      setAnnotations((prev) => [...prev, annotation]);
-      try {
-        // The takeoff create endpoint expects API-contract field names
-        // (annotationType / pageNumber / lineThickness), not the local
-        // canvas field names (type / page / thickness). Spreading the
-        // raw annotation here previously dropped annotationType entirely
-        // and the server silently rejected each row, so accepted smart-
-        // count entries vanished on reload.
-        const saved = await createTakeoffAnnotation(projectId, {
-          documentId:
-            selectedDoc.source === "knowledge" && selectedDoc.bookId
-              ? selectedDoc.bookId
-              : selectedDoc.id,
-          pageNumber: page,
-          annotationType: annotation.type,
-          label: annotation.label,
-          color: annotation.color,
-          lineThickness: annotation.thickness,
-          visible: annotation.visible,
-          groupName: annotation.groupName ?? "",
-          points: annotation.points,
-          measurement: annotation.measurement ?? {},
-          metadata: {
-            canvasWidth: annotation.canvasWidth,
-            canvasHeight: annotation.canvasHeight,
-          },
-        });
-        if (saved?.id) {
-          setAnnotations((prev) =>
-            prev.map((a) => (a.id === annotation.id ? { ...a, id: saved.id } : a)),
-          );
-        }
-      } catch (err) {
-        console.error("[smart-count] Failed to persist annotation:", err);
-        /* keep local */
-      }
-      placedOffset++;
-    }
-    colorIndexRef.current += smartCountItems.length;
-    notifyAnnotationsMutated();
-    setSmartCountModalOpen(false);
-    setSmartCountItems(null);
-    setSmartCountBbox(null);
-    setSmartCountCropImage(null);
-    setActiveTool("select");
-    setToastMessage(`Added ${placedOffset} smart-count entries to "Smart Count" group.`);
-    setToastType("success");
+    return {
+      x: center.x + (placedOffset % 4) * 18 - 27,
+      y: center.y + Math.floor(placedOffset / 4) * 18 - 18,
+    };
   }
 
-  function handleRejectSmartCount() {
-    setSmartCountModalOpen(false);
+  function handleSelectSmartCountItem(id: string | null) {
+    setSelectedSmartCountItemId(id);
+    if (id && smartCountBbox) focusVisionBoundingBox(smartCountBbox);
+  }
+
+  function handleToggleSmartCountItem(id: string) {
+    if (!smartCountItems) return;
+    const index = smartCountItems.findIndex((item) => item.id === id);
+    if (index < 0) return;
+    setSmartCountIncluded((current) => {
+      const next = [...current];
+      next[index] = !next[index];
+      return next;
+    });
+  }
+
+  async function saveSmartCountItemAsAnnotation(id: string): Promise<TakeoffAnnotation | null> {
+    if (!smartCountItems || !smartCountBbox || !selectedDoc) return null;
+    const index = smartCountItems.findIndex((item) => item.id === id);
+    const item = index >= 0 ? smartCountItems[index] : null;
+    if (!item) return null;
+    if (item.annotationId) {
+      const existing = annotations.find((annotation) => annotation.id === item.annotationId);
+      if (existing) return existing;
+    }
+    const point = smartCountItemPoint(index, index);
+    if (!point) return null;
+
+    const color = COLOR_CYCLE[colorIndexRef.current % COLOR_CYCLE.length];
+    colorIndexRef.current += 1;
+    const localAnnotation: TakeoffAnnotation = {
+      id: crypto.randomUUID(),
+      type: "count",
+      label: `${item.label} (x${item.count})`,
+      color,
+      thickness: 5,
+      points: [point],
+      visible: true,
+      groupName: "Smart Count",
+      canvasWidth: canvasSize.width,
+      canvasHeight: canvasSize.height,
+      measurement: { value: item.count, unit: "count" },
+      opts: {
+        smartCountItemId: item.id,
+        smartCountLabel: item.label,
+        smartCountConfidence: item.confidence,
+        smartCountBbox,
+      } as unknown as TakeoffAnnotation["opts"],
+    };
+
+    setSmartCountSavingId(id);
+    setAnnotations((prev) => [...prev, localAnnotation]);
+    let finalAnnotation = localAnnotation;
+    try {
+      const saved = await createTakeoffAnnotation(projectId, annotationToApiPayload(localAnnotation));
+      finalAnnotation = mapSavedAnnotation(saved, localAnnotation);
+      setAnnotations((prev) =>
+        prev.map((annotation) => (annotation.id === localAnnotation.id ? finalAnnotation : annotation)),
+      );
+    } catch (err) {
+      console.error("[smart-count] Failed to persist annotation:", err);
+    } finally {
+      pushTakeoffHistory({ kind: "create", annotation: finalAnnotation });
+      setSmartCountItems((current) =>
+        current?.map((candidate) =>
+          candidate.id === id ? { ...candidate, annotationId: finalAnnotation.id } : candidate,
+        ) ?? null,
+      );
+      setSmartCountSavingId(null);
+      notifyAnnotationsMutated();
+    }
+    return finalAnnotation;
+  }
+
+  async function handleSaveSelectedSmartCountItems() {
+    if (!smartCountItems) return;
+    let savedCount = 0;
+    for (let i = 0; i < smartCountItems.length; i++) {
+      if (!smartCountIncluded[i]) continue;
+      const annotation = await saveSmartCountItemAsAnnotation(smartCountItems[i]!.id);
+      if (annotation) savedCount += 1;
+    }
+    if (savedCount > 0) {
+      setToastMessage(`Saved ${savedCount} Smart Count row${savedCount === 1 ? "" : "s"} as takeoff marks.`);
+      setToastType("success");
+    }
+  }
+
+  async function handleCreateSmartCountItemLineItem(id: string, pick: InspectCategoryPick) {
+    try {
+      const annotation = await saveSmartCountItemAsAnnotation(id);
+      if (!annotation) return;
+      const created = await createLineItemFromAnnotation(annotation, pick);
+      if (!created) return;
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      notifyTakeoffLinksMutated();
+      setToastType("success");
+      setToastMessage("Created line item from Smart Count row.");
+    } catch (error) {
+      console.error("[smart-count] Failed to create line item:", error);
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that Smart Count row."));
+    }
+  }
+
+  function handleClearSmartCountResults() {
     setSmartCountItems(null);
     setSmartCountBbox(null);
     setSmartCountCropImage(null);
     setSmartCountError(null);
+    setSelectedSmartCountItemId(null);
+    setSmartCountSavingId(null);
+  }
+
+  function smartCountSnapshotItems() {
+    if (!smartCountItems) return [];
+    return smartCountItems.map((item, index) => {
+      const annotationId = item.annotationId ?? null;
+      const isLinked = annotationId ? takeoffLinks.some((link) => link.annotationId === annotationId) : false;
+      return {
+        id: item.id,
+        label: item.label,
+        count: item.count,
+        confidence: item.confidence,
+        notes: item.notes,
+        included: smartCountIncluded[index] ?? true,
+        isSaved: Boolean(annotationId),
+        isLinked,
+        annotationId,
+        bbox: smartCountBbox,
+      };
+    });
+  }
+
+  function shouldPublishSmartCountSnapshot(mode: InspectSnapshot["mode"]): boolean {
+    return Boolean(mode === "pdf" && selectedDoc && (smartCountRunning || smartCountError || smartCountBbox || smartCountItems || smartCountCropImage));
   }
 
   /* ─── Ask AI: send cropped image to Claude API for analysis ─── */
@@ -3052,6 +3436,7 @@ export function TakeoffTab({
     setCalibrationApplyToAllPages(false);
     setDetectedScales(null);
     setCalibrationPromptOpen(true);
+    setActiveTool("select");
   }
 
   async function handleDetectScale() {
@@ -3107,6 +3492,7 @@ export function TakeoffTab({
     if (!docId) return;
 
     onOpenInspectEntities?.();
+    postTakeoffMessage({ type: "open-inspect-entities" });
     setDrawingAnalysisRunning(true);
     setDrawingAnalysisError(null);
     setSelectedDrawingDetectionId(null);
@@ -3130,6 +3516,7 @@ export function TakeoffTab({
       });
 
       setDrawingAnalysisResult(result);
+      postTakeoffMessage({ type: "drawing-analysis-result", docId, page, analysis: result });
       if (result.warnings.length > 0) {
         setDrawingAnalysisError(result.warnings[0]);
       }
@@ -3163,6 +3550,73 @@ export function TakeoffTab({
     const text = result.textRegions.find((item) => item.id === id);
     if (text) return { x: text.x, y: text.y, width: text.w, height: text.h };
     return null;
+  }
+
+  function drawingDetectionAnnotations(id: string): TakeoffAnnotation[] {
+    return annotations.filter((annotation) => {
+      const metadata = (annotation.opts ?? {}) as Record<string, unknown>;
+      return metadata.detectionId === id || metadata.systemId === id;
+    });
+  }
+
+  function drawingAnalysisPaperScale() {
+    const result = drawingAnalysisResult;
+    if (!result) return { x: 1, y: 1 };
+    const currentZoom = Math.max(zoomRef.current, 0.0001);
+    const baseWidth = canvasSize.width > 0 ? canvasSize.width / currentZoom : result.imageWidth;
+    const baseHeight = canvasSize.height > 0 ? canvasSize.height / currentZoom : result.imageHeight;
+    return {
+      x: baseWidth / Math.max(result.imageWidth, 1),
+      y: baseHeight / Math.max(result.imageHeight, 1),
+    };
+  }
+
+  function drawingAnalysisCalibrationSnapshot() {
+    if (!calibration || calibration.pixelsPerUnit <= 0) return null;
+    const scale = drawingAnalysisPaperScale();
+    return {
+      unit: calibration.unit,
+      pixelsPerUnit: calibration.pixelsPerUnit,
+      analysisToPaperScaleX: scale.x,
+      analysisToPaperScaleY: scale.y,
+    };
+  }
+
+  function drawingAnalysisPaperLength(points: Point[]) {
+    const scale = drawingAnalysisPaperScale();
+    let total = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      const prev = points[index - 1]!;
+      const point = points[index]!;
+      total += Math.hypot((point.x - prev.x) * scale.x, (point.y - prev.y) * scale.y);
+    }
+    return total;
+  }
+
+  function calibratedDrawingMeasurement(points: Point[], analysisLengthPx?: number) {
+    const paperLengthPx = drawingAnalysisPaperLength(points);
+    if (calibration && calibration.pixelsPerUnit > 0) {
+      const value = Math.round((paperLengthPx / calibration.pixelsPerUnit) * 100) / 100;
+      return {
+        measurement: { value, unit: calibration.unit } satisfies TakeoffAnnotation["measurement"],
+        metadata: {
+          measurementBasis: "calibrated_pdf_scale",
+          analysisLengthPx,
+          paperLengthPx: Math.round(paperLengthPx * 100) / 100,
+          calibrationUnit: calibration.unit,
+          pixelsPerUnit: calibration.pixelsPerUnit,
+        },
+      };
+    }
+    return {
+      measurement: undefined,
+      metadata: {
+        measurementBasis: "requires_pdf_scale",
+        requiresCalibration: true,
+        analysisLengthPx,
+        paperLengthPx: Math.round(paperLengthPx * 100) / 100,
+      },
+    };
   }
 
   function focusDrawingBounds(bounds: { x: number; y: number; width: number; height: number }) {
@@ -3205,42 +3659,139 @@ export function TakeoffTab({
 
   function handleSelectDrawingDetection(id: string | null) {
     setSelectedDrawingDetectionId(id);
+    if (selectedDocId) {
+      postTakeoffMessage({ type: "drawing-detection-selection", docId: selectedDocId, page, detectionId: id });
+    }
     if (!id) return;
     const bounds = drawingDetectionBounds(id);
     if (bounds) focusDrawingBounds(bounds);
   }
 
-  async function handleSaveDrawingDetection(id: string, kind: "system" | "symbol" | "circle" | "line") {
+  useEffect(() => {
+    const id = pendingDrawingFocusRef.current;
+    if (!id || selectedDrawingDetectionId !== id || !drawingAnalysisResult) return;
+    const bounds = drawingDetectionBounds(id);
+    if (!bounds) return;
+    pendingDrawingFocusRef.current = null;
+    focusDrawingBounds(bounds);
+  }, [selectedDrawingDetectionId, drawingAnalysisResult, canvasSize.width, canvasSize.height, zoom]);
+
+  function makeDrawingFallbackAnnotation(input: {
+    id: string;
+    type: string;
+    label: string;
+    color: string;
+    thickness?: number;
+    groupName?: string;
+    points: Point[];
+    measurement?: TakeoffAnnotation["measurement"];
+    opts?: Record<string, unknown>;
+  }): TakeoffAnnotation {
+    return {
+      id: input.id,
+      type: input.type,
+      label: input.label,
+      color: input.color,
+      thickness: input.thickness ?? 3,
+      points: input.points,
+      visible: true,
+      groupName: input.groupName,
+      measurement: input.measurement,
+      canvasWidth: drawingAnalysisResult?.imageWidth,
+      canvasHeight: drawingAnalysisResult?.imageHeight,
+      opts: input.opts as TakeoffAnnotation["opts"],
+    };
+  }
+
+  function mapSavedDrawingAnnotations(saved: unknown[], fallbacks: TakeoffAnnotation[]) {
+    return saved.map((annotation, index) => mapSavedAnnotation(annotation, fallbacks[index] ?? fallbacks[0]));
+  }
+
+  async function handleSaveDrawingDetection(
+    id: string,
+    kind: "system" | "symbol" | "circle" | "line",
+    options: { toast?: boolean } = {},
+  ): Promise<TakeoffAnnotation[]> {
     const result = drawingAnalysisResult;
-    if (!result) return;
+    if (!result) return [];
     if (kind === "system") {
       const system = result.systems.find((item) => item.id === id);
-      if (system) await handleSaveDrawingSystem(system);
-      return;
+      return system ? handleSaveDrawingSystem(system, options) : [];
     }
     if (kind === "symbol") {
       const symbol = result.symbolCandidates.find((item) => item.id === id);
-      if (symbol) await handleSaveDrawingSymbol(symbol);
-      return;
+      return symbol ? handleSaveDrawingSymbol(symbol, options) : [];
     }
     if (kind === "circle") {
       const circle = result.circles.find((item) => item.id === id);
-      if (circle) await handleSaveDrawingCircle(circle);
-      return;
+      return circle ? handleSaveDrawingCircle(circle, options) : [];
     }
     const line = result.lines.find((item) => item.id === id);
-    if (line) await handleSaveDrawingLine(line);
+    return line ? handleSaveDrawingLine(line, options) : [];
   }
 
-  async function handleSaveDrawingSystem(system: DrawingTracedSystem) {
-    if (!drawingAnalysisResult || !selectedDoc) return;
+  async function handleSaveDrawingSystem(
+    system: DrawingTracedSystem,
+    options: { toast?: boolean } = {},
+  ): Promise<TakeoffAnnotation[]> {
+    if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
     const segments = drawingSystemSegments(system);
-    if (segments.length === 0) return;
+    if (segments.length === 0) return [];
 
     setDrawingAnalysisSavingId(system.id);
     try {
       const groupName = `${system.label} (${drawingAnalysisPreset})`;
+      const detections = segments.map((segment) => {
+        const points = [{ x: segment.x1, y: segment.y1 }, { x: segment.x2, y: segment.y2 }];
+        const calibrated = calibratedDrawingMeasurement(points, segment.lengthPx);
+        return {
+          id: segment.id,
+          kind: "line_segment",
+          label: system.label,
+          annotationType: "linear",
+          groupName,
+          color: "#0ea5e9",
+          lineThickness: 3,
+          points,
+          confidence: Math.min(system.confidence, segment.confidence),
+          source: "drawing-intelligence",
+          measurement: calibrated.measurement,
+          metadata: {
+            sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
+            preset: drawingAnalysisPreset,
+            detectionId: segment.id,
+            systemId: system.id,
+            systemLengthPx: system.lengthPx,
+            systemCounts: system.counts,
+            savedSegmentCount: segments.length,
+            ...calibrated.metadata,
+          },
+        };
+      });
+      const fallbacks = segments.map((segment) => {
+        const points = [{ x: segment.x1, y: segment.y1 }, { x: segment.x2, y: segment.y2 }];
+        const calibrated = calibratedDrawingMeasurement(points, segment.lengthPx);
+        return makeDrawingFallbackAnnotation({
+          id: segment.id,
+          type: "linear",
+          label: system.label,
+          color: "#0ea5e9",
+          thickness: 3,
+          groupName,
+          points,
+          measurement: calibrated.measurement,
+          opts: {
+            sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
+            preset: drawingAnalysisPreset,
+            detectionId: segment.id,
+            systemId: system.id,
+            ...calibrated.metadata,
+          },
+        });
+      });
       const result = await saveDrawingDetectionsAsAnnotations({
         projectId,
         documentId: docId,
@@ -3250,50 +3801,54 @@ export function TakeoffTab({
         analysisId: drawingAnalysisResult.analysisId,
         groupName,
         color: "#0ea5e9",
-        detections: segments.map((segment) => ({
-          id: segment.id,
-          kind: "line_segment",
-          label: system.label,
-          annotationType: "linear",
-          groupName,
-          color: "#0ea5e9",
-          lineThickness: 3,
-          points: [
-            { x: segment.x1, y: segment.y1 },
-            { x: segment.x2, y: segment.y2 },
-          ],
-          confidence: Math.min(system.confidence, segment.confidence),
-          source: "drawing-intelligence",
-          measurement: { value: segment.lengthPx, unit: "px" },
-          metadata: {
-            sourceTool: "drawing-intelligence",
-            analysisId: drawingAnalysisResult.analysisId,
-            preset: drawingAnalysisPreset,
-            systemId: system.id,
-            systemLengthPx: system.lengthPx,
-            systemCounts: system.counts,
-            savedSegmentCount: segments.length,
-          },
-        })),
+        detections,
       });
+      const saved = mapSavedDrawingAnnotations(result.annotations, fallbacks);
       await loadAnnotationsRef.current();
       notifyAnnotationsMutated();
-      setToastMessage(`Saved ${result.savedCount} traced line segments to takeoff.`);
-      setToastType("success");
+      if (options.toast !== false) {
+        setToastMessage(`Saved ${result.savedCount} traced line segments to takeoff.`);
+        setToastType("success");
+      }
+      return saved;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save traced system";
       setToastMessage(message);
       setToastType("error");
+      return [];
     } finally {
       setDrawingAnalysisSavingId(null);
     }
   }
 
-  async function handleSaveDrawingLine(segment: DrawingLineSegment) {
-    if (!drawingAnalysisResult || !selectedDoc) return;
+  async function handleSaveDrawingLine(
+    segment: DrawingLineSegment,
+    options: { toast?: boolean } = {},
+  ): Promise<TakeoffAnnotation[]> {
+    if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
     setDrawingAnalysisSavingId(segment.id);
     try {
+      const groupName = "Drawing Intelligence Linework";
+      const points = [{ x: segment.x1, y: segment.y1 }, { x: segment.x2, y: segment.y2 }];
+      const calibrated = calibratedDrawingMeasurement(points, segment.lengthPx);
+      const fallback = makeDrawingFallbackAnnotation({
+        id: segment.id,
+        type: "linear",
+        label: "Detected line",
+        color: "#38bdf8",
+        thickness: 3,
+        groupName,
+        points,
+        measurement: calibrated.measurement,
+        opts: {
+          sourceTool: "drawing-intelligence",
+          analysisId: drawingAnalysisResult.analysisId,
+          preset: drawingAnalysisPreset,
+          detectionId: segment.id,
+          ...calibrated.metadata,
+        },
+      });
       const result = await saveDrawingDetectionsAsAnnotations({
         projectId,
         documentId: docId,
@@ -3301,41 +3856,73 @@ export function TakeoffTab({
         imageWidth: drawingAnalysisResult.imageWidth,
         imageHeight: drawingAnalysisResult.imageHeight,
         analysisId: drawingAnalysisResult.analysisId,
-        groupName: "Drawing Intelligence Linework",
+        groupName,
         color: "#38bdf8",
         detections: [{
           id: segment.id,
           kind: "line_segment",
           label: "Detected line",
           annotationType: "linear",
-          groupName: "Drawing Intelligence Linework",
+          groupName,
           color: "#38bdf8",
           lineThickness: 3,
-          points: [{ x: segment.x1, y: segment.y1 }, { x: segment.x2, y: segment.y2 }],
+          points,
           confidence: segment.confidence,
           source: "drawing-intelligence",
-          measurement: { value: segment.lengthPx, unit: "px" },
-          metadata: { sourceTool: "drawing-intelligence", analysisId: drawingAnalysisResult.analysisId, preset: drawingAnalysisPreset },
+          measurement: calibrated.measurement,
+          metadata: {
+            sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
+            preset: drawingAnalysisPreset,
+            detectionId: segment.id,
+            ...calibrated.metadata,
+          },
         }],
       });
+      const saved = mapSavedDrawingAnnotations(result.annotations, [fallback]);
       await loadAnnotationsRef.current();
       notifyAnnotationsMutated();
-      setToastMessage(`Saved ${result.savedCount} detected line to takeoff.`);
-      setToastType("success");
+      if (options.toast !== false) {
+        setToastMessage(`Saved ${result.savedCount} detected line to takeoff.`);
+        setToastType("success");
+      }
+      return saved;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save detected line";
       setToastMessage(message);
       setToastType("error");
+      return [];
     } finally {
       setDrawingAnalysisSavingId(null);
     }
   }
 
-  async function handleSaveDrawingCircle(circle: DrawingGeometryAnalysisResult["circles"][number]) {
-    if (!drawingAnalysisResult || !selectedDoc) return;
+  async function handleSaveDrawingCircle(
+    circle: DrawingGeometryAnalysisResult["circles"][number],
+    options: { toast?: boolean } = {},
+  ): Promise<TakeoffAnnotation[]> {
+    if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
     setDrawingAnalysisSavingId(circle.id);
     try {
+      const groupName = "Drawing Intelligence Circles";
+      const fallback = makeDrawingFallbackAnnotation({
+        id: circle.id,
+        type: "count",
+        label: "Detected circle",
+        color: "#a855f7",
+        groupName,
+        points: [{ x: circle.cx, y: circle.cy }],
+        measurement: { value: 1, unit: "count" },
+        opts: {
+          sourceTool: "drawing-intelligence",
+          analysisId: drawingAnalysisResult.analysisId,
+          preset: drawingAnalysisPreset,
+          detectionId: circle.id,
+          radius: circle.radius,
+          bounds: circle.bbox,
+        },
+      });
       const result = await saveDrawingDetectionsAsAnnotations({
         projectId,
         documentId: docId,
@@ -3343,14 +3930,14 @@ export function TakeoffTab({
         imageWidth: drawingAnalysisResult.imageWidth,
         imageHeight: drawingAnalysisResult.imageHeight,
         analysisId: drawingAnalysisResult.analysisId,
-        groupName: "Drawing Intelligence Circles",
+        groupName,
         color: "#a855f7",
         detections: [{
           id: circle.id,
           kind: "circle",
           label: "Detected circle",
           annotationType: "count",
-          groupName: "Drawing Intelligence Circles",
+          groupName,
           color: "#a855f7",
           points: [{ x: circle.cx, y: circle.cy }],
           count: 1,
@@ -3360,25 +3947,50 @@ export function TakeoffTab({
           metadata: { sourceTool: "drawing-intelligence", analysisId: drawingAnalysisResult.analysisId, preset: drawingAnalysisPreset, radius: circle.radius, bounds: circle.bbox },
         }],
       });
+      const saved = mapSavedDrawingAnnotations(result.annotations, [fallback]);
       await loadAnnotationsRef.current();
       notifyAnnotationsMutated();
-      setToastMessage(`Saved ${result.savedCount} circle mark to takeoff.`);
-      setToastType("success");
+      if (options.toast !== false) {
+        setToastMessage(`Saved ${result.savedCount} circle mark to takeoff.`);
+        setToastType("success");
+      }
+      return saved;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save circle";
       setToastMessage(message);
       setToastType("error");
+      return [];
     } finally {
       setDrawingAnalysisSavingId(null);
     }
   }
 
-  async function handleSaveDrawingSymbol(candidate: DrawingSymbolCandidate) {
-    if (!drawingAnalysisResult || !selectedDoc) return;
+  async function handleSaveDrawingSymbol(
+    candidate: DrawingSymbolCandidate,
+    options: { toast?: boolean } = {},
+  ): Promise<TakeoffAnnotation[]> {
+    if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
 
     setDrawingAnalysisSavingId(candidate.id);
     try {
+      const groupName = "Drawing Intelligence Symbols";
+      const fallback = makeDrawingFallbackAnnotation({
+        id: candidate.id,
+        type: "count",
+        label: "Symbol candidate",
+        color: "#f59e0b",
+        groupName,
+        points: [{ x: candidate.cx, y: candidate.cy }],
+        measurement: { value: 1, unit: "count" },
+        opts: {
+          sourceTool: "drawing-intelligence",
+          analysisId: drawingAnalysisResult.analysisId,
+          preset: drawingAnalysisPreset,
+          detectionId: candidate.id,
+          bounds: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
+        },
+      });
       const result = await saveDrawingDetectionsAsAnnotations({
         projectId,
         documentId: docId,
@@ -3386,14 +3998,14 @@ export function TakeoffTab({
         imageWidth: drawingAnalysisResult.imageWidth,
         imageHeight: drawingAnalysisResult.imageHeight,
         analysisId: drawingAnalysisResult.analysisId,
-        groupName: "Drawing Intelligence Symbols",
+        groupName,
         color: "#f59e0b",
         detections: [{
           id: candidate.id,
           kind: "symbol_candidate",
           label: "Symbol candidate",
           annotationType: "count",
-          groupName: "Drawing Intelligence Symbols",
+          groupName,
           color: "#f59e0b",
           points: [{ x: candidate.cx, y: candidate.cy }],
           count: 1,
@@ -3408,16 +4020,67 @@ export function TakeoffTab({
           },
         }],
       });
+      const saved = mapSavedDrawingAnnotations(result.annotations, [fallback]);
       await loadAnnotationsRef.current();
       notifyAnnotationsMutated();
-      setToastMessage(`Saved ${result.savedCount} symbol mark to takeoff.`);
-      setToastType("success");
+      if (options.toast !== false) {
+        setToastMessage(`Saved ${result.savedCount} symbol mark to takeoff.`);
+        setToastType("success");
+      }
+      return saved;
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save symbol candidate";
       setToastMessage(message);
       setToastType("error");
+      return [];
     } finally {
       setDrawingAnalysisSavingId(null);
+    }
+  }
+
+  async function handleCreateDrawingDetectionLineItem(
+    id: string,
+    kind: "system" | "symbol" | "circle" | "line",
+    pick: InspectCategoryPick,
+  ) {
+    try {
+      if ((kind === "system" || kind === "line") && (!calibration || calibration.pixelsPerUnit <= 0)) {
+        setToastType("error");
+        setToastMessage("Set the drawing scale before adding detected linework to a worksheet.");
+        return;
+      }
+      let targets = drawingDetectionAnnotations(id);
+      if (targets.length === 0) {
+        targets = await handleSaveDrawingDetection(id, kind, { toast: false });
+      }
+      if (targets.length === 0) {
+        setToastType("error");
+        setToastMessage("Save the detected entity before adding it to a worksheet.");
+        return;
+      }
+
+      const created = targets.length === 1
+        ? await createLineItemFromAnnotation(targets[0], pick)
+        : await createLineItemFromAnnotationGroup(
+            targets,
+            targets[0]?.groupName || targets[0]?.label || "Detected drawing system",
+            pick,
+          );
+      if (!created) return;
+
+      await loadAnnotationsRef.current();
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      setToastType("success");
+      setToastMessage(
+        kind === "system"
+          ? `Created line item from detected system (${targets.length} segments).`
+          : "Created line item from detected entity.",
+      );
+    } catch (error) {
+      console.error("[takeoff] Failed to create line item from drawing detection:", error);
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that detected entity."));
     }
   }
 
@@ -3528,12 +4191,12 @@ export function TakeoffTab({
     if (!onInspectSnapshotChange) return;
     // selectedDocId defaults to the first project PDF on mount so the
     // viewer has something to open when the user clicks into a takeoff.
-    // BUT while we're on the intake landing page (`showLanding && !detached`),
+    // BUT while we're on the intake landing page,
     // the user hasn't actually opened anything — surfacing the auto-selected
     // doc's elements in the right-hand Inspect panel is wrong. Force mode
     // "empty" in that case so the Inspect tab shows its empty state and
     // doesn't preview a model the estimator hasn't asked to see yet.
-    const isLandingShown = showLanding && !detached;
+    const isLandingShown = showLanding;
     const mode: InspectSnapshot["mode"] = isLandingShown || !selectedDoc
       ? "empty"
       : isDwgDocument
@@ -3618,8 +4281,24 @@ export function TakeoffTab({
             savingId: drawingAnalysisSavingId,
             error: drawingAnalysisError,
             selectedDetectionId: selectedDrawingDetectionId,
+            calibration: drawingAnalysisCalibrationSnapshot(),
           }
         : null,
+      smartCount: shouldPublishSmartCountSnapshot(mode) && selectedDoc
+        ? {
+            documentId: selectedVisionDocumentId(),
+            fileName: selectedDoc.fileName,
+            pageNumber: page,
+            running: smartCountRunning,
+            savingId: smartCountSavingId,
+            error: smartCountError,
+            cropImage: smartCountCropImage,
+            bbox: smartCountBbox,
+            items: smartCountSnapshotItems(),
+            selectedItemId: selectedSmartCountItemId,
+          }
+        : null,
+      dwgIntelligence: mode === "dwg" ? dwgIntelligence : null,
       modelElements: inspectModelElements,
       modelElementsLoading,
       modelError,
@@ -3708,6 +4387,19 @@ export function TakeoffTab({
     drawingAnalysisSavingId,
     drawingAnalysisError,
     selectedDrawingDetectionId,
+    smartCountRunning,
+    smartCountSavingId,
+    smartCountBbox,
+    smartCountCropImage,
+    smartCountItems,
+    smartCountIncluded,
+    smartCountError,
+    selectedSmartCountItemId,
+    dwgIntelligence,
+    calibration,
+    canvasSize.width,
+    canvasSize.height,
+    zoom,
     modelElements,
     modelElementsLoading,
     modelError,
@@ -3915,6 +4607,12 @@ export function TakeoffTab({
     pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
+    const annotationMetadata = (annotation.opts ?? {}) as Record<string, unknown>;
+    if (annotationMetadata.requiresCalibration === true) {
+      setToastType("error");
+      setToastMessage("Set the drawing scale before adding this detected linework to a worksheet.");
+      return null;
+    }
     const pick = normalizeTakeoffCategoryPick(pickInput);
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
@@ -4641,7 +5339,6 @@ export function TakeoffTab({
   const isAskAiActive = activeTool === "ask-ai";
   const isSmartCountActive = activeTool === "smart-count";
   const isRectSelectTool = isAutoCountActive || isAskAiActive || isSmartCountActive;
-  const activeToolDef = TOOLS.find((tool) => tool.id === activeTool) ?? TOOLS[0];
   const canUndoTakeoff = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
   const bimDocuments = takeoffDocuments.filter((doc) => doc.kind === "bim");
@@ -4943,7 +5640,7 @@ export function TakeoffTab({
 
   /* ─── Render ─── */
 
-  if (showLanding && !detached) {
+  if (showLanding) {
     return (
       <div
         ref={cardRef}
@@ -5111,127 +5808,19 @@ export function TakeoffTab({
         detached ? "rounded-none border-0" : "rounded-lg border border-line"
       )}
     >
-      {/* ─── Top Toolbar ─── */}
+      {!isDwgDocument && (
+      /* ─── Top Toolbar ─── */
       <div className="flex min-w-0 items-center gap-1 overflow-hidden border-b border-line bg-panel px-1.5 py-1.5 shrink-0">
-        {!detached && (
-          <>
-            <Button
-              variant="ghost"
-              size="xs"
-              onClick={() => setShowLanding(true)}
-              title="Back to takeoff intake"
-              aria-label="Back to takeoff intake"
-              className="h-7 w-7 shrink-0 px-0"
-            >
-              <FolderOpen className="h-3.5 w-3.5" />
-            </Button>
-            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
-          </>
-        )}
-        {/* Document selector */}
-        <div className="flex min-w-0 shrink items-center gap-1">
-          <RadixSelect.Root
-            value={selectedDocId}
-            onValueChange={(v) => {
-              setSelectedDocId(v);
-              setPage(1);
-              setZoom(1);
-              fitOnLoadRef.current = true;
-              setAnnotations([]);
-              setAutoCountResults(null);
-              setAutoCountSnippet(null);
-            }}
-          >
-            <RadixSelect.Trigger className="inline-flex h-8 w-32 min-w-0 shrink items-center gap-1.5 truncate rounded-lg border border-line bg-bg/50 px-2 text-xs text-fg outline-none transition-colors hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 sm:w-40 xl:w-48 2xl:w-56">
-              <RadixSelect.Value placeholder="No drawings available" />
-              <RadixSelect.Icon className="ml-auto shrink-0">
-                <ChevronDown className="h-3.5 w-3.5 text-fg/40" />
-              </RadixSelect.Icon>
-            </RadixSelect.Trigger>
-            <RadixSelect.Portal>
-              <RadixSelect.Content
-                className="z-[100] overflow-hidden rounded-lg border border-line bg-panel shadow-xl"
-                position="popper"
-                sideOffset={4}
-              >
-                <RadixSelect.Viewport className="p-1 max-h-64">
-                  {takeoffDocuments.length === 0 && (
-                    <div className="px-2 py-1.5 text-xs text-fg/40">No drawings available</div>
-                  )}
-                  {projectPdfs.length > 0 && (
-                    <RadixSelect.Group>
-                      <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
-                        Project Documents
-                      </RadixSelect.Label>
-                      {projectPdfs.map((d) => (
-                        <RadixSelect.Item
-                          key={d.id}
-                          value={d.id}
-                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
-                        >
-                          <RadixSelect.ItemIndicator className="shrink-0">
-                            <Check className="h-3 w-3 text-accent" />
-                          </RadixSelect.ItemIndicator>
-                          <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
-                        </RadixSelect.Item>
-                      ))}
-                    </RadixSelect.Group>
-                  )}
-                  {(() => {
-                    // Render from the deduped `takeoffDocuments` so the ids
-                    // shown here match what `selectedDoc.find()` looks up.
-                    // Filter out anything already shown in the PDF + knowledge
-                    // groups so each doc appears exactly once.
-                    const projectPdfIds = new Set(projectPdfs.map((d) => d.id));
-                    const knowledgeIds = new Set(knowledgePdfs.map((d) => d.id));
-                    const projectFiles = takeoffDocuments.filter(
-                      (d) => d.source === "project" && !projectPdfIds.has(d.id) && !knowledgeIds.has(d.id),
-                    );
-                    if (projectFiles.length === 0) return null;
-                    return (
-                      <RadixSelect.Group>
-                        <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
-                          Project Files
-                        </RadixSelect.Label>
-                        {projectFiles.map((d) => (
-                          <RadixSelect.Item
-                            key={d.id}
-                            value={d.id}
-                            className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
-                          >
-                            <RadixSelect.ItemIndicator className="shrink-0">
-                              <Check className="h-3 w-3 text-accent" />
-                            </RadixSelect.ItemIndicator>
-                            <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
-                          </RadixSelect.Item>
-                        ))}
-                      </RadixSelect.Group>
-                    );
-                  })()}
-                  {knowledgePdfs.length > 0 && (
-                    <RadixSelect.Group>
-                      <RadixSelect.Label className="px-2 py-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider">
-                        Knowledge Books
-                      </RadixSelect.Label>
-                      {knowledgePdfs.map((d) => (
-                        <RadixSelect.Item
-                          key={d.id}
-                          value={d.id}
-                          className="flex items-center gap-2 px-2 py-1.5 text-xs rounded cursor-pointer outline-none data-[highlighted]:bg-accent/10 text-fg truncate"
-                        >
-                          <RadixSelect.ItemIndicator className="shrink-0">
-                            <Check className="h-3 w-3 text-accent" />
-                          </RadixSelect.ItemIndicator>
-                          <RadixSelect.ItemText>{d.label}</RadixSelect.ItemText>
-                        </RadixSelect.Item>
-                      ))}
-                    </RadixSelect.Group>
-                  )}
-                </RadixSelect.Viewport>
-              </RadixSelect.Content>
-            </RadixSelect.Portal>
-          </RadixSelect.Root>
-        </div>
+        <Button
+          variant="ghost"
+          size="xs"
+          onClick={() => setShowLanding(true)}
+          title="Back to takeoff intake"
+          aria-label="Back to takeoff intake"
+          className="h-7 w-7 shrink-0 px-0"
+        >
+          <FolderOpen className="h-3.5 w-3.5" />
+        </Button>
 
         {!isCadDocument && !isDwgDocument && (
           <>
@@ -5326,82 +5915,29 @@ export function TakeoffTab({
 
             <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
 
-            {/* Calibration indicator — click to set/reset scale */}
-            {calibration ? (
-              <div className="inline-flex shrink-0 items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => handleToolSelect("calibrate")}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-emerald-500/10 text-emerald-500 transition-colors hover:bg-emerald-500/20"
-                  title={`Recalibrate: 1 ${calibration.unit} = ${calibration.pixelsPerUnit.toFixed(1)}px`}
-                  aria-label="Recalibrate drawing scale"
-                >
-                  <Scaling className="h-3 w-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setVerifyMode(true);
-                    setActiveTool("calibrate");
-                  }}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-emerald-500/20 text-emerald-500/80 transition-colors hover:bg-emerald-500/10"
-                  title="Draw a line of known length to verify the calibration"
-                  aria-label="Verify drawing calibration"
-                >
-                  <Check className="h-3 w-3" />
-                </button>
-              </div>
-            ) : (
-              <button
-                type="button"
-                onClick={() => handleToolSelect("calibrate")}
-                className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-amber-500/10 text-amber-500 transition-colors hover:bg-amber-500/20"
-                title="Click to set the drawing scale"
-                aria-label="Set drawing scale"
-              >
-                <Scaling className="h-3 w-3" />
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={handleReadLegend}
-              disabled={legendLoading || !selectedDoc}
-              className="inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md border border-line bg-panel2/40 px-1.5 text-fg/70 transition-colors hover:bg-panel2 disabled:opacity-50"
-              title="Read the legend / symbol schedule on this page (uses Azure DI OCR)"
-              aria-label="Read legend or symbol schedule"
-            >
-              <BookOpen className="h-3 w-3" />
-              {legendLoading && <Loader2 className="ml-1 h-3 w-3 animate-spin" />}
-              {legendEntries && legendEntries.length > 0 && (
-                <span className="text-[10px] text-fg/45 ml-0.5">{legendEntries.length}</span>
-              )}
-            </button>
-            {isPdfDocument && (
-              <button
-                type="button"
-                onClick={() => {
-                  onOpenInspectEntities?.();
-                  if (!drawingAnalysisResult && !drawingAnalysisRunning) {
-                    void handleRunDrawingAnalysis();
-                  }
-                }}
-                disabled={drawingAnalysisRunning || !selectedDoc}
-                className={cn(
-                  "inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md border px-1.5 transition-colors disabled:opacity-50",
-                  drawingAnalysisResult
-                    ? "border-sky-500/40 bg-sky-500/10 text-sky-500"
-                    : "border-line bg-panel2/40 text-fg/70 hover:bg-panel2"
-                )}
-                title="Open Drawing Intelligence in the Entities panel"
-                aria-label="Drawing intelligence"
-              >
-                <GitBranch className="h-3 w-3" />
-                {drawingAnalysisRunning && <Loader2 className="ml-1 h-3 w-3 animate-spin" />}
-                {drawingAnalysisResult && !drawingAnalysisRunning && (
-                  <span className="text-[10px] text-fg/45 ml-0.5">{drawingAnalysisResult.summary.systemCount}</span>
-                )}
-              </button>
-            )}
+            <PdfToolGroupMenus
+              activeTool={activeTool}
+              onSelect={handleToolSelect}
+              onReadLegend={handleReadLegend}
+              onOpenDrawingIntelligence={() => {
+                onOpenInspectEntities?.();
+                postTakeoffMessage({ type: "open-inspect-entities" });
+                if (!drawingAnalysisResult && !drawingAnalysisRunning) {
+                  void handleRunDrawingAnalysis();
+                }
+              }}
+              legendOpen={legendOpen}
+              legendLoading={legendLoading}
+              legendEntries={legendEntries}
+              legendWarnings={legendWarnings}
+              legendCount={legendEntries?.length ?? 0}
+              onCloseLegend={() => setLegendOpen(false)}
+              drawingAnalysisRunning={drawingAnalysisRunning}
+              drawingAnalysisCount={drawingAnalysisResult?.summary.systemCount ?? null}
+              canRunDocumentAi={Boolean(selectedDoc)}
+              canRunDrawingIntelligence={Boolean(isPdfDocument && selectedDoc)}
+            />
+
           </>
         )}
 
@@ -5409,22 +5945,6 @@ export function TakeoffTab({
 
         {!isCadDocument && !isDwgDocument && (
           <>
-            {/* Active tool indicator */}
-            <Badge tone="info" className="h-7 min-w-7 shrink-0 gap-1 px-1.5 text-[11px] 2xl:px-2" title={`${activeToolDef?.label ?? "Select"} tool`}>
-              {activeToolDef && <activeToolDef.icon className="h-3 w-3" />}
-              <span className="hidden 2xl:inline">{activeToolDef?.label ?? "Select"}</span>
-            </Badge>
-
-            <Button
-              variant={snapEnabled ? "secondary" : "ghost"}
-              size="xs"
-              onClick={() => setSnapEnabled((value) => !value)}
-              title="Toggle PDF edge and vertex snap"
-              aria-label="Toggle PDF edge and vertex snap"
-              className="h-7 w-7 shrink-0 px-0"
-            >
-              <Crosshair className="h-3.5 w-3.5" />
-            </Button>
             <Button
               variant="ghost"
               size="xs"
@@ -5509,18 +6029,21 @@ export function TakeoffTab({
             <Expand className="h-3.5 w-3.5" />
           )}
         </Button>
-        <Button
-          variant="ghost"
-          size="xs"
-          onClick={handleDetach}
-          title="Open in new window"
-          aria-label="Open in new window"
-          disabled={!selectedDocId}
-          className="h-7 w-7 shrink-0 px-0"
-        >
-          <ExternalLink className="h-3.5 w-3.5" />
-        </Button>
+        {!detached && (
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={handleDetach}
+            title="Open in new window"
+            aria-label="Open in new window"
+            disabled={!selectedDocId}
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+          </Button>
+        )}
       </div>
+      )}
 
       {/* ─── No-Calibration Warning ─── */}
       {!isCadDocument && !isDwgDocument && !calibration && activeTool && isMeasurementTool(activeTool) && (
@@ -5531,13 +6054,9 @@ export function TakeoffTab({
               Drawing scale isn't set — measurements will be in pixels until you calibrate.
             </p>
             <p className="text-[11px] text-fg/50 mt-0.5">
-              Click below to set the scale, or pick the Calibrate tool from the side palette.
+              Use Measure &gt; Set Scale before creating real measurements.
             </p>
           </div>
-          <Button size="xs" variant="accent" onClick={() => handleToolSelect("calibrate")}>
-            <Scaling className="h-3 w-3" />
-            Set scale
-          </Button>
         </div>
       )}
 
@@ -5944,6 +6463,7 @@ export function TakeoffTab({
               setZoom(1);
               fitOnLoadRef.current = true;
               setAnnotations([]);
+              setDwgIntelligence(null);
               updateAnnotationSelection(null);
               setAutoCountResults(null);
               setAutoCountSnippet(null);
@@ -5975,39 +6495,96 @@ export function TakeoffTab({
             }}
             onAnnotationsChange={setDwgAnnotationsCache}
             actionsRef={dwgActionsRef}
+            onOpenDrawingIntelligence={() => {
+              onOpenInspectEntities?.();
+              postTakeoffMessage({ type: "open-inspect-entities" });
+            }}
+            onIntelligenceChange={setDwgIntelligence}
+            toolbarStart={
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={() => setShowLanding(true)}
+                title="Back to takeoff intake"
+                aria-label="Back to takeoff intake"
+                className="h-7 w-7 shrink-0 px-0"
+              >
+                <FolderOpen className="h-3.5 w-3.5" />
+              </Button>
+            }
+            toolbarEnd={
+              <>
+                <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  onClick={handleFullscreen}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  className="h-7 w-7 shrink-0 px-0"
+                >
+                  {isFullscreen ? (
+                    <Shrink className="h-3.5 w-3.5" />
+                  ) : (
+                    <Expand className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+                {!detached && (
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    onClick={handleDetach}
+                    title="Open in new window"
+                    aria-label="Open in new window"
+                    disabled={!selectedDocId}
+                    className="h-7 w-7 shrink-0 px-0"
+                  >
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </>
+            }
           />
         ) : (
           <>
 
-        {/* Left: Tool palette */}
+        {/* Left: Quick controls */}
         {!isCadDocument && (
-        <div className="flex w-9 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
-          {TOOL_GROUPS.map((group) => {
-            const groupTools = TOOLS.filter((t) => t.group === group.key);
-            return (
-              <div key={group.key}>
-                {group.key !== "nav" && (
-                  <div className="my-px h-px w-full bg-line/50" />
-                )}
-                {groupTools.map(({ id, label, icon: Icon }) => (
-                  <button
-                    key={id}
-                    onClick={() => handleToolSelect(id)}
-                    title={label}
-                    className={cn(
-                      "flex h-6 w-full items-center justify-center rounded-md transition-colors",
-                      activeTool === id
-                        ? "bg-accent/15 text-accent"
-                        : "text-fg/40 hover:bg-panel2 hover:text-fg/70"
-                    )}
-                  >
-                    <Icon className="h-3.5 w-3.5" />
-                  </button>
-                ))}
-              </div>
-            );
-          })}
-        </div>
+          <div className="flex w-9 shrink-0 flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
+            {(["select"] as ToolId[]).map((id) => {
+              const tool = TOOLS.find((item) => item.id === id);
+              if (!tool) return null;
+              const Icon = tool.icon;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => handleToolSelect(id)}
+                  title={tool.label}
+                  className={cn(
+                    "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                    activeTool === id
+                      ? "bg-accent/15 text-accent"
+                      : "text-fg/45 hover:bg-panel2 hover:text-fg/75",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                </button>
+              );
+            })}
+            <div className="my-0.5 h-px w-full bg-line/60" />
+            <button
+              type="button"
+              onClick={() => setSnapEnabled((value) => !value)}
+              title="Toggle PDF snap"
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                snapEnabled ? "bg-sky-500/10 text-sky-500" : "text-fg/40 hover:bg-panel2 hover:text-fg/70",
+              )}
+            >
+              <Crosshair className="h-3.5 w-3.5" />
+            </button>
+          </div>
         )}
 
         {/* Center: Document viewer area */}
@@ -6015,7 +6592,7 @@ export function TakeoffTab({
           ref={viewerContainerRef}
           className={cn(
             "flex flex-1 bg-bg/50",
-            isCadDocument ? "items-stretch justify-stretch overflow-hidden" : "items-start justify-center overflow-auto"
+            isCadDocument ? "items-stretch justify-stretch overflow-hidden" : "items-start justify-start overflow-auto"
           )}
         >
           {!selectedDoc ? (
@@ -6061,7 +6638,7 @@ export function TakeoffTab({
               )}
             </div>
           ) : (
-            <div className="relative inline-block m-4">
+            <div className="relative mx-auto my-4 inline-block shrink-0">
                   {/* PDF canvas */}
                   <PdfCanvasViewer
                     documentUrl={documentUrl}
@@ -6112,9 +6689,15 @@ export function TakeoffTab({
                     visible={drawingAnalysisOverlay}
                     selectedId={selectedDrawingDetectionId}
                   />
+                  <SmartCountOverlay
+                    bbox={smartCountBbox}
+                    width={canvasSize.width}
+                    height={canvasSize.height}
+                    active={Boolean(selectedSmartCountItemId)}
+                  />
 
                   {/* Processing overlay */}
-                  {(autoCountRunning || askAiRunning || drawingAnalysisRunning) && (
+                  {(autoCountRunning || askAiRunning || smartCountRunning || drawingAnalysisRunning) && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg backdrop-blur-sm z-10">
                       <div className="flex items-center gap-3 rounded-xl bg-panel px-5 py-3 shadow-xl border border-line">
                         <Loader2 className="h-5 w-5 animate-spin text-accent" />
@@ -6124,14 +6707,18 @@ export function TakeoffTab({
                               ? "Analyzing drawing geometry..."
                               : autoCountRunning
                                 ? "Running symbol detection..."
-                                : "Cropping region for AI analysis..."}
+                                : smartCountRunning
+                                  ? "Running Smart Count..."
+                                  : "Cropping region for AI analysis..."}
                           </p>
                           <p className="text-xs text-fg/40">
                             {drawingAnalysisRunning
                               ? "Tracing linework, symbols, text zones, and connected systems"
                               : autoCountRunning
                                 ? "OpenCV template matching + feature detection"
-                                : "Preparing image crop"}
+                                : smartCountRunning
+                                  ? "Cropping the region and extracting count rows into Entities"
+                                  : "Preparing image crop"}
                           </p>
                         </div>
                       </div>
@@ -6684,183 +7271,6 @@ export function TakeoffTab({
         </div>
       )}
 
-      {/* ─── Smart Count Results Modal ─── */}
-      {smartCountModalOpen && (
-        <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
-          <Card className="border border-emerald-400/30 shadow-xl max-h-[55vh] flex flex-col">
-            <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
-              <Wand2 className="h-4 w-4 text-emerald-500 shrink-0" />
-              <span className="text-xs font-semibold text-fg flex-1">
-                Smart Count
-                {smartCountItems && smartCountItems.length > 0 && (
-                  <span className="ml-2 text-fg/45 font-normal">
-                    {smartCountIncluded.filter(Boolean).length} of {smartCountItems.length} selected
-                  </span>
-                )}
-              </span>
-              {smartCountItems && smartCountItems.length > 0 && (
-                <button
-                  onClick={() => {
-                    const allOn = smartCountIncluded.every(Boolean);
-                    setSmartCountIncluded(smartCountItems.map(() => !allOn));
-                  }}
-                  className="text-[10px] text-accent hover:underline mr-2"
-                >
-                  {smartCountIncluded.every(Boolean) ? "Deselect All" : "Select All"}
-                </button>
-              )}
-              <button onClick={handleRejectSmartCount} className="text-fg/30 hover:text-fg/60 transition-colors">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            <div className="flex gap-3 p-4 overflow-y-auto flex-1 min-h-0">
-              {smartCountCropImage && (
-                <div className="shrink-0 flex items-start">
-                  <div className="rounded-md border border-line bg-white p-1.5">
-                    <img src={smartCountCropImage} alt="Region" className="h-32 w-32 object-contain" />
-                  </div>
-                </div>
-              )}
-              <div className="flex-1 min-w-0">
-                {smartCountRunning && (
-                  <div className="flex items-center gap-2 py-2">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin text-emerald-500 shrink-0" />
-                    <span className="text-xs text-fg/60">Counting symbols in the region…</span>
-                  </div>
-                )}
-                {smartCountError && !smartCountRunning && (
-                  <div className="text-[11px] text-red-400 bg-red-500/5 border border-red-500/20 rounded-md px-2.5 py-1.5">
-                    {smartCountError}
-                  </div>
-                )}
-                {smartCountItems && smartCountItems.length > 0 && (
-                  <div className="space-y-1">
-                    {smartCountItems.map((item, i) => (
-                      <div
-                        key={i}
-                        onClick={() => {
-                          const next = [...smartCountIncluded];
-                          next[i] = !next[i];
-                          setSmartCountIncluded(next);
-                        }}
-                        className={cn(
-                          "flex items-center gap-3 px-3 py-2 rounded-md cursor-pointer transition-colors",
-                          smartCountIncluded[i]
-                            ? "bg-emerald-500/8 border border-emerald-500/20"
-                            : "bg-panel2/30 border border-line opacity-60",
-                        )}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={smartCountIncluded[i]}
-                          onChange={() => {}}
-                          className="h-3.5 w-3.5 rounded border-line accent-emerald-500 shrink-0"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <div className="text-xs font-medium text-fg truncate">{item.label}</div>
-                          {item.notes && (
-                            <div className="text-[10px] text-fg/45 truncate">{item.notes}</div>
-                          )}
-                        </div>
-                        <Badge
-                          tone={item.confidence === "high" ? "success" : item.confidence === "medium" ? "warning" : "default"}
-                          className="text-[9px] shrink-0"
-                        >
-                          {item.confidence}
-                        </Badge>
-                        <span className="text-base font-mono font-semibold text-emerald-500 tabular-nums shrink-0">
-                          ×{item.count}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-
-            {smartCountItems && smartCountItems.length > 0 && (
-              <div className="flex items-center justify-between px-4 py-2.5 border-t border-line shrink-0">
-                <span className="text-[10px] text-fg/40">
-                  Total selected:{" "}
-                  <span className="font-mono text-fg/70">
-                    {smartCountItems.reduce(
-                      (s, it, i) => s + (smartCountIncluded[i] ? it.count : 0),
-                      0,
-                    )}
-                  </span>
-                </span>
-                <div className="flex gap-2">
-                  <Button size="xs" variant="secondary" onClick={handleRejectSmartCount}>
-                    Cancel
-                  </Button>
-                  <Button
-                    size="xs"
-                    variant="accent"
-                    onClick={handleAcceptSmartCount}
-                    disabled={!smartCountIncluded.some(Boolean)}
-                  >
-                    Add to drawing
-                  </Button>
-                </div>
-              </div>
-            )}
-          </Card>
-        </div>
-      )}
-
-      {/* ─── Legend Reader Panel ─── */}
-      {legendOpen && (
-        <div className="absolute top-16 right-4 z-30 w-[340px] max-h-[70vh] flex flex-col rounded-lg border border-amber-500/30 bg-panel shadow-2xl animate-in slide-in-from-right-4 duration-200">
-          <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
-            <BookOpen className="h-4 w-4 text-amber-500 shrink-0" />
-            <span className="text-xs font-semibold text-fg flex-1">
-              Page legend
-              {legendEntries && legendEntries.length > 0 && (
-                <span className="ml-2 text-fg/45 font-normal">{legendEntries.length} entries</span>
-              )}
-            </span>
-            <button onClick={() => setLegendOpen(false)} className="text-fg/30 hover:text-fg/60 transition-colors">
-              <X className="h-3.5 w-3.5" />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
-            {legendLoading && (
-              <div className="flex items-center gap-2 py-2">
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-amber-500 shrink-0" />
-                <span className="text-xs text-fg/60">Reading legend table on this page…</span>
-              </div>
-            )}
-            {!legendLoading && legendEntries && legendEntries.length === 0 && (
-              <div className="text-[11px] text-fg/50 py-2">
-                {legendWarnings[0] ?? "No legend table or symbol list found on this page."}
-              </div>
-            )}
-            {legendEntries?.map((entry, i) => (
-              <div
-                key={`${entry.symbol}-${i}`}
-                className="flex items-start gap-3 rounded-md border border-line bg-panel2/30 px-2.5 py-2"
-              >
-                <div className="shrink-0 inline-flex h-7 w-7 items-center justify-center rounded-md border border-amber-500/40 bg-amber-500/10 font-mono text-[11px] font-semibold text-amber-400">
-                  {entry.symbol}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-xs text-fg/85 leading-snug">{entry.label}</div>
-                  {entry.confidence < 0.7 && (
-                    <div className="text-[10px] text-fg/35 mt-0.5">low confidence</div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-          {legendEntries && legendEntries.length > 0 && (
-            <div className="px-3 py-2 border-t border-line text-[10px] text-fg/40">
-              Tip: drop the AI-detected names into Smart Count or Auto Count to enrich your tally.
-            </div>
-          )}
-        </div>
-      )}
-
       {askAiModalOpen && askAiCropImage && (
         <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
           <Card className="border border-violet-300/30 shadow-xl max-h-[50vh] flex flex-col">
@@ -6921,12 +7331,11 @@ export function TakeoffTab({
         </div>
       )}
 
-      {/* ─── Status Bar ─── */}
+      {!isDwgDocument && (
+      /* ─── Status Bar ─── */
       <div className="flex items-center gap-3 border-t border-line bg-panel px-3 py-1.5 shrink-0">
         <p className="text-[11px] text-fg/40">
-          {isDwgDocument
-            ? "DWG takeoff surface active."
-            : isCadDocument
+          {isCadDocument
             ? selectedModelIsEditable
               ? "Model editor active."
               : "3D model preview active."
@@ -6949,6 +7358,7 @@ export function TakeoffTab({
           </>
         )}
       </div>
+      )}
 
       {/* ─── No-active-worksheet prompt ─── */}
       {/* Mounted whenever a model-element / model-selection action is queued
@@ -6995,6 +7405,68 @@ export function TakeoffTab({
   );
 }
 
+function SmartCountOverlay({
+  bbox,
+  width,
+  height,
+  active,
+}: {
+  bbox: VisionBoundingBox | null;
+  width: number;
+  height: number;
+  active: boolean;
+}) {
+  if (!bbox || width <= 0 || height <= 0) return null;
+  const sx = width / Math.max(1, bbox.imageWidth);
+  const sy = height / Math.max(1, bbox.imageHeight);
+  const box = {
+    x: bbox.x * sx,
+    y: bbox.y * sy,
+    width: bbox.width * sx,
+    height: bbox.height * sy,
+  };
+  const corner = Math.min(24, Math.max(10, Math.min(box.width, box.height) * 0.18));
+
+  return (
+    <svg
+      className="pointer-events-none absolute inset-0 z-[4]"
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      aria-hidden="true"
+    >
+      <rect
+        x={box.x}
+        y={box.y}
+        width={box.width}
+        height={box.height}
+        fill="#10b981"
+        fillOpacity={active ? 0.08 : 0.04}
+        stroke={active ? "#f97316" : "#10b981"}
+        strokeWidth={active ? 2.5 : 1.5}
+        strokeDasharray="8 4"
+        rx={5}
+        opacity={active ? 0.96 : 0.72}
+      />
+      {active && [
+        [box.x, box.y, box.x + corner, box.y],
+        [box.x, box.y, box.x, box.y + corner],
+        [box.x + box.width, box.y, box.x + box.width - corner, box.y],
+        [box.x + box.width, box.y, box.x + box.width, box.y + corner],
+        [box.x, box.y + box.height, box.x + corner, box.y + box.height],
+        [box.x, box.y + box.height, box.x, box.y + box.height - corner],
+        [box.x + box.width, box.y + box.height, box.x + box.width - corner, box.y + box.height],
+        [box.x + box.width, box.y + box.height, box.x + box.width, box.y + box.height - corner],
+      ].map(([x1, y1, x2, y2], index) => (
+        <g key={`smart-count-corner-${index}`}>
+          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#ffffff" strokeWidth={5} strokeLinecap="round" opacity={0.82} />
+          <line x1={x1} y1={y1} x2={x2} y2={y2} stroke="#f97316" strokeWidth={2.4} strokeLinecap="round" />
+        </g>
+      ))}
+    </svg>
+  );
+}
+
 function DrawingIntelligenceOverlay({
   analysis,
   width,
@@ -7014,6 +7486,25 @@ function DrawingIntelligenceOverlay({
   const sy = height / Math.max(analysis.imageHeight, 1);
   const lineById = new Map(analysis.lines.map((line) => [line.id, line]));
   const systemColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#a855f7", "#ef4444", "#14b8a6"];
+  const selectedSystem = selectedId ? analysis.systems.find((system) => system.id === selectedId) : null;
+  const selectedLine = selectedId ? analysis.lines.find((line) => line.id === selectedId) : null;
+  const selectedSymbol = selectedId ? analysis.symbolCandidates.find((candidate) => candidate.id === selectedId) : null;
+  const selectedCircle = selectedId ? analysis.circles.find((circle) => circle.id === selectedId) : null;
+  const selectedText = selectedId ? analysis.textRegions.find((region) => region.id === selectedId) : null;
+  const selectedBounds = selectedSystem?.bbox
+    ?? selectedLine?.bbox
+    ?? (selectedSymbol ? { x: selectedSymbol.x, y: selectedSymbol.y, width: selectedSymbol.w, height: selectedSymbol.h } : null)
+    ?? selectedCircle?.bbox
+    ?? (selectedText ? { x: selectedText.x, y: selectedText.y, width: selectedText.w, height: selectedText.h } : null);
+  const selectedBox = selectedBounds
+    ? {
+        x: selectedBounds.x * sx,
+        y: selectedBounds.y * sy,
+        width: selectedBounds.width * sx,
+        height: selectedBounds.height * sy,
+      }
+    : null;
+  const selectedCorner = selectedBox ? Math.min(22, Math.max(8, Math.min(selectedBox.width, selectedBox.height) * 0.22)) : 0;
 
   return (
     <svg
@@ -7101,6 +7592,161 @@ function DrawingIntelligenceOverlay({
           opacity={selectedId === region.id ? 0.95 : 0.65}
         />
       ))}
+
+      {selectedSystem && selectedSystem.segmentIds.map((segmentId) => {
+        const line = lineById.get(segmentId);
+        if (!line) return null;
+        return (
+          <g key={`selected-system-${selectedSystem.id}-${segmentId}`}>
+            <line
+              x1={line.x1 * sx}
+              y1={line.y1 * sy}
+              x2={line.x2 * sx}
+              y2={line.y2 * sy}
+              stroke="#ffffff"
+              strokeWidth={8}
+              opacity={0.72}
+              strokeLinecap="round"
+            />
+            <line
+              x1={line.x1 * sx}
+              y1={line.y1 * sy}
+              x2={line.x2 * sx}
+              y2={line.y2 * sy}
+              stroke="#f97316"
+              strokeWidth={4.6}
+              opacity={0.98}
+              strokeLinecap="round"
+            />
+          </g>
+        );
+      })}
+
+      {selectedLine && (
+        <g>
+          <line
+            x1={selectedLine.x1 * sx}
+            y1={selectedLine.y1 * sy}
+            x2={selectedLine.x2 * sx}
+            y2={selectedLine.y2 * sy}
+            stroke="#ffffff"
+            strokeWidth={7}
+            opacity={0.78}
+            strokeLinecap="round"
+          />
+          <line
+            x1={selectedLine.x1 * sx}
+            y1={selectedLine.y1 * sy}
+            x2={selectedLine.x2 * sx}
+            y2={selectedLine.y2 * sy}
+            stroke="#f97316"
+            strokeWidth={4}
+            opacity={0.98}
+            strokeLinecap="round"
+          />
+        </g>
+      )}
+
+      {selectedSymbol && (
+        <rect
+          x={selectedSymbol.x * sx}
+          y={selectedSymbol.y * sy}
+          width={selectedSymbol.w * sx}
+          height={selectedSymbol.h * sy}
+          fill="#f97316"
+          fillOpacity={0.12}
+          stroke="#f97316"
+          strokeWidth={3}
+          rx={4}
+        />
+      )}
+
+      {selectedCircle && (
+        <circle
+          cx={selectedCircle.cx * sx}
+          cy={selectedCircle.cy * sy}
+          r={Math.max(selectedCircle.radius * ((sx + sy) / 2), 3)}
+          fill="#f97316"
+          fillOpacity={0.12}
+          stroke="#f97316"
+          strokeWidth={3}
+        />
+      )}
+
+      {selectedText && (
+        <rect
+          x={selectedText.x * sx}
+          y={selectedText.y * sy}
+          width={selectedText.w * sx}
+          height={selectedText.h * sy}
+          fill="#f97316"
+          fillOpacity={0.08}
+          stroke="#f97316"
+          strokeWidth={2.5}
+          strokeDasharray="6 3"
+          rx={3}
+        />
+      )}
+
+      {selectedBox && (
+        <g>
+          <rect
+            x={selectedBox.x}
+            y={selectedBox.y}
+            width={selectedBox.width}
+            height={selectedBox.height}
+            fill="#f97316"
+            fillOpacity={0.07}
+            stroke="#f97316"
+            strokeWidth={2}
+            strokeDasharray="7 4"
+            rx={4}
+          />
+          {[
+            [selectedBox.x, selectedBox.y, selectedBox.x + selectedCorner, selectedBox.y],
+            [selectedBox.x, selectedBox.y, selectedBox.x, selectedBox.y + selectedCorner],
+            [selectedBox.x + selectedBox.width, selectedBox.y, selectedBox.x + selectedBox.width - selectedCorner, selectedBox.y],
+            [selectedBox.x + selectedBox.width, selectedBox.y, selectedBox.x + selectedBox.width, selectedBox.y + selectedCorner],
+            [selectedBox.x, selectedBox.y + selectedBox.height, selectedBox.x + selectedCorner, selectedBox.y + selectedBox.height],
+            [selectedBox.x, selectedBox.y + selectedBox.height, selectedBox.x, selectedBox.y + selectedBox.height - selectedCorner],
+            [selectedBox.x + selectedBox.width, selectedBox.y + selectedBox.height, selectedBox.x + selectedBox.width - selectedCorner, selectedBox.y + selectedBox.height],
+            [selectedBox.x + selectedBox.width, selectedBox.y + selectedBox.height, selectedBox.x + selectedBox.width, selectedBox.y + selectedBox.height - selectedCorner],
+          ].map(([x1, y1, x2, y2], index) => (
+            <line
+              key={`selected-corner-${index}`}
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke="#ffffff"
+              strokeWidth={5}
+              strokeLinecap="round"
+              opacity={0.82}
+            />
+          ))}
+          {[
+            [selectedBox.x, selectedBox.y, selectedBox.x + selectedCorner, selectedBox.y],
+            [selectedBox.x, selectedBox.y, selectedBox.x, selectedBox.y + selectedCorner],
+            [selectedBox.x + selectedBox.width, selectedBox.y, selectedBox.x + selectedBox.width - selectedCorner, selectedBox.y],
+            [selectedBox.x + selectedBox.width, selectedBox.y, selectedBox.x + selectedBox.width, selectedBox.y + selectedCorner],
+            [selectedBox.x, selectedBox.y + selectedBox.height, selectedBox.x + selectedCorner, selectedBox.y + selectedBox.height],
+            [selectedBox.x, selectedBox.y + selectedBox.height, selectedBox.x, selectedBox.y + selectedBox.height - selectedCorner],
+            [selectedBox.x + selectedBox.width, selectedBox.y + selectedBox.height, selectedBox.x + selectedBox.width - selectedCorner, selectedBox.y + selectedBox.height],
+            [selectedBox.x + selectedBox.width, selectedBox.y + selectedBox.height, selectedBox.x + selectedBox.width, selectedBox.y + selectedBox.height - selectedCorner],
+          ].map(([x1, y1, x2, y2], index) => (
+            <line
+              key={`selected-corner-accent-${index}`}
+              x1={x1}
+              y1={y1}
+              x2={x2}
+              y2={y2}
+              stroke="#f97316"
+              strokeWidth={2.4}
+              strokeLinecap="round"
+            />
+          ))}
+        </g>
+      )}
     </svg>
   );
 }

@@ -1,13 +1,15 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import {
   AlertTriangle,
   Check,
+  ChevronDown,
   Crosshair,
   Download,
   Eye,
   EyeOff,
+  GitBranch,
   Hand,
   Layers,
   Loader2,
@@ -22,6 +24,8 @@ import {
   Type,
   Undo2,
   Redo2,
+  Scaling,
+  Sparkles,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -137,16 +141,151 @@ type EstimateCategory = {
   entityType: string;
 };
 
-const TOOL_OPTIONS: Array<{ id: DwgTool; label: string; icon: typeof MousePointer2; shortcut?: string }> = [
+type DwgToolGroupKey = "measure" | "count" | "markup";
+
+type DwgToolDef = {
+  id: DwgTool;
+  label: string;
+  icon: typeof MousePointer2;
+  shortcut?: string;
+  group?: DwgToolGroupKey;
+  section?: string;
+};
+
+const TOOL_OPTIONS: DwgToolDef[] = [
   { id: "select", label: "Select", icon: MousePointer2, shortcut: "V" },
   { id: "pan", label: "Pan", icon: Hand, shortcut: "H" },
-  { id: "distance", label: "Distance", icon: Ruler, shortcut: "D" },
-  { id: "area", label: "Area", icon: PenTool, shortcut: "A" },
-  { id: "rectangle", label: "Rectangle", icon: Square, shortcut: "R" },
-  { id: "count", label: "Count", icon: Tally5, shortcut: "C" },
-  { id: "text", label: "Text", icon: Type, shortcut: "T" },
-  { id: "calibrate", label: "Calibrate", icon: Crosshair, shortcut: "K" },
+  { id: "calibrate", label: "Set Scale", icon: Scaling, shortcut: "K", group: "measure", section: "Scale" },
+  { id: "distance", label: "Distance", icon: Ruler, shortcut: "D", group: "measure", section: "Length" },
+  { id: "area", label: "Polygon Area", icon: PenTool, shortcut: "A", group: "measure", section: "Area" },
+  { id: "rectangle", label: "Rectangle Area", icon: Square, shortcut: "R", group: "measure", section: "Area" },
+  { id: "count", label: "Count", icon: Tally5, shortcut: "C", group: "count", section: "Manual" },
+  { id: "text", label: "Text", icon: Type, shortcut: "T", group: "markup", section: "Text" },
 ];
+
+const DWG_TOOL_MENU_GROUPS: ReadonlyArray<{ key: DwgToolGroupKey; label: string; icon: typeof Ruler }> = [
+  { key: "measure", label: "Measure", icon: Ruler },
+  { key: "count", label: "Count", icon: Tally5 },
+  { key: "markup", label: "Markup", icon: Type },
+];
+
+function DwgToolGroupMenus({
+  activeTool,
+  onSelect,
+}: {
+  activeTool: DwgTool;
+  onSelect: (tool: DwgTool) => void;
+}) {
+  return (
+    <div className="flex min-w-0 items-center gap-1">
+      {DWG_TOOL_MENU_GROUPS.map((group) => {
+        const tools = TOOL_OPTIONS.filter((tool) => tool.group === group.key);
+        const active = tools.find((tool) => tool.id === activeTool);
+        const Icon = active?.icon ?? group.icon;
+        return (
+          <Popover.Root key={group.key}>
+            <Popover.Trigger asChild>
+              <Button
+                variant={active ? "secondary" : "ghost"}
+                size="xs"
+                className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+                title={`${group.label} tools`}
+              >
+                <Icon className="h-3.5 w-3.5" />
+                <span>{group.label}</span>
+                <ChevronDown className="h-3 w-3 text-fg/40" />
+              </Button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="start"
+                sideOffset={6}
+                className="z-[1000] max-h-[min(70vh,28rem)] w-60 overflow-y-auto rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none"
+              >
+                {tools.map((tool, index) => {
+                  const ToolIcon = tool.icon;
+                  const previousSection = index > 0 ? tools[index - 1]?.section : undefined;
+                  const showSection = Boolean(tool.section && tool.section !== previousSection);
+                  return (
+                    <div key={tool.id}>
+                      {showSection && (
+                        <p className={cn("px-2 pb-1 text-[10px] font-medium uppercase tracking-wider text-fg/35", index > 0 && "pt-2")}>
+                          {tool.section}
+                        </p>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => onSelect(tool.id)}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors",
+                          activeTool === tool.id ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg",
+                        )}
+                      >
+                        <ToolIcon className="h-3.5 w-3.5 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate">{tool.label}</span>
+                        {tool.shortcut && <span className="font-mono text-[10px] text-fg/35">{tool.shortcut}</span>}
+                      </button>
+                    </div>
+                  );
+                })}
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+        );
+      })}
+    </div>
+  );
+}
+
+function DwgAiMenu({
+  entityCount,
+  layerCount,
+  onOpenDrawingIntelligence,
+}: {
+  entityCount: number;
+  layerCount: number;
+  onOpenDrawingIntelligence?: () => void;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button
+          variant="ghost"
+          size="xs"
+          className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+          title="AI tools"
+        >
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>AI</span>
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="start"
+          sideOffset={6}
+          className="z-[1000] max-h-[min(70vh,28rem)] w-72 overflow-y-auto rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none"
+        >
+          <Popover.Close asChild>
+            <button
+              type="button"
+              onClick={onOpenDrawingIntelligence}
+              disabled={!onOpenDrawingIntelligence}
+              className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg disabled:cursor-not-allowed disabled:opacity-45"
+              title="Review parsed DWG/DXF entities, layers, layouts, and measurements"
+            >
+              <GitBranch className="h-3.5 w-3.5 shrink-0 text-sky-500" />
+              <span className="min-w-0 flex-1 truncate font-medium">Drawing Intelligence</span>
+              <span className="shrink-0 text-[10px] text-fg/45">
+                {entityCount.toLocaleString()} · {layerCount.toLocaleString()}
+              </span>
+            </button>
+          </Popover.Close>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
 
 const PRESET_COLORS = ["#ef4444", "#f59e0b", "#22c55e", "#3b82f6", "#8b5cf6", "#ec4899"];
 
@@ -547,6 +686,23 @@ interface DwgTakeoffSurfaceProps {
   /** A ref the parent populates so it can dispatch annotation actions
    *  (delete, etc.) to this surface from the unified Inspect view. */
   actionsRef?: React.MutableRefObject<{ deleteAnnotation: (id: string) => Promise<void> | void } | null>;
+  /** Slots from the parent takeoff shell so DWG uses one unified header. */
+  toolbarStart?: ReactNode;
+  toolbarEnd?: ReactNode;
+  onOpenDrawingIntelligence?: () => void;
+  onIntelligenceChange?: (snapshot: {
+    documentId: string;
+    fileName: string;
+    selectedLayout: string;
+    entityCount: number;
+    visibleEntityCount: number;
+    layerCount: number;
+    annotationCount: number;
+    layouts: { name: string; entityCount: number }[];
+    layers: { name: string; color: string; count: number; visible: boolean }[];
+    status: string | null;
+    processedAt: string | null;
+  } | null) => void;
 }
 
 export function DwgTakeoffSurface({
@@ -562,6 +718,10 @@ export function DwgTakeoffSurface({
   onSelectedAnnotationChange,
   onAnnotationsChange,
   actionsRef,
+  toolbarStart,
+  toolbarEnd,
+  onOpenDrawingIntelligence,
+  onIntelligenceChange,
 }: DwgTakeoffSurfaceProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -717,6 +877,61 @@ export function DwgTakeoffSurface({
   }, [layoutEntities, visibleLayers]);
   const canUndo = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedo = historyVersion >= 0 && redoStackRef.current.length > 0;
+  const lastIntelligenceSignatureRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!onIntelligenceChange) return;
+    if (!activeDocument) {
+      if (lastIntelligenceSignatureRef.current !== null) {
+        lastIntelligenceSignatureRef.current = null;
+        onIntelligenceChange(null);
+      }
+      return;
+    }
+    const snapshot = {
+      documentId: activeDocument.id,
+      fileName: activeDocument.fileName,
+      selectedLayout,
+      entityCount: layoutEntities.length,
+      visibleEntityCount: filteredEntities.length,
+      layerCount: layers.length,
+      annotationCount: annotations.length,
+      layouts: (metadata?.layouts ?? []).map((layout) => ({
+        name: layout.name || "Model",
+        entityCount: layout.entityCount ?? 0,
+      })),
+      layers: layers.map((layer) => ({
+        name: layer.name,
+        color: layer.color,
+        count: layer.count,
+        visible: visibleLayers.has(layer.name),
+      })),
+      status: metadata?.status ?? null,
+      processedAt: metadata?.processedAt ?? null,
+    };
+    const signature = JSON.stringify(snapshot);
+    if (signature === lastIntelligenceSignatureRef.current) return;
+    lastIntelligenceSignatureRef.current = signature;
+    onIntelligenceChange(snapshot);
+  }, [
+    activeDocument?.fileName,
+    activeDocument?.id,
+    annotations.length,
+    filteredEntities.length,
+    layers,
+    layoutEntities.length,
+    metadata?.layouts,
+    metadata?.processedAt,
+    metadata?.status,
+    onIntelligenceChange,
+    selectedLayout,
+    visibleLayers,
+  ]);
+
+  function selectDwgTool(tool: DwgTool) {
+    setActiveTool(tool);
+    setDrawPoints([]);
+  }
 
   useEffect(() => {
     fitEntitiesRef.current = layoutEntities.length > 0 ? layoutEntities : entities;
@@ -1249,9 +1464,6 @@ export function DwgTakeoffSurface({
     if (annotation) pushHistory({ kind: "delete", annotation });
   }
 
-  const visibleEntityCount = filteredEntities.length;
-  const totalMeasured = annotations.reduce((sum, annotation) => sum + (annotation.measurement?.value ?? 0), 0);
-
   if (documents.length === 0) {
     return (
       <div className="flex h-full min-h-0 items-center justify-center bg-bg/30 p-6">
@@ -1268,26 +1480,98 @@ export function DwgTakeoffSurface({
 
   return (
     <div className="flex h-full w-full min-h-0 flex-col bg-panel">
-      {status && (
-        <div className={cn(
-          "flex shrink-0 items-center gap-2 border-b px-3 py-2 text-xs",
-          status.tone === "danger" ? "border-danger/20 bg-danger/5 text-danger" : status.tone === "success" ? "border-success/20 bg-success/5 text-success" : "border-accent/20 bg-accent/5 text-accent",
-        )}>
-          {status.tone === "success" ? <Check className="h-3.5 w-3.5" /> : <PanelRightOpen className="h-3.5 w-3.5" />}
-          <span className="truncate">{status.message}</span>
+      <div className="grid min-w-0 shrink-0 grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] items-center gap-2 overflow-hidden border-b border-line bg-panel px-1.5 py-1.5">
+        <div className="flex min-w-0 items-center gap-1">
+          {toolbarStart}
+          <span className="hidden min-w-0 truncate px-1 text-[11px] font-medium text-fg/45 md:block">
+            {activeDocument?.fileName ?? "DWG/DXF"}
+          </span>
         </div>
-      )}
+
+        <div className="flex min-w-0 items-center gap-1 rounded-md border border-line bg-bg/35 p-0.5">
+          <DwgToolGroupMenus activeTool={activeTool} onSelect={selectDwgTool} />
+          <DwgAiMenu
+            entityCount={layoutEntities.length}
+            layerCount={layers.length}
+            onOpenDrawingIntelligence={onOpenDrawingIntelligence}
+          />
+        </div>
+
+        <div className="flex min-w-0 items-center justify-end gap-1">
+          {status && (
+            <span
+              className={cn(
+                "hidden max-w-56 truncate rounded-md border px-2 py-1 text-[10px] font-medium lg:inline-flex",
+                status.tone === "danger"
+                  ? "border-danger/25 bg-danger/10 text-danger"
+                  : status.tone === "success"
+                    ? "border-success/25 bg-success/10 text-success"
+                    : "border-accent/25 bg-accent/10 text-accent",
+              )}
+              title={status.message}
+            >
+              {status.message}
+            </span>
+          )}
+          {calibration && (
+            <span className="hidden shrink-0 rounded-md border border-line bg-bg/35 px-2 py-1 text-[10px] font-medium text-fg/50 md:inline-flex">
+              Scale {formatNumber(calibration.unitsPerWorld, 4)} {calibration.unit}/du
+            </span>
+          )}
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => void undoLastAction()}
+            disabled={!canUndo}
+            title="Undo takeoff edit"
+            aria-label="Undo takeoff edit"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => void redoLastAction()}
+            disabled={!canRedo}
+            title="Redo takeoff edit"
+            aria-label="Redo takeoff edit"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <Redo2 className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => void reloadAnnotations()}
+            title="Reload annotations"
+            aria-label="Reload annotations"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="xs"
+            onClick={() => exportAnnotationsCsv(activeDocument?.fileName ?? "dwg", annotations)}
+            disabled={annotations.length === 0}
+            title="Export measurements CSV"
+            aria-label="Export measurements CSV"
+            className="h-7 w-7 shrink-0 px-0"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </Button>
+          {toolbarEnd}
+        </div>
+      </div>
 
       <div className="flex min-h-0 flex-1">
         <div className="flex w-9 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
-          {TOOL_OPTIONS.map(({ id, label, icon: Icon, shortcut }) => (
+          {TOOL_OPTIONS.filter((tool) => tool.id === "select" || tool.id === "pan").map(({ id, label, icon: Icon, shortcut }) => (
             <button
               key={id}
               type="button"
-              onClick={() => {
-                setActiveTool(id);
-                setDrawPoints([]);
-              }}
+              onClick={() => selectDwgTool(id)}
               title={shortcut ? `${label} (${shortcut})` : label}
               aria-label={label}
               className={cn(
@@ -1493,45 +1777,6 @@ export function DwgTakeoffSurface({
           >
             <Crosshair className="h-3.5 w-3.5" />
           </button>
-          <button
-            type="button"
-            onClick={() => void undoLastAction()}
-            disabled={!canUndo}
-            title="Undo takeoff edit"
-            aria-label="Undo takeoff edit"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-30"
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => void redoLastAction()}
-            disabled={!canRedo}
-            title="Redo takeoff edit"
-            aria-label="Redo takeoff edit"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-30"
-          >
-            <Redo2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => void reloadAnnotations()}
-            title="Reload annotations"
-            aria-label="Reload annotations"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
-          >
-            <RefreshCw className="h-3.5 w-3.5" />
-          </button>
-          <button
-            type="button"
-            onClick={() => exportAnnotationsCsv(activeDocument?.fileName ?? "dwg", annotations)}
-            disabled={annotations.length === 0}
-            title="Export measurements CSV"
-            aria-label="Export measurements CSV"
-            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-30"
-          >
-            <Download className="h-3.5 w-3.5" />
-          </button>
         </div>
 
         <div className="relative min-w-0 flex-1 bg-[#101522]">
@@ -1587,39 +1832,6 @@ export function DwgTakeoffSurface({
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-t border-line bg-panel px-3 py-1.5 text-[11px] text-fg/40">
-        <span>{activeDocument?.fileName}</span>
-        <span>•</span>
-        <span>{TOOL_OPTIONS.find((tool) => tool.id === activeTool)?.label ?? "Select"} tool</span>
-        <span>•</span>
-        <span>{visibleEntityCount.toLocaleString()} entities</span>
-        <span>•</span>
-        <span>{annotations.length.toLocaleString()} measurements</span>
-        <span>•</span>
-        <span>{calibration ? `scale ${formatNumber(calibration.unitsPerWorld, 4)} ${calibration.unit}/du` : "uncalibrated"}</span>
-        <span>•</span>
-        <span>{Math.round(viewportRef.current.scale * 100) / 100} px/du</span>
-        <span>•</span>
-        <span>{snapEnabled ? "snap on" : "snap off"}</span>
-        {metadata?.processedAt && (
-          <>
-            <span>•</span>
-            <span>processed {new Date(metadata.processedAt).toLocaleString()}</span>
-          </>
-        )}
-        {cursorWorld && (
-          <>
-            <span>•</span>
-            <span className="font-mono">X {formatNumber(cursorWorld.x)} Y {formatNumber(cursorWorld.y)}</span>
-          </>
-        )}
-        {snapCandidate && (
-          <>
-            <span>•</span>
-            <span className="text-emerald-400">snap {snapCandidate.kind}</span>
-          </>
-        )}
-      </div>
     </div>
   );
 }

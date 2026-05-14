@@ -389,23 +389,31 @@ export function AnnotationCanvas({
   const [snapPoint, setSnapPoint] = useState<Point | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const snapPointRef = useRef<Point | null>(null);
+  /* Refs mirror state for drag tools so mouseUp always sees values set by mouseDown,
+     even if React hasn't re-rendered yet (stale closure problem). */
+  const isDraggingRef = useRef(false);
+  const dragStartRef = useRef<Point | null>(null);
   useEffect(() => {
     snapPointRef.current = snapPoint;
   }, [snapPoint]);
 
   // Whenever the active tool changes (or calibrate is exited), clear any
-  // stale snap target so it can't be honoured by a later click.
+  // stale interaction state so snap/loupe/drag state can't leak into the
+  // next tool. This is especially important for calibration: the loupe is
+  // fixed-position and otherwise survives after the two-point flow opens
+  // the scale prompt.
   useEffect(() => {
+    setDrawingPoints([]);
+    setCursorPos(null);
+    setScreenCursor(null);
+    setIsDragging(false);
+    isDraggingRef.current = false;
+    dragStartRef.current = null;
     if (activeTool !== "calibrate") {
       setSnapPoint(null);
       snapPointRef.current = null;
     }
   }, [activeTool]);
-
-  /* Refs mirror state for drag tools so mouseUp always sees values set by mouseDown,
-     even if React hasn't re-rendered yet (stale closure problem). */
-  const isDraggingRef = useRef(false);
-  const dragStartRef = useRef<Point | null>(null);
 
   /* Full redraw */
   const redraw = useCallback(() => {
@@ -980,7 +988,9 @@ export function AnnotationCanvas({
           onCalibrationRequest?.(finalPoints as [Point, Point]);
           setDrawingPoints([]);
           setCursorPos(null);
+          setScreenCursor(null);
           setSnapPoint(null);
+          snapPointRef.current = null;
         } else {
           finishAnnotation(finalPoints);
         }
@@ -1027,7 +1037,9 @@ export function AnnotationCanvas({
 
     setDrawingPoints([]);
     setCursorPos(null);
+    setScreenCursor(null);
     setSnapPoint(null);
+    snapPointRef.current = null;
   }
 
   /* Cancel drawing with Escape */
@@ -1036,7 +1048,9 @@ export function AnnotationCanvas({
       if (e.key === "Escape") {
         setDrawingPoints([]);
         setCursorPos(null);
+        setScreenCursor(null);
         setSnapPoint(null);
+        snapPointRef.current = null;
         setIsDragging(false);
         isDraggingRef.current = false;
         dragStartRef.current = null;

@@ -223,7 +223,12 @@ function normalizeDetectionMeasurement(
     return { value: Number(detection.count ?? 1) || 1, unit: "count" };
   }
   const length = points.slice(1).reduce((sum, point, index) => sum + distanceBetweenPoints(points[index]!, point), 0);
-  return { value: Math.round(length * 100) / 100, length: Math.round(length * 100) / 100, unit: "px" };
+  return {
+    value: 0,
+    unit: "",
+    lengthPx: Math.round(length * 100) / 100,
+    requiresCalibration: true,
+  };
 }
 
 const DRAWING_ANALYSES_KEY = "drawingAnalyses";

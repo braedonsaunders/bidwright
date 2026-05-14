@@ -71,6 +71,7 @@ export function ComboView({
 }: ComboViewProps) {
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspect");
   const [fullscreen, setFullscreen] = useState(false);
+  const [takeoffDetached, setTakeoffDetached] = useState(false);
   const [takeoffSelection, setTakeoffSelection] = useState<TakeoffSelection | null>(null);
   const [annotationsCache, setAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
   const [linksReloadSignal, setLinksReloadSignal] = useState(0);
@@ -88,6 +89,7 @@ export function ComboView({
     setAnnotationsCache(next);
   }, []);
   const containerRef = useRef<HTMLDivElement>(null);
+  const detachedTakeoffWindowRef = useRef<Window | null>(null);
 
   // Bridge: TakeoffTab populates these refs with its action handlers so the
   // side-panel link view can trigger them without TakeoffTab having to expose
@@ -137,6 +139,24 @@ export function ComboView({
 
   const takeoffOriginId = workspaceSyncOriginId ? `${workspaceSyncOriginId}-combo` : undefined;
 
+  const handleDetachedWindowChange = useCallback((open: boolean, win?: Window | null) => {
+    detachedTakeoffWindowRef.current = open ? win ?? detachedTakeoffWindowRef.current : null;
+    setTakeoffDetached(open);
+    if (open) setRightPanelTab("entities");
+  }, []);
+
+  useEffect(() => {
+    if (!takeoffDetached) return;
+    const interval = window.setInterval(() => {
+      const win = detachedTakeoffWindowRef.current;
+      if (win && win.closed) {
+        detachedTakeoffWindowRef.current = null;
+        setTakeoffDetached(false);
+      }
+    }, 900);
+    return () => window.clearInterval(interval);
+  }, [takeoffDetached]);
+
   const layoutStorage = useMemo<LayoutStorage>(() => ({
     getItem: (key) => (typeof window === "undefined" ? null : window.localStorage.getItem(key)),
     setItem: (key, value) => {
@@ -155,6 +175,101 @@ export function ComboView({
     panelIds: ["combo-takeoff", "combo-right"],
     storage: layoutStorage,
   });
+
+  const detachedLayout = useDefaultLayout({
+    id: "combo-view-detached",
+    panelIds: ["combo-detached-entities", "combo-detached-worksheets"],
+    storage: layoutStorage,
+  });
+
+  const takeoffSurface = (
+    <TakeoffTab
+      workspace={workspace}
+      onOpenAgentChat={onOpenAgentChat}
+      onOpenRevisionDiff={onOpenRevisionDiff}
+      onWorkspaceMutated={onWorkspaceMutated}
+      detached={takeoffDetached}
+      workspaceSyncOriginId={takeoffOriginId}
+      selectedWorksheetId={selectedWorksheetId ?? null}
+      initialDocumentId={initialDocumentId}
+      selection={takeoffSelection}
+      onSelectionChange={handleTakeoffSelectionChange}
+      onAnnotationsChange={handleAnnotationsChange}
+      linksReloadSignal={linksReloadSignal}
+      onLinksMutated={handleLinksMutated}
+      modelSendToEstimateRef={modelSendToEstimateRef}
+      modelElementCreateLineItemRef={modelElementCreateLineItemRef}
+      inspectActionsRef={inspectActionsRef}
+      onOpenInspectEntities={() => setRightPanelTab("entities")}
+      onInspectSnapshotChange={handleInspectSnapshotChange}
+      onDetachedWindowChange={handleDetachedWindowChange}
+    />
+  );
+
+  if (takeoffDetached) {
+    return (
+      <div
+        ref={containerRef}
+        className={cn(
+          "relative flex flex-col flex-1 min-h-0",
+          fullscreen && "bg-bg p-2",
+        )}
+      >
+        <div className="fixed -left-[10000px] top-0 h-[720px] w-[1024px] overflow-hidden opacity-0 pointer-events-none" aria-hidden="true">
+          {takeoffSurface}
+        </div>
+        <Group
+          orientation="horizontal"
+          className="flex-1 min-h-0"
+          defaultLayout={detachedLayout.defaultLayout}
+          onLayoutChanged={detachedLayout.onLayoutChanged}
+        >
+          <Panel id="combo-detached-entities" defaultSize="25%" minSize="18%">
+            <div className="h-full min-h-0 border-r border-line bg-panel/30">
+              <RightPanel
+                workspace={workspace}
+                activeWorksheetId={activeWorksheetId}
+                tab={rightPanelTab}
+                onTabChange={setRightPanelTab}
+                onOpenAgentChat={onOpenAgentChat}
+                fullscreen={fullscreen}
+                onToggleFullscreen={toggleFullscreen}
+                takeoffSelection={takeoffSelection}
+                annotationsCache={annotationsCache}
+                onLinksMutated={handleLinksMutated}
+                onSendModelSelectionToEstimate={handleModelSendToEstimate}
+                onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
+                inspectSnapshot={inspectSnapshot}
+                inspectActionsRef={inspectActionsRef}
+              />
+            </div>
+          </Panel>
+
+          <Separator className="group relative !w-px bg-line transition-colors hover:bg-accent/60 data-[resize-active]:bg-accent">
+            <div className="absolute inset-y-0 -left-1 -right-1" />
+          </Separator>
+
+          <Panel id="combo-detached-worksheets" defaultSize="75%" minSize="45%">
+            <div className="h-full min-h-0 pl-1.5">
+              <EstimateGrid
+                workspace={workspace}
+                onApply={onApply}
+                onError={onError}
+                onRefresh={onRefresh}
+                highlightItemId={highlightItemId}
+                activeWorksheetId={activeWorksheetId}
+                onActiveWorksheetChange={onActiveWorksheetChange}
+                onOpenPluginTools={onOpenPluginTools}
+                onOpenTakeoffLink={onOpenTakeoffLink}
+                revisionImpactByItem={revisionImpactByItem}
+                onOpenRevisionDiff={onOpenRevisionDiff}
+              />
+            </div>
+          </Panel>
+        </Group>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -179,25 +294,7 @@ export function ComboView({
           >
             <Panel id="combo-takeoff" defaultSize="67%" minSize="30%">
               <div className="h-full min-h-0 flex flex-col pr-1.5 pb-1.5">
-                <TakeoffTab
-                  workspace={workspace}
-                  onOpenAgentChat={onOpenAgentChat}
-                  onOpenRevisionDiff={onOpenRevisionDiff}
-                  onWorkspaceMutated={onWorkspaceMutated}
-                  workspaceSyncOriginId={takeoffOriginId}
-                  selectedWorksheetId={selectedWorksheetId ?? null}
-                  initialDocumentId={initialDocumentId}
-                  selection={takeoffSelection}
-                  onSelectionChange={handleTakeoffSelectionChange}
-                  onAnnotationsChange={handleAnnotationsChange}
-                  linksReloadSignal={linksReloadSignal}
-                  onLinksMutated={handleLinksMutated}
-                  modelSendToEstimateRef={modelSendToEstimateRef}
-                  modelElementCreateLineItemRef={modelElementCreateLineItemRef}
-                  inspectActionsRef={inspectActionsRef}
-                  onOpenInspectEntities={() => setRightPanelTab("entities")}
-                  onInspectSnapshotChange={handleInspectSnapshotChange}
-                />
+                {takeoffSurface}
               </div>
             </Panel>
 

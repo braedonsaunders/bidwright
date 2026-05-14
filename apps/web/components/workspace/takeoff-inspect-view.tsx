@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, Save, ScanSearch, Settings2, Sigma, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, Save, ScanSearch, Settings2, Sigma, Trash2, Wand2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import { Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -52,6 +52,73 @@ export interface InspectDrawingAnalysisSnapshot {
   savingId: string | null;
   error: string | null;
   selectedDetectionId: string | null;
+  calibration: {
+    unit: string;
+    pixelsPerUnit: number;
+    analysisToPaperScaleX: number;
+    analysisToPaperScaleY: number;
+  } | null;
+}
+
+export interface InspectVisionBoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+export interface InspectSmartCountItem {
+  id: string;
+  label: string;
+  count: number;
+  confidence: "high" | "medium" | "low";
+  notes: string;
+  included: boolean;
+  isSaved: boolean;
+  isLinked: boolean;
+  annotationId: string | null;
+  bbox: InspectVisionBoundingBox | null;
+}
+
+export interface InspectSmartCountSnapshot {
+  documentId: string;
+  fileName: string;
+  pageNumber: number;
+  running: boolean;
+  savingId: string | null;
+  error: string | null;
+  cropImage: string | null;
+  bbox: InspectVisionBoundingBox | null;
+  items: InspectSmartCountItem[];
+  selectedItemId: string | null;
+}
+
+export interface InspectDwgLayerSummary {
+  name: string;
+  color: string;
+  count: number;
+  visible: boolean;
+}
+
+export interface InspectDwgLayoutSummary {
+  name: string;
+  entityCount: number;
+}
+
+export interface InspectDwgIntelligenceSnapshot {
+  documentId: string;
+  fileName: string;
+  selectedLayout: string;
+  entityCount: number;
+  visibleEntityCount: number;
+  layerCount: number;
+  annotationCount: number;
+  layouts: InspectDwgLayoutSummary[];
+  layers: InspectDwgLayerSummary[];
+  status: string | null;
+  processedAt: string | null;
 }
 
 export interface InspectPhotoBomRow {
@@ -188,6 +255,8 @@ export interface InspectSnapshot {
   selectedAnnotationId: string | null;
   editingAnnotationId: string | null;
   drawingAnalysis: InspectDrawingAnalysisSnapshot | null;
+  smartCount: InspectSmartCountSnapshot | null;
+  dwgIntelligence: InspectDwgIntelligenceSnapshot | null;
   // 3D model
   modelElements: InspectModelElement[];
   modelElementsLoading: boolean;
@@ -227,6 +296,13 @@ export interface InspectActions {
   setDrawingAnalysisOverlay: (patch: Partial<InspectDrawingAnalysisSnapshot["overlay"]>) => void;
   selectDrawingDetection: (id: string | null, kind?: InspectDrawingDetectionKind) => void;
   saveDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line") => Promise<void> | void;
+  createLineItemFromDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line", pick: InspectCategoryPick) => Promise<void> | void;
+  selectSmartCountItem: (id: string | null) => void;
+  toggleSmartCountItem: (id: string) => void;
+  saveSmartCountItem: (id: string) => Promise<void> | void;
+  createLineItemFromSmartCountItem: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
+  saveSelectedSmartCountItems: () => Promise<void> | void;
+  clearSmartCountResults: () => void;
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
@@ -309,6 +385,10 @@ export function TakeoffInspectView({
     return <PdfEntitiesInspect snapshot={snapshot} actions={actions} />;
   }
 
+  if (snapshot.mode === "dwg" && snapshot.dwgIntelligence) {
+    return <DwgEntitiesInspect snapshot={snapshot} actions={actions} />;
+  }
+
   return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
 }
 
@@ -333,12 +413,256 @@ function PdfEntitiesInspect({
   const [showSettings, setShowSettings] = useState(false);
   return (
     <div className="flex h-full flex-col gap-2 text-xs">
+      <SmartCountInspect snapshot={snapshot} actions={actions} />
       <DrawingAnalysisInspect
         snapshot={snapshot}
         actions={actions}
         showSettings={showSettings}
         onToggleSettings={() => setShowSettings((value) => !value)}
       />
+      <div className="min-h-0 flex-1 border-t border-line/70 pt-2">
+        <AnnotationsInspect snapshot={snapshot} actions={actions} />
+      </div>
+    </div>
+  );
+}
+
+function SmartCountInspect({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  const smart = snapshot.smartCount;
+  if (!smart) return null;
+
+  const totalSelected = smart.items.reduce((sum, item) => sum + (item.included ? item.count : 0), 0);
+  const selectedUnsaved = smart.items.some((item) => item.included && !item.isSaved);
+  const confidenceClass = (confidence: InspectSmartCountItem["confidence"]) =>
+    confidence === "high"
+      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-600"
+      : confidence === "medium"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-600"
+        : "border-rose-500/30 bg-rose-500/10 text-rose-600";
+
+  return (
+    <div className="shrink-0 rounded-md border border-line bg-panel/50 p-2">
+      <div className="flex items-start gap-2">
+        <Wand2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-500" />
+        <div className="min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={() => setCollapsed((value) => !value)}
+            className="flex max-w-full items-center gap-1 text-left"
+          >
+            {collapsed ? <ChevronRight className="h-3 w-3 text-fg/40" /> : <ChevronDown className="h-3 w-3 text-fg/40" />}
+            <span className="truncate text-[11px] font-semibold text-fg">Smart Count</span>
+          </button>
+          <p className="mt-0.5 truncate text-[10px] text-fg/40" title={smart.fileName}>
+            Page {smart.pageNumber} · {smart.items.length} row{smart.items.length === 1 ? "" : "s"} · {totalSelected.toLocaleString()} selected
+          </p>
+        </div>
+        {smart.running && <Loader2 className="mt-1 h-3.5 w-3.5 shrink-0 animate-spin text-emerald-500" />}
+        <button
+          type="button"
+          onClick={() => void actions?.saveSelectedSmartCountItems()}
+          disabled={!selectedUnsaved || smart.running}
+          title="Save selected Smart Count rows as takeoff marks"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-bg/40 px-2 text-[10px] font-medium text-fg/70 transition-colors hover:border-emerald-500/35 hover:text-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          <Save className="h-3 w-3" />
+          Save selected
+        </button>
+        <button
+          type="button"
+          onClick={() => actions?.clearSmartCountResults()}
+          title="Clear Smart Count results"
+          className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-line bg-bg/40 text-fg/40 transition-colors hover:border-danger/30 hover:text-danger"
+        >
+          <X className="h-3 w-3" />
+        </button>
+      </div>
+
+      {!collapsed && (
+        <>
+          {(smart.cropImage || smart.error) && (
+            <div className="mt-2 flex gap-2">
+              {smart.cropImage && (
+                <div className="shrink-0 rounded-md border border-line bg-white p-1">
+                  <img src={smart.cropImage} alt="Smart Count region" className="h-16 w-16 object-contain" />
+                </div>
+              )}
+              <div className="min-w-0 flex-1">
+                {smart.error && (
+                  <p className="rounded-md border border-warning/25 bg-warning/10 px-2 py-1.5 text-[10px] text-warning">
+                    {smart.error}
+                  </p>
+                )}
+                {smart.running && (
+                  <p className="rounded-md border border-emerald-500/20 bg-emerald-500/5 px-2 py-1.5 text-[10px] text-emerald-600">
+                    Counting distinct symbols in the selected region.
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="mt-2 max-h-[34vh] space-y-1 overflow-auto pr-1">
+            {smart.items.length === 0 && !smart.running ? (
+              <p className="rounded-md border border-line bg-bg/30 px-3 py-3 text-center text-[11px] text-fg/40">
+                Draw a Smart Count region from Count &gt; Smart Count to populate native rows here.
+              </p>
+            ) : smart.items.map((item) => (
+              <div
+                key={item.id}
+                onClick={() => actions?.selectSmartCountItem(item.id)}
+                className={cn(
+                  "group flex cursor-pointer items-center gap-2 rounded-md border px-1.5 py-1.5 transition-colors",
+                  smart.selectedItemId === item.id
+                    ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
+                    : item.isLinked
+                      ? "border-success/25 bg-success/5 hover:bg-panel2/35"
+                      : "border-transparent hover:border-line hover:bg-panel2/35",
+                  !item.included && "opacity-55",
+                )}
+              >
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    actions?.toggleSmartCountItem(item.id);
+                  }}
+                  className={cn(
+                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                    item.included ? "border-emerald-500 bg-emerald-500 text-white" : "border-line bg-bg/40 text-transparent",
+                  )}
+                  title={item.included ? "Exclude from selected batch" : "Include in selected batch"}
+                >
+                  <Check className="h-3 w-3" />
+                </button>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1">
+                    <p className="truncate text-[11px] font-medium text-fg/80">{item.label}</p>
+                    {item.isLinked ? (
+                      <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent">
+                        <Link2 className="h-2 w-2" />
+                        Linked
+                      </span>
+                    ) : item.isSaved ? (
+                      <span className="shrink-0 rounded-full bg-success/12 px-1 py-0.5 text-[9px] font-medium text-success">
+                        Saved
+                      </span>
+                    ) : null}
+                  </div>
+                  <p className="truncate text-[10px] text-fg/40">{item.notes || "AI-derived count row"}</p>
+                </div>
+                <span className={cn("shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium capitalize", confidenceClass(item.confidence))}>
+                  {item.confidence}
+                </span>
+                <span className="w-10 shrink-0 text-right font-mono text-sm font-semibold tabular-nums text-emerald-500">
+                  x{item.count.toLocaleString()}
+                </span>
+                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                  {!item.isLinked && (
+                    <AddToCategoryPopover
+                      snapshot={snapshot}
+                      actions={actions}
+                      onPick={(pick) => void actions?.createLineItemFromSmartCountItem(item.id, pick)}
+                      triggerLabel="Add"
+                      triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      triggerTitle="Add this Smart Count row to a worksheet — pick a category"
+                      triggerIcon={<Plus className="h-3 w-3" />}
+                    />
+                  )}
+                  {!item.isSaved && (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void actions?.saveSmartCountItem(item.id);
+                      }}
+                      disabled={smart.savingId === item.id}
+                      title="Save as takeoff mark"
+                      className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-emerald-500/10 hover:text-emerald-500 disabled:cursor-wait"
+                    >
+                      {smart.savingId === item.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                    </button>
+                  )}
+                  <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function DwgEntitiesInspect({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const intel = snapshot.dwgIntelligence;
+  if (!intel) return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
+  const visibleLayers = intel.layers.filter((layer) => layer.visible).length;
+  const topLayers = intel.layers.slice(0, 18);
+
+  return (
+    <div className="flex h-full flex-col gap-2 text-xs">
+      <div className="shrink-0 rounded-md border border-line bg-panel/50 p-2">
+        <div className="flex items-start gap-2">
+          <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[11px] font-semibold text-fg">Drawing intelligence</p>
+            <p className="mt-0.5 truncate text-[10px] text-fg/40" title={intel.fileName}>
+              {intel.selectedLayout === "__all__" ? "All layouts" : intel.selectedLayout}
+              {intel.processedAt ? ` · processed ${new Date(intel.processedAt).toLocaleDateString()}` : ""}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-2 grid grid-cols-4 gap-1">
+          <AnalysisStat label="Entities" value={intel.entityCount} />
+          <AnalysisStat label="Visible" value={intel.visibleEntityCount} />
+          <AnalysisStat label="Layers" value={intel.layerCount} />
+          <AnalysisStat label="Marks" value={intel.annotationCount} />
+        </div>
+
+        <div className="mt-2 rounded-md border border-line/70 bg-bg/35 p-2">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-fg/40">
+              Layer intelligence
+            </p>
+            <span className="text-[10px] text-fg/35">{visibleLayers}/{intel.layerCount} visible</span>
+          </div>
+          <div className="mt-2 max-h-48 space-y-1 overflow-auto pr-1">
+            {topLayers.length === 0 ? (
+              <p className="rounded-md border border-line bg-panel/40 px-2 py-3 text-center text-[11px] text-fg/40">
+                No parsed layers yet.
+              </p>
+            ) : topLayers.map((layer) => (
+              <div
+                key={layer.name}
+                className={cn(
+                  "flex items-center gap-2 rounded-md border px-2 py-1.5",
+                  layer.visible ? "border-line/70 bg-panel/60" : "border-transparent bg-panel/30 opacity-55",
+                )}
+              >
+                <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: layer.color }} />
+                <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-fg/70">{layer.name}</span>
+                <span className="font-mono text-[10px] text-fg/40">{layer.count}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
       <div className="min-h-0 flex-1 border-t border-line/70 pt-2">
         <AnnotationsInspect snapshot={snapshot} actions={actions} />
       </div>
@@ -357,6 +681,29 @@ function DrawingAnalysisInspect({
   showSettings: boolean;
   onToggleSettings: () => void;
 }) {
+  const [query, setQuery] = useState("");
+  const linkedAnnotationIds = useMemo(
+    () => new Set(snapshot.takeoffLinks.map((link) => link.annotationId)),
+    [snapshot.takeoffLinks],
+  );
+
+  const detectionAnnotationIndex = useMemo(() => {
+    const map = new Map<string, TakeoffAnnotation[]>();
+    for (const ann of snapshot.annotations) {
+      const metadata = (ann.opts ?? {}) as Record<string, unknown>;
+      const keys = [
+        typeof metadata.detectionId === "string" ? metadata.detectionId : "",
+        typeof metadata.systemId === "string" ? metadata.systemId : "",
+      ].filter(Boolean);
+      for (const key of keys) {
+        const arr = map.get(key) ?? [];
+        arr.push(ann);
+        map.set(key, arr);
+      }
+    }
+    return map;
+  }, [snapshot.annotations]);
+
   const drawing = snapshot.drawingAnalysis;
   if (!drawing) return null;
   const { analysis, settings, overlay, running, savingId, selectedDetectionId } = drawing;
@@ -365,6 +712,28 @@ function DrawingAnalysisInspect({
   const circles = analysis?.circles ?? [];
   const lines = analysis?.lines ?? [];
   const texts = analysis?.textRegions ?? [];
+  const formatDetectedLength = (lengthPx: number) => {
+    if (!drawing.calibration || drawing.calibration.pixelsPerUnit <= 0) {
+      return "Scale needed";
+    }
+    const paperPx = lengthPx * ((drawing.calibration.analysisToPaperScaleX + drawing.calibration.analysisToPaperScaleY) / 2);
+    const value = paperPx / drawing.calibration.pixelsPerUnit;
+    return `${value.toFixed(value >= 100 ? 0 : 2)} ${drawing.calibration.unit}`;
+  };
+
+  const linkedStateFor = (id: string) => {
+    const savedAnnotations = detectionAnnotationIndex.get(id) ?? [];
+    return {
+      savedCount: savedAnnotations.length,
+      linkCount: savedAnnotations.filter((ann) => linkedAnnotationIds.has(ann.id)).length,
+    };
+  };
+
+  const matchesQuery = (row: DetectionRow) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return [row.title, row.subtitle, row.detail, row.kind].filter(Boolean).some((value) => String(value).toLowerCase().includes(q));
+  };
 
   return (
     <div className="shrink-0 rounded-md border border-line bg-panel/50 p-2">
@@ -491,81 +860,131 @@ function DrawingAnalysisInspect({
       )}
 
       {analysis ? (
+        <div className="mt-2">
+          <Input
+            className="h-7 text-xs"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Filter detected entities..."
+          />
+        </div>
+      ) : null}
+
+      {analysis ? (
         <div className="mt-2 max-h-[42vh] space-y-2 overflow-auto pr-1">
           <DetectionGroup
             title="Traced systems"
             count={systems.length}
-            rows={systems.slice(0, 80).map((system) => ({
-              id: system.id,
-              kind: "system" as const,
-              title: system.label,
-              subtitle: `${system.segmentCount} segments · ${Math.round(system.lengthPx).toLocaleString()} px · ${Math.round(system.confidence * 100)}%`,
-              detail: `${system.counts.openEnds} ends · ${system.counts.tees} tees · ${system.counts.elbows45 + system.counts.elbows90} elbows`,
-              selected: selectedDetectionId === system.id,
-              saving: savingId === system.id,
-            }))}
+            rows={systems.map((system) => {
+              const state = linkedStateFor(system.id);
+              return {
+                id: system.id,
+                kind: "system" as const,
+                title: system.label,
+                subtitle: `${system.segmentCount} segments · ${formatDetectedLength(system.lengthPx)} · ${Math.round(system.confidence * 100)}%`,
+                detail: `${system.counts.openEnds} ends · ${system.counts.tees} tees · ${system.counts.elbows45 + system.counts.elbows90} elbows`,
+                selected: selectedDetectionId === system.id,
+                saving: savingId === system.id,
+                color: "#0ea5e9",
+                requiresCalibration: !drawing.calibration,
+                ...state,
+              };
+            }).filter(matchesQuery)}
+            snapshot={snapshot}
+            actions={actions}
             onSelect={(id) => actions?.selectDrawingDetection(id, "system")}
             onSave={(id) => void actions?.saveDrawingDetection(id, "system")}
+            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "system", pick)}
           />
           <DetectionGroup
             title="Symbol candidates"
             count={symbols.length}
             icon={<CircleDashed className="h-3 w-3 text-amber-500" />}
-            rows={symbols.slice(0, 80).map((symbol, index) => ({
-              id: symbol.id,
-              kind: "symbol" as const,
-              title: `Candidate ${index + 1}`,
-              subtitle: `${Math.round(symbol.w)} x ${Math.round(symbol.h)} px · ${Math.round(symbol.confidence * 100)}%`,
-              selected: selectedDetectionId === symbol.id,
-              saving: savingId === symbol.id,
-            }))}
+            rows={symbols.map((symbol, index) => {
+              const state = linkedStateFor(symbol.id);
+              return {
+                id: symbol.id,
+                kind: "symbol" as const,
+                title: `Candidate ${index + 1}`,
+                subtitle: `${Math.round(symbol.w)} x ${Math.round(symbol.h)} px · ${Math.round(symbol.confidence * 100)}%`,
+                selected: selectedDetectionId === symbol.id,
+                saving: savingId === symbol.id,
+                color: "#f59e0b",
+                ...state,
+              };
+            }).filter(matchesQuery)}
+            snapshot={snapshot}
+            actions={actions}
             onSelect={(id) => actions?.selectDrawingDetection(id, "symbol")}
             onSave={(id) => void actions?.saveDrawingDetection(id, "symbol")}
+            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "symbol", pick)}
           />
           {circles.length > 0 && (
             <DetectionGroup
               title="Circles"
               count={circles.length}
-              rows={circles.slice(0, 40).map((circle) => ({
-                id: circle.id,
-                kind: "circle" as const,
-                title: circle.id,
-                subtitle: `R ${Math.round(circle.radius)} px · ${Math.round(circle.confidence * 100)}%`,
-                selected: selectedDetectionId === circle.id,
-                saving: savingId === circle.id,
-              }))}
+              rows={circles.map((circle) => {
+                const state = linkedStateFor(circle.id);
+                return {
+                  id: circle.id,
+                  kind: "circle" as const,
+                  title: circle.id,
+                  subtitle: `R ${Math.round(circle.radius)} px · ${Math.round(circle.confidence * 100)}%`,
+                  selected: selectedDetectionId === circle.id,
+                  saving: savingId === circle.id,
+                  color: "#ec4899",
+                  ...state,
+                };
+              }).filter(matchesQuery)}
+              snapshot={snapshot}
+              actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "circle")}
               onSave={(id) => void actions?.saveDrawingDetection(id, "circle")}
+              onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "circle", pick)}
             />
           )}
           {lines.length > 0 && (
             <DetectionGroup
               title="Linework"
               count={lines.length}
-              rows={lines.slice(0, 80).map((line) => ({
-                id: line.id,
-                kind: "line" as const,
-                title: line.id,
-                subtitle: `${Math.round(line.lengthPx)} px · ${Math.round(line.confidence * 100)}%`,
-                selected: selectedDetectionId === line.id,
-                saving: savingId === line.id,
-              }))}
+              rows={lines.map((line) => {
+                const state = linkedStateFor(line.id);
+                return {
+                  id: line.id,
+                  kind: "line" as const,
+                  title: line.id,
+                  subtitle: `${formatDetectedLength(line.lengthPx)} · ${Math.round(line.confidence * 100)}%`,
+                  selected: selectedDetectionId === line.id,
+                  saving: savingId === line.id,
+                  color: "#38bdf8",
+                  requiresCalibration: !drawing.calibration,
+                  ...state,
+                };
+              }).filter(matchesQuery)}
+              snapshot={snapshot}
+              actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "line")}
               onSave={(id) => void actions?.saveDrawingDetection(id, "line")}
+              onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "line", pick)}
             />
           )}
           {texts.length > 0 && (
             <DetectionGroup
               title="Text regions"
               count={texts.length}
-              rows={texts.slice(0, 40).map((region) => ({
+              rows={texts.map((region) => ({
                 id: region.id,
                 kind: "text" as const,
                 title: region.id,
                 subtitle: `${Math.round(region.w)} x ${Math.round(region.h)} px`,
                 selected: selectedDetectionId === region.id,
                 saving: false,
-              }))}
+                savedCount: 0,
+                linkCount: 0,
+                color: "#64748b",
+              })).filter(matchesQuery)}
+              snapshot={snapshot}
+              actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "text")}
             />
           )}
@@ -646,6 +1065,10 @@ type DetectionRow = {
   detail?: string;
   selected: boolean;
   saving: boolean;
+  savedCount: number;
+  linkCount: number;
+  color: string;
+  requiresCalibration?: boolean;
 };
 
 function DetectionGroup({
@@ -653,17 +1076,24 @@ function DetectionGroup({
   count,
   rows,
   icon,
+  snapshot,
+  actions,
   onSelect,
   onSave,
+  onAdd,
 }: {
   title: string;
   count: number;
   rows: DetectionRow[];
   icon?: React.ReactNode;
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
   onSelect: (id: string) => void;
   onSave?: (id: string) => void;
+  onAdd?: (id: string, kind: Exclude<InspectDrawingDetectionKind, "text">, pick: InspectCategoryPick) => void;
 }) {
   const [collapsed, setCollapsed] = useState(false);
+  const shownCount = rows.length;
   return (
     <section>
       <button
@@ -674,7 +1104,9 @@ function DetectionGroup({
         {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
         {icon}
         <span className="min-w-0 flex-1 truncate">{title}</span>
-        <span className="font-mono text-[10px] text-fg/35">{count.toLocaleString()}</span>
+        <span className="font-mono text-[10px] text-fg/35">
+          {shownCount === count ? count.toLocaleString() : `${shownCount.toLocaleString()}/${count.toLocaleString()}`}
+        </span>
       </button>
       {!collapsed && (
         <div className="ml-2 space-y-0.5">
@@ -685,30 +1117,73 @@ function DetectionGroup({
               key={row.id}
               onClick={() => onSelect(row.id)}
               className={cn(
-                "group flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
-                row.selected ? "border-sky-500/35 bg-sky-500/10" : "border-transparent hover:border-line hover:bg-panel2/35",
+                "group flex cursor-pointer items-center gap-2 rounded-md border px-1.5 py-1.5 transition-colors",
+                row.selected
+                  ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
+                  : row.linkCount > 0
+                    ? "border-success/25 bg-success/5 hover:bg-panel2/35"
+                    : "border-transparent hover:border-line hover:bg-panel2/35",
               )}
             >
-              <LocateFixed className="h-3 w-3 shrink-0 text-fg/35 group-hover:text-sky-500" />
+              <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-[11px] font-medium text-fg/75">{row.title}</p>
+                <div className="flex items-center gap-1">
+                  <p className="truncate text-[11px] font-medium text-fg/80">{row.title}</p>
+                  {row.linkCount > 0 ? (
+                    <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent">
+                      <Link2 className="h-2 w-2" />
+                      {row.linkCount}
+                    </span>
+                  ) : row.savedCount > 0 ? (
+                    <span className="shrink-0 rounded-full bg-success/12 px-1 py-0.5 text-[9px] font-medium text-success">
+                      Saved
+                    </span>
+                  ) : null}
+                </div>
                 <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>
                 {row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
               </div>
-              {onSave && (
+              <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              {onAdd && row.kind !== "text" && row.linkCount === 0 && (
+                row.requiresCalibration ? (
+                  <button
+                    type="button"
+                    disabled
+                    title="Set drawing scale before adding linear detections to a worksheet"
+                    className="inline-flex h-6 items-center gap-1 rounded-md border border-warning/25 bg-warning/10 px-1.5 text-[10px] font-medium text-warning/70 disabled:cursor-not-allowed"
+                  >
+                    <Plus className="h-3 w-3" />
+                    Add
+                  </button>
+                ) : (
+                <AddToCategoryPopover
+                  snapshot={snapshot}
+                  actions={actions}
+                  onPick={(pick) => onAdd(row.id, row.kind as Exclude<InspectDrawingDetectionKind, "text">, pick)}
+                  triggerLabel="Add"
+                  triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                  triggerTitle="Add this detected entity to a worksheet — pick a category"
+                  triggerIcon={<Plus className="h-3 w-3" />}
+                />
+                )
+              )}
+              {onSave && row.kind !== "text" && row.savedCount === 0 && (
                 <button
                   type="button"
                   onClick={(event) => {
                     event.stopPropagation();
+                    if (row.requiresCalibration) return;
                     onSave(row.id);
                   }}
-                  disabled={row.saving}
-                  title="Save as takeoff mark"
-                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 opacity-0 transition-opacity hover:bg-sky-500/10 hover:text-sky-500 group-hover:opacity-100 disabled:opacity-60"
+                  disabled={row.saving || row.requiresCalibration}
+                  title={row.requiresCalibration ? "Set drawing scale before saving linear detections" : "Save as takeoff mark"}
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-sky-500/10 hover:text-sky-500 disabled:cursor-not-allowed disabled:text-warning/45"
                 >
                   {row.saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
                 </button>
               )}
+              <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
+              </div>
             </div>
           ))}
         </div>
