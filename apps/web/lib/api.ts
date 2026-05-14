@@ -4929,6 +4929,36 @@ export interface DrawingCircleDetection {
   source: string;
 }
 
+export interface DrawingPolylineDetection {
+  id: string;
+  source: string;
+  systemId?: string | null;
+  label?: string | null;
+  segmentIds: string[];
+  pointCount: number;
+  points: Array<{ x: number; y: number }>;
+  pointLimitApplied?: boolean;
+  lengthPx: number;
+  bbox: DrawingGeometryBounds;
+  closed: boolean;
+  confidence: number;
+}
+
+export interface DrawingContourDetection {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  area: number;
+  perimeter: number;
+  pointCount: number;
+  points: Array<{ x: number; y: number }>;
+  bbox: DrawingGeometryBounds;
+  confidence: number;
+  source: string;
+}
+
 export interface DrawingSymbolCandidate {
   id: string;
   x: number;
@@ -4991,17 +5021,23 @@ export interface DrawingGeometryAnalysisResult {
   imageHeight: number;
   pageWidth?: number;
   pageHeight?: number;
+  analysisId?: string;
+  scaleMetadata?: Record<string, unknown>;
   preprocessing?: Record<string, unknown>;
   summary: {
     lineCount: number;
+    polylineCount: number;
     circleCount: number;
+    contourCount: number;
     symbolCandidateCount: number;
     textRegionCount: number;
     systemCount: number;
     totalSystemLengthPx: number;
   };
   lines: DrawingLineSegment[];
+  polylines: DrawingPolylineDetection[];
   circles: DrawingCircleDetection[];
+  contours: DrawingContourDetection[];
   symbolCandidates: DrawingSymbolCandidate[];
   textRegions: DrawingTextRegion[];
   systems: DrawingTracedSystem[];
@@ -5077,6 +5113,7 @@ export async function saveDrawingDetectionsAsAnnotations(input: {
   pageNumber: number;
   imageWidth: number;
   imageHeight: number;
+  analysisId?: string;
   groupName?: string;
   color?: string;
   detections: DrawingDetectionToSave[];

@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { apiPost, getProjectId } from "../api-client.js";
+import { apiGet, apiPost, getProjectId } from "../api-client.js";
 
 /**
  * Vision tools for the MCP server — gives the Claude Code CLI agent
@@ -34,6 +34,65 @@ const drawingAnalysisPresetSchema = z.enum([
   "civil_linear",
   "structural",
 ]);
+
+function imageBase64(dataUrl: unknown) {
+  const match = String(dataUrl ?? "").match(/^data:image\/png;base64,(.+)$/);
+  return match?.[1] ?? null;
+}
+
+function asToolRecord(value: unknown): Record<string, any> {
+  return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
+}
+
+function asToolArray(value: unknown): any[] {
+  return Array.isArray(value) ? value : [];
+}
+
+function layerDiscipline(nameValue: unknown) {
+  const name = String(nameValue ?? "").toLowerCase();
+  if (/pipe|piping|valve|pump|mech|process|hydronic|steam|gas/.test(name)) return "mechanical_piping";
+  if (/plumb|sanitary|domestic|storm|waste|vent/.test(name)) return "plumbing";
+  if (/fire|sprinkler|fp-|f[-_ ]?protection/.test(name)) return "fire_protection";
+  if (/duct|hvac|air|supply|return|exhaust/.test(name)) return "ductwork";
+  if (/elec|power|light|conduit|cable|panel|device/.test(name)) return "electrical";
+  if (/struct|steel|beam|column|foundation|rebar|anchor/.test(name)) return "structural";
+  if (/civil|site|utility|storm|sewer|water|road|grade/.test(name)) return "civil_linear";
+  if (/text|anno|note|dim|tag|label|title/.test(name)) return "annotation_text";
+  if (/border|title|sheet/.test(name)) return "sheet_border_title";
+  return "unknown";
+}
+
+function bboxFromAny(value: unknown) {
+  const record = asToolRecord(value);
+  const bbox = asToolRecord(record.bbox ?? record.rect ?? value);
+  const x = Number(bbox.x ?? record.x);
+  const y = Number(bbox.y ?? record.y);
+  const width = Number(bbox.width ?? bbox.w ?? record.width ?? record.w);
+  const height = Number(bbox.height ?? bbox.h ?? record.height ?? record.h);
+  if (![x, y, width, height].every(Number.isFinite)) return null;
+  return { x, y, width, height };
+}
+
+function bboxIntersects(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
+  return a.x <= b.x + b.width && a.x + a.width >= b.x && a.y <= b.y + b.height && a.y + a.height >= b.y;
+}
+
+function paddedRegion(region: { x: number; y: number; width: number; height: number; imageWidth: number; imageHeight: number }, paddingRatio: number) {
+  const padX = region.width * paddingRatio;
+  const padY = region.height * paddingRatio;
+  const x = Math.max(0, region.x - padX);
+  const y = Math.max(0, region.y - padY);
+  const maxWidth = Math.max(1, region.imageWidth - x);
+  const maxHeight = Math.max(1, region.imageHeight - y);
+  return {
+    x: Math.round(x),
+    y: Math.round(y),
+    width: Math.round(Math.min(maxWidth, region.width + padX * 2)),
+    height: Math.round(Math.min(maxHeight, region.height + padY * 2)),
+    imageWidth: region.imageWidth,
+    imageHeight: region.imageHeight,
+  };
+}
 
 function isIgnoredSourceDocument(fileName: unknown) {
   const name = String(fileName ?? "").toLowerCase();
@@ -208,7 +267,7 @@ COMMON PITFALLS:
 - The zoomed image dimensions are different from the original — always use ORIGINAL coordinates for countSymbols
 - Make the region large enough to see context around the symbol (add 20-30% padding)`,
     {
-      documentId: z.string().describe("Document ID of the PDF drawing"),
+      documentId: z.string().describe("Document ID of the PDF/DXF/DWG drawing"),
       pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
       region: z.object(boundingBoxSchema).describe("Region to zoom into — coordinates from a previous renderDrawingPage result"),
     },
@@ -291,7 +350,7 @@ COMMON PITFALLS:
 - Providing too small a bounding box (clipping the symbol) also reduces accuracy
 - Without crossScale, a template from one CAD source may not match a different source's rendering of the same symbol`,
     {
-      documentId: z.string().describe("Document ID of the PDF drawing"),
+      documentId: z.string().describe("Document ID of the PDF/DXF/DWG drawing"),
       pageNumber: z.coerce.number().min(1).describe("Page number to search (1-based)"),
       boundingBox: z.object(boundingBoxSchema).describe("Bounding box around ONE example of the symbol to find — in renderDrawingPage coordinate space"),
       threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold. 0.75 is optimal (proven across 5 packages). Lower = more matches, higher = stricter"),
@@ -349,6 +408,100 @@ COMMON PITFALLS:
               savedCount: saveResult.savedCount,
               saveErrors: saveResult.errors.length ? saveResult.errors : undefined,
             } : {}),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── countDrawingSymbol ───────────────────────────────────
+  server.tool(
+    "countDrawingSymbol",
+    `Count a specific drawing symbol with the reusable DrawingDetection schema.
+
+WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use renderDrawingPage/zoomDrawingRegion first, then pass one tight representative symbol box. The response includes both raw matches and detections shaped for saveDetectionsAsTakeoffMarks.`,
+    {
+      documentId: z.string().describe("Document ID of the PDF drawing"),
+      pageNumber: z.coerce.number().min(1).describe("Page number to search"),
+      boundingBox: z.object(boundingBoxSchema).describe("Tight box around one clean example of the symbol, in renderDrawingPage coordinate space"),
+      label: z.string().default("Counted symbol").describe("Label to use for returned/saved detections"),
+      threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match threshold"),
+      crossScale: z.boolean().default(false).describe("Enable multi-scale matching"),
+      autoSave: z.boolean().default(false).describe("Persist detections immediately as takeoff marks after counting"),
+    },
+    async ({ documentId, pageNumber, boundingBox, label, threshold, crossScale, autoSave }) => {
+      const result = await apiPost("/api/vision/count-symbols", {
+        projectId: getProjectId(),
+        documentId,
+        pageNumber,
+        boundingBox,
+        threshold,
+        crossScale,
+      });
+
+      if (!result.success) {
+        return { content: [{ type: "text" as const, text: `Symbol count failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
+      }
+
+      const matches = asToolArray(result.matches);
+      const detections = matches.map((match, index) => {
+        const rect = asToolRecord(match.rect);
+        return {
+          id: `symbol-${pageNumber}-${index + 1}`,
+          kind: "symbol",
+          label,
+          annotationType: "count",
+          color: "#22c55e",
+          points: [{ x: Number(rect.x), y: Number(rect.y) }],
+          confidence: Number(match.confidence ?? 0),
+          source: "opencv-template-match",
+          measurement: { value: 1, unit: "count" },
+          metadata: {
+            rect,
+            method: match.detection_method ?? match.method ?? "template_matching",
+            threshold,
+            crossScale,
+          },
+        };
+      });
+
+      let saveResult: any = null;
+      if (autoSave && detections.length > 0) {
+        saveResult = await apiPost("/api/vision/save-detections-as-annotations", {
+          projectId: getProjectId(),
+          documentId,
+          pageNumber,
+          imageWidth: boundingBox.imageWidth,
+          imageHeight: boundingBox.imageHeight,
+          groupName: label,
+          color: "#22c55e",
+          detections,
+        });
+      }
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            documentId,
+            pageNumber,
+            label,
+            totalCount: result.totalCount ?? detections.length,
+            threshold,
+            crossScale,
+            imageWidth: boundingBox.imageWidth,
+            imageHeight: boundingBox.imageHeight,
+            detections,
+            rawMatches: matches.map((match) => ({
+              rect: match.rect,
+              confidence: match.confidence,
+              method: match.detection_method ?? match.method,
+              text: match.text || undefined,
+            })),
+            autoSaved: autoSave ? {
+              savedCount: saveResult?.savedCount ?? 0,
+              errors: saveResult?.errors?.length ? saveResult.errors : undefined,
+            } : undefined,
           }, null, 2),
         }],
       };
@@ -546,6 +699,93 @@ TIPS:
     }
   );
 
+  // ── findDrawingSymbolCandidates ───────────────────────────
+  server.tool(
+    "findDrawingSymbolCandidates",
+    `Find symbol-like regions on a drawing and optionally return thumbnails.
+
+WHEN TO USE: Use this as the agent equivalent of symbol discovery before choosing one candidate to count. It returns reusable coordinates in the page image coordinate space plus optional high-resolution crop thumbnails for visual review.`,
+    {
+      documentId: z.string().describe("Document ID of the PDF drawing"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number"),
+      minSize: z.coerce.number().default(20).describe("Minimum symbol dimension in pixels"),
+      maxSize: z.coerce.number().default(150).describe("Maximum symbol dimension in pixels"),
+      limit: z.coerce.number().min(1).max(80).default(30).describe("Maximum candidates to return in JSON"),
+      includeThumbnails: z.boolean().default(true).describe("Include image thumbnails for the top candidates"),
+      thumbnailLimit: z.coerce.number().min(0).max(12).default(6).describe("Maximum thumbnails to emit"),
+    },
+    async ({ documentId, pageNumber, minSize, maxSize, limit, includeThumbnails, thumbnailLimit }) => {
+      const result = await apiPost("/api/vision/find-symbols", {
+        projectId: getProjectId(),
+        documentId,
+        pageNumber,
+        minSize,
+        maxSize,
+      });
+
+      if (!result.success) {
+        return { content: [{ type: "text" as const, text: `Symbol candidate search failed: ${result.error ?? result.message ?? "unknown error"}` }] };
+      }
+
+      const candidates = asToolArray(result.candidates).slice(0, limit).map((candidate, index) => ({
+        id: candidate.id ?? `sym-${index + 1}`,
+        x: candidate.x,
+        y: candidate.y,
+        w: candidate.w,
+        h: candidate.h,
+        cx: candidate.cx,
+        cy: candidate.cy,
+        area: candidate.area,
+        aspect: candidate.aspect,
+        confidence: candidate.confidence ?? 0.52,
+        source: candidate.source ?? "connected-component",
+        bbox: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
+        thumbnailIndex: includeThumbnails && index < thumbnailLimit ? index + 1 : undefined,
+      }));
+
+      const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+      if (includeThumbnails && thumbnailLimit > 0) {
+        for (const candidate of candidates.slice(0, thumbnailLimit)) {
+          const region = paddedRegion({
+            x: Number(candidate.x),
+            y: Number(candidate.y),
+            width: Number(candidate.w),
+            height: Number(candidate.h),
+            imageWidth: Number(result.imageWidth),
+            imageHeight: Number(result.imageHeight),
+          }, 0.35);
+          const crop = await apiPost("/api/vision/render-page", {
+            projectId: getProjectId(),
+            documentId,
+            pageNumber,
+            dpi: 300,
+            region,
+          }).catch(() => null);
+          const base64 = imageBase64(crop?.image);
+          if (base64) {
+            content.push({ type: "image" as const, data: base64, mimeType: "image/png" as const });
+          }
+        }
+      }
+
+      content.push({
+        type: "text" as const,
+        text: JSON.stringify({
+          documentId,
+          pageNumber,
+          imageWidth: result.imageWidth,
+          imageHeight: result.imageHeight,
+          total: result.total,
+          returned: candidates.length,
+          candidates,
+          note: "Use candidate.bbox as a starting point for countDrawingSymbol, but tighten the box after visual review if needed.",
+        }, null, 2),
+      });
+
+      return { content };
+    }
+  );
+
   // ── scanDrawingSymbols ────────────────────────────────────
   server.tool(
     "scanDrawingSymbols",
@@ -680,44 +920,87 @@ OUTPUT: Compact JSON with summary, coordinate space, top line segments, circles,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
       pageNumber: z.coerce.number().min(1).default(1).describe("Page number to analyze"),
+      geometrySource: z.enum(["auto", "pdf_raster", "cad_native"]).default("auto").describe("Use pdf_raster for PDF/image OpenCV, cad_native for DXF/DWG entity analysis, or auto to try PDF then CAD"),
+      sourceKind: z.enum(["source_document", "file_node"]).default("source_document").describe("Source kind for CAD-native DXF/DWG analysis"),
+      refreshCadMetadata: z.boolean().default(false).describe("Refresh cached DXF/DWG metadata before CAD-native analysis"),
       preset: drawingAnalysisPresetSchema.default("generic").describe("Trade/use-case preset for the generic CV engine"),
       traceSystems: z.boolean().default(true).describe("Group connected linework into candidate systems/runs"),
       includeSymbols: z.boolean().default(true).describe("Include symbol-like connected-component candidates"),
       includeTextRegions: z.boolean().default(true).describe("Include dense text-region candidates"),
       includeCircles: z.boolean().default(true).describe("Include circular detections"),
       maxLines: z.coerce.number().min(50).max(3000).default(800).describe("Maximum line segments to return"),
+      maxEntities: z.coerce.number().min(50).max(5000).default(1200).describe("Maximum CAD-native entities to return when geometrySource is cad_native"),
       maxRegions: z.coerce.number().min(20).max(500).default(120).describe("Maximum candidates per non-line category"),
       minLineLength: z.coerce.number().min(5).optional().describe("Optional minimum detected line length in pixels"),
       snapTolerance: z.coerce.number().min(2).optional().describe("Optional endpoint snap tolerance in pixels for topology"),
     },
     async (args) => {
-      const result = await apiPost("/api/vision/analyze-geometry", {
-        projectId: getProjectId(),
-        ...args,
+      const {
+        geometrySource,
+        sourceKind,
+        refreshCadMetadata,
+        maxEntities,
+        ...analysisArgs
+      } = args;
+      const projectId = getProjectId();
+      const runPdf = () => apiPost("/api/vision/analyze-geometry", {
+        projectId,
+        ...analysisArgs,
       });
+      const runCad = () => apiPost("/api/vision/analyze-cad-geometry", {
+        projectId,
+        ...analysisArgs,
+        sourceKind,
+        refresh: refreshCadMetadata,
+        maxEntities,
+      });
+
+      let result: any;
+      if (geometrySource === "cad_native") {
+        result = await runCad();
+      } else if (geometrySource === "pdf_raster") {
+        result = await runPdf();
+      } else {
+        try {
+          result = await runPdf();
+        } catch {
+          result = await runCad();
+        }
+      }
 
       if (!result.success) {
         return { content: [{ type: "text" as const, text: `Geometry analysis failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
       }
 
       const compact = {
-        documentId: args.documentId,
-        pageNumber: args.pageNumber,
+        documentId: analysisArgs.documentId,
+        pageNumber: result.pageNumber ?? analysisArgs.pageNumber,
+        analysisId: result.analysisId,
         preset: result.preset,
+        geometrySource: result.geometrySource ?? "pdf_raster",
+        coordinateSpace: result.coordinateSpace ?? "pdf-render-pixels",
+        units: result.units,
         imageWidth: result.imageWidth,
         imageHeight: result.imageHeight,
+        scaleMetadata: result.scaleMetadata,
         preprocessing: result.preprocessing,
         summary: result.summary,
         warnings: result.warnings,
+        layers: (result.layers ?? []).slice(0, 80),
         lines: (result.lines ?? []).slice(0, 80),
+        polylines: (result.polylines ?? []).slice(0, 40),
         systems: (result.systems ?? []).slice(0, 40),
         circles: (result.circles ?? []).slice(0, 40),
+        contours: (result.contours ?? []).slice(0, 40),
         symbolCandidates: (result.symbolCandidates ?? []).slice(0, 40),
         textRegions: (result.textRegions ?? []).slice(0, 40),
         omitted: {
+          layers: Math.max(0, Number(result.layers?.length ?? 0) - 80),
           lines: Math.max(0, Number(result.lines?.length ?? 0) - 80),
+          polylines: Math.max(0, Number(result.polylines?.length ?? 0) - 40),
           systems: Math.max(0, Number(result.systems?.length ?? 0) - 40),
           circles: Math.max(0, Number(result.circles?.length ?? 0) - 40),
+          contours: Math.max(0, Number(result.contours?.length ?? 0) - 40),
           symbolCandidates: Math.max(0, Number(result.symbolCandidates?.length ?? 0) - 40),
           textRegions: Math.max(0, Number(result.textRegions?.length ?? 0) - 40),
         },
@@ -741,16 +1024,48 @@ OUTPUT: Candidate systems with segment IDs, total length in pixels, inferred top
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
       pageNumber: z.coerce.number().min(1).default(1).describe("Page number to trace"),
+      geometrySource: z.enum(["auto", "pdf_raster", "cad_native"]).default("auto").describe("Use cad_native for DXF/DWG vector entity tracing"),
+      sourceKind: z.enum(["source_document", "file_node"]).default("source_document").describe("Source kind for CAD-native DXF/DWG tracing"),
+      refreshCadMetadata: z.boolean().default(false).describe("Refresh cached DXF/DWG metadata before CAD-native tracing"),
       preset: drawingAnalysisPresetSchema.default("mechanical_piping").describe("System-tracing preset"),
       maxLines: z.coerce.number().min(50).max(3000).default(1200).describe("Maximum line segments to consider"),
+      maxEntities: z.coerce.number().min(50).max(5000).default(1800).describe("Maximum CAD-native entities to consider"),
       minLineLength: z.coerce.number().min(5).optional().describe("Optional minimum line length in pixels"),
       snapTolerance: z.coerce.number().min(2).optional().describe("Optional endpoint snap tolerance in pixels"),
     },
     async (args) => {
-      const result = await apiPost("/api/vision/trace-systems", {
-        projectId: getProjectId(),
-        ...args,
+      const {
+        geometrySource,
+        sourceKind,
+        refreshCadMetadata,
+        maxEntities,
+        ...traceArgs
+      } = args;
+      const projectId = getProjectId();
+      const runPdf = () => apiPost("/api/vision/trace-systems", {
+        projectId,
+        ...traceArgs,
       });
+      const runCad = () => apiPost("/api/vision/analyze-cad-geometry", {
+        projectId,
+        ...traceArgs,
+        traceSystems: true,
+        sourceKind,
+        refresh: refreshCadMetadata,
+        maxEntities,
+      });
+      let result: any;
+      if (geometrySource === "cad_native") {
+        result = await runCad();
+      } else if (geometrySource === "pdf_raster") {
+        result = await runPdf();
+      } else {
+        try {
+          result = await runPdf();
+        } catch {
+          result = await runCad();
+        }
+      }
 
       if (!result.success) {
         return { content: [{ type: "text" as const, text: `Trace failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
@@ -760,15 +1075,22 @@ OUTPUT: Candidate systems with segment IDs, total length in pixels, inferred top
         content: [{
           type: "text" as const,
           text: JSON.stringify({
-            documentId: args.documentId,
-            pageNumber: args.pageNumber,
+            documentId: traceArgs.documentId,
+            pageNumber: result.pageNumber ?? traceArgs.pageNumber,
+            analysisId: result.analysisId,
             preset: result.preset,
+            geometrySource: result.geometrySource ?? "pdf_raster",
+            coordinateSpace: result.coordinateSpace ?? "pdf-render-pixels",
+            units: result.units,
             imageWidth: result.imageWidth,
             imageHeight: result.imageHeight,
+            scaleMetadata: result.scaleMetadata,
             preprocessing: result.preprocessing,
             summary: result.summary,
             warnings: result.warnings,
+            layers: (result.layers ?? []).slice(0, 80),
             systems: (result.systems ?? []).slice(0, 60),
+            polylines: (result.polylines ?? []).slice(0, 60),
             lines: (result.lines ?? []).slice(0, 120),
             note: "System lengths are pixel lengths until calibrated or reviewed. Save accepted systems/segments as takeoff marks before linking them to estimate rows.",
           }, null, 2),
@@ -795,17 +1117,19 @@ COMMON PITFALLS: Do not save every raw detection automatically. Save accepted de
       pageNumber: z.coerce.number().min(1).describe("Page number where detections were found"),
       imageWidth: z.coerce.number().positive().describe("Image coordinate-space width returned by analyzeDrawingGeometry"),
       imageHeight: z.coerce.number().positive().describe("Image coordinate-space height returned by analyzeDrawingGeometry"),
+      analysisId: z.string().optional().describe("Optional analysisId returned by analyzeDrawingGeometry/traceDrawingSystems, used to update accepted counts"),
       groupName: z.string().default("Drawing Intelligence").describe("Group name for saved annotations"),
       color: z.string().default("#0ea5e9").describe("Default annotation color"),
       detections: z.array(z.object({}).passthrough()).describe("Reviewed detections to persist as takeoff marks"),
     },
-    async ({ documentId, pageNumber, imageWidth, imageHeight, groupName, color, detections }) => {
+    async ({ documentId, pageNumber, imageWidth, imageHeight, analysisId, groupName, color, detections }) => {
       const result = await apiPost("/api/vision/save-detections-as-annotations", {
         projectId: getProjectId(),
         documentId,
         pageNumber,
         imageWidth,
         imageHeight,
+        analysisId,
         groupName,
         color,
         detections,
@@ -822,6 +1146,336 @@ COMMON PITFALLS: Do not save every raw detection automatically. Save accepted de
             pageNumber,
             errors: result.errors?.length ? result.errors : undefined,
           }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── classifyDrawingLayers ────────────────────────────────
+  server.tool(
+    "classifyDrawingLayers",
+    `Classify PDF optional-content layers or CAD layers/entities by likely construction discipline.
+
+WHEN TO USE: Before running a trade-specific trace or count on CAD/vector drawings. This tells the agent whether the file exposes useful native layers and which layers look like piping, ductwork, electrical, structure, annotations, title blocks, or reference geometry.`,
+    {
+      documentId: z.string().describe("Document ID from listDrawingPages or a CAD/file-node document ID"),
+      documentKind: z.enum(["auto", "pdf", "dwg_dxf"]).default("auto").describe("Native structure source to inspect"),
+      pageNumber: z.coerce.number().min(1).optional().describe("Optional PDF page to sample"),
+      maxPages: z.coerce.number().min(1).max(25).default(5).describe("PDF max page sample when pageNumber is omitted"),
+      refresh: z.boolean().default(false).describe("Refresh CAD metadata when inspecting DWG/DXF"),
+      sourceKind: z.enum(["source_document", "file_node"]).default("source_document").describe("Source kind for CAD/DXF metadata"),
+    },
+    async ({ documentId, documentKind, pageNumber, maxPages, refresh, sourceKind }) => {
+      const projectId = getProjectId();
+      const attempts: Record<string, any> = {};
+      let pdfNative: any = null;
+      let cadNative: any = null;
+
+      if (documentKind !== "dwg_dxf") {
+        try {
+          pdfNative = await apiPost("/api/vision/pdf-native-summary", {
+            projectId,
+            documentId,
+            pageNumber,
+            maxPages,
+          });
+        } catch (error) {
+          attempts.pdf = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      if (documentKind !== "pdf" && (!pdfNative?.hasOptionalContentLayers || documentKind === "dwg_dxf")) {
+        const query = new URLSearchParams({
+          refresh: refresh ? "1" : "0",
+          sourceKind,
+        });
+        try {
+          cadNative = await apiGet(`/api/takeoff/${projectId}/documents/${encodeURIComponent(documentId)}/dwg-metadata?${query.toString()}`);
+        } catch (error) {
+          attempts.dwgDxf = error instanceof Error ? error.message : String(error);
+        }
+      }
+
+      const pdfLayers = asToolArray(pdfNative?.layers).map((layer) => ({
+        id: layer.id,
+        name: layer.name,
+        nativeClassification: layer.classification,
+        discipline: layerDiscipline(layer.name || layer.classification),
+        intent: layer.intent ?? null,
+        usage: layer.usage ?? null,
+      }));
+
+      const cadLayersRaw = asToolArray(cadNative?.layers ?? cadNative?.result?.layers ?? cadNative?.metadata?.layers);
+      const cadLayers = cadLayersRaw.map((layer, index) => {
+        const name = layer.name ?? layer.layer ?? layer.id ?? `layer-${index + 1}`;
+        return {
+          id: layer.id ?? String(name),
+          name,
+          discipline: layerDiscipline(name),
+          entityCount: layer.entityCount ?? layer.count ?? layer.entities ?? null,
+          color: layer.color ?? null,
+          lineType: layer.lineType ?? layer.linetype ?? null,
+          raw: layer,
+        };
+      });
+
+      const source = cadNative ? "dwg_dxf" : "pdf";
+      const layers = cadNative ? cadLayers : pdfLayers;
+      const disciplineCounts = layers.reduce<Record<string, number>>((acc, layer) => {
+        const key = String(layer.discipline ?? "unknown");
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {});
+
+      const pages = asToolArray(pdfNative?.pages).map((page) => ({
+        pageNumber: page.pageNumber,
+        width: page.width,
+        height: page.height,
+        textItemCount: page.textItemCount,
+        operatorCount: page.operatorCount,
+        vectorSignals: page.vectorSignals,
+      }));
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            success: Boolean(pdfNative?.success || cadNative),
+            documentId,
+            source,
+            fileName: pdfNative?.fileName ?? cadNative?.fileName ?? cadNative?.source?.fileName,
+            layerCount: layers.length,
+            disciplineCounts,
+            layers: layers.slice(0, 160),
+            omittedLayers: Math.max(0, layers.length - 160),
+            pdf: pdfNative ? {
+              pageCount: pdfNative.pageCount,
+              hasOptionalContentLayers: pdfNative.hasOptionalContentLayers,
+              layerClassCounts: pdfNative.layerClassCounts,
+              pages,
+            } : null,
+            cad: cadNative ? {
+              status: cadNative.status ?? cadNative.result?.status,
+              entityCount: cadNative.entityCount ?? cadNative.result?.entityCount,
+              entityTypeCounts: cadNative.entityTypeCounts ?? cadNative.result?.entityTypeCounts,
+              layoutCount: asToolArray(cadNative.layouts ?? cadNative.result?.layouts).length || undefined,
+            } : null,
+            attempts: Object.keys(attempts).length ? attempts : undefined,
+            note: "Use disciplineCounts to pick a tracing preset. Unknown or annotation-heavy layers usually need pixel CV plus visual review rather than blind save.",
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── inspectDetectionRegion ───────────────────────────────
+  server.tool(
+    "inspectDetectionRegion",
+    `Return a high-resolution crop of a detection region plus nearby native text and stored analysis detections.
+
+WHEN TO USE: After analyzeDrawingGeometry, traceDrawingSystems, findDrawingSymbolCandidates, or compareAnalysisToTakeoff returns a candidate and the agent needs visual evidence before saving, rejecting, or linking it.`,
+    {
+      documentId: z.string().describe("Document ID of the PDF drawing"),
+      pageNumber: z.coerce.number().min(1).default(1).describe("Page number"),
+      region: z.object(boundingBoxSchema).describe("Region to inspect in render/analyze image coordinates"),
+      paddingRatio: z.coerce.number().min(0).max(2).default(0.3).describe("Padding around the region before rendering the crop"),
+      analysisId: z.string().optional().describe("Optional stored analysis ID to include intersecting detections"),
+      includeNativeContext: z.boolean().default(true).describe("Include nearby PDF-native text/layer context when available"),
+      includeImage: z.boolean().default(true).describe("Include the crop image in the tool result"),
+    },
+    async ({ documentId, pageNumber, region, paddingRatio, analysisId, includeNativeContext, includeImage }) => {
+      const projectId = getProjectId();
+      const padded = paddedRegion(region, paddingRatio);
+      const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: "image/png" }> = [];
+
+      let crop: any = null;
+      if (includeImage) {
+        crop = await apiPost("/api/vision/render-page", {
+          projectId,
+          documentId,
+          pageNumber,
+          dpi: 300,
+          region: padded,
+        }).catch((error) => ({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        const base64 = imageBase64(crop?.image);
+        if (base64) content.push({ type: "image" as const, data: base64, mimeType: "image/png" as const });
+      }
+
+      let nativeContext: any = null;
+      if (includeNativeContext) {
+        const native = await apiPost("/api/vision/pdf-native-summary", {
+          projectId,
+          documentId,
+          pageNumber,
+          maxPages: 1,
+        }).catch((error) => ({ success: false, error: error instanceof Error ? error.message : String(error) }));
+        const page = asToolArray(native?.pages)[0];
+        const pageWidth = Number(page?.width ?? 0);
+        const pageHeight = Number(page?.height ?? 0);
+        const sx = pageWidth > 0 ? region.imageWidth / pageWidth : 1;
+        const sy = pageHeight > 0 ? region.imageHeight / pageHeight : 1;
+        const nearbyText = asToolArray(page?.textItemsSample)
+          .map((item) => {
+            const x = Number(item.x);
+            const y = Number(item.y);
+            const width = Number(item.width ?? 0);
+            const height = Number(item.height ?? 8);
+            if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+            const box = {
+              x: x * sx,
+              y: region.imageHeight - (y * sy) - Math.max(1, height * sy),
+              width: Math.max(1, width * sx),
+              height: Math.max(1, height * sy),
+            };
+            return { text: item.text, bbox: box, fontName: item.fontName ?? null };
+          })
+          .filter((item): item is { text: any; bbox: { x: number; y: number; width: number; height: number }; fontName: any } => Boolean(item))
+          .filter((item) => bboxIntersects(item.bbox, padded))
+          .slice(0, 30);
+        nativeContext = {
+          success: native?.success === true,
+          error: native?.error,
+          layers: asToolArray(native?.layers).slice(0, 80),
+          page: page ? {
+            pageNumber: page.pageNumber,
+            width: page.width,
+            height: page.height,
+            textItemCount: page.textItemCount,
+            vectorSignals: page.vectorSignals,
+          } : null,
+          nearbyText,
+        };
+      }
+
+      let analysisContext: any = null;
+      if (analysisId) {
+        const analyses = await apiPost("/api/vision/list-analyses", {
+          projectId,
+          documentId,
+          pageNumber,
+          includeDetections: true,
+        }).catch((error) => ({ success: false, error: error instanceof Error ? error.message : String(error), analyses: [] }));
+        const run = asToolArray(analyses?.analyses).find((entry) => String(entry.id) === analysisId);
+        const detections = asToolRecord(run?.detections);
+        const allDetections = [
+          ...asToolArray(detections.lines),
+          ...asToolArray(detections.polylines),
+          ...asToolArray(detections.circles),
+          ...asToolArray(detections.contours),
+          ...asToolArray(detections.symbolCandidates),
+          ...asToolArray(detections.textRegions),
+          ...asToolArray(detections.systems),
+        ];
+        analysisContext = {
+          found: Boolean(run),
+          analysisId,
+          summary: run?.summary,
+          intersectingDetections: allDetections
+            .map((detection) => ({ detection, bbox: bboxFromAny(detection) }))
+            .filter((entry) => entry.bbox && bboxIntersects(entry.bbox, padded))
+            .slice(0, 80)
+            .map((entry) => entry.detection),
+        };
+      }
+
+      content.push({
+        type: "text" as const,
+        text: JSON.stringify({
+          success: crop?.success !== false,
+          documentId,
+          pageNumber,
+          requestedRegion: region,
+          renderedRegion: padded,
+          crop: crop ? {
+            width: crop.width,
+            height: crop.height,
+            dpi: 300,
+            error: crop.error,
+          } : null,
+          nativeContext,
+          analysisContext,
+          note: "Use the crop as visual evidence. Coordinates in nativeContext/analysisContext are mapped back to the original image coordinate space.",
+        }, null, 2),
+      });
+
+      return { content };
+    }
+  );
+
+  // ── listDrawingAnalyses ──────────────────────────────────
+  server.tool(
+    "listDrawingAnalyses",
+    `List previous Drawing Intelligence analysis runs stored on a drawing document.
+
+WHEN TO USE: Use this to avoid rerunning expensive CV work, audit accepted/rejected counts, or find the analysisId required by compareAnalysisToTakeoff and inspectDetectionRegion.`,
+    {
+      documentId: z.string().describe("Document ID of the analyzed drawing"),
+      pageNumber: z.coerce.number().min(1).optional().describe("Optional page filter"),
+      includeDetections: z.boolean().default(false).describe("Include compact detection refs stored with each run"),
+    },
+    async ({ documentId, pageNumber, includeDetections }) => {
+      const result = await apiPost("/api/vision/list-analyses", {
+        projectId: getProjectId(),
+        documentId,
+        pageNumber,
+        includeDetections,
+      });
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            success: result.success,
+            documentId: result.documentId ?? documentId,
+            fileName: result.fileName,
+            count: result.count,
+            analyses: asToolArray(result.analyses).map((run) => includeDetections ? run : {
+              id: run.id,
+              status: run.status,
+              tool: run.tool,
+              createdAt: run.createdAt,
+              pageNumber: run.pageNumber,
+              preset: run.preset,
+              parameters: run.parameters,
+              imageWidth: run.imageWidth,
+              imageHeight: run.imageHeight,
+              summary: run.summary,
+              warnings: run.warnings,
+              acceptedCount: run.acceptedCount,
+              rejectedCount: run.rejectedCount,
+              savedAnnotationIds: run.savedAnnotationIds,
+            }),
+          }, null, 2),
+        }],
+      };
+    }
+  );
+
+  // ── compareAnalysisToTakeoff ─────────────────────────────
+  server.tool(
+    "compareAnalysisToTakeoff",
+    `Compare a stored drawing analysis with saved takeoff annotations and worksheet links.
+
+WHEN TO USE: After CV has found candidates, use this to tell what is detected but not yet saved, and what is saved as a mark but not yet linked to an estimate/takeoff row.`,
+    {
+      documentId: z.string().describe("Document ID of the analyzed drawing"),
+      analysisId: z.string().optional().describe("Specific analysis run ID. If omitted, the newest matching page run is used."),
+      pageNumber: z.coerce.number().min(1).optional().describe("Optional page filter when analysisId is omitted"),
+      limit: z.coerce.number().min(1).max(500).default(120).describe("Maximum unsaved/unlinked entries to return"),
+    },
+    async ({ documentId, analysisId, pageNumber, limit }) => {
+      const result = await apiPost("/api/vision/compare-analysis-to-takeoff", {
+        projectId: getProjectId(),
+        documentId,
+        analysisId,
+        pageNumber,
+        limit,
+      });
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify(result, null, 2),
         }],
       };
     }

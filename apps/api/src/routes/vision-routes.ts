@@ -1,8 +1,10 @@
 import type { FastifyInstance } from "fastify";
 import { resolveApiPath } from "../paths.js";
 import { access, readFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { prisma } from "@bidwright/db";
 import { emitSessionEvent, interruptAndResumeSession } from "../services/cli-runtime.js";
+import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
 
 /** Helper: resolve a document's absolute PDF path from its storagePath. */
 async function resolveDocPdf(store: any, projectId: string, documentId: string): Promise<{ absPath: string; doc: any } | { error: string; status: number }> {
@@ -29,7 +31,7 @@ async function resolveDocPdf(store: any, projectId: string, documentId: string):
       if (node.storagePath) {
         const absPath = resolveApiPath(node.storagePath);
         try { await access(absPath); } catch { return { error: `PDF not on disk: ${node.storagePath}`, status: 404 }; }
-        return { absPath, doc: { id: node.id, fileName: node.name, storagePath: node.storagePath, source: "file_node" } };
+        return { absPath, doc: { id: node.id, fileName: node.name, storagePath: node.storagePath, metadata: node.metadata ?? {}, source: "file_node" } };
       }
     }
   }
@@ -39,7 +41,7 @@ async function resolveDocPdf(store: any, projectId: string, documentId: string):
     if (book?.storagePath && (!book.projectId || book.projectId === projectId)) {
       const absPath = resolveApiPath(book.storagePath);
       try { await access(absPath); } catch { return { error: `PDF not on disk: ${book.storagePath}`, status: 404 }; }
-      return { absPath, doc: { id: book.id, fileName: book.sourceFileName ?? book.name, storagePath: book.storagePath, source: "knowledge_book" } };
+      return { absPath, doc: { id: book.id, fileName: book.sourceFileName ?? book.name, storagePath: book.storagePath, metadata: book.metadata ?? {}, source: "knowledge_book" } };
     }
   }
 
@@ -222,6 +224,579 @@ function normalizeDetectionMeasurement(
   }
   const length = points.slice(1).reduce((sum, point, index) => sum + distanceBetweenPoints(points[index]!, point), 0);
   return { value: Math.round(length * 100) / 100, length: Math.round(length * 100) / 100, unit: "px" };
+}
+
+const DRAWING_ANALYSES_KEY = "drawingAnalyses";
+
+function analysisRunSource(doc: any): "source_document" | "file_node" | "knowledge_book" {
+  if (doc?.source === "file_node") return "file_node";
+  if (doc?.source === "knowledge_book") return "knowledge_book";
+  return "source_document";
+}
+
+function currentAnalysisRuns(doc: any): any[] {
+  const source = analysisRunSource(doc);
+  const root = source === "source_document" ? asRecord(doc?.structuredData) : asRecord(doc?.metadata);
+  const runs = root[DRAWING_ANALYSES_KEY];
+  return Array.isArray(runs) ? runs.map(asRecord) : [];
+}
+
+function compactAnalysisDetections(result: any) {
+  return {
+    lines: (Array.isArray(result.lines) ? result.lines : []).slice(0, 1200).map((line: any) => ({
+      id: line.id,
+      kind: "line",
+      x1: line.x1,
+      y1: line.y1,
+      x2: line.x2,
+      y2: line.y2,
+      lengthPx: line.lengthPx,
+      bbox: line.bbox,
+      entityId: line.entityId,
+      layer: line.layer,
+      confidence: line.confidence,
+    })),
+    polylines: (Array.isArray(result.polylines) ? result.polylines : []).slice(0, 250).map((polyline: any) => ({
+      id: polyline.id,
+      kind: "polyline",
+      systemId: polyline.systemId,
+      label: polyline.label,
+      pointCount: polyline.pointCount,
+      lengthPx: polyline.lengthPx,
+      bbox: polyline.bbox,
+      closed: polyline.closed,
+      entityId: polyline.entityId,
+      layer: polyline.layer,
+      confidence: polyline.confidence,
+    })),
+    circles: (Array.isArray(result.circles) ? result.circles : []).slice(0, 250).map((circle: any) => ({
+      id: circle.id,
+      kind: "circle",
+      cx: circle.cx,
+      cy: circle.cy,
+      radius: circle.radius,
+      bbox: circle.bbox,
+      entityId: circle.entityId,
+      layer: circle.layer,
+      confidence: circle.confidence,
+    })),
+    contours: (Array.isArray(result.contours) ? result.contours : []).slice(0, 250).map((contour: any) => ({
+      id: contour.id,
+      kind: "contour",
+      bbox: contour.bbox,
+      area: contour.area,
+      perimeter: contour.perimeter,
+      pointCount: contour.pointCount,
+      entityId: contour.entityId,
+      layer: contour.layer,
+      confidence: contour.confidence,
+    })),
+    symbolCandidates: (Array.isArray(result.symbolCandidates) ? result.symbolCandidates : []).slice(0, 250).map((symbol: any) => ({
+      id: symbol.id,
+      kind: "symbol_candidate",
+      x: symbol.x,
+      y: symbol.y,
+      w: symbol.w,
+      h: symbol.h,
+      cx: symbol.cx,
+      cy: symbol.cy,
+      bbox: { x: symbol.x, y: symbol.y, width: symbol.w, height: symbol.h },
+      entityId: symbol.entityId,
+      blockName: symbol.blockName,
+      layer: symbol.layer,
+      confidence: symbol.confidence,
+    })),
+    textRegions: (Array.isArray(result.textRegions) ? result.textRegions : []).slice(0, 200).map((region: any) => ({
+      id: region.id,
+      kind: "text_region",
+      x: region.x ?? region.bbox?.x,
+      y: region.y ?? region.bbox?.y,
+      w: region.w ?? region.bbox?.width,
+      h: region.h ?? region.bbox?.height,
+      bbox: region.bbox ?? { x: region.x, y: region.y, width: region.w, height: region.h },
+      entityId: region.entityId,
+      layer: region.layer,
+      text: region.text,
+      confidence: region.confidence,
+    })),
+    systems: (Array.isArray(result.systems) ? result.systems : []).slice(0, 100).map((system: any) => ({
+      id: system.id,
+      kind: "system",
+      label: system.label,
+      segmentCount: system.segmentCount,
+      nodeCount: system.nodeCount,
+      lengthPx: system.lengthPx,
+      bbox: system.bbox,
+      layer: system.layer,
+      entityIds: system.entityIds,
+      counts: system.counts,
+      confidence: system.confidence,
+    })),
+  };
+}
+
+function detectionRefsFromRun(run: any) {
+  const detections = asRecord(run.detections);
+  return [
+    ...((Array.isArray(detections.lines) ? detections.lines : []) as any[]),
+    ...((Array.isArray(detections.polylines) ? detections.polylines : []) as any[]),
+    ...((Array.isArray(detections.circles) ? detections.circles : []) as any[]),
+    ...((Array.isArray(detections.contours) ? detections.contours : []) as any[]),
+    ...((Array.isArray(detections.symbolCandidates) ? detections.symbolCandidates : []) as any[]),
+    ...((Array.isArray(detections.textRegions) ? detections.textRegions : []) as any[]),
+    ...((Array.isArray(detections.systems) ? detections.systems : []) as any[]),
+  ].map(asRecord).filter((entry) => entry.id);
+}
+
+async function persistAnalysisRuns(projectId: string, doc: any, runs: any[]) {
+  const source = analysisRunSource(doc);
+  const capped = runs.slice(0, 25).map((run) => sanitizeJsonForPostgres(run));
+  if (source === "file_node") {
+    const metadata = { ...asRecord(doc.metadata), [DRAWING_ANALYSES_KEY]: capped };
+    await prisma.fileNode.update({ where: { id: String(doc.id) }, data: { metadata: metadata as any } });
+    return;
+  }
+  if (source === "knowledge_book") {
+    const metadata = { ...asRecord(doc.metadata), [DRAWING_ANALYSES_KEY]: capped };
+    await prisma.knowledgeBook.update({ where: { id: String(doc.id) }, data: { metadata: metadata as any } });
+    return;
+  }
+  const structuredData = { ...asRecord(doc.structuredData), [DRAWING_ANALYSES_KEY]: capped };
+  await prisma.sourceDocument.update({ where: { id: String(doc.id) }, data: { structuredData: structuredData as any } });
+}
+
+async function recordDrawingAnalysisRun(projectId: string, doc: any, result: any, parameters: Record<string, unknown>, tool: string) {
+  const analysisId = `dai_${randomUUID()}`;
+  const run = {
+    id: analysisId,
+    status: "completed",
+    tool,
+    createdAt: new Date().toISOString(),
+    projectId,
+    documentId: doc.id,
+    fileName: doc.fileName,
+    pageNumber: result.pageNumber,
+    preset: result.preset,
+    parameters: sanitizeJsonForPostgres(parameters),
+    imageWidth: result.imageWidth,
+    imageHeight: result.imageHeight,
+    scaleMetadata: result.scaleMetadata ?? null,
+    summary: result.summary ?? {},
+    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    detections: compactAnalysisDetections(result),
+    acceptedCount: 0,
+    rejectedCount: 0,
+    savedAnnotationIds: [],
+  };
+  const runs = [run, ...currentAnalysisRuns(doc)];
+  await persistAnalysisRuns(projectId, doc, runs).catch(() => null);
+  return analysisId;
+}
+
+async function updateDrawingAnalysisAcceptance(projectId: string, doc: any, analysisId: string, annotationIds: string[]) {
+  if (!analysisId || annotationIds.length === 0) return;
+  const runs = currentAnalysisRuns(doc);
+  const nextRuns = runs.map((run) => {
+    if (String(run.id) !== analysisId) return run;
+    const saved = new Set([...(Array.isArray(run.savedAnnotationIds) ? run.savedAnnotationIds.map(String) : []), ...annotationIds]);
+    return {
+      ...run,
+      acceptedCount: saved.size,
+      savedAnnotationIds: Array.from(saved),
+      updatedAt: new Date().toISOString(),
+    };
+  });
+  await persistAnalysisRuns(projectId, doc, nextRuns).catch(() => null);
+}
+
+function findAnalysisRun(doc: any, analysisId?: string, pageNumber?: number) {
+  const runs = currentAnalysisRuns(doc);
+  if (analysisId) return runs.find((run) => String(run.id) === analysisId) ?? null;
+  if (pageNumber) return runs.find((run) => Number(run.pageNumber) === Number(pageNumber)) ?? null;
+  return runs[0] ?? null;
+}
+
+function classifyCadLayerName(nameValue: unknown) {
+  const name = String(nameValue ?? "").toLowerCase();
+  if (/pipe|piping|valve|pump|mech|process|steam|gas|hydronic|chw|hw|cw|san|vent|storm/.test(name)) return "mechanical_piping";
+  if (/plumb|domestic|waste|drain/.test(name)) return "plumbing";
+  if (/fire|sprinkler|fp[-_ ]?/.test(name)) return "fire_protection";
+  if (/duct|hvac|air|supply|return|exhaust/.test(name)) return "ductwork";
+  if (/elec|power|light|conduit|cable|panel|device/.test(name)) return "electrical";
+  if (/struct|steel|beam|column|foundation|rebar|anchor|plate/.test(name)) return "structural";
+  if (/civil|site|utility|road|grade|sewer|water/.test(name)) return "civil_linear";
+  if (/text|anno|note|dim|tag|label|title|callout/.test(name)) return "annotation_text";
+  if (/border|sheet|grid|datum/.test(name)) return "sheet_border_title";
+  return "unknown";
+}
+
+function cadLayerMatchesPreset(layerName: unknown, preset: string) {
+  const discipline = classifyCadLayerName(layerName);
+  if (discipline === "annotation_text" || discipline === "sheet_border_title") return false;
+  if (preset === "generic") return true;
+  if (preset === "mechanical_piping") return discipline === "mechanical_piping" || discipline === "plumbing" || discipline === "unknown";
+  return discipline === preset || discipline === "unknown";
+}
+
+function cadBbox(boundsValue: unknown) {
+  const bounds = asRecord(boundsValue);
+  const minX = Number(bounds.minX);
+  const minY = Number(bounds.minY);
+  const maxX = Number(bounds.maxX);
+  const maxY = Number(bounds.maxY);
+  if (![minX, minY, maxX, maxY].every(Number.isFinite)) {
+    return { x: 0, y: 0, width: 0, height: 0 };
+  }
+  return {
+    x: Math.round(minX * 1000) / 1000,
+    y: Math.round(minY * 1000) / 1000,
+    width: Math.round(Math.max(0, maxX - minX) * 1000) / 1000,
+    height: Math.round(Math.max(0, maxY - minY) * 1000) / 1000,
+  };
+}
+
+function cadPoint(value: unknown): { x: number; y: number } | null {
+  const point = asRecord(value);
+  const x = Number(point.x);
+  const y = Number(point.y);
+  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+}
+
+function cadDistance(a: { x: number; y: number }, b: { x: number; y: number }) {
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+function cadPolylineLength(points: { x: number; y: number }[], closed = false) {
+  let length = 0;
+  for (let index = 1; index < points.length; index++) {
+    length += cadDistance(points[index - 1]!, points[index]!);
+  }
+  if (closed && points.length > 2) length += cadDistance(points[points.length - 1]!, points[0]!);
+  return length;
+}
+
+type CadTraceSegment = {
+  id: string;
+  layer: string;
+  color?: string;
+  entityId: string;
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  length: number;
+};
+
+function cadSegmentsFromEntities(entities: any[], preset: string): CadTraceSegment[] {
+  const segments: CadTraceSegment[] = [];
+  for (const entity of entities) {
+    const layer = String(entity.layer ?? "0");
+    if (!cadLayerMatchesPreset(layer, preset)) continue;
+    const type = String(entity.type).toUpperCase();
+    if (type === "LINE") {
+      const start = cadPoint(entity.start);
+      const end = cadPoint(entity.end);
+      if (!start || !end) continue;
+      const length = cadDistance(start, end);
+      if (length <= 0) continue;
+      segments.push({ id: `cad-ln-${segments.length + 1}`, layer, color: entity.color, entityId: String(entity.id ?? ""), x1: start.x, y1: start.y, x2: end.x, y2: end.y, length });
+    } else if (type === "LWPOLYLINE" || type === "POLYLINE") {
+      const vertices = (Array.isArray(entity.vertices) ? entity.vertices : []).map(cadPoint).filter(Boolean) as { x: number; y: number }[];
+      const pairs = entity.closed === true && vertices.length > 2 ? [...vertices, vertices[0]!] : vertices;
+      for (let index = 1; index < pairs.length; index++) {
+        const start = pairs[index - 1]!;
+        const end = pairs[index]!;
+        const length = cadDistance(start, end);
+        if (length <= 0) continue;
+        segments.push({ id: `cad-ln-${segments.length + 1}`, layer, color: entity.color, entityId: String(entity.id ?? ""), x1: start.x, y1: start.y, x2: end.x, y2: end.y, length });
+      }
+    }
+  }
+  return segments;
+}
+
+function presetLabelForApi(preset: string) {
+  const labels: Record<string, string> = {
+    mechanical_piping: "Mechanical piping",
+    plumbing: "Plumbing",
+    fire_protection: "Fire protection",
+    ductwork: "Ductwork",
+    electrical: "Electrical",
+    civil_linear: "Civil",
+    structural: "Structural",
+  };
+  return labels[preset] ?? "Detected";
+}
+
+function cadTraceSystemsFromSegments(segments: CadTraceSegment[], extentsValue: unknown, preset: string) {
+  if (segments.length === 0) return [];
+  const extents = asRecord(extentsValue);
+  const width = Math.abs(Number(extents.maxX ?? 0) - Number(extents.minX ?? 0));
+  const height = Math.abs(Number(extents.maxY ?? 0) - Number(extents.minY ?? 0));
+  const tolerance = Math.max(0.01, Math.max(width, height) * 0.0015);
+  const nodeIds = new Map<string, number>();
+  const nodeDegree = new Map<number, number>();
+  const segmentNodes = new Map<string, [number, number]>();
+  const adjacency = new Map<number, CadTraceSegment[]>();
+  const nodeKey = (layer: string, point: { x: number; y: number }) => `${layer}:${Math.round(point.x / tolerance)}:${Math.round(point.y / tolerance)}`;
+  const nodeFor = (layer: string, point: { x: number; y: number }) => {
+    const key = nodeKey(layer, point);
+    let id = nodeIds.get(key);
+    if (id === undefined) {
+      id = nodeIds.size + 1;
+      nodeIds.set(key, id);
+    }
+    return id;
+  };
+
+  for (const segment of segments) {
+    const a = nodeFor(segment.layer, { x: segment.x1, y: segment.y1 });
+    const b = nodeFor(segment.layer, { x: segment.x2, y: segment.y2 });
+    if (a === b) continue;
+    segmentNodes.set(segment.id, [a, b]);
+    nodeDegree.set(a, (nodeDegree.get(a) ?? 0) + 1);
+    nodeDegree.set(b, (nodeDegree.get(b) ?? 0) + 1);
+    adjacency.set(a, [...(adjacency.get(a) ?? []), segment]);
+    adjacency.set(b, [...(adjacency.get(b) ?? []), segment]);
+  }
+
+  const seen = new Set<string>();
+  const systems: any[] = [];
+  for (const segment of segments) {
+    if (seen.has(segment.id) || !segmentNodes.has(segment.id)) continue;
+    const queue = [segment];
+    const component: CadTraceSegment[] = [];
+    const nodes = new Set<number>();
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      if (seen.has(current.id)) continue;
+      seen.add(current.id);
+      component.push(current);
+      const pair = segmentNodes.get(current.id);
+      if (!pair) continue;
+      for (const node of pair) {
+        nodes.add(node);
+        for (const neighbor of adjacency.get(node) ?? []) {
+          if (!seen.has(neighbor.id)) queue.push(neighbor);
+        }
+      }
+    }
+    if (component.length === 0) continue;
+    const length = component.reduce((sum, item) => sum + item.length, 0);
+    if (length < Math.max(0.5, Math.max(width, height) * 0.01) && component.length < 3) continue;
+    const xs = component.flatMap((item) => [item.x1, item.x2]);
+    const ys = component.flatMap((item) => [item.y1, item.y2]);
+    const counts = {
+      openEnds: Array.from(nodes).filter((node) => (nodeDegree.get(node) ?? 0) <= 1).length,
+      elbows45: 0,
+      elbows90: 0,
+      bends: Array.from(nodes).filter((node) => (nodeDegree.get(node) ?? 0) === 2).length,
+      tees: Array.from(nodes).filter((node) => (nodeDegree.get(node) ?? 0) === 3).length,
+      crosses: Array.from(nodes).filter((node) => (nodeDegree.get(node) ?? 0) > 3).length,
+      transitions: 0,
+    };
+    const layer = component[0]?.layer ?? "0";
+    systems.push({
+      id: `cad-sys-${systems.length + 1}`,
+      label: `${presetLabelForApi(preset)} CAD run ${systems.length + 1}`,
+      preset,
+      layer,
+      layerDiscipline: classifyCadLayerName(layer),
+      source: "cad-topology",
+      segmentIds: component.map((item) => item.id),
+      entityIds: Array.from(new Set(component.map((item) => item.entityId).filter(Boolean))).slice(0, 200),
+      segmentCount: component.length,
+      nodeCount: nodes.size,
+      lengthPx: Math.round(length * 1000) / 1000,
+      lengthCadUnits: Math.round(length * 1000) / 1000,
+      bbox: {
+        x: Math.round(Math.min(...xs) * 1000) / 1000,
+        y: Math.round(Math.min(...ys) * 1000) / 1000,
+        width: Math.round((Math.max(...xs) - Math.min(...xs)) * 1000) / 1000,
+        height: Math.round((Math.max(...ys) - Math.min(...ys)) * 1000) / 1000,
+      },
+      counts,
+      confidence: 0.92,
+      warnings: counts.openEnds > 2 ? ["multiple_open_ends"] : [],
+    });
+  }
+  return systems.sort((left, right) => Number(right.lengthCadUnits) - Number(left.lengthCadUnits)).slice(0, 120);
+}
+
+function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean, maxEntities: number) {
+  const entities = Array.isArray(cad.entities) ? cad.entities : [];
+  const extents = asRecord(cad.extents);
+  const width = Math.max(1, Number(extents.maxX ?? 0) - Number(extents.minX ?? 0));
+  const height = Math.max(1, Number(extents.maxY ?? 0) - Number(extents.minY ?? 0));
+  const linearSegments = cadSegmentsFromEntities(entities, preset);
+  const lines = linearSegments.slice(0, maxEntities).map((segment, index) => ({
+    id: segment.id,
+    entityId: segment.entityId,
+    x1: Math.round(segment.x1 * 1000) / 1000,
+    y1: Math.round(segment.y1 * 1000) / 1000,
+    x2: Math.round(segment.x2 * 1000) / 1000,
+    y2: Math.round(segment.y2 * 1000) / 1000,
+    lengthPx: Math.round(segment.length * 1000) / 1000,
+    lengthCadUnits: Math.round(segment.length * 1000) / 1000,
+    angleDeg: 0,
+    bbox: cadBbox({ minX: Math.min(segment.x1, segment.x2), minY: Math.min(segment.y1, segment.y2), maxX: Math.max(segment.x1, segment.x2), maxY: Math.max(segment.y1, segment.y2) }),
+    layer: segment.layer,
+    color: segment.color,
+    source: "cad-entity-segment",
+    confidence: index < entities.length ? 0.98 : 0.96,
+  }));
+  const polylines = entities
+    .filter((entity: any) => ["LWPOLYLINE", "POLYLINE"].includes(String(entity.type).toUpperCase()))
+    .slice(0, maxEntities)
+    .map((entity: any, index: number) => {
+      const points = (Array.isArray(entity.vertices) ? entity.vertices : []).map(cadPoint).filter(Boolean) as { x: number; y: number }[];
+      const length = cadPolylineLength(points, entity.closed === true);
+      return {
+        id: `cad-pl-${index + 1}`,
+        entityId: entity.id,
+        source: "cad-polyline",
+        layer: entity.layer,
+        layerDiscipline: classifyCadLayerName(entity.layer),
+        pointCount: points.length,
+        points: points.slice(0, 240),
+        pointLimitApplied: points.length > 240,
+        lengthPx: Math.round(length * 1000) / 1000,
+        lengthCadUnits: Math.round(length * 1000) / 1000,
+        bbox: cadBbox(entity.bounds),
+        closed: entity.closed === true,
+        confidence: 0.98,
+      };
+    });
+  const circles = entities
+    .filter((entity: any) => ["CIRCLE", "ARC", "ELLIPSE"].includes(String(entity.type).toUpperCase()) && cadPoint(entity.center))
+    .slice(0, maxEntities)
+    .map((entity: any, index: number) => {
+      const center = cadPoint(entity.center)!;
+      return {
+        id: `cad-cir-${index + 1}`,
+        entityId: entity.id,
+        kind: String(entity.type).toLowerCase(),
+        cx: center.x,
+        cy: center.y,
+        radius: Number(entity.radius ?? 0),
+        bbox: cadBbox(entity.bounds),
+        layer: entity.layer,
+        source: "cad-circle-arc",
+        confidence: 0.98,
+      };
+    });
+  const symbolCandidates = entities
+    .filter((entity: any) => String(entity.type).toUpperCase() === "INSERT")
+    .slice(0, maxEntities)
+    .map((entity: any, index: number) => {
+      const point = cadPoint(entity.start) ?? { x: 0, y: 0 };
+      const bbox = cadBbox(entity.bounds);
+      return {
+        id: `cad-sym-${index + 1}`,
+        entityId: entity.id,
+        blockName: entity.text || asRecord(entity.raw).blockName || "",
+        x: bbox.x || point.x,
+        y: bbox.y || point.y,
+        w: bbox.width || 1,
+        h: bbox.height || 1,
+        cx: point.x,
+        cy: point.y,
+        area: Math.max(1, bbox.width * bbox.height),
+        aspect: bbox.height ? bbox.width / bbox.height : 1,
+        bbox,
+        layer: entity.layer,
+        confidence: 0.95,
+        source: "cad-insert-block",
+        metadata: entity.raw ?? {},
+      };
+    });
+  const textRegions = entities
+    .filter((entity: any) => ["TEXT", "MTEXT"].includes(String(entity.type).toUpperCase()))
+    .slice(0, maxEntities)
+    .map((entity: any, index: number) => ({
+      id: `cad-txt-${index + 1}`,
+      entityId: entity.id,
+      text: entity.text ?? "",
+      bbox: cadBbox(entity.bounds),
+      layer: entity.layer,
+      confidence: 0.98,
+      source: "cad-text",
+    }));
+  const systems = traceSystems ? cadTraceSystemsFromSegments(linearSegments, extents, preset) : [];
+  const contours = [
+    ...polylines.filter((polyline: any) => polyline.closed),
+    ...circles.filter((circle: any) => circle.kind === "circle"),
+  ].slice(0, maxEntities).map((entry: any, index: number) => ({
+    id: `cad-ctr-${index + 1}`,
+    entityId: entry.entityId,
+    bbox: entry.bbox,
+    layer: entry.layer,
+    source: "cad-closed-geometry",
+    confidence: entry.confidence ?? 0.9,
+  }));
+  const totalSystemLength = Math.round(systems.reduce((sum, system) => sum + Number(system.lengthCadUnits ?? 0), 0) * 1000) / 1000;
+  return {
+    success: true,
+    schemaVersion: 1,
+    geometrySource: "cad-native",
+    preset,
+    documentId: cad.documentId,
+    fileName: cad.fileName,
+    pageNumber: 1,
+    dpi: null,
+    coordinateSpace: "cad-native",
+    units: cad.units,
+    imageWidth: Math.round(width * 1000) / 1000,
+    imageHeight: Math.round(height * 1000) / 1000,
+    pageWidth: Math.round(width * 1000) / 1000,
+    pageHeight: Math.round(height * 1000) / 1000,
+    scaleMetadata: {
+      coordinateSpace: "cad-native",
+      units: cad.units,
+      extents: cad.extents,
+      sourceKind: cad.sourceKind,
+      converter: cad.converter,
+      calibrationRequired: false,
+    },
+    preprocessing: {
+      parser: "bidwright-dwg-processing-service",
+      sourceKind: cad.sourceKind,
+      converterStatus: cad.converter?.status,
+    },
+    summary: {
+      lineCount: lines.length,
+      circleCount: circles.length,
+      symbolCandidateCount: symbolCandidates.length,
+      textRegionCount: textRegions.length,
+      systemCount: systems.length,
+      polylineCount: polylines.length,
+      contourCount: contours.length,
+      totalSystemLengthPx: totalSystemLength,
+      totalSystemLengthCadUnits: totalSystemLength,
+      entityCount: entities.length,
+      layerCount: Array.isArray(cad.layers) ? cad.layers.length : 0,
+    },
+    layers: Array.isArray(cad.layers) ? cad.layers.map((layer: any) => ({ ...layer, discipline: classifyCadLayerName(layer.name) })) : [],
+    layouts: cad.layouts ?? [],
+    lines,
+    polylines,
+    circles,
+    contours,
+    symbolCandidates,
+    textRegions,
+    systems,
+    thumbnailSvg: cad.thumbnailSvg,
+    warnings: cad.status === "converter_required" ? [cad.converter?.message ?? "DWG converter required"] : [],
+    duration_ms: 0,
+  };
+}
+
+async function resolveAnalysisDocForCad(projectId: string, documentId: string, sourceKind: "source_document" | "file_node") {
+  if (sourceKind === "file_node") {
+    const fileNode = await prisma.fileNode.findFirst({ where: { id: documentId, projectId } });
+    return fileNode ? { ...fileNode, fileName: fileNode.name, source: "file_node" } : null;
+  }
+  return prisma.sourceDocument.findFirst({ where: { id: documentId, projectId } });
 }
 
 async function safeJson(response: Response) {
@@ -1224,8 +1799,7 @@ export async function visionRoutes(app: FastifyInstance) {
     }
 
     try {
-      const result = await runAnalyzeDrawingGeometry({
-        pdfPath: resolved.absPath,
+      const parameters = {
         pageNumber,
         dpi: (body.dpi as number) ?? 150,
         preset: String(body.preset ?? "generic"),
@@ -1237,15 +1811,23 @@ export async function visionRoutes(app: FastifyInstance) {
         snapTolerance: typeof body.snapTolerance === "number" ? body.snapTolerance : undefined,
         maxLines: typeof body.maxLines === "number" ? body.maxLines : undefined,
         maxRegions: typeof body.maxRegions === "number" ? body.maxRegions : undefined,
+      };
+      const result = await runAnalyzeDrawingGeometry({
+        pdfPath: resolved.absPath,
+        ...parameters,
       });
 
       if (!result.success) {
         return reply.code(500).send({ ...result, success: false, message: result.error ?? "Geometry analysis failed" });
       }
+      const analysisId = body.persist === false
+        ? undefined
+        : await recordDrawingAnalysisRun(projectId, resolved.doc, result, parameters, "analyzeDrawingGeometry");
 
       return {
         ...result,
         success: true,
+        analysisId,
         projectId,
         documentId,
         fileName: resolved.doc.fileName,
@@ -1285,8 +1867,7 @@ export async function visionRoutes(app: FastifyInstance) {
     }
 
     try {
-      const result = await runAnalyzeDrawingGeometry({
-        pdfPath: resolved.absPath,
+      const parameters = {
         pageNumber,
         dpi: (body.dpi as number) ?? 150,
         preset: String(body.preset ?? "generic"),
@@ -1298,13 +1879,21 @@ export async function visionRoutes(app: FastifyInstance) {
         snapTolerance: typeof body.snapTolerance === "number" ? body.snapTolerance : undefined,
         maxLines: typeof body.maxLines === "number" ? body.maxLines : undefined,
         maxRegions: typeof body.maxRegions === "number" ? body.maxRegions : undefined,
+      };
+      const result = await runAnalyzeDrawingGeometry({
+        pdfPath: resolved.absPath,
+        ...parameters,
       });
       if (!result.success) {
         return reply.code(500).send({ ...result, success: false, message: result.error ?? "Trace systems failed" });
       }
+      const analysisId = body.persist === false
+        ? undefined
+        : await recordDrawingAnalysisRun(projectId, resolved.doc, result, parameters, "traceDrawingSystems");
       return {
         ...result,
         success: true,
+        analysisId,
         projectId,
         documentId,
         fileName: resolved.doc.fileName,
@@ -1314,6 +1903,62 @@ export async function visionRoutes(app: FastifyInstance) {
       return reply.code(500).send({
         message: "Trace systems failed",
         error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+  // ── POST /api/vision/analyze-cad-geometry ─────────────────────────────
+  // Native CAD drawing intelligence for DXF/DWG files. Uses the existing
+  // DWG processing service for direct DXF parsing and optional DWG->DXF
+  // conversion, then normalizes entities into the same broad geometry schema.
+  app.post("/api/vision/analyze-cad-geometry", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = String(body.projectId ?? "");
+    const documentId = String(body.documentId ?? "");
+    const sourceKind = body.sourceKind === "file_node" ? "file_node" as const : "source_document" as const;
+    const preset = String(body.preset ?? "generic");
+    const traceSystems = body.traceSystems !== false;
+    const maxEntities = Math.max(50, Math.min(5000, Number(body.maxEntities ?? body.maxLines ?? 1200)));
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+
+    try {
+      const started = Date.now();
+      const cad = await getDwgProcessingResult(projectId, documentId, {
+        refresh: body.refresh === true,
+        sourceKind,
+      });
+      const result = buildCadDrawingAnalysis(cad, preset, traceSystems, maxEntities);
+      result.duration_ms = Date.now() - started;
+      const parameters = {
+        sourceKind,
+        preset,
+        traceSystems,
+        maxEntities,
+        refresh: body.refresh === true,
+      };
+      const doc = body.persist === false ? null : await resolveAnalysisDocForCad(projectId, documentId, sourceKind).catch(() => null);
+      const analysisId = doc
+        ? await recordDrawingAnalysisRun(projectId, doc, result, parameters, "analyzeCadGeometry")
+        : undefined;
+      return {
+        ...result,
+        success: true,
+        analysisId,
+        projectId,
+        documentId,
+        fileName: cad.fileName,
+      };
+    } catch (err) {
+      const statusCode = typeof (err as { statusCode?: unknown }).statusCode === "number"
+        ? (err as { statusCode: number }).statusCode
+        : 500;
+      return reply.code(statusCode).send({
+        success: false,
+        message: "CAD geometry analysis failed",
+        error: err instanceof Error ? err.message : String(err),
+        result: (err as { result?: unknown }).result,
       });
     }
   });
@@ -1330,6 +1975,8 @@ export async function visionRoutes(app: FastifyInstance) {
     const imageHeight = Number(body.imageHeight ?? 0);
     const defaultGroupName = String(body.groupName ?? "Drawing Intelligence");
     const detections = Array.isArray(body.detections) ? body.detections as Record<string, unknown>[] : [];
+    const firstDetectionMetadata = asRecord(asRecord(detections[0] ?? {}).metadata);
+    const analysisId = String(body.analysisId ?? firstDetectionMetadata.analysisId ?? "");
 
     if (!projectId || !documentId) {
       return reply.code(400).send({ message: "projectId and documentId are required" });
@@ -1340,6 +1987,7 @@ export async function visionRoutes(app: FastifyInstance) {
 
     const annotations: unknown[] = [];
     const errors: string[] = [];
+    const resolvedForRun = analysisId ? await resolveDocPdf(request.store!, projectId, documentId).catch(() => null) : null;
 
     for (const [index, detection] of detections.entries()) {
       try {
@@ -1356,6 +2004,7 @@ export async function visionRoutes(app: FastifyInstance) {
         const label = String(detection.label ?? detection.id ?? `Detection ${index + 1}`);
         const metadata = sanitizeJsonForPostgres({
           ...(asRecord(detection.metadata)),
+          analysisId: analysisId || undefined,
           canvasWidth: imageWidth || undefined,
           canvasHeight: imageHeight || undefined,
           detectionId: detection.id,
@@ -1385,11 +2034,127 @@ export async function visionRoutes(app: FastifyInstance) {
       }
     }
 
+    if (analysisId && resolvedForRun && !("error" in resolvedForRun)) {
+      const ids = annotations.map((annotation: any) => String(annotation?.id ?? "")).filter(Boolean);
+      await updateDrawingAnalysisAcceptance(projectId, resolvedForRun.doc, analysisId, ids);
+    }
+
     return {
       success: errors.length === 0,
       savedCount: annotations.length,
       annotations,
       errors,
+    };
+  });
+
+  // ── POST /api/vision/list-analyses ──────────────────────────────────────
+  // Lists previous drawing-intelligence runs persisted against the document.
+  app.post("/api/vision/list-analyses", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = String(body.projectId ?? "");
+    const documentId = String(body.documentId ?? "");
+    const pageNumber = body.pageNumber === undefined ? undefined : Number(body.pageNumber);
+    const includeDetections = body.includeDetections === true;
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    const runs = currentAnalysisRuns(resolved.doc)
+      .filter((run) => pageNumber === undefined || Number(run.pageNumber) === pageNumber)
+      .map((run) => includeDetections ? run : {
+        id: run.id,
+        status: run.status,
+        tool: run.tool,
+        createdAt: run.createdAt,
+        updatedAt: run.updatedAt,
+        documentId,
+        fileName: resolved.doc.fileName,
+        pageNumber: run.pageNumber,
+        preset: run.preset,
+        parameters: run.parameters,
+        imageWidth: run.imageWidth,
+        imageHeight: run.imageHeight,
+        scaleMetadata: run.scaleMetadata,
+        summary: run.summary,
+        warnings: run.warnings,
+        acceptedCount: Number(run.acceptedCount ?? 0),
+        rejectedCount: Number(run.rejectedCount ?? 0),
+        savedAnnotationIds: Array.isArray(run.savedAnnotationIds) ? run.savedAnnotationIds : [],
+      });
+
+    return { success: true, documentId, fileName: resolved.doc.fileName, count: runs.length, analyses: runs };
+  });
+
+  // ── POST /api/vision/compare-analysis-to-takeoff ───────────────────────
+  // Compares a stored detection run against saved annotations and estimate links.
+  app.post("/api/vision/compare-analysis-to-takeoff", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = String(body.projectId ?? "");
+    const documentId = String(body.documentId ?? "");
+    const analysisId = body.analysisId === undefined ? undefined : String(body.analysisId);
+    const pageNumber = body.pageNumber === undefined ? undefined : Number(body.pageNumber);
+    const limit = Math.max(1, Math.min(500, Number(body.limit ?? 120)));
+    if (!projectId || !documentId) {
+      return reply.code(400).send({ message: "projectId and documentId are required" });
+    }
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+    const run = findAnalysisRun(resolved.doc, analysisId, pageNumber);
+    if (!run) {
+      return {
+        success: true,
+        documentId,
+        analysisId: analysisId ?? null,
+        found: false,
+        message: "No stored drawing analysis matched the request.",
+        detectedCount: 0,
+        savedCount: 0,
+        linkedCount: 0,
+        unsavedDetections: [],
+        savedButUnlinked: [],
+      };
+    }
+
+    const annotations = await request.store!.listTakeoffAnnotations(projectId, documentId, Number(run.pageNumber)).catch(() => []);
+    const links = await request.store!.listTakeoffLinks(projectId).catch(() => []);
+    const linkedAnnotationIds = new Set((Array.isArray(links) ? links : []).map((link: any) => String(link.annotationId)));
+    const annotationByDetectionId = new Map<string, any>();
+    for (const annotation of annotations as any[]) {
+      const metadata = asRecord(annotation?.metadata);
+      if (String(metadata.analysisId ?? "") !== String(run.id)) continue;
+      const detectionId = String(metadata.detectionId ?? "");
+      if (detectionId) annotationByDetectionId.set(detectionId, annotation);
+    }
+
+    const refs = detectionRefsFromRun(run);
+    const saved = refs.filter((ref) => annotationByDetectionId.has(String(ref.id)));
+    const unsaved = refs.filter((ref) => !annotationByDetectionId.has(String(ref.id)));
+    const savedButUnlinked = saved
+      .map((ref) => {
+        const annotation = annotationByDetectionId.get(String(ref.id));
+        return { detection: ref, annotationId: annotation?.id, label: annotation?.label };
+      })
+      .filter((entry) => entry.annotationId && !linkedAnnotationIds.has(String(entry.annotationId)));
+
+    return {
+      success: true,
+      found: true,
+      documentId,
+      fileName: resolved.doc.fileName,
+      analysisId: run.id,
+      pageNumber: run.pageNumber,
+      preset: run.preset,
+      summary: run.summary,
+      detectedCount: refs.length,
+      savedCount: saved.length,
+      linkedCount: saved.length - savedButUnlinked.length,
+      unsavedCount: unsaved.length,
+      savedButUnlinkedCount: savedButUnlinked.length,
+      unsavedDetections: unsaved.slice(0, limit),
+      savedButUnlinked: savedButUnlinked.slice(0, limit),
+      note: "Unsaved detections are not yet takeoff annotations. Saved-but-unlinked annotations exist on the drawing but have no worksheet takeoff link.",
     };
   });
 
@@ -1408,21 +2173,8 @@ export async function visionRoutes(app: FastifyInstance) {
       return reply.code(400).send({ message: "projectId, documentId, and boundingBox are required" });
     }
 
-    const doc = await request.store!.getDocument(projectId, documentId);
-    if (!doc) {
-      return reply.code(404).send({ message: "Document not found" });
-    }
-
-    if (!doc.storagePath) {
-      return reply.code(400).send({ message: "Document has no file on disk" });
-    }
-
-    const absPath = resolveApiPath(doc.storagePath);
-    try {
-      await access(absPath);
-    } catch {
-      return reply.code(404).send({ message: "PDF file not found on disk" });
-    }
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
 
     // Use the render pipeline to crop the region directly
     let renderPdfPage: typeof import("@bidwright/vision")["renderPdfPage"];
@@ -1435,7 +2187,7 @@ export async function visionRoutes(app: FastifyInstance) {
 
     try {
       const result = await renderPdfPage({
-        pdfPath: absPath,
+        pdfPath: resolved.absPath,
         pageNumber,
         dpi: 300,
         region: {

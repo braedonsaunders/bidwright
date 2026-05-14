@@ -3136,6 +3136,7 @@ export function TakeoffTab({
         pageNumber: page,
         imageWidth: drawingAnalysisResult.imageWidth,
         imageHeight: drawingAnalysisResult.imageHeight,
+        analysisId: drawingAnalysisResult.analysisId,
         groupName,
         color: "#0ea5e9",
         detections: segments.map((segment) => ({
@@ -3155,6 +3156,7 @@ export function TakeoffTab({
           measurement: { value: segment.lengthPx, unit: "px" },
           metadata: {
             sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
             preset: drawingAnalysisPreset,
             systemId: system.id,
             systemLengthPx: system.lengthPx,
@@ -3191,6 +3193,7 @@ export function TakeoffTab({
         pageNumber: page,
         imageWidth: drawingAnalysisResult.imageWidth,
         imageHeight: drawingAnalysisResult.imageHeight,
+        analysisId: drawingAnalysisResult.analysisId,
         groupName: "Drawing Intelligence Symbols",
         color: "#f59e0b",
         detections: [{
@@ -3207,6 +3210,7 @@ export function TakeoffTab({
           measurement: { value: 1, unit: "count" },
           metadata: {
             sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
             preset: drawingAnalysisPreset,
             bounds: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
           },

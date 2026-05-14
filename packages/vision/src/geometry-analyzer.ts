@@ -61,6 +61,36 @@ export interface DrawingCircleDetection {
   source: string;
 }
 
+export interface DrawingPolylineDetection {
+  id: string;
+  source: string;
+  systemId?: string | null;
+  label?: string | null;
+  segmentIds: string[];
+  pointCount: number;
+  points: Array<{ x: number; y: number }>;
+  pointLimitApplied?: boolean;
+  lengthPx: number;
+  bbox: DrawingGeometryBounds;
+  closed: boolean;
+  confidence: number;
+}
+
+export interface DrawingContourDetection {
+  id: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  area: number;
+  perimeter: number;
+  pointCount: number;
+  points: Array<{ x: number; y: number }>;
+  bbox: DrawingGeometryBounds;
+  confidence: number;
+  source: string;
+}
+
 export interface DrawingSymbolCandidate {
   id: string;
   x: number;
@@ -120,17 +150,22 @@ export interface AnalyzeDrawingGeometryResult {
   imageHeight: number;
   pageWidth?: number;
   pageHeight?: number;
+  scaleMetadata?: Record<string, unknown>;
   preprocessing?: Record<string, unknown>;
   summary: {
     lineCount: number;
+    polylineCount: number;
     circleCount: number;
+    contourCount: number;
     symbolCandidateCount: number;
     textRegionCount: number;
     systemCount: number;
     totalSystemLengthPx: number;
   };
   lines: DrawingLineSegment[];
+  polylines: DrawingPolylineDetection[];
   circles: DrawingCircleDetection[];
+  contours: DrawingContourDetection[];
   symbolCandidates: DrawingSymbolCandidate[];
   textRegions: DrawingTextRegion[];
   systems: DrawingTracedSystem[];
@@ -147,14 +182,18 @@ function emptyResult(duration_ms: number, error?: string): AnalyzeDrawingGeometr
     imageHeight: 0,
     summary: {
       lineCount: 0,
+      polylineCount: 0,
       circleCount: 0,
+      contourCount: 0,
       symbolCandidateCount: 0,
       textRegionCount: 0,
       systemCount: 0,
       totalSystemLengthPx: 0,
     },
     lines: [],
+    polylines: [],
     circles: [],
+    contours: [],
     symbolCandidates: [],
     textRegions: [],
     systems: [],
@@ -205,14 +244,18 @@ export async function runAnalyzeDrawingGeometry(
       success: parsed.success !== false,
       summary: {
         lineCount: Number(parsed.summary?.lineCount ?? parsed.lines?.length ?? 0),
+        polylineCount: Number(parsed.summary?.polylineCount ?? parsed.polylines?.length ?? 0),
         circleCount: Number(parsed.summary?.circleCount ?? parsed.circles?.length ?? 0),
+        contourCount: Number(parsed.summary?.contourCount ?? parsed.contours?.length ?? 0),
         symbolCandidateCount: Number(parsed.summary?.symbolCandidateCount ?? parsed.symbolCandidates?.length ?? 0),
         textRegionCount: Number(parsed.summary?.textRegionCount ?? parsed.textRegions?.length ?? 0),
         systemCount: Number(parsed.summary?.systemCount ?? parsed.systems?.length ?? 0),
         totalSystemLengthPx: Number(parsed.summary?.totalSystemLengthPx ?? 0),
       },
       lines: Array.isArray(parsed.lines) ? parsed.lines : [],
+      polylines: Array.isArray(parsed.polylines) ? parsed.polylines : [],
       circles: Array.isArray(parsed.circles) ? parsed.circles : [],
+      contours: Array.isArray(parsed.contours) ? parsed.contours : [],
       symbolCandidates: Array.isArray(parsed.symbolCandidates) ? parsed.symbolCandidates : [],
       textRegions: Array.isArray(parsed.textRegions) ? parsed.textRegions : [],
       systems: Array.isArray(parsed.systems) ? parsed.systems : [],

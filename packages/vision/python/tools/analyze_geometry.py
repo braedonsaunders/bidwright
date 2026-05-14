@@ -105,7 +105,8 @@ def analyze_page(
     if len(segments) >= max_lines:
         warnings.append(f"Line output capped at {max_lines}; use a higher maxLines for dense sheets.")
 
-    text_regions = detect_text_regions(gray, max_regions=max_regions) if include_text_regions else []
+    text_regions_for_filter = detect_text_regions(gray, max_regions=max_regions)
+    text_regions = text_regions_for_filter if include_text_regions else []
     symbol_candidates = (
         find_symbol_candidates(
             img,
@@ -120,8 +121,18 @@ def analyze_page(
         if include_symbols
         else []
     )
-    circles = detect_circles(gray, img_w, img_h, max_regions=max_regions) if include_circles else []
-    systems = trace_linear_systems(segments, preset=preset, snap_tolerance=snap) if trace_systems else []
+    circles = detect_circles(gray, img_w, img_h, text_regions_for_filter, max_regions=max_regions) if include_circles else []
+    systems = trace_linear_systems(segments, preset=preset, snap_tolerance=snap, img_w=img_w, img_h=img_h) if trace_systems else []
+    if (
+        trace_systems
+        and len(text_regions_for_filter) >= min(max(80, max_regions * 0.6), max_regions)
+        and systems
+        and float(systems[0].get("lengthPx", 0)) < min(img_w, img_h) * 0.35
+    ):
+        warnings.append("Text-heavy sheet detected; suppressed short text-line topology candidates.")
+        systems = []
+    polylines = build_polylines(segments, systems, max_regions=max_regions)
+    contours = detect_contours(cleaned, img_w, img_h, max_regions=max_regions)
 
     duration_ms = round((time.time() - start) * 1000)
     return {
@@ -134,6 +145,19 @@ def analyze_page(
         "imageHeight": img_h,
         "pageWidth": round(float(page_w), 2),
         "pageHeight": round(float(page_h), 2),
+        "scaleMetadata": {
+            "dpi": dpi,
+            "pdfPageWidthPt": round(float(page_w), 2),
+            "pdfPageHeightPt": round(float(page_h), 2),
+            "imageWidthPx": img_w,
+            "imageHeightPx": img_h,
+            "pixelsPerPdfPointX": round(img_w / max(float(page_w), 1.0), 6),
+            "pixelsPerPdfPointY": round(img_h / max(float(page_h), 1.0), 6),
+            "pixelsPerPaperInchX": round(img_w / max(float(page_w) / 72.0, 0.0001), 4),
+            "pixelsPerPaperInchY": round(img_h / max(float(page_h) / 72.0, 0.0001), 4),
+            "realWorldScale": None,
+            "calibrationRequired": True,
+        },
         "preprocessing": {
             "threshold": "adaptive-gaussian",
             "morphology": "linework-close-open",
@@ -146,10 +170,14 @@ def analyze_page(
             "symbolCandidateCount": len(symbol_candidates),
             "textRegionCount": len(text_regions),
             "systemCount": len(systems),
+            "polylineCount": len(polylines),
+            "contourCount": len(contours),
             "totalSystemLengthPx": round(sum(float(s.get("lengthPx", 0)) for s in systems), 2),
         },
         "lines": [segment.to_json() for segment in segments],
+        "polylines": polylines,
         "circles": circles,
+        "contours": contours,
         "symbolCandidates": _normalize_symbol_candidates(symbol_candidates),
         "textRegions": text_regions,
         "systems": systems,
@@ -198,36 +226,228 @@ def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: 
     ]
 
 
-def detect_circles(gray: np.ndarray, img_w: int, img_h: int, max_regions: int) -> list[dict[str, Any]]:
+def detect_circles(gray: np.ndarray, img_w: int, img_h: int, text_regions: list[dict[str, Any]], max_regions: int) -> list[dict[str, Any]]:
     blurred = cv2.medianBlur(gray, 5)
     min_dim = min(img_w, img_h)
     circles = cv2.HoughCircles(
         blurred,
         cv2.HOUGH_GRADIENT,
-        dp=1.4,
-        minDist=max(24, min_dim * 0.015),
+        dp=1.35,
+        minDist=max(28, min_dim * 0.018),
         param1=100,
-        param2=42,
-        minRadius=max(6, int(min_dim * 0.003)),
-        maxRadius=max(24, int(min_dim * 0.05)),
+        param2=62,
+        minRadius=max(7, int(min_dim * 0.003)),
+        maxRadius=max(18, int(min_dim * 0.024)),
     )
     if circles is None:
         return []
     result: list[dict[str, Any]] = []
-    for idx, c in enumerate(np.round(circles[0]).astype(int)[:max_regions]):
+    seen: list[tuple[int, int, int]] = []
+    for c in np.round(circles[0]).astype(int):
         cx, cy, radius = [int(v) for v in c]
         if radius <= 0:
             continue
+        if _point_in_sheet_margin(cx, cy, img_w, img_h) or _point_in_title_block(cx, cy, img_w, img_h):
+            continue
+        if _circle_hits_text_region(cx, cy, radius, text_regions):
+            continue
+        if not _circle_has_clean_ring(gray, cx, cy, radius):
+            continue
+        if any(math.hypot(cx - sx, cy - sy) < (radius + sr) * 0.72 for sx, sy, sr in seen):
+            continue
+        seen.append((cx, cy, radius))
         result.append({
-            "id": f"cir-{idx + 1}",
+            "id": f"cir-{len(result) + 1}",
             "cx": cx,
             "cy": cy,
             "radius": radius,
             "bbox": {"x": cx - radius, "y": cy - radius, "width": radius * 2, "height": radius * 2},
-            "confidence": 0.66,
+            "confidence": 0.72,
             "source": "hough-circle",
         })
+        if len(result) >= max_regions:
+            break
     return result
+
+
+def _circle_hits_text_region(cx: int, cy: int, radius: int, text_regions: list[dict[str, Any]]) -> bool:
+    circle_box = {
+        "x": cx - radius,
+        "y": cy - radius,
+        "width": radius * 2,
+        "height": radius * 2,
+    }
+    circle_area = max(1, circle_box["width"] * circle_box["height"])
+    for region in text_regions:
+        rx = int(region.get("x", 0))
+        ry = int(region.get("y", 0))
+        rw = int(region.get("w", region.get("width", 0)))
+        rh = int(region.get("h", region.get("height", 0)))
+        if rw <= 0 or rh <= 0:
+            continue
+        pad = max(4, int(radius * 0.22))
+        region_box = {"x": rx - pad, "y": ry - pad, "width": rw + pad * 2, "height": rh + pad * 2}
+        overlap_w = min(circle_box["x"] + circle_box["width"], region_box["x"] + region_box["width"]) - max(circle_box["x"], region_box["x"])
+        overlap_h = min(circle_box["y"] + circle_box["height"], region_box["y"] + region_box["height"]) - max(circle_box["y"], region_box["y"])
+        if overlap_w <= 0 or overlap_h <= 0:
+            continue
+        if (overlap_w * overlap_h) / circle_area > 0.18:
+            return True
+    return False
+
+
+def _circle_has_clean_ring(gray: np.ndarray, cx: int, cy: int, radius: int) -> bool:
+    img_h, img_w = gray.shape
+    pad = max(3, int(radius * 0.22))
+    x1 = max(0, cx - radius - pad)
+    y1 = max(0, cy - radius - pad)
+    x2 = min(img_w, cx + radius + pad)
+    y2 = min(img_h, cy + radius + pad)
+    if x2 <= x1 or y2 <= y1:
+        return False
+    crop = gray[y1:y2, x1:x2]
+    edges = cv2.Canny(crop, 60, 160)
+    yy, xx = np.indices(edges.shape)
+    local_cx = cx - x1
+    local_cy = cy - y1
+    dist = np.sqrt((xx - local_cx) ** 2 + (yy - local_cy) ** 2)
+    ring_mask = (dist >= radius - max(2, radius * 0.16)) & (dist <= radius + max(2, radius * 0.16))
+    inner_mask = dist < radius * 0.55
+    if int(np.count_nonzero(ring_mask)) == 0:
+        return False
+    ring_density = float(np.count_nonzero(edges[ring_mask])) / float(np.count_nonzero(ring_mask))
+    inner_density = float(np.count_nonzero(edges[inner_mask])) / max(float(np.count_nonzero(inner_mask)), 1.0)
+    return 0.018 <= ring_density <= 0.42 and inner_density <= 0.22
+
+
+def detect_contours(binary: np.ndarray, img_w: int, img_h: int, max_regions: int) -> list[dict[str, Any]]:
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    min_area = max(90, int(img_w * img_h * 0.000012))
+    max_area = img_w * img_h * 0.18
+    results: list[dict[str, Any]] = []
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < min_area or area > max_area:
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        if w < 6 or h < 6:
+            continue
+        perimeter = float(cv2.arcLength(contour, True))
+        approx = cv2.approxPolyDP(contour, 0.025 * perimeter, True) if perimeter > 0 else contour
+        points = [
+            {"x": int(point[0][0]), "y": int(point[0][1])}
+            for point in approx[:16]
+        ]
+        results.append({
+            "x": int(x),
+            "y": int(y),
+            "w": int(w),
+            "h": int(h),
+            "area": round(area, 2),
+            "perimeter": round(perimeter, 2),
+            "pointCount": int(len(approx)),
+            "points": points,
+            "bbox": {"x": int(x), "y": int(y), "width": int(w), "height": int(h)},
+            "confidence": 0.56,
+            "source": "opencv-contour",
+        })
+    results.sort(key=lambda r: (-float(r["area"]), int(r["y"]), int(r["x"])))
+    return [
+        {"id": f"ctr-{idx + 1}", **contour}
+        for idx, contour in enumerate(results[:max_regions])
+    ]
+
+
+def build_polylines(segments: list[Segment], systems: list[dict[str, Any]], max_regions: int) -> list[dict[str, Any]]:
+    by_id = {segment.id: segment for segment in segments}
+    polylines: list[dict[str, Any]] = []
+    for system in systems[:max_regions]:
+        component = [by_id[sid] for sid in system.get("segmentIds", []) if sid in by_id]
+        if not component:
+            continue
+        ordered_points = _greedy_segment_chain(component)
+        bounds = _component_bounds(component)
+        polylines.append({
+            "id": f"pl-{len(polylines) + 1}",
+            "source": "system-chain",
+            "systemId": system.get("id"),
+            "label": system.get("label"),
+            "segmentIds": [segment.id for segment in component],
+            "pointCount": len(ordered_points),
+            "points": ordered_points[:240],
+            "pointLimitApplied": len(ordered_points) > 240,
+            "lengthPx": round(sum(segment.length for segment in component), 2),
+            "bbox": bounds,
+            "closed": _polyline_closed(ordered_points),
+            "confidence": round(float(system.get("confidence", 0.5)), 3),
+        })
+    return polylines
+
+
+def _greedy_segment_chain(segments: list[Segment]) -> list[dict[str, float]]:
+    remaining = segments[:]
+    first = remaining.pop(0)
+    points: list[tuple[float, float]] = [(first.x1, first.y1), (first.x2, first.y2)]
+    while remaining and len(points) < 500:
+        end = points[-1]
+        best_index = -1
+        best_reversed = False
+        best_distance = float("inf")
+        for idx, segment in enumerate(remaining):
+            d_start = math.hypot(segment.x1 - end[0], segment.y1 - end[1])
+            d_end = math.hypot(segment.x2 - end[0], segment.y2 - end[1])
+            if d_start < best_distance:
+                best_index = idx
+                best_reversed = False
+                best_distance = d_start
+            if d_end < best_distance:
+                best_index = idx
+                best_reversed = True
+                best_distance = d_end
+        if best_index < 0:
+            break
+        segment = remaining.pop(best_index)
+        points.append((segment.x1, segment.y1) if best_reversed else (segment.x2, segment.y2))
+    return [{"x": round(x, 2), "y": round(y, 2)} for x, y in points]
+
+
+def _polyline_closed(points: list[dict[str, float]]) -> bool:
+    if len(points) < 3:
+        return False
+    first = points[0]
+    last = points[-1]
+    return math.hypot(float(last["x"]) - float(first["x"]), float(last["y"]) - float(first["y"])) <= 8
+
+
+def _point_in_sheet_margin(x: float, y: float, img_w: int, img_h: int) -> bool:
+    margin_x = img_w * 0.018
+    margin_y = img_h * 0.018
+    return x < margin_x or x > img_w - margin_x or y < margin_y or y > img_h - margin_y
+
+
+def _point_in_title_block(x: float, y: float, img_w: int, img_h: int) -> bool:
+    return (x > img_w * 0.60 and y > img_h * 0.74) or (y > img_h * 0.91)
+
+
+def _segment_midpoint(segment: Segment) -> tuple[float, float]:
+    return (segment.x1 + segment.x2) / 2, (segment.y1 + segment.y2) / 2
+
+
+def _segment_for_topology(segment: Segment, img_w: int, img_h: int) -> bool:
+    mx, my = _segment_midpoint(segment)
+    if _point_in_title_block(mx, my, img_w, img_h):
+        return False
+    horizontal = abs(segment.y2 - segment.y1) <= max(3.0, segment.length * 0.025)
+    vertical = abs(segment.x2 - segment.x1) <= max(3.0, segment.length * 0.025)
+    if horizontal and (my < img_h * 0.035 or my > img_h * 0.955):
+        return False
+    if vertical and (mx < img_w * 0.045 or mx > img_w * 0.955):
+        return False
+    if segment.length > img_w * 0.72 and (my < img_h * 0.08 or my > img_h * 0.88):
+        return False
+    if segment.length > img_h * 0.72 and (mx < img_w * 0.08 or mx > img_w * 0.92):
+        return False
+    return True
 
 
 def detect_text_regions(gray: np.ndarray, max_regions: int) -> list[dict[str, Any]]:
@@ -264,15 +484,16 @@ def detect_text_regions(gray: np.ndarray, max_regions: int) -> list[dict[str, An
     ]
 
 
-def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: float) -> list[dict[str, Any]]:
-    if not segments:
+def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: float, img_w: int, img_h: int) -> list[dict[str, Any]]:
+    topology_segments = [segment for segment in segments if _segment_for_topology(segment, img_w, img_h)]
+    if not topology_segments:
         return []
 
     nodes: list[dict[str, Any]] = []
     segment_nodes: dict[str, tuple[int, int]] = {}
     adjacency: dict[int, list[tuple[int, Segment]]] = defaultdict(list)
 
-    for segment in segments:
+    for segment in topology_segments:
         a = _snap_node(nodes, segment.x1, segment.y1, snap_tolerance)
         b = _snap_node(nodes, segment.x2, segment.y2, snap_tolerance)
         if a == b:
@@ -285,7 +506,7 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
     systems: list[dict[str, Any]] = []
     preset_label = _preset_label(preset)
 
-    for segment in segments:
+    for segment in topology_segments:
         if segment.id in seen or segment.id not in segment_nodes:
             continue
         queue = deque([segment.id])
@@ -304,10 +525,10 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
                     if neighbor_seg.id not in seen:
                         queue.append(neighbor_seg.id)
 
-        component_segments = [s for s in segments if s.id in set(component_ids)]
+        component_segments = [s for s in topology_segments if s.id in set(component_ids)]
         if len(component_segments) == 0:
             continue
-        if _component_noise(component_segments, component_nodes, adjacency):
+        if _component_noise(component_segments, component_nodes, adjacency, img_w, img_h):
             continue
 
         fitting_counts = _infer_fittings(component_nodes, adjacency)
@@ -331,6 +552,19 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
         })
 
     systems.sort(key=lambda s: (-float(s["lengthPx"]), str(s["id"])))
+    if systems:
+        min_dim = min(img_w, img_h)
+        minimum_meaningful_length = max(520.0, min_dim * 0.16)
+        strong_systems = [
+            system
+            for system in systems
+            if float(system["lengthPx"]) >= minimum_meaningful_length
+            or (int(system["segmentCount"]) >= 8 and float(system["lengthPx"]) >= minimum_meaningful_length * 0.75)
+        ]
+        if float(systems[0]["lengthPx"]) < minimum_meaningful_length:
+            systems = []
+        elif len(strong_systems) >= max(3, min(len(systems), 8)):
+            systems = strong_systems
     return [
         {**system, "id": f"sys-{idx + 1}", "label": f"{preset_label} run {idx + 1}"}
         for idx, system in enumerate(systems[:80])
@@ -479,11 +713,26 @@ def _component_bounds(segments: list[Segment]) -> dict[str, float]:
     }
 
 
-def _component_noise(segments: list[Segment], nodes: set[int], adjacency: dict[int, list[tuple[int, Segment]]]) -> bool:
+def _component_noise(segments: list[Segment], nodes: set[int], adjacency: dict[int, list[tuple[int, Segment]]], img_w: int, img_h: int) -> bool:
     length = sum(s.length for s in segments)
+    bounds = _component_bounds(segments)
+    center_x = float(bounds["x"]) + float(bounds["width"]) / 2
+    center_y = float(bounds["y"]) + float(bounds["height"]) / 2
+    if _point_in_title_block(center_x, center_y, img_w, img_h):
+        return True
+    if center_y < img_h * 0.05 or center_y > img_h * 0.95:
+        return True
+    if center_x < img_w * 0.03 or center_x > img_w * 0.97:
+        return True
     if len(segments) == 1 and length < 80:
         return True
+    if len(segments) == 1 and length > min(img_w, img_h) * 0.40:
+        return True
     if len(nodes) <= 2 and len(segments) <= 2 and length < 120:
+        return True
+    if len(segments) <= 2 and float(bounds["height"]) < 8 and float(bounds["width"]) > img_w * 0.35:
+        return True
+    if len(segments) <= 2 and float(bounds["width"]) < 8 and float(bounds["height"]) > img_h * 0.35:
         return True
     high_degree = any(len(adjacency[n]) >= 3 for n in nodes)
     return len(segments) <= 2 and not high_degree and length < 150
