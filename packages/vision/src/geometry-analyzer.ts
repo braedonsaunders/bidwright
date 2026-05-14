@@ -16,11 +16,14 @@ export type DrawingAnalysisPreset =
   | "civil_linear"
   | "structural";
 
+export type DrawingGeometrySource = "auto" | "pdf_vector" | "raster_cv";
+
 export interface AnalyzeDrawingGeometryRequest {
   pdfPath: string;
   pageNumber?: number;
   dpi?: number;
   preset?: DrawingAnalysisPreset | string;
+  geometrySource?: DrawingGeometrySource | string;
   includeSymbols?: boolean;
   includeTextRegions?: boolean;
   includeCircles?: boolean;
@@ -51,6 +54,10 @@ export interface DrawingLineSegment {
   bbox: DrawingGeometryBounds;
   source: string;
   confidence: number;
+  layer?: string | null;
+  strokeWidth?: number | null;
+  color?: string | null;
+  qualityFlags?: string[];
 }
 
 export interface DrawingCircleDetection {
@@ -140,12 +147,19 @@ export interface DrawingTracedSystem {
   };
   confidence: number;
   warnings: string[];
+  layers?: string[];
+  junctions?: Record<string, number>;
+  qualityFlags?: string[];
 }
 
 export interface AnalyzeDrawingGeometryResult {
   success: boolean;
   schemaVersion: number;
   preset?: string;
+  geometrySource?: string;
+  geometrySourceRequested?: string;
+  sourceConfidence?: number;
+  qualityFlags?: string[];
   pageNumber?: number;
   dpi?: number;
   imageWidth: number;
@@ -215,6 +229,7 @@ export async function runAnalyzeDrawingGeometry(
     pageNumber: request.pageNumber ?? 1,
     dpi: request.dpi ?? 150,
     preset: request.preset ?? "generic",
+    geometrySource: request.geometrySource ?? "auto",
     includeSymbols: request.includeSymbols ?? true,
     includeTextRegions: request.includeTextRegions ?? true,
     includeCircles: request.includeCircles ?? true,

@@ -277,18 +277,19 @@ function findCategoryByIdOrName(
   return undefined;
 }
 
-function findCategoryByBucket(categories: EntityCategoryRecord[], buckets: string[]) {
-  const enabled = sortedEnabledCategories(categories);
-  const normalizedBuckets = buckets.map(normalizeKey).filter(Boolean);
-  for (const bucket of normalizedBuckets) {
-    const match = enabled.find((category) =>
-      normalizeKey(category.analyticsBucket) === bucket ||
-      normalizeKey(category.entityType).includes(bucket) ||
-      normalizeKey(category.name).includes(bucket)
-    );
-    if (match) return match;
-  }
-  return undefined;
+function categoryRequiresRateScheduleItem(category: EntityCategoryRecord | undefined) {
+  const calcType = normalizeKey(category?.calculationType ?? "manual");
+  return category?.itemSource === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
+}
+
+function categoryCanAcceptCandidate(category: EntityCategoryRecord | undefined, candidate: SearchCandidate) {
+  if (!category || category.enabled === false) return false;
+  const links = candidateLinks(candidate);
+  const requiresRateItem = categoryRequiresRateScheduleItem(category);
+  const candidateNeedsRateItem = candidate.sourceType === "labor_unit" && !links.rateScheduleItemId;
+  if (candidateNeedsRateItem) return requiresRateItem;
+  if (links.rateScheduleItemId) return requiresRateItem;
+  return !requiresRateItem;
 }
 
 function resolveCandidateCategory(
@@ -297,7 +298,7 @@ function resolveCandidateCategory(
   categories: EntityCategoryRecord[],
 ) {
   const payload = asObject(candidate.payload);
-  const requestedCategoryId = input.categoryId ?? stringValue(payload.categoryId);
+  const requestedCategoryId = input.categoryId ?? stringValue(payload.categoryId) ?? stringValue(payload.entityCategoryId);
   if (requestedCategoryId) {
     return findCategoryByIdOrName(categories, { categoryId: requestedCategoryId });
   }
@@ -305,38 +306,20 @@ function resolveCandidateCategory(
     category: input.category ?? stringValue(payload.category),
     entityType: input.entityType ?? stringValue(payload.entityType),
   });
-  if (direct) return direct;
+  if (direct && categoryCanAcceptCandidate(direct, candidate)) return direct;
 
   const candidateDirect = findCategoryByIdOrName(categories, {
     category: candidate.category,
     entityType: candidate.entityType,
   });
-  if (candidateDirect) return candidateDirect;
-
-  if (candidate.sourceType === "labor_unit") {
-    const labour = findCategoryByBucket(categories, ["labour", "labor"]);
-    if (labour) return labour;
+  if (candidateDirect && candidate.sourceType !== "effective_cost" && categoryCanAcceptCandidate(candidateDirect, candidate)) {
+    return candidateDirect;
   }
 
-  const resourceType = normalizeKey(payload.resourceType) || normalizeKey(payload.componentType) || normalizeKey(candidate.category);
-  if (resourceType.includes("equip")) {
-    const equipment = findCategoryByBucket(categories, ["equipment"]);
-    if (equipment) return equipment;
-  }
-  if (resourceType.includes("subcontract") || resourceType.includes("contractor")) {
-    const subcontract = findCategoryByBucket(categories, ["subcontract", "subcontractor"]);
-    if (subcontract) return subcontract;
-  }
-  if (resourceType.includes("labour") || resourceType.includes("labor")) {
-    const labour = findCategoryByBucket(categories, ["labour", "labor"]);
-    if (labour) return labour;
-  }
-  if (resourceType.includes("material") || resourceType.includes("product") || candidate.sourceType === "effective_cost") {
-    const material = findCategoryByBucket(categories, ["material"]);
-    if (material) return material;
-  }
-
-  return findCategoryByBucket(categories, ["material"]) ?? sortedEnabledCategories(categories)[0];
+  const compatible = sortedEnabledCategories(categories).filter((category) =>
+    categoryCanAcceptCandidate(category, candidate)
+  );
+  return compatible.length === 1 ? compatible[0] : undefined;
 }
 
 function categoryNameForSearch(categoryId: string | undefined, category: string | undefined, categories: EntityCategoryRecord[]) {
@@ -986,7 +969,7 @@ export function registerResourceTools(server: McpServer) {
         q: input.q,
       }, categories);
       const warning = preferred.sourceType === "labor_unit" && !candidateLinks(preferred).rateScheduleItemId
-        ? "This is a labour productivity source, not a priced rate item. Apply its laborUnitId/unit values to a labour line, then choose an imported rate schedule item to price the row."
+        ? "This is a productivity source, not a priced rate item. Apply its laborUnitId/unit values to a compatible rate-schedule line, then choose an imported rate schedule item to price the row."
         : undefined;
 
       return {

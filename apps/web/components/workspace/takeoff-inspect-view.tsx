@@ -9,6 +9,7 @@ import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotatio
 import type {
   DrawingAnalysisPreset,
   DrawingGeometryAnalysisResult,
+  DrawingGeometrySource,
   TakeoffLinkRecord,
 } from "@/lib/api";
 
@@ -23,6 +24,7 @@ export type InspectDrawingDetectionKind = "system" | "line" | "symbol" | "circle
 
 export interface InspectDrawingAnalysisSettings {
   preset: DrawingAnalysisPreset;
+  geometrySource: DrawingGeometrySource;
   includeSymbols: boolean;
   includeTextRegions: boolean;
   includeCircles: boolean;
@@ -355,9 +357,12 @@ export interface InspectActions {
   updateDrawingAnalysisSettings: (patch: Partial<InspectDrawingAnalysisSettings>) => void;
   setDrawingAnalysisOverlay: (patch: Partial<InspectDrawingAnalysisSnapshot["overlay"]>) => void;
   selectDrawingDetection: (id: string | null, kind?: InspectDrawingDetectionKind) => void;
+  selectDrawingDetectionGroup: (ids: string[]) => void;
   saveDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line") => Promise<void> | void;
   createLineItemFromDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line", pick: InspectCategoryPick) => Promise<void> | void;
+  createLineItemFromDrawingSymbolGroup: (ids: string[], label: string, pick: InspectCategoryPick) => Promise<void> | void;
   deleteDrawingDetection: (id: string, kind: InspectDrawingDetectionKind) => void;
+  deleteDrawingDetectionGroup: (ids: string[], kind: InspectDrawingDetectionKind) => void;
   selectSmartCountItem: (id: string | null) => void;
   toggleSmartCountItem: (id: string) => void;
   saveSmartCountItem: (id: string) => Promise<void> | void;
@@ -473,6 +478,12 @@ const DRAWING_PRESETS: Array<{ value: DrawingAnalysisPreset; label: string }> = 
   { value: "structural", label: "Structural" },
 ];
 
+const DRAWING_SOURCES: Array<{ value: DrawingGeometrySource; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "pdf_vector", label: "PDF vector" },
+  { value: "raster_cv", label: "Raster CV" },
+];
+
 function PdfEntitiesInspect({
   snapshot,
   actions,
@@ -532,6 +543,52 @@ function CandidateQueueHeader({
   );
 }
 
+function drawingSourceLabel(value: string | null | undefined) {
+  if (value === "pdf-vector" || value === "pdf_vector") return "PDF vector";
+  if (value === "raster-cv" || value === "raster_cv") return "Raster CV";
+  if (value === "cad-native" || value === "cad_native") return "CAD native";
+  return "Auto";
+}
+
+type PdfCountGroup = {
+  id: string;
+  label: string;
+  symbolIds: string[];
+  count: number;
+  avgWidth: number;
+  avgHeight: number;
+  avgConfidence: number;
+  source: string;
+};
+
+function pdfCountGroupsFromSymbols(symbols: DrawingGeometryAnalysisResult["symbolCandidates"]): PdfCountGroup[] {
+  const buckets = new Map<string, DrawingGeometryAnalysisResult["symbolCandidates"]>();
+  for (const symbol of symbols) {
+    const widthBucket = Math.max(4, Math.round(symbol.w / 8) * 8);
+    const heightBucket = Math.max(4, Math.round(symbol.h / 8) * 8);
+    const aspectBucket = Math.round(symbol.aspect * 4) / 4;
+    const key = `${symbol.source}:${widthBucket}:${heightBucket}:${aspectBucket}`;
+    const bucket = buckets.get(key) ?? [];
+    bucket.push(symbol);
+    buckets.set(key, bucket);
+  }
+  return Array.from(buckets.entries())
+    .map(([key, bucket], index) => {
+      const count = bucket.length;
+      return {
+        id: `pdf-count-${index + 1}-${key.replace(/[^a-z0-9]+/gi, "-")}`,
+        label: count > 1 ? `Similar symbol group ${index + 1}` : `Symbol candidate ${index + 1}`,
+        symbolIds: bucket.map((symbol) => symbol.id),
+        count,
+        avgWidth: bucket.reduce((sum, symbol) => sum + symbol.w, 0) / Math.max(count, 1),
+        avgHeight: bucket.reduce((sum, symbol) => sum + symbol.h, 0) / Math.max(count, 1),
+        avgConfidence: bucket.reduce((sum, symbol) => sum + symbol.confidence, 0) / Math.max(count, 1),
+        source: bucket[0]?.source ?? "symbol-candidate",
+      };
+    })
+    .sort((a, b) => b.count - a.count || b.avgConfidence - a.avgConfidence);
+}
+
 function SmartCountInspect({
   snapshot,
   actions,
@@ -562,7 +619,7 @@ function SmartCountInspect({
             className="flex max-w-full items-center gap-1 text-left"
           >
             {collapsed ? <ChevronRight className="h-3 w-3 text-fg/40" /> : <ChevronDown className="h-3 w-3 text-fg/40" />}
-            <span className="truncate text-[11px] font-semibold text-fg">Count candidates</span>
+            <span className="truncate text-[11px] font-semibold text-fg">Smart Count candidates</span>
           </button>
           <p className="mt-0.5 truncate text-[10px] text-fg/40" title={smart.fileName}>
             Page {smart.pageNumber} · {smart.items.length} row{smart.items.length === 1 ? "" : "s"} · {totalSelected.toLocaleString()} selected
@@ -951,8 +1008,10 @@ function DrawingAnalysisInspect({
   const drawing = snapshot.drawingAnalysis;
   if (!drawing) return null;
   const { analysis, settings, overlay, running, savingId, selectedDetectionId } = drawing;
+  const sourceLabel = analysis ? drawingSourceLabel(analysis.geometrySource) : drawingSourceLabel(settings.geometrySource);
   const systems = analysis?.systems ?? [];
   const symbols = analysis?.symbolCandidates ?? [];
+  const countGroups = pdfCountGroupsFromSymbols(symbols);
   const circles = analysis?.circles ?? [];
   const lines = analysis?.lines ?? [];
   const texts = analysis?.textRegions ?? [];
@@ -984,7 +1043,12 @@ function DrawingAnalysisInspect({
       <div className="flex items-start gap-2">
         <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px] font-semibold text-fg">Detected candidates</p>
+          <div className="flex min-w-0 items-center gap-1">
+            <p className="truncate text-[11px] font-semibold text-fg">Drawing intelligence</p>
+            <span className="shrink-0 rounded-full border border-sky-500/25 bg-sky-500/10 px-1.5 py-0.5 text-[9px] font-medium text-sky-600">
+              {sourceLabel}
+            </span>
+          </div>
           <p className="mt-0.5 truncate text-[10px] text-fg/40" title={drawing.fileName}>
             Page {drawing.pageNumber} · {analysis ? `${analysis.duration_ms.toFixed(0)} ms` : "No run yet"}
           </p>
@@ -1014,16 +1078,28 @@ function DrawingAnalysisInspect({
 
       {showSettings && (
         <div className="mt-2 grid gap-2 rounded-md border border-line/70 bg-bg/35 p-2">
-          <label className="grid gap-1">
-            <span className="text-[10px] font-medium uppercase tracking-wider text-fg/40">Preset</span>
-            <select
-              value={settings.preset}
-              onChange={(event) => actions?.updateDrawingAnalysisSettings({ preset: event.target.value as DrawingAnalysisPreset })}
-              className="h-7 rounded-md border border-line bg-panel px-2 text-[11px] text-fg outline-none"
-            >
-              {DRAWING_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
-            </select>
-          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="grid gap-1">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-fg/40">Preset</span>
+              <select
+                value={settings.preset}
+                onChange={(event) => actions?.updateDrawingAnalysisSettings({ preset: event.target.value as DrawingAnalysisPreset })}
+                className="h-7 rounded-md border border-line bg-panel px-2 text-[11px] text-fg outline-none"
+              >
+                {DRAWING_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
+              </select>
+            </label>
+            <label className="grid gap-1">
+              <span className="text-[10px] font-medium uppercase tracking-wider text-fg/40">Source</span>
+              <select
+                value={settings.geometrySource}
+                onChange={(event) => actions?.updateDrawingAnalysisSettings({ geometrySource: event.target.value as DrawingGeometrySource })}
+                className="h-7 rounded-md border border-line bg-panel px-2 text-[11px] text-fg outline-none"
+              >
+                {DRAWING_SOURCES.map((source) => <option key={source.value} value={source.value}>{source.label}</option>)}
+              </select>
+            </label>
+          </div>
           <RangeSetting
             label="Line sensitivity"
             value={settings.lineSensitivity}
@@ -1126,7 +1202,13 @@ function DrawingAnalysisInspect({
                 kind: "system" as const,
                 title: system.label,
                 subtitle: `${system.segmentCount} segments · ${formatDetectedLength(system.lengthPx)} · ${Math.round(system.confidence * 100)}%`,
-                detail: `${system.counts.openEnds} ends · ${system.counts.tees} tees · ${system.counts.elbows45 + system.counts.elbows90} elbows`,
+                detail: [
+                  `${system.counts.openEnds} ends`,
+                  `${system.counts.tees} tees`,
+                  `${system.counts.elbows45 + system.counts.elbows90} elbows`,
+                  system.layers?.length ? `layer ${system.layers.slice(0, 2).join(", ")}` : "",
+                  system.warnings?.length ? system.warnings.slice(0, 2).join(", ") : "",
+                ].filter(Boolean).join(" · "),
                 selected: selectedDetectionId === system.id,
                 saving: savingId === system.id,
                 color: "#0ea5e9",
@@ -1141,27 +1223,42 @@ function DrawingAnalysisInspect({
             onDelete={(id) => actions?.deleteDrawingDetection(id, "system")}
           />
           <DetectionGroup
-            title="Symbol candidates"
-            count={symbols.length}
-            icon={<CircleDashed className="h-3 w-3 text-amber-500" />}
-            rows={symbols.map((symbol, index) => {
-              const state = linkedStateFor(symbol.id);
+            title="Count candidates"
+            count={countGroups.length}
+            icon={<CircleDashed className="h-3 w-3 text-emerald-500" />}
+            rows={countGroups.map((group) => {
+              const states = group.symbolIds.map((id) => linkedStateFor(id));
+              const savedCount = states.reduce((sum, state) => sum + state.savedCount, 0);
+              const linkCount = states.reduce((sum, state) => sum + state.linkCount, 0);
               return {
-                id: symbol.id,
+                id: group.id,
                 kind: "symbol" as const,
-                title: `Candidate ${index + 1}`,
-                subtitle: `${Math.round(symbol.w)} x ${Math.round(symbol.h)} px · ${Math.round(symbol.confidence * 100)}%`,
-                selected: selectedDetectionId === symbol.id,
-                saving: savingId === symbol.id,
-                color: "#f59e0b",
-                ...state,
+                title: group.label,
+                subtitle: `${group.count.toLocaleString()} found · ${Math.round(group.avgWidth)} x ${Math.round(group.avgHeight)} px · ${Math.round(group.avgConfidence * 100)}%`,
+                detail: group.source,
+                value: `x${group.count.toLocaleString()}`,
+                selected: group.symbolIds.includes(selectedDetectionId ?? ""),
+                saving: group.symbolIds.some((id) => savingId === id),
+                savedCount,
+                linkCount,
+                color: "#10b981",
+                symbolIds: group.symbolIds,
               };
             }).filter(matchesQuery)}
             snapshot={snapshot}
             actions={actions}
-            onSelect={(id) => actions?.selectDrawingDetection(id, "symbol")}
-            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "symbol", pick)}
-            onDelete={(id) => actions?.deleteDrawingDetection(id, "symbol")}
+            onSelect={(id) => {
+              const group = countGroups.find((item) => item.id === id);
+              if (group) actions?.selectDrawingDetectionGroup(group.symbolIds);
+            }}
+            onAdd={(id, _kind, pick) => {
+              const group = countGroups.find((item) => item.id === id);
+              if (group) void actions?.createLineItemFromDrawingSymbolGroup(group.symbolIds, group.label, pick);
+            }}
+            onDelete={(id) => {
+              const group = countGroups.find((item) => item.id === id);
+              if (group) actions?.deleteDrawingDetectionGroup(group.symbolIds, "symbol");
+            }}
           />
           {circles.length > 0 && (
             <DetectionGroup
@@ -1313,6 +1410,8 @@ type DetectionRow = {
   savedCount: number;
   linkCount: number;
   color: string;
+  value?: string;
+  symbolIds?: string[];
   requiresCalibration?: boolean;
 };
 
@@ -1388,30 +1487,31 @@ function DetectionGroup({
                 <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>
                 {row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
               </div>
+              {row.value && <span className="shrink-0 font-mono text-[10px] text-fg/50">{row.value}</span>}
               <div className="flex items-center gap-0.5">
-              {onAdd && row.kind !== "text" && row.linkCount === 0 && (
-                row.requiresCalibration ? (
-                  <button
-                    type="button"
-                    disabled
-                    title="Set drawing scale before adding linear detections to a worksheet"
-                    className="inline-flex h-6 items-center gap-1 rounded-md border border-warning/25 bg-warning/10 px-1.5 text-[10px] font-medium text-warning/70 disabled:cursor-not-allowed"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Add
-                  </button>
-                ) : (
-                <AddToCategoryPopover
-                  snapshot={snapshot}
-                  actions={actions}
-                  onPick={(pick) => onAdd(row.id, row.kind as Exclude<InspectDrawingDetectionKind, "text">, pick)}
-                  triggerLabel="Add"
-                  triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-                  triggerTitle="Add this detected entity to a worksheet and link it automatically"
-                  triggerIcon={<Plus className="h-3 w-3" />}
-                />
-                )
-              )}
+                {onAdd && row.kind !== "text" && row.linkCount === 0 && (
+                  row.requiresCalibration ? (
+                    <button
+                      type="button"
+                      disabled
+                      title="Set drawing scale before adding linear detections to a worksheet"
+                      className="inline-flex h-6 items-center gap-1 rounded-md border border-warning/25 bg-warning/10 px-1.5 text-[10px] font-medium text-warning/70 disabled:cursor-not-allowed"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add
+                    </button>
+                  ) : (
+                    <AddToCategoryPopover
+                      snapshot={snapshot}
+                      actions={actions}
+                      onPick={(pick) => onAdd(row.id, row.kind as Exclude<InspectDrawingDetectionKind, "text">, pick)}
+                      triggerLabel="Add"
+                      triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      triggerTitle="Add this detected entity to a worksheet and link it automatically"
+                      triggerIcon={<Plus className="h-3 w-3" />}
+                    />
+                  )
+                )}
               {onDelete && (
                 <button
                   type="button"

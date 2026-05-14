@@ -4899,6 +4899,8 @@ export type DrawingAnalysisPreset =
   | "civil_linear"
   | "structural";
 
+export type DrawingGeometrySource = "auto" | "pdf_vector" | "raster_cv";
+
 export interface DrawingGeometryBounds {
   x: number;
   y: number;
@@ -4917,6 +4919,10 @@ export interface DrawingLineSegment {
   bbox: DrawingGeometryBounds;
   source: string;
   confidence: number;
+  layer?: string | null;
+  strokeWidth?: number | null;
+  color?: string | null;
+  qualityFlags?: string[];
 }
 
 export interface DrawingCircleDetection {
@@ -5006,6 +5012,9 @@ export interface DrawingTracedSystem {
   };
   confidence: number;
   warnings: string[];
+  layers?: string[];
+  junctions?: Record<string, number>;
+  qualityFlags?: string[];
 }
 
 export interface DrawingGeometryAnalysisResult {
@@ -5015,6 +5024,10 @@ export interface DrawingGeometryAnalysisResult {
   fileName?: string;
   schemaVersion: number;
   preset: DrawingAnalysisPreset | string;
+  geometrySource?: string;
+  geometrySourceRequested?: string;
+  sourceConfidence?: number;
+  qualityFlags?: string[];
   pageNumber: number;
   dpi: number;
   imageWidth: number;
@@ -5075,6 +5088,7 @@ export async function analyzeDrawingGeometry(input: {
   documentId: string;
   pageNumber?: number;
   preset?: DrawingAnalysisPreset;
+  geometrySource?: DrawingGeometrySource;
   traceSystems?: boolean;
   includeSymbols?: boolean;
   includeTextRegions?: boolean;
@@ -5098,6 +5112,7 @@ export async function traceDrawingSystems(input: {
   documentId: string;
   pageNumber?: number;
   preset?: DrawingAnalysisPreset;
+  geometrySource?: DrawingGeometrySource;
   maxLines?: number;
   maxRegions?: number;
   minLineLength?: number;

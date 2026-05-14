@@ -118,6 +118,13 @@ function summarizeVectorSignals(operatorCounts: Record<string, number>) {
   };
 }
 
+function normalizeDrawingGeometrySource(value: unknown) {
+  const normalized = String(value ?? "auto").trim().toLowerCase().replace(/-/g, "_");
+  if (["pdf", "vector", "pdf_native", "pdf_vector"].includes(normalized)) return "pdf_vector";
+  if (["raster", "cv", "opencv", "raster_cv"].includes(normalized)) return "raster_cv";
+  return "auto";
+}
+
 function normalizedDocText(value: unknown) {
   return String(value ?? "").trim().toLowerCase();
 }
@@ -1637,7 +1644,7 @@ export async function visionRoutes(app: FastifyInstance) {
 
   // ── POST /api/vision/count-symbols-all-pages ──────────────────────────
   // Runs count_symbols on EVERY page of a document with the same template bbox.
-  // Body: { projectId, documentId, boundingBox, threshold? }
+  // Body: { projectId, documentId, boundingBox, threshold?, crossScale? }
   // Returns: { pages: [{ pageNumber, matches, totalCount }], grandTotal }
   app.post("/api/vision/count-symbols-all-pages", async (request, reply) => {
     const body = request.body as Record<string, unknown>;
@@ -1645,6 +1652,7 @@ export async function visionRoutes(app: FastifyInstance) {
     const documentId = body.documentId as string;
     const boundingBox = body.boundingBox as Record<string, number> | undefined;
     const threshold = (body.threshold as number) ?? 0.75;
+    const crossScale = (body.crossScale as boolean) ?? false;
 
     if (!projectId || !documentId || !boundingBox) {
       return reply.code(400).send({ message: "projectId, documentId, and boundingBox are required" });
@@ -1692,6 +1700,7 @@ export async function visionRoutes(app: FastifyInstance) {
           pageNumber: pg,
           boundingBox: bbox,
           threshold,
+          crossScale,
           documentId,
         });
         pages.push({
@@ -1805,6 +1814,7 @@ export async function visionRoutes(app: FastifyInstance) {
         pageNumber,
         dpi: (body.dpi as number) ?? 150,
         preset: String(body.preset ?? "generic"),
+        geometrySource: normalizeDrawingGeometrySource(body.geometrySource),
         includeSymbols: body.includeSymbols !== false,
         includeTextRegions: body.includeTextRegions !== false,
         includeCircles: body.includeCircles !== false,
@@ -1875,6 +1885,7 @@ export async function visionRoutes(app: FastifyInstance) {
         pageNumber,
         dpi: (body.dpi as number) ?? 150,
         preset: String(body.preset ?? "generic"),
+        geometrySource: normalizeDrawingGeometrySource(body.geometrySource),
         includeSymbols: body.includeSymbols === true,
         includeTextRegions: body.includeTextRegions === true,
         includeCircles: body.includeCircles === true,

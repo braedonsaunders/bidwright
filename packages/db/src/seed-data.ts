@@ -42,8 +42,16 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
       unitLabels: {},
     },
     {
+      name: "Vendor Services", entityType: "VendorService", shortform: "VS", defaultUom: "LS",
+      validUoms: ["EA", "LS", "HR", "DAY"], color: "#0ea5e9", order: 5,
+      calculationType: "manual", itemSource: "freeform" as const,
+      analyticsBucket: "service" as string | null,
+      editableFields: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
+      unitLabels: {},
+    },
+    {
       name: "Consumables", entityType: "Consumable", shortform: "C", defaultUom: "EA",
-      validUoms: ["EA", "KG", "LB", "GAL"], color: "#6b7280", order: 5,
+      validUoms: ["EA", "KG", "LB", "GAL"], color: "#6b7280", order: 6,
       calculationType: "quantity_markup", itemSource: "freeform" as const,
       analyticsBucket: "material" as string | null,
       editableFields: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
@@ -51,7 +59,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
     },
     {
       name: "Rental Equipment", entityType: "RentalEquipment", shortform: "R", defaultUom: "DAY",
-      validUoms: ["DAY", "WK", "MO", "HR"], color: "#ec4899", order: 6,
+      validUoms: ["DAY", "WK", "MO", "HR"], color: "#ec4899", order: 7,
       calculationType: "duration_rate", itemSource: "freeform" as const,
       analyticsBucket: "equipment" as string | null,
       editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: true },
@@ -59,7 +67,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
     },
     {
       name: "Travel & Per Diem", entityType: "Travel", shortform: "T", defaultUom: "DAY",
-      validUoms: ["DAY", "EA", "MI"], color: "#f97316", order: 7,
+      validUoms: ["DAY", "EA", "MI"], color: "#f97316", order: 8,
       calculationType: "manual", itemSource: "freeform" as const,
       analyticsBucket: null as string | null,
       editableFields: { quantity: true, cost: true, markup: true, price: true, tierUnits: false },
@@ -67,7 +75,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
     },
     {
       name: "Other Charges", entityType: "OtherCharges", shortform: "O", defaultUom: "LS",
-      validUoms: ["EA", "LS", "%"], color: "#ef4444", order: 8,
+      validUoms: ["EA", "LS", "%"], color: "#ef4444", order: 9,
       calculationType: "direct_total", itemSource: "freeform" as const,
       analyticsBucket: null as string | null,
       editableFields: { quantity: false, cost: false, markup: false, price: true, tierUnits: false },
@@ -75,7 +83,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
     },
     {
       name: "Allowances", entityType: "Allowance", shortform: "A", defaultUom: "LS",
-      validUoms: ["EA", "LS"], color: "#14b8a6", order: 9,
+      validUoms: ["EA", "LS"], color: "#14b8a6", order: 10,
       calculationType: "direct_total", itemSource: "freeform" as const,
       analyticsBucket: "allowance" as string | null,
       editableFields: { quantity: false, cost: false, markup: false, price: true, tierUnits: false },
@@ -83,7 +91,7 @@ export async function seedEntityCategories(prisma: PrismaClient, organizationId:
     },
     {
       name: "Overhead", entityType: "Overhead", shortform: "H", defaultUom: "%",
-      validUoms: ["%", "EA", "LS"], color: "#a855f7", order: 10,
+      validUoms: ["%", "EA", "LS"], color: "#a855f7", order: 11,
       calculationType: "direct_total", itemSource: "freeform" as const,
       analyticsBucket: null as string | null,
       editableFields: { quantity: false, cost: false, markup: false, price: true, tierUnits: false },
@@ -250,15 +258,38 @@ export async function seedSampleProjects(prisma: PrismaClient, store: BidwrightS
 
 export async function seedRateSchedules(prisma: PrismaClient, store: BidwrightStore, organizationId: string) {
   for (const schedule of store.rateSchedules ?? []) {
+    const category = await prisma.entityCategory.findFirst({
+      where: {
+        organizationId,
+        enabled: true,
+        OR: [
+          { id: schedule.category },
+          { name: schedule.category },
+          { entityType: schedule.category },
+        ],
+      },
+    });
+    const metadata = {
+      ...((schedule.metadata ?? {}) as Record<string, unknown>),
+      ...(category ? { entityCategoryId: category.id } : {}),
+    };
     await prisma.rateSchedule.create({
       data: {
         id: schedule.id, organizationId, name: schedule.name, description: schedule.description,
-        category: schedule.category, scope: schedule.scope, defaultMarkup: schedule.defaultMarkup,
-        autoCalculate: schedule.autoCalculate, metadata: schedule.metadata as any,
+        category: category?.entityType?.trim() || category?.name || schedule.category,
+        scope: schedule.scope,
+        projectId: schedule.projectId ?? null,
+        revisionId: schedule.revisionId ?? null,
+        sourceScheduleId: schedule.sourceScheduleId ?? null,
+        effectiveDate: schedule.effectiveDate ?? null,
+        expiryDate: schedule.expiryDate ?? null,
+        defaultMarkup: schedule.defaultMarkup,
+        autoCalculate: schedule.autoCalculate,
+        metadata: metadata as any,
         tiers: {
           create: (store.rateScheduleTiers ?? [])
             .filter((t) => t.scheduleId === schedule.id)
-            .map((t) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder })),
+            .map((t) => ({ id: t.id, name: t.name, multiplier: t.multiplier, sortOrder: t.sortOrder, uom: t.uom ?? null })),
         },
         items: {
           create: (store.rateScheduleItems ?? [])

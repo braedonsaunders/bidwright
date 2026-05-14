@@ -42,6 +42,10 @@ class Segment:
     y2: float
     source: str
     confidence: float
+    layer: str | None = None
+    stroke_width: float | None = None
+    color: str | None = None
+    flags: tuple[str, ...] = ()
 
     @property
     def length(self) -> float:
@@ -73,6 +77,10 @@ class Segment:
             "bbox": self.bbox,
             "source": self.source,
             "confidence": round(self.confidence, 3),
+            **({"layer": self.layer} if self.layer else {}),
+            **({"strokeWidth": round(float(self.stroke_width), 3)} if self.stroke_width is not None else {}),
+            **({"color": self.color} if self.color else {}),
+            **({"qualityFlags": list(self.flags)} if self.flags else {}),
         }
 
 
@@ -81,6 +89,7 @@ def analyze_page(
     page: int = 1,
     dpi: int = 150,
     preset: str = "generic",
+    geometry_source: str = "auto",
     include_symbols: bool = True,
     include_text_regions: bool = True,
     include_circles: bool = True,
@@ -94,6 +103,7 @@ def analyze_page(
 ) -> dict[str, Any]:
     start = time.time()
     warnings: list[str] = []
+    requested_source = _normalize_geometry_source(geometry_source)
 
     img, page_w, page_h, img_w, img_h = render_to_numpy(pdf_path, page, dpi)
     gray = _to_gray(img)
@@ -110,26 +120,57 @@ def analyze_page(
     line_limit = _normalize_limit(max_lines)
     region_limit = max(20, int(max_regions))
 
-    segments = detect_line_segments(gray, cleaned, min_line, max_lines=line_limit)
+    text_regions_for_filter = detect_text_regions(gray, max_regions=region_limit)
+    raw_symbol_candidates = find_symbol_candidates(
+        img,
+        img_w,
+        img_h,
+        min_size=max(12, int(min(img_w, img_h) * 0.004)),
+        max_size=max(80, int(min(img_w, img_h) * 0.04)),
+        min_area=60,
+        exclude_borders=True,
+        border_margin=max(20, int(min(img_w, img_h) * 0.015)),
+    )[:region_limit]
+    symbol_candidates = raw_symbol_candidates if include_symbols else []
+
+    semantic_regions = _semantic_exclusion_regions(text_regions_for_filter, raw_symbol_candidates, img_w, img_h)
+    topology_mask = _mask_regions(cleaned, semantic_regions, pad=max(2, int(snap * 0.18)))
+    raster_segments = detect_line_segments(
+        gray,
+        topology_mask,
+        min_line,
+        max_lines=line_limit,
+        exclusion_regions=semantic_regions,
+        img_w=img_w,
+        img_h=img_h,
+    )
+    vector_segments: list[Segment] = []
+    vector_stats: dict[str, Any] = {}
+    if requested_source in {"auto", "pdf_vector"}:
+        vector_segments, vector_stats = extract_pdf_vector_segments(
+            pdf_path,
+            page,
+            img_w,
+            img_h,
+            float(page_w),
+            float(page_h),
+            min_line,
+            max_lines=line_limit,
+            exclusion_regions=semantic_regions,
+        )
+    segments, chosen_source, source_confidence = _choose_geometry_segments(
+        requested_source,
+        raster_segments,
+        vector_segments,
+        img_w,
+        img_h,
+        warnings,
+    )
+    segments = merge_collinear_segments(segments, snap_tolerance=snap)
     if line_limit is not None and len(segments) >= line_limit:
         warnings.append(f"Line output capped at {line_limit}; set maxLines to 0 for full output or raise the budget for dense sheets.")
 
-    text_regions_for_filter = detect_text_regions(gray, max_regions=region_limit)
     text_regions = text_regions_for_filter if include_text_regions else []
-    symbol_candidates = (
-        find_symbol_candidates(
-            img,
-            img_w,
-            img_h,
-            min_size=max(12, int(min(img_w, img_h) * 0.004)),
-            max_size=max(80, int(min(img_w, img_h) * 0.04)),
-            min_area=60,
-            exclude_borders=True,
-            border_margin=max(20, int(min(img_w, img_h) * 0.015)),
-        )[:region_limit]
-        if include_symbols
-        else []
-    )
     circles = detect_circles(gray, img_w, img_h, text_regions_for_filter, max_regions=region_limit) if include_circles else []
     systems = trace_linear_systems(segments, preset=preset, snap_tolerance=snap, img_w=img_w, img_h=img_h) if trace_systems else []
     if (
@@ -148,6 +189,10 @@ def analyze_page(
         "success": True,
         "schemaVersion": 1,
         "preset": preset,
+        "geometrySource": chosen_source,
+        "geometrySourceRequested": requested_source,
+        "sourceConfidence": round(source_confidence, 3),
+        "qualityFlags": _analysis_quality_flags(chosen_source, vector_stats, raster_segments, vector_segments),
         "pageNumber": page,
         "dpi": dpi,
         "imageWidth": img_w,
@@ -168,8 +213,17 @@ def analyze_page(
             "calibrationRequired": True,
         },
         "preprocessing": {
+            "geometrySource": chosen_source,
+            "geometrySourceRequested": requested_source,
             "threshold": "adaptive-gaussian",
             "morphology": "linework-close-open",
+            "semanticMasks": {
+                "textRegionsMasked": len(text_regions_for_filter),
+                "symbolRegionsMasked": len(raw_symbol_candidates),
+                "titleBlockExcluded": True,
+                "borderExcluded": True,
+            },
+            "vectorSignals": vector_stats,
             "minLineLengthPx": round(min_line, 2),
             "snapTolerancePx": round(snap, 2),
             "lineSensitivity": round(line_sensitivity, 3),
@@ -199,8 +253,273 @@ def analyze_page(
     }
 
 
-def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: float, max_lines: int | None) -> list[Segment]:
+def extract_pdf_vector_segments(
+    pdf_path: str,
+    page: int,
+    img_w: int,
+    img_h: int,
+    page_w: float,
+    page_h: float,
+    min_line_length: float,
+    max_lines: int | None,
+    exclusion_regions: list[dict[str, Any]] | None = None,
+) -> tuple[list[Segment], dict[str, Any]]:
+    try:
+        import fitz  # type: ignore
+    except Exception as exc:
+        return [], {"available": False, "error": f"PyMuPDF unavailable: {exc}"}
+
+    segments: list[Segment] = []
+    stats: dict[str, Any] = {
+        "available": True,
+        "drawingCount": 0,
+        "pathItemCount": 0,
+        "lineItemCount": 0,
+        "rectItemCount": 0,
+        "curveItemCount": 0,
+        "layerCount": 0,
+        "capped": False,
+    }
+    regions = exclusion_regions or []
+    sx = img_w / max(page_w, 1.0)
+    sy = img_h / max(page_h, 1.0)
+    budget = None if max_lines is None else max_lines * 4
+    layers: set[str] = set()
+
+    try:
+        doc = fitz.open(pdf_path, filetype="pdf")
+        pg = doc.load_page(page - 1)
+        drawings = pg.get_drawings()
+        stats["drawingCount"] = len(drawings)
+        for path in drawings:
+            if budget is not None and len(segments) >= budget:
+                stats["capped"] = True
+                break
+            layer = _clean_layer_name(path.get("layer") or path.get("oc"))
+            if layer:
+                layers.add(layer)
+            stroke_width = _safe_float(path.get("width"))
+            color = _color_to_hex(path.get("color"))
+            dashes = path.get("dashes")
+            flags = tuple(flag for flag in [
+                "vector",
+                "dashed" if _has_dash_pattern(dashes) else "",
+            ] if flag)
+            for item in path.get("items", []) or []:
+                if budget is not None and len(segments) >= budget:
+                    stats["capped"] = True
+                    break
+                if not item:
+                    continue
+                op = str(item[0])
+                stats["pathItemCount"] += 1
+                if op == "l" and len(item) >= 3:
+                    stats["lineItemCount"] += 1
+                    _append_vector_line(segments, item[1], item[2], sx, sy, min_line_length, "pdf-vector-line", 0.94, layer, stroke_width, color, flags, regions, img_w, img_h)
+                elif op == "re" and len(item) >= 2:
+                    stats["rectItemCount"] += 1
+                    for p1, p2 in _rect_edges(item[1]):
+                        _append_vector_line(segments, p1, p2, sx, sy, min_line_length, "pdf-vector-rect", 0.9, layer, stroke_width, color, flags + ("rect",), regions, img_w, img_h)
+                elif op == "qu" and len(item) >= 2:
+                    stats["rectItemCount"] += 1
+                    for p1, p2 in _quad_edges(item[1]):
+                        _append_vector_line(segments, p1, p2, sx, sy, min_line_length, "pdf-vector-quad", 0.9, layer, stroke_width, color, flags + ("quad",), regions, img_w, img_h)
+                elif op == "c" and len(item) >= 5:
+                    stats["curveItemCount"] += 1
+                    points = [_point_xy(item[index]) for index in range(1, 5)]
+                    curve_points = _sample_cubic(points, steps=10)
+                    for p1, p2 in zip(curve_points, curve_points[1:]):
+                        _append_vector_line(segments, p1, p2, sx, sy, max(6.0, min_line_length * 0.42), "pdf-vector-curve", 0.86, layer, stroke_width, color, flags + ("curve",), regions, img_w, img_h)
+        doc.close()
+    except Exception as exc:
+        return [], {**stats, "error": str(exc)}
+
+    stats["layerCount"] = len(layers)
+    stats["segmentCount"] = len(segments)
+    stats["totalLengthPx"] = round(sum(segment.length for segment in segments), 2)
+    return segments, stats
+
+
+def _append_vector_line(
+    segments: list[Segment],
+    p1: Any,
+    p2: Any,
+    sx: float,
+    sy: float,
+    min_line_length: float,
+    source: str,
+    confidence: float,
+    layer: str | None,
+    stroke_width: float | None,
+    color: str | None,
+    flags: tuple[str, ...],
+    exclusion_regions: list[dict[str, Any]],
+    img_w: int,
+    img_h: int,
+) -> None:
+    x1, y1 = _point_xy(p1)
+    x2, y2 = _point_xy(p2)
+    segment = Segment(
+        f"vec-{len(segments) + 1}",
+        x1 * sx,
+        y1 * sy,
+        x2 * sx,
+        y2 * sy,
+        source,
+        confidence,
+        layer=layer,
+        stroke_width=stroke_width,
+        color=color,
+        flags=flags,
+    )
+    if segment.length < min_line_length:
+        return
+    if _segment_excluded(segment, exclusion_regions, img_w, img_h):
+        return
+    segments.append(segment)
+
+
+def _point_xy(point: Any) -> tuple[float, float]:
+    if hasattr(point, "x") and hasattr(point, "y"):
+        return float(point.x), float(point.y)
+    if isinstance(point, dict):
+        return float(point.get("x", 0.0)), float(point.get("y", 0.0))
+    if isinstance(point, (list, tuple)) and len(point) >= 2:
+        return float(point[0]), float(point[1])
+    return 0.0, 0.0
+
+
+def _rect_edges(rect: Any) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    if hasattr(rect, "x0"):
+        x0, y0, x1, y1 = float(rect.x0), float(rect.y0), float(rect.x1), float(rect.y1)
+    elif isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        x0, y0, x1, y1 = [float(v) for v in rect[:4]]
+    else:
+        return []
+    return [((x0, y0), (x1, y0)), ((x1, y0), (x1, y1)), ((x1, y1), (x0, y1)), ((x0, y1), (x0, y0))]
+
+
+def _quad_edges(quad: Any) -> list[tuple[tuple[float, float], tuple[float, float]]]:
+    attrs = ["ul", "ur", "lr", "ll"]
+    if all(hasattr(quad, attr) for attr in attrs):
+        pts = [_point_xy(getattr(quad, attr)) for attr in attrs]
+    elif isinstance(quad, (list, tuple)) and len(quad) >= 4:
+        pts = [_point_xy(point) for point in quad[:4]]
+    else:
+        return []
+    return list(zip(pts, pts[1:] + pts[:1]))
+
+
+def _sample_cubic(points: list[tuple[float, float]], steps: int) -> list[tuple[float, float]]:
+    if len(points) != 4:
+        return points
+    p0, p1, p2, p3 = points
+    sampled: list[tuple[float, float]] = []
+    for i in range(steps + 1):
+        t = i / max(steps, 1)
+        mt = 1 - t
+        x = (mt ** 3) * p0[0] + 3 * (mt ** 2) * t * p1[0] + 3 * mt * (t ** 2) * p2[0] + (t ** 3) * p3[0]
+        y = (mt ** 3) * p0[1] + 3 * (mt ** 2) * t * p1[1] + 3 * mt * (t ** 2) * p2[1] + (t ** 3) * p3[1]
+        sampled.append((x, y))
+    return sampled
+
+
+def _choose_geometry_segments(
+    requested_source: str,
+    raster_segments: list[Segment],
+    vector_segments: list[Segment],
+    img_w: int,
+    img_h: int,
+    warnings: list[str],
+) -> tuple[list[Segment], str, float]:
+    min_dim = min(img_w, img_h)
+    vector_length = sum(segment.length for segment in vector_segments)
+    raster_length = sum(segment.length for segment in raster_segments)
+    vector_usable = len(vector_segments) >= 8 and vector_length >= max(500.0, min_dim * 0.42)
+    vector_forced_usable = len(vector_segments) > 0 and vector_length >= max(120.0, min_dim * 0.18)
+    if requested_source == "raster_cv":
+        return raster_segments, "raster-cv", 0.72 if raster_segments else 0.25
+    if vector_usable or (requested_source == "pdf_vector" and vector_forced_usable):
+        return vector_segments, "pdf-vector", 0.94
+    if requested_source == "pdf_vector":
+        warnings.append("PDF vector source requested, but usable vector linework was sparse; falling back to raster CV.")
+    elif vector_segments:
+        warnings.append("Sparse PDF vector linework detected; raster CV used for trace completeness.")
+    confidence = 0.72 if raster_segments else 0.25
+    if raster_length <= 0 and vector_length > 0:
+        return vector_segments, "pdf-vector", 0.62
+    return raster_segments, "raster-cv", confidence
+
+
+def _analysis_quality_flags(chosen_source: str, vector_stats: dict[str, Any], raster_segments: list[Segment], vector_segments: list[Segment]) -> list[str]:
+    flags: list[str] = [chosen_source]
+    if chosen_source == "pdf-vector":
+        flags.append("native_geometry")
+        if int(vector_stats.get("layerCount") or 0) > 0:
+            flags.append("layered_pdf")
+    else:
+        flags.append("pixel_traced")
+    if len(raster_segments) > 2500 or len(vector_segments) > 2500:
+        flags.append("dense_sheet")
+    if vector_stats.get("capped"):
+        flags.append("vector_budget_capped")
+    return flags
+
+
+def _semantic_exclusion_regions(text_regions: list[dict[str, Any]], symbol_candidates: list[dict[str, Any]], img_w: int, img_h: int) -> list[dict[str, Any]]:
+    regions: list[dict[str, Any]] = []
+    for region in text_regions:
+        regions.append({
+            "kind": "text",
+            "x": int(region.get("x", 0)),
+            "y": int(region.get("y", 0)),
+            "w": int(region.get("w", 0)),
+            "h": int(region.get("h", 0)),
+        })
+    for candidate in symbol_candidates[:400]:
+        w = int(candidate.get("w", 0))
+        h = int(candidate.get("h", 0))
+        if w <= 0 or h <= 0:
+            continue
+        if w > img_w * 0.12 or h > img_h * 0.12:
+            continue
+        regions.append({
+            "kind": "symbol",
+            "x": int(candidate.get("x", 0)),
+            "y": int(candidate.get("y", 0)),
+            "w": w,
+            "h": h,
+        })
+    return regions
+
+
+def _mask_regions(binary: np.ndarray, regions: list[dict[str, Any]], pad: int) -> np.ndarray:
+    if not regions:
+        return binary
+    masked = binary.copy()
+    img_h, img_w = masked.shape[:2]
+    for region in regions:
+        x = max(0, int(region.get("x", 0)) - pad)
+        y = max(0, int(region.get("y", 0)) - pad)
+        w = int(region.get("w", region.get("width", 0))) + pad * 2
+        h = int(region.get("h", region.get("height", 0))) + pad * 2
+        if w <= 0 or h <= 0 or w * h > img_w * img_h * 0.12:
+            continue
+        masked[y:min(img_h, y + h), x:min(img_w, x + w)] = 0
+    return masked
+
+
+def detect_line_segments(
+    gray: np.ndarray,
+    binary: np.ndarray,
+    min_line_length: float,
+    max_lines: int | None,
+    exclusion_regions: list[dict[str, Any]] | None = None,
+    img_w: int | None = None,
+    img_h: int | None = None,
+) -> list[Segment]:
     candidates: list[Segment] = []
+    regions = exclusion_regions or []
 
     # Line Segment Detector gives clean vector-like segments on high-quality PDFs.
     try:
@@ -210,7 +529,7 @@ def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: 
             for raw in _take_with_budget(detected, None if max_lines is None else max_lines * 3):
                 x1, y1, x2, y2 = [float(v) for v in raw[0]]
                 seg = Segment("", x1, y1, x2, y2, "lsd", 0.82)
-                if seg.length >= min_line_length:
+                if seg.length >= min_line_length and not _segment_excluded(seg, regions, img_w, img_h):
                     candidates.append(seg)
     except Exception:
         pass
@@ -228,7 +547,7 @@ def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: 
         for raw in _take_with_budget(hough, None if max_lines is None else max_lines * 4):
             x1, y1, x2, y2 = [float(v) for v in raw[0]]
             seg = Segment("", x1, y1, x2, y2, "hough", 0.74)
-            if seg.length >= min_line_length:
+            if seg.length >= min_line_length and not _segment_excluded(seg, regions, img_w, img_h):
                 candidates.append(seg)
 
     deduped = _dedupe_segments(candidates)
@@ -443,6 +762,45 @@ def _point_in_title_block(x: float, y: float, img_w: int, img_h: int) -> bool:
     return (x > img_w * 0.60 and y > img_h * 0.74) or (y > img_h * 0.91)
 
 
+def _normalize_geometry_source(value: str) -> str:
+    normalized = str(value or "auto").strip().lower().replace("-", "_")
+    if normalized in {"pdf", "vector", "pdf_native", "pdf_vector"}:
+        return "pdf_vector"
+    if normalized in {"raster", "cv", "opencv", "raster_cv"}:
+        return "raster_cv"
+    return "auto"
+
+
+def _clean_layer_name(value: Any) -> str | None:
+    text = str(value or "").strip()
+    return text or None
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if math.isfinite(number) else None
+
+
+def _color_to_hex(value: Any) -> str | None:
+    if not isinstance(value, (list, tuple)) or len(value) < 3:
+        return None
+    try:
+        r, g, b = [max(0, min(255, int(round(float(component) * 255)))) for component in value[:3]]
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except (TypeError, ValueError):
+        return None
+
+
+def _has_dash_pattern(value: Any) -> bool:
+    text = str(value or "").strip()
+    if not text or text in {"[] 0", "[] 0.0", "None"}:
+        return False
+    return any(char.isdigit() and char != "0" for char in text)
+
+
 def _segment_midpoint(segment: Segment) -> tuple[float, float]:
     return (segment.x1 + segment.x2) / 2, (segment.y1 + segment.y2) / 2
 
@@ -462,6 +820,178 @@ def _segment_for_topology(segment: Segment, img_w: int, img_h: int) -> bool:
     if segment.length > img_h * 0.72 and (mx < img_w * 0.08 or mx > img_w * 0.92):
         return False
     return True
+
+
+def _segment_excluded(segment: Segment, regions: list[dict[str, Any]], img_w: int | None, img_h: int | None) -> bool:
+    mx, my = _segment_midpoint(segment)
+    if img_w and img_h and (_point_in_title_block(mx, my, img_w, img_h) or _point_in_sheet_margin(mx, my, img_w, img_h)):
+        return True
+    if not regions:
+        return False
+    overlap = _segment_region_overlap_ratio(segment, regions)
+    if overlap >= 0.42:
+        return True
+    return segment.length < 160 and overlap >= 0.22
+
+
+def _segment_region_overlap_ratio(segment: Segment, regions: list[dict[str, Any]]) -> float:
+    if segment.length <= 0:
+        return 0.0
+    samples = max(8, min(42, int(segment.length / 24)))
+    hits = 0
+    for index in range(samples + 1):
+        t = index / samples
+        x = segment.x1 + (segment.x2 - segment.x1) * t
+        y = segment.y1 + (segment.y2 - segment.y1) * t
+        if _point_in_any_region(x, y, regions):
+            hits += 1
+    return hits / (samples + 1)
+
+
+def _point_in_any_region(x: float, y: float, regions: list[dict[str, Any]]) -> bool:
+    for region in regions:
+        pad = 4 if region.get("kind") == "text" else 2
+        rx = float(region.get("x", 0)) - pad
+        ry = float(region.get("y", 0)) - pad
+        rw = float(region.get("w", region.get("width", 0))) + pad * 2
+        rh = float(region.get("h", region.get("height", 0))) + pad * 2
+        if rw <= 0 or rh <= 0:
+            continue
+        if rx <= x <= rx + rw and ry <= y <= ry + rh:
+            return True
+    return False
+
+
+def merge_collinear_segments(segments: list[Segment], snap_tolerance: float) -> list[Segment]:
+    if len(segments) < 2:
+        return [
+            Segment(f"ln-{idx + 1}", s.x1, s.y1, s.x2, s.y2, s.source, s.confidence, s.layer, s.stroke_width, s.color, s.flags)
+            for idx, s in enumerate(segments)
+        ]
+
+    angle_tol = 4.0
+    max_perp = max(4.0, snap_tolerance * 0.72)
+    max_gap = max(10.0, snap_tolerance * 1.8)
+    groups: list[dict[str, Any]] = []
+    ordered = sorted(segments, key=lambda s: (-s.length, s.y1, s.x1))
+    for segment in ordered:
+        matched: dict[str, Any] | None = None
+        for group in groups:
+            if _same_collinear_group(segment, group, angle_tol, max_perp, max_gap):
+                matched = group
+                break
+        if matched is None:
+            ux, uy = _segment_unit(segment)
+            matched = {
+                "ux": ux,
+                "uy": uy,
+                "origin": (segment.x1, segment.y1),
+                "segments": [],
+                "layers": set(),
+                "colors": set(),
+                "strokeWidths": [],
+            }
+            groups.append(matched)
+        matched["segments"].append(segment)
+        if segment.layer:
+            matched["layers"].add(segment.layer)
+        if segment.color:
+            matched["colors"].add(segment.color)
+        if segment.stroke_width is not None:
+            matched["strokeWidths"].append(segment.stroke_width)
+
+    merged: list[Segment] = []
+    for group in groups:
+        members: list[Segment] = group["segments"]
+        if len(members) == 1:
+            s = members[0]
+            merged.append(Segment("", s.x1, s.y1, s.x2, s.y2, s.source, s.confidence, s.layer, s.stroke_width, s.color, s.flags))
+            continue
+        ux, uy = float(group["ux"]), float(group["uy"])
+        px, py = -uy, ux
+        ox, oy = group["origin"]
+        projections: list[float] = []
+        perps: list[float] = []
+        for s in members:
+            for x, y in [(s.x1, s.y1), (s.x2, s.y2)]:
+                dx, dy = x - ox, y - oy
+                projections.append(dx * ux + dy * uy)
+                perps.append(dx * px + dy * py)
+        min_proj, max_proj = min(projections), max(projections)
+        mean_perp = sum(perps) / max(len(perps), 1)
+        x1 = ox + ux * min_proj + px * mean_perp
+        y1 = oy + uy * min_proj + py * mean_perp
+        x2 = ox + ux * max_proj + px * mean_perp
+        y2 = oy + uy * max_proj + py * mean_perp
+        source = _common_value([s.source for s in members]) or "merged-linework"
+        layer = _common_value(list(group["layers"]))
+        color = _common_value(list(group["colors"]))
+        stroke_width = None
+        if group["strokeWidths"]:
+            stroke_width = sum(float(v) for v in group["strokeWidths"]) / len(group["strokeWidths"])
+        confidence = min(0.98, (sum(s.confidence * s.length for s in members) / max(sum(s.length for s in members), 1.0)) + 0.03)
+        flags = tuple(sorted(set(flag for s in members for flag in s.flags) | {"merged"}))
+        merged.append(Segment("", x1, y1, x2, y2, source, confidence, layer, stroke_width, color, flags))
+
+    merged.sort(key=lambda s: (-s.length, s.y1, s.x1))
+    return [
+        Segment(f"ln-{index + 1}", s.x1, s.y1, s.x2, s.y2, s.source, s.confidence, s.layer, s.stroke_width, s.color, s.flags)
+        for index, s in enumerate(merged)
+    ]
+
+
+def _same_collinear_group(segment: Segment, group: dict[str, Any], angle_tol: float, max_perp: float, max_gap: float) -> bool:
+    members: list[Segment] = group["segments"]
+    if not members:
+        return False
+    if segment.layer and group["layers"] and segment.layer not in group["layers"]:
+        return False
+    ux, uy = float(group["ux"]), float(group["uy"])
+    sux, suy = _segment_unit(segment)
+    dot = abs(ux * sux + uy * suy)
+    angle = math.degrees(math.acos(max(-1.0, min(1.0, dot))))
+    if angle > angle_tol:
+        return False
+    px, py = -uy, ux
+    ox, oy = group["origin"]
+    seg_projs: list[float] = []
+    seg_perps: list[float] = []
+    for x, y in [(segment.x1, segment.y1), (segment.x2, segment.y2)]:
+        dx, dy = x - ox, y - oy
+        seg_projs.append(dx * ux + dy * uy)
+        seg_perps.append(abs(dx * px + dy * py))
+    if max(seg_perps) > max_perp:
+        return False
+    group_projs = [
+        (x - ox) * ux + (y - oy) * uy
+        for s in members
+        for x, y in [(s.x1, s.y1), (s.x2, s.y2)]
+    ]
+    return _interval_gap(min(seg_projs), max(seg_projs), min(group_projs), max(group_projs)) <= max_gap
+
+
+def _segment_unit(segment: Segment) -> tuple[float, float]:
+    length = max(segment.length, 0.0001)
+    ux = (segment.x2 - segment.x1) / length
+    uy = (segment.y2 - segment.y1) / length
+    if ux < 0 or (abs(ux) < 0.0001 and uy < 0):
+        ux, uy = -ux, -uy
+    return ux, uy
+
+
+def _interval_gap(a0: float, a1: float, b0: float, b1: float) -> float:
+    if a1 < b0:
+        return b0 - a1
+    if b1 < a0:
+        return a0 - b1
+    return 0.0
+
+
+def _common_value(values: list[Any]) -> Any:
+    if not values:
+        return None
+    first = values[0]
+    return first if all(value == first for value in values) else None
 
 
 def detect_text_regions(gray: np.ndarray, max_regions: int) -> list[dict[str, Any]]:
@@ -546,23 +1076,28 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
             continue
 
         fitting_counts = _infer_fittings(component_nodes, adjacency)
+        crossing_count = _count_component_crossings(component_segments, snap_tolerance)
+        junctions = _component_junction_summary(component_nodes, adjacency, crossing_count)
         bounds = _component_bounds(component_segments)
         length_px = sum(s.length for s in component_segments)
-        confidence = _system_confidence(component_segments, component_nodes, adjacency)
+        confidence = _system_confidence(component_segments, component_nodes, adjacency, crossing_count)
         system_index = len(systems) + 1
         systems.append({
             "id": f"sys-{system_index}",
             "label": f"{preset_label} run {system_index}",
             "preset": preset,
-            "source": "opencv-topology",
+            "source": _system_source(component_segments),
             "segmentIds": component_ids,
             "segmentCount": len(component_segments),
             "nodeCount": len(component_nodes),
             "lengthPx": round(length_px, 2),
             "bbox": bounds,
             "counts": fitting_counts,
+            "junctions": junctions,
+            "layers": sorted({s.layer for s in component_segments if s.layer}),
             "confidence": round(confidence, 3),
-            "warnings": _system_warnings(fitting_counts, component_segments),
+            "warnings": _system_warnings(fitting_counts, component_segments, crossing_count),
+            "qualityFlags": _system_quality_flags(component_segments, crossing_count),
         })
 
     systems.sort(key=lambda s: (-float(s["lengthPx"]), str(s["id"])))
@@ -740,35 +1275,110 @@ def _component_noise(segments: list[Segment], nodes: set[int], adjacency: dict[i
         return True
     if len(segments) == 1 and length < 80:
         return True
-    if len(segments) == 1 and length > min(img_w, img_h) * 0.40:
+    if len(segments) == 1 and length > min(img_w, img_h) * 0.40 and not segments[0].source.startswith("pdf-vector"):
         return True
     if len(nodes) <= 2 and len(segments) <= 2 and length < 120:
         return True
-    if len(segments) <= 2 and float(bounds["height"]) < 8 and float(bounds["width"]) > img_w * 0.35:
+    vector_component = any(segment.source.startswith("pdf-vector") for segment in segments)
+    if len(segments) <= 2 and float(bounds["height"]) < 8 and float(bounds["width"]) > img_w * 0.35 and not vector_component:
         return True
-    if len(segments) <= 2 and float(bounds["width"]) < 8 and float(bounds["height"]) > img_h * 0.35:
+    if len(segments) <= 2 and float(bounds["width"]) < 8 and float(bounds["height"]) > img_h * 0.35 and not vector_component:
         return True
     high_degree = any(len(adjacency[n]) >= 3 for n in nodes)
     return len(segments) <= 2 and not high_degree and length < 150
 
 
-def _system_confidence(segments: list[Segment], nodes: set[int], adjacency: dict[int, list[tuple[int, Segment]]]) -> float:
+def _system_confidence(segments: list[Segment], nodes: set[int], adjacency: dict[int, list[tuple[int, Segment]]], crossing_count: int = 0) -> float:
     if not segments:
         return 0.0
     avg_segment_confidence = sum(s.confidence for s in segments) / len(segments)
     branch_bonus = 0.08 if any(len(adjacency[n]) >= 3 for n in nodes) else 0.0
     length_bonus = min(0.12, sum(s.length for s in segments) / 5000)
     noise_penalty = 0.12 if len(segments) < 3 else 0.0
-    return max(0.1, min(0.96, avg_segment_confidence + branch_bonus + length_bonus - noise_penalty))
+    crossing_penalty = min(0.12, crossing_count * 0.025)
+    return max(0.1, min(0.96, avg_segment_confidence + branch_bonus + length_bonus - noise_penalty - crossing_penalty))
 
 
-def _system_warnings(counts: dict[str, int], segments: list[Segment]) -> list[str]:
+def _system_warnings(counts: dict[str, int], segments: list[Segment], crossing_count: int = 0) -> list[str]:
     warnings: list[str] = []
     if counts.get("openEnds", 0) > 2:
         warnings.append("multiple_open_ends")
-    if len(segments) < 3:
+    vector_component = any(segment.source.startswith("pdf-vector") for segment in segments)
+    if len(segments) < 3 and not vector_component:
         warnings.append("short_run_candidate")
+    if crossing_count > 0:
+        warnings.append("unresolved_crossings")
+    if any("dashed" in s.flags for s in segments):
+        warnings.append("dashed_linework")
     return warnings
+
+
+def _component_junction_summary(component_nodes: set[int], adjacency: dict[int, list[tuple[int, Segment]]], crossing_count: int) -> dict[str, int]:
+    degree_counts = defaultdict(int)
+    for node_id in component_nodes:
+        degree_counts[len(adjacency[node_id])] += 1
+    return {
+        "endpoints": int(degree_counts.get(1, 0)),
+        "bends": int(degree_counts.get(2, 0)),
+        "tees": int(degree_counts.get(3, 0)),
+        "crosses": int(sum(count for degree, count in degree_counts.items() if degree >= 4)),
+        "geometricCrossings": int(crossing_count),
+        "branchNodes": int(sum(count for degree, count in degree_counts.items() if degree >= 3)),
+    }
+
+
+def _count_component_crossings(segments: list[Segment], tolerance: float) -> int:
+    count = 0
+    max_checks = 25000
+    checks = 0
+    for i, a in enumerate(segments):
+        for b in segments[i + 1:]:
+            checks += 1
+            if checks > max_checks:
+                return count
+            if _segments_share_endpoint(a, b, tolerance):
+                continue
+            if _segments_intersect(a, b):
+                count += 1
+    return count
+
+
+def _segments_share_endpoint(a: Segment, b: Segment, tolerance: float) -> bool:
+    for ax, ay in [(a.x1, a.y1), (a.x2, a.y2)]:
+        for bx, by in [(b.x1, b.y1), (b.x2, b.y2)]:
+            if math.hypot(ax - bx, ay - by) <= tolerance:
+                return True
+    return False
+
+
+def _segments_intersect(a: Segment, b: Segment) -> bool:
+    def orient(px: float, py: float, qx: float, qy: float, rx: float, ry: float) -> float:
+        return (qy - py) * (rx - qx) - (qx - px) * (ry - qy)
+
+    a1 = orient(a.x1, a.y1, a.x2, a.y2, b.x1, b.y1)
+    a2 = orient(a.x1, a.y1, a.x2, a.y2, b.x2, b.y2)
+    b1 = orient(b.x1, b.y1, b.x2, b.y2, a.x1, a.y1)
+    b2 = orient(b.x1, b.y1, b.x2, b.y2, a.x2, a.y2)
+    return (a1 * a2 < 0) and (b1 * b2 < 0)
+
+
+def _system_source(segments: list[Segment]) -> str:
+    if not segments:
+        return "topology"
+    if all(segment.source.startswith("pdf-vector") for segment in segments):
+        return "pdf-vector-topology"
+    if any(segment.source.startswith("pdf-vector") for segment in segments):
+        return "hybrid-topology"
+    return "opencv-topology"
+
+
+def _system_quality_flags(segments: list[Segment], crossing_count: int) -> list[str]:
+    flags = sorted(set(flag for segment in segments for flag in segment.flags))
+    if crossing_count > 0:
+        flags.append("crossing_review")
+    if len({segment.layer for segment in segments if segment.layer}) > 1:
+        flags.append("multi_layer")
+    return flags
 
 
 def _preset_label(preset: str) -> str:
@@ -821,6 +1431,7 @@ if __name__ == "__main__":
             page=int(payload.get("pageNumber", 1)),
             dpi=int(payload.get("dpi", 150)),
             preset=str(payload.get("preset", "generic")),
+            geometry_source=str(payload.get("geometrySource", "auto")),
             include_symbols=_payload_bool(payload, "includeSymbols", True),
             include_text_regions=_payload_bool(payload, "includeTextRegions", True),
             include_circles=_payload_bool(payload, "includeCircles", True),

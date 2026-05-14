@@ -551,7 +551,11 @@ function findCategoryForRow(
 }
 
 function categoryRequiresRateSchedule(category: EntityCategory | undefined) {
-  return category?.itemSource === "rate_schedule" || category?.calculationType === "tiered_rate";
+  return (
+    category?.itemSource === "rate_schedule" ||
+    category?.calculationType === "tiered_rate" ||
+    category?.calculationType === "duration_rate"
+  );
 }
 
 type EstimatePhase = ProjectWorkspaceData["phases"][number];
@@ -848,6 +852,13 @@ type PendingLaborSelection = {
   catalogData: EntitySelectionCatalogData;
 };
 
+type PendingCategorySelection = {
+  rowId: string;
+  group: EntityOptionGroup;
+  item: EntityOptionItem;
+  message: string;
+};
+
 function normalizeEntityLookup(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
 }
@@ -1097,6 +1108,56 @@ function itemNeedsLaborRateSelection(item: EntityOptionItem) {
     payloadString(item.payload, "source") === "labor_unit" ||
     !!item.laborUnitId;
   return isLaborUnit && !item.rateScheduleItemId;
+}
+
+function rateScheduleEntityCategoryId(schedule: RateSchedule | null | undefined) {
+  return firstText(
+    metadataString(schedule?.metadata, "entityCategoryId"),
+    metadataString(schedule?.metadata, "categoryId"),
+  );
+}
+
+function categoryForRateSchedule(
+  schedule: RateSchedule | null | undefined,
+  categories: EntityCategory[],
+) {
+  if (!schedule) return undefined;
+  const metadataCategoryId = rateScheduleEntityCategoryId(schedule);
+  if (metadataCategoryId) {
+    const byId = categories.find((category) => category.id === metadataCategoryId && category.enabled);
+    if (byId) return byId;
+  }
+
+  const scheduleCategoryKey = normalizeEntityLookup(schedule.category);
+  if (!scheduleCategoryKey) return undefined;
+  return categories.find((category) =>
+    category.enabled && categoryLookupKeys(category).includes(scheduleCategoryKey)
+  );
+}
+
+function sourceKindForCategoryPrompt(item: EntityOptionItem) {
+  if (item.source === "cost_intelligence") {
+    const rawKind = firstText(
+      payloadString(item.payload, "resourceType"),
+      payloadString(item.payload, "costCategory"),
+      payloadString(item.payload, "resourceCategory"),
+    );
+    const trimmedKind = rawKind.trim();
+    const displayKind = trimmedKind.toLowerCase() === "service"
+      ? "vendor service"
+      : trimmedKind;
+    return displayKind
+      ? `${displayKind} cost intelligence`
+      : "cost intelligence";
+  }
+  if (item.source === "catalog") return "catalog item";
+  if (item.source === "plugin_result") return "provider result";
+  if (item.source === "labor_unit") return "productivity unit";
+  return "library item";
+}
+
+function categorySelectionPrompt(item: EntityOptionItem) {
+  return `Choose an estimate category for ${sourceKindForCategoryPrompt(item)}.`;
 }
 
 function compactMoney(value: number) {
@@ -1509,9 +1570,9 @@ function sourceGroupForSearchResult(
       const vendor = firstText(payloadString(payload, "vendorName"), result.vendor);
       const region = payloadString(payload, "region");
       return {
-        categoryName: targetCategoryName,
+        categoryName: "Cost Intelligence",
         categoryId: `cost:${normalizeEntityLookup(resourceType)}:${normalizeEntityLookup(costCategory)}:${normalizeEntityLookup(vendor)}:${normalizeEntityLookup(region)}`,
-        entityType,
+        entityType: "Cost Intelligence",
         defaultUom,
         label: compactPath(["Cost Intelligence", "Cost Basis", resourceType || costCategory, vendor, region]),
         source,
@@ -1968,10 +2029,8 @@ function buildEntityOptions(
 
     switch (itemSource) {
       case "rate_schedule": {
-        // Rate books are keyed by the canonical EntityCategory.entityType.
-        const catKey = cat.entityType.trim();
         for (const sched of workspace.rateSchedules ?? []) {
-          if (sched.category.trim() === catKey) {
+          if (categoryForRateSchedule(sched, categories)?.id === cat.id) {
             for (const rsItem of sched.items ?? []) {
               const firstTier = sched.tiers?.[0];
               const rate = firstTier ? (rsItem.rates[firstTier.id] ?? 0) : 0;
@@ -2307,6 +2366,7 @@ export function EstimateGrid({
   const [entityActionLoadingId, setEntityActionLoadingId] = useState<string | null>(null);
   const [entityPluginResults, setEntityPluginResults] = useState<EntityOptionItem[]>([]);
   const [pendingLaborSelections, setPendingLaborSelections] = useState<Record<string, PendingLaborSelection>>({});
+  const [pendingCategorySelection, setPendingCategorySelection] = useState<PendingCategorySelection | null>(null);
   const entitySearchRequestRef = useRef(0);
   const entitySearchLoadingMoreRef = useRef(false);
 
@@ -2561,6 +2621,7 @@ export function EstimateGrid({
     setEntitySearchHasMore(false);
     setEntitySearchOffset(0);
     setEntitySearchError(null);
+    setPendingCategorySelection(null);
   }, []);
 
   const clearEntityDropdownTimers = useCallback(() => {
@@ -2618,6 +2679,7 @@ export function EstimateGrid({
     setEntitySearchTerm(options.searchTerm ?? "");
     setEntityBrowseMode(options.browseMode ?? null);
     setEntitySearchError(options.searchError ?? null);
+    setPendingCategorySelection(null);
     if (options.clearPluginResults ?? true) setEntityPluginResults([]);
     setSelectedCell({ rowId, column: "entityName" });
     setSelectedRowId(rowId);
@@ -2801,9 +2863,9 @@ export function EstimateGrid({
       const scheduleItem = (schedule.items ?? []).find((item) => item.id === activeEntityRow.rateScheduleItemId);
       if (!scheduleItem) continue;
       const category =
-        entityCategories.find((candidate) => candidate.name === activeEntityRow.category)
-        ?? entityCategories.find((candidate) => candidate.itemSource === "rate_schedule" && candidate.entityType === schedule.category)
-        ?? entityCategories.find((candidate) => candidate.entityType === schedule.category);
+        categoryForRateSchedule(schedule, entityCategories)
+        ?? entityCategories.find((candidate) => candidate.id === activeEntityRow.categoryId)
+        ?? entityCategories.find((candidate) => candidate.name === activeEntityRow.category);
       const firstTier = schedule.tiers?.[0];
       const rate = firstTier ? (scheduleItem.rates[firstTier.id] ?? 0) : 0;
       const categoryName = category?.name ?? activeEntityRow.category;
@@ -3825,6 +3887,7 @@ export function EstimateGrid({
     rateScheduleItemId?: string,
     itemId?: string,
   ) {
+    setPendingCategorySelection(null);
     closeEntityDropdown(rowId);
 
 	    const row = visibleRows.find((r) => r.id === rowId);
@@ -4000,54 +4063,94 @@ export function EstimateGrid({
     });
 	  }
 
-  function categoryByAnalyticsBucket(bucket: string) {
-    const normalized = bucket.trim().toLowerCase();
-    return entityCategories.find((category) => (category.analyticsBucket ?? "").trim().toLowerCase() === normalized);
+  function categoryCanAcceptOption(category: EntityCategory | undefined, item: EntityOptionItem) {
+    if (!category?.enabled) return false;
+    if (item.actionType && item.actionType !== "select" && item.actionType !== "plugin_result") return false;
+
+    const requiresRateItem = categoryRequiresRateSchedule(category);
+    if (itemNeedsLaborRateSelection(item)) {
+      return requiresRateItem;
+    }
+    if (item.rateScheduleItemId) {
+      return requiresRateItem;
+    }
+    if (requiresRateItem) {
+      return false;
+    }
+
+    if (item.source === "catalog") {
+      if (category.itemSource === "catalog" && category.catalogId) {
+        return payloadString(item.payload, "catalogId") === category.catalogId;
+      }
+      return category.itemSource !== "rate_schedule";
+    }
+
+    return category.itemSource !== "rate_schedule";
   }
 
-  function labourCategory() {
-    return categoryByAnalyticsBucket("labour")
-      ?? entityCategories.find((category) => /labou?r/i.test(`${category.name} ${category.entityType}`))
-      ?? entityCategories.find((category) => category.itemSource === "rate_schedule" && category.calculationType === "tiered_rate");
+  function compatibleCategoriesForOption(item: EntityOptionItem) {
+    return entityCategories
+      .filter((category) => categoryCanAcceptOption(category, item))
+      .sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
   }
 
-  function materialCategory() {
-    return categoryByAnalyticsBucket("material")
-      ?? entityCategories.find((category) => /materials?/i.test(`${category.name} ${category.entityType}`))
-      ?? firstEnabledCategory(entityCategories);
+  function directCategoryForOption(group: EntityOptionGroup, item?: EntityOptionItem) {
+    const metadataCategoryId = firstText(
+      payloadString(item?.payload, "entityCategoryId"),
+      payloadString(item?.payload, "categoryId"),
+    );
+    if (metadataCategoryId) {
+      const byPayloadId = entityCategories.find((category) => category.id === metadataCategoryId && category.enabled);
+      if (byPayloadId) return byPayloadId;
+    }
+
+    const byGroupId = entityCategories.find((category) => category.id === group.categoryId && category.enabled);
+    if (byGroupId) return byGroupId;
+
+    const keys = [group.categoryName, group.entityType]
+      .map(normalizeEntityLookup)
+      .filter(Boolean);
+    if (keys.length === 0) return undefined;
+    return entityCategories.find((category) => {
+      const categoryKeys = categoryLookupKeys(category);
+      return category.enabled && keys.some((key) => categoryKeys.includes(key));
+    });
+  }
+
+  function rateScheduleCategoryForOption(item: EntityOptionItem) {
+    if (!item.rateScheduleItemId) return undefined;
+    const schedule = (workspace.rateSchedules ?? []).find((candidate) =>
+      (candidate.items ?? []).some((scheduleItem) => scheduleItem.id === item.rateScheduleItemId),
+    );
+    return categoryForRateSchedule(schedule, entityCategories);
   }
 
   function inferCanonicalCategoryForOption(group: EntityOptionGroup, item: EntityOptionItem) {
-    const direct = getTargetCategoryForEntityGroup(group, item);
-    if (item.source === "labor_unit") {
-      return labourCategory() ?? direct;
+    const rateCategory = rateScheduleCategoryForOption(item);
+    if (rateCategory && categoryCanAcceptOption(rateCategory, item)) {
+      return rateCategory;
     }
+
     if (item.source === "cost_intelligence" || item.source === "plugin_result") {
-      const resourceType = [
-        payloadString(item.payload, "resourceType"),
-        payloadString(item.payload, "costCategory"),
-        payloadString(item.payload, "resourceCategory"),
-        group.categoryName,
-        group.entityType,
-      ].join(" ").toLowerCase();
-      if (/\bequipment\b|\brental\b/.test(resourceType)) {
-        return categoryByAnalyticsBucket("equipment")
-          ?? entityCategories.find((category) => /\bequipment\b/i.test(`${category.name} ${category.entityType}`))
-          ?? direct
-          ?? materialCategory();
-      }
-      if (/\bsub(contract|contractor)?\b/.test(resourceType)) {
-        return categoryByAnalyticsBucket("subcontractor")
-          ?? entityCategories.find((category) => /\bsub/i.test(`${category.name} ${category.entityType}`))
-          ?? direct
-          ?? materialCategory();
-      }
-      if (/\blabou?r\b/.test(resourceType)) {
-        return labourCategory() ?? direct ?? materialCategory();
-      }
-      return direct ?? materialCategory();
+      return undefined;
     }
-    return direct;
+
+    const direct = directCategoryForOption(group, item);
+    return categoryCanAcceptOption(direct, item) ? direct : undefined;
+  }
+
+  function resolveTargetCategoryForOption(
+    row: WorkspaceWorksheetItem | null | undefined,
+    group: EntityOptionGroup,
+    item: EntityOptionItem,
+  ) {
+    const inferred = inferCanonicalCategoryForOption(group, item);
+    if (inferred) return inferred;
+
+    const rowCategory = row ? findCategoryForRow(row, entityCategories) : undefined;
+    if (categoryCanAcceptOption(rowCategory, item)) return rowCategory;
+
+    return undefined;
   }
 
   function stageTemporaryWorksheetItemPatch(rowId: string, patch: WorksheetItemPatchInput) {
@@ -4188,7 +4291,28 @@ export function EstimateGrid({
     }
   }
 
-  function handleEntityAction(rowId: string, group: EntityOptionGroup, item: EntityOptionItem) {
+  function promptForEntityOptionCategory(
+    rowId: string,
+    group: EntityOptionGroup,
+    item: EntityOptionItem,
+    message = categorySelectionPrompt(item),
+  ) {
+    const categories = compatibleCategoriesForOption(item);
+    if (categories.length === 0) {
+      setPendingCategorySelection(null);
+      setEntitySearchError(`No enabled estimate category can accept this ${sourceKindForCategoryPrompt(item)}.`);
+      return;
+    }
+    setEntitySearchError(null);
+    setPendingCategorySelection({ rowId, group, item, message });
+  }
+
+  function handleEntityAction(
+    rowId: string,
+    group: EntityOptionGroup,
+    item: EntityOptionItem,
+    forcedCategory?: EntityCategory,
+  ) {
     if (item.actionType === "plugin_remote_search") {
       void handlePluginRemoteSearch(item);
       return;
@@ -4242,9 +4366,13 @@ export function EstimateGrid({
       return;
     }
 
-    const targetCategory = inferCanonicalCategoryForOption(group, item);
+    const targetCategory = forcedCategory ?? resolveTargetCategoryForOption(row, group, item);
     if (!targetCategory) {
-      setEntitySearchError("Choose a configured worksheet category before applying this result.");
+      promptForEntityOptionCategory(rowId, group, item);
+      return;
+    }
+    if (forcedCategory && !categoryCanAcceptOption(forcedCategory, item)) {
+      setEntitySearchError(`${forcedCategory.name} cannot accept this ${sourceKindForCategoryPrompt(item)}.`);
       return;
     }
 
@@ -4254,7 +4382,7 @@ export function EstimateGrid({
       const existingRateScheduleItemId = row?.rateScheduleItemId ?? undefined;
       stagedPatch.rateScheduleItemId = existingRateScheduleItemId;
       stagedPatch.itemId = row?.itemId ?? null;
-      stagedPatch.entityName = row?.entityName.trim() ? row.entityName : "Choose labour rate...";
+      stagedPatch.entityName = row?.entityName.trim() ? row.entityName : "Choose rate item...";
 
       if (existingRateScheduleItemId && (item.unit1 || item.unit2 || item.unit3)) {
         const schedule = (workspace.rateSchedules ?? []).find((candidate) =>
@@ -4282,7 +4410,7 @@ export function EstimateGrid({
       if (!row || stageTemporaryWorksheetItemPatch(rowId, stagedPatch)) {
         openEntityDropdown(rowId, null, {
           browseMode: "rate_books",
-          searchError: "Productivity selected. Choose an imported labour rate item to price this line.",
+          searchError: "Productivity selected. Choose an imported rate item to price this line.",
         });
         return;
       }
@@ -4291,15 +4419,13 @@ export function EstimateGrid({
 
       openEntityDropdown(rowId, null, {
         browseMode: "rate_books",
-        searchError: "Productivity selected. Choose an imported labour rate item to price this line.",
+        searchError: "Productivity selected. Choose an imported rate item to price this line.",
       });
       return;
     }
 
     if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
-      setEntitySearchError(
-        `Choose an imported ${targetCategory.name} item for this category before creating the row.`
-      );
+      promptForEntityOptionCategory(rowId, group, item);
       return;
     }
 
@@ -4941,21 +5067,7 @@ export function EstimateGrid({
   // ─── Universal Add Items ───
 
   function getTargetCategoryForEntityGroup(group: EntityOptionGroup, item?: EntityOptionItem) {
-    const directMatch = entityCategories.find((category) =>
-      category.name === group.categoryName || category.entityType === group.entityType
-    );
-    if (directMatch || item?.source !== "catalog") return directMatch;
-
-    const catalogKind = firstText(
-      payloadString(item.payload, "catalogKind"),
-      payloadString(item.payload, "catalogName"),
-    );
-    if (!catalogKind) return undefined;
-    const catalogKey = normalizeEntityLookup(catalogKind);
-    return entityCategories.find((category) =>
-      normalizeEntityLookup(category.name) === catalogKey ||
-      normalizeEntityLookup(category.entityType) === catalogKey
-    );
+    return directCategoryForOption(group, item);
   }
 
 	  function canCreateWorksheetItemFromOption(group: EntityOptionGroup, item: EntityOptionItem) {
@@ -4964,6 +5076,7 @@ export function EstimateGrid({
     if (item.source === "assembly" || item.source === "plugin" || item.source === "external_action" || item.source === "plugin_result") {
       return false;
     }
+    if (!targetCategory) return false;
     if (itemNeedsLaborRateSelection(item)) return false;
     if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) return false;
     return true;
@@ -4975,9 +5088,14 @@ export function EstimateGrid({
     lineOrder?: number,
 	  ): { payload?: CreateWorksheetItemInput; error?: string } {
 	    const targetCategory = inferCanonicalCategoryForOption(group, item);
+    if (!targetCategory) {
+      return {
+        error: categorySelectionPrompt(item),
+      };
+    }
     if (itemNeedsLaborRateSelection(item)) {
       return {
-        error: "Choose an imported labour rate item before creating a row from a productivity unit.",
+        error: "Choose an imported rate item before creating a row from a productivity unit.",
       };
     }
     if (categoryRequiresRateSchedule(targetCategory) && !item.rateScheduleItemId) {
@@ -5684,7 +5802,7 @@ export function EstimateGrid({
 		              filtered.map((item) => {
 		                const myIdx = entityFlatIndexByGroup.get(group)?.get(item) ?? 0;
 		                const isHighlighted = myIdx === entityHighlightIdx;
-		                const itemCategory = inferCanonicalCategoryForOption(group, item) ?? getTargetCategoryForEntityGroup(group, item);
+		                const itemCategory = resolveTargetCategoryForOption(row, group, item);
 		                const itemCategoryColor = itemCategory?.color ?? getCategoryHexColor(group.categoryName, entityCategories);
 		                const isLinkedCatalogRate = item.source === "catalog" && !!item.rateScheduleItemId;
 		                const badge = isLinkedCatalogRate ? "Catalog + rate" : sourceBadgeLabel(item.source);
@@ -6214,6 +6332,45 @@ export function EstimateGrid({
 		              </div>
 		            );
 
+		            const categorySelection = pendingCategorySelection?.rowId === row.id
+		              ? pendingCategorySelection
+		              : null;
+		            const categorySelectionOptions = categorySelection
+		              ? compatibleCategoriesForOption(categorySelection.item)
+		              : [];
+		            const renderCategorySelection = () => {
+		              if (!categorySelection || categorySelectionOptions.length === 0) return null;
+		              return (
+		                <div className="m-2 rounded-lg border border-accent/20 bg-accent/5 p-2">
+		                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-accent">
+		                    <Tag className="h-3.5 w-3.5" />
+		                    <span>{categorySelection.message}</span>
+		                  </div>
+		                  <div className="grid grid-cols-2 gap-1">
+		                    {categorySelectionOptions.map((category) => (
+		                      <button
+		                        key={category.id}
+		                        type="button"
+		                        className="flex min-w-0 items-center gap-1.5 rounded-md border border-line bg-bg/65 px-2 py-1 text-left text-[11px] transition-colors hover:border-accent/35 hover:bg-accent/8"
+		                        onClick={() => handleEntityAction(row.id, categorySelection.group, categorySelection.item, category)}
+		                      >
+		                        <span
+		                          className="h-2.5 w-2.5 shrink-0 rounded-full"
+		                          style={{ backgroundColor: category.color || DEFAULT_CATEGORY_HEX }}
+		                        />
+		                        <span className="min-w-0 flex-1 truncate font-medium text-fg">
+		                          {category.name}
+		                        </span>
+		                        <span className="shrink-0 text-[9px] text-fg/35">
+		                          {category.shortform || category.entityType}
+		                        </span>
+		                      </button>
+		                    ))}
+		                  </div>
+		                </div>
+		              );
+		            };
+
 	            const isDropdownShown = isDropdownOpen && entityDropdownVisible;
 	            const openClipPath = entityDropdownPos.placement === "above"
 	              ? `inset(-${entityDropdownPos.listMaxHeight + 8}px 0 0 0 round 12px)`
@@ -6274,6 +6431,7 @@ export function EstimateGrid({
 		                      onChange={(e) => {
 		                        const next = e.target.value;
 		                        setEntitySearchTerm(next);
+		                        setPendingCategorySelection(null);
 		                        if (next.trim()) setEntityBrowseMode(null);
 		                      }}
 		                      onKeyDown={(e) => {
@@ -6360,6 +6518,7 @@ export function EstimateGrid({
 			                  onScroll={handleResultsScroll}
 			                >
 			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
+			                  {!showBrowseLaunchpad && renderCategorySelection()}
 			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
 			                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">
 			                      <Loader2 className="h-4 w-4 animate-spin text-accent" />

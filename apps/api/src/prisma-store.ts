@@ -2210,8 +2210,8 @@ export class PrismaApiStore {
           'catalog_item',
           ci."id",
           'select',
-          COALESCE(NULLIF(ci."metadata"->>'category', ''), c."kind", ''),
-          c."kind",
+          COALESCE(linked_rate."entityCategoryName", NULLIF(ci."metadata"->>'category', ''), c."kind", ''),
+          COALESCE(linked_rate."entityCategoryType", c."kind"),
           COALESCE(NULLIF(ci."name", ''), 'Catalog item'),
           c."name",
           ci."code",
@@ -2219,8 +2219,8 @@ export class PrismaApiStore {
           COALESCE(NULLIF(linked_rate."rateUnit", ''), NULLIF(ci."unit", ''), 'EA'),
           COALESCE(linked_rate."rateUnitCost", ci."unitCost"),
           ci."unitPrice",
-          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", ci."metadata"::text),
-          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", ci."metadata"::text)),
+          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", ci."metadata"::text),
+          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", ci."metadata"::text)),
           jsonb_build_object(
             'source', 'catalog',
             'itemId', ci."id",
@@ -2232,6 +2232,9 @@ export class PrismaApiStore {
             'scheduleId', linked_rate."scheduleId",
             'scheduleName', linked_rate."scheduleName",
             'scheduleCategory', linked_rate."scheduleCategory",
+            'entityCategoryId', linked_rate."entityCategoryId",
+            'entityCategoryName', linked_rate."entityCategoryName",
+            'entityCategoryType', linked_rate."entityCategoryType",
             'rateScheduleLinked', linked_rate."rateScheduleItemId" IS NOT NULL,
             'vendor', COALESCE(ci."metadata"->>'vendor', ''),
             'description', ci."name",
@@ -2268,6 +2271,9 @@ export class PrismaApiStore {
             rsi."scheduleId",
             rs."name" AS "scheduleName",
             rs."category" AS "scheduleCategory",
+            ec."id" AS "entityCategoryId",
+            ec."name" AS "entityCategoryName",
+            ec."entityType" AS "entityCategoryType",
             rsi."unit" AS "rateUnit",
             tier."id" AS "tierId",
             COALESCE(NULLIF(rsi."rates"->>tier."id", '')::double precision, 0) AS "rateUnitCost"
@@ -2275,6 +2281,13 @@ export class PrismaApiStore {
           JOIN "RateSchedule" rs ON rs."id" = rsi."scheduleId"
           JOIN "QuoteRevision" qr ON qr."id" = rs."revisionId"
           JOIN "Quote" q ON q."id" = qr."quoteId"
+          LEFT JOIN "EntityCategory" ec ON ec."organizationId" = $1::text
+            AND ec."enabled" = true
+            AND (
+              ec."id" = rs."metadata"->>'entityCategoryId'
+              OR lower(ec."name") = lower(rs."category")
+              OR lower(ec."entityType") = lower(rs."category")
+            )
           LEFT JOIN LATERAL (
             SELECT "id"
             FROM "RateScheduleTier" rst
@@ -2296,6 +2309,27 @@ export class PrismaApiStore {
         ) linked_rate ON true
         WHERE c."organizationId" = $1::text
           AND ($2::text IS NULL OR c."scope" = 'global' OR c."projectId" = $2::text)
+          AND (
+            linked_rate."rateScheduleItemId" IS NOT NULL
+            OR ci."id" NOT IN (
+              SELECT any_rsi."catalogItemId"
+              FROM "RateScheduleItem" any_rsi
+              JOIN "RateSchedule" any_rs ON any_rs."id" = any_rsi."scheduleId"
+              LEFT JOIN "EntityCategory" any_ec ON any_ec."organizationId" = $1::text
+                AND any_ec."enabled" = true
+                AND (
+                  any_ec."id" = any_rs."metadata"->>'entityCategoryId'
+                  OR lower(any_ec."name") = lower(any_rs."category")
+                  OR lower(any_ec."entityType") = lower(any_rs."category")
+                )
+              WHERE any_rsi."catalogItemId" IS NOT NULL
+                AND any_rs."organizationId" = $1::text
+                AND (
+                  any_ec."itemSource" = 'rate_schedule'
+                  OR any_ec."calculationType" IN ('tiered_rate', 'duration_rate')
+                )
+            )
+          )
         ON CONFLICT ("id") DO UPDATE SET
           "projectId" = EXCLUDED."projectId",
           "category" = EXCLUDED."category",
@@ -2330,8 +2364,8 @@ export class PrismaApiStore {
           'rate_schedule_item',
           rsi."id",
           'select',
-          rs."category",
-          rs."category",
+          COALESCE(ec."name", rs."category"),
+          COALESCE(ec."entityType", rs."category"),
           COALESCE(NULLIF(rsi."name", ''), 'Rate schedule item'),
           rs."name",
           rsi."code",
@@ -2339,14 +2373,17 @@ export class PrismaApiStore {
           COALESCE(NULLIF(rsi."unit", ''), 'HR'),
           COALESCE(NULLIF(rsi."rates"->>tier."id", '')::double precision, 0),
           NULL,
-          concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", rs."description", rsi."metadata"::text),
-          to_tsvector('english', concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", rs."description", rsi."metadata"::text)),
+          concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", ec."name", ec."entityType", rs."description", rsi."metadata"::text),
+          to_tsvector('english', concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", ec."name", ec."entityType", rs."description", rsi."metadata"::text)),
           jsonb_build_object(
             'source', 'rate_schedule',
             'rateScheduleItemId', rsi."id",
             'scheduleId', rs."id",
             'scheduleName', rs."name",
             'scheduleCategory', rs."category",
+            'entityCategoryId', ec."id",
+            'entityCategoryName', ec."name",
+            'entityCategoryType', ec."entityType",
             'description', rsi."name",
             'resourceComposition', jsonb_build_object(
               'source', 'rate_schedule',
@@ -2372,6 +2409,13 @@ export class PrismaApiStore {
         JOIN "RateSchedule" rs ON rs."id" = rsi."scheduleId"
         LEFT JOIN "QuoteRevision" qr ON qr."id" = rs."revisionId"
         LEFT JOIN "Quote" q ON q."id" = qr."quoteId"
+        LEFT JOIN "EntityCategory" ec ON ec."organizationId" = $1::text
+          AND ec."enabled" = true
+          AND (
+            ec."id" = rs."metadata"->>'entityCategoryId'
+            OR lower(ec."name") = lower(rs."category")
+            OR lower(ec."entityType") = lower(rs."category")
+          )
         LEFT JOIN LATERAL (
           SELECT "id"
           FROM "RateScheduleTier" rst
@@ -2797,6 +2841,28 @@ export class PrismaApiStore {
             cardinality($11::text[]) = 0
             OR "sourceType" <> 'catalog_item'
             OR COALESCE("payload"->>'catalogId', '') <> ALL($11::text[])
+          )
+          AND (
+            "sourceType" <> 'catalog_item'
+            OR NULLIF("payload"->>'rateScheduleItemId', '') IS NOT NULL
+            OR "sourceId" NOT IN (
+              SELECT any_rsi."catalogItemId"
+              FROM "RateScheduleItem" any_rsi
+              JOIN "RateSchedule" any_rs ON any_rs."id" = any_rsi."scheduleId"
+              LEFT JOIN "EntityCategory" any_ec ON any_ec."organizationId" = $1::text
+                AND any_ec."enabled" = true
+                AND (
+                  any_ec."id" = any_rs."metadata"->>'entityCategoryId'
+                  OR lower(any_ec."name") = lower(any_rs."category")
+                  OR lower(any_ec."entityType") = lower(any_rs."category")
+                )
+              WHERE any_rsi."catalogItemId" IS NOT NULL
+                AND any_rs."organizationId" = $1::text
+                AND (
+                  any_ec."itemSource" = 'rate_schedule'
+                  OR any_ec."calculationType" IN ('tiered_rate', 'duration_rate')
+                )
+            )
           )
           AND (
             $5::text = ''
@@ -11057,7 +11123,7 @@ export class PrismaApiStore {
     return mapRateScheduleWithChildren(schedule);
   }
 
-  private async requireRateScheduleCategory(category: string | null | undefined): Promise<string> {
+  private async resolveRateScheduleEntityCategory(category: string | null | undefined) {
     const value = typeof category === "string" ? category.trim() : "";
     if (!value) throw new Error("Rate schedule category is required");
     const entityCategory = await this.db.entityCategory.findFirst({
@@ -11074,6 +11140,11 @@ export class PrismaApiStore {
     if (!entityCategory) {
       throw new Error(`Rate schedule category "${value}" must match an enabled EntityCategory`);
     }
+    return entityCategory;
+  }
+
+  private async requireRateScheduleCategory(category: string | null | undefined): Promise<string> {
+    const entityCategory = await this.resolveRateScheduleEntityCategory(category);
     return entityCategory.entityType?.trim() || entityCategory.name.trim();
   }
 
@@ -11132,7 +11203,8 @@ export class PrismaApiStore {
     name: string; description?: string; category?: string; defaultMarkup?: number; autoCalculate?: boolean;
     effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
   }): Promise<RateScheduleWithChildren> {
-    const category = await this.requireRateScheduleCategory(input.category);
+    const entityCategory = await this.resolveRateScheduleEntityCategory(input.category);
+    const category = entityCategory.entityType?.trim() || entityCategory.name.trim();
     const created = await this.db.rateSchedule.create({
       data: {
         id: createId("rs"),
@@ -11145,7 +11217,7 @@ export class PrismaApiStore {
         expiryDate: input.expiryDate ?? null,
         defaultMarkup: input.defaultMarkup ?? 0,
         autoCalculate: input.autoCalculate ?? true,
-        metadata: (input.metadata ?? {}) as any,
+        metadata: ({ ...(input.metadata ?? {}), entityCategoryId: entityCategory.id } as any),
       },
       include: rateScheduleCalcInclude,
     });
@@ -11161,16 +11233,29 @@ export class PrismaApiStore {
     const data: any = {};
     if (patch.name !== undefined) data.name = patch.name;
     if (patch.description !== undefined) data.description = patch.description;
-    if (patch.category !== undefined) data.category = await this.requireRateScheduleCategory(patch.category);
+    let categoryEntity: any = null;
+    if (patch.category !== undefined) {
+      categoryEntity = await this.resolveRateScheduleEntityCategory(patch.category);
+      data.category = categoryEntity.entityType?.trim() || categoryEntity.name.trim();
+    }
     if (patch.defaultMarkup !== undefined) data.defaultMarkup = patch.defaultMarkup;
     if (patch.autoCalculate !== undefined) data.autoCalculate = patch.autoCalculate;
     if (patch.effectiveDate !== undefined) data.effectiveDate = patch.effectiveDate;
     if (patch.expiryDate !== undefined) data.expiryDate = patch.expiryDate;
-    if (patch.metadata !== undefined) {
-      if (existing.scope === "revision" && this.metadataTouchesRateBookCostSide(patch.metadata)) {
+    if (patch.metadata !== undefined || categoryEntity) {
+      const baseMetadata = patch.metadata !== undefined
+        ? patch.metadata
+        : existing.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata)
+          ? existing.metadata as Record<string, unknown>
+          : {};
+      const nextMetadata = {
+        ...baseMetadata,
+        ...(categoryEntity ? { entityCategoryId: categoryEntity.id } : {}),
+      };
+      if (existing.scope === "revision" && this.metadataTouchesRateBookCostSide(nextMetadata)) {
         throw badRequestError("Imported quote Ratebooks can only modify sell-side metadata. Cost-side components remain locked to the imported cost basis.");
       }
-      data.metadata = patch.metadata;
+      data.metadata = nextMetadata;
     }
     const updated = await this.db.rateSchedule.update({
       where: { id }, data,

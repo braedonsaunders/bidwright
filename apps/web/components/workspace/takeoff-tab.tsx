@@ -1871,6 +1871,7 @@ export function TakeoffTab({
   /* Drawing intelligence state */
   const [drawingAnalysisSettings, setDrawingAnalysisSettings] = useState<InspectDrawingAnalysisSettings>({
     preset: "generic",
+    geometrySource: "auto",
     includeSymbols: true,
     includeTextRegions: true,
     includeCircles: true,
@@ -2579,14 +2580,23 @@ export function TakeoffTab({
         selectDrawingDetection: (id) => {
           handleSelectDrawingDetection(id);
         },
+        selectDrawingDetectionGroup: (ids) => {
+          handleSelectDrawingDetectionGroup(ids);
+        },
         saveDrawingDetection: async (id, kind) => {
           await handleSaveDrawingDetection(id, kind);
         },
         createLineItemFromDrawingDetection: async (id, kind, pick) => {
           await handleCreateDrawingDetectionLineItem(id, kind, pick);
         },
+        createLineItemFromDrawingSymbolGroup: async (ids, label, pick) => {
+          await handleCreateDrawingSymbolGroupLineItem(ids, label, pick);
+        },
         deleteDrawingDetection: (id, kind) => {
           handleDeleteDrawingDetection(id, kind);
+        },
+        deleteDrawingDetectionGroup: (ids, kind) => {
+          handleDeleteDrawingDetectionGroup(ids, kind);
         },
         selectSmartCountItem: (id) => {
           handleSelectSmartCountItem(id);
@@ -4288,6 +4298,7 @@ export function TakeoffTab({
         documentId: docId,
         pageNumber: page,
         preset: drawingAnalysisSettings.preset,
+        geometrySource: drawingAnalysisSettings.geometrySource,
         traceSystems: drawingAnalysisSettings.traceSystems,
         includeSymbols: drawingAnalysisSettings.includeSymbols,
         includeTextRegions: drawingAnalysisSettings.includeTextRegions,
@@ -4342,6 +4353,18 @@ export function TakeoffTab({
       const metadata = (annotation.opts ?? {}) as Record<string, unknown>;
       return metadata.detectionId === id || metadata.systemId === id;
     });
+  }
+
+  function drawingDetectionGroupBounds(ids: string[]): { x: number; y: number; width: number; height: number } | null {
+    const boxes = ids
+      .map((id) => drawingDetectionBounds(id))
+      .filter((box): box is { x: number; y: number; width: number; height: number } => Boolean(box));
+    if (boxes.length === 0) return null;
+    const minX = Math.min(...boxes.map((box) => box.x));
+    const minY = Math.min(...boxes.map((box) => box.y));
+    const maxX = Math.max(...boxes.map((box) => box.x + box.width));
+    const maxY = Math.max(...boxes.map((box) => box.y + box.height));
+    return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
   }
 
   function drawingAnalysisPaperScale() {
@@ -4536,6 +4559,16 @@ export function TakeoffTab({
     if (bounds) focusDrawingBounds(bounds);
   }
 
+  function handleSelectDrawingDetectionGroup(ids: string[]) {
+    const firstId = ids[0] ?? null;
+    setSelectedDrawingDetectionId(firstId);
+    if (selectedDocId) {
+      postTakeoffMessage({ type: "drawing-detection-selection", docId: selectedDocId, page, detectionId: firstId });
+    }
+    const bounds = drawingDetectionGroupBounds(ids);
+    if (bounds) focusDrawingBounds(bounds);
+  }
+
   function handleDeleteDrawingDetection(id: string, kind: InspectDrawingDetectionKind) {
     const next = removeDrawingAnalysisEntity(drawingAnalysisResult, id, kind);
     if (next === drawingAnalysisResult) return;
@@ -4551,6 +4584,32 @@ export function TakeoffTab({
     }
     setToastType("success");
     setToastMessage("Deleted detected entity from this analysis run.");
+  }
+
+  function handleDeleteDrawingDetectionGroup(ids: string[], kind: InspectDrawingDetectionKind) {
+    const idSet = new Set(ids);
+    if (idSet.size === 0 || !drawingAnalysisResult) return;
+    const next = updateDrawingAnalysisSummary({
+      ...drawingAnalysisResult,
+      symbolCandidates: kind === "symbol"
+        ? drawingAnalysisResult.symbolCandidates.filter((candidate) => !idSet.has(candidate.id))
+        : drawingAnalysisResult.symbolCandidates,
+      textRegions: kind === "text"
+        ? drawingAnalysisResult.textRegions.filter((region) => !idSet.has(region.id))
+        : drawingAnalysisResult.textRegions,
+    });
+    setDrawingAnalysisResult(next);
+    if (selectedDrawingDetectionId && idSet.has(selectedDrawingDetectionId)) {
+      setSelectedDrawingDetectionId(null);
+      if (selectedDocId) {
+        postTakeoffMessage({ type: "drawing-detection-selection", docId: selectedDocId, page, detectionId: null });
+      }
+    }
+    if (selectedDocId) {
+      postTakeoffMessage({ type: "drawing-analysis-result", docId: selectedDocId, page, analysis: next });
+    }
+    setToastType("success");
+    setToastMessage(`Deleted ${idSet.size} detected ${kind === "symbol" ? "count candidates" : "entities"} from this analysis run.`);
   }
 
   useEffect(() => {
@@ -4975,6 +5034,40 @@ export function TakeoffTab({
       console.error("[takeoff] Failed to create line item from drawing detection:", error);
       setToastType("error");
       setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that detected entity."));
+    }
+  }
+
+  async function handleCreateDrawingSymbolGroupLineItem(ids: string[], label: string, pick: InspectCategoryPick) {
+    const uniqueIds = Array.from(new Set(ids));
+    if (uniqueIds.length === 0) return;
+    try {
+      const targets: TakeoffAnnotation[] = [];
+      for (const id of uniqueIds) {
+        const existing = drawingDetectionAnnotations(id);
+        if (existing.length > 0) {
+          targets.push(...existing);
+          continue;
+        }
+        const saved = await handleSaveDrawingDetection(id, "symbol", { toast: false });
+        targets.push(...saved);
+      }
+      if (targets.length === 0) {
+        setToastType("error");
+        setToastMessage("Could not save and link those count candidates automatically.");
+        return;
+      }
+      const created = await createLineItemFromAnnotationGroup(targets, label || "PDF count candidates", pick);
+      if (!created) return;
+      await loadAnnotationsRef.current();
+      await loadTakeoffLinks();
+      notifyWorkspaceMutated();
+      notifyTakeoffLinksMutated();
+      setToastType("success");
+      setToastMessage(`Created count line item from ${targets.length} PDF candidate${targets.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      console.error("[takeoff] Failed to create line item from PDF count group:", error);
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from those count candidates."));
     }
   }
 

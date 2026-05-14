@@ -9,6 +9,7 @@ export {
   type AnalyzeDrawingGeometryRequest,
   type AnalyzeDrawingGeometryResult,
   type DrawingAnalysisPreset,
+  type DrawingGeometrySource,
   type DrawingCircleDetection,
   type DrawingContourDetection,
   type DrawingLineSegment,
