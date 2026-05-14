@@ -25,37 +25,17 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 5
     env:
-      VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
-      VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+      VERCEL_DEPLOY_HOOK_URL: ${{ secrets.VERCEL_DEPLOY_HOOK_URL }}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Set up pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 10.30.3
-
-      - name: Set up Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-
-      - name: Assert Vercel credentials
+      - name: Assert Vercel deploy hook
         run: |
-          test -n "$VERCEL_ORG_ID"
-          test -n "$VERCEL_PROJECT_ID"
-          test -n "$VERCEL_TOKEN"
+          test -n "$VERCEL_DEPLOY_HOOK_URL"
 
-      - name: Pull Vercel production environment
-        run: pnpm dlx vercel@latest pull --yes --environment=production --token "$VERCEL_TOKEN"
-
-      - name: Build Vercel artifact
-        run: pnpm dlx vercel@latest build --prod --token "$VERCEL_TOKEN"
-
-      - name: Deploy demo web to production
-        run: pnpm dlx vercel@latest deploy --prebuilt --prod --token "$VERCEL_TOKEN"
+      - name: Trigger Vercel production deploy
+        run: |
+          curl --fail --silent --show-error --request POST "$VERCEL_DEPLOY_HOOK_URL"
