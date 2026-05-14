@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
-import { Compass, FileText, Layers, Maximize2, Minimize2 } from "lucide-react";
+import { Compass, FileText, Layers, Maximize2, Minimize2, PanelRightClose } from "lucide-react";
 import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
@@ -145,6 +145,15 @@ export function ComboView({
     if (open) setRightPanelTab("entities");
   }, []);
 
+  const handleMergeDetachedTakeoff = useCallback(() => {
+    const win = detachedTakeoffWindowRef.current;
+    if (win && !win.closed) {
+      win.close();
+    }
+    detachedTakeoffWindowRef.current = null;
+    setTakeoffDetached(false);
+  }, []);
+
   useEffect(() => {
     if (!takeoffDetached) return;
     const interval = window.setInterval(() => {
@@ -177,8 +186,8 @@ export function ComboView({
   });
 
   const detachedLayout = useDefaultLayout({
-    id: "combo-view-detached",
-    panelIds: ["combo-detached-entities", "combo-detached-worksheets"],
+    id: "combo-view-detached-v2",
+    panelIds: ["combo-detached-worksheets", "combo-detached-entities"],
     storage: layoutStorage,
   });
 
@@ -218,14 +227,51 @@ export function ComboView({
         <div className="fixed -left-[10000px] top-0 h-[720px] w-[1024px] overflow-hidden opacity-0 pointer-events-none" aria-hidden="true">
           {takeoffSurface}
         </div>
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel/80 px-3 py-1.5">
+          <div className="min-w-0 text-xs">
+            <span className="font-medium text-fg/75">Takeoff popped out</span>
+            <span className="ml-2 text-fg/40">Worksheets left, entities right</span>
+          </div>
+          <button
+            type="button"
+            onClick={handleMergeDetachedTakeoff}
+            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-line bg-bg/40 px-2 text-[11px] font-medium text-fg/65 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+            title="Close the detached takeoff window and restore the full workspace layout"
+          >
+            <PanelRightClose className="h-3.5 w-3.5" />
+            Merge back
+          </button>
+        </div>
         <Group
           orientation="horizontal"
           className="flex-1 min-h-0"
           defaultLayout={detachedLayout.defaultLayout}
           onLayoutChanged={detachedLayout.onLayoutChanged}
         >
+          <Panel id="combo-detached-worksheets" defaultSize="75%" minSize="45%">
+            <div className="h-full min-h-0 pr-1.5">
+              <EstimateGrid
+                workspace={workspace}
+                onApply={onApply}
+                onError={onError}
+                onRefresh={onRefresh}
+                highlightItemId={highlightItemId}
+                activeWorksheetId={activeWorksheetId}
+                onActiveWorksheetChange={onActiveWorksheetChange}
+                onOpenPluginTools={onOpenPluginTools}
+                onOpenTakeoffLink={onOpenTakeoffLink}
+                revisionImpactByItem={revisionImpactByItem}
+                onOpenRevisionDiff={onOpenRevisionDiff}
+              />
+            </div>
+          </Panel>
+
+          <Separator className="group relative !w-px bg-line transition-colors hover:bg-accent/60 data-[resize-active]:bg-accent">
+            <div className="absolute inset-y-0 -left-1 -right-1" />
+          </Separator>
+
           <Panel id="combo-detached-entities" defaultSize="25%" minSize="18%">
-            <div className="h-full min-h-0 border-r border-line bg-panel/30">
+            <div className="h-full min-h-0 border-l border-line bg-panel/30">
               <RightPanel
                 workspace={workspace}
                 activeWorksheetId={activeWorksheetId}
@@ -241,28 +287,6 @@ export function ComboView({
                 onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
                 inspectSnapshot={inspectSnapshot}
                 inspectActionsRef={inspectActionsRef}
-              />
-            </div>
-          </Panel>
-
-          <Separator className="group relative !w-px bg-line transition-colors hover:bg-accent/60 data-[resize-active]:bg-accent">
-            <div className="absolute inset-y-0 -left-1 -right-1" />
-          </Separator>
-
-          <Panel id="combo-detached-worksheets" defaultSize="75%" minSize="45%">
-            <div className="h-full min-h-0 pl-1.5">
-              <EstimateGrid
-                workspace={workspace}
-                onApply={onApply}
-                onError={onError}
-                onRefresh={onRefresh}
-                highlightItemId={highlightItemId}
-                activeWorksheetId={activeWorksheetId}
-                onActiveWorksheetChange={onActiveWorksheetChange}
-                onOpenPluginTools={onOpenPluginTools}
-                onOpenTakeoffLink={onOpenTakeoffLink}
-                revisionImpactByItem={revisionImpactByItem}
-                onOpenRevisionDiff={onOpenRevisionDiff}
               />
             </div>
           </Panel>

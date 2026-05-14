@@ -1584,6 +1584,7 @@ export function TakeoffTab({
   onDetachedWindowChange,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
+  const isDetachedMirror = detached && Boolean(onDetachedWindowChange);
   const selectedWorksheet =
     (selectedWorksheetId ? workspace.worksheets.find((worksheet) => worksheet.id === selectedWorksheetId) : null) ??
     workspace.worksheets[0] ??
@@ -2895,9 +2896,10 @@ export function TakeoffTab({
 
   /* BroadcastChannel sync — broadcast annotation/page changes to detached window */
   useEffect(() => {
+    if (isDetachedMirror) return;
     if (!selectedDocId) return;
     postTakeoffMessage({ type: "view-change", docId: selectedDocId, page, zoom });
-  }, [page, postTakeoffMessage, selectedDocId, zoom]);
+  }, [isDetachedMirror, page, postTakeoffMessage, selectedDocId, zoom]);
 
   useEffect(() => {
     postTakeoffMessage({ type: "calibration-change", calibration });

@@ -658,7 +658,7 @@ function SmartCountInspect({
                 <span className="w-10 shrink-0 text-right font-mono text-sm font-semibold tabular-nums text-emerald-500">
                   x{item.count.toLocaleString()}
                 </span>
-                <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                <div className="flex shrink-0 items-center gap-0.5">
                   {!item.isLinked && (
                     <AddToCategoryPopover
                       snapshot={snapshot}
@@ -763,7 +763,7 @@ function DwgEntitiesInspect({
         <p className="truncate text-[10px] text-fg/40">{subtitle}</p>
       </div>
       <span className="shrink-0 font-mono text-[10px] text-fg/50">{value}</span>
-      <div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+      <div className="flex shrink-0 items-center gap-0.5">
         {!linked && (
           <AddToCategoryPopover
             snapshot={snapshot}
@@ -1388,7 +1388,7 @@ function DetectionGroup({
                 <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>
                 {row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
               </div>
-              <div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+              <div className="flex items-center gap-0.5">
               {onAdd && row.kind !== "text" && row.linkCount === 0 && (
                 row.requiresCalibration ? (
                   <button
@@ -1697,7 +1697,7 @@ function AnnotationsInspect({
                       )
                     }
                     triggerLabel="Add"
-                    triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
+                    triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 transition-colors hover:bg-accent/10 hover:text-accent focus:bg-accent/10 focus:text-accent"
                     triggerTitle={`Add one summed worksheet line item from ${items.length} ${groupLabel} candidates`}
                     triggerIcon={<Sigma className="h-3 w-3" />}
                   />
@@ -1773,7 +1773,7 @@ function AnnotationRow({
         </div>
         <p className="text-[10px] text-fg/40">{formatMeasurement(ann)}</p>
       </div>
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center gap-0.5">
         {linkCount === 0 && snapshot && (
           <AddToCategoryPopover
             snapshot={snapshot}

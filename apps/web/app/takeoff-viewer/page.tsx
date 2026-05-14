@@ -2,7 +2,7 @@
 
 import { Suspense, useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { AlertCircle, Loader2, Ruler } from "lucide-react";
+import { AlertCircle, Loader2, PanelRightClose, Ruler } from "lucide-react";
 import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { getProjectWorkspace, type WorkspaceResponse } from "@/lib/api";
 import { Button } from "@/components/ui";
@@ -37,6 +37,10 @@ function TakeoffViewerInner() {
       setLoading(false);
     }
   }, [projectId]);
+
+  const handleMergeBack = useCallback(() => {
+    window.close();
+  }, []);
 
   useEffect(() => {
     setLoading(true);
@@ -79,6 +83,16 @@ function TakeoffViewerInner() {
         <Ruler className="h-3.5 w-3.5" />
         <span className="font-medium text-fg/70">Takeoff</span>
         <span>Detached window</span>
+        <Button
+          className="ml-auto"
+          variant="secondary"
+          size="xs"
+          onClick={handleMergeBack}
+          title="Close this detached takeoff window and merge back to the main workspace"
+        >
+          <PanelRightClose className="mr-1 h-3.5 w-3.5" />
+          Merge back
+        </Button>
       </div>
       <div className="min-h-0 flex-1">
         <TakeoffTab
