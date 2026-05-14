@@ -446,7 +446,7 @@ const ENTITY_DROPDOWN_MARGIN = 8;
 const ENTITY_DROPDOWN_HEADER_PADDING = 8;
 const ENTITY_DROPDOWN_HEADER_HEIGHT = 84;
 const ENTITY_DROPDOWN_PREFERRED_LIST_HEIGHT = 460;
-const ENTITY_SEARCH_PAGE_SIZE = 90;
+const ENTITY_SEARCH_PAGE_SIZE = 40;
 const TEMP_WORKSHEET_ITEM_PREFIX = "temp-worksheet-item-";
 
 /* ─── Helpers ─── */
@@ -552,6 +552,10 @@ function findCategoryForRow(
 
 function categoryRequiresRateSchedule(category: EntityCategory | undefined) {
   return category?.itemSource === "rate_schedule";
+}
+
+function categoryAcceptsFreeformEntry(category: EntityCategory | undefined) {
+  return !!category?.enabled && (category.itemSource || "freeform") === "freeform";
 }
 
 type EstimatePhase = ProjectWorkspaceData["phases"][number];
@@ -855,6 +859,71 @@ type PendingCategorySelection = {
   message: string;
 };
 
+function buildFreeformEntryGroups(
+  searchTerm: string,
+  row: WorkspaceWorksheetItem | null | undefined,
+  categories: EntityCategory[],
+): EntityOptionGroup[] {
+  const normalizedSearch = normalizeEntityLookup(searchTerm);
+  const rowCategory = row ? findCategoryForRow(row, categories) : undefined;
+  const freeformCategories = categories
+    .filter(categoryAcceptsFreeformEntry)
+    .slice()
+    .sort((left, right) => {
+      if (rowCategory?.id === left.id && rowCategory.id !== right.id) return -1;
+      if (rowCategory?.id === right.id && rowCategory.id !== left.id) return 1;
+      return left.order - right.order || left.name.localeCompare(right.name);
+    });
+  if (freeformCategories.length === 0) return [];
+
+  const matchingCategories = normalizedSearch
+    ? freeformCategories.filter((category) => freeformCategoryMatchesSearch(category, normalizedSearch))
+    : freeformCategories;
+  const visibleCategories = matchingCategories.length > 0 ? matchingCategories : freeformCategories;
+
+  return [{
+    categoryName: "Manual Entry",
+    categoryId: "__manual_freeform_categories",
+    entityType: "Manual Entry",
+    defaultUom: "EA",
+    label: "Manual Categories",
+    source: "freeform" as const,
+    sortPriority: -100,
+    tone: "accent" as const,
+    items: visibleCategories.map((category) => ({
+      label: category.name,
+      value: category.name,
+      source: "freeform" as const,
+      sourceId: category.id,
+      unit: category.defaultUom || "EA",
+      description: "",
+      subtitle: category.entityType,
+      payload: {
+        entityCategoryId: category.id,
+        categoryName: category.name,
+        entityType: category.entityType,
+        manualEntry: true,
+      },
+    })),
+  }];
+}
+
+function freeformCategoryMatchesSearch(category: EntityCategory, normalizedSearch: string) {
+  if (!normalizedSearch) return true;
+  return [category.name, category.entityType, category.shortform, category.analyticsBucket]
+    .map(normalizeEntityLookup)
+    .filter(Boolean)
+    .some((value) => value.includes(normalizedSearch) || (value.length >= 3 && normalizedSearch.includes(value)));
+}
+
+function freeformSearchMatchesAnyCategory(searchTerm: string, categories: EntityCategory[]) {
+  const normalizedSearch = normalizeEntityLookup(searchTerm);
+  if (!normalizedSearch) return true;
+  return categories
+    .filter(categoryAcceptsFreeformEntry)
+    .some((category) => freeformCategoryMatchesSearch(category, normalizedSearch));
+}
+
 function normalizeEntityLookup(value: string | null | undefined) {
   return (value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
 }
@@ -1132,6 +1201,7 @@ function categoryForRateSchedule(
 }
 
 function sourceKindForCategoryPrompt(item: EntityOptionItem) {
+  if (item.source === "freeform") return "manual item";
   if (item.source === "cost_intelligence") {
     const rawKind = firstText(
       payloadString(item.payload, "resourceType"),
@@ -1162,6 +1232,10 @@ function compactMoney(value: number) {
   return `$${value.toFixed(2)}`;
 }
 
+function formatWorksheetMoney(value: number) {
+  return formatMoney(value, 2);
+}
+
 function firstText(...values: Array<string | null | undefined>) {
   return values.map((value) => value?.trim()).find(Boolean) ?? "";
 }
@@ -1189,6 +1263,7 @@ function cleanHierarchyPart(value: string | null | undefined) {
 
 function sourceBadgeLabel(source: EntityOptionItem["source"]) {
   switch (source) {
+    case "freeform": return "Manual";
     case "rate_schedule": return "Rate";
     case "cost_intelligence": return "CI";
     case "labor_unit": return "Labor";
@@ -1203,6 +1278,7 @@ function sourceBadgeLabel(source: EntityOptionItem["source"]) {
 
 function sourceIconFor(source: EntityOptionItem["source"]) {
   switch (source) {
+    case "freeform": return Edit3;
     case "rate_schedule": return Zap;
     case "cost_intelligence": return BrainCircuit;
     case "labor_unit": return Hammer;
@@ -1217,6 +1293,8 @@ function sourceIconFor(source: EntityOptionItem["source"]) {
 
 function sourceAccentClasses(source: EntityOptionItem["source"]) {
   switch (source) {
+    case "freeform":
+      return "border-accent/25 bg-accent/8 text-accent";
     case "cost_intelligence":
       return "border-success/25 bg-success/8 text-success";
     case "labor_unit":
@@ -1368,6 +1446,7 @@ function laborHierarchyLevelLabel(level: number) {
 
 function sourcePriority(source: EntityOptionItem["source"]) {
   switch (source) {
+    case "freeform": return -1;
     case "rate_schedule": return 0;
     case "catalog": return 1;
     case "cost_intelligence": return 2;
@@ -1856,6 +1935,11 @@ function optionMeasureLabel(item: EntityOptionItem) {
 function optionMetaParts(item: EntityOptionItem) {
   const payload = item.payload;
   switch (item.source) {
+    case "freeform":
+      return [
+        item.subtitle || payloadString(payload, "entityType"),
+        item.unit ? `UOM ${item.unit}` : "",
+      ].filter(Boolean);
     case "labor_unit": {
       return [
         item.unit ? `UOM ${item.unit}` : "",
@@ -2543,9 +2627,14 @@ export function EstimateGrid({
 
   const positionEntityDropdown = useCallback((anchorEl?: HTMLTableCellElement | null, rowId?: string | null) => {
     const lookupRowId = rowId ?? entityDropdownRowId ?? entityDropdownClosingRowId;
+    const refAnchor = entityCellRef.current;
+    const refAnchorMatchesRow =
+      !!refAnchor &&
+      refAnchor.isConnected &&
+      (!lookupRowId || refAnchor.dataset.cellRow === lookupRowId);
     const anchor =
       anchorEl ??
-      entityCellRef.current ??
+      (refAnchorMatchesRow ? refAnchor : null) ??
       (lookupRowId
         ? document.querySelector<HTMLTableCellElement>(
             `[data-cell-row="${lookupRowId}"][data-cell-col="entityName"]`,
@@ -2631,7 +2720,10 @@ export function EstimateGrid({
     }
   }, []);
 
-  const closeEntityDropdown = useCallback((closingRowId?: string | null) => {
+  const closeEntityDropdown = useCallback((
+    closingRowId?: string | null,
+    options: { preserveTemporaryDraft?: boolean } = {},
+  ) => {
     clearEntityDropdownTimers();
     const rowId = closingRowId ?? entityDropdownRowId;
     if (rowId) setEntityDropdownClosingRowId(rowId);
@@ -2644,7 +2736,7 @@ export function EstimateGrid({
     // remaining temp id here means "nothing was picked." Strip it instead
     // of leaving an unusable shell row that can't be right-clicked or
     // edited.
-    if (rowId && isTemporaryWorksheetItemId(rowId)) {
+    if (rowId && isTemporaryWorksheetItemId(rowId) && !options.preserveTemporaryDraft) {
       onApply((current) => applyWorksheetItemDelete(current, rowId));
       if (selectedRowId === rowId) setSelectedRowId(null);
     }
@@ -2668,6 +2760,8 @@ export function EstimateGrid({
     if (anchorEl) {
       entityCellRef.current = anchorEl;
       positionEntityDropdown(anchorEl, rowId);
+    } else {
+      entityCellRef.current = null;
     }
     setEntityDropdownVisible(false);
     setEntityDropdownClosingRowId(null);
@@ -2778,24 +2872,6 @@ export function EstimateGrid({
     if (entityDropdownRowId) {
       setTimeout(() => entitySearchRef.current?.focus(), 0);
     }
-  }, [entityDropdownRowId]);
-
-  useEffect(() => {
-    if (!entityDropdownRowId) return;
-    setEntityDropdownVisible(false);
-    const firstFrame = requestAnimationFrame(() => {
-      const secondFrame = requestAnimationFrame(() => {
-        setEntityDropdownVisible(true);
-      });
-      entityDropdownOpenFrameRef.current = secondFrame;
-    });
-    entityDropdownOpenFrameRef.current = firstFrame;
-    return () => {
-      if (entityDropdownOpenFrameRef.current !== null) {
-        cancelAnimationFrame(entityDropdownOpenFrameRef.current);
-        entityDropdownOpenFrameRef.current = null;
-      }
-    };
   }, [entityDropdownRowId]);
 
   useEffect(() => {
@@ -3038,12 +3114,21 @@ export function EstimateGrid({
   ]);
 
   const entityDisplayGroups = useMemo(() => {
+    const manualGroups = activeEntityRow
+      ? buildFreeformEntryGroups(entitySearchTerm, activeEntityRow, entityCategories)
+      : [];
     const baseGroups = entityCurrentRateGroup && !entitySearchGroups.some((group) =>
       group.items.some((item) => item.rateScheduleItemId === activeEntityRow?.rateScheduleItemId)
     )
       ? [entityCurrentRateGroup, ...entitySearchGroups]
       : entitySearchGroups;
-    if (entityPluginResults.length === 0) return baseGroups;
+    const manualFirst = !entitySearchTerm.trim() || freeformSearchMatchesAnyCategory(entitySearchTerm, entityCategories);
+    const groupsWithManual = manualGroups.length === 0
+      ? baseGroups
+      : manualFirst
+      ? [...manualGroups, ...baseGroups]
+      : [...baseGroups, ...manualGroups];
+    if (entityPluginResults.length === 0) return groupsWithManual;
     const remoteGroup: EntityOptionGroup = {
       categoryName: "Provider Results",
       categoryId: "__provider_results",
@@ -3055,8 +3140,8 @@ export function EstimateGrid({
       tone: "success",
       items: entityPluginResults,
     };
-    return [remoteGroup, ...baseGroups];
-  }, [activeEntityRow?.rateScheduleItemId, entityCurrentRateGroup, entityPluginResults, entitySearchGroups]);
+    return [remoteGroup, ...groupsWithManual];
+  }, [activeEntityRow, entityCategories, entityCurrentRateGroup, entityPluginResults, entitySearchGroups, entitySearchTerm]);
 
   // Flat list of selectable entity items for keyboard navigation when the
   // entity dropdown is open. Items in the "matching" group come first.
@@ -3583,6 +3668,21 @@ export function EstimateGrid({
 
   // ─── Cell editing ───
 
+  function beginEditingCell(rowId: string, column: EditableColumn, currentValue: string | number | null | undefined) {
+    const value = column === "markup" ? fmtPct(Number(currentValue ?? 0)) : String(currentValue ?? "");
+    setEditingCell({ rowId, column });
+    setSelectedCell({ rowId, column });
+    setEditValue(value);
+    setSelectedRowId(rowId);
+
+    setTimeout(() => {
+      editInputRef.current?.focus();
+      if (editInputRef.current && "select" in editInputRef.current) {
+        (editInputRef.current as HTMLInputElement).select();
+      }
+    }, 0);
+  }
+
   function startEditing(rowId: string, column: EditableColumn, currentValue: string | number) {
     const row = visibleRows.find((r) => r.id === rowId);
     if (!row) return;
@@ -3598,24 +3698,7 @@ export function EstimateGrid({
     const catDef = findCategoryForRow(row, entityCategories);
     if (isCellDisabledByCategory(catDef, column)) return;
 
-    let val: string;
-    if (column === "markup") {
-      val = fmtPct(currentValue as number);
-    } else {
-      val = String(currentValue ?? "");
-    }
-
-    setEditingCell({ rowId, column });
-    setSelectedCell({ rowId, column });
-    setEditValue(val);
-    setSelectedRowId(rowId);
-
-    setTimeout(() => {
-      editInputRef.current?.focus();
-      if (editInputRef.current && "select" in editInputRef.current) {
-        (editInputRef.current as HTMLInputElement).select();
-      }
-    }, 0);
+    beginEditingCell(rowId, column, currentValue);
   }
 
   function commitEdit() {
@@ -3873,7 +3956,7 @@ export function EstimateGrid({
 
   // ─── Entity selection ───
 
-	  function handleEntitySelect(
+  function handleEntitySelect(
     rowId: string,
     entityName: string,
     categoryName: string,
@@ -3882,28 +3965,27 @@ export function EstimateGrid({
     catalogData?: EntitySelectionCatalogData,
     rateScheduleItemId?: string,
     itemId?: string,
+    options: { focusColumn?: EditableColumn } = {},
   ) {
     setPendingCategorySelection(null);
-    closeEntityDropdown(rowId);
+    const row = visibleRows.find((r) => r.id === rowId);
+    const newCatDef = entityCategories.find((c) => c.name === categoryName);
+    const oldCategory = row?.category;
+    const categoryChanged = oldCategory !== categoryName;
+    const preservingProductivityBasis = !!rateScheduleItemId && !!(catalogData?.laborUnitId ?? row?.laborUnitId);
 
-	    const row = visibleRows.find((r) => r.id === rowId);
-	    const newCatDef = entityCategories.find((c) => c.name === categoryName);
-	    const oldCategory = row?.category;
-	    const categoryChanged = oldCategory !== categoryName;
-	    const preservingProductivityBasis = !!rateScheduleItemId && !!(catalogData?.laborUnitId ?? row?.laborUnitId);
-
-	    const patch: Record<string, unknown> = {
-	      categoryId: newCatDef?.id ?? null,
-	      entityName,
-	      category: categoryName,
-	      entityType,
-	      uom: preservingProductivityBasis ? (row?.uom || catalogData?.uom || defaultUom) : catalogData?.uom ?? defaultUom,
-	    };
+    const patch: Record<string, unknown> = {
+      categoryId: newCatDef?.id ?? null,
+      entityName,
+      category: categoryName,
+      entityType,
+      uom: preservingProductivityBasis ? (row?.uom || catalogData?.uom || defaultUom) : catalogData?.uom ?? defaultUom,
+    };
 
     if (catalogData?.cost !== undefined) patch.cost = catalogData.cost;
     if (catalogData?.price !== undefined) patch.price = catalogData.price;
     if (catalogData?.quantity !== undefined) patch.quantity = catalogData.quantity;
-	    if (catalogData?.description && !(preservingProductivityBasis && row?.description)) patch.description = catalogData.description;
+    if (catalogData?.description && !(preservingProductivityBasis && row?.description)) patch.description = catalogData.description;
     if (catalogData?.vendor !== undefined) patch.vendor = catalogData.vendor;
     if (catalogData?.sourceNotes !== undefined) patch.sourceNotes = catalogData.sourceNotes;
     if (catalogData?.costResourceId !== undefined) patch.costResourceId = catalogData.costResourceId;
@@ -3936,37 +4018,37 @@ export function EstimateGrid({
       patch.itemId = null;
     }
 
-	    if (rateScheduleItemId) {
-	      patch.rateScheduleItemId = rateScheduleItemId;
-	      const schedule = (workspace.rateSchedules ?? []).find((s) =>
-	        s.items.some((i) => i.id === rateScheduleItemId),
-	      );
-	      if (schedule) {
-	        const incomingUnit1 = Number(catalogData?.unit1 ?? 0);
-	        const incomingUnit2 = Number(catalogData?.unit2 ?? 0);
-	        const incomingUnit3 = Number(catalogData?.unit3 ?? 0);
-	        // Existing per-row hours bucketed by tier multiplier (1.0/1.5/2.0).
-	        const existingSlots = row ? getRowSlotHours(row, workspace.rateSchedules ?? []) : { unit1: 0, unit2: 0, unit3: 0 };
-	        const existingUnit1 = incomingUnit1 || existingSlots.unit1;
-	        const existingUnit2 = incomingUnit2 || existingSlots.unit2;
-	        const existingUnit3 = incomingUnit3 || existingSlots.unit3;
-	        const hasProductivityHours = !!(catalogData?.laborUnitId ?? row?.laborUnitId) && (existingUnit1 > 0 || existingUnit2 > 0 || existingUnit3 > 0);
-	        const sortedTiers = [...schedule.tiers].sort((left, right) => left.multiplier - right.multiplier || left.sortOrder - right.sortOrder);
-	        const tierUnits: Record<string, number> = {};
-	        if (hasProductivityHours) {
-	          const regular = sortedTiers.find((tier) => tier.multiplier === 1) ?? sortedTiers[0];
-	          const overtime = sortedTiers.find((tier) => tier.multiplier === 1.5);
-	          const doubletime = sortedTiers.find((tier) => tier.multiplier === 2);
-	          if (regular && existingUnit1 > 0) tierUnits[regular.id] = existingUnit1;
-	          if (overtime && existingUnit2 > 0) tierUnits[overtime.id] = existingUnit2;
-	          if (doubletime && existingUnit3 > 0) tierUnits[doubletime.id] = existingUnit3;
-	        } else {
-	          for (const tier of schedule.tiers) {
-	            tierUnits[tier.id] = 0;
-	          }
-	        }
-	        patch.tierUnits = tierUnits;
-	      }
+    if (rateScheduleItemId) {
+      patch.rateScheduleItemId = rateScheduleItemId;
+      const schedule = (workspace.rateSchedules ?? []).find((s) =>
+        s.items.some((i) => i.id === rateScheduleItemId),
+      );
+      if (schedule) {
+        const incomingUnit1 = Number(catalogData?.unit1 ?? 0);
+        const incomingUnit2 = Number(catalogData?.unit2 ?? 0);
+        const incomingUnit3 = Number(catalogData?.unit3 ?? 0);
+        // Existing per-row hours bucketed by tier multiplier (1.0/1.5/2.0).
+        const existingSlots = row ? getRowSlotHours(row, workspace.rateSchedules ?? []) : { unit1: 0, unit2: 0, unit3: 0 };
+        const existingUnit1 = incomingUnit1 || existingSlots.unit1;
+        const existingUnit2 = incomingUnit2 || existingSlots.unit2;
+        const existingUnit3 = incomingUnit3 || existingSlots.unit3;
+        const hasProductivityHours = !!(catalogData?.laborUnitId ?? row?.laborUnitId) && (existingUnit1 > 0 || existingUnit2 > 0 || existingUnit3 > 0);
+        const sortedTiers = [...schedule.tiers].sort((left, right) => left.multiplier - right.multiplier || left.sortOrder - right.sortOrder);
+        const tierUnits: Record<string, number> = {};
+        if (hasProductivityHours) {
+          const regular = sortedTiers.find((tier) => tier.multiplier === 1) ?? sortedTiers[0];
+          const overtime = sortedTiers.find((tier) => tier.multiplier === 1.5);
+          const doubletime = sortedTiers.find((tier) => tier.multiplier === 2);
+          if (regular && existingUnit1 > 0) tierUnits[regular.id] = existingUnit1;
+          if (overtime && existingUnit2 > 0) tierUnits[overtime.id] = existingUnit2;
+          if (doubletime && existingUnit3 > 0) tierUnits[doubletime.id] = existingUnit3;
+        } else {
+          for (const tier of schedule.tiers) {
+            tierUnits[tier.id] = 0;
+          }
+        }
+        patch.tierUnits = tierUnits;
+      }
     } else if (categoryChanged) {
       patch.rateScheduleItemId = null;
       patch.tierUnits = {};
@@ -3985,8 +4067,8 @@ export function EstimateGrid({
       patch.sourceEvidence = {};
     }
 
-	    if (categoryChanged && newCatDef) {
-	      patch.uom = preservingProductivityBasis ? row?.uom : catalogData?.uom ?? newCatDef.defaultUom;
+    if (categoryChanged && newCatDef) {
+      patch.uom = preservingProductivityBasis ? row?.uom : catalogData?.uom ?? newCatDef.defaultUom;
       if (!categoryAllowsEditingTierUnits(newCatDef)) patch.tierUnits = {};
       if (isCellDisabledByCategory(newCatDef, "cost")) patch.cost = catalogData?.cost ?? 0;
       if (isCellDisabledByCategory(newCatDef, "markup")) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
@@ -3998,9 +4080,9 @@ export function EstimateGrid({
       const patchValue = <T,>(key: string, fallback: T): T =>
         patchHas(key) && patch[key] !== undefined ? (patch[key] as T) : fallback;
       const createPayload: CreateWorksheetItemInput = {
-	        phaseId: row.phaseId ?? null,
-	        categoryId: (patch.categoryId as string | null | undefined) ?? newCatDef?.id ?? null,
-	        category: String(patch.category ?? categoryName),
+        phaseId: row.phaseId ?? null,
+        categoryId: (patch.categoryId as string | null | undefined) ?? newCatDef?.id ?? null,
+        category: String(patch.category ?? categoryName),
         entityType: String(patch.entityType ?? entityType),
         entityName: String(patch.entityName ?? entityName),
         classification: row.classification ?? {},
@@ -4024,6 +4106,36 @@ export function EstimateGrid({
         sourceEvidence: patchValue("sourceEvidence", row.sourceEvidence ?? {}) as Record<string, unknown>,
       };
 
+      const optimisticItem: WorkspaceWorksheetItem = {
+        ...row,
+        categoryId: createPayload.categoryId ?? null,
+        category: createPayload.category,
+        entityType: createPayload.entityType,
+        entityName: createPayload.entityName,
+        classification: createPayload.classification ?? {},
+        costCode: createPayload.costCode ?? null,
+        vendor: createPayload.vendor ?? undefined,
+        description: createPayload.description,
+        quantity: createPayload.quantity,
+        uom: createPayload.uom,
+        cost: createPayload.cost ?? 0,
+        markup: createPayload.markup ?? workspace.currentRevision.defaultMarkup ?? 0.2,
+        price: createPayload.price ?? 0,
+        lineOrder: createPayload.lineOrder ?? row.lineOrder,
+        rateScheduleItemId: createPayload.rateScheduleItemId ?? null,
+        itemId: createPayload.itemId ?? null,
+        costResourceId: createPayload.costResourceId ?? null,
+        effectiveCostId: createPayload.effectiveCostId ?? null,
+        laborUnitId: createPayload.laborUnitId ?? null,
+        tierUnits: createPayload.tierUnits ?? {},
+        sourceNotes: createPayload.sourceNotes ?? "",
+        resourceComposition: createPayload.resourceComposition ?? {},
+        sourceEvidence: createPayload.sourceEvidence ?? {},
+      };
+
+      onApply((current) => applyWorksheetItemUpsert(current, optimisticItem));
+      closeEntityDropdown(rowId, { preserveTemporaryDraft: true });
+
       startTransition(async () => {
         try {
           const mutation = await createWorksheetItemFast(
@@ -4035,9 +4147,18 @@ export function EstimateGrid({
             const withoutDraft = applyWorksheetItemDelete(current, row.id);
             return applyWorksheetItemMutation(withoutDraft, mutation);
           });
-          setSelectedRowId(mutation.item.id);
-          setSelectedCell({ rowId: mutation.item.id, column: "entityName" });
+          if (options.focusColumn) {
+            beginEditingCell(
+              mutation.item.id,
+              options.focusColumn,
+              getEditableValue(mutation.item, options.focusColumn) as string | number,
+            );
+          } else {
+            setSelectedRowId(mutation.item.id);
+            setSelectedCell({ rowId: mutation.item.id, column: "entityName" });
+          }
         } catch (error) {
+          onApply((current) => applyWorksheetItemDelete(current, row.id));
           applyMutationError("Create failed.", error);
         }
       });
@@ -4050,18 +4171,26 @@ export function EstimateGrid({
       return;
     }
 
-	    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
+    closeEntityDropdown(rowId);
+    commitItemPatch(rowId, patch as WorksheetItemPatchInput);
+    if (options.focusColumn && row) {
+      beginEditingCell(rowId, options.focusColumn, getEditableValue(row, options.focusColumn) as string | number);
+    }
     setPendingLaborSelections((current) => {
       if (!Object.prototype.hasOwnProperty.call(current, rowId)) return current;
       const next = { ...current };
       delete next[rowId];
       return next;
     });
-	  }
+  }
 
   function categoryCanAcceptOption(category: EntityCategory | undefined, item: EntityOptionItem) {
     if (!category?.enabled) return false;
     if (item.actionType && item.actionType !== "select" && item.actionType !== "plugin_result") return false;
+
+    if (item.source === "freeform") {
+      return categoryAcceptsFreeformEntry(category);
+    }
 
     const requiresRateItem = categoryRequiresRateSchedule(category);
     if (itemNeedsLaborRateSelection(item)) {
@@ -4221,7 +4350,7 @@ export function EstimateGrid({
     };
   }
 
-	  async function handlePluginRemoteSearch(item: EntityOptionItem) {
+  async function handlePluginRemoteSearch(item: EntityOptionItem) {
     const query = entitySearchTerm.trim();
     if (!item.pluginId || !item.toolId || !item.searchFieldId) {
       onError("This plugin search action is missing its tool metadata.");
@@ -4301,6 +4430,13 @@ export function EstimateGrid({
     }
     setEntitySearchError(null);
     setPendingCategorySelection({ rowId, group, item, message });
+    window.requestAnimationFrame(() => {
+      const scroller = entityDropdownRef.current?.querySelector<HTMLElement>("[data-entity-results-scroll]");
+      if (scroller) scroller.scrollTop = 0;
+      entityDropdownRef.current
+        ?.querySelector<HTMLElement>("[data-category-selection-panel]")
+        ?.scrollIntoView({ block: "nearest" });
+    });
   }
 
   function handleEntityAction(
@@ -4425,8 +4561,6 @@ export function EstimateGrid({
       return;
     }
 
-    closeEntityDropdown(rowId);
-
     const pendingLabor = pendingLaborSelections[rowId];
     const itemCatalogData = catalogDataFromEntityOption(item);
     const catalogData = pendingLabor && item.rateScheduleItemId
@@ -4434,14 +4568,15 @@ export function EstimateGrid({
       : itemCatalogData;
 
     handleEntitySelect(
-	      rowId,
-	      item.value,
-	      targetCategory.name,
-	      targetCategory.entityType,
-	      targetCategory.defaultUom,
+      rowId,
+      item.value,
+      targetCategory.name,
+      targetCategory.entityType,
+      targetCategory.defaultUom,
       catalogData,
       item.rateScheduleItemId,
       item.itemId,
+      item.source === "freeform" ? { focusColumn: "description" } : undefined,
     );
   }
 
@@ -5734,6 +5869,7 @@ export function EstimateGrid({
     const isDropdownOpen = entityDropdownRowId === dropdownRowId;
 
     const orderedGroups = orderEntityGroupsForRow(entityDisplayGroups, row.category, entitySearchTerm.trim().length > 0);
+    const manualEntryGroups = orderedGroups.filter((group) => group.source === "freeform");
     const sourceStats = Array.from(
       entityFlatItems.reduce<Map<string, number>>((map, entry) => {
         const label = sourceBadgeLabel(entry.item.source) || "Item";
@@ -6337,7 +6473,7 @@ export function EstimateGrid({
 		            const renderCategorySelection = () => {
 		              if (!categorySelection || categorySelectionOptions.length === 0) return null;
 		              return (
-		                <div className="m-2 rounded-lg border border-accent/20 bg-accent/5 p-2">
+		                <div data-category-selection-panel className="m-2 rounded-lg border border-accent/20 bg-accent/5 p-2">
 		                  <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-semibold text-accent">
 		                    <Tag className="h-3.5 w-3.5" />
 		                    <span>{categorySelection.message}</span>
@@ -6422,7 +6558,7 @@ export function EstimateGrid({
 	                      ref={entitySearchRef}
 	                      type="text"
 	                      className="h-6 min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg/30"
-	                      placeholder="Search libraries, catalogs, rates, plugins..."
+	                      placeholder="Search categories, libraries, catalogs..."
 		                      value={entitySearchTerm}
 		                      onChange={(e) => {
 		                        const next = e.target.value;
@@ -6505,6 +6641,7 @@ export function EstimateGrid({
 	                  </div>
 	                </div>
 		                <div
+		                  data-entity-results-scroll
 		                  className={cn(
 		                    "line-item-search-scrollbar overflow-y-auto p-0",
 		                    entityDropdownPos.placement === "above" &&
@@ -6513,6 +6650,11 @@ export function EstimateGrid({
 		                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
 			                  onScroll={handleResultsScroll}
 			                >
+			                  {showBrowseLaunchpad && manualEntryGroups.length > 0 && (
+			                    <div className="border-b border-line/70">
+			                      {renderGroupCollection(manualEntryGroups, "accent", "manual-launchpad")}
+			                    </div>
+			                  )}
 			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
 			                  {!showBrowseLaunchpad && renderCategorySelection()}
 			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
@@ -7535,18 +7677,18 @@ export function EstimateGrid({
                     )}
                     {isColVisible("cost") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                        {formatMoney(totals.cost)}
+                        {formatWorksheetMoney(totals.cost)}
                       </td>
                     )}
                     {isColVisible("extCost") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums">
-                        {formatMoney(totals.cost)}
+                        {formatWorksheetMoney(totals.cost)}
                       </td>
                     )}
                     {isColVisible("markup") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("price") && (
                       <td className="border-t border-line px-2 py-2 text-right tabular-nums font-semibold">
-                        {formatMoney(totals.price)}
+                        {formatWorksheetMoney(totals.price)}
                       </td>
                     )}
                     {isColVisible("margin") && <td className="border-t border-line px-2 py-2" />}
@@ -7610,7 +7752,7 @@ export function EstimateGrid({
                   <span className="truncate">{contextRow.category || "Uncategorized"}</span>
                   <span className="text-fg/20">/</span>
                   <span className="tabular-nums">{contextRow.quantity} {contextRow.uom}</span>
-                  <span className="ml-auto font-medium tabular-nums text-fg/55">{formatMoney(contextRow.price)}</span>
+                  <span className="ml-auto font-medium tabular-nums text-fg/55">{formatWorksheetMoney(contextRow.price)}</span>
                 </div>
               </div>
             </div>
@@ -9021,7 +9163,7 @@ function LineFactorDrawer({
                         <div className="truncate text-xs font-medium text-fg">{factor.name}</div>
                         <div className="mt-0.5 text-[10px] text-fg/45">{lineFactorFormulaLabel(factor.formulaType)} / {lineFactorPercent(total?.value ?? factor.value)}%</div>
                       </div>
-                      <div className={cn("font-mono text-[11px]", (total?.valueDelta ?? 0) >= 0 ? "text-warning" : "text-success")}>{formatMoney(total?.valueDelta ?? 0)}</div>
+                      <div className={cn("font-mono text-[11px]", (total?.valueDelta ?? 0) >= 0 ? "text-warning" : "text-success")}>{formatWorksheetMoney(total?.valueDelta ?? 0)}</div>
                       <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => startEdit(factor)} disabled={isPending}>Edit</Button>
                       <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => mutate(() => deleteEstimateFactor(workspace.project.id, factor.id))} disabled={isPending}>
                         <Trash2 className="h-3.5 w-3.5 text-danger" />
@@ -9208,7 +9350,7 @@ function WorksheetOrganizerPanel({
         <Table2 className="h-3.5 w-3.5 shrink-0 text-fg/35" />
         <span className="min-w-0 flex-1 truncate font-medium" title={worksheet.name}>{worksheet.name}</span>
         <span className="text-[10px] text-fg/30">{worksheet.items.length}</span>
-        <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatMoney(price)}</span>
+        <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatWorksheetMoney(price)}</span>
       </button>
     );
   }
@@ -9256,7 +9398,7 @@ function WorksheetOrganizerPanel({
           )}
           <span className="min-w-0 flex-1 truncate font-medium">{folder.name}</span>
           <span className="text-[10px] text-fg/30">{stats.worksheetCount}</span>
-          <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatMoney(stats.price)}</span>
+          <span className="hidden text-[10px] tabular-nums text-fg/30 xl:inline">{formatWorksheetMoney(stats.price)}</span>
         </button>
         {isExpanded && (
           <div>
@@ -9435,7 +9577,7 @@ function GroupRows({
               {group.items.length} item{group.items.length !== 1 ? "s" : ""}
             </span>
             <span className="ml-auto text-xs font-medium tabular-nums text-fg/60">
-              {formatMoney(group.totalPrice)}
+              {formatWorksheetMoney(group.totalPrice)}
             </span>
           </div>
         </td>
@@ -9622,7 +9764,7 @@ function GroupRows({
                     <span>{lineFactorsByItemId.get(row.id)?.length ?? 0}</span>
                     {lineFactorsByItemId.get(row.id)?.some((factor) => (factorTotalsById.get(factor.id)?.valueDelta ?? 0) !== 0) ? (
                       <span className="max-w-[40px] truncate text-[9px] text-fg/45">
-                        {formatMoney(lineFactorsByItemId.get(row.id)?.reduce((sum, factor) => sum + (factorTotalsById.get(factor.id)?.valueDelta ?? 0), 0) ?? 0)}
+                        {formatWorksheetMoney(lineFactorsByItemId.get(row.id)?.reduce((sum, factor) => sum + (factorTotalsById.get(factor.id)?.valueDelta ?? 0), 0) ?? 0)}
                       </span>
                     ) : null}
                   </button>
@@ -9672,9 +9814,9 @@ function GroupRows({
                       "inline-flex h-5 max-w-full items-center justify-end rounded-md px-1.5 tabular-nums font-medium leading-none",
                       hasFactorAdjustment && "border border-accent/35 bg-accent/10 text-accent",
                     )}
-                    title={hasFactorAdjustment ? `Raw ${formatMoney(row.price)} / factor-adjusted ${formatMoney(displayRow.price)}` : undefined}
+                    title={hasFactorAdjustment ? `Raw ${formatWorksheetMoney(row.price)} / factor-adjusted ${formatWorksheetMoney(displayRow.price)}` : undefined}
                   >
-                    <span>{formatMoney(displayRow.price)}</span>
+                    <span>{formatWorksheetMoney(displayRow.price)}</span>
                     {visibleColumns.has("markup") && !isColVisible("markup") && (
                       <span className="block text-[10px] font-normal text-fg/35">{formatPercent(row.markup)} mkup</span>
                     )}

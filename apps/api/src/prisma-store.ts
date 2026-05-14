@@ -331,6 +331,19 @@ function categoryOwnsCalculatedPricing(category: { itemSource?: string | null; c
   return category?.itemSource === "rate_schedule" || calcType === "formula";
 }
 
+function worksheetItemNeedsRateScheduleContext(
+  category: { itemSource?: string | null; calculationType?: string | null } | null | undefined,
+  item: { rateScheduleItemId?: string | null; tierUnits?: Record<string, number> | null } | null | undefined,
+) {
+  const calcType = normalizeCalculationType(category?.calculationType ?? "manual");
+  return (
+    categoryRequiresRateScheduleItem(category) ||
+    calcType === "tiered_rate" ||
+    !!item?.rateScheduleItemId ||
+    hasPositiveTierUnits(item?.tierUnits)
+  );
+}
+
 /**
  * Categories are dynamically configured per organization. New writes resolve
  * through the stable EntityCategory.id first; category/entityType strings are
@@ -2041,7 +2054,6 @@ export class PrismaApiStore {
     await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchVector_fts_idx" ON "LineItemSearchDocument" USING GIN ("searchVector")`);
     await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_fts_idx" ON "LineItemSearchDocument" USING GIN (to_tsvector('english', "searchText"))`);
     await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_trgm_idx" ON "LineItemSearchDocument" USING GIN ("searchText" gin_trgm_ops)`);
-    await this.db.$executeRawUnsafe(`UPDATE "LineItemSearchDocument" SET "searchVector" = to_tsvector('english', "searchText") WHERE "searchVector" = ''::tsvector`);
     PrismaApiStore.lineItemSearchInfrastructureReady = true;
   }
 
@@ -2700,22 +2712,28 @@ export class PrismaApiStore {
     if (input.refresh) {
       await this.rebuildLineItemSearchIndex(projectId);
     } else {
-      const countRows = await this.db.$queryRawUnsafe<Array<{ total_count: number | bigint; project_count: number | bigint }>>(
+      const indexStateRows = await this.db.$queryRawUnsafe<Array<{ has_any: boolean; has_project: boolean }>>(
         `
           SELECT
-            count(*)::int AS total_count,
-            count(*) FILTER (WHERE "projectId" = $2::text)::int AS project_count
-          FROM "LineItemSearchDocument"
-          WHERE "organizationId" = $1::text
-            AND ("projectId" IS NULL OR "projectId" = $2::text)
+            EXISTS (
+              SELECT 1
+              FROM "LineItemSearchDocument"
+              WHERE "organizationId" = $1::text
+                AND ("projectId" IS NULL OR "projectId" = $2::text)
+              LIMIT 1
+            ) AS has_any,
+            EXISTS (
+              SELECT 1
+              FROM "LineItemSearchDocument"
+              WHERE "organizationId" = $1::text
+                AND "projectId" = $2::text
+              LIMIT 1
+            ) AS has_project
         `,
         this.organizationId,
         projectId,
       );
-      if (
-        Number(countRows[0]?.total_count ?? 0) === 0 ||
-        Number(countRows[0]?.project_count ?? 0) === 0
-      ) {
+      if (!indexStateRows[0]?.has_any || !indexStateRows[0]?.has_project) {
         await this.rebuildLineItemSearchIndex(projectId);
       }
     }
@@ -2744,7 +2762,7 @@ export class PrismaApiStore {
       .filter((sourceType) => !disabledSourceTypes.includes(sourceType));
     const sourceTypeCount = Math.max(1, new Set(searchableSourceTypes).size);
     const sourceHarvestLimit = searchProfile?.terms.length
-      ? Math.min(450, Math.max(limit + offset + 120, limit * 35))
+      ? Math.min(320, Math.max(limit + offset + 60, limit * 5))
       : limit + offset;
     const sqlLimit = searchProfile?.terms.length
       ? sourceHarvestLimit * sourceTypeCount
@@ -2770,129 +2788,179 @@ export class PrismaApiStore {
       searchText: string;
     }>>(
       `
-        WITH scored AS (
-        SELECT
-          "id",
-          "sourceType",
-          "sourceId",
-          "actionType",
-          "projectId",
-          "category",
-          "entityType",
-          "title",
-          "subtitle",
-          "code",
-          "vendor",
-          "uom",
-          "unitCost",
-          "unitPrice",
-          "payload",
-          "searchText",
-          (
+        WITH candidates AS MATERIALIZED (
+          SELECT
+            "id",
+            "sourceType",
+            "sourceId",
+            "actionType",
+            "projectId",
+            "category",
+            "entityType",
+            "title",
+            "subtitle",
+            "code",
+            "vendor",
+            "uom",
+            "unitCost",
+            "unitPrice",
+            "payload",
+            "searchVector",
+            "searchText"
+          FROM "LineItemSearchDocument"
+          WHERE "organizationId" = $1::text
+            AND ("projectId" IS NULL OR "projectId" = $2::text)
+            AND "sourceType" <> 'cost_resource'
+            AND ("sourceType" <> 'rate_schedule_item' OR "projectId" = $2::text)
+            AND (cardinality($4::text[]) = 0 OR "sourceType" = ANY($4::text[]))
+            AND (cardinality($9::text[]) = 0 OR "sourceType" <> ALL($9::text[]))
+            AND (
+              cardinality($10::text[]) = 0
+              OR "sourceType" <> 'labor_unit'
+              OR COALESCE("payload"->>'libraryId', '') <> ALL($10::text[])
+            )
+            AND (
+              cardinality($11::text[]) = 0
+              OR "sourceType" <> 'catalog_item'
+              OR COALESCE("payload"->>'catalogId', '') <> ALL($11::text[])
+            )
+            AND (
+              $5::text = ''
+              OR "sourceType" = 'external_action'
+              OR "searchVector" @@ websearch_to_tsquery('english', $6::text)
+              OR (cardinality($12::text[]) > 0 AND "searchText" ILIKE ANY($12::text[]))
+            )
+          ORDER BY
             CASE
-              WHEN $3::text <> '' AND (lower("category") = lower($3::text) OR lower("entityType") = lower($3::text)) THEN 4
-              ELSE 0
-            END
-            + CASE "sourceType"
-              WHEN 'catalog_item' THEN 1.5
-              WHEN 'rate_schedule_item' THEN 1.4
-              WHEN 'effective_cost' THEN 1.3
-              WHEN 'assembly' THEN 1.15
-              WHEN 'labor_unit' THEN 0.85
-              WHEN 'external_action' THEN 1.1
-              WHEN 'plugin_tool' THEN 1.25
-              ELSE 0
-            END
-            + CASE
-              WHEN NULLIF("payload"->>'rateScheduleItemId', '') IS NOT NULL THEN 1.75
-              ELSE 0
-            END
-            + CASE
               WHEN $5::text = '' THEN 0
-              WHEN lower("title") = lower($5::text) THEN 10
-              WHEN lower("code") = lower($5::text) THEN 8
-              WHEN lower("title") LIKE lower($5::text) || '%' THEN 5
-              WHEN lower("code") LIKE lower($5::text) || '%' THEN 4
-              ELSE 0
-            END
-            + CASE
-              WHEN $6::text = '' THEN 0
-              WHEN "searchVector" @@ websearch_to_tsquery('english', $6::text) THEN 2
-              ELSE 0
-            END
-            + CASE
-              WHEN $5::text = '' THEN 0
-              WHEN "title" ILIKE '%' || $5::text || '%' THEN 1
-              WHEN "code" ILIKE '%' || $5::text || '%' THEN 1
-              WHEN "subtitle" ILIKE '%' || $5::text || '%' THEN 0.5
-              WHEN "vendor" ILIKE '%' || $5::text || '%' THEN 0.5
-              ELSE 0
-            END
-            + COALESCE((
-              SELECT count(*)::double precision * 0.85
-              FROM unnest($12::text[]) AS token_pattern(pattern)
-              WHERE "searchText" ILIKE token_pattern.pattern
-            ), 0)
-          )::double precision AS score
-        FROM "LineItemSearchDocument"
-        WHERE "organizationId" = $1::text
-          AND ("projectId" IS NULL OR "projectId" = $2::text)
-          AND "sourceType" <> 'cost_resource'
-          AND ("sourceType" <> 'rate_schedule_item' OR "projectId" = $2::text)
-          AND (cardinality($4::text[]) = 0 OR "sourceType" = ANY($4::text[]))
-          AND (cardinality($9::text[]) = 0 OR "sourceType" <> ALL($9::text[]))
-          AND (
-            cardinality($10::text[]) = 0
-            OR "sourceType" <> 'labor_unit'
-            OR COALESCE("payload"->>'libraryId', '') <> ALL($10::text[])
-          )
-          AND (
-            cardinality($11::text[]) = 0
-            OR "sourceType" <> 'catalog_item'
-            OR COALESCE("payload"->>'catalogId', '') <> ALL($11::text[])
-          )
-          AND (
-            "sourceType" <> 'catalog_item'
-            OR NOT EXISTS (
-              SELECT 1
-              FROM "EntityCategory" direct_ec
-              WHERE direct_ec."organizationId" = $1::text
-                AND direct_ec."enabled" = true
-                AND direct_ec."itemSource" = 'rate_schedule'
-                AND (
-                  lower(direct_ec."name") = lower("category")
-                  OR lower(direct_ec."entityType") = lower(COALESCE("payload"->>'entityCategoryType', "payload"->>'catalogKind', ''))
-                )
+              WHEN lower("title") = lower($5::text) THEN 0
+              WHEN lower("code") = lower($5::text) THEN 1
+              WHEN lower("title") LIKE lower($5::text) || '%' THEN 2
+              WHEN lower("code") LIKE lower($5::text) || '%' THEN 3
+              WHEN $6::text <> '' AND "searchVector" @@ websearch_to_tsquery('english', $6::text) THEN 4
+              ELSE 5
+            END,
+            CASE "sourceType"
+              WHEN 'catalog_item' THEN 0
+              WHEN 'rate_schedule_item' THEN 1
+              WHEN 'effective_cost' THEN 2
+              WHEN 'assembly' THEN 3
+              WHEN 'plugin_tool' THEN 4
+              WHEN 'labor_unit' THEN 5
+              WHEN 'external_action' THEN 6
+              ELSE 7
+            END,
+            "title" ASC
+          LIMIT ($7::int + $8::int)
+        ),
+        scored AS (
+          SELECT
+            "id",
+            "sourceType",
+            "sourceId",
+            "actionType",
+            "projectId",
+            "category",
+            "entityType",
+            "title",
+            "subtitle",
+            "code",
+            "vendor",
+            "uom",
+            "unitCost",
+            "unitPrice",
+            "payload",
+            "searchText",
+            (
+              CASE
+                WHEN $3::text <> '' AND (lower("category") = lower($3::text) OR lower("entityType") = lower($3::text)) THEN 4
+                ELSE 0
+              END
+              + CASE "sourceType"
+                WHEN 'catalog_item' THEN 1.5
+                WHEN 'rate_schedule_item' THEN 1.4
+                WHEN 'effective_cost' THEN 1.3
+                WHEN 'assembly' THEN 1.15
+                WHEN 'labor_unit' THEN 0.85
+                WHEN 'external_action' THEN 1.1
+                WHEN 'plugin_tool' THEN 1.25
+                ELSE 0
+              END
+              + CASE
+                WHEN NULLIF("payload"->>'rateScheduleItemId', '') IS NOT NULL THEN 1.75
+                ELSE 0
+              END
+              + CASE
+                WHEN $5::text = '' THEN 0
+                WHEN lower("title") = lower($5::text) THEN 10
+                WHEN lower("code") = lower($5::text) THEN 8
+                WHEN lower("title") LIKE lower($5::text) || '%' THEN 5
+                WHEN lower("code") LIKE lower($5::text) || '%' THEN 4
+                ELSE 0
+              END
+              + CASE
+                WHEN $6::text = '' THEN 0
+                WHEN "searchVector" @@ websearch_to_tsquery('english', $6::text) THEN 2
+                ELSE 0
+              END
+              + CASE
+                WHEN $5::text = '' THEN 0
+                WHEN "title" ILIKE '%' || $5::text || '%' THEN 1
+                WHEN "code" ILIKE '%' || $5::text || '%' THEN 1
+                WHEN "subtitle" ILIKE '%' || $5::text || '%' THEN 0.5
+                WHEN "vendor" ILIKE '%' || $5::text || '%' THEN 0.5
+                ELSE 0
+              END
+              + COALESCE((
+                SELECT count(*)::double precision * 0.85
+                FROM unnest($12::text[]) AS token_pattern(pattern)
+                WHERE "searchText" ILIKE token_pattern.pattern
+              ), 0)
+            )::double precision AS score
+          FROM candidates
+          WHERE TRUE
+            AND (
+              "sourceType" <> 'catalog_item'
+              OR NOT EXISTS (
+                SELECT 1
+                FROM "EntityCategory" direct_ec
+                WHERE direct_ec."organizationId" = $1::text
+                  AND direct_ec."enabled" = true
+                  AND direct_ec."itemSource" = 'rate_schedule'
+                  AND (
+                    lower(direct_ec."name") = lower("category")
+                    OR lower(direct_ec."entityType") = lower(COALESCE("payload"->>'entityCategoryType', "payload"->>'catalogKind', ''))
+                  )
+              )
             )
-          )
-          AND (
-            "sourceType" <> 'catalog_item'
-            OR "sourceId" NOT IN (
-              SELECT any_rsi."catalogItemId"
-              FROM "RateScheduleItem" any_rsi
-              JOIN "RateSchedule" any_rs ON any_rs."id" = any_rsi."scheduleId"
-              LEFT JOIN "EntityCategory" any_ec ON any_ec."organizationId" = $1::text
-                AND any_ec."enabled" = true
-                AND (
-                  any_ec."id" = any_rs."metadata"->>'entityCategoryId'
-                  OR lower(any_ec."name") = lower(any_rs."category")
-                  OR lower(any_ec."entityType") = lower(any_rs."category")
-                )
-              WHERE any_rsi."catalogItemId" IS NOT NULL
-                AND any_rs."organizationId" = $1::text
-                AND any_ec."itemSource" = 'rate_schedule'
+            AND (
+              "sourceType" <> 'catalog_item'
+              OR "sourceId" NOT IN (
+                SELECT any_rsi."catalogItemId"
+                FROM "RateScheduleItem" any_rsi
+                JOIN "RateSchedule" any_rs ON any_rs."id" = any_rsi."scheduleId"
+                LEFT JOIN "EntityCategory" any_ec ON any_ec."organizationId" = $1::text
+                  AND any_ec."enabled" = true
+                  AND (
+                    any_ec."id" = any_rs."metadata"->>'entityCategoryId'
+                    OR lower(any_ec."name") = lower(any_rs."category")
+                    OR lower(any_ec."entityType") = lower(any_rs."category")
+                  )
+                WHERE any_rsi."catalogItemId" IS NOT NULL
+                  AND any_rs."organizationId" = $1::text
+                  AND any_ec."itemSource" = 'rate_schedule'
+              )
             )
-          )
-          AND (
-            $5::text = ''
-            OR "sourceType" = 'external_action'
-            OR "searchVector" @@ websearch_to_tsquery('english', $6::text)
-            OR (cardinality($12::text[]) > 0 AND "searchText" ILIKE ANY($12::text[]))
-            OR "title" ILIKE '%' || $5::text || '%'
-            OR "code" ILIKE '%' || $5::text || '%'
-            OR "subtitle" ILIKE '%' || $5::text || '%'
-            OR "vendor" ILIKE '%' || $5::text || '%'
-          )
+            AND (
+              $5::text = ''
+              OR "sourceType" = 'external_action'
+              OR "searchVector" @@ websearch_to_tsquery('english', $6::text)
+              OR (cardinality($12::text[]) > 0 AND "searchText" ILIKE ANY($12::text[]))
+              OR "title" ILIKE '%' || $5::text || '%'
+              OR "code" ILIKE '%' || $5::text || '%'
+              OR "subtitle" ILIKE '%' || $5::text || '%'
+              OR "vendor" ILIKE '%' || $5::text || '%'
+            )
         ),
         source_ranked AS (
           SELECT
@@ -8031,16 +8099,20 @@ export class PrismaApiStore {
       sourceEvidence: normalizedInput.sourceEvidence ?? {},
     };
 
-    const revisionScheduleRows = await this.db.rateSchedule.findMany({
-      where: { revisionId: revision.id },
-      include: rateScheduleCalcInclude,
-    });
-    const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
-
     // ── Validate rateScheduleItemId / itemId references ──────────────
     const calcType = normalizeCalculationType(catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const requiresRateScheduleItem = categoryRequiresRateScheduleItem(catDef);
+    const needsRateScheduleContext = worksheetItemNeedsRateScheduleContext(catDef, item);
+    let revisionScheduleRows: Prisma.RateScheduleGetPayload<{ include: typeof rateScheduleCalcInclude }>[] = [];
+    let mappedRevisionSchedules: RateScheduleWithChildren[] = [];
+    if (needsRateScheduleContext) {
+      revisionScheduleRows = await this.db.rateSchedule.findMany({
+        where: { revisionId: revision.id },
+        include: rateScheduleCalcInclude,
+      });
+      mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
+    }
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
 
     if (item.rateScheduleItemId) {
       const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
@@ -8392,7 +8464,8 @@ export class PrismaApiStore {
     };
 
     // Apply patch to a domain item for recalculation
-    const domainItem = mapWorksheetItem(item);
+    const previousDomainItem = mapWorksheetItem(item);
+    const domainItem = { ...previousDomainItem };
     const previousClassification = normalizeWorksheetClassification(domainItem.classification);
     Object.assign(domainItem, normalizedPatch);
 	    if (normalizedPatch.vendor === null) {
@@ -8418,12 +8491,8 @@ export class PrismaApiStore {
       domainItem.costCode = domainItem.costCode ?? costCodeFromClassification(domainItem.classification);
     }
 
-    const revisionScheduleRows = await this.db.rateSchedule.findMany({
-      where: { revisionId: revision.id },
-      include: rateScheduleCalcInclude,
-    });
-    const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
+    let revisionScheduleRows: Prisma.RateScheduleGetPayload<{ include: typeof rateScheduleCalcInclude }>[] = [];
+    let mappedRevisionSchedules: RateScheduleWithChildren[] = [];
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
     const updateEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
@@ -8438,6 +8507,17 @@ export class PrismaApiStore {
     domainItem.entityType = updateCatDef.entityType;
     const updateCalcType = normalizeCalculationType(updateCatDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const updateRequiresRateScheduleItem = categoryRequiresRateScheduleItem(updateCatDef);
+    const needsRateScheduleContext =
+      worksheetItemNeedsRateScheduleContext(updateCatDef, domainItem) ||
+      worksheetItemNeedsRateScheduleContext(item.entityCategory, previousDomainItem);
+    if (needsRateScheduleContext) {
+      revisionScheduleRows = await this.db.rateSchedule.findMany({
+        where: { revisionId: revision.id },
+        include: rateScheduleCalcInclude,
+      });
+      mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
+    }
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
 
     if (domainItem.rateScheduleItemId) {
       const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
