@@ -278,8 +278,7 @@ function findCategoryByIdOrName(
 }
 
 function categoryRequiresRateScheduleItem(category: EntityCategoryRecord | undefined) {
-  const calcType = normalizeKey(category?.calculationType ?? "manual");
-  return category?.itemSource === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
+  return category?.itemSource === "rate_schedule";
 }
 
 function categoryCanAcceptCandidate(category: EntityCategoryRecord | undefined, candidate: SearchCandidate) {

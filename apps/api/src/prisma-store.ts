@@ -323,13 +323,12 @@ function hasPositiveTierUnits(tierUnits: Record<string, number> | null | undefin
 }
 
 function categoryRequiresRateScheduleItem(category: { itemSource?: string | null; calculationType?: string | null } | null | undefined) {
-  const calcType = normalizeCalculationType(category?.calculationType ?? "manual");
-  return category?.itemSource === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
+  return category?.itemSource === "rate_schedule";
 }
 
 function categoryOwnsCalculatedPricing(category: { itemSource?: string | null; calculationType?: string | null } | null | undefined) {
   const calcType = normalizeCalculationType(category?.calculationType ?? "manual");
-  return category?.itemSource === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate" || calcType === "formula";
+  return category?.itemSource === "rate_schedule" || calcType === "formula";
 }
 
 /**
@@ -2190,7 +2189,7 @@ export class PrismaApiStore {
       `
         DELETE FROM "LineItemSearchDocument"
         WHERE "organizationId" = $1::text
-          AND ($2::text IS NULL OR "projectId" IS NULL OR "projectId" = $2::text)
+          AND ($2::text IS NULL OR "projectId" = $2::text)
       `,
       this.organizationId,
       projectId ?? null,
@@ -2219,8 +2218,8 @@ export class PrismaApiStore {
           COALESCE(NULLIF(linked_rate."rateUnit", ''), NULLIF(ci."unit", ''), 'EA'),
           COALESCE(linked_rate."rateUnitCost", ci."unitCost"),
           ci."unitPrice",
-          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", ci."metadata"::text),
-          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", ci."metadata"::text)),
+          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", left(COALESCE(ci."metadata"::text, ''), 500)),
+          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", left(COALESCE(ci."metadata"::text, ''), 500))),
           jsonb_build_object(
             'source', 'catalog',
             'itemId', ci."id",
@@ -2309,26 +2308,31 @@ export class PrismaApiStore {
         ) linked_rate ON true
         WHERE c."organizationId" = $1::text
           AND ($2::text IS NULL OR c."scope" = 'global' OR c."projectId" = $2::text)
-          AND (
-            linked_rate."rateScheduleItemId" IS NOT NULL
-            OR ci."id" NOT IN (
-              SELECT any_rsi."catalogItemId"
-              FROM "RateScheduleItem" any_rsi
-              JOIN "RateSchedule" any_rs ON any_rs."id" = any_rsi."scheduleId"
-              LEFT JOIN "EntityCategory" any_ec ON any_ec."organizationId" = $1::text
-                AND any_ec."enabled" = true
-                AND (
-                  any_ec."id" = any_rs."metadata"->>'entityCategoryId'
-                  OR lower(any_ec."name") = lower(any_rs."category")
-                  OR lower(any_ec."entityType") = lower(any_rs."category")
-                )
-              WHERE any_rsi."catalogItemId" IS NOT NULL
-                AND any_rs."organizationId" = $1::text
-                AND (
-                  any_ec."itemSource" = 'rate_schedule'
-                  OR any_ec."calculationType" IN ('tiered_rate', 'duration_rate')
-                )
-            )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM "EntityCategory" direct_ec
+            WHERE direct_ec."organizationId" = $1::text
+              AND direct_ec."enabled" = true
+              AND direct_ec."itemSource" = 'rate_schedule'
+              AND (
+                lower(direct_ec."name") = lower(COALESCE(NULLIF(ci."metadata"->>'category', ''), c."kind", ''))
+                OR lower(direct_ec."entityType") = lower(COALESCE(NULLIF(ci."metadata"->>'entityType', ''), c."kind", ''))
+              )
+          )
+          AND ci."id" NOT IN (
+            SELECT any_rsi."catalogItemId"
+            FROM "RateScheduleItem" any_rsi
+            JOIN "RateSchedule" any_rs ON any_rs."id" = any_rsi."scheduleId"
+            LEFT JOIN "EntityCategory" any_ec ON any_ec."organizationId" = $1::text
+              AND any_ec."enabled" = true
+              AND (
+                any_ec."id" = any_rs."metadata"->>'entityCategoryId'
+                OR lower(any_ec."name") = lower(any_rs."category")
+                OR lower(any_ec."entityType") = lower(any_rs."category")
+              )
+            WHERE any_rsi."catalogItemId" IS NOT NULL
+              AND any_rs."organizationId" = $1::text
+              AND any_ec."itemSource" = 'rate_schedule'
           )
         ON CONFLICT ("id") DO UPDATE SET
           "projectId" = EXCLUDED."projectId",
@@ -2373,8 +2377,8 @@ export class PrismaApiStore {
           COALESCE(NULLIF(rsi."unit", ''), 'HR'),
           COALESCE(NULLIF(rsi."rates"->>tier."id", '')::double precision, 0),
           NULL,
-          concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", ec."name", ec."entityType", rs."description", rsi."metadata"::text),
-          to_tsvector('english', concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", ec."name", ec."entityType", rs."description", rsi."metadata"::text)),
+          concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", ec."name", ec."entityType", rs."description", left(COALESCE(rsi."metadata"::text, ''), 500)),
+          to_tsvector('english', concat_ws(' ', rsi."name", rsi."code", rsi."unit", rs."name", rs."category", ec."name", ec."entityType", rs."description", left(COALESCE(rsi."metadata"::text, ''), 500))),
           jsonb_build_object(
             'source', 'rate_schedule',
             'rateScheduleItemId', rsi."id",
@@ -2470,8 +2474,8 @@ export class PrismaApiStore {
           COALESCE(NULLIF(ec."uom", ''), r."defaultUom", 'EA'),
           ec."unitCost",
           ec."unitPrice",
-          concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", ec."vendorName", ec."region", ec."method", left(COALESCE(po."rawText", ''), 500), ec."metadata"::text),
-          to_tsvector('english', concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", ec."vendorName", ec."region", ec."method", left(COALESCE(po."rawText", ''), 500), ec."metadata"::text)),
+          concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", ec."vendorName", ec."region", ec."method", left(COALESCE(po."rawText", ''), 500), left(COALESCE(ec."metadata"::text, ''), 500)),
+          to_tsvector('english', concat_ws(' ', r."name", r."code", r."description", r."category", r."resourceType", r."manufacturer", r."manufacturerPartNumber", ec."vendorName", ec."region", ec."method", left(COALESCE(po."rawText", ''), 500), left(COALESCE(ec."metadata"::text, ''), 500))),
           jsonb_build_object(
             'source', 'cost_intelligence',
             'effectiveCostId', ec."id",
@@ -2565,8 +2569,8 @@ export class PrismaApiStore {
           COALESCE(NULLIF(lu."outputUom", ''), 'EA'),
           NULL,
           NULL,
-          concat_ws(' ', lu."name", lu."code", lu."description", lu."discipline", lu."category", lu."className", lu."subClassName", lib."name", lib."provider", array_to_string(lu."tags", ' '), lu."metadata"::text),
-          to_tsvector('english', concat_ws(' ', lu."name", lu."code", lu."description", lu."discipline", lu."category", lu."className", lu."subClassName", lib."name", lib."provider", array_to_string(lu."tags", ' '), lu."metadata"::text)),
+          concat_ws(' ', lu."name", lu."code", lu."description", lu."discipline", lu."category", lu."className", lu."subClassName", lib."name", lib."provider", array_to_string(lu."tags", ' '), left(COALESCE(lu."metadata"::text, ''), 500)),
+          to_tsvector('english', concat_ws(' ', lu."name", lu."code", lu."description", lu."discipline", lu."category", lu."className", lu."subClassName", lib."name", lib."provider", array_to_string(lu."tags", ' '), left(COALESCE(lu."metadata"::text, ''), 500))),
           jsonb_build_object(
             'source', 'labor_unit',
             'laborUnitId', lu."id",
@@ -2696,9 +2700,11 @@ export class PrismaApiStore {
     if (input.refresh) {
       await this.rebuildLineItemSearchIndex(projectId);
     } else {
-      const countRows = await this.db.$queryRawUnsafe<Array<{ count: number | bigint }>>(
+      const countRows = await this.db.$queryRawUnsafe<Array<{ total_count: number | bigint; project_count: number | bigint }>>(
         `
-          SELECT count(*)::int AS count
+          SELECT
+            count(*)::int AS total_count,
+            count(*) FILTER (WHERE "projectId" = $2::text)::int AS project_count
           FROM "LineItemSearchDocument"
           WHERE "organizationId" = $1::text
             AND ("projectId" IS NULL OR "projectId" = $2::text)
@@ -2706,7 +2712,10 @@ export class PrismaApiStore {
         this.organizationId,
         projectId,
       );
-      if (Number(countRows[0]?.count ?? 0) === 0) {
+      if (
+        Number(countRows[0]?.total_count ?? 0) === 0 ||
+        Number(countRows[0]?.project_count ?? 0) === 0
+      ) {
         await this.rebuildLineItemSearchIndex(projectId);
       }
     }
@@ -2844,7 +2853,20 @@ export class PrismaApiStore {
           )
           AND (
             "sourceType" <> 'catalog_item'
-            OR NULLIF("payload"->>'rateScheduleItemId', '') IS NOT NULL
+            OR NOT EXISTS (
+              SELECT 1
+              FROM "EntityCategory" direct_ec
+              WHERE direct_ec."organizationId" = $1::text
+                AND direct_ec."enabled" = true
+                AND direct_ec."itemSource" = 'rate_schedule'
+                AND (
+                  lower(direct_ec."name") = lower("category")
+                  OR lower(direct_ec."entityType") = lower(COALESCE("payload"->>'entityCategoryType', "payload"->>'catalogKind', ''))
+                )
+            )
+          )
+          AND (
+            "sourceType" <> 'catalog_item'
             OR "sourceId" NOT IN (
               SELECT any_rsi."catalogItemId"
               FROM "RateScheduleItem" any_rsi
@@ -2858,10 +2880,7 @@ export class PrismaApiStore {
                 )
               WHERE any_rsi."catalogItemId" IS NOT NULL
                 AND any_rs."organizationId" = $1::text
-                AND (
-                  any_ec."itemSource" = 'rate_schedule'
-                  OR any_ec."calculationType" IN ('tiered_rate', 'duration_rate')
-                )
+                AND any_ec."itemSource" = 'rate_schedule'
             )
           )
           AND (
@@ -8037,7 +8056,7 @@ export class PrismaApiStore {
       }
     } else if (requiresRateScheduleItem) {
       throw new Error(
-        `Category "${item.category}" requires a rateScheduleItemId (${calcType}/rate-schedule calculated). ` +
+        `Category "${item.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
         `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
       );
     }
@@ -8434,7 +8453,7 @@ export class PrismaApiStore {
       }
     } else if (updateRequiresRateScheduleItem) {
       throw new Error(
-        `Category "${domainItem.category}" requires a rateScheduleItemId (${updateCalcType}/rate-schedule calculated). ` +
+        `Category "${domainItem.category}" requires a rateScheduleItemId (itemSource=rate_schedule). ` +
         `Call listRateScheduleItems to find valid IDs, then set rateScheduleItemId.`
       );
     }

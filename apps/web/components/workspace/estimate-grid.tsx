@@ -551,11 +551,7 @@ function findCategoryForRow(
 }
 
 function categoryRequiresRateSchedule(category: EntityCategory | undefined) {
-  return (
-    category?.itemSource === "rate_schedule" ||
-    category?.calculationType === "tiered_rate" ||
-    category?.calculationType === "duration_rate"
-  );
+  return category?.itemSource === "rate_schedule";
 }
 
 type EstimatePhase = ProjectWorkspaceData["phases"][number];

@@ -2837,11 +2837,10 @@ export function buildServer() {
     }
 
     if (matchedCategory) {
-      const calcType = (matchedCategory as any).calculationType;
       const itemSrc = (matchedCategory as any).itemSource;
 
-      // Rate/tier categories are system-calculated and MUST link to a concrete rate item.
-      if (calcType === "tiered_rate" || calcType === "duration_rate" || itemSrc === "rate_schedule") {
+      // Rate-schedule-backed categories MUST link to a concrete imported rate item.
+      if (itemSrc === "rate_schedule") {
         if (!parsed.data.rateScheduleItemId) {
           // Check if rate schedules exist for this project
           const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);
