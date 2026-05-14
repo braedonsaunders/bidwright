@@ -27,12 +27,9 @@ import {
 } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import {
-  Badge,
   Button,
   EmptyState,
   Input,
-  Select,
-  Separator,
 } from "@/components/ui";
 import {
   createTakeoffAnnotation,
@@ -1271,175 +1268,6 @@ export function DwgTakeoffSurface({
 
   return (
     <div className="flex h-full w-full min-h-0 flex-col bg-panel">
-      {/* The takeoff-tab toolbar above owns the document selector. This
-          internal toolbar only carries the DWG-specific controls (layout,
-          tools, color, zoom, layers, snap, undo/redo, export) so the two
-          rows don't render duplicate doc pickers. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-        {layoutOptions.length > 1 && (
-          <div className="w-44">
-            <Select
-              value={selectedLayout}
-              onValueChange={(value) => {
-                setSelectedLayout(value);
-                const nextEntities = value === "__all__"
-                  ? entities
-                  : entities.filter((entity) => (entity.layoutName || "Model") === value);
-                setVisibleLayers(new Set(buildLayers(nextEntities).map((layer) => layer.name)));
-                window.requestAnimationFrame(() => fitToEntities(nextEntities));
-              }}
-              options={[
-                { value: "__all__", label: "All layouts" },
-                ...layoutOptions.map((name) => ({ value: name, label: name })),
-              ]}
-              size="sm"
-            />
-          </div>
-        )}
-
-        <div className="flex items-center rounded-lg border border-line bg-bg/45 p-0.5">
-          {TOOL_OPTIONS.map(({ id, label, icon: Icon, shortcut }) => (
-            <button
-              key={id}
-              type="button"
-              onClick={() => {
-                setActiveTool(id);
-                setDrawPoints([]);
-              }}
-              title={shortcut ? `${label} (${shortcut})` : label}
-              className={cn(
-                "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
-                activeTool === id ? "bg-panel2 text-accent shadow-sm" : "text-fg/45 hover:bg-panel2/60 hover:text-fg/75",
-              )}
-            >
-              <Icon className="h-4 w-4" />
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-1 rounded-lg border border-line bg-bg/45 px-2 py-1">
-          {PRESET_COLORS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              onClick={() => setActiveColor(color)}
-              className={cn("h-5 w-5 rounded-full border-2", activeColor === color ? "border-fg scale-110" : "border-transparent")}
-              style={{ backgroundColor: color }}
-              title={color}
-            />
-          ))}
-        </div>
-
-        <Separator className="!h-6 !w-px" />
-        <Button variant="ghost" size="xs" onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 1.2 })}>
-          <ZoomIn className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 0.8 })}>
-          <ZoomOut className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => fitToEntities()}>
-          <Maximize2 className="h-3.5 w-3.5" />
-        </Button>
-
-        {/* Layer visibility — replaces the old right-aside layer list. The
-            selection/inspect surface lives in the workspace side panel; only
-            view-state controls remain in the canvas toolbar. */}
-        <Popover.Root>
-          <Popover.Trigger asChild>
-            <Button variant="ghost" size="xs" title="Layer visibility">
-              <Layers className="h-3.5 w-3.5" />
-              <span className="text-[10px] tabular-nums">{visibleLayers.size}/{layers.length}</span>
-            </Button>
-          </Popover.Trigger>
-          <Popover.Portal>
-            <Popover.Content
-              align="start"
-              sideOffset={6}
-              className="z-[100] w-72 rounded-lg border border-line bg-panel p-3 shadow-xl outline-none"
-            >
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-xs font-semibold text-fg">Layers</h3>
-                <div className="flex items-center gap-1 text-[11px]">
-                  <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set(layers.map((layer) => layer.name)))}>All on</button>
-                  <span className="text-fg/25">/</span>
-                  <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set())}>All off</button>
-                </div>
-              </div>
-              <Input
-                value={layerSearch}
-                onChange={(event) => setLayerSearch(event.target.value)}
-                placeholder="Filter layers"
-                className="mt-2 h-7 text-xs"
-              />
-              <div className="mt-2 max-h-64 space-y-1 overflow-auto">
-                {filteredLayers.length === 0 ? (
-                  <p className="rounded-md border border-line bg-bg/30 px-2 py-3 text-center text-[11px] text-fg/40">
-                    No layers match.
-                  </p>
-                ) : filteredLayers.map((layer) => {
-                  const visible = visibleLayers.has(layer.name);
-                  return (
-                    <button
-                      key={layer.name}
-                      type="button"
-                      onClick={() => {
-                        setVisibleLayers((current) => {
-                          const next = new Set(current);
-                          if (next.has(layer.name)) next.delete(layer.name);
-                          else next.add(layer.name);
-                          return next;
-                        });
-                      }}
-                      className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-fg/65 hover:bg-panel2"
-                    >
-                      {visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-fg/30" />}
-                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: layer.color }} />
-                      <span className="min-w-0 flex-1 truncate">{layer.name}</span>
-                      <span className="font-mono text-[10px] text-fg/35">{layer.count}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </Popover.Content>
-          </Popover.Portal>
-        </Popover.Root>
-
-        <Button variant="ghost" size="xs" onClick={() => void loadDrawingMetadata(true)} title="Reprocess DWG/DXF metadata">
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant={snapEnabled ? "secondary" : "ghost"} size="xs" onClick={() => setSnapEnabled((value) => !value)} title="Toggle entity snap">
-          <Crosshair className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => void undoLastAction()} disabled={!canUndo} title="Undo takeoff edit">
-          <Undo2 className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => void redoLastAction()} disabled={!canRedo} title="Redo takeoff edit">
-          <Redo2 className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => void reloadAnnotations()} title="Reload annotations">
-          <RefreshCw className="h-3.5 w-3.5" />
-        </Button>
-        <Button variant="secondary" size="xs" onClick={() => exportAnnotationsCsv(activeDocument?.fileName ?? "dwg", annotations)} disabled={annotations.length === 0}>
-          <Download className="h-3.5 w-3.5" />
-          CSV
-        </Button>
-
-        <div className="flex-1" />
-
-        <Badge tone={calibration ? "success" : "warning"} className="text-[10px]">
-          {calibration ? `Scale ${formatNumber(calibration.unitsPerWorld, 4)} ${calibration.unit}/du` : "Uncalibrated"}
-        </Badge>
-        <Badge tone="info" className="text-[10px]">
-          {visibleEntityCount} entities
-        </Badge>
-        <Badge tone={metadata?.status === "processed" ? "success" : "warning"} className="text-[10px]">
-          {metadata?.versions?.length ?? 0} versions
-        </Badge>
-        <Badge tone="default" className="text-[10px]">
-          {annotations.length} measurements
-        </Badge>
-      </div>
-
       {status && (
         <div className={cn(
           "flex shrink-0 items-center gap-2 border-b px-3 py-2 text-xs",
@@ -1451,6 +1279,261 @@ export function DwgTakeoffSurface({
       )}
 
       <div className="flex min-h-0 flex-1">
+        <div className="flex w-9 shrink-0 flex-col overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
+          {TOOL_OPTIONS.map(({ id, label, icon: Icon, shortcut }) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => {
+                setActiveTool(id);
+                setDrawPoints([]);
+              }}
+              title={shortcut ? `${label} (${shortcut})` : label}
+              aria-label={label}
+              className={cn(
+                "flex h-7 w-full items-center justify-center rounded-md transition-colors",
+                activeTool === id ? "bg-accent/15 text-accent" : "text-fg/40 hover:bg-panel2 hover:text-fg/70",
+              )}
+            >
+              <Icon className="h-3.5 w-3.5" />
+            </button>
+          ))}
+
+          <div className="my-px h-px w-full bg-line/60" />
+
+          <Popover.Root>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                title="Annotation color"
+                aria-label="Annotation color"
+                className="flex h-7 w-full items-center justify-center rounded-md text-fg/50 transition-colors hover:bg-panel2 hover:text-fg/75"
+              >
+                <span className="h-3.5 w-3.5 rounded-full border border-white/60" style={{ backgroundColor: activeColor }} />
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content align="start" sideOffset={6} className="z-[100] rounded-lg border border-line bg-panel p-2 shadow-xl outline-none">
+                <div className="grid grid-cols-6 gap-1">
+                  {PRESET_COLORS.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      onClick={() => setActiveColor(color)}
+                      className={cn("h-6 w-6 rounded-full border-2", activeColor === color ? "border-fg scale-110" : "border-transparent")}
+                      style={{ backgroundColor: color }}
+                      title={color}
+                    />
+                  ))}
+                </div>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+
+          <div className="my-px h-px w-full bg-line/60" />
+
+          <button
+            type="button"
+            onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 1.2 })}
+            title="Zoom in"
+            aria-label="Zoom in"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+          >
+            <ZoomIn className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => updateViewport({ ...viewportRef.current, scale: viewportRef.current.scale * 0.8 })}
+            title="Zoom out"
+            aria-label="Zoom out"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+          >
+            <ZoomOut className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => fitToEntities()}
+            title="Fit drawing"
+            aria-label="Fit drawing"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+
+          <div className="my-px h-px w-full bg-line/60" />
+
+          {layoutOptions.length > 1 && (
+            <Popover.Root>
+              <Popover.Trigger asChild>
+                <button
+                  type="button"
+                  title="Layout"
+                  aria-label="Layout"
+                  className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+                >
+                  <PanelRightOpen className="h-3.5 w-3.5" />
+                </button>
+              </Popover.Trigger>
+              <Popover.Portal>
+                <Popover.Content align="start" sideOffset={6} className="z-[100] w-52 rounded-lg border border-line bg-panel p-2 shadow-xl outline-none">
+                  <p className="px-1 pb-1 text-[10px] font-medium uppercase tracking-wider text-fg/40">Layout</p>
+                  {[
+                    { value: "__all__", label: "All layouts" },
+                    ...layoutOptions.map((name) => ({ value: name, label: name })),
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => {
+                        setSelectedLayout(option.value);
+                        const nextEntities = option.value === "__all__"
+                          ? entities
+                          : entities.filter((entity) => (entity.layoutName || "Model") === option.value);
+                        setVisibleLayers(new Set(buildLayers(nextEntities).map((layer) => layer.name)));
+                        window.requestAnimationFrame(() => fitToEntities(nextEntities));
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs transition-colors hover:bg-panel2",
+                        selectedLayout === option.value ? "text-accent" : "text-fg/65",
+                      )}
+                    >
+                      {selectedLayout === option.value && <Check className="h-3 w-3" />}
+                      <span className="truncate">{option.label}</span>
+                    </button>
+                  ))}
+                </Popover.Content>
+              </Popover.Portal>
+            </Popover.Root>
+          )}
+
+          <Popover.Root>
+            <Popover.Trigger asChild>
+              <button
+                type="button"
+                title={`Layers ${visibleLayers.size}/${layers.length}`}
+                aria-label="Layer visibility"
+                className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+              >
+                <Layers className="h-3.5 w-3.5" />
+              </button>
+            </Popover.Trigger>
+            <Popover.Portal>
+              <Popover.Content
+                align="start"
+                sideOffset={6}
+                className="z-[100] w-72 rounded-lg border border-line bg-panel p-3 shadow-xl outline-none"
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <h3 className="text-xs font-semibold text-fg">Layers</h3>
+                  <div className="flex items-center gap-1 text-[11px]">
+                    <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set(layers.map((layer) => layer.name)))}>All on</button>
+                    <span className="text-fg/25">/</span>
+                    <button className="text-fg/45 hover:text-fg" onClick={() => setVisibleLayers(new Set())}>All off</button>
+                  </div>
+                </div>
+                <Input
+                  value={layerSearch}
+                  onChange={(event) => setLayerSearch(event.target.value)}
+                  placeholder="Filter layers"
+                  className="mt-2 h-7 text-xs"
+                />
+                <div className="mt-2 max-h-64 space-y-1 overflow-auto">
+                  {filteredLayers.length === 0 ? (
+                    <p className="rounded-md border border-line bg-bg/30 px-2 py-3 text-center text-[11px] text-fg/40">
+                      No layers match.
+                    </p>
+                  ) : filteredLayers.map((layer) => {
+                    const visible = visibleLayers.has(layer.name);
+                    return (
+                      <button
+                        key={layer.name}
+                        type="button"
+                        onClick={() => {
+                          setVisibleLayers((current) => {
+                            const next = new Set(current);
+                            if (next.has(layer.name)) next.delete(layer.name);
+                            else next.add(layer.name);
+                            return next;
+                          });
+                        }}
+                        className="flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-xs text-fg/65 hover:bg-panel2"
+                      >
+                        {visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-fg/30" />}
+                        <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: layer.color }} />
+                        <span className="min-w-0 flex-1 truncate">{layer.name}</span>
+                        <span className="font-mono text-[10px] text-fg/35">{layer.count}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </Popover.Content>
+            </Popover.Portal>
+          </Popover.Root>
+
+          <div className="my-px h-px w-full bg-line/60" />
+
+          <button
+            type="button"
+            onClick={() => void loadDrawingMetadata(true)}
+            title="Reprocess DWG/DXF metadata"
+            aria-label="Reprocess DWG/DXF metadata"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setSnapEnabled((value) => !value)}
+            title="Toggle entity snap"
+            aria-label="Toggle entity snap"
+            className={cn(
+              "flex h-7 w-full items-center justify-center rounded-md transition-colors",
+              snapEnabled ? "bg-accent/15 text-accent" : "text-fg/40 hover:bg-panel2 hover:text-fg/70",
+            )}
+          >
+            <Crosshair className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void undoLastAction()}
+            disabled={!canUndo}
+            title="Undo takeoff edit"
+            aria-label="Undo takeoff edit"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-30"
+          >
+            <Undo2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void redoLastAction()}
+            disabled={!canRedo}
+            title="Redo takeoff edit"
+            aria-label="Redo takeoff edit"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-30"
+          >
+            <Redo2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => void reloadAnnotations()}
+            title="Reload annotations"
+            aria-label="Reload annotations"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => exportAnnotationsCsv(activeDocument?.fileName ?? "dwg", annotations)}
+            disabled={annotations.length === 0}
+            title="Export measurements CSV"
+            aria-label="Export measurements CSV"
+            className="flex h-7 w-full items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-panel2 hover:text-fg/70 disabled:opacity-30"
+          >
+            <Download className="h-3.5 w-3.5" />
+          </button>
+        </div>
+
         <div className="relative min-w-0 flex-1 bg-[#101522]">
           {loading && (
             <div className="absolute inset-0 z-20 flex items-center justify-center bg-[#101522]/80 text-fg/60">
@@ -1508,6 +1591,12 @@ export function DwgTakeoffSurface({
         <span>{activeDocument?.fileName}</span>
         <span>•</span>
         <span>{TOOL_OPTIONS.find((tool) => tool.id === activeTool)?.label ?? "Select"} tool</span>
+        <span>•</span>
+        <span>{visibleEntityCount.toLocaleString()} entities</span>
+        <span>•</span>
+        <span>{annotations.length.toLocaleString()} measurements</span>
+        <span>•</span>
+        <span>{calibration ? `scale ${formatNumber(calibration.unitsPerWorld, 4)} ${calibration.unit}/du` : "uncalibrated"}</span>
         <span>•</span>
         <span>{Math.round(viewportRef.current.scale * 100) / 100} px/du</span>
         <span>•</span>

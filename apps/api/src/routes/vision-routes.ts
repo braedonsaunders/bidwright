@@ -243,7 +243,7 @@ function currentAnalysisRuns(doc: any): any[] {
 
 function compactAnalysisDetections(result: any) {
   return {
-    lines: (Array.isArray(result.lines) ? result.lines : []).slice(0, 1200).map((line: any) => ({
+    lines: (Array.isArray(result.lines) ? result.lines : []).map((line: any) => ({
       id: line.id,
       kind: "line",
       x1: line.x1,
@@ -256,7 +256,7 @@ function compactAnalysisDetections(result: any) {
       layer: line.layer,
       confidence: line.confidence,
     })),
-    polylines: (Array.isArray(result.polylines) ? result.polylines : []).slice(0, 250).map((polyline: any) => ({
+    polylines: (Array.isArray(result.polylines) ? result.polylines : []).map((polyline: any) => ({
       id: polyline.id,
       kind: "polyline",
       systemId: polyline.systemId,
@@ -269,7 +269,7 @@ function compactAnalysisDetections(result: any) {
       layer: polyline.layer,
       confidence: polyline.confidence,
     })),
-    circles: (Array.isArray(result.circles) ? result.circles : []).slice(0, 250).map((circle: any) => ({
+    circles: (Array.isArray(result.circles) ? result.circles : []).map((circle: any) => ({
       id: circle.id,
       kind: "circle",
       cx: circle.cx,
@@ -280,7 +280,7 @@ function compactAnalysisDetections(result: any) {
       layer: circle.layer,
       confidence: circle.confidence,
     })),
-    contours: (Array.isArray(result.contours) ? result.contours : []).slice(0, 250).map((contour: any) => ({
+    contours: (Array.isArray(result.contours) ? result.contours : []).map((contour: any) => ({
       id: contour.id,
       kind: "contour",
       bbox: contour.bbox,
@@ -291,7 +291,7 @@ function compactAnalysisDetections(result: any) {
       layer: contour.layer,
       confidence: contour.confidence,
     })),
-    symbolCandidates: (Array.isArray(result.symbolCandidates) ? result.symbolCandidates : []).slice(0, 250).map((symbol: any) => ({
+    symbolCandidates: (Array.isArray(result.symbolCandidates) ? result.symbolCandidates : []).map((symbol: any) => ({
       id: symbol.id,
       kind: "symbol_candidate",
       x: symbol.x,
@@ -306,7 +306,7 @@ function compactAnalysisDetections(result: any) {
       layer: symbol.layer,
       confidence: symbol.confidence,
     })),
-    textRegions: (Array.isArray(result.textRegions) ? result.textRegions : []).slice(0, 200).map((region: any) => ({
+    textRegions: (Array.isArray(result.textRegions) ? result.textRegions : []).map((region: any) => ({
       id: region.id,
       kind: "text_region",
       x: region.x ?? region.bbox?.x,
@@ -319,7 +319,7 @@ function compactAnalysisDetections(result: any) {
       text: region.text,
       confidence: region.confidence,
     })),
-    systems: (Array.isArray(result.systems) ? result.systems : []).slice(0, 100).map((system: any) => ({
+    systems: (Array.isArray(result.systems) ? result.systems : []).map((system: any) => ({
       id: system.id,
       kind: "system",
       label: system.label,
@@ -625,11 +625,12 @@ function cadTraceSystemsFromSegments(segments: CadTraceSegment[], extentsValue: 
 
 function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean, maxEntities: number) {
   const entities = Array.isArray(cad.entities) ? cad.entities : [];
+  const takeBudget = <T>(items: T[]) => maxEntities > 0 ? items.slice(0, maxEntities) : items;
   const extents = asRecord(cad.extents);
   const width = Math.max(1, Number(extents.maxX ?? 0) - Number(extents.minX ?? 0));
   const height = Math.max(1, Number(extents.maxY ?? 0) - Number(extents.minY ?? 0));
   const linearSegments = cadSegmentsFromEntities(entities, preset);
-  const lines = linearSegments.slice(0, maxEntities).map((segment, index) => ({
+  const lines = takeBudget(linearSegments).map((segment, index) => ({
     id: segment.id,
     entityId: segment.entityId,
     x1: Math.round(segment.x1 * 1000) / 1000,
@@ -645,9 +646,8 @@ function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean
     source: "cad-entity-segment",
     confidence: index < entities.length ? 0.98 : 0.96,
   }));
-  const polylines = entities
-    .filter((entity: any) => ["LWPOLYLINE", "POLYLINE"].includes(String(entity.type).toUpperCase()))
-    .slice(0, maxEntities)
+  const polylines = takeBudget(entities
+    .filter((entity: any) => ["LWPOLYLINE", "POLYLINE"].includes(String(entity.type).toUpperCase())))
     .map((entity: any, index: number) => {
       const points = (Array.isArray(entity.vertices) ? entity.vertices : []).map(cadPoint).filter(Boolean) as { x: number; y: number }[];
       const length = cadPolylineLength(points, entity.closed === true);
@@ -667,9 +667,8 @@ function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean
         confidence: 0.98,
       };
     });
-  const circles = entities
-    .filter((entity: any) => ["CIRCLE", "ARC", "ELLIPSE"].includes(String(entity.type).toUpperCase()) && cadPoint(entity.center))
-    .slice(0, maxEntities)
+  const circles = takeBudget(entities
+    .filter((entity: any) => ["CIRCLE", "ARC", "ELLIPSE"].includes(String(entity.type).toUpperCase()) && cadPoint(entity.center)))
     .map((entity: any, index: number) => {
       const center = cadPoint(entity.center)!;
       return {
@@ -685,9 +684,8 @@ function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean
         confidence: 0.98,
       };
     });
-  const symbolCandidates = entities
-    .filter((entity: any) => String(entity.type).toUpperCase() === "INSERT")
-    .slice(0, maxEntities)
+  const symbolCandidates = takeBudget(entities
+    .filter((entity: any) => String(entity.type).toUpperCase() === "INSERT"))
     .map((entity: any, index: number) => {
       const point = cadPoint(entity.start) ?? { x: 0, y: 0 };
       const bbox = cadBbox(entity.bounds);
@@ -710,9 +708,8 @@ function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean
         metadata: entity.raw ?? {},
       };
     });
-  const textRegions = entities
-    .filter((entity: any) => ["TEXT", "MTEXT"].includes(String(entity.type).toUpperCase()))
-    .slice(0, maxEntities)
+  const textRegions = takeBudget(entities
+    .filter((entity: any) => ["TEXT", "MTEXT"].includes(String(entity.type).toUpperCase())))
     .map((entity: any, index: number) => ({
       id: `cad-txt-${index + 1}`,
       entityId: entity.id,
@@ -723,10 +720,10 @@ function buildCadDrawingAnalysis(cad: any, preset: string, traceSystems: boolean
       source: "cad-text",
     }));
   const systems = traceSystems ? cadTraceSystemsFromSegments(linearSegments, extents, preset) : [];
-  const contours = [
+  const contours = takeBudget([
     ...polylines.filter((polyline: any) => polyline.closed),
     ...circles.filter((circle: any) => circle.kind === "circle"),
-  ].slice(0, maxEntities).map((entry: any, index: number) => ({
+  ]).map((entry: any, index: number) => ({
     id: `cad-ctr-${index + 1}`,
     entityId: entry.entityId,
     bbox: entry.bbox,
@@ -1811,6 +1808,8 @@ export async function visionRoutes(app: FastifyInstance) {
         snapTolerance: typeof body.snapTolerance === "number" ? body.snapTolerance : undefined,
         maxLines: typeof body.maxLines === "number" ? body.maxLines : undefined,
         maxRegions: typeof body.maxRegions === "number" ? body.maxRegions : undefined,
+        lineSensitivity: typeof body.lineSensitivity === "number" ? body.lineSensitivity : undefined,
+        noiseRejection: typeof body.noiseRejection === "number" ? body.noiseRejection : undefined,
       };
       const result = await runAnalyzeDrawingGeometry({
         pdfPath: resolved.absPath,
@@ -1879,6 +1878,8 @@ export async function visionRoutes(app: FastifyInstance) {
         snapTolerance: typeof body.snapTolerance === "number" ? body.snapTolerance : undefined,
         maxLines: typeof body.maxLines === "number" ? body.maxLines : undefined,
         maxRegions: typeof body.maxRegions === "number" ? body.maxRegions : undefined,
+        lineSensitivity: typeof body.lineSensitivity === "number" ? body.lineSensitivity : undefined,
+        noiseRejection: typeof body.noiseRejection === "number" ? body.noiseRejection : undefined,
       };
       const result = await runAnalyzeDrawingGeometry({
         pdfPath: resolved.absPath,
@@ -1918,7 +1919,10 @@ export async function visionRoutes(app: FastifyInstance) {
     const sourceKind = body.sourceKind === "file_node" ? "file_node" as const : "source_document" as const;
     const preset = String(body.preset ?? "generic");
     const traceSystems = body.traceSystems !== false;
-    const maxEntities = Math.max(50, Math.min(5000, Number(body.maxEntities ?? body.maxLines ?? 1200)));
+    const rawMaxEntities = Number(body.maxEntities ?? body.maxLines ?? 0);
+    const maxEntities = Number.isFinite(rawMaxEntities) && rawMaxEntities > 0
+      ? Math.max(50, Math.min(50000, rawMaxEntities))
+      : 0;
     if (!projectId || !documentId) {
       return reply.code(400).send({ message: "projectId and documentId are required" });
     }

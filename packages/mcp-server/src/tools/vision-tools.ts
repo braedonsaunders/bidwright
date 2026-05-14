@@ -914,7 +914,7 @@ INPUTS:
 - pageNumber: Page to analyze
 - preset: generic by default; use mechanical_piping/plumbing/fire_protection/ductwork/electrical/civil_linear/structural to tune line filtering and system labels
 - traceSystems: true to group connected linework into candidate runs/systems
-- maxLines/maxRegions: caps to keep output manageable
+- maxLines/maxRegions: optional output budgets; set maxLines to 0 for full line output on dense sheets
 
 OUTPUT: Compact JSON with summary, coordinate space, top line segments, circles, symbol candidates, text regions, and systems. Coordinates are in the returned imageWidth/imageHeight coordinate space and can be saved as takeoff marks after human/agent review.`,
     {
@@ -928,11 +928,13 @@ OUTPUT: Compact JSON with summary, coordinate space, top line segments, circles,
       includeSymbols: z.boolean().default(true).describe("Include symbol-like connected-component candidates"),
       includeTextRegions: z.boolean().default(true).describe("Include dense text-region candidates"),
       includeCircles: z.boolean().default(true).describe("Include circular detections"),
-      maxLines: z.coerce.number().min(50).max(3000).default(800).describe("Maximum line segments to return"),
-      maxEntities: z.coerce.number().min(50).max(5000).default(1200).describe("Maximum CAD-native entities to return when geometrySource is cad_native"),
-      maxRegions: z.coerce.number().min(20).max(500).default(120).describe("Maximum candidates per non-line category"),
+      maxLines: z.coerce.number().min(0).max(50000).default(0).describe("Maximum line segments to return; 0 returns the full detected line set"),
+      maxEntities: z.coerce.number().min(0).max(50000).default(0).describe("Maximum CAD-native entities to return when geometrySource is cad_native; 0 returns all parsed entities"),
+      maxRegions: z.coerce.number().min(20).max(2000).default(500).describe("Maximum candidates per non-line category"),
       minLineLength: z.coerce.number().min(5).optional().describe("Optional minimum detected line length in pixels"),
       snapTolerance: z.coerce.number().min(2).optional().describe("Optional endpoint snap tolerance in pixels for topology"),
+      lineSensitivity: z.coerce.number().min(0.1).max(1).default(0.62).describe("Line detection sensitivity; higher finds finer/shorter linework"),
+      noiseRejection: z.coerce.number().min(0).max(1).default(0.42).describe("Noise rejection strength; higher suppresses short noisy fragments"),
     },
     async (args) => {
       const {
@@ -1028,10 +1030,12 @@ OUTPUT: Candidate systems with segment IDs, total length in pixels, inferred top
       sourceKind: z.enum(["source_document", "file_node"]).default("source_document").describe("Source kind for CAD-native DXF/DWG tracing"),
       refreshCadMetadata: z.boolean().default(false).describe("Refresh cached DXF/DWG metadata before CAD-native tracing"),
       preset: drawingAnalysisPresetSchema.default("mechanical_piping").describe("System-tracing preset"),
-      maxLines: z.coerce.number().min(50).max(3000).default(1200).describe("Maximum line segments to consider"),
-      maxEntities: z.coerce.number().min(50).max(5000).default(1800).describe("Maximum CAD-native entities to consider"),
+      maxLines: z.coerce.number().min(0).max(50000).default(0).describe("Maximum line segments to consider; 0 considers all detected linework"),
+      maxEntities: z.coerce.number().min(0).max(50000).default(0).describe("Maximum CAD-native entities to consider; 0 considers all parsed entities"),
       minLineLength: z.coerce.number().min(5).optional().describe("Optional minimum line length in pixels"),
       snapTolerance: z.coerce.number().min(2).optional().describe("Optional endpoint snap tolerance in pixels"),
+      lineSensitivity: z.coerce.number().min(0.1).max(1).default(0.62).describe("Line detection sensitivity; higher finds finer/shorter linework"),
+      noiseRejection: z.coerce.number().min(0).max(1).default(0.42).describe("Noise rejection strength; higher suppresses short noisy fragments"),
     },
     async (args) => {
       const {

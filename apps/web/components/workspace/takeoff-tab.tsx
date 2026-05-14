@@ -107,7 +107,6 @@ import {
   apiRequest,
   analyzeDrawingGeometry,
   saveDrawingDetectionsAsAnnotations,
-  traceDrawingSystems,
   detectTitleBlockScale,
   extractLegendFromPage,
   getFileTree,
@@ -356,6 +355,7 @@ import type { TakeoffSelection } from "./takeoff-link-view";
 import type {
   InspectActions,
   InspectCategoryPick,
+  InspectDrawingAnalysisSettings,
   InspectModelElement,
   InspectRateScheduleItemOption,
   InspectSnapshot,
@@ -414,6 +414,8 @@ interface TakeoffTabProps {
   /** A ref the parent owns; this tab populates it with action callbacks the
    *  side-panel Inspect tab can drive (toggle visibility, delete, edit, etc.). */
   inspectActionsRef?: React.MutableRefObject<InspectActions | null>;
+  /** Ask the parent shell to open the right-side Entities tab. */
+  onOpenInspectEntities?: () => void;
   /** Called whenever the inspect-relevant state changes so the parent can
    *  re-render the Inspect tab. */
   onInspectSnapshotChange?: (snapshot: InspectSnapshot) => void;
@@ -918,6 +920,7 @@ export function TakeoffTab({
   modelSendToEstimateRef,
   modelElementCreateLineItemRef,
   inspectActionsRef,
+  onOpenInspectEntities,
   onInspectSnapshotChange,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
@@ -1187,12 +1190,25 @@ export function TakeoffTab({
   const [legendWarnings, setLegendWarnings] = useState<string[]>([]);
 
   /* Drawing intelligence state */
-  const [drawingAnalysisOpen, setDrawingAnalysisOpen] = useState(false);
-  const [drawingAnalysisPreset, setDrawingAnalysisPreset] = useState<DrawingAnalysisPreset>("generic");
+  const [drawingAnalysisSettings, setDrawingAnalysisSettings] = useState<InspectDrawingAnalysisSettings>({
+    preset: "generic",
+    includeSymbols: true,
+    includeTextRegions: true,
+    includeCircles: true,
+    traceSystems: true,
+    maxLines: 0,
+    maxRegions: 500,
+    minLineLength: 0,
+    snapTolerance: 0,
+    lineSensitivity: 0.62,
+    noiseRejection: 0.42,
+  });
+  const drawingAnalysisPreset = drawingAnalysisSettings.preset;
   const [drawingAnalysisResult, setDrawingAnalysisResult] = useState<DrawingGeometryAnalysisResult | null>(null);
   const [drawingAnalysisRunning, setDrawingAnalysisRunning] = useState(false);
   const [drawingAnalysisSavingId, setDrawingAnalysisSavingId] = useState<string | null>(null);
   const [drawingAnalysisError, setDrawingAnalysisError] = useState<string | null>(null);
+  const [selectedDrawingDetectionId, setSelectedDrawingDetectionId] = useState<string | null>(null);
   const [drawingAnalysisOverlay, setDrawingAnalysisOverlay] = useState<DrawingAnalysisOverlayState>({
     lines: true,
     systems: true,
@@ -1794,6 +1810,21 @@ export function TakeoffTab({
         },
         saveAnnotationEdit: (id, updates) => {
           handleSaveAnnotationEdit(id, updates);
+        },
+        runDrawingAnalysis: async () => {
+          await handleRunDrawingAnalysis();
+        },
+        updateDrawingAnalysisSettings: (patch) => {
+          setDrawingAnalysisSettings((current) => ({ ...current, ...patch }));
+        },
+        setDrawingAnalysisOverlay: (patch) => {
+          setDrawingAnalysisOverlay((current) => ({ ...current, ...patch }));
+        },
+        selectDrawingDetection: (id) => {
+          handleSelectDrawingDetection(id);
+        },
+        saveDrawingDetection: async (id, kind) => {
+          await handleSaveDrawingDetection(id, kind);
         },
         setModelSearch: (s) => setModelElementSearch(s),
         setModelBasis: (b) => setModelLedgerBasis(b),
@@ -3070,36 +3101,33 @@ export function TakeoffTab({
     return selectedDoc.source === "knowledge" && selectedDoc.bookId ? selectedDoc.bookId : selectedDoc.id;
   }
 
-  async function handleRunDrawingAnalysis(mode: "geometry" | "systems" = "geometry") {
+  async function handleRunDrawingAnalysis() {
     if (!selectedDoc || !isPdfDocument) return;
     const docId = selectedVisionDocumentId();
     if (!docId) return;
 
-    setDrawingAnalysisOpen(true);
+    onOpenInspectEntities?.();
     setDrawingAnalysisRunning(true);
     setDrawingAnalysisError(null);
+    setSelectedDrawingDetectionId(null);
 
     try {
-      const result = mode === "systems"
-        ? await traceDrawingSystems({
-            projectId,
-            documentId: docId,
-            pageNumber: page,
-            preset: drawingAnalysisPreset,
-            maxLines: 1600,
-          })
-        : await analyzeDrawingGeometry({
-            projectId,
-            documentId: docId,
-            pageNumber: page,
-            preset: drawingAnalysisPreset,
-            traceSystems: true,
-            includeSymbols: true,
-            includeTextRegions: true,
-            includeCircles: true,
-            maxLines: 1600,
-            maxRegions: 180,
-          });
+      const result = await analyzeDrawingGeometry({
+        projectId,
+        documentId: docId,
+        pageNumber: page,
+        preset: drawingAnalysisSettings.preset,
+        traceSystems: drawingAnalysisSettings.traceSystems,
+        includeSymbols: drawingAnalysisSettings.includeSymbols,
+        includeTextRegions: drawingAnalysisSettings.includeTextRegions,
+        includeCircles: drawingAnalysisSettings.includeCircles,
+        maxLines: drawingAnalysisSettings.maxLines,
+        maxRegions: drawingAnalysisSettings.maxRegions,
+        minLineLength: drawingAnalysisSettings.minLineLength > 0 ? drawingAnalysisSettings.minLineLength : undefined,
+        snapTolerance: drawingAnalysisSettings.snapTolerance > 0 ? drawingAnalysisSettings.snapTolerance : undefined,
+        lineSensitivity: drawingAnalysisSettings.lineSensitivity,
+        noiseRejection: drawingAnalysisSettings.noiseRejection,
+      });
 
       setDrawingAnalysisResult(result);
       if (result.warnings.length > 0) {
@@ -3121,10 +3149,93 @@ export function TakeoffTab({
     return result.lines.filter((line) => ids.has(line.id));
   }
 
+  function drawingDetectionBounds(id: string): { x: number; y: number; width: number; height: number } | null {
+    const result = drawingAnalysisResult;
+    if (!result) return null;
+    const system = result.systems.find((item) => item.id === id);
+    if (system?.bbox) return system.bbox;
+    const line = result.lines.find((item) => item.id === id);
+    if (line?.bbox) return line.bbox;
+    const symbol = result.symbolCandidates.find((item) => item.id === id);
+    if (symbol) return { x: symbol.x, y: symbol.y, width: symbol.w, height: symbol.h };
+    const circle = result.circles.find((item) => item.id === id);
+    if (circle?.bbox) return circle.bbox;
+    const text = result.textRegions.find((item) => item.id === id);
+    if (text) return { x: text.x, y: text.y, width: text.w, height: text.h };
+    return null;
+  }
+
+  function focusDrawingBounds(bounds: { x: number; y: number; width: number; height: number }) {
+    if (!drawingAnalysisResult) return;
+    const container = viewerContainerRef.current;
+    if (!container || canvasSize.width <= 0 || canvasSize.height <= 0) return;
+    const scaleX = canvasSize.width / Math.max(1, drawingAnalysisResult.imageWidth);
+    const scaleY = canvasSize.height / Math.max(1, drawingAnalysisResult.imageHeight);
+    const box = {
+      x: bounds.x * scaleX,
+      y: bounds.y * scaleY,
+      width: Math.max(24, bounds.width * scaleX),
+      height: Math.max(24, bounds.height * scaleY),
+    };
+    const currentZoom = Math.max(zoomRef.current, 0.01);
+    const targetZoom = roundPdfZoom(
+      Math.min(
+        6,
+        Math.max(
+          0.35,
+          currentZoom * Math.min(
+            (container.clientWidth * 0.58) / Math.max(box.width, 1),
+            (container.clientHeight * 0.58) / Math.max(box.height, 1),
+          ),
+        ),
+      ),
+    );
+    const ratio = targetZoom / currentZoom;
+    const scroll = () => {
+      container.scrollTo({
+        left: Math.max(0, (box.x + box.width / 2) * ratio - container.clientWidth / 2),
+        top: Math.max(0, (box.y + box.height / 2) * ratio - container.clientHeight / 2),
+        behavior: "smooth",
+      });
+    };
+    applyPdfZoom(targetZoom);
+    requestAnimationFrame(scroll);
+    window.setTimeout(scroll, 120);
+  }
+
+  function handleSelectDrawingDetection(id: string | null) {
+    setSelectedDrawingDetectionId(id);
+    if (!id) return;
+    const bounds = drawingDetectionBounds(id);
+    if (bounds) focusDrawingBounds(bounds);
+  }
+
+  async function handleSaveDrawingDetection(id: string, kind: "system" | "symbol" | "circle" | "line") {
+    const result = drawingAnalysisResult;
+    if (!result) return;
+    if (kind === "system") {
+      const system = result.systems.find((item) => item.id === id);
+      if (system) await handleSaveDrawingSystem(system);
+      return;
+    }
+    if (kind === "symbol") {
+      const symbol = result.symbolCandidates.find((item) => item.id === id);
+      if (symbol) await handleSaveDrawingSymbol(symbol);
+      return;
+    }
+    if (kind === "circle") {
+      const circle = result.circles.find((item) => item.id === id);
+      if (circle) await handleSaveDrawingCircle(circle);
+      return;
+    }
+    const line = result.lines.find((item) => item.id === id);
+    if (line) await handleSaveDrawingLine(line);
+  }
+
   async function handleSaveDrawingSystem(system: DrawingTracedSystem) {
     if (!drawingAnalysisResult || !selectedDoc) return;
     const docId = selectedVisionDocumentId();
-    const segments = drawingSystemSegments(system).slice(0, 750);
+    const segments = drawingSystemSegments(system);
     if (segments.length === 0) return;
 
     setDrawingAnalysisSavingId(system.id);
@@ -3169,11 +3280,92 @@ export function TakeoffTab({
       notifyAnnotationsMutated();
       setToastMessage(`Saved ${result.savedCount} traced line segments to takeoff.`);
       setToastType("success");
-      if (segments.length < drawingSystemSegments(system).length) {
-        setDrawingAnalysisError("Saved the first 750 segments from this system to keep the takeoff responsive.");
-      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "Could not save traced system";
+      setToastMessage(message);
+      setToastType("error");
+    } finally {
+      setDrawingAnalysisSavingId(null);
+    }
+  }
+
+  async function handleSaveDrawingLine(segment: DrawingLineSegment) {
+    if (!drawingAnalysisResult || !selectedDoc) return;
+    const docId = selectedVisionDocumentId();
+    setDrawingAnalysisSavingId(segment.id);
+    try {
+      const result = await saveDrawingDetectionsAsAnnotations({
+        projectId,
+        documentId: docId,
+        pageNumber: page,
+        imageWidth: drawingAnalysisResult.imageWidth,
+        imageHeight: drawingAnalysisResult.imageHeight,
+        analysisId: drawingAnalysisResult.analysisId,
+        groupName: "Drawing Intelligence Linework",
+        color: "#38bdf8",
+        detections: [{
+          id: segment.id,
+          kind: "line_segment",
+          label: "Detected line",
+          annotationType: "linear",
+          groupName: "Drawing Intelligence Linework",
+          color: "#38bdf8",
+          lineThickness: 3,
+          points: [{ x: segment.x1, y: segment.y1 }, { x: segment.x2, y: segment.y2 }],
+          confidence: segment.confidence,
+          source: "drawing-intelligence",
+          measurement: { value: segment.lengthPx, unit: "px" },
+          metadata: { sourceTool: "drawing-intelligence", analysisId: drawingAnalysisResult.analysisId, preset: drawingAnalysisPreset },
+        }],
+      });
+      await loadAnnotationsRef.current();
+      notifyAnnotationsMutated();
+      setToastMessage(`Saved ${result.savedCount} detected line to takeoff.`);
+      setToastType("success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save detected line";
+      setToastMessage(message);
+      setToastType("error");
+    } finally {
+      setDrawingAnalysisSavingId(null);
+    }
+  }
+
+  async function handleSaveDrawingCircle(circle: DrawingGeometryAnalysisResult["circles"][number]) {
+    if (!drawingAnalysisResult || !selectedDoc) return;
+    const docId = selectedVisionDocumentId();
+    setDrawingAnalysisSavingId(circle.id);
+    try {
+      const result = await saveDrawingDetectionsAsAnnotations({
+        projectId,
+        documentId: docId,
+        pageNumber: page,
+        imageWidth: drawingAnalysisResult.imageWidth,
+        imageHeight: drawingAnalysisResult.imageHeight,
+        analysisId: drawingAnalysisResult.analysisId,
+        groupName: "Drawing Intelligence Circles",
+        color: "#a855f7",
+        detections: [{
+          id: circle.id,
+          kind: "circle",
+          label: "Detected circle",
+          annotationType: "count",
+          groupName: "Drawing Intelligence Circles",
+          color: "#a855f7",
+          points: [{ x: circle.cx, y: circle.cy }],
+          count: 1,
+          confidence: circle.confidence,
+          source: "drawing-intelligence",
+          measurement: { value: 1, unit: "count" },
+          metadata: { sourceTool: "drawing-intelligence", analysisId: drawingAnalysisResult.analysisId, preset: drawingAnalysisPreset, radius: circle.radius, bounds: circle.bbox },
+        }],
+      });
+      await loadAnnotationsRef.current();
+      notifyAnnotationsMutated();
+      setToastMessage(`Saved ${result.savedCount} circle mark to takeoff.`);
+      setToastType("success");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Could not save circle";
       setToastMessage(message);
       setToastType("error");
     } finally {
@@ -3240,6 +3432,7 @@ export function TakeoffTab({
     setDrawingAnalysisResult(null);
     setDrawingAnalysisError(null);
     setDrawingAnalysisSavingId(null);
+    setSelectedDrawingDetectionId(null);
   }, [selectedDocId, page]);
 
   function handleCalibrationConfirm() {
@@ -3413,6 +3606,20 @@ export function TakeoffTab({
       takeoffLinks,
       selectedAnnotationId: inspectSelectedAnnotationId,
       editingAnnotationId,
+      drawingAnalysis: mode === "pdf" && selectedDoc
+        ? {
+            documentId: selectedVisionDocumentId(),
+            fileName: selectedDoc.fileName,
+            pageNumber: page,
+            analysis: drawingAnalysisResult,
+            settings: drawingAnalysisSettings,
+            overlay: drawingAnalysisOverlay,
+            running: drawingAnalysisRunning,
+            savingId: drawingAnalysisSavingId,
+            error: drawingAnalysisError,
+            selectedDetectionId: selectedDrawingDetectionId,
+          }
+        : null,
       modelElements: inspectModelElements,
       modelElementsLoading,
       modelError,
@@ -3490,9 +3697,17 @@ export function TakeoffTab({
     annotations,
     dwgAnnotationsCache,
     selection,
+    page,
     selectedAnnotationId,
     editingAnnotationId,
     takeoffLinks,
+    drawingAnalysisResult,
+    drawingAnalysisSettings,
+    drawingAnalysisOverlay,
+    drawingAnalysisRunning,
+    drawingAnalysisSavingId,
+    drawingAnalysisError,
+    selectedDrawingDetectionId,
     modelElements,
     modelElementsLoading,
     modelError,
@@ -5165,20 +5380,19 @@ export function TakeoffTab({
               <button
                 type="button"
                 onClick={() => {
-                  const nextOpen = !drawingAnalysisOpen;
-                  setDrawingAnalysisOpen(nextOpen);
-                  if (nextOpen && !drawingAnalysisResult && !drawingAnalysisRunning) {
-                    void handleRunDrawingAnalysis("geometry");
+                  onOpenInspectEntities?.();
+                  if (!drawingAnalysisResult && !drawingAnalysisRunning) {
+                    void handleRunDrawingAnalysis();
                   }
                 }}
                 disabled={drawingAnalysisRunning || !selectedDoc}
                 className={cn(
                   "inline-flex h-7 min-w-7 shrink-0 items-center justify-center rounded-md border px-1.5 transition-colors disabled:opacity-50",
-                  drawingAnalysisOpen
+                  drawingAnalysisResult
                     ? "border-sky-500/40 bg-sky-500/10 text-sky-500"
                     : "border-line bg-panel2/40 text-fg/70 hover:bg-panel2"
                 )}
-                title="Analyze drawing geometry, trace connected systems, and save reviewed detections"
+                title="Open Drawing Intelligence in the Entities panel"
                 aria-label="Drawing intelligence"
               >
                 <GitBranch className="h-3 w-3" />
@@ -5896,6 +6110,7 @@ export function TakeoffTab({
                     width={canvasSize.width}
                     height={canvasSize.height}
                     visible={drawingAnalysisOverlay}
+                    selectedId={selectedDrawingDetectionId}
                   />
 
                   {/* Processing overlay */}
@@ -5925,24 +6140,6 @@ export function TakeoffTab({
             </div>
           )}
         </div>
-
-        {drawingAnalysisOpen && isPdfDocument && (
-          <DrawingIntelligencePanel
-            preset={drawingAnalysisPreset}
-            onPresetChange={setDrawingAnalysisPreset}
-            analysis={drawingAnalysisResult}
-            running={drawingAnalysisRunning}
-            savingId={drawingAnalysisSavingId}
-            error={drawingAnalysisError}
-            overlay={drawingAnalysisOverlay}
-            onOverlayChange={setDrawingAnalysisOverlay}
-            onAnalyze={() => void handleRunDrawingAnalysis("geometry")}
-            onTrace={() => void handleRunDrawingAnalysis("systems")}
-            onClose={() => setDrawingAnalysisOpen(false)}
-            onSaveSystem={(system) => void handleSaveDrawingSystem(system)}
-            onSaveSymbol={(candidate) => void handleSaveDrawingSymbol(candidate)}
-          />
-        )}
 
           </>
         )}
@@ -6803,11 +7000,13 @@ function DrawingIntelligenceOverlay({
   width,
   height,
   visible,
+  selectedId,
 }: {
   analysis: DrawingGeometryAnalysisResult | null;
   width: number;
   height: number;
   visible: DrawingAnalysisOverlayState;
+  selectedId?: string | null;
 }) {
   if (!analysis || width <= 0 || height <= 0) return null;
 
@@ -6824,23 +7023,23 @@ function DrawingIntelligenceOverlay({
       viewBox={`0 0 ${width} ${height}`}
       aria-hidden="true"
     >
-      {visible.lines && analysis.lines.slice(0, 700).map((line) => (
+      {visible.lines && analysis.lines.map((line) => (
         <line
           key={`line-${line.id}`}
           x1={line.x1 * sx}
           y1={line.y1 * sy}
           x2={line.x2 * sx}
           y2={line.y2 * sy}
-          stroke="#38bdf8"
-          strokeWidth={1.2}
-          opacity={0.32}
+          stroke={selectedId === line.id ? "#f97316" : "#38bdf8"}
+          strokeWidth={selectedId === line.id ? 4 : 1.2}
+          opacity={selectedId === line.id ? 0.95 : 0.32}
           strokeLinecap="round"
         />
       ))}
 
-      {visible.systems && analysis.systems.slice(0, 10).map((system, systemIndex) => {
+      {visible.systems && analysis.systems.map((system, systemIndex) => {
         const color = systemColors[systemIndex % systemColors.length];
-        return system.segmentIds.slice(0, 450).map((segmentId) => {
+        return system.segmentIds.map((segmentId) => {
           const line = lineById.get(segmentId);
           if (!line) return null;
           return (
@@ -6850,16 +7049,16 @@ function DrawingIntelligenceOverlay({
               y1={line.y1 * sy}
               x2={line.x2 * sx}
               y2={line.y2 * sy}
-              stroke={color}
-              strokeWidth={2.6}
-              opacity={0.72}
+              stroke={selectedId === system.id ? "#f97316" : color}
+              strokeWidth={selectedId === system.id ? 4.5 : 2.6}
+              opacity={selectedId === system.id ? 0.95 : 0.72}
               strokeLinecap="round"
             />
           );
         });
       })}
 
-      {visible.symbols && analysis.symbolCandidates.slice(0, 120).map((candidate) => (
+      {visible.symbols && analysis.symbolCandidates.map((candidate) => (
         <rect
           key={`symbol-${candidate.id}`}
           x={candidate.x * sx}
@@ -6867,27 +7066,27 @@ function DrawingIntelligenceOverlay({
           width={candidate.w * sx}
           height={candidate.h * sy}
           fill="none"
-          stroke="#f59e0b"
-          strokeWidth={1.5}
-          opacity={0.8}
+          stroke={selectedId === candidate.id ? "#f97316" : "#f59e0b"}
+          strokeWidth={selectedId === candidate.id ? 3 : 1.5}
+          opacity={selectedId === candidate.id ? 0.98 : 0.8}
           rx={3}
         />
       ))}
 
-      {visible.circles && analysis.circles.slice(0, 120).map((circle) => (
+      {visible.circles && analysis.circles.map((circle) => (
         <circle
           key={`circle-${circle.id}`}
           cx={circle.cx * sx}
           cy={circle.cy * sy}
           r={Math.max(circle.radius * ((sx + sy) / 2), 2)}
           fill="none"
-          stroke="#ec4899"
-          strokeWidth={1.5}
-          opacity={0.75}
+          stroke={selectedId === circle.id ? "#f97316" : "#ec4899"}
+          strokeWidth={selectedId === circle.id ? 3 : 1.5}
+          opacity={selectedId === circle.id ? 0.98 : 0.75}
         />
       ))}
 
-      {visible.text && analysis.textRegions.slice(0, 80).map((region) => (
+      {visible.text && analysis.textRegions.map((region) => (
         <rect
           key={`text-${region.id}`}
           x={region.x * sx}
@@ -6896,10 +7095,10 @@ function DrawingIntelligenceOverlay({
           height={region.h * sy}
           fill="#111827"
           fillOpacity={0.05}
-          stroke="#64748b"
+          stroke={selectedId === region.id ? "#f97316" : "#64748b"}
           strokeDasharray="4 3"
-          strokeWidth={1}
-          opacity={0.65}
+          strokeWidth={selectedId === region.id ? 2.5 : 1}
+          opacity={selectedId === region.id ? 0.95 : 0.65}
         />
       ))}
     </svg>

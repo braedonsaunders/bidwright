@@ -27,8 +27,8 @@ except ImportError:
     from find_symbols import find_symbol_candidates
 
 
-MAX_DEFAULT_LINES = 1200
-MAX_DEFAULT_REGIONS = 220
+MAX_DEFAULT_LINES = 0
+MAX_DEFAULT_REGIONS = 500
 ANGLE_BUCKET_DEGREES = 2.5
 MIDPOINT_BUCKET_PX = 8
 
@@ -87,8 +87,10 @@ def analyze_page(
     trace_systems: bool = True,
     min_line_length: float | None = None,
     snap_tolerance: float | None = None,
-    max_lines: int = MAX_DEFAULT_LINES,
+    max_lines: int | None = MAX_DEFAULT_LINES,
     max_regions: int = MAX_DEFAULT_REGIONS,
+    line_sensitivity: float = 0.62,
+    noise_rejection: float = 0.42,
 ) -> dict[str, Any]:
     start = time.time()
     warnings: list[str] = []
@@ -98,14 +100,21 @@ def analyze_page(
     binary = _binary_drawing_mask(gray)
     cleaned = _clean_linework(binary)
 
-    min_line = float(min_line_length or _default_min_line_length(img_w, img_h, preset))
-    snap = float(snap_tolerance or max(8.0, min(img_w, img_h) * 0.0025))
+    line_sensitivity = _clamp(float(line_sensitivity), 0.1, 1.0)
+    noise_rejection = _clamp(float(noise_rejection), 0.0, 1.0)
+    default_min_line = _default_min_line_length(img_w, img_h, preset)
+    sensitivity_factor = 1.28 - (line_sensitivity * 0.56)
+    noise_factor = 0.82 + (noise_rejection * 0.52)
+    min_line = float(min_line_length or max(5.0, default_min_line * sensitivity_factor * noise_factor))
+    snap = float(snap_tolerance or max(8.0, min(img_w, img_h) * (0.0016 + noise_rejection * 0.0022)))
+    line_limit = _normalize_limit(max_lines)
+    region_limit = max(20, int(max_regions))
 
-    segments = detect_line_segments(gray, cleaned, min_line, max_lines=max_lines)
-    if len(segments) >= max_lines:
-        warnings.append(f"Line output capped at {max_lines}; use a higher maxLines for dense sheets.")
+    segments = detect_line_segments(gray, cleaned, min_line, max_lines=line_limit)
+    if line_limit is not None and len(segments) >= line_limit:
+        warnings.append(f"Line output capped at {line_limit}; set maxLines to 0 for full output or raise the budget for dense sheets.")
 
-    text_regions_for_filter = detect_text_regions(gray, max_regions=max_regions)
+    text_regions_for_filter = detect_text_regions(gray, max_regions=region_limit)
     text_regions = text_regions_for_filter if include_text_regions else []
     symbol_candidates = (
         find_symbol_candidates(
@@ -117,22 +126,22 @@ def analyze_page(
             min_area=60,
             exclude_borders=True,
             border_margin=max(20, int(min(img_w, img_h) * 0.015)),
-        )[:max_regions]
+        )[:region_limit]
         if include_symbols
         else []
     )
-    circles = detect_circles(gray, img_w, img_h, text_regions_for_filter, max_regions=max_regions) if include_circles else []
+    circles = detect_circles(gray, img_w, img_h, text_regions_for_filter, max_regions=region_limit) if include_circles else []
     systems = trace_linear_systems(segments, preset=preset, snap_tolerance=snap, img_w=img_w, img_h=img_h) if trace_systems else []
     if (
         trace_systems
-        and len(text_regions_for_filter) >= min(max(80, max_regions * 0.6), max_regions)
+        and len(text_regions_for_filter) >= min(max(80, region_limit * 0.6), region_limit)
         and systems
         and float(systems[0].get("lengthPx", 0)) < min(img_w, img_h) * 0.35
     ):
         warnings.append("Text-heavy sheet detected; suppressed short text-line topology candidates.")
         systems = []
-    polylines = build_polylines(segments, systems, max_regions=max_regions)
-    contours = detect_contours(cleaned, img_w, img_h, max_regions=max_regions)
+    polylines = build_polylines(segments, systems, max_regions=region_limit)
+    contours = detect_contours(cleaned, img_w, img_h, max_regions=region_limit)
 
     duration_ms = round((time.time() - start) * 1000)
     return {
@@ -163,6 +172,10 @@ def analyze_page(
             "morphology": "linework-close-open",
             "minLineLengthPx": round(min_line, 2),
             "snapTolerancePx": round(snap, 2),
+            "lineSensitivity": round(line_sensitivity, 3),
+            "noiseRejection": round(noise_rejection, 3),
+            "maxLines": line_limit,
+            "maxRegions": region_limit,
         },
         "summary": {
             "lineCount": len(segments),
@@ -186,7 +199,7 @@ def analyze_page(
     }
 
 
-def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: float, max_lines: int) -> list[Segment]:
+def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: float, max_lines: int | None) -> list[Segment]:
     candidates: list[Segment] = []
 
     # Line Segment Detector gives clean vector-like segments on high-quality PDFs.
@@ -194,7 +207,7 @@ def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: 
         lsd = cv2.createLineSegmentDetector(0)
         detected = lsd.detect(gray)[0]
         if detected is not None:
-            for raw in detected[: max_lines * 3]:
+            for raw in _take_with_budget(detected, None if max_lines is None else max_lines * 3):
                 x1, y1, x2, y2 = [float(v) for v in raw[0]]
                 seg = Segment("", x1, y1, x2, y2, "lsd", 0.82)
                 if seg.length >= min_line_length:
@@ -212,7 +225,7 @@ def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: 
         maxLineGap=max(6, int(min_line_length * 0.18)),
     )
     if hough is not None:
-        for raw in hough[: max_lines * 4]:
+        for raw in _take_with_budget(hough, None if max_lines is None else max_lines * 4):
             x1, y1, x2, y2 = [float(v) for v in raw[0]]
             seg = Segment("", x1, y1, x2, y2, "hough", 0.74)
             if seg.length >= min_line_length:
@@ -220,10 +233,11 @@ def detect_line_segments(gray: np.ndarray, binary: np.ndarray, min_line_length: 
 
     deduped = _dedupe_segments(candidates)
     deduped.sort(key=lambda s: (-s.length, s.y1, s.x1))
-    return [
+    ordered = [
         Segment(f"ln-{index + 1}", s.x1, s.y1, s.x2, s.y2, s.source, s.confidence)
-        for index, s in enumerate(deduped[:max_lines])
+        for index, s in enumerate(_take_with_budget(deduped, max_lines))
     ]
+    return ordered
 
 
 def detect_circles(gray: np.ndarray, img_w: int, img_h: int, text_regions: list[dict[str, Any]], max_regions: int) -> list[dict[str, Any]]:
@@ -567,7 +581,7 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
             systems = strong_systems
     return [
         {**system, "id": f"sys-{idx + 1}", "label": f"{preset_label} run {idx + 1}"}
-        for idx, system in enumerate(systems[:80])
+        for idx, system in enumerate(systems)
     ]
 
 
@@ -779,6 +793,26 @@ def _payload_bool(payload: dict[str, Any], key: str, default: bool) -> bool:
     return bool(value)
 
 
+def _clamp(value: float, low: float, high: float) -> float:
+    if not math.isfinite(value):
+        return low
+    return max(low, min(high, value))
+
+
+def _normalize_limit(value: int | float | None) -> int | None:
+    if value is None:
+        return None
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number > 0 else None
+
+
+def _take_with_budget(items: Any, limit: int | None):
+    return items if limit is None else items[:limit]
+
+
 if __name__ == "__main__":
     try:
         payload = json.loads(sys.stdin.read() or "{}")
@@ -793,8 +827,10 @@ if __name__ == "__main__":
             trace_systems=_payload_bool(payload, "traceSystems", True),
             min_line_length=payload.get("minLineLength"),
             snap_tolerance=payload.get("snapTolerance"),
-            max_lines=int(payload.get("maxLines", MAX_DEFAULT_LINES)),
+            max_lines=_normalize_limit(payload.get("maxLines", MAX_DEFAULT_LINES)),
             max_regions=int(payload.get("maxRegions", MAX_DEFAULT_REGIONS)),
+            line_sensitivity=float(payload.get("lineSensitivity", 0.62)),
+            noise_rejection=float(payload.get("noiseRejection", 0.42)),
         )
         print(json.dumps(result))
     except Exception as exc:

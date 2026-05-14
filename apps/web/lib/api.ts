@@ -5083,6 +5083,8 @@ export async function analyzeDrawingGeometry(input: {
   maxRegions?: number;
   minLineLength?: number;
   snapTolerance?: number;
+  lineSensitivity?: number;
+  noiseRejection?: number;
 }) {
   return apiRequest<DrawingGeometryAnalysisResult>("/api/vision/analyze-geometry", {
     method: "POST",
@@ -5097,8 +5099,11 @@ export async function traceDrawingSystems(input: {
   pageNumber?: number;
   preset?: DrawingAnalysisPreset;
   maxLines?: number;
+  maxRegions?: number;
   minLineLength?: number;
   snapTolerance?: number;
+  lineSensitivity?: number;
+  noiseRejection?: number;
 }) {
   return apiRequest<DrawingGeometryAnalysisResult>("/api/vision/trace-systems", {
     method: "POST",

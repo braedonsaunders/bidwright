@@ -1,12 +1,16 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, Link2, Loader2, Pencil, Plus, RefreshCw, Sigma, Trash2, X } from "lucide-react";
+import { Check, ChevronDown, ChevronRight, CircleDashed, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, Save, ScanSearch, Settings2, Sigma, Trash2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import { Input } from "@/components/ui";
 import { cn } from "@/lib/utils";
 import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
-import type { TakeoffLinkRecord } from "@/lib/api";
+import type {
+  DrawingAnalysisPreset,
+  DrawingGeometryAnalysisResult,
+  TakeoffLinkRecord,
+} from "@/lib/api";
 
 /** `bim` is element-aware (IFC/Revit/Navisworks) and uses the BIM-specific
  *  inspect surface; `model` is geometry-only (STEP/glTF/OBJ/STL) and degrades
@@ -14,6 +18,41 @@ import type { TakeoffLinkRecord } from "@/lib/api";
  *  row as an entity that can be imported into a worksheet one click at a
  *  time, using a column-mapping heuristic. */
 export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "spreadsheet" | "photo-bom" | "empty";
+
+export type InspectDrawingDetectionKind = "system" | "line" | "symbol" | "circle" | "text";
+
+export interface InspectDrawingAnalysisSettings {
+  preset: DrawingAnalysisPreset;
+  includeSymbols: boolean;
+  includeTextRegions: boolean;
+  includeCircles: boolean;
+  traceSystems: boolean;
+  maxLines: number;
+  maxRegions: number;
+  minLineLength: number;
+  snapTolerance: number;
+  lineSensitivity: number;
+  noiseRejection: number;
+}
+
+export interface InspectDrawingAnalysisSnapshot {
+  documentId: string;
+  fileName: string;
+  pageNumber: number;
+  analysis: DrawingGeometryAnalysisResult | null;
+  settings: InspectDrawingAnalysisSettings;
+  overlay: {
+    lines: boolean;
+    systems: boolean;
+    symbols: boolean;
+    circles: boolean;
+    text: boolean;
+  };
+  running: boolean;
+  savingId: string | null;
+  error: string | null;
+  selectedDetectionId: string | null;
+}
 
 export interface InspectPhotoBomRow {
   id: string;
@@ -148,6 +187,7 @@ export interface InspectSnapshot {
   takeoffLinks: TakeoffLinkRecord[];
   selectedAnnotationId: string | null;
   editingAnnotationId: string | null;
+  drawingAnalysis: InspectDrawingAnalysisSnapshot | null;
   // 3D model
   modelElements: InspectModelElement[];
   modelElementsLoading: boolean;
@@ -182,6 +222,11 @@ export interface InspectActions {
   editAnnotation: (id: string) => void;
   cancelAnnotationEdit: () => void;
   saveAnnotationEdit: (id: string, updates: { label?: string; color?: string; groupName?: string }) => void;
+  runDrawingAnalysis: () => Promise<void> | void;
+  updateDrawingAnalysisSettings: (patch: Partial<InspectDrawingAnalysisSettings>) => void;
+  setDrawingAnalysisOverlay: (patch: Partial<InspectDrawingAnalysisSnapshot["overlay"]>) => void;
+  selectDrawingDetection: (id: string | null, kind?: InspectDrawingDetectionKind) => void;
+  saveDrawingDetection: (id: string, kind: "system" | "symbol" | "circle" | "line") => Promise<void> | void;
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
@@ -260,7 +305,416 @@ export function TakeoffInspectView({
     return <SpreadsheetInspect snapshot={snapshot} actions={actions} />;
   }
 
+  if (snapshot.mode === "pdf" && snapshot.drawingAnalysis) {
+    return <PdfEntitiesInspect snapshot={snapshot} actions={actions} />;
+  }
+
   return <AnnotationsInspect snapshot={snapshot} actions={actions} />;
+}
+
+const DRAWING_PRESETS: Array<{ value: DrawingAnalysisPreset; label: string }> = [
+  { value: "generic", label: "General" },
+  { value: "mechanical_piping", label: "Piping" },
+  { value: "plumbing", label: "Plumbing" },
+  { value: "fire_protection", label: "Fire protection" },
+  { value: "ductwork", label: "Ductwork" },
+  { value: "electrical", label: "Electrical" },
+  { value: "civil_linear", label: "Civil linear" },
+  { value: "structural", label: "Structural" },
+];
+
+function PdfEntitiesInspect({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const [showSettings, setShowSettings] = useState(false);
+  return (
+    <div className="flex h-full flex-col gap-2 text-xs">
+      <DrawingAnalysisInspect
+        snapshot={snapshot}
+        actions={actions}
+        showSettings={showSettings}
+        onToggleSettings={() => setShowSettings((value) => !value)}
+      />
+      <div className="min-h-0 flex-1 border-t border-line/70 pt-2">
+        <AnnotationsInspect snapshot={snapshot} actions={actions} />
+      </div>
+    </div>
+  );
+}
+
+function DrawingAnalysisInspect({
+  snapshot,
+  actions,
+  showSettings,
+  onToggleSettings,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+  showSettings: boolean;
+  onToggleSettings: () => void;
+}) {
+  const drawing = snapshot.drawingAnalysis;
+  if (!drawing) return null;
+  const { analysis, settings, overlay, running, savingId, selectedDetectionId } = drawing;
+  const systems = analysis?.systems ?? [];
+  const symbols = analysis?.symbolCandidates ?? [];
+  const circles = analysis?.circles ?? [];
+  const lines = analysis?.lines ?? [];
+  const texts = analysis?.textRegions ?? [];
+
+  return (
+    <div className="shrink-0 rounded-md border border-line bg-panel/50 p-2">
+      <div className="flex items-start gap-2">
+        <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-[11px] font-semibold text-fg">Drawing intelligence</p>
+          <p className="mt-0.5 truncate text-[10px] text-fg/40" title={drawing.fileName}>
+            Page {drawing.pageNumber} · {analysis ? `${analysis.duration_ms.toFixed(0)} ms` : "No run yet"}
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void actions?.runDrawingAnalysis()}
+          disabled={running}
+          title="Analyze geometry and trace connected systems"
+          className="inline-flex h-7 items-center gap-1 rounded-md border border-line bg-bg/40 px-2 text-[10px] font-medium text-fg/70 transition-colors hover:border-sky-500/35 hover:text-sky-500 disabled:opacity-50"
+        >
+          {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <ScanSearch className="h-3 w-3" />}
+          Analyze
+        </button>
+        <button
+          type="button"
+          onClick={onToggleSettings}
+          title="Analysis parameters"
+          className={cn(
+            "inline-flex h-7 w-7 items-center justify-center rounded-md border transition-colors",
+            showSettings ? "border-sky-500/35 bg-sky-500/10 text-sky-500" : "border-line bg-bg/40 text-fg/50 hover:text-fg/75",
+          )}
+        >
+          <Settings2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {showSettings && (
+        <div className="mt-2 grid gap-2 rounded-md border border-line/70 bg-bg/35 p-2">
+          <label className="grid gap-1">
+            <span className="text-[10px] font-medium uppercase tracking-wider text-fg/40">Preset</span>
+            <select
+              value={settings.preset}
+              onChange={(event) => actions?.updateDrawingAnalysisSettings({ preset: event.target.value as DrawingAnalysisPreset })}
+              className="h-7 rounded-md border border-line bg-panel px-2 text-[11px] text-fg outline-none"
+            >
+              {DRAWING_PRESETS.map((preset) => <option key={preset.value} value={preset.value}>{preset.label}</option>)}
+            </select>
+          </label>
+          <RangeSetting
+            label="Line sensitivity"
+            value={settings.lineSensitivity}
+            min={0.1}
+            max={1}
+            step={0.01}
+            onChange={(lineSensitivity) => actions?.updateDrawingAnalysisSettings({ lineSensitivity })}
+          />
+          <RangeSetting
+            label="Noise rejection"
+            value={settings.noiseRejection}
+            min={0}
+            max={1}
+            step={0.01}
+            onChange={(noiseRejection) => actions?.updateDrawingAnalysisSettings({ noiseRejection })}
+          />
+          <div className="grid grid-cols-2 gap-2">
+            <NumberSetting
+              label="Line budget"
+              title="0 means full output"
+              value={settings.maxLines}
+              onChange={(maxLines) => actions?.updateDrawingAnalysisSettings({ maxLines })}
+            />
+            <NumberSetting
+              label="Region budget"
+              value={settings.maxRegions}
+              onChange={(maxRegions) => actions?.updateDrawingAnalysisSettings({ maxRegions })}
+            />
+            <NumberSetting
+              label="Min line px"
+              title="0 means automatic"
+              value={settings.minLineLength}
+              onChange={(minLineLength) => actions?.updateDrawingAnalysisSettings({ minLineLength })}
+            />
+            <NumberSetting
+              label="Snap px"
+              title="0 means automatic"
+              value={settings.snapTolerance}
+              onChange={(snapTolerance) => actions?.updateDrawingAnalysisSettings({ snapTolerance })}
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-1">
+            <ToggleChip active={settings.includeSymbols} label="Symbols" onClick={() => actions?.updateDrawingAnalysisSettings({ includeSymbols: !settings.includeSymbols })} />
+            <ToggleChip active={settings.includeCircles} label="Circles" onClick={() => actions?.updateDrawingAnalysisSettings({ includeCircles: !settings.includeCircles })} />
+            <ToggleChip active={settings.includeTextRegions} label="Text" onClick={() => actions?.updateDrawingAnalysisSettings({ includeTextRegions: !settings.includeTextRegions })} />
+          </div>
+        </div>
+      )}
+
+      <div className="mt-2 grid grid-cols-4 gap-1">
+        <AnalysisStat label="Systems" value={analysis?.summary.systemCount ?? 0} />
+        <AnalysisStat label="Lines" value={analysis?.summary.lineCount ?? 0} />
+        <AnalysisStat label="Symbols" value={analysis?.summary.symbolCandidateCount ?? 0} />
+        <AnalysisStat label="Circles" value={analysis?.summary.circleCount ?? 0} />
+      </div>
+
+      <div className="mt-2 grid grid-cols-5 gap-1">
+        {([
+          ["systems", "Systems"],
+          ["lines", "Lines"],
+          ["symbols", "Symbols"],
+          ["circles", "Circles"],
+          ["text", "Text"],
+        ] as const).map(([key, label]) => (
+          <ToggleChip
+            key={key}
+            active={overlay[key]}
+            label={label}
+            onClick={() => actions?.setDrawingAnalysisOverlay({ [key]: !overlay[key] })}
+          />
+        ))}
+      </div>
+
+      {drawing.error && (
+        <p className="mt-2 rounded-md border border-warning/25 bg-warning/10 px-2 py-1.5 text-[10px] text-warning">
+          {drawing.error}
+        </p>
+      )}
+
+      {analysis ? (
+        <div className="mt-2 max-h-[42vh] space-y-2 overflow-auto pr-1">
+          <DetectionGroup
+            title="Traced systems"
+            count={systems.length}
+            rows={systems.slice(0, 80).map((system) => ({
+              id: system.id,
+              kind: "system" as const,
+              title: system.label,
+              subtitle: `${system.segmentCount} segments · ${Math.round(system.lengthPx).toLocaleString()} px · ${Math.round(system.confidence * 100)}%`,
+              detail: `${system.counts.openEnds} ends · ${system.counts.tees} tees · ${system.counts.elbows45 + system.counts.elbows90} elbows`,
+              selected: selectedDetectionId === system.id,
+              saving: savingId === system.id,
+            }))}
+            onSelect={(id) => actions?.selectDrawingDetection(id, "system")}
+            onSave={(id) => void actions?.saveDrawingDetection(id, "system")}
+          />
+          <DetectionGroup
+            title="Symbol candidates"
+            count={symbols.length}
+            icon={<CircleDashed className="h-3 w-3 text-amber-500" />}
+            rows={symbols.slice(0, 80).map((symbol, index) => ({
+              id: symbol.id,
+              kind: "symbol" as const,
+              title: `Candidate ${index + 1}`,
+              subtitle: `${Math.round(symbol.w)} x ${Math.round(symbol.h)} px · ${Math.round(symbol.confidence * 100)}%`,
+              selected: selectedDetectionId === symbol.id,
+              saving: savingId === symbol.id,
+            }))}
+            onSelect={(id) => actions?.selectDrawingDetection(id, "symbol")}
+            onSave={(id) => void actions?.saveDrawingDetection(id, "symbol")}
+          />
+          {circles.length > 0 && (
+            <DetectionGroup
+              title="Circles"
+              count={circles.length}
+              rows={circles.slice(0, 40).map((circle) => ({
+                id: circle.id,
+                kind: "circle" as const,
+                title: circle.id,
+                subtitle: `R ${Math.round(circle.radius)} px · ${Math.round(circle.confidence * 100)}%`,
+                selected: selectedDetectionId === circle.id,
+                saving: savingId === circle.id,
+              }))}
+              onSelect={(id) => actions?.selectDrawingDetection(id, "circle")}
+              onSave={(id) => void actions?.saveDrawingDetection(id, "circle")}
+            />
+          )}
+          {lines.length > 0 && (
+            <DetectionGroup
+              title="Linework"
+              count={lines.length}
+              rows={lines.slice(0, 80).map((line) => ({
+                id: line.id,
+                kind: "line" as const,
+                title: line.id,
+                subtitle: `${Math.round(line.lengthPx)} px · ${Math.round(line.confidence * 100)}%`,
+                selected: selectedDetectionId === line.id,
+                saving: savingId === line.id,
+              }))}
+              onSelect={(id) => actions?.selectDrawingDetection(id, "line")}
+              onSave={(id) => void actions?.saveDrawingDetection(id, "line")}
+            />
+          )}
+          {texts.length > 0 && (
+            <DetectionGroup
+              title="Text regions"
+              count={texts.length}
+              rows={texts.slice(0, 40).map((region) => ({
+                id: region.id,
+                kind: "text" as const,
+                title: region.id,
+                subtitle: `${Math.round(region.w)} x ${Math.round(region.h)} px`,
+                selected: selectedDetectionId === region.id,
+                saving: false,
+              }))}
+              onSelect={(id) => actions?.selectDrawingDetection(id, "text")}
+            />
+          )}
+        </div>
+      ) : (
+        <p className="mt-2 rounded-md border border-line bg-bg/30 px-3 py-3 text-center text-[11px] text-fg/40">
+          Run Analyze to populate reviewable geometry entities.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function AnalysisStat({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="rounded-md border border-line/70 bg-bg/35 px-1.5 py-1 text-center">
+      <p className="text-[11px] font-semibold tabular-nums text-fg">{value.toLocaleString()}</p>
+      <p className="text-[9px] text-fg/40">{label}</p>
+    </div>
+  );
+}
+
+function RangeSetting({ label, value, min, max, step, onChange }: { label: string; value: number; min: number; max: number; step: number; onChange: (value: number) => void }) {
+  return (
+    <label className="grid gap-1">
+      <span className="flex items-center justify-between text-[10px] font-medium uppercase tracking-wider text-fg/40">
+        {label}
+        <span className="font-mono text-fg/55">{Math.round(value * 100)}%</span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="w-full accent-sky-500"
+      />
+    </label>
+  );
+}
+
+function NumberSetting({ label, value, title, onChange }: { label: string; value: number; title?: string; onChange: (value: number) => void }) {
+  return (
+    <label className="grid gap-1" title={title}>
+      <span className="text-[10px] font-medium uppercase tracking-wider text-fg/40">{label}</span>
+      <input
+        type="number"
+        min={0}
+        value={value}
+        onChange={(event) => onChange(Math.max(0, Number(event.target.value) || 0))}
+        className="h-7 rounded-md border border-line bg-panel px-2 text-[11px] text-fg outline-none"
+      />
+    </label>
+  );
+}
+
+function ToggleChip({ active, label, onClick }: { active: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        "h-7 rounded-md border px-1 text-[10px] font-medium transition-colors",
+        active ? "border-sky-500/35 bg-sky-500/10 text-sky-500" : "border-line bg-bg/35 text-fg/45 hover:text-fg/70",
+      )}
+    >
+      {label}
+    </button>
+  );
+}
+
+type DetectionRow = {
+  id: string;
+  kind: InspectDrawingDetectionKind;
+  title: string;
+  subtitle: string;
+  detail?: string;
+  selected: boolean;
+  saving: boolean;
+};
+
+function DetectionGroup({
+  title,
+  count,
+  rows,
+  icon,
+  onSelect,
+  onSave,
+}: {
+  title: string;
+  count: number;
+  rows: DetectionRow[];
+  icon?: React.ReactNode;
+  onSelect: (id: string) => void;
+  onSave?: (id: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(false);
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={() => setCollapsed((value) => !value)}
+        className="flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left text-[11px] font-medium text-fg/60 hover:bg-panel2/50"
+      >
+        {collapsed ? <ChevronRight className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        {icon}
+        <span className="min-w-0 flex-1 truncate">{title}</span>
+        <span className="font-mono text-[10px] text-fg/35">{count.toLocaleString()}</span>
+      </button>
+      {!collapsed && (
+        <div className="ml-2 space-y-0.5">
+          {rows.length === 0 ? (
+            <p className="rounded-md border border-line bg-bg/25 px-2 py-2 text-center text-[10px] text-fg/35">None found</p>
+          ) : rows.map((row) => (
+            <div
+              key={row.id}
+              onClick={() => onSelect(row.id)}
+              className={cn(
+                "group flex cursor-pointer items-center gap-2 rounded-md border px-2 py-1.5 transition-colors",
+                row.selected ? "border-sky-500/35 bg-sky-500/10" : "border-transparent hover:border-line hover:bg-panel2/35",
+              )}
+            >
+              <LocateFixed className="h-3 w-3 shrink-0 text-fg/35 group-hover:text-sky-500" />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-[11px] font-medium text-fg/75">{row.title}</p>
+                <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>
+                {row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
+              </div>
+              {onSave && (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSave(row.id);
+                  }}
+                  disabled={row.saving}
+                  title="Save as takeoff mark"
+                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 opacity-0 transition-opacity hover:bg-sky-500/10 hover:text-sky-500 group-hover:opacity-100 disabled:opacity-60"
+                >
+                  {row.saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
 }
 
 /** Per-click category picker — wraps a "+ Add"-style trigger and opens a

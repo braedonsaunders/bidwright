@@ -195,6 +195,7 @@ export function ComboView({
                   modelSendToEstimateRef={modelSendToEstimateRef}
                   modelElementCreateLineItemRef={modelElementCreateLineItemRef}
                   inspectActionsRef={inspectActionsRef}
+                  onOpenInspectEntities={() => setRightPanelTab("entities")}
                   onInspectSnapshotChange={handleInspectSnapshotChange}
                 />
               </div>

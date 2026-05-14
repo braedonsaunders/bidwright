@@ -27,8 +27,10 @@ export interface AnalyzeDrawingGeometryRequest {
   traceSystems?: boolean;
   minLineLength?: number;
   snapTolerance?: number;
-  maxLines?: number;
+  maxLines?: number | null;
   maxRegions?: number;
+  lineSensitivity?: number;
+  noiseRejection?: number;
 }
 
 export interface DrawingGeometryBounds {
@@ -219,8 +221,10 @@ export async function runAnalyzeDrawingGeometry(
     traceSystems: request.traceSystems ?? true,
     minLineLength: request.minLineLength,
     snapTolerance: request.snapTolerance,
-    maxLines: request.maxLines ?? 1200,
-    maxRegions: request.maxRegions ?? 220,
+    maxLines: request.maxLines ?? 0,
+    maxRegions: request.maxRegions ?? 500,
+    lineSensitivity: request.lineSensitivity ?? 0.62,
+    noiseRejection: request.noiseRejection ?? 0.42,
   });
 
   const { stdout, stderr, code } = await spawnPythonCommand({
