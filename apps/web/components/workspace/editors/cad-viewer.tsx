@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, type MutableRefObject } from "react";
 import { Loader2, Maximize2, Box, AlertCircle, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui";
 import { cn } from "@/lib/utils";
@@ -13,6 +13,23 @@ interface CadViewerProps {
   className?: string;
   /** Fires on IFC click. expressID -1 means "miss / background". */
   onIfcElementSelect?: (selection: { expressID: number; elementClass: string }) => void;
+  actionsRef?: MutableRefObject<CadViewerActions | null>;
+  displayMode?: CadViewerDisplayMode;
+  showGrid?: boolean;
+  autoRotate?: boolean;
+  showOverlayToolbar?: boolean;
+}
+
+export type CadViewerDisplayMode = "shaded" | "wireframe" | "xray";
+export type CadViewerStandardView = "iso" | "top" | "front" | "right";
+
+export interface CadViewerActions {
+  fitToContent: () => void;
+  resetView: () => void;
+  setStandardView: (view: CadViewerStandardView) => void;
+  setGridVisible: (visible: boolean) => void;
+  setDisplayMode: (mode: CadViewerDisplayMode) => void;
+  setAutoRotate: (enabled: boolean) => void;
 }
 
 /* ─── Supported format detection ─── */
@@ -50,6 +67,7 @@ async function createScene(container: HTMLDivElement) {
 
   // Grid
   const grid = new THREE.GridHelper(20, 20, 0x303050, 0x252540);
+  grid.name = "scene-grid";
   scene.add(grid);
 
   // Lights
@@ -99,6 +117,52 @@ async function createScene(container: HTMLDivElement) {
   });
   ro.observe(container);
 
+  function contentBox() {
+    const box = new THREE.Box3();
+    let hasContent = false;
+    scene.traverse((object: any) => {
+      if (object.name === "scene-grid" || !object.isMesh) return;
+      box.expandByObject(object);
+      hasContent = true;
+    });
+    return hasContent ? box : new THREE.Box3().setFromObject(scene);
+  }
+
+  function setCameraView(view: CadViewerStandardView) {
+    const box = contentBox();
+    const size = box.getSize(new THREE.Vector3());
+    const center = box.getCenter(new THREE.Vector3());
+    if (size.length() === 0) return;
+    const maxDim = Math.max(size.x, size.y, size.z, 1);
+    const dist = maxDim * 2;
+    controls.target.copy(center);
+    if (view === "top") {
+      camera.position.set(center.x, center.y + dist, center.z + 0.001);
+    } else if (view === "front") {
+      camera.position.set(center.x, center.y + dist * 0.15, center.z + dist);
+    } else if (view === "right") {
+      camera.position.set(center.x + dist, center.y + dist * 0.15, center.z);
+    } else {
+      camera.position.set(center.x + dist * 0.5, center.y + dist * 0.5, center.z + dist * 0.5);
+    }
+    camera.lookAt(center);
+    controls.update();
+  }
+
+  function setDisplayMode(mode: CadViewerDisplayMode) {
+    scene.traverse((object: any) => {
+      if (!object.isMesh || !object.material) return;
+      const materials = Array.isArray(object.material) ? object.material : [object.material];
+      materials.forEach((material: any) => {
+        material.wireframe = mode === "wireframe";
+        material.transparent = mode === "xray";
+        material.opacity = mode === "xray" ? 0.32 : 1;
+        material.depthWrite = mode !== "xray";
+        material.needsUpdate = true;
+      });
+    });
+  }
+
   return {
     scene,
     camera,
@@ -106,18 +170,33 @@ async function createScene(container: HTMLDivElement) {
     controls,
     THREE,
     fitToContent: () => {
-      const box = new THREE.Box3().setFromObject(scene);
+      const box = contentBox();
       const size = box.getSize(new THREE.Vector3());
       const center = box.getCenter(new THREE.Vector3());
 
       if (size.length() === 0) return;
 
       controls.target.copy(center);
-      const maxDim = Math.max(size.x, size.y, size.z);
+      const maxDim = Math.max(size.x, size.y, size.z, 1);
       const dist = maxDim * 2;
       camera.position.set(center.x + dist * 0.5, center.y + dist * 0.5, center.z + dist * 0.5);
       camera.lookAt(center);
       controls.update();
+    },
+    resetView: () => {
+      controls.target.set(0, 0, 0);
+      camera.position.set(5, 5, 5);
+      camera.lookAt(0, 0, 0);
+      controls.update();
+    },
+    setStandardView: setCameraView,
+    setGridVisible: (visible: boolean) => {
+      grid.visible = visible;
+    },
+    setDisplayMode,
+    setAutoRotate: (enabled: boolean) => {
+      controls.autoRotate = enabled;
+      controls.autoRotateSpeed = 1.4;
     },
     dispose: () => {
       cancelAnimationFrame(animId);
@@ -370,7 +449,17 @@ function attachIfcPicker(
 
 /* ─── Component ─── */
 
-export function CadViewer({ fileUrl, fileName, className, onIfcElementSelect }: CadViewerProps) {
+export function CadViewer({
+  fileUrl,
+  fileName,
+  className,
+  onIfcElementSelect,
+  actionsRef,
+  displayMode = "shaded",
+  showGrid = true,
+  autoRotate = false,
+  showOverlayToolbar = true,
+}: CadViewerProps) {
   const [state, setState] = useState<CadViewerState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [loadingText, setLoadingText] = useState("Initializing 3D engine...");
@@ -387,13 +476,34 @@ export function CadViewer({ fileUrl, fileName, className, onIfcElementSelect }: 
   }, []);
 
   const handleResetView = useCallback(() => {
-    if (!sceneRef.current) return;
-    const { camera, controls } = sceneRef.current;
-    controls.target.set(0, 0, 0);
-    camera.position.set(5, 5, 5);
-    camera.lookAt(0, 0, 0);
-    controls.update();
+    sceneRef.current?.resetView();
   }, []);
+
+  useEffect(() => {
+    if (!actionsRef) return;
+    actionsRef.current = sceneRef.current
+      ? {
+          fitToContent: sceneRef.current.fitToContent,
+          resetView: sceneRef.current.resetView,
+          setStandardView: sceneRef.current.setStandardView,
+          setGridVisible: sceneRef.current.setGridVisible,
+          setDisplayMode: sceneRef.current.setDisplayMode,
+          setAutoRotate: sceneRef.current.setAutoRotate,
+        }
+      : null;
+  });
+
+  useEffect(() => {
+    sceneRef.current?.setDisplayMode(displayMode);
+  }, [displayMode]);
+
+  useEffect(() => {
+    sceneRef.current?.setGridVisible(showGrid);
+  }, [showGrid]);
+
+  useEffect(() => {
+    sceneRef.current?.setAutoRotate(autoRotate);
+  }, [autoRotate]);
 
   useEffect(() => {
     if (!canvasContainerRef.current || !fileUrl || !fileName) return;
@@ -408,6 +518,9 @@ export function CadViewer({ fileUrl, fileName, className, onIfcElementSelect }: 
         setLoadingText("Setting up 3D scene...");
         const sceneCtx = await createScene(container);
         sceneRef.current = sceneCtx;
+        sceneCtx.setDisplayMode(displayMode);
+        sceneCtx.setGridVisible(showGrid);
+        sceneCtx.setAutoRotate(autoRotate);
         if (cancelled) { sceneCtx.dispose(); return; }
 
         // 2. Fetch the file
@@ -455,6 +568,7 @@ export function CadViewer({ fileUrl, fileName, className, onIfcElementSelect }: 
       detachPicker?.();
       sceneRef.current?.dispose();
       sceneRef.current = null;
+      if (actionsRef) actionsRef.current = null;
     };
   }, [fileUrl, fileName]);
 
@@ -499,7 +613,7 @@ export function CadViewer({ fileUrl, fileName, className, onIfcElementSelect }: 
       )}
 
       {/* Toolbar overlay — shown when ready */}
-      {state === "ready" && (
+      {state === "ready" && showOverlayToolbar && (
         <>
           <div className="absolute top-0 left-0 right-0 z-10 flex items-center gap-2 px-3 py-2 bg-zinc-900/80 backdrop-blur-sm border-b border-zinc-800">
             <Box className="h-4 w-4 text-indigo-400 shrink-0" />

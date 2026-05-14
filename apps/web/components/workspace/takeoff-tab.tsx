@@ -57,6 +57,11 @@ import {
   Redo2,
   GitBranch,
   Save,
+  Table2,
+  Sigma,
+  SlidersHorizontal,
+  Edit3,
+  Eye,
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
@@ -134,14 +139,19 @@ import {
 import * as Popover from "@radix-ui/react-popover";
 import dynamic from "next/dynamic";
 import { cn } from "@/lib/utils";
-import { postWorkspaceMutation } from "@/lib/workspace-sync";
+import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
-import { isBidwrightEditableModel } from "./editors/bidwright-model-editor";
+import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 import type {
   BidwrightModelLineItemDraft,
   BidwrightModelLinkedLineItem,
   BidwrightModelSelectionMessage,
 } from "./editors/bidwright-model-editor";
+import type {
+  CadViewerActions,
+  CadViewerDisplayMode,
+  CadViewerStandardView,
+} from "./editors/cad-viewer";
 const PdfCanvasViewer = dynamic(
   () => import("./takeoff/pdf-canvas-viewer").then((m) => m.PdfCanvasViewer),
   { ssr: false }
@@ -152,10 +162,6 @@ const CadViewer = dynamic(
 );
 const DwgTakeoffSurface = dynamic(
   () => import("./dwg-takeoff-surface").then((m) => ({ default: m.DwgTakeoffSurface })),
-  { ssr: false }
-);
-const BidwrightModelEditor = dynamic(
-  () => import("./editors/bidwright-model-editor").then((m) => ({ default: m.BidwrightModelEditor })),
   { ssr: false }
 );
 import {
@@ -532,6 +538,301 @@ function PdfToolGroupMenus({
         );
       })}
     </div>
+  );
+}
+
+function SpreadsheetTransformMenu({
+  view,
+  onViewChange,
+  groupBy,
+  onGroupByChange,
+  measure,
+  onMeasureChange,
+  groupOptions,
+  measureOptions,
+  disabled,
+}: {
+  view: SpreadsheetPanelView;
+  onViewChange: (view: SpreadsheetPanelView) => void;
+  groupBy: string;
+  onGroupByChange: (value: string) => void;
+  measure: string;
+  onMeasureChange: (value: string) => void;
+  groupOptions: Array<{ value: string; label: string; disabled?: boolean }>;
+  measureOptions: Array<{ value: string; label: string; disabled?: boolean }>;
+  disabled: boolean;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button
+          variant={view === "pivot" ? "secondary" : "ghost"}
+          size="xs"
+          disabled={disabled}
+          className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+          title="Transform spreadsheet view"
+        >
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          <span>Transform</span>
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content
+          align="start"
+          sideOffset={6}
+          className="z-[1000] w-72 rounded-lg border border-line bg-panel p-2 shadow-xl outline-none"
+        >
+          <div className="grid gap-1">
+            {([
+              { id: "preview" as const, label: "Table Preview", icon: Table2, detail: "Inspect parsed rows and columns" },
+              { id: "pivot" as const, label: "Pivot Summary", icon: Sigma, detail: "Group rows and summarize a measure" },
+            ]).map((option) => {
+              const Icon = option.icon;
+              return (
+                <Popover.Close asChild key={option.id}>
+                  <button
+                    type="button"
+                    onClick={() => onViewChange(option.id)}
+                    className={cn(
+                      "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] transition-colors",
+                      view === option.id ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg",
+                    )}
+                  >
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate font-medium">{option.label}</span>
+                      <span className="block truncate text-[10px] text-fg/40">{option.detail}</span>
+                    </span>
+                    {view === option.id && <Check className="h-3 w-3" />}
+                  </button>
+                </Popover.Close>
+              );
+            })}
+          </div>
+          <div className="my-2 h-px bg-line/70" />
+          <div className="grid gap-2 px-1 pb-1">
+            <div>
+              <Label>Group by</Label>
+              <Select
+                value={groupBy}
+                onValueChange={(value) => {
+                  onGroupByChange(value);
+                  onViewChange("pivot");
+                }}
+                options={groupOptions.length ? groupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
+                size="sm"
+              />
+            </div>
+            <div>
+              <Label>Measure</Label>
+              <Select
+                value={measure}
+                onValueChange={(value) => {
+                  onMeasureChange(value);
+                  onViewChange("pivot");
+                }}
+                options={measureOptions}
+                size="sm"
+              />
+            </div>
+          </div>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function SpreadsheetDataMenu({
+  disabled,
+  rowCount,
+  columnCount,
+  onOpenEntities,
+  onImportAll,
+}: {
+  disabled: boolean;
+  rowCount: number;
+  columnCount: number;
+  onOpenEntities: () => void;
+  onImportAll: () => void;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button variant="ghost" size="xs" disabled={disabled} className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Spreadsheet row actions">
+          <Table2 className="h-3.5 w-3.5" />
+          <span>Rows</span>
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" sideOffset={6} className="z-[1000] w-64 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
+          <div className="px-2 py-1.5">
+            <p className="text-[11px] font-semibold text-fg">Parsed source</p>
+            <p className="mt-0.5 text-[10px] text-fg/40">{rowCount.toLocaleString()} rows · {columnCount.toLocaleString()} columns</p>
+          </div>
+          <div className="my-1 h-px bg-line/70" />
+          <Popover.Close asChild>
+            <button type="button" onClick={onOpenEntities} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
+              <Boxes className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate font-medium">Review Rows In Entities</span>
+            </button>
+          </Popover.Close>
+          <Popover.Close asChild>
+            <button type="button" onClick={onImportAll} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
+              <Plus className="h-3.5 w-3.5 shrink-0" />
+              <span className="min-w-0 flex-1 truncate font-medium">Import All Rows</span>
+            </button>
+          </Popover.Close>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function SpreadsheetAiMenu({
+  disabled,
+  onSummarize,
+}: {
+  disabled: boolean;
+  onSummarize: () => void;
+}) {
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button variant="ghost" size="xs" disabled={disabled} className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Spreadsheet AI">
+          <Sparkles className="h-3.5 w-3.5" />
+          <span>AI</span>
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" sideOffset={6} className="z-[1000] w-72 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
+          <Popover.Close asChild>
+            <button type="button" onClick={onSummarize} className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
+              <BrainCircuit className="h-3.5 w-3.5 shrink-0 text-violet-500" />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium">Summarize For Estimate</span>
+                <span className="block truncate text-[10px] text-fg/40">Find line items, quantity columns, cost fields, and risks</span>
+              </span>
+            </button>
+          </Popover.Close>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function ModelViewMenu({
+  currentView,
+  onView,
+}: {
+  currentView: CadViewerStandardView;
+  onView: (view: CadViewerStandardView) => void;
+}) {
+  const views: Array<{ id: CadViewerStandardView; label: string }> = [
+    { id: "iso", label: "Isometric" },
+    { id: "top", label: "Top" },
+    { id: "front", label: "Front" },
+    { id: "right", label: "Right" },
+  ];
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button variant="ghost" size="xs" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model view">
+          <Box className="h-3.5 w-3.5" />
+          <span>View</span>
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" sideOffset={6} className="z-[1000] w-48 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
+          {views.map((view) => (
+            <Popover.Close asChild key={view.id}>
+              <button
+                type="button"
+                onClick={() => onView(view.id)}
+                className={cn(
+                  "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors",
+                  currentView === view.id ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg",
+                )}
+              >
+                <Scan className="h-3.5 w-3.5 shrink-0" />
+                <span className="min-w-0 flex-1 truncate font-medium">{view.label}</span>
+                {currentView === view.id && <Check className="h-3 w-3" />}
+              </button>
+            </Popover.Close>
+          ))}
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
+  );
+}
+
+function ModelDisplayMenu({
+  mode,
+  gridVisible,
+  autoRotate,
+  onMode,
+  onGrid,
+  onAutoRotate,
+}: {
+  mode: CadViewerDisplayMode;
+  gridVisible: boolean;
+  autoRotate: boolean;
+  onMode: (mode: CadViewerDisplayMode) => void;
+  onGrid: () => void;
+  onAutoRotate: () => void;
+}) {
+  const modes: Array<{ id: CadViewerDisplayMode; label: string; icon: typeof Eye }> = [
+    { id: "shaded", label: "Shaded", icon: Eye },
+    { id: "wireframe", label: "Wireframe", icon: GitBranch },
+    { id: "xray", label: "X-Ray", icon: Sparkles },
+  ];
+  return (
+    <Popover.Root>
+      <Popover.Trigger asChild>
+        <Button variant={mode !== "shaded" || !gridVisible || autoRotate ? "secondary" : "ghost"} size="xs" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model display">
+          <SlidersHorizontal className="h-3.5 w-3.5" />
+          <span>Display</span>
+          <ChevronDown className="h-3 w-3 text-fg/40" />
+        </Button>
+      </Popover.Trigger>
+      <Popover.Portal>
+        <Popover.Content align="start" sideOffset={6} className="z-[1000] w-56 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
+          {modes.map((item) => {
+            const Icon = item.icon;
+            return (
+              <Popover.Close asChild key={item.id}>
+                <button
+                  type="button"
+                  onClick={() => onMode(item.id)}
+                  className={cn(
+                    "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors",
+                    mode === item.id ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  <span className="min-w-0 flex-1 truncate font-medium">{item.label}</span>
+                  {mode === item.id && <Check className="h-3 w-3" />}
+                </button>
+              </Popover.Close>
+            );
+          })}
+          <div className="my-1 h-px bg-line/70" />
+          <button type="button" onClick={onGrid} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
+            <Table2 className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate font-medium">Reference Grid</span>
+            {gridVisible && <Check className="h-3 w-3 text-accent" />}
+          </button>
+          <button type="button" onClick={onAutoRotate} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
+            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
+            <span className="min-w-0 flex-1 truncate font-medium">Auto Rotate</span>
+            {autoRotate && <Check className="h-3 w-3 text-accent" />}
+          </button>
+        </Popover.Content>
+      </Popover.Portal>
+    </Popover.Root>
   );
 }
 
@@ -1560,6 +1861,11 @@ export function TakeoffTab({
   const [selectedModelElementIds, setSelectedModelElementIds] = useState<Set<string>>(() => new Set());
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
+  const modelViewerActionsRef = useRef<CadViewerActions | null>(null);
+  const [modelDisplayMode, setModelDisplayMode] = useState<CadViewerDisplayMode>("shaded");
+  const [modelGridVisible, setModelGridVisible] = useState(true);
+  const [modelAutoRotate, setModelAutoRotate] = useState(false);
+  const [modelStandardView, setModelStandardView] = useState<CadViewerStandardView>("iso");
   // Discriminated union: the picker carries enough context to resume the
   // original action once a worksheet exists. Covers every entity-to-line-item
   // path in the side panel — per-row Adds and per-group summed Adds for both
@@ -1799,6 +2105,13 @@ export function TakeoffTab({
   }, [selectedDocId]);
 
   useEffect(() => {
+    setModelDisplayMode("shaded");
+    setModelGridVisible(true);
+    setModelAutoRotate(false);
+    setModelStandardView("iso");
+  }, [selectedDocId]);
+
+  useEffect(() => {
     pageRef.current = page;
   }, [page]);
 
@@ -2033,9 +2346,9 @@ export function TakeoffTab({
       modelElementCreateLineItemRef.current = async (elementId: string) => {
         const element = modelElements.find((e) => e.id === elementId);
         if (!element) throw new Error("Model element not found");
-        // This ref is driven by BidwrightModelEditor's in-canvas action,
-        // which doesn't show the AddToCategoryPopover. Fall back to the
-        // sticky / heuristic takeoffCategory the side-panel uses.
+        // This ref is driven by model-editor actions outside the Entities
+        // panel, so it doesn't show the AddToCategoryPopover. Fall back to
+        // the sticky / heuristic takeoffCategory the side-panel uses.
         const categoryId = takeoffCategory?.id;
         if (!categoryId) {
           setToastType("error");
@@ -2672,6 +2985,74 @@ export function TakeoffTab({
     }
     detachedWindowRef.current = nextWindow;
     onDetachedWindowChange?.(true, nextWindow);
+  }
+
+  function handleSpreadsheetSummarize() {
+    if (!spreadsheetPreview) return;
+    onOpenAgentChat?.(
+      `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks.`,
+    );
+  }
+
+  function handleSpreadsheetImportAllFromToolbar() {
+    const categoryId = takeoffCategory?.id;
+    if (!categoryId) {
+      setToastType("error");
+      setToastMessage("Pick a takeoff category in the Entities panel before importing rows.");
+      return;
+    }
+    void handleCreateAllSpreadsheetLineItems(categoryId);
+  }
+
+  function handleModelFitView() {
+    modelViewerActionsRef.current?.fitToContent();
+  }
+
+  function handleModelResetView() {
+    setModelStandardView("iso");
+    modelViewerActionsRef.current?.resetView();
+  }
+
+  function handleModelStandardView(view: CadViewerStandardView) {
+    setModelStandardView(view);
+    modelViewerActionsRef.current?.setStandardView(view);
+  }
+
+  function handleModelDisplayMode(mode: CadViewerDisplayMode) {
+    setModelDisplayMode(mode);
+    modelViewerActionsRef.current?.setDisplayMode(mode);
+  }
+
+  function handleModelGridToggle() {
+    setModelGridVisible((current) => {
+      const next = !current;
+      modelViewerActionsRef.current?.setGridVisible(next);
+      return next;
+    });
+  }
+
+  function handleModelAutoRotateToggle() {
+    setModelAutoRotate((current) => {
+      const next = !current;
+      modelViewerActionsRef.current?.setAutoRotate(next);
+      return next;
+    });
+  }
+
+  function handleOpenModelEditor() {
+    if (!selectedModelIsEditable || !selectedDoc) return;
+    const editorUrl = buildModelEditorUrl(documentUrl, selectedDoc.fileName, 0, {
+      projectId,
+      modelAssetId: selectedModelAsset?.id,
+      modelDocumentId: selectedDoc.fileNodeId ?? selectedDoc.id,
+      syncChannelName: modelEditorChannelName(projectId),
+      estimateEnabled: Boolean(selectedWorksheet),
+      estimateTargetWorksheetId: selectedWorksheet?.id,
+      estimateTargetWorksheetName: selectedWorksheet?.name,
+      estimateDefaultMarkup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      estimateQuoteLabel: workspace.quote?.quoteNumber ?? workspace.project.name,
+    });
+    window.open(editorUrl, "_blank", "width=1400,height=900,resizable=yes");
   }
 
   function notifyAnnotationsMutated(nextAnnotations?: TakeoffAnnotation[]) {
@@ -5418,8 +5799,8 @@ export function TakeoffTab({
       setToastMessage("Select unlinked model elements first.");
       return;
     }
-    // The legacy multi-select Send-to-Estimate flow (driven by the
-    // BidwrightModelEditor toolbar) doesn't go through the AddToCategoryPopover.
+    // The legacy multi-select Send-to-Estimate flow (driven by model-editor
+    // actions) doesn't go through the AddToCategoryPopover.
     // Use the global takeoffCategory memo (the last-used / heuristic default)
     // as a sensible fallback so the action still works from that surface.
     const categoryId = takeoffCategory?.id;
@@ -6107,7 +6488,7 @@ export function TakeoffTab({
           <FolderOpen className="h-3.5 w-3.5" />
         </Button>
 
-        {!isCadDocument && !isDwgDocument && (
+        {isPdfDocument && (
           <>
             <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
 
@@ -6226,9 +6607,143 @@ export function TakeoffTab({
           </>
         )}
 
+        {isSpreadsheetDocument && (
+          <>
+            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
+            <div className="hidden min-w-0 max-w-72 flex-col px-1 md:flex">
+              <span className="truncate text-[11px] font-medium text-fg/65">{spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? "Spreadsheet"}</span>
+              <span className="truncate text-[10px] text-fg/35">
+                {spreadsheetPreview
+                  ? `${(spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length).toLocaleString()} rows · ${spreadsheetPreview.headers.length.toLocaleString()} columns`
+                  : "Select a spreadsheet source"}
+              </span>
+            </div>
+            <div className="flex min-w-0 items-center gap-1 rounded-md border border-line bg-bg/35 p-0.5">
+              <SpreadsheetTransformMenu
+                view={spreadsheetPanelView}
+                onViewChange={setSpreadsheetPanelView}
+                groupBy={pivotGroupBy || activePivotSummary?.groupBy || ""}
+                onGroupByChange={setPivotGroupBy}
+                measure={pivotMeasure}
+                onMeasureChange={setPivotMeasure}
+                groupOptions={spreadsheetGroupOptions.length ? spreadsheetGroupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
+                measureOptions={spreadsheetMeasureOptions}
+                disabled={!spreadsheetPreview}
+              />
+              <SpreadsheetDataMenu
+                disabled={!spreadsheetPreview}
+                rowCount={spreadsheetPreview?.rowCount ?? spreadsheetPreview?.sampleRows.length ?? 0}
+                columnCount={spreadsheetPreview?.headers.length ?? 0}
+                onOpenEntities={() => {
+                  onOpenInspectEntities?.();
+                  postTakeoffMessage({ type: "open-inspect-entities" });
+                }}
+                onImportAll={handleSpreadsheetImportAllFromToolbar}
+              />
+              <SpreadsheetAiMenu
+                disabled={!spreadsheetPreview}
+                onSummarize={handleSpreadsheetSummarize}
+              />
+            </div>
+          </>
+        )}
+
+        {isCadDocument && (
+          <>
+            <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
+            <div className="hidden min-w-0 max-w-72 flex-col px-1 md:flex">
+              <span className="truncate text-[11px] font-medium text-fg/65">{selectedDoc?.fileName ?? "3D model"}</span>
+              <span className="truncate text-[10px] text-fg/35">
+                {isBimDocument ? "BIM takeoff surface" : "3D takeoff surface"}
+              </span>
+            </div>
+            <div className="flex min-w-0 items-center gap-1 rounded-md border border-line bg-bg/35 p-0.5">
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleModelFitView}
+                title="Fit model"
+                aria-label="Fit model"
+                className="h-7 w-7 shrink-0 px-0"
+              >
+                <Scan className="h-3.5 w-3.5" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="xs"
+                onClick={handleModelResetView}
+                title="Reset model view"
+                aria-label="Reset model view"
+                className="h-7 w-7 shrink-0 px-0"
+              >
+                <RotateCcw className="h-3.5 w-3.5" />
+              </Button>
+              <ModelViewMenu currentView={modelStandardView} onView={handleModelStandardView} />
+              <ModelDisplayMenu
+                mode={modelDisplayMode}
+                gridVisible={modelGridVisible}
+                autoRotate={modelAutoRotate}
+                onMode={handleModelDisplayMode}
+                onGrid={handleModelGridToggle}
+                onAutoRotate={handleModelAutoRotateToggle}
+              />
+              <Popover.Root>
+                <Popover.Trigger asChild>
+                  <Button variant="ghost" size="xs" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model takeoff">
+                    <Boxes className="h-3.5 w-3.5" />
+                    <span>Takeoff</span>
+                    <ChevronDown className="h-3 w-3 text-fg/40" />
+                  </Button>
+                </Popover.Trigger>
+                <Popover.Portal>
+                  <Popover.Content align="start" sideOffset={6} className="z-[1000] w-64 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
+                    <Popover.Close asChild>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onOpenInspectEntities?.();
+                          postTakeoffMessage({ type: "open-inspect-entities" });
+                        }}
+                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg"
+                      >
+                        <Boxes className="h-3.5 w-3.5 shrink-0" />
+                        <span className="min-w-0 flex-1 truncate font-medium">Review Entities</span>
+                      </button>
+                    </Popover.Close>
+                    <Popover.Close asChild>
+                      <button
+                        type="button"
+                        onClick={() => void refreshModelAssets(true)}
+                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg"
+                      >
+                        <RefreshCw className={cn("h-3.5 w-3.5 shrink-0", modelSyncing && "animate-spin")} />
+                        <span className="min-w-0 flex-1 truncate font-medium">Sync Model Index</span>
+                      </button>
+                    </Popover.Close>
+                  </Popover.Content>
+                </Popover.Portal>
+              </Popover.Root>
+              {selectedModelIsEditable && (
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  onClick={handleOpenModelEditor}
+                  title="Open compatible model in editor"
+                  aria-label="Open compatible model in editor"
+                  className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
+                >
+                  <Edit3 className="h-3.5 w-3.5" />
+                  <span>Edit</span>
+                  <ExternalLink className="h-3 w-3 text-fg/45" />
+                </Button>
+              )}
+            </div>
+          </>
+        )}
+
         <div className="min-w-2 flex-1" />
 
-        {!isCadDocument && !isDwgDocument && (
+        {isPdfDocument && (
           <>
             <Button
               variant="ghost"
@@ -6331,7 +6846,7 @@ export function TakeoffTab({
       )}
 
       {/* ─── No-Calibration Warning ─── */}
-      {!isCadDocument && !isDwgDocument && !calibration && activeTool && isMeasurementTool(activeTool) && (
+      {isPdfDocument && !calibration && activeTool && isMeasurementTool(activeTool) && (
         <div className="flex items-center gap-3 border-b border-amber-500/30 bg-amber-500/5 px-4 py-2.5 shrink-0">
           <Scaling className="h-4 w-4 text-amber-500 shrink-0 animate-pulse" />
           <div className="flex-1">
@@ -6346,7 +6861,7 @@ export function TakeoffTab({
       )}
 
       {/* ─── Auto-Count Banner ─── */}
-      {!isCadDocument && !isDwgDocument && (isAutoCountActive || autoCountRunning) && (
+      {isPdfDocument && (isAutoCountActive || autoCountRunning) && (
         <div className="flex items-center gap-3 border-b border-accent/30 bg-accent/5 px-4 py-2.5 shrink-0">
           <ScanSearch className="h-4 w-4 text-accent shrink-0" />
           <div className="flex-1">
@@ -6540,7 +7055,7 @@ export function TakeoffTab({
       )}
 
       {/* ─── Ask AI Banner ─── */}
-      {!isCadDocument && !isDwgDocument && isAskAiActive && (
+      {isPdfDocument && isAskAiActive && (
         <div className="flex items-center gap-3 border-b border-violet-500/30 bg-violet-500/5 px-4 py-2.5 shrink-0">
           <BrainCircuit className="h-4 w-4 text-violet-500 shrink-0" />
           <div className="flex-1">
@@ -6573,51 +7088,10 @@ export function TakeoffTab({
       <div className="relative flex flex-1 overflow-hidden min-h-0">
         {isSpreadsheetDocument ? (
           <div className="relative flex h-full w-full min-h-0 flex-col bg-bg/50">
-            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-line bg-panel px-4 py-3">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-fg">{spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? "Spreadsheet"}</p>
-                <p className="mt-1 text-xs text-fg/40">
-                  {spreadsheetPreview
-                    ? `${spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length} rows · ${spreadsheetPreview.headers.length} columns`
-                    : "Preview, pivot, and summarize the selected source."}
-                </p>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                {spreadsheetPreview && (
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => onOpenAgentChat?.(
-                      `Summarize spreadsheet source ${spreadsheetPreview.sourceName}. Identify estimate-ready line items, quantity columns, cost/price columns, likely category/vendor fields, and any data quality risks.`
-                    )}
-                  >
-                    <BrainCircuit className="h-3.5 w-3.5" />
-                    Summarize
-                  </Button>
-                )}
-              </div>
-            </div>
-
             {spreadsheetPreview ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
-                <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-bg/40 p-1 w-fit">
-                  {(["preview", "pivot"] as const).map((view) => (
-                    <button
-                      key={view}
-                      type="button"
-                      onClick={() => setSpreadsheetPanelView(view)}
-                      className={cn(
-                        "rounded px-2.5 py-1 text-[11px] font-medium capitalize transition-colors",
-                        spreadsheetPanelView === view ? "bg-panel2 text-fg shadow-sm" : "text-fg/45 hover:text-fg/70"
-                      )}
-                    >
-                      {view}
-                    </button>
-                  ))}
-                </div>
-
                 {spreadsheetPanelView === "preview" && (
-                  <div className="mt-4 flex min-h-0 flex-1 flex-col">
+                  <div className="flex min-h-0 flex-1 flex-col">
                     <div className="min-h-0 flex-1 overflow-auto rounded-md border border-line">
                       <table className="min-w-full text-left text-xs">
                         <thead className="sticky top-0 z-10 bg-panel2 text-[10px] uppercase tracking-wide text-fg/40">
@@ -6644,29 +7118,15 @@ export function TakeoffTab({
                 )}
 
                 {spreadsheetPanelView === "pivot" && (
-                  <div className="mt-4 grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-                    <div className="space-y-3 rounded-md border border-line bg-bg/35 p-3">
-                      <div>
-                        <Label>Group by</Label>
-                        <Select
-                          value={pivotGroupBy || activePivotSummary?.groupBy || ""}
-                          onValueChange={setPivotGroupBy}
-                          options={spreadsheetGroupOptions.length ? spreadsheetGroupOptions : [{ value: "none", label: "No text fields", disabled: true }]}
-                          size="sm"
-                        />
-                      </div>
-                      <div>
-                        <Label>Measure</Label>
-                        <Select
-                          value={pivotMeasure}
-                          onValueChange={setPivotMeasure}
-                          options={spreadsheetMeasureOptions}
-                          size="sm"
-                        />
-                      </div>
-                      <p className="text-xs text-fg/40">Pivot is built from the parsed file, not just the visible sample rows.</p>
+                  <div className="grid min-h-0 flex-1 gap-3">
+                    <div className="flex min-h-0 items-center gap-2 rounded-md border border-line bg-bg/35 px-3 py-2 text-[11px] text-fg/50">
+                      <Sigma className="h-3.5 w-3.5 text-accent" />
+                      <span className="min-w-0 flex-1 truncate">
+                        Grouped by <span className="font-medium text-fg/70">{(activePivotSummary?.groupBy ?? pivotGroupBy) || "field"}</span>
+                        {" · "}
+                        Measure <span className="font-medium text-fg/70">{activePivotSummary?.measure === "__count" ? "Row count" : activePivotSummary?.measure ?? pivotMeasure}</span>
+                      </span>
                     </div>
-
                     <div className="min-h-0 overflow-y-auto rounded-md border border-line bg-bg/35 p-2">
                       {activePivotSummary?.rows.length ? activePivotSummary.rows.map((row) => (
                         <div key={row.label} className="mb-1.5 rounded-md bg-panel/70 p-2 last:mb-0">
@@ -6701,7 +7161,7 @@ export function TakeoffTab({
                   <p className="mt-1 text-xs text-fg/40">
                     {spreadsheetPreviewLoading
                       ? "Parsing rows and computing pivot summaries."
-                      : "Choose a source from the intake list to preview and pivot."}
+                      : "Choose a source from the intake list to preview or transform."}
                   </p>
                 </div>
               </div>
@@ -6835,7 +7295,7 @@ export function TakeoffTab({
           <>
 
         {/* Left: Quick controls */}
-        {!isCadDocument && (
+        {isPdfDocument && (
           <div className="flex w-9 shrink-0 flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
             {(["select"] as ToolId[]).map((id) => {
               const tool = TOOLS.find((item) => item.id === id);
@@ -6873,6 +7333,71 @@ export function TakeoffTab({
           </div>
         )}
 
+        {isCadDocument && (
+          <div className="flex w-9 shrink-0 flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
+            <button
+              type="button"
+              title={isBimDocument ? "Select BIM elements" : "Inspect model"}
+              className="flex h-7 w-7 items-center justify-center rounded-md bg-accent/15 text-accent transition-colors"
+              onClick={() => {
+                onOpenInspectEntities?.();
+                postTakeoffMessage({ type: "open-inspect-entities" });
+              }}
+            >
+              <MousePointer2 className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleModelFitView}
+              title="Fit model"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 transition-colors hover:bg-panel2 hover:text-fg/75"
+            >
+              <Scan className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => handleModelDisplayMode(modelDisplayMode === "xray" ? "shaded" : "xray")}
+              title="Toggle X-Ray"
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                modelDisplayMode === "xray" ? "bg-violet-500/10 text-violet-500" : "text-fg/45 hover:bg-panel2 hover:text-fg/75",
+              )}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={handleModelGridToggle}
+              title="Toggle reference grid"
+              className={cn(
+                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                modelGridVisible ? "bg-sky-500/10 text-sky-500" : "text-fg/45 hover:bg-panel2 hover:text-fg/75",
+              )}
+            >
+              <Table2 className="h-3.5 w-3.5" />
+            </button>
+            <div className="my-0.5 h-px w-full bg-line/60" />
+            <button
+              type="button"
+              onClick={() => void refreshModelAssets(true)}
+              title="Sync model index"
+              className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 transition-colors hover:bg-panel2 hover:text-fg/75"
+            >
+              <RefreshCw className={cn("h-3.5 w-3.5", modelSyncing && "animate-spin")} />
+            </button>
+            {selectedModelIsEditable && (
+              <button
+                type="button"
+                onClick={handleOpenModelEditor}
+                title="Open model editor in new tab"
+                className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 transition-colors hover:bg-panel2 hover:text-fg/75"
+              >
+                <Edit3 className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+
         {/* Center: Document viewer area */}
         <div
           ref={viewerContainerRef}
@@ -6895,33 +7420,16 @@ export function TakeoffTab({
             </div>
           ) : isCadDocument ? (
             <div className="h-full w-full">
-              {selectedModelIsEditable ? (
-                <BidwrightModelEditor
-                  fileUrl={documentUrl}
-                  fileName={selectedDoc?.fileName}
-                  projectId={projectId}
-                  modelAssetId={selectedModelAsset?.id}
-                  modelDocumentId={selectedDoc?.fileNodeId ?? selectedDoc?.id}
-                  syncChannelName={takeoffChannelName(projectId)}
-                  estimateTargetWorksheetId={selectedWorksheet?.id}
-                  estimateTargetWorksheetName={selectedWorksheet?.name}
-                  estimateDefaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
-                  estimateQuoteLabel={workspace.quote?.quoteNumber ?? workspace.project.name}
-                  title="3D Takeoff Model"
-                  variant="takeoff"
-                  linkedLineItems={linkedModelLineItems}
-                  onModelSelection={setModelSelection}
-                  onSendSelectionToEstimate={handleSendModelSelectionToEstimate}
-                  onUpdateLinkedLineItem={handleUpdateModelLinkedLineItem}
-                  onDeleteLinkedLineItem={handleDeleteModelLinkedLineItem}
-                />
-              ) : (
-                <CadViewer
-                  fileUrl={documentUrl}
-                  fileName={selectedDoc?.fileName}
-                  onIfcElementSelect={handleIfcElementSelect}
-                />
-              )}
+              <CadViewer
+                fileUrl={documentUrl}
+                fileName={selectedDoc?.fileName}
+                onIfcElementSelect={handleIfcElementSelect}
+                actionsRef={modelViewerActionsRef}
+                displayMode={modelDisplayMode}
+                showGrid={modelGridVisible}
+                autoRotate={modelAutoRotate}
+                showOverlayToolbar={false}
+              />
             </div>
           ) : (
             <div className="relative mx-auto my-4 inline-block shrink-0">
@@ -7622,18 +8130,18 @@ export function TakeoffTab({
       <div className="flex items-center gap-3 border-t border-line bg-panel px-3 py-1.5 shrink-0">
         <p className="text-[11px] text-fg/40">
           {isCadDocument
-            ? selectedModelIsEditable
-              ? "Model editor active."
-              : "3D model preview active."
+            ? isBimDocument
+              ? "BIM takeoff active. Select IFC elements to inspect and create worksheet items."
+              : "3D model takeoff active. Use View and Display to inspect geometry."
             : TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
         </p>
         <div className="flex-1" />
-        {!isCadDocument && !isDwgDocument && calibration && (
+        {isPdfDocument && calibration && (
           <span className="text-[11px] text-fg/30">
             Scale: 1 {calibration.unit} = {calibration.pixelsPerUnit.toFixed(1)}px
           </span>
         )}
-        {!isCadDocument && !isDwgDocument && (
+        {isPdfDocument && (
           <>
             <span className="text-[11px] text-fg/30">
               Page {page}/{totalPages}
@@ -7642,6 +8150,16 @@ export function TakeoffTab({
               {zoomPercent}%
             </span>
           </>
+        )}
+        {isSpreadsheetDocument && spreadsheetPreview && (
+          <span className="text-[11px] text-fg/30">
+            {spreadsheetPanelView === "pivot" ? "Pivot Summary" : "Table Preview"} · {(spreadsheetPreview.rowCount ?? spreadsheetPreview.sampleRows.length).toLocaleString()} rows
+          </span>
+        )}
+        {isCadDocument && selectedModelIsEditable && (
+          <span className="text-[11px] text-fg/30">
+            Editor available from toolbar
+          </span>
         )}
       </div>
       )}
