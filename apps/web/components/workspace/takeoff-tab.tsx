@@ -1870,6 +1870,7 @@ export function TakeoffTab({
   const [drawingAnalysisError, setDrawingAnalysisError] = useState<string | null>(null);
   const [selectedDrawingDetectionId, setSelectedDrawingDetectionId] = useState<string | null>(null);
   const pendingDrawingFocusRef = useRef<string | null>(null);
+  const pendingDrawingFocusBoundsRef = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
   const [drawingAnalysisOverlay, setDrawingAnalysisOverlay] = useState<DrawingAnalysisOverlayState>({
     lines: true,
     systems: true,
@@ -2985,7 +2986,12 @@ export function TakeoffTab({
     apiRequest<WorkspaceStateRecord>(`/projects/${projectId}/workspace-state`)
       .then((ws) => {
         const map = ws.state?.takeoffCalibrations as Record<string, Record<number, Calibration>> | undefined;
-        if (map) calibrationCacheRef.current = map;
+        if (!map) return;
+        calibrationCacheRef.current = map;
+        const currentDocId = selectedDocIdRef.current;
+        if (currentDocId) {
+          setCalibration(lookupCalibrationFromCache(currentDocId, pageRef.current));
+        }
       })
       .catch(() => {});
   }, [projectId]);
@@ -4285,43 +4291,76 @@ export function TakeoffTab({
     };
   }
 
-  function focusDrawingBounds(bounds: { x: number; y: number; width: number; height: number }) {
+  function scrollDrawingBoundsIntoView(
+    bounds: { x: number; y: number; width: number; height: number },
+    behavior: ScrollBehavior = "smooth",
+  ) {
     if (!drawingAnalysisResult) return;
     const container = viewerContainerRef.current;
     if (!container || canvasSize.width <= 0 || canvasSize.height <= 0) return;
-    const scaleX = canvasSize.width / Math.max(1, drawingAnalysisResult.imageWidth);
-    const scaleY = canvasSize.height / Math.max(1, drawingAnalysisResult.imageHeight);
+    const canvas = pdfCanvasRef.current;
+    const renderedWidth = canvas?.width && canvas.width > 0 ? canvas.width : canvasSize.width;
+    const renderedHeight = canvas?.height && canvas.height > 0 ? canvas.height : canvasSize.height;
+    const scaleX = renderedWidth / Math.max(1, drawingAnalysisResult.imageWidth);
+    const scaleY = renderedHeight / Math.max(1, drawingAnalysisResult.imageHeight);
     const box = {
       x: bounds.x * scaleX,
       y: bounds.y * scaleY,
       width: Math.max(24, bounds.width * scaleX),
       height: Math.max(24, bounds.height * scaleY),
     };
+    container.scrollTo({
+      left: Math.max(0, box.x + box.width / 2 - container.clientWidth / 2),
+      top: Math.max(0, box.y + box.height / 2 - container.clientHeight / 2),
+      behavior,
+    });
+  }
+
+  function focusDrawingBounds(bounds: { x: number; y: number; width: number; height: number }) {
+    if (!drawingAnalysisResult) return;
+    const container = viewerContainerRef.current;
+    if (!container || canvasSize.width <= 0 || canvasSize.height <= 0) return;
+    const canvas = pdfCanvasRef.current;
+    const renderedWidth = canvas?.width && canvas.width > 0 ? canvas.width : canvasSize.width;
+    const renderedHeight = canvas?.height && canvas.height > 0 ? canvas.height : canvasSize.height;
     const currentZoom = Math.max(zoomRef.current, 0.01);
+    const baseWidth = renderedWidth / currentZoom;
+    const baseHeight = renderedHeight / currentZoom;
+    const baseScaleX = baseWidth / Math.max(1, drawingAnalysisResult.imageWidth);
+    const baseScaleY = baseHeight / Math.max(1, drawingAnalysisResult.imageHeight);
+    const baseBox = {
+      width: Math.max(24, bounds.width * baseScaleX),
+      height: Math.max(24, bounds.height * baseScaleY),
+    };
     const targetZoom = roundPdfZoom(
       Math.min(
         6,
         Math.max(
           0.35,
-          currentZoom * Math.min(
-            (container.clientWidth * 0.58) / Math.max(box.width, 1),
-            (container.clientHeight * 0.58) / Math.max(box.height, 1),
+          Math.min(
+            (container.clientWidth * 0.58) / Math.max(baseBox.width, 1),
+            (container.clientHeight * 0.58) / Math.max(baseBox.height, 1),
           ),
         ),
       ),
     );
-    const ratio = targetZoom / currentZoom;
-    const scroll = () => {
-      container.scrollTo({
-        left: Math.max(0, (box.x + box.width / 2) * ratio - container.clientWidth / 2),
-        top: Math.max(0, (box.y + box.height / 2) * ratio - container.clientHeight / 2),
-        behavior: "smooth",
-      });
-    };
+    pendingDrawingFocusBoundsRef.current = bounds;
     applyPdfZoom(targetZoom);
+    const scroll = () => scrollDrawingBoundsIntoView(bounds);
     requestAnimationFrame(scroll);
     window.setTimeout(scroll, 120);
+    window.setTimeout(scroll, 320);
   }
+
+  useEffect(() => {
+    const bounds = pendingDrawingFocusBoundsRef.current;
+    if (!bounds || !drawingAnalysisResult || canvasSize.width <= 0 || canvasSize.height <= 0) return;
+    const frame = requestAnimationFrame(() => {
+      scrollDrawingBoundsIntoView(bounds);
+      pendingDrawingFocusBoundsRef.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [canvasSize.width, canvasSize.height, drawingAnalysisResult]);
 
   function focusAnnotationSelection(id: string) {
     const annotation = annotations.find((item) => item.id === id);
@@ -4860,8 +4899,7 @@ export function TakeoffTab({
     // Persist on WorkspaceState so the calibration survives reloads and
     // syncs to other open tabs / devices.
     if (selectedDocId) {
-      const cache = calibrationCacheRef.current;
-      const docCache = { ...(cache[selectedDocId] ?? {}) };
+      const docCache = { ...(calibrationCacheRef.current[selectedDocId] ?? {}) };
       if (calibrationApplyToAllPages) {
         // Mark this calibration as the document-wide default and clear any
         // page-specific overrides so every page picks it up.
@@ -4869,8 +4907,9 @@ export function TakeoffTab({
       } else {
         docCache[page] = next;
       }
-      cache[selectedDocId] = docCache;
-      void updateWorkspaceState(projectId, { takeoffCalibrations: cache }).catch(() => {});
+      const nextCache = { ...calibrationCacheRef.current, [selectedDocId]: docCache };
+      calibrationCacheRef.current = nextCache;
+      void updateWorkspaceState(projectId, { takeoffCalibrations: nextCache }).catch(() => {});
     }
     setActiveTool("select");
   }

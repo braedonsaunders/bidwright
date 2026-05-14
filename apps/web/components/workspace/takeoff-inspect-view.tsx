@@ -481,8 +481,22 @@ function PdfEntitiesInspect({
   actions: InspectActions | null;
 }) {
   const [showSettings, setShowSettings] = useState(false);
+  const analysis = snapshot.drawingAnalysis?.analysis;
+  const detectedCount = analysis
+    ? analysis.systems.length + analysis.symbolCandidates.length + analysis.circles.length + analysis.lines.length
+    : 0;
+  const smartCount = snapshot.smartCount?.items.length ?? 0;
+  const manualCount = snapshot.annotations.length;
+  const annotationIds = new Set(snapshot.annotations.map((annotation) => annotation.id));
+  const linkedCount = snapshot.takeoffLinks.filter((link) => annotationIds.has(link.annotationId)).length;
   return (
     <div className="flex h-full flex-col gap-2 text-xs">
+      <CandidateQueueHeader
+        title="Potential line items"
+        count={smartCount + detectedCount + manualCount}
+        linkedCount={linkedCount}
+        detail="PDF review queue"
+      />
       <SmartCountInspect snapshot={snapshot} actions={actions} />
       <DrawingAnalysisInspect
         snapshot={snapshot}
@@ -493,6 +507,27 @@ function PdfEntitiesInspect({
       <div className="min-h-0 flex-1 border-t border-line/70 pt-2">
         <AnnotationsInspect snapshot={snapshot} actions={actions} />
       </div>
+    </div>
+  );
+}
+
+function CandidateQueueHeader({
+  title,
+  count,
+  linkedCount,
+  detail,
+}: {
+  title: string;
+  count: number;
+  linkedCount: number;
+  detail: string;
+}) {
+  return (
+    <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-fg/40">{title}</p>
+      <p className="mt-0.5 text-[11px] text-fg/60">
+        {count.toLocaleString()} candidate{count === 1 ? "" : "s"} · {linkedCount.toLocaleString()} linked · {detail}
+      </p>
     </div>
   );
 }
@@ -527,7 +562,7 @@ function SmartCountInspect({
             className="flex max-w-full items-center gap-1 text-left"
           >
             {collapsed ? <ChevronRight className="h-3 w-3 text-fg/40" /> : <ChevronDown className="h-3 w-3 text-fg/40" />}
-            <span className="truncate text-[11px] font-semibold text-fg">Smart Count</span>
+            <span className="truncate text-[11px] font-semibold text-fg">Count candidates</span>
           </button>
           <p className="mt-0.5 truncate text-[10px] text-fg/40" title={smart.fileName}>
             Page {smart.pageNumber} · {smart.items.length} row{smart.items.length === 1 ? "" : "s"} · {totalSelected.toLocaleString()} selected
@@ -537,7 +572,7 @@ function SmartCountInspect({
         <button
           type="button"
           onClick={() => actions?.clearSmartCountResults()}
-          title="Clear Smart Count results"
+          title="Clear count candidates"
           className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-line bg-bg/40 text-fg/40 transition-colors hover:border-danger/30 hover:text-danger"
         >
           <X className="h-3 w-3" />
@@ -550,7 +585,7 @@ function SmartCountInspect({
             <div className="mt-2 flex gap-2">
               {smart.cropImage && (
                 <div className="shrink-0 rounded-md border border-line bg-white p-1">
-                  <img src={smart.cropImage} alt="Smart Count region" className="h-16 w-16 object-contain" />
+                  <img src={smart.cropImage} alt="Count candidate region" className="h-16 w-16 object-contain" />
                 </div>
               )}
               <div className="min-w-0 flex-1">
@@ -571,7 +606,7 @@ function SmartCountInspect({
           <div className="mt-2 max-h-[34vh] space-y-1 overflow-auto pr-1">
             {smart.items.length === 0 && !smart.running ? (
               <p className="rounded-md border border-line bg-bg/30 px-3 py-3 text-center text-[11px] text-fg/40">
-                Draw a Smart Count region from Count &gt; Smart Count to populate native rows here.
+                Draw a count region to populate candidates here.
               </p>
             ) : smart.items.map((item) => (
               <div
@@ -631,7 +666,7 @@ function SmartCountInspect({
                       onPick={(pick) => void actions?.createLineItemFromSmartCountItem(item.id, pick)}
                       triggerLabel="Add"
                       triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-                      triggerTitle="Add this Smart Count row to a worksheet and link it automatically"
+                      triggerTitle="Add this count candidate to a worksheet and link it automatically"
                       triggerIcon={<Plus className="h-3 w-3" />}
                     />
                   )}
@@ -641,7 +676,7 @@ function SmartCountInspect({
                       event.stopPropagation();
                       actions?.deleteSmartCountItem(item.id);
                     }}
-                    title="Delete Smart Count row"
+                    title="Delete count candidate"
                     className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger"
                   >
                     <Trash2 className="h-3 w-3" />
@@ -762,7 +797,7 @@ function DwgEntitiesInspect({
         <div className="flex items-start gap-2">
           <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
           <div className="min-w-0 flex-1">
-            <p className="truncate text-[11px] font-semibold text-fg">Drawing intelligence</p>
+            <p className="truncate text-[11px] font-semibold text-fg">Potential line items</p>
             <p className="mt-0.5 truncate text-[10px] text-fg/40" title={intel.fileName}>
               {intel.selectedLayout === "__all__" ? "All layouts" : intel.selectedLayout}
               {intel.processedAt ? ` · processed ${new Date(intel.processedAt).toLocaleDateString()}` : ""}
@@ -771,23 +806,23 @@ function DwgEntitiesInspect({
         </div>
 
         <div className="mt-2 grid grid-cols-4 gap-1">
-          <AnalysisStat label="Entities" value={intel.entityCount} />
-          <AnalysisStat label="Systems" value={intel.systems.length} />
+          <AnalysisStat label="CAD" value={intel.entityCount} />
+          <AnalysisStat label="Linear" value={intel.systems.length} />
           <AnalysisStat label="Counts" value={intel.autoCounts.length} />
-          <AnalysisStat label="Marks" value={intel.annotationCount} />
+          <AnalysisStat label="Manual" value={intel.annotationCount} />
         </div>
 
         <Input
           className="mt-2 h-7 text-xs"
           value={query}
           onChange={(event) => setQuery(event.target.value)}
-          placeholder="Filter DWG entities, layers, systems..."
+          placeholder="Filter candidate line items..."
         />
       </div>
 
       <div className="min-h-0 flex-1 space-y-2 overflow-auto pr-1">
         <DetectionGroup
-          title="Traced systems"
+          title="Linear candidates"
           count={intel.systems.length}
           rows={systems.map((system) => ({
             id: system.id,
@@ -812,7 +847,7 @@ function DwgEntitiesInspect({
         />
 
         <DetectionGroup
-          title="Auto Count groups"
+          title="Count candidates"
           count={intel.autoCounts.length}
           icon={<CircleDashed className="h-3 w-3 text-emerald-500" />}
           rows={autoCounts.map((row) => ({
@@ -839,7 +874,7 @@ function DwgEntitiesInspect({
         <section>
           <div className="flex items-center gap-1.5 rounded-md px-1.5 py-1 text-[11px] font-medium text-fg/60">
             <ChevronDown className="h-3 w-3" />
-            <span className="min-w-0 flex-1 truncate">Native entities</span>
+            <span className="min-w-0 flex-1 truncate">CAD entity candidates</span>
             <span className="font-mono text-[10px] text-fg/35">
               {entities.length === intel.entities.length ? intel.entities.length.toLocaleString() : `${entities.length.toLocaleString()}/${intel.entities.length.toLocaleString()}`}
             </span>
@@ -949,7 +984,7 @@ function DrawingAnalysisInspect({
       <div className="flex items-start gap-2">
         <GitBranch className="mt-0.5 h-3.5 w-3.5 shrink-0 text-sky-500" />
         <div className="min-w-0 flex-1">
-          <p className="truncate text-[11px] font-semibold text-fg">Drawing intelligence</p>
+          <p className="truncate text-[11px] font-semibold text-fg">Detected candidates</p>
           <p className="mt-0.5 truncate text-[10px] text-fg/40" title={drawing.fileName}>
             Page {drawing.pageNumber} · {analysis ? `${analysis.duration_ms.toFixed(0)} ms` : "No run yet"}
           </p>
@@ -1082,7 +1117,7 @@ function DrawingAnalysisInspect({
       {analysis ? (
         <div className="mt-2 max-h-[42vh] space-y-2 overflow-auto pr-1">
           <DetectionGroup
-            title="Traced systems"
+            title="Linear candidates"
             count={systems.length}
             rows={systems.map((system) => {
               const state = linkedStateFor(system.id);
@@ -1130,7 +1165,7 @@ function DrawingAnalysisInspect({
           />
           {circles.length > 0 && (
             <DetectionGroup
-              title="Circles"
+              title="Circle candidates"
               count={circles.length}
               rows={circles.map((circle) => {
                 const state = linkedStateFor(circle.id);
@@ -1154,7 +1189,7 @@ function DrawingAnalysisInspect({
           )}
           {lines.length > 0 && (
             <DetectionGroup
-              title="Linework"
+              title="Linework candidates"
               count={lines.length}
               rows={lines.map((line) => {
                 const state = linkedStateFor(line.id);
@@ -1179,7 +1214,7 @@ function DrawingAnalysisInspect({
           )}
           {texts.length > 0 && (
             <DetectionGroup
-              title="Text regions"
+              title="Text candidates"
               count={texts.length}
               rows={texts.map((region) => ({
                 id: region.id,
@@ -1612,7 +1647,7 @@ function AnnotationsInspect({
     <div className="flex h-full flex-col gap-2 text-xs">
       <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5">
         <p className="text-[10px] font-medium uppercase tracking-wider text-fg/40">
-          {mode === "dwg" ? "DWG measurements" : "Takeoff marks"}
+          {mode === "dwg" ? "Manual CAD candidates" : "Manual takeoff candidates"}
         </p>
         <p className="mt-0.5 text-[11px] text-fg/60">
           {totalCount} item{totalCount === 1 ? "" : "s"} · {visibleCount} visible
@@ -1622,7 +1657,7 @@ function AnnotationsInspect({
       {totalCount === 0 ? (
         <p className="rounded-md border border-line bg-panel/40 px-3 py-4 text-center text-[11px] text-fg/40">
           {mode === "dwg"
-            ? "Draw a measurement to build the DWG ledger."
+            ? "No manual CAD candidates yet."
             : "Use a tool and click on the drawing to start measuring."}
         </p>
       ) : (
@@ -1663,7 +1698,7 @@ function AnnotationsInspect({
                     }
                     triggerLabel="Add"
                     triggerClassName="inline-flex shrink-0 items-center gap-1 rounded-md px-2 text-[10px] font-medium text-fg/55 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
-                    triggerTitle={`Add one summed line item from all ${items.length} marks in ${groupLabel} — pick a category`}
+                    triggerTitle={`Add one summed worksheet line item from ${items.length} ${groupLabel} candidates`}
                     triggerIcon={<Sigma className="h-3 w-3" />}
                   />
                 </div>
@@ -1746,7 +1781,7 @@ function AnnotationRow({
             onPick={(pick) => void actions?.createLineItemFromAnnotation(ann.id, pick)}
             triggerLabel="Add"
             triggerClassName="inline-flex items-center gap-0.5 rounded-md border border-line bg-bg/50 px-1.5 py-0.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-            triggerTitle="Add this annotation to a worksheet — pick a category"
+            triggerTitle="Add this candidate to a worksheet and link it automatically"
             triggerIcon={<Plus className="h-3 w-3" />}
           />
         )}
