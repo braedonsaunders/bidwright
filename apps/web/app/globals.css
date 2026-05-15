@@ -174,3 +174,16 @@ a {
 table {
   border-collapse: collapse;
 }
+
+/* Hide native browser spinners on number inputs that opt in via .no-spinner.
+   Used in the worksheet grid where the up/down arrows crowd already-tight
+   cells and add no value over typing or arrow-key navigation. */
+.no-spinner::-webkit-inner-spin-button,
+.no-spinner::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.no-spinner {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}

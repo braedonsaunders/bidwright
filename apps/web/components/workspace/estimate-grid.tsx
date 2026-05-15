@@ -1766,7 +1766,7 @@ function entityOptionFromSearchResult(
       unitCost: result.unitCost ?? undefined,
       unitPrice: result.unitPrice ?? undefined,
       unit: result.uom,
-      description: payloadString(payload, "description") || result.subtitle || result.title,
+      description: payloadString(payload, "description") || result.subtitle || "",
       rateScheduleItemId,
       itemId,
       effectiveCostId,
@@ -2931,6 +2931,21 @@ export function EstimateGrid({
     };
   }, [entityDropdownRowId, positionEntityDropdown]);
 
+  // Escape always closes the dropdown — the search input has its own handler,
+  // but focus can shift to results, browse cards, etc. while the dropdown is
+  // open, and those elements don't catch Escape on their own.
+  useEffect(() => {
+    if (!entityDropdownRowId) return;
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeEntityDropdown(entityDropdownRowId);
+    };
+    document.addEventListener("keydown", handler, true);
+    return () => document.removeEventListener("keydown", handler, true);
+  }, [entityDropdownRowId, closeEntityDropdown]);
+
   useEffect(() => () => clearEntityDropdownTimers(), [clearEntityDropdownTimers]);
 
   // Focus inline rename input
@@ -3990,20 +4005,26 @@ export function EstimateGrid({
     if (!editingCell) return;
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
       e.preventDefault();
+      e.stopPropagation();
       commitEdit();
       window.setTimeout(() => addNewItem(), 0);
     } else if (e.key === "Enter") {
-      // Commit and keep this cell selected (no auto-advance) — Tab moves on
+      // Commit and keep this cell selected (no auto-advance) — Tab moves on.
+      // stopPropagation prevents the document-level keydown from re-firing on
+      // the now-selected cell, which would re-open the picker for entityName.
       e.preventDefault();
+      e.stopPropagation();
       const { rowId, column } = editingCell;
       commitEdit();
       setSelectedCell({ rowId, column });
     } else if (e.key === "Escape") {
+      e.stopPropagation();
       const { rowId, column } = editingCell;
       cancelEdit();
       setSelectedCell({ rowId, column });
     } else if (e.key === "Tab") {
       e.preventDefault();
+      e.stopPropagation();
       const { rowId, column } = editingCell;
       commitEdit();
       if (e.shiftKey) {
@@ -5764,7 +5785,7 @@ export function EstimateGrid({
             ref={(el) => { editInputRef.current = el; }}
             type="number"
             step="0.01"
-            className="w-14 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
+            className="no-spinner w-14 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={commitEdit}
@@ -5853,7 +5874,7 @@ export function EstimateGrid({
             type="number"
             step="0.01"
             size={1}
-            className="w-12 min-w-0 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
+            className="no-spinner w-12 min-w-0 text-center rounded border border-accent/50 bg-bg px-1 py-0.5 text-xs outline-none tabular-nums"
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={commitEdit}
@@ -6870,7 +6891,10 @@ export function EstimateGrid({
             type={inputType}
             size={1}
             step={inputType === "number" ? "0.01" : undefined}
-            className="h-6 w-full min-w-0 rounded border border-accent/50 bg-bg px-1.5 text-xs outline-none tabular-nums"
+            className={cn(
+              "h-6 w-full min-w-0 rounded border border-accent/50 bg-bg px-1.5 text-xs outline-none tabular-nums",
+              inputType === "number" && "no-spinner",
+            )}
             value={editValue}
             onChange={(e) => setEditValue(e.target.value)}
             onBlur={commitEdit}

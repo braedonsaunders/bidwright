@@ -145,16 +145,17 @@ function calcTieredRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
   const rsResult = calcRateSchedule(item, undefined, ctx);
   if (rsResult) return rsResult;
 
-  return {};
+  return calcManual(item);
 }
 
 function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
-  // Duration pricing flows through rate schedules. The schedule defines tiers
-  // for the duration units (DAY/WEEK/MONTH) and the line item populates
-  // `tierUnits` keyed by tier id. No legacy fallback path.
+  // Duration pricing prefers a linked rate schedule (DAY/WEEK/MONTH tiers,
+  // hours in `tierUnits`). If no schedule is attached, treat the row as a
+  // plain markup line so the user-entered cost/qty/markup still produces a
+  // sensible price — important for ad-hoc / vendor-quote style entries.
   const rsResult = calcRateSchedule(item, undefined, ctx);
   if (rsResult) return rsResult;
-  return {};
+  return calcManual(item);
 }
 
 function calcQuantityMarkup(item: WorksheetItem): CalcResult {

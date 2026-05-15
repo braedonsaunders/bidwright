@@ -1254,14 +1254,9 @@ function normalizeEntityUnitLabels(
 
 function normalizeEntityItemSource(
   rawValue: unknown,
-  rawCalculationType: unknown,
   calculationType: EntityCategory["calculationType"],
 ): EntityCategory["itemSource"] {
   const raw = typeof rawValue === "string" ? rawValue.trim() : "";
-  const rawCalc = typeof rawCalculationType === "string" ? rawCalculationType.trim().toLowerCase() : "";
-  if (rawCalc === "auto_labour" || rawCalc === "auto_labor" || rawCalc === "labour" || rawCalc === "labor") {
-    return "rate_schedule";
-  }
   if (raw === "rate_schedule" || raw === "catalog" || raw === "freeform") {
     return raw;
   }
@@ -1283,7 +1278,7 @@ export function mapEntityCategory(e: any): EntityCategory {
     unitLabels: normalizeEntityUnitLabels(e.unitLabels, calculationType),
     calculationType,
     calcFormula: e.calcFormula ?? "",
-    itemSource: normalizeEntityItemSource(e.itemSource, e.calculationType, calculationType),
+    itemSource: normalizeEntityItemSource(e.itemSource, calculationType),
     catalogId: e.catalogId ?? null,
     analyticsBucket: e.analyticsBucket ?? null,
     color: e.color ?? "#6b7280",

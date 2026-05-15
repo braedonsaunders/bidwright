@@ -10,7 +10,7 @@ const labourCategory = {
   name: "Labour",
   entityType: "Labour",
   itemSource: "rate_schedule",
-  calculationType: "hours",
+  calculationType: "tiered_rate",
   validUoms: ["HR"],
 };
 
@@ -18,7 +18,7 @@ const materialCategory = {
   name: "Material",
   entityType: "Material",
   itemSource: "catalog",
-  calculationType: "quantity",
+  calculationType: "quantity_markup",
   validUoms: ["EA", "SF"],
 };
 
