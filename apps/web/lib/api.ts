@@ -1641,6 +1641,7 @@ export async function searchLineItemCandidates(
     limit?: number;
     offset?: number;
     refresh?: boolean;
+    signal?: AbortSignal;
   } = {},
 ): Promise<LineItemSearchResult[]> {
   const params = new URLSearchParams();
@@ -1655,7 +1656,9 @@ export async function searchLineItemCandidates(
   if (input.offset) params.set("offset", String(input.offset));
   if (input.refresh) params.set("refresh", "true");
   const query = params.toString();
-  return apiRequest<LineItemSearchResult[]>(`/projects/${projectId}/line-item-search${query ? `?${query}` : ""}`);
+  return apiRequest<LineItemSearchResult[]>(`/projects/${projectId}/line-item-search${query ? `?${query}` : ""}`, {
+    signal: input.signal,
+  });
 }
 
 export async function rebuildLineItemSearchIndex(projectId: string): Promise<{ indexed: number }> {

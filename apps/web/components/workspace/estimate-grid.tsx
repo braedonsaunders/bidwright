@@ -1481,6 +1481,10 @@ function groupHasImportedRateScheduleOption(group: EntityOptionGroup) {
   return group.source === "rate_schedule" || group.items.some(isImportedRateScheduleOption);
 }
 
+function isAbortError(error: unknown) {
+  return error instanceof Error && error.name === "AbortError";
+}
+
 function mergeEntityOptionGroups(
   existing: EntityOptionGroup[],
   incoming: EntityOptionGroup[],
@@ -2444,6 +2448,7 @@ export function EstimateGrid({
   const [selectedAddItems, setSelectedAddItems] = useState<Map<string, { group: EntityOptionGroup; item: EntityOptionItem }>>(() => new Map());
   const addItemsRequestRef = useRef(0);
   const addItemsLoadingMoreRef = useRef(false);
+  const addItemsSearchAbortRef = useRef<AbortController | null>(null);
 
   // ─── NEW STATE: Assembly insert ───
   const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
@@ -2461,6 +2466,7 @@ export function EstimateGrid({
   const [pendingCategorySelection, setPendingCategorySelection] = useState<PendingCategorySelection | null>(null);
   const entitySearchRequestRef = useRef(0);
   const entitySearchLoadingMoreRef = useRef(false);
+  const entitySearchAbortRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (!detailItem) return;
@@ -3043,7 +3049,11 @@ export function EstimateGrid({
       return;
     }
 
+    let controller: AbortController | null = null;
     const timer = window.setTimeout(async () => {
+      controller = new AbortController();
+      entitySearchAbortRef.current?.abort();
+      entitySearchAbortRef.current = controller;
       setEntitySearchLoading(true);
       setEntitySearchLoadingMore(false);
       entitySearchLoadingMoreRef.current = false;
@@ -3063,6 +3073,7 @@ export function EstimateGrid({
           disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
           limit: ENTITY_SEARCH_PAGE_SIZE,
           offset: 0,
+          signal: controller.signal,
         });
         if (requestId !== entitySearchRequestRef.current) return;
         setEntitySearchGroups(groupSearchResults(results, entityCategories, entitySearchTerm, activeEntityRow.category));
@@ -3070,6 +3081,7 @@ export function EstimateGrid({
         setEntitySearchHasMore(results.length === ENTITY_SEARCH_PAGE_SIZE);
         setEntityPluginResults([]);
       } catch (error) {
+        if (isAbortError(error)) return;
         if (requestId !== entitySearchRequestRef.current) return;
         setEntitySearchGroups([]);
         setEntitySearchOffset(0);
@@ -3084,6 +3096,7 @@ export function EstimateGrid({
 
     return () => {
       window.clearTimeout(timer);
+      controller?.abort();
     };
   }, [activeEntityBrowseCard, activeEntityRow, entityCategories, entityBrowseMode, entityDropdownClosingRowId, entityDropdownRowId, entitySearchTerm, estimateSearchSettings, workspace.project.id]);
 
@@ -3511,7 +3524,11 @@ export function EstimateGrid({
       return;
     }
 
+    let controller: AbortController | null = null;
     const timer = window.setTimeout(async () => {
+      controller = new AbortController();
+      addItemsSearchAbortRef.current?.abort();
+      addItemsSearchAbortRef.current = controller;
       setAddItemsLoading(true);
       setAddItemsLoadingMore(false);
       addItemsLoadingMoreRef.current = false;
@@ -3528,12 +3545,14 @@ export function EstimateGrid({
           disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
           limit: ENTITY_SEARCH_PAGE_SIZE,
           offset: 0,
+          signal: controller.signal,
         });
         if (requestId !== addItemsRequestRef.current) return;
         setAddItemsGroups(groupSearchResults(results, entityCategories, addItemsSearchTerm, ""));
         setAddItemsOffset(results.length);
         setAddItemsHasMore(results.length === ENTITY_SEARCH_PAGE_SIZE);
       } catch (error) {
+        if (isAbortError(error)) return;
         if (requestId !== addItemsRequestRef.current) return;
         setAddItemsGroups([]);
         setAddItemsOffset(0);
@@ -3548,6 +3567,7 @@ export function EstimateGrid({
 
     return () => {
       window.clearTimeout(timer);
+      controller?.abort();
     };
   }, [
     activeAddItemsBrowseCard,
