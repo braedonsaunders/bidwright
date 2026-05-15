@@ -33,6 +33,7 @@ packages/db/seed-datasets/
 packages/db/seed-items/
 packages/db/seed-plugins/
 packages/db/.tmp/
+supabase/.temp/
 venv/
 __pycache__/
 *.pyc
