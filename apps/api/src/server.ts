@@ -75,7 +75,7 @@ import {
   type CreateScheduleResourceInput,
   type ScheduleResourcePatchInput,
   type CreateScheduleBaselineInput,
-  type LineItemSearchSourceType
+  type LineItemSearchSourceType,
 } from "./prisma-store.js";
 import { prisma } from "@bidwright/db";
 import {
@@ -2876,14 +2876,6 @@ export function buildServer() {
           });
         }
 
-        const hasPositiveTierUnits =
-          !!parsed.data.tierUnits && Object.values(parsed.data.tierUnits).some((value) => Number(value) > 0);
-        if (!hasPositiveTierUnits) {
-          return reply.code(400).send({
-            message: `Category "${parsed.data.category}" is calculated from a rate schedule and requires positive tierUnits.`,
-            hint: "Pass rateScheduleItemId, quantity, and tierUnits only. The system calculates cost and price.",
-          });
-        }
       }
 
       // Catalog-backed categories should use a valid catalogItemId when catalogs are configured

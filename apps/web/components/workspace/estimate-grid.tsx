@@ -1473,6 +1473,14 @@ function entityOptionKey(item: EntityOptionItem) {
   ].filter(Boolean).join("\u001f");
 }
 
+function isImportedRateScheduleOption(item: EntityOptionItem) {
+  return item.source === "rate_schedule" || Boolean(item.rateScheduleItemId);
+}
+
+function groupHasImportedRateScheduleOption(group: EntityOptionGroup) {
+  return group.source === "rate_schedule" || group.items.some(isImportedRateScheduleOption);
+}
+
 function mergeEntityOptionGroups(
   existing: EntityOptionGroup[],
   incoming: EntityOptionGroup[],
@@ -1838,9 +1846,11 @@ function orderEntityGroupsForRow(
   rowCategoryName?: string,
   actionsFirst = false,
 ): EntityOptionGroup[] {
-  const providerGroups = groups.filter((group) => group.categoryName === "Provider Results");
-  const actionGroups = groups.filter((group) => group.categoryName === "Actions");
-  const regularGroups = groups.filter((group) =>
+  const importedRateScheduleGroups = groups.filter(groupHasImportedRateScheduleOption);
+  const remainingGroups = groups.filter((group) => !groupHasImportedRateScheduleOption(group));
+  const providerGroups = remainingGroups.filter((group) => group.categoryName === "Provider Results");
+  const actionGroups = remainingGroups.filter((group) => group.categoryName === "Actions");
+  const regularGroups = remainingGroups.filter((group) =>
     group.categoryName !== "Actions" &&
     group.categoryName !== "Provider Results"
   );
@@ -1855,6 +1865,7 @@ function orderEntityGroupsForRow(
 
   if (actionsFirst) {
     return [
+      ...importedRateScheduleGroups,
       ...providerGroups,
       ...actionGroups,
       ...matchingPricedGroups,
@@ -1864,6 +1875,7 @@ function orderEntityGroupsForRow(
   }
 
   return [
+    ...importedRateScheduleGroups,
     ...providerGroups,
     ...matchingPricedGroups,
     ...otherPricedGroups,
@@ -2720,6 +2732,20 @@ export function EstimateGrid({
     }
   }, []);
 
+  const focusWorksheetGrid = useCallback(() => {
+    if (typeof window === "undefined") return;
+    window.requestAnimationFrame(() => {
+      gridWidthRef.current?.focus({ preventScroll: true });
+    });
+  }, []);
+
+  const findEntityCellAnchor = useCallback((rowId: string | null | undefined) => {
+    if (!rowId || typeof document === "undefined") return null;
+    return document.querySelector<HTMLTableCellElement>(
+      `[data-cell-row="${rowId}"][data-cell-col="entityName"]`,
+    );
+  }, []);
+
   const closeEntityDropdown = useCallback((
     closingRowId?: string | null,
     options: { preserveTemporaryDraft?: boolean } = {},
@@ -2740,11 +2766,12 @@ export function EstimateGrid({
       onApply((current) => applyWorksheetItemDelete(current, rowId));
       if (selectedRowId === rowId) setSelectedRowId(null);
     }
+    focusWorksheetGrid();
     entityDropdownCloseTimerRef.current = window.setTimeout(() => {
       entityDropdownCloseTimerRef.current = null;
       resetEntityDropdownState();
     }, 260);
-  }, [clearEntityDropdownTimers, entityDropdownRowId, onApply, resetEntityDropdownState, selectedRowId]);
+  }, [clearEntityDropdownTimers, entityDropdownRowId, focusWorksheetGrid, onApply, resetEntityDropdownState, selectedRowId]);
 
   const openEntityDropdown = useCallback((
     rowId: string,
@@ -2774,13 +2801,22 @@ export function EstimateGrid({
     setSelectedCell({ rowId, column: "entityName" });
     setSelectedRowId(rowId);
     entityDropdownOpenFrameRef.current = window.requestAnimationFrame(() => {
-      if (!anchorEl) positionEntityDropdown(null, rowId);
+      const measuredAnchor = anchorEl ?? findEntityCellAnchor(rowId);
+      if (measuredAnchor) {
+        entityCellRef.current = measuredAnchor;
+        measuredAnchor.scrollIntoView({ block: "nearest", inline: "nearest" });
+      }
       entityDropdownOpenFrameRef.current = window.requestAnimationFrame(() => {
-        entityDropdownOpenFrameRef.current = null;
-        setEntityDropdownVisible(true);
+        const settledAnchor = anchorEl ?? findEntityCellAnchor(rowId);
+        if (settledAnchor) entityCellRef.current = settledAnchor;
+        positionEntityDropdown(settledAnchor, rowId);
+        entityDropdownOpenFrameRef.current = window.requestAnimationFrame(() => {
+          entityDropdownOpenFrameRef.current = null;
+          setEntityDropdownVisible(true);
+        });
       });
     });
-  }, [clearEntityDropdownTimers, positionEntityDropdown]);
+  }, [clearEntityDropdownTimers, findEntityCellAnchor, positionEntityDropdown]);
 
   const createDraftItem = useCallback((worksheetId: string) => {
     const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
@@ -3932,7 +3968,11 @@ export function EstimateGrid({
 
   function handleCellKeyDown(e: React.KeyboardEvent) {
     if (!editingCell) return;
-    if (e.key === "Enter") {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      commitEdit();
+      window.setTimeout(() => addNewItem(), 0);
+    } else if (e.key === "Enter") {
       // Commit and keep this cell selected (no auto-advance) — Tab moves on
       e.preventDefault();
       const { rowId, column } = editingCell;
@@ -4069,7 +4109,7 @@ export function EstimateGrid({
 
     if (categoryChanged && newCatDef) {
       patch.uom = preservingProductivityBasis ? row?.uom : catalogData?.uom ?? newCatDef.defaultUom;
-      if (!categoryAllowsEditingTierUnits(newCatDef)) patch.tierUnits = {};
+      if (!categoryRequiresRateSchedule(newCatDef) && !categoryAllowsEditingTierUnits(newCatDef)) patch.tierUnits = {};
       if (isCellDisabledByCategory(newCatDef, "cost")) patch.cost = catalogData?.cost ?? 0;
       if (isCellDisabledByCategory(newCatDef, "markup")) patch.markup = workspace.currentRevision.defaultMarkup ?? 0.2;
       if (isCellDisabledByCategory(newCatDef, "price")) patch.price = 0;
@@ -4156,6 +4196,7 @@ export function EstimateGrid({
           } else {
             setSelectedRowId(mutation.item.id);
             setSelectedCell({ rowId: mutation.item.id, column: "entityName" });
+            focusWorksheetGrid();
           }
         } catch (error) {
           onApply((current) => applyWorksheetItemDelete(current, row.id));
@@ -4175,6 +4216,10 @@ export function EstimateGrid({
     commitItemPatch(rowId, patch as WorksheetItemPatchInput);
     if (options.focusColumn && row) {
       beginEditingCell(rowId, options.focusColumn, getEditableValue(row, options.focusColumn) as string | number);
+    } else {
+      setSelectedRowId(rowId);
+      setSelectedCell({ rowId, column: "entityName" });
+      focusWorksheetGrid();
     }
     setPendingLaborSelections((current) => {
       if (!Object.prototype.hasOwnProperty.call(current, rowId)) return current;
@@ -4576,7 +4621,6 @@ export function EstimateGrid({
       catalogData,
       item.rateScheduleItemId,
       item.itemId,
-      item.source === "freeform" ? { focusColumn: "description" } : undefined,
     );
   }
 
@@ -5290,7 +5334,7 @@ export function EstimateGrid({
 
     if (targetCategory) {
       payload.uom = item.unit ?? targetCategory.defaultUom;
-      if (!categoryAllowsEditingTierUnits(targetCategory)) payload.tierUnits = {};
+      if (!categoryRequiresRateSchedule(targetCategory) && !categoryAllowsEditingTierUnits(targetCategory)) payload.tierUnits = {};
       if (isCellDisabledByCategory(targetCategory, "cost")) payload.cost = item.unitCost ?? 0;
       if (isCellDisabledByCategory(targetCategory, "markup")) payload.markup = markup;
       if (isCellDisabledByCategory(targetCategory, "price")) payload.price = 0;
@@ -7447,6 +7491,7 @@ export function EstimateGrid({
         )}
         <div
           ref={gridWidthRef}
+          tabIndex={-1}
           className={cn(
             "h-full min-h-0",
             worksheetViewMode === "organizer" ? "relative flex-1" : "absolute inset-0",
@@ -7779,21 +7824,25 @@ export function EstimateGrid({
             </button>
             <button
               className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-line bg-panel2/40 text-[9px] text-fg/70 transition-colors hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
+              title="Duplicate this row"
+              aria-label="Duplicate this row"
               onClick={() => {
                 duplicateRow(contextRow.id);
                 setContextMenu(null);
               }}
             >
-              <Copy className="h-3 w-3" /> Clone
+              <Copy className="h-3 w-3" /> Duplicate
             </button>
             <button
               className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-line bg-panel2/40 text-[9px] text-fg/70 transition-colors hover:border-accent/35 hover:bg-accent/10 hover:text-accent"
+              title="Copy row text to clipboard"
+              aria-label="Copy row text to clipboard"
               onClick={() => {
                 copyRowToClipboard(contextRow.id);
                 setContextMenu(null);
               }}
             >
-              <Clipboard className="h-3 w-3" /> Copy
+              <Clipboard className="h-3 w-3" /> Copy text
             </button>
             <button
               className="flex h-10 flex-col items-center justify-center gap-0.5 rounded-lg border border-danger/25 bg-danger/8 text-[9px] text-danger transition-colors hover:bg-danger/15"

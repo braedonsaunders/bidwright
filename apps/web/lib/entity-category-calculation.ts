@@ -129,14 +129,16 @@ export function getCalculationTypeOption(value: CalculationType | string | undef
   );
 }
 
-export function categoryUsesTieredUnits(category: Pick<EntityCategory, "calculationType"> | undefined) {
+export function categoryUsesTieredUnits(category: Pick<EntityCategory, "calculationType" | "itemSource"> | undefined) {
+  if (category?.itemSource === "rate_schedule") return true;
   return getCalculationTypeOption(category?.calculationType).unitMode === "tiered";
 }
 
 export function categoryAllowsEditingTierUnits(
-  category: Pick<EntityCategory, "calculationType" | "editableFields"> | undefined,
+  category: Pick<EntityCategory, "calculationType" | "editableFields" | "itemSource"> | undefined,
 ) {
   if (!category) return true;
+  if (category.itemSource === "rate_schedule") return true;
   if (categoryUsesTieredUnits(category)) return true;
   return Boolean(category.editableFields?.tierUnits);
 }

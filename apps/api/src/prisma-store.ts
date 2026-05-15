@@ -8133,13 +8133,6 @@ export class PrismaApiStore {
       );
     }
 
-    if (requiresRateScheduleItem && !hasPositiveTierUnits(item.tierUnits)) {
-      throw new Error(
-        `Category "${item.category}" is calculated from a rate schedule, so positive tierUnits are required. ` +
-        `Provide only rateScheduleItemId, quantity, and tierUnits; Bidwright calculates cost and price.`
-      );
-    }
-
     if (categoryOwnsCalculatedPricing(catDef)) {
       item.cost = 0;
       item.markup = 0;
@@ -8591,13 +8584,6 @@ export class PrismaApiStore {
 
     if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
       domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionScheduleRows);
-    }
-
-    if (updateRequiresRateScheduleItem && !hasPositiveTierUnits(domainItem.tierUnits)) {
-      throw new Error(
-        `Category "${domainItem.category}" is calculated from a rate schedule, so positive tierUnits are required. ` +
-        `Provide only rateScheduleItemId, quantity, and tierUnits; Bidwright calculates cost and price.`
-      );
     }
 
     // ── Auto-resolve EffectiveCost on cost-resource changes ──────────
