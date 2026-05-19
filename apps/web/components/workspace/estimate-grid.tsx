@@ -78,7 +78,6 @@ import {
   deleteWorksheetItem,
   deleteWorksheetItemFast,
   executePlugin,
-  getEntityCategories,
   searchLineItemCandidates,
   searchPluginField,
   getEstimateFactorLibrary,
@@ -2283,8 +2282,7 @@ export function EstimateGrid({
   const isSnapMode = variant === "snap";
   const snapWorksheetId = lockedWorksheetId ?? workspace.worksheets[0]?.id ?? null;
 
-  // Entity categories loaded from API
-  const [entityCategories, setEntityCategories] = useState<EntityCategory[]>([]);
+  const entityCategories = workspace.entityCategories;
   const globalUoms = useUomLibrary();
 
   // Tab state
@@ -2874,19 +2872,6 @@ export function EstimateGrid({
     clearEntityDropdownTimers();
     resetEntityDropdownState();
   }, [clearEntityDropdownTimers, entityDropdownRowId, resetEntityDropdownState]);
-
-  // Load entity categories on mount
-  useEffect(() => {
-    let cancelled = false;
-    getEntityCategories()
-      .then((cats) => {
-        if (!cancelled) setEntityCategories(cats);
-      })
-      .catch(() => {
-        // Silently fail; categories will be empty
-      });
-    return () => { cancelled = true; };
-  }, []);
 
   // Sync active tab when worksheets change
   useEffect(() => {
