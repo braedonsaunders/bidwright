@@ -5,7 +5,8 @@ ALTER TABLE "PickupLink" RENAME CONSTRAINT "TakeoffLink_pkey" TO "PickupLink_pke
 ALTER TABLE "PickupLink" RENAME CONSTRAINT "TakeoffLink_projectId_fkey" TO "PickupLink_projectId_fkey";
 ALTER TABLE "PickupLink" RENAME CONSTRAINT "TakeoffLink_pickupId_fkey" TO "PickupLink_pickupId_fkey";
 ALTER TABLE "PickupLink" RENAME CONSTRAINT "TakeoffLink_worksheetItemId_fkey" TO "PickupLink_worksheetItemId_fkey";
-ALTER INDEX "TakeoffLink_pkey" RENAME TO "PickupLink_pkey";
+-- RENAME CONSTRAINT above already cascaded the pkey index rename, so no
+-- explicit ALTER INDEX for the pkey is needed.
 ALTER INDEX "TakeoffLink_pickupId_idx" RENAME TO "PickupLink_pickupId_idx";
 ALTER INDEX "TakeoffLink_worksheetItemId_idx" RENAME TO "PickupLink_worksheetItemId_idx";
 ALTER INDEX "TakeoffLink_projectId_idx" RENAME TO "PickupLink_projectId_idx";
