@@ -6511,38 +6511,38 @@ export function EstimateGrid({
 		            const BrowseHeaderIcon = browseCard?.Icon;
 		            const showBrowseLaunchpad = !entitySearchTerm.trim() && !browseCard;
 		            const renderBrowseLaunchpad = () => (
-		              <div className="p-2">
-		                <div className="grid grid-cols-2 gap-1.5">
+		              <div className="p-1.5">
+		                <div className="grid grid-cols-2 gap-1">
 		                  {enabledEntityBrowseCards.map((card) => {
 		                    const BrowseIcon = card.Icon;
 		                    return (
 		                      <button
 		                        key={card.id}
 		                        type="button"
-		                        className="group flex min-h-[58px] items-center gap-2 rounded-lg border border-line/70 bg-bg/45 px-2 py-1.5 text-left transition-colors hover:border-accent/30 hover:bg-accent/5"
+		                        className="group flex min-h-[42px] items-center gap-1.5 rounded-md border border-line/70 bg-bg/45 px-1.5 py-1 text-left transition-colors hover:border-accent/30 hover:bg-accent/5"
 		                        onClick={() => {
 		                          setEntityBrowseMode(card.id);
 		                          setEntityHighlightIdx(0);
 		                        }}
 		                      >
-		                        <span className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-md border", card.accent)}>
-		                          <BrowseIcon className="h-4 w-4" />
+		                        <span className={cn("flex h-6 w-6 shrink-0 items-center justify-center rounded-md border", card.accent)}>
+		                          <BrowseIcon className="h-3.5 w-3.5" />
 		                        </span>
 		                        <span className="min-w-0">
-		                          <span className="block truncate text-[12px] font-semibold leading-4 text-fg">
+		                          <span className="block truncate text-[11px] font-semibold leading-[14px] text-fg">
 		                            {card.label}
 		                          </span>
-		                          <span className="block truncate text-[10px] leading-3 text-fg/42">
+		                          <span className="block truncate text-[9px] leading-3 text-fg/42">
 		                            {card.detail}
 		                          </span>
 		                        </span>
-		                        <ChevronRight className="ml-auto h-3.5 w-3.5 shrink-0 text-fg/25 transition-colors group-hover:text-accent" />
+		                        <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-fg/25 transition-colors group-hover:text-accent" />
 		                      </button>
 		                    );
 		                  })}
 		                </div>
 		                {enabledEntityBrowseCards.length === 0 && (
-		                  <div className="rounded-lg border border-dashed border-line bg-bg/35 px-3 py-7 text-center text-xs text-fg/42">
+		                  <div className="rounded-md border border-dashed border-line bg-bg/35 px-3 py-6 text-center text-[11px] text-fg/42">
 		                    All estimate search sources are disabled for this quote.
 		                  </div>
 		                )}
@@ -6735,12 +6735,12 @@ export function EstimateGrid({
 		                  style={{ maxHeight: entityDropdownPos.listMaxHeight }}
 			                  onScroll={handleResultsScroll}
 			                >
+			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
 			                  {showBrowseLaunchpad && manualEntryGroups.length > 0 && (
-			                    <div className="border-b border-line/70">
+			                    <div className="border-t border-line/70">
 			                      {renderGroupCollection(manualEntryGroups, "accent", "manual-launchpad")}
 			                    </div>
 			                  )}
-			                  {showBrowseLaunchpad && renderBrowseLaunchpad()}
 			                  {!showBrowseLaunchpad && renderCategorySelection()}
 			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
 			                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">

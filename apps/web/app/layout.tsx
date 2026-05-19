@@ -32,7 +32,11 @@ export default function RootLayout({
   children: ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${sora.variable} ${plexMono.variable}`}>
+    <html
+      lang="en"
+      className={`${sora.variable} ${plexMono.variable}`}
+      suppressHydrationWarning
+    >
       <body>
         <AuthProvider>
           <I18nProvider>
