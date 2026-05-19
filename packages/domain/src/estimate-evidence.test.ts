@@ -124,7 +124,7 @@ test("scoreEstimateEvidenceCoverage rewards source, quantity, and rate coverage"
       kind: "takeoff_link",
       worksheetItemId: "line-1",
       takeoffLinkId: "tol-1",
-      annotationId: "ann-1",
+      pickupId: "ann-1",
       quantityField: "value",
       derivedQuantity: 8,
       uom: "EA",
@@ -179,7 +179,7 @@ test("scoreEstimateEvidenceCoverageByWorksheetItemId scores each worksheet item 
   const scores = scoreEstimateEvidenceCoverageByWorksheetItemId(
     [
       { kind: "document_page", worksheetItemId: "line-1", fileName: "Spec.pdf", pageNumber: 2 },
-      { kind: "takeoff_link", worksheetItemId: "line-2", annotationId: "ann-1", derivedQuantity: 10 },
+      { kind: "takeoff_link", worksheetItemId: "line-2", pickupId: "ann-1", derivedQuantity: 10 },
       { kind: "rate_schedule_item", worksheetItemId: "line-2", itemName: "Electrician", rate: 95 },
     ],
     { expectedFacets: ["quantity", "rate"] },

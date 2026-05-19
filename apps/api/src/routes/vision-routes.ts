@@ -405,12 +405,12 @@ async function recordDrawingAnalysisRun(projectId: string, doc: any, result: any
   return analysisId;
 }
 
-async function updateDrawingAnalysisAcceptance(projectId: string, doc: any, analysisId: string, annotationIds: string[]) {
-  if (!analysisId || annotationIds.length === 0) return;
+async function updateDrawingAnalysisAcceptance(projectId: string, doc: any, analysisId: string, pickupIds: string[]) {
+  if (!analysisId || pickupIds.length === 0) return;
   const runs = currentAnalysisRuns(doc);
   const nextRuns = runs.map((run) => {
     if (String(run.id) !== analysisId) return run;
-    const saved = new Set([...(Array.isArray(run.savedAnnotationIds) ? run.savedAnnotationIds.map(String) : []), ...annotationIds]);
+    const saved = new Set([...(Array.isArray(run.savedAnnotationIds) ? run.savedAnnotationIds.map(String) : []), ...pickupIds]);
     return {
       ...run,
       acceptedCount: saved.size,
@@ -1984,7 +1984,7 @@ export async function visionRoutes(app: FastifyInstance) {
   });
 
   // ── POST /api/vision/save-detections-as-annotations ──────────────────────
-  // Persist reviewed geometry/system detections as normal TakeoffAnnotation
+  // Persist reviewed geometry/system detections as normal Pickup
   // rows so the rest of Bidwright can link, price, and audit them.
   app.post("/api/vision/save-detections-as-annotations", async (request, reply) => {
     const body = request.body as Record<string, unknown>;
@@ -2034,7 +2034,7 @@ export async function visionRoutes(app: FastifyInstance) {
           createdBy: "drawing-intelligence",
         });
 
-        const annotation = await request.store!.createTakeoffAnnotation(projectId, {
+        const annotation = await request.store!.createPickup(projectId, {
           documentId,
           pageNumber,
           annotationType,
@@ -2137,9 +2137,9 @@ export async function visionRoutes(app: FastifyInstance) {
       };
     }
 
-    const annotations = await request.store!.listTakeoffAnnotations(projectId, documentId, Number(run.pageNumber)).catch(() => []);
-    const links = await request.store!.listTakeoffLinks(projectId).catch(() => []);
-    const linkedAnnotationIds = new Set((Array.isArray(links) ? links : []).map((link: any) => String(link.annotationId)));
+    const annotations = await request.store!.listPickups(projectId, documentId, Number(run.pageNumber)).catch(() => []);
+    const links = await request.store!.listPickupLinks(projectId).catch(() => []);
+    const linkedAnnotationIds = new Set((Array.isArray(links) ? links : []).map((link: any) => String(link.pickupId)));
     const annotationByDetectionId = new Map<string, any>();
     for (const annotation of annotations as any[]) {
       const metadata = asRecord(annotation?.metadata);
@@ -2154,9 +2154,9 @@ export async function visionRoutes(app: FastifyInstance) {
     const savedButUnlinked = saved
       .map((ref) => {
         const annotation = annotationByDetectionId.get(String(ref.id));
-        return { detection: ref, annotationId: annotation?.id, label: annotation?.label };
+        return { detection: ref, pickupId: annotation?.id, label: annotation?.label };
       })
-      .filter((entry) => entry.annotationId && !linkedAnnotationIds.has(String(entry.annotationId)));
+      .filter((entry) => entry.pickupId && !linkedAnnotationIds.has(String(entry.pickupId)));
 
     return {
       success: true,

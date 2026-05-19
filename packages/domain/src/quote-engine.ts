@@ -2213,7 +2213,7 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
     scheduleTaskAssignments: (store.scheduleTaskAssignments || []).filter((assignment) =>
       scheduleTaskIds.has(assignment.taskId),
     ),
-    takeoffLinks: (store.takeoffLinks || []).filter((link) => link.projectId === projectId),
+    pickupLinks: (store.pickupLinks || []).filter((link) => link.projectId === projectId),
     entityCategories: store.entityCategories ?? [],
     estimateStrategy,
     estimateFeedback,

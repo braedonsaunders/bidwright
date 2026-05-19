@@ -56,7 +56,15 @@ export interface SitePhotoIntakeProps {
   /** Hand results back to TakeoffTab so it can surface them as entities
    *  in the right side panel. Called on every successful analysis;
    *  passing null clears any previous results. */
-  onResults: (result: PhotoTakeoffResult | null, sourcePhotoNames: string[]) => void;
+  /** Hand BOM rows up to the parent. `sourcePhotoNames[i]` and
+   *  `sourcePhotoDataUris[i]` are zero-aligned with the same indexes
+   *  the model referenced via `sourceImageIndexes` so the Pickups panel
+   *  can render the source photo as the row's thumbnail. */
+  onResults: (
+    result: PhotoTakeoffResult | null,
+    sourcePhotoNames: string[],
+    sourcePhotoDataUris: string[],
+  ) => void;
 }
 
 function formatBytes(bytes: number | undefined) {
@@ -162,7 +170,14 @@ export function SitePhotoIntake({
         focusPrompt: focusPrompt.trim() || undefined,
         projectContext: context.length > 0 ? context : undefined,
       });
-      onResults(response, selectedPhotos.map((p) => p.name));
+      onResults(
+        response,
+        selectedPhotos.map((p) => p.name),
+        // Build data URIs from the same base64 + mime we sent to the model
+        // so the Pickups panel renders the user's actual photo as the
+        // source-photo thumbnail on each row.
+        images.map((img) => `data:${img.mimeType};base64,${img.data}`),
+      );
       setLastResultCount(response.items.length);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Photo analysis failed");

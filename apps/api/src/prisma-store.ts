@@ -215,9 +215,10 @@ import {
   mapSourceDocument,
   mapStoredPackage,
   mapSummaryRow,
-  mapTakeoffAnnotation,
-  mapTakeoffLink,
+  mapPickup,
+  mapPickupLink,
   mapDwgEntityLink,
+  mapSymbolTemplate,
   mapUser,
   mapWorksheet,
   mapWorksheetFolder,
@@ -1399,7 +1400,7 @@ export interface SourceDocumentPatchInput {
   documentType?: string;
 }
 
-export interface CreateTakeoffAnnotationInput {
+export interface CreatePickupInput {
   documentId: string;
   pageNumber: number;
   annotationType: string;
@@ -1415,7 +1416,7 @@ export interface CreateTakeoffAnnotationInput {
   createdBy?: string;
 }
 
-export interface TakeoffAnnotationPatchInput {
+export interface PickupPatchInput {
   label?: string;
   color?: string;
   lineThickness?: number;
@@ -1427,8 +1428,8 @@ export interface TakeoffAnnotationPatchInput {
   metadata?: Record<string, unknown>;
 }
 
-export interface CreateTakeoffLinkInput {
-  annotationId: string;
+export interface CreatePickupLinkInput {
+  pickupId: string;
   worksheetItemId: string;
   quantityField?: string;  // defaults to "value"
   multiplier?: number;     // defaults to 1.0
@@ -1437,6 +1438,35 @@ export interface CreateTakeoffLinkInput {
 export interface UpdateTakeoffLinkInput {
   quantityField?: string;
   multiplier?: number;
+}
+
+export interface CreateSymbolTemplateInput {
+  /** Pre-computed cuid. Lets the caller name the on-disk PNG before insert. */
+  id: string;
+  symbol?: string;
+  label?: string;
+  /** PNG path relative to apiDataRoot. The file must already exist. */
+  storagePath: string;
+  width: number;
+  height: number;
+  dpi?: number;
+  sourceDocumentId?: string;
+  sourcePage?: number;
+  sourceBbox?: Record<string, unknown>;
+  threshold?: number;
+  crossScale?: boolean;
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
+  createdBy?: string;
+}
+
+export interface SymbolTemplatePatchInput {
+  symbol?: string;
+  label?: string;
+  threshold?: number;
+  crossScale?: boolean;
+  enabled?: boolean;
+  metadata?: Record<string, unknown>;
 }
 
 export interface ImportPreviewResult {
@@ -3309,7 +3339,7 @@ export class PrismaApiStore {
     const jobs = await this.db.job.findMany({ where: { projectId } });
     const fileNodes = await this.db.fileNode.findMany({ where: { projectId } });
     const pluginExecutions = await this.db.pluginExecution.findMany({ where: { projectId } });
-    const takeoffLinks = await this.db.takeoffLink.findMany({ where: { projectId } });
+    const pickupLinks = await this.db.pickupLink.findMany({ where: { projectId } });
     const scheduleTasks = await this.db.scheduleTask.findMany({ where: { projectId } });
     const scheduleTaskIds = scheduleTasks.map((t) => t.id);
     const scheduleDependencies = scheduleTaskIds.length > 0
@@ -3396,7 +3426,7 @@ export class PrismaApiStore {
       rateSchedules: rateSchedules.map(mapRateSchedule),
       rateScheduleTiers: rateSchedules.flatMap((s) => (s.tiers ?? []).map(mapRateScheduleTier)),
       rateScheduleItems: rateSchedules.flatMap((s) => (s.items ?? []).map(mapRateScheduleItem)),
-      takeoffLinks: takeoffLinks.map(mapTakeoffLink),
+      pickupLinks: pickupLinks.map(mapPickupLink),
     };
   }
 
@@ -14883,20 +14913,20 @@ export class PrismaApiStore {
 
   // ── Takeoff Annotation CRUD ──────────────────────────────────────────
 
-  async listTakeoffAnnotations(projectId: string, documentId?: string, pageNumber?: number) {
+  async listPickups(projectId: string, documentId?: string, pageNumber?: number) {
     await this.requireProject(projectId);
     const where: any = { projectId };
     if (documentId) where.documentId = documentId;
     if (pageNumber !== undefined) where.pageNumber = pageNumber;
-    const rows = await this.db.takeoffAnnotation.findMany({ where, orderBy: { createdAt: "asc" } });
-    return rows.map(mapTakeoffAnnotation);
+    const rows = await this.db.pickup.findMany({ where, orderBy: { createdAt: "asc" } });
+    return rows.map(mapPickup);
   }
 
-  async createTakeoffAnnotation(projectId: string, input: CreateTakeoffAnnotationInput) {
+  async createPickup(projectId: string, input: CreatePickupInput) {
     await this.requireProject(projectId);
     if (!input.documentId) throw new Error("documentId is required");
     if (!input.annotationType) throw new Error("annotationType is required");
-    const annotation = await this.db.takeoffAnnotation.create({
+    const annotation = await this.db.pickup.create({
       data: {
         id: createId("takeoff"),
         projectId,
@@ -14917,12 +14947,12 @@ export class PrismaApiStore {
         updatedAt: new Date(),
       },
     });
-    return mapTakeoffAnnotation(annotation);
+    return mapPickup(annotation);
   }
 
-  async updateTakeoffAnnotation(annotationId: string, patch: TakeoffAnnotationPatchInput) {
-    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
-    if (!annotation) throw new Error(`Takeoff annotation ${annotationId} not found`);
+  async updatePickup(pickupId: string, patch: PickupPatchInput) {
+    const annotation = await this.db.pickup.findFirst({ where: { id: pickupId } });
+    if (!annotation) throw new Error(`Takeoff annotation ${pickupId} not found`);
 
     const data: any = { updatedAt: new Date() };
     if (patch.label !== undefined) data.label = patch.label;
@@ -14935,25 +14965,25 @@ export class PrismaApiStore {
     if (patch.calibration !== undefined) data.calibration = patch.calibration as any;
     if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
 
-    const updated = await this.db.takeoffAnnotation.update({ where: { id: annotationId }, data });
+    const updated = await this.db.pickup.update({ where: { id: pickupId }, data });
 
     // Live sync: if measurement/points/calibration changed, cascade to linked line items
     if (patch.measurement !== undefined || patch.points !== undefined || patch.calibration !== undefined) {
-      await this.syncAnnotationLinks(annotation.projectId, annotationId);
+      await this.syncPickupLinks(annotation.projectId, pickupId);
     }
 
-    return mapTakeoffAnnotation(updated);
+    return mapPickup(updated);
   }
 
-  async deleteTakeoffAnnotation(annotationId: string) {
-    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
-    if (!annotation) throw new Error(`Takeoff annotation ${annotationId} not found`);
+  async deletePickup(pickupId: string) {
+    const annotation = await this.db.pickup.findFirst({ where: { id: pickupId } });
+    if (!annotation) throw new Error(`Takeoff annotation ${pickupId} not found`);
 
     // Collect affected line items BEFORE cascade delete removes the links
-    const links = await this.db.takeoffLink.findMany({ where: { annotationId } });
+    const links = await this.db.pickupLink.findMany({ where: { pickupId: pickupId } });
     const affectedItemIds = [...new Set(links.map((l) => l.worksheetItemId))];
 
-    await this.db.takeoffAnnotation.delete({ where: { id: annotationId } });
+    await this.db.pickup.delete({ where: { id: pickupId } });
 
     // Recalculate each affected line item (links are now cascade-deleted)
     for (const itemId of affectedItemIds) {
@@ -14963,35 +14993,140 @@ export class PrismaApiStore {
     return { deleted: true };
   }
 
-  // ── Takeoff Links ─────────────────────────────────────────────────────────
+  // ── Symbol Library (Few-Shot from Legend) ─────────────────────────────────
+  //
+  // The PNG bytes live on disk; this layer only owns the metadata row. The
+  // caller (symbol-template-service) is responsible for writing/deleting the
+  // file alongside the DB operation. Tightly coupling them at this layer
+  // would entangle file IO with the otherwise pure DB store.
 
-  async listTakeoffLinks(projectId: string, annotationId?: string, worksheetItemId?: string) {
+  async listSymbolTemplates(projectId: string, opts?: { enabledOnly?: boolean }) {
     await this.requireProject(projectId);
     const where: any = { projectId };
-    if (annotationId) where.annotationId = annotationId;
-    if (worksheetItemId) where.worksheetItemId = worksheetItemId;
-    const rows = await this.db.takeoffLink.findMany({
+    if (opts?.enabledOnly) where.enabled = true;
+    const rows = await this.db.symbolTemplate.findMany({
       where,
-      include: { annotation: true },
+      orderBy: [{ symbol: "asc" }, { createdAt: "asc" }],
+    });
+    return rows.map(mapSymbolTemplate);
+  }
+
+  async getSymbolTemplate(projectId: string, templateId: string) {
+    await this.requireProject(projectId);
+    const row = await this.db.symbolTemplate.findFirst({
+      where: { id: templateId, projectId },
+    });
+    return row ? mapSymbolTemplate(row) : null;
+  }
+
+  async createSymbolTemplate(projectId: string, input: CreateSymbolTemplateInput) {
+    await this.requireProject(projectId);
+    if (!input.id) throw new Error("id is required");
+    if (!input.storagePath) throw new Error("storagePath is required");
+    if (!Number.isFinite(input.width) || input.width <= 0) throw new Error("width must be a positive number");
+    if (!Number.isFinite(input.height) || input.height <= 0) throw new Error("height must be a positive number");
+    if (input.sourceDocumentId) {
+      // Validate the FK so we get a meaningful error rather than a Postgres
+      // foreign-key violation deep in Prisma.
+      const doc = await this.db.sourceDocument.findFirst({
+        where: { id: input.sourceDocumentId, projectId },
+        select: { id: true },
+      });
+      if (!doc) throw new Error(`SourceDocument ${input.sourceDocumentId} not found in project`);
+    }
+    const row = await this.db.symbolTemplate.create({
+      data: {
+        id: input.id,
+        projectId,
+        symbol: input.symbol ?? "",
+        label: input.label ?? "",
+        storagePath: input.storagePath,
+        width: Math.round(input.width),
+        height: Math.round(input.height),
+        dpi: input.dpi ?? 150,
+        sourceDocumentId: input.sourceDocumentId ?? null,
+        sourcePage: input.sourcePage ?? 1,
+        sourceBbox: (input.sourceBbox ?? {}) as any,
+        threshold: input.threshold ?? 0.75,
+        crossScale: input.crossScale ?? false,
+        enabled: input.enabled ?? true,
+        metadata: (input.metadata ?? {}) as any,
+        createdBy: input.createdBy ?? undefined,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    });
+    return mapSymbolTemplate(row);
+  }
+
+  async updateSymbolTemplate(projectId: string, templateId: string, patch: SymbolTemplatePatchInput) {
+    await this.requireProject(projectId);
+    const existing = await this.db.symbolTemplate.findFirst({
+      where: { id: templateId, projectId },
+    });
+    if (!existing) throw new Error(`SymbolTemplate ${templateId} not found in project`);
+
+    const data: any = { updatedAt: new Date() };
+    if (patch.symbol !== undefined) data.symbol = patch.symbol;
+    if (patch.label !== undefined) data.label = patch.label;
+    if (patch.threshold !== undefined) {
+      if (!Number.isFinite(patch.threshold) || patch.threshold < 0.3 || patch.threshold > 0.95) {
+        throw new Error("threshold must be between 0.3 and 0.95");
+      }
+      data.threshold = patch.threshold;
+    }
+    if (patch.crossScale !== undefined) data.crossScale = patch.crossScale;
+    if (patch.enabled !== undefined) data.enabled = patch.enabled;
+    if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
+
+    const updated = await this.db.symbolTemplate.update({
+      where: { id: templateId },
+      data,
+    });
+    return mapSymbolTemplate(updated);
+  }
+
+  async deleteSymbolTemplate(projectId: string, templateId: string) {
+    await this.requireProject(projectId);
+    const row = await this.db.symbolTemplate.findFirst({
+      where: { id: templateId, projectId },
+      select: { id: true, storagePath: true },
+    });
+    if (!row) throw new Error(`SymbolTemplate ${templateId} not found in project`);
+    await this.db.symbolTemplate.delete({ where: { id: templateId } });
+    // File cleanup is the caller's responsibility — see symbol-template-service.
+    return { deleted: true, storagePath: row.storagePath };
+  }
+
+  // ── Takeoff Links ─────────────────────────────────────────────────────────
+
+  async listPickupLinks(projectId: string, pickupId?: string, worksheetItemId?: string) {
+    await this.requireProject(projectId);
+    const where: any = { projectId };
+    if (pickupId) where.pickupId = pickupId;
+    if (worksheetItemId) where.worksheetItemId = worksheetItemId;
+    const rows = await this.db.pickupLink.findMany({
+      where,
+      include: { pickup: true },
       orderBy: { createdAt: "asc" },
     });
     return rows.map((r: any) => ({
-      ...mapTakeoffLink(r),
-      annotation: r.annotation ? mapTakeoffAnnotation(r.annotation) : undefined,
+      ...mapPickupLink(r),
+      pickup: r.pickup ? mapPickup(r.pickup) : undefined,
     }));
   }
 
-  async createTakeoffLink(projectId: string, input: CreateTakeoffLinkInput) {
+  async createPickupLink(projectId: string, input: CreatePickupLinkInput) {
     await this.requireProject(projectId);
 
-    if (!input.annotationId) throw new Error("annotationId is required");
+    if (!input.pickupId) throw new Error("pickupId is required");
     if (!input.worksheetItemId) throw new Error("worksheetItemId is required");
 
     // Validate annotation exists and belongs to project
-    const annotation = await this.db.takeoffAnnotation.findFirst({
-      where: { id: input.annotationId, projectId },
+    const annotation = await this.db.pickup.findFirst({
+      where: { id: input.pickupId, projectId },
     });
-    if (!annotation) throw new Error(`Takeoff annotation ${input.annotationId} not found in project`);
+    if (!annotation) throw new Error(`Takeoff annotation ${input.pickupId} not found in project`);
 
     // Validate worksheet item exists and belongs to project's current revision
     const item = await this.db.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
@@ -15013,11 +15148,11 @@ export class PrismaApiStore {
     const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
     const derivedQuantity = rawValue * multiplier;
 
-    const link = await this.db.takeoffLink.create({
+    const link = await this.db.pickupLink.create({
       data: {
         id: createId("tlink"),
         projectId,
-        annotationId: input.annotationId,
+        pickupId: input.pickupId,
         worksheetItemId: input.worksheetItemId,
         quantityField,
         multiplier,
@@ -15029,23 +15164,23 @@ export class PrismaApiStore {
 
     await this.recalcLinkedItemQuantity(input.worksheetItemId, projectId);
 
-    return mapTakeoffLink(link);
+    return mapPickupLink(link);
   }
 
   async updateTakeoffLink(linkId: string, patch: UpdateTakeoffLinkInput) {
-    const link = await this.db.takeoffLink.findFirst({ where: { id: linkId } });
+    const link = await this.db.pickupLink.findFirst({ where: { id: linkId } });
     if (!link) throw new Error(`Takeoff link ${linkId} not found`);
 
     const quantityField = patch.quantityField ?? link.quantityField;
     const multiplier = patch.multiplier ?? link.multiplier;
 
     // Re-fetch annotation to get current measurement
-    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: link.annotationId } });
+    const annotation = await this.db.pickup.findFirst({ where: { id: link.pickupId } });
     const measurement = (annotation?.measurement as Record<string, unknown>) ?? {};
     const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
     const derivedQuantity = rawValue * multiplier;
 
-    const updated = await this.db.takeoffLink.update({
+    const updated = await this.db.pickupLink.update({
       where: { id: linkId },
       data: {
         quantityField,
@@ -15057,15 +15192,15 @@ export class PrismaApiStore {
 
     await this.recalcLinkedItemQuantity(link.worksheetItemId, link.projectId);
 
-    return mapTakeoffLink(updated);
+    return mapPickupLink(updated);
   }
 
-  async deleteTakeoffLink(linkId: string) {
-    const link = await this.db.takeoffLink.findFirst({ where: { id: linkId } });
+  async deletePickupLink(linkId: string) {
+    const link = await this.db.pickupLink.findFirst({ where: { id: linkId } });
     if (!link) throw new Error(`Takeoff link ${linkId} not found`);
 
     const { worksheetItemId, projectId } = link;
-    await this.db.takeoffLink.delete({ where: { id: linkId } });
+    await this.db.pickupLink.delete({ where: { id: linkId } });
 
     // Recalculate item quantity from remaining links
     await this.recalcLinkedItemQuantity(worksheetItemId, projectId);
@@ -15152,11 +15287,11 @@ export class PrismaApiStore {
   }
 
   /** Recompute all TakeoffLinks for an annotation and cascade to affected line items */
-  private async syncAnnotationLinks(projectId: string, annotationId: string) {
-    const annotation = await this.db.takeoffAnnotation.findFirst({ where: { id: annotationId } });
+  private async syncPickupLinks(projectId: string, pickupId: string) {
+    const annotation = await this.db.pickup.findFirst({ where: { id: pickupId } });
     if (!annotation) return;
 
-    const links = await this.db.takeoffLink.findMany({ where: { annotationId } });
+    const links = await this.db.pickupLink.findMany({ where: { pickupId: pickupId } });
     if (links.length === 0) return;
 
     const measurement = (annotation.measurement as Record<string, unknown>) ?? {};
@@ -15165,7 +15300,7 @@ export class PrismaApiStore {
     for (const link of links) {
       const rawValue = Number(measurement[link.quantityField] ?? measurement.value ?? 0) || 0;
       const derivedQuantity = rawValue * link.multiplier;
-      await this.db.takeoffLink.update({
+      await this.db.pickupLink.update({
         where: { id: link.id },
         data: { derivedQuantity, updatedAt: new Date() },
       });
@@ -15179,7 +15314,7 @@ export class PrismaApiStore {
 
   /** Sum all TakeoffLink.derivedQuantity for a WorksheetItem and recalculate its cost/price */
   private async recalcLinkedItemQuantity(worksheetItemId: string, projectId: string) {
-    const links = await this.db.takeoffLink.findMany({ where: { worksheetItemId } });
+    const links = await this.db.pickupLink.findMany({ where: { worksheetItemId } });
     const totalQuantity = links.reduce((sum, l) => sum + l.derivedQuantity, 0);
 
     const item = await this.db.worksheetItem.findFirst({ where: { id: worksheetItemId } });

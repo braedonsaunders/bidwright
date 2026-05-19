@@ -1085,6 +1085,10 @@ export async function listProjectModelAssets(projectId: string, options: { disco
           elements: true,
           quantities: true,
           issues: true,
+          // ModelAsset's relation field is named `takeoffLinks` because it
+          // points at ModelTakeoffLink[], a different model from PickupLink.
+          // Do not rename — that join is BIM-element-to-worksheet, distinct
+          // from the Pickup-to-worksheet rename we did elsewhere.
           takeoffLinks: true,
         },
       },

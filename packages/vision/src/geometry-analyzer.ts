@@ -152,6 +152,65 @@ export interface DrawingTracedSystem {
   qualityFlags?: string[];
 }
 
+/** Canonical primitive kind emitted by the PDF vector pipeline. Coordinates
+ *  in `params` are PDF page points (1pt = 1/72in); use
+ *  `AnalyzeDrawingGeometryResult.coordinateSpace` to convert. */
+export type DrawingPrimitiveKind =
+  | "line"
+  | "arc"
+  | "circle"
+  | "ellipse"
+  | "cubic_bezier"
+  | "quad_bezier"
+  | "rect";
+
+export interface DrawingPrimitive {
+  id: string;
+  kind: DrawingPrimitiveKind;
+  /** Shape parameters in PDF-point coords. Schema depends on `kind`:
+   *   line     → { x1, y1, x2, y2 }
+   *   rect     → { x, y, width, height }
+   *   arc      → { cx, cy, r, startAngleRad, endAngleRad }
+   *   circle   → { cx, cy, r }
+   *   ellipse  → { cx, cy, rx, ry, rotationRad }
+   *   cubic_bezier → { points: [x0,y0,x1,y1,x2,y2,x3,y3] }
+   *   quad_bezier  → { points: [x0,y0,x1,y1,x2,y2] } */
+  params: Record<string, number | number[]>;
+  layer: string | null;
+  strokeWidth: number | null;
+  color: string | null;
+  /** Painting mode: "stroke" (boundary), "fill" (region), or
+   *  "stroke+fill" (both). null when the source didn't apply either. */
+  paint: "stroke" | "fill" | "stroke+fill" | null;
+  /** Subpath index — primitives sharing the same value were joined by
+   *  `m`-less continuation in the source PDF path. */
+  subpath: number;
+  /** Density-based classification of this primitive:
+   *   - "drawing": real geometry the candidate list should surface (pipes,
+   *     equipment outlines, instrument bubbles).
+   *   - "text": short stroke sitting in a text-dense cluster (glyph outline,
+   *     decorative tick, label artwork). Kept in the output so the canvas
+   *     overlay can show them as faint hints, but the candidate list /
+   *     review queue filter them out — without this split, a single
+   *     text-heavy P&ID surfaces 150k+ "candidates" that are all glyph
+   *     strokes.
+   *  Defaults to "drawing" when omitted (back-compat with older payloads). */
+  category?: "drawing" | "text";
+}
+
+/** Coordinate-space metadata for the primitives. Use these factors to
+ *  convert PDF points → image pixels or real-world units. */
+export interface DrawingCoordinateSpace {
+  unit: "pdf-point";
+  pointsPerInch: number;
+  pageWidthPt: number;
+  pageHeightPt: number;
+  imageWidthPx: number;
+  imageHeightPx: number;
+  imagePixelPerPdfPointX: number;
+  imagePixelPerPdfPointY: number;
+}
+
 export interface AnalyzeDrawingGeometryResult {
   success: boolean;
   schemaVersion: number;
@@ -185,15 +244,49 @@ export interface AnalyzeDrawingGeometryResult {
   symbolCandidates: DrawingSymbolCandidate[];
   textRegions: DrawingTextRegion[];
   systems: DrawingTracedSystem[];
+  /** Canonical primitive list from the PDF vector pipeline (Phase 2).
+   *  Empty for raster-CV sources. Coordinates in PDF points. */
+  primitives: DrawingPrimitive[];
+  /** Histogram of primitive kinds for quick UI counters. */
+  primitivesByKind: Record<string, number>;
+  /** Number of primitives whose `category === "drawing"`. This is the
+   *  count the candidate list / review queue should display — it excludes
+   *  text-cluster glyph strokes. */
+  drawingPrimitiveCount?: number;
+  /** Number of primitives whose `category === "text"`. Rendered on the
+   *  canvas overlay (so the user can see them as faint hints) but not in
+   *  the candidate list. */
+  textPrimitiveCount?: number;
+  /** Conversion factors between PDF points and image pixels. Present only
+   *  when primitives were emitted (vector source). */
+  coordinateSpace?: DrawingCoordinateSpace;
   warnings: string[];
   duration_ms: number;
   error?: string;
 }
 
+/** Strip every `[vector-pipeline] {json}` line out of a stderr blob and
+ *  echo each one to console.log on the host process. The Python pipeline
+ *  emits structured telemetry on stderr (so it doesn't contaminate the
+ *  stdout JSON); without this forwarder the telemetry is silently dropped
+ *  on the success path. Non-tagged stderr lines (e.g. Python warnings,
+ *  exception tracebacks) are NOT forwarded — those still surface via the
+ *  emptyResult error string on failure. */
+function forwardVectorPipelineLogs(stderr: string): void {
+  if (!stderr) return;
+  for (const line of stderr.split("\n")) {
+    if (line.startsWith("[vector-pipeline]")) {
+      // Same prefix the TS-side vector-pipeline-logger uses, so log
+      // aggregation grep filters catch both sources uniformly.
+      console.log(line);
+    }
+  }
+}
+
 function emptyResult(duration_ms: number, error?: string): AnalyzeDrawingGeometryResult {
   return {
     success: false,
-    schemaVersion: 1,
+    schemaVersion: 2,
     imageWidth: 0,
     imageHeight: 0,
     summary: {
@@ -213,6 +306,8 @@ function emptyResult(duration_ms: number, error?: string): AnalyzeDrawingGeometr
     symbolCandidates: [],
     textRegions: [],
     systems: [],
+    primitives: [],
+    primitivesByKind: {},
     warnings: [],
     duration_ms,
     error,
@@ -250,6 +345,13 @@ export async function runAnalyzeDrawingGeometry(
     stdin: payload,
   });
 
+  // Forward Python-side `[vector-pipeline]` JSONL telemetry to the host
+  // process's stdout so the same log aggregator that captures the TS-side
+  // vector-pipeline logs sees the Python events too. We do this on BOTH
+  // the success and failure paths — failures are usually where these logs
+  // matter most.
+  forwardVectorPipelineLogs(stderr);
+
   const duration_ms = Date.now() - start;
   if (code !== 0) {
     return emptyResult(duration_ms, stderr || `Process exited with code ${code}`);
@@ -278,6 +380,11 @@ export async function runAnalyzeDrawingGeometry(
       symbolCandidates: Array.isArray(parsed.symbolCandidates) ? parsed.symbolCandidates : [],
       textRegions: Array.isArray(parsed.textRegions) ? parsed.textRegions : [],
       systems: Array.isArray(parsed.systems) ? parsed.systems : [],
+      primitives: Array.isArray(parsed.primitives) ? parsed.primitives : [],
+      primitivesByKind: (parsed.primitivesByKind ?? {}) as Record<string, number>,
+      drawingPrimitiveCount: Number(parsed.drawingPrimitiveCount ?? 0),
+      textPrimitiveCount: Number(parsed.textPrimitiveCount ?? 0),
+      coordinateSpace: parsed.coordinateSpace,
       warnings: Array.isArray(parsed.warnings) ? parsed.warnings : [],
       duration_ms: Number(parsed.duration_ms ?? duration_ms),
     };

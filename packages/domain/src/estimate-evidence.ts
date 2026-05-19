@@ -129,9 +129,9 @@ export interface EstimateEvidenceMeasurement {
   count?: number | null;
 }
 
-export interface TakeoffAnnotationEstimateEvidence extends EstimateEvidenceBase {
+export interface PickupEstimateEvidence extends EstimateEvidenceBase {
   kind: "takeoff_annotation";
-  annotationId?: string | null;
+  pickupId?: string | null;
   documentId?: string | null;
   documentName?: string | null;
   pageNumber?: number | null;
@@ -143,7 +143,7 @@ export interface TakeoffAnnotationEstimateEvidence extends EstimateEvidenceBase 
 export interface TakeoffLinkEstimateEvidence extends EstimateEvidenceBase {
   kind: "takeoff_link";
   takeoffLinkId?: string | null;
-  annotationId?: string | null;
+  pickupId?: string | null;
   annotationLabel?: string | null;
   quantityField?: string | null;
   multiplier?: number | null;
@@ -228,7 +228,7 @@ export type EstimateEvidence =
   | KnowledgePageEstimateEvidence
   | DatasetRowEstimateEvidence
   | WebUrlEstimateEvidence
-  | TakeoffAnnotationEstimateEvidence
+  | PickupEstimateEvidence
   | TakeoffLinkEstimateEvidence
   | ModelQuantityEstimateEvidence
   | ModelLinkEstimateEvidence
@@ -628,20 +628,20 @@ export function normalizeEstimateEvidence(row: EstimateEvidence): NormalizedEsti
       return pruneUndefined({
         ...common,
         kind: row.kind,
-        annotationId: cleanString(row.annotationId),
+        pickupId: cleanString(row.pickupId),
         documentId: cleanString(row.documentId),
         documentName: cleanString(row.documentName),
         pageNumber: cleanPageNumber(row.pageNumber),
         annotationLabel: cleanString(row.annotationLabel),
         quantityField: cleanString(row.quantityField),
         measurement: cleanMeasurement(row.measurement),
-      }) as TakeoffAnnotationEstimateEvidence;
+      }) as PickupEstimateEvidence;
     case "takeoff_link":
       return pruneUndefined({
         ...common,
         kind: row.kind,
         takeoffLinkId: cleanString(row.takeoffLinkId),
-        annotationId: cleanString(row.annotationId),
+        pickupId: cleanString(row.pickupId),
         annotationLabel: cleanString(row.annotationLabel),
         quantityField: cleanString(row.quantityField),
         multiplier: cleanNumber(row.multiplier),
@@ -783,14 +783,14 @@ export function renderEstimateEvidenceSourceNote(row: EstimateEvidence): string 
       return appendLabeled("Web:", compact([source, publisher, url, accessed], " "), generalDetail);
     }
     case "takeoff_annotation": {
-      const source = firstString(evidence.annotationLabel, evidence.annotationId);
+      const source = firstString(evidence.annotationLabel, evidence.pickupId);
       const document = firstString(evidence.documentName, evidence.documentId);
       const measurement = formatTakeoffMeasurement(evidence.measurement, evidence.quantityField);
       const location = compact([document, formatPages(evidence.pageNumber), measurement], ", ");
       return appendLabeled("Takeoff:", compact([source, location], " "), generalDetail);
     }
     case "takeoff_link": {
-      const source = firstString(evidence.annotationLabel, evidence.annotationId, evidence.takeoffLinkId);
+      const source = firstString(evidence.annotationLabel, evidence.pickupId, evidence.takeoffLinkId);
       const multiplier = evidence.multiplier != null ? `x ${formatNumber(evidence.multiplier)}` : undefined;
       const derived = formatQuantity(evidence.derivedQuantity, evidence.uom);
       const quantity = derived ? `= ${derived}` : undefined;
@@ -955,7 +955,7 @@ export function validateEstimateEvidence(row: EstimateEvidence): EstimateEvidenc
       }
       break;
     case "takeoff_annotation":
-      if (!evidence.annotationId) {
+      if (!evidence.pickupId) {
         addIssue("warning", "missing_annotation_reference", "Takeoff annotation evidence should include an annotation id.");
       }
       if (!evidence.measurement && !hasAnyString(evidence.excerpt, evidence.note)) {
@@ -963,7 +963,7 @@ export function validateEstimateEvidence(row: EstimateEvidence): EstimateEvidenc
       }
       break;
     case "takeoff_link":
-      if (!hasAnyString(evidence.takeoffLinkId, evidence.annotationId)) {
+      if (!hasAnyString(evidence.takeoffLinkId, evidence.pickupId)) {
         addIssue("warning", "missing_takeoff_link_reference", "Takeoff link evidence should include a link id or annotation id.");
       }
       if (!evidence.worksheetItemId) {

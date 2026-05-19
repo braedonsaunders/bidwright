@@ -9,7 +9,7 @@ import { TakeoffTab } from "./takeoff-tab";
 import { EstimateGrid } from "./estimate-grid";
 import { TakeoffLinkView, type TakeoffSelection } from "./takeoff-link-view";
 import { TakeoffInspectView, type InspectActions, type InspectSnapshot } from "./takeoff-inspect-view";
-import type { TakeoffAnnotation } from "./takeoff/annotation-canvas";
+import type { Pickup } from "./takeoff/annotation-canvas";
 import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
@@ -82,7 +82,7 @@ export function ComboView({
   const [takeoffViewState, setTakeoffViewState] = useState<TakeoffViewState | null>(
     initialDocumentId ? { documentId: initialDocumentId, page: 1, zoom: 1 } : null,
   );
-  const [annotationsCache, setAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
+  const [annotationsCache, setAnnotationsCache] = useState<Pickup[]>([]);
   const [linksReloadSignal, setLinksReloadSignal] = useState(0);
   const handleLinksMutated = useCallback(() => setLinksReloadSignal((k) => k + 1), []);
   const handleTakeoffSelectionChange = useCallback((next: TakeoffSelection | null) => {
@@ -106,7 +106,7 @@ export function ComboView({
     setTakeoffViewState(next);
   }, [initialDocumentId]);
   const annotationsCacheSignatureRef = useRef<string | null>(null);
-  const handleAnnotationsChange = useCallback((next: TakeoffAnnotation[]) => {
+  const handleAnnotationsChange = useCallback((next: Pickup[]) => {
     const signature = JSON.stringify(next);
     if (signature === annotationsCacheSignatureRef.current) return;
     annotationsCacheSignatureRef.current = signature;
@@ -438,7 +438,7 @@ function RightPanel({
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   takeoffSelection: TakeoffSelection | null;
-  annotationsCache: TakeoffAnnotation[];
+  annotationsCache: Pickup[];
   onLinksMutated: () => void;
   onSendModelSelectionToEstimate: (selection: BidwrightModelSelectionMessage) => Promise<void> | void;
   onCreateLineItemFromModelElement: (elementId: string) => Promise<void> | void;
@@ -447,7 +447,13 @@ function RightPanel({
 }) {
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "inspect", label: "Inspect", icon: Compass },
-    { id: "entities", label: "Entities", icon: Layers },
+    // "Pickups" — estimator term for measurable items found during takeoff.
+    // Avoids overlap with the worksheet "line items" column the estimator
+    // promotes things INTO. Every source (CAD entity, traced system,
+    // count group, vector arc, manual annotation, smart count, BIM
+    // element, spreadsheet row, photo BOM item) is a pickup until the
+    // estimator + Add-s it as an actual worksheet line item.
+    { id: "entities", label: "Pickups", icon: Layers },
   ];
 
   const FsIcon = fullscreen ? Minimize2 : Maximize2;
@@ -601,7 +607,7 @@ function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null })
       : "Document";
   const fileName = snapshot.modelAsset?.fileName;
   const annotationCount = snapshot.annotations.length;
-  const linkCount = snapshot.takeoffLinks.length;
+  const linkCount = snapshot.pickupLinks.length;
 
   return (
     <div className="shrink-0 rounded-md border border-line bg-panel/50 px-3 py-2 text-[11px]">

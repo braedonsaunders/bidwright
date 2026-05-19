@@ -1095,7 +1095,7 @@ export interface ProjectWorkspaceData {
   scheduleResources: ScheduleResource[];
   scheduleTaskAssignments: ScheduleTaskAssignment[];
   estimate: EstimateData;
-  takeoffLinks?: TakeoffLinkRecord[];
+  pickupLinks?: PickupLinkRecord[];
   estimateStrategy?: EstimateStrategy | null;
   estimateFeedback?: EstimateCalibrationFeedback[];
 }
@@ -4516,32 +4516,32 @@ export async function extractDatasetsFromBook(bookId: string) {
 
 // ── Takeoff Annotations ──────────────────────────────────────────────────
 
-export async function listTakeoffAnnotations(projectId: string, documentId?: string, page?: number) {
+export async function listPickups(projectId: string, documentId?: string, page?: number) {
   const params = new URLSearchParams();
   if (documentId) params.set("documentId", documentId);
   if (page !== undefined) params.set("page", String(page));
   const qs = params.toString();
-  return apiRequest<any[]>(`/api/takeoff/${projectId}/annotations${qs ? `?${qs}` : ""}`);
+  return apiRequest<any[]>(`/api/takeoff/${projectId}/pickups${qs ? `?${qs}` : ""}`);
 }
 
-export async function createTakeoffAnnotation(projectId: string, data: Record<string, unknown>) {
-  return apiRequest<any>(`/api/takeoff/${projectId}/annotations`, {
+export async function createPickup(projectId: string, data: Record<string, unknown>) {
+  return apiRequest<any>(`/api/takeoff/${projectId}/pickups`, {
     method: "POST",
     body: JSON.stringify(data),
     headers: { "Content-Type": "application/json" },
   });
 }
 
-export async function updateTakeoffAnnotation(projectId: string, annotationId: string, data: Record<string, unknown>) {
-  return apiRequest<any>(`/api/takeoff/${projectId}/annotations/${annotationId}`, {
+export async function updatePickup(projectId: string, pickupId: string, data: Record<string, unknown>) {
+  return apiRequest<any>(`/api/takeoff/${projectId}/pickups/${pickupId}`, {
     method: "PATCH",
     body: JSON.stringify(data),
     headers: { "Content-Type": "application/json" },
   });
 }
 
-export async function deleteTakeoffAnnotation(projectId: string, annotationId: string) {
-  return apiRequest<void>(`/api/takeoff/${projectId}/annotations/${annotationId}`, {
+export async function deletePickup(projectId: string, pickupId: string) {
+  return apiRequest<void>(`/api/takeoff/${projectId}/pickups/${pickupId}`, {
     method: "DELETE",
   });
 }
@@ -4607,7 +4607,13 @@ export interface DwgTakeoffMetadata {
     command?: string;
     message?: string;
   };
+  /** Canonical unit (always "in" after the dxf-parser rewrite). */
   units: string;
+  /** Source unit detected from $INSUNITS. Set by processorVersion >= 2. */
+  originalUnits?: string;
+  /** Multiplier applied to every coordinate to reach `units`. Always 1 when
+   *  the source was already in inches or unitless. */
+  unitScaleFactor?: number;
   extents: DwgTakeoffBounds;
   layers: DwgTakeoffLayer[];
   layouts: DwgTakeoffLayout[];
@@ -4649,10 +4655,10 @@ export async function processDwgTakeoffMetadata(projectId: string, documentId: s
 
 // ── Takeoff Links (Annotation ↔ Line Item) ──────────────────────────────
 
-export interface TakeoffLinkRecord {
+export interface PickupLinkRecord {
   id: string;
   projectId: string;
-  annotationId: string;
+  pickupId: string;
   worksheetItemId: string;
   quantityField: string;
   multiplier: number;
@@ -4662,23 +4668,23 @@ export interface TakeoffLinkRecord {
   updatedAt: string;
 }
 
-export async function listTakeoffLinks(
+export async function listPickupLinks(
   projectId: string,
-  annotationId?: string,
+  pickupId?: string,
   worksheetItemId?: string,
 ) {
   const params = new URLSearchParams();
-  if (annotationId) params.set("annotationId", annotationId);
+  if (pickupId) params.set("pickupId", pickupId);
   if (worksheetItemId) params.set("worksheetItemId", worksheetItemId);
   const qs = params.toString();
-  return apiRequest<TakeoffLinkRecord[]>(`/api/takeoff/${projectId}/links${qs ? `?${qs}` : ""}`);
+  return apiRequest<PickupLinkRecord[]>(`/api/takeoff/${projectId}/links${qs ? `?${qs}` : ""}`);
 }
 
-export async function createTakeoffLink(
+export async function createPickupLink(
   projectId: string,
-  data: { annotationId: string; worksheetItemId: string; quantityField?: string; multiplier?: number },
+  data: { pickupId: string; worksheetItemId: string; quantityField?: string; multiplier?: number },
 ) {
-  return apiRequest<TakeoffLinkRecord>(`/api/takeoff/${projectId}/links`, {
+  return apiRequest<PickupLinkRecord>(`/api/takeoff/${projectId}/links`, {
     method: "POST",
     body: JSON.stringify(data),
     headers: { "Content-Type": "application/json" },
@@ -4690,7 +4696,7 @@ export async function updateTakeoffLink(
   linkId: string,
   data: { quantityField?: string; multiplier?: number },
 ) {
-  return apiRequest<TakeoffLinkRecord>(`/api/takeoff/${projectId}/links/${linkId}`, {
+  return apiRequest<PickupLinkRecord>(`/api/takeoff/${projectId}/links/${linkId}`, {
     method: "PATCH",
     body: JSON.stringify(data),
     headers: { "Content-Type": "application/json" },
@@ -4757,7 +4763,7 @@ export async function deleteDwgEntityLink(projectId: string, linkId: string) {
   });
 }
 
-export async function deleteTakeoffLink(projectId: string, linkId: string) {
+export async function deletePickupLink(projectId: string, linkId: string) {
   return apiRequest<void>(`/api/takeoff/${projectId}/links/${linkId}`, {
     method: "DELETE",
   });
@@ -4953,6 +4959,55 @@ export interface DrawingPolylineDetection {
   confidence: number;
 }
 
+/** Canonical primitive emitted by the PDF vector pipeline. Coordinates in
+ *  `params` are PDF page points (1pt = 1/72in); use
+ *  `DrawingGeometryAnalysisResult.coordinateSpace.imagePixelPerPdfPoint{X,Y}`
+ *  to convert to image-pixel space when overlaying on the canvas. */
+export type DrawingPrimitiveKind =
+  | "line"
+  | "arc"
+  | "circle"
+  | "ellipse"
+  | "cubic_bezier"
+  | "quad_bezier"
+  | "rect";
+
+export interface DrawingPrimitive {
+  id: string;
+  kind: DrawingPrimitiveKind;
+  /** Shape parameters in PDF-point coords. Schema depends on `kind`:
+   *   line     → { x1, y1, x2, y2 }
+   *   rect     → { x, y, width, height }
+   *   arc      → { cx, cy, r, startAngleRad, endAngleRad }
+   *   circle   → { cx, cy, r }
+   *   ellipse  → { cx, cy, rx, ry, rotationRad }
+   *   cubic_bezier → { points: [x0,y0,x1,y1,x2,y2,x3,y3] }
+   *   quad_bezier  → { points: [x0,y0,x1,y1,x2,y2] } */
+  params: Record<string, number | number[]>;
+  layer: string | null;
+  strokeWidth: number | null;
+  color: string | null;
+  paint: "stroke" | "fill" | "stroke+fill" | null;
+  subpath: number;
+  /** Density-classifier output from the PDF vector pipeline. "drawing" =
+   *  real geometry we want in the Pickups list, "text" = glyph stroke or
+   *  decorative tick we want rendered as a faint canvas hint only. See
+   *  `packages/vision/python/tools/analyze_geometry.py`. Defaults to
+   *  "drawing" when older payloads omit it. */
+  category?: "drawing" | "text";
+}
+
+export interface DrawingCoordinateSpace {
+  unit: "pdf-point";
+  pointsPerInch: number;
+  pageWidthPt: number;
+  pageHeightPt: number;
+  imageWidthPx: number;
+  imageHeightPx: number;
+  imagePixelPerPdfPointX: number;
+  imagePixelPerPdfPointY: number;
+}
+
 export interface DrawingContourDetection {
   id: string;
   x: number;
@@ -5057,6 +5112,25 @@ export interface DrawingGeometryAnalysisResult {
   symbolCandidates: DrawingSymbolCandidate[];
   textRegions: DrawingTextRegion[];
   systems: DrawingTracedSystem[];
+  /** Canonical primitives from the PDF vector pipeline. Phase-2 output:
+   *  arcs/circles/ellipses/beziers recovered from CAD-exported geometry,
+   *  alongside the legacy raster line list. Empty when geometrySource is
+   *  raster-cv. */
+  primitives?: DrawingPrimitive[];
+  /** Histogram of primitive kinds for quick UI counters. */
+  primitivesByKind?: Record<string, number>;
+  /** Number of primitives whose `category === "drawing"`. The Pickups list
+   *  uses this count instead of `primitives.length` so a text-heavy P&ID
+   *  doesn't claim 150k pickups when only ~6k are real drawing geometry.
+   *  See packages/vision/python/tools/analyze_geometry.py. */
+  drawingPrimitiveCount?: number;
+  /** Number of primitives whose `category === "text"`. Rendered on the
+   *  canvas overlay (faint hints) but excluded from the Pickups list. */
+  textPrimitiveCount?: number;
+  /** Conversion factors between PDF points (primitive coords) and image
+   *  pixels (canvas coords). Required for any overlay or annotation
+   *  conversion that wants to project primitives onto the rendered page. */
+  coordinateSpace?: DrawingCoordinateSpace;
   warnings: string[];
   duration_ms: number;
   error?: string;
@@ -5553,7 +5627,7 @@ export interface ModelAsset {
     elements: number;
     quantities: number;
     issues: number;
-    takeoffLinks: number;
+    pickupLinks: number;
   };
 }
 
@@ -5596,7 +5670,7 @@ export interface ModelQuantity {
   updatedAt: string;
 }
 
-export interface ModelTakeoffLinkRecord {
+export interface ModelPickupLinkRecord {
   id: string;
   projectId: string;
   modelId: string;
@@ -5848,7 +5922,7 @@ export async function removeFederationMember(
 }
 
 export async function listModelTakeoffLinks(projectId: string, modelId: string) {
-  return apiRequest<{ links: ModelTakeoffLinkRecord[] }>(
+  return apiRequest<{ links: ModelPickupLinkRecord[] }>(
     `/api/models/${projectId}/assets/${modelId}/takeoff-links`,
   );
 }
@@ -5866,7 +5940,7 @@ export async function createModelTakeoffLink(
     selection?: unknown;
   },
 ) {
-  return apiRequest<{ link: ModelTakeoffLinkRecord }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links`, {
+  return apiRequest<{ link: ModelPickupLinkRecord }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
@@ -6112,11 +6186,23 @@ export async function detectTitleBlockScale(
 
 // ─── Symbol legend reader ───────────────────────────────────────────────
 
+/** Axis-aligned bbox of a legend cell in PDF inches (Azure DI v4 unit). */
+export interface LegendCellBboxRecord {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
 export interface LegendEntryRecord {
   symbol: string;
   label: string;
   pageNumber: number;
   confidence: number;
+  /** Bbox of the symbol cell. Absent for text-fallback entries. */
+  symbolBbox?: LegendCellBboxRecord;
+  /** Bbox of the description cell. */
+  labelBbox?: LegendCellBboxRecord;
 }
 
 export interface ExtractLegendResultRecord {
@@ -6139,6 +6225,176 @@ export async function extractLegendFromPage(
   );
 }
 
+// ─── Symbol Library (Few-Shot from Legend) ──────────────────────────────
+
+export interface SymbolTemplateRecord {
+  id: string;
+  projectId: string;
+  symbol: string;
+  label: string;
+  storagePath: string;
+  width: number;
+  height: number;
+  dpi: number;
+  sourceDocumentId?: string;
+  sourcePage: number;
+  sourceBbox: {
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    imageWidth?: number;
+    imageHeight?: number;
+  };
+  threshold: number;
+  crossScale: boolean;
+  enabled: boolean;
+  metadata: Record<string, unknown>;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ListSymbolTemplatesResult {
+  templates: SymbolTemplateRecord[];
+}
+
+export interface RunLibraryMatch {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  confidence: number;
+  scale?: number;
+}
+
+export interface RunLibraryTemplateResult {
+  templateId: string;
+  symbol: string;
+  label: string;
+  totalCount: number;
+  matches: RunLibraryMatch[];
+  error?: string;
+  savedAnnotationIds?: string[];
+}
+
+export interface RunLibraryOnPageResultRecord {
+  documentId: string;
+  pageNumber: number;
+  imageWidth: number;
+  imageHeight: number;
+  dpi: number;
+  duration_ms: number;
+  templateResults: RunLibraryTemplateResult[];
+  errors: string[];
+}
+
+export interface RunLibraryOnDocumentResultRecord {
+  documentId: string;
+  pageCount: number;
+  pages: RunLibraryOnPageResultRecord[];
+  grandTotal: number;
+  duration_ms: number;
+}
+
+export async function listSymbolTemplates(
+  projectId: string,
+  opts?: { enabledOnly?: boolean },
+): Promise<ListSymbolTemplatesResult> {
+  const params = new URLSearchParams();
+  if (opts?.enabledOnly) params.set("enabledOnly", "1");
+  const qs = params.toString();
+  return apiRequest<ListSymbolTemplatesResult>(
+    `/api/takeoff/${projectId}/symbol-templates${qs ? `?${qs}` : ""}`,
+  );
+}
+
+export async function createSymbolTemplateFromLegendEntry(
+  projectId: string,
+  input: {
+    documentId: string;
+    pageNumber: number;
+    entry: LegendEntryRecord;
+    threshold?: number;
+    crossScale?: boolean;
+  },
+): Promise<SymbolTemplateRecord> {
+  return apiRequest<SymbolTemplateRecord>(
+    `/api/takeoff/${projectId}/symbol-templates/from-legend`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function updateSymbolTemplate(
+  projectId: string,
+  templateId: string,
+  patch: {
+    symbol?: string;
+    label?: string;
+    threshold?: number;
+    crossScale?: boolean;
+    enabled?: boolean;
+    metadata?: Record<string, unknown>;
+  },
+): Promise<SymbolTemplateRecord> {
+  return apiRequest<SymbolTemplateRecord>(
+    `/api/takeoff/${projectId}/symbol-templates/${templateId}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    },
+  );
+}
+
+export async function deleteSymbolTemplate(
+  projectId: string,
+  templateId: string,
+): Promise<{ deleted: true }> {
+  return apiRequest<{ deleted: true }>(
+    `/api/takeoff/${projectId}/symbol-templates/${templateId}`,
+    { method: "DELETE" },
+  );
+}
+
+/** URL for the cropped PNG preview. Returns a URL the UI can stick in
+ *  `<img src>` rather than re-fetching JSON. */
+export function symbolTemplateImageUrl(projectId: string, templateId: string): string {
+  return resolveApiUrl(`/api/takeoff/${projectId}/symbol-templates/${templateId}/image`);
+}
+
+export async function runProjectLibraryOnPage(
+  projectId: string,
+  input: { documentId: string; pageNumber: number; autoSave?: boolean; templateIds?: string[] },
+): Promise<RunLibraryOnPageResultRecord> {
+  return apiRequest<RunLibraryOnPageResultRecord>(
+    `/api/takeoff/${projectId}/symbol-templates/run-on-page`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
+export async function runProjectLibraryOnDocument(
+  projectId: string,
+  input: { documentId: string; autoSave?: boolean; templateIds?: string[] },
+): Promise<RunLibraryOnDocumentResultRecord> {
+  return apiRequest<RunLibraryOnDocumentResultRecord>(
+    `/api/takeoff/${projectId}/symbol-templates/run-on-document`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
+}
+
 // ─── Auto-takeoff line-item suggestions ─────────────────────────────────
 
 export type LineItemSuggestionKind = "catalog" | "rateScheduleItem";
@@ -6155,17 +6411,17 @@ export interface LineItemSuggestionRecord {
 }
 
 export interface SuggestLineItemsResultRecord {
-  annotationId: string;
+  pickupId: string;
   suggestions: LineItemSuggestionRecord[];
   warnings: string[];
 }
 
 export async function suggestLineItemsForAnnotation(
   projectId: string,
-  annotationId: string,
+  pickupId: string,
 ): Promise<SuggestLineItemsResultRecord> {
   return apiRequest<SuggestLineItemsResultRecord>(
-    `/api/takeoff/${projectId}/annotations/${annotationId}/suggest-line-items`,
+    `/api/takeoff/${projectId}/pickups/${pickupId}/suggest-line-items`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

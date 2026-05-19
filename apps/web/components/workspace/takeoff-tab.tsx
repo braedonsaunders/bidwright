@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useMemo, type Dispatch, type SetStateAction } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, type Dispatch, type PointerEvent as ReactPointerEvent, type SetStateAction } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   Check,
@@ -62,6 +62,7 @@ import {
   SlidersHorizontal,
   Edit3,
   Eye,
+  Library,
 } from "lucide-react";
 import type {
   CreateWorksheetItemInput,
@@ -70,23 +71,24 @@ import type {
   ProjectWorkspaceData,
   VisionMatch,
   VisionBoundingBox,
-  TakeoffLinkRecord,
+  PickupLinkRecord,
   ModelAsset,
   ModelElement,
   ModelQuantity,
-  ModelTakeoffLinkRecord,
+  ModelPickupLinkRecord,
   DrawingAnalysisPreset,
   DrawingGeometryAnalysisResult,
+  DrawingPrimitive,
   DrawingLineSegment,
   DrawingSymbolCandidate,
   DrawingTracedSystem,
   DwgEntityLinkRecord,
 } from "@/lib/api";
 import {
-  listTakeoffAnnotations,
-  createTakeoffAnnotation,
-  updateTakeoffAnnotation,
-  deleteTakeoffAnnotation,
+  listPickups,
+  createPickup,
+  updatePickup,
+  deletePickup,
   getDocumentDownloadUrl,
   getFileDownloadUrl,
   getBookFileUrl,
@@ -96,8 +98,8 @@ import {
   runVisionCountAllPages,
   saveVisionCrop,
   askAi,
-  listTakeoffLinks,
-  createTakeoffLink,
+  listPickupLinks,
+  createPickupLink,
   listDwgEntityLinks,
   createDwgEntityLink,
   createModelTakeoffLink,
@@ -117,6 +119,8 @@ import {
   saveDrawingDetectionsAsAnnotations,
   detectTitleBlockScale,
   extractLegendFromPage,
+  createSymbolTemplateFromLegendEntry,
+  listSymbolTemplates,
   getFileTree,
   importPreview,
   type DetectedDisciplineRecord,
@@ -138,6 +142,7 @@ import {
 } from "@/components/ui";
 import * as Popover from "@radix-ui/react-popover";
 import dynamic from "next/dynamic";
+import { isPrimitiveClosed, samplePdfPrimitive } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
@@ -166,9 +171,10 @@ const DwgTakeoffSurface = dynamic(
 );
 import {
   AnnotationCanvas,
-  type TakeoffAnnotation,
+  type Pickup,
 } from "./takeoff/annotation-canvas";
 import { AnnotationSidebar } from "./takeoff/annotation-sidebar";
+import { SymbolLibraryPanel } from "./takeoff/symbol-library-panel";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import {
   CreateAnnotationModal,
@@ -212,6 +218,12 @@ type DrawingAnalysisOverlayState = {
   symbols: boolean;
   circles: boolean;
   text: boolean;
+  /** Vector arc / circle / ellipse primitives rendered on the overlay.
+   *  Separate toggle from `circles` (which is the raster Hough output) so
+   *  the estimator can compare the two sources visually. */
+  arcs: boolean;
+  /** Cubic + quad bezier primitives rendered on the overlay. */
+  curves: boolean;
 };
 
 function lineSegmentBounds(lines: DrawingLineSegment[]): DrawingLineSegment["bbox"] {
@@ -282,14 +294,32 @@ function removeDrawingAnalysisEntity(
     const circles = result.circles.filter((circle) => circle.id !== id);
     return circles.length === result.circles.length ? result : updateDrawingAnalysisSummary({ ...result, circles });
   }
+  if (kind === "arc" || kind === "curve") {
+    // Phase-2 vector primitives. The primitives array carries arc /
+    // circle / ellipse (kind="arc" in the panel) and cubic/quad bezier
+    // (kind="curve" in the panel). Match by id; the row's kind only
+    // tells us which bucket the user clicked.
+    const primitives = result.primitives ?? [];
+    const filtered = primitives.filter((primitive) => primitive.id !== id);
+    if (filtered.length === primitives.length) return result;
+    const byKindNext: Record<string, number> = {};
+    for (const primitive of filtered) {
+      byKindNext[primitive.kind] = (byKindNext[primitive.kind] ?? 0) + 1;
+    }
+    return updateDrawingAnalysisSummary({
+      ...result,
+      primitives: filtered,
+      primitivesByKind: byKindNext,
+    });
+  }
   const textRegions = result.textRegions.filter((region) => region.id !== id);
   return textRegions.length === result.textRegions.length ? result : updateDrawingAnalysisSummary({ ...result, textRegions });
 }
 
 type TakeoffHistoryCommand =
-  | { kind: "create"; annotation: TakeoffAnnotation }
-  | { kind: "delete"; annotation: TakeoffAnnotation }
-  | { kind: "clear"; annotations: TakeoffAnnotation[] };
+  | { kind: "create"; annotation: Pickup }
+  | { kind: "delete"; annotation: Pickup }
+  | { kind: "clear"; annotations: Pickup[] };
 
 function getFileExtension(fileName: string): string {
   return fileName.split(".").pop()?.toLowerCase() ?? "";
@@ -433,6 +463,18 @@ function PdfToolGroupMenus({
   drawingAnalysisCount,
   canRunDocumentAi,
   canRunDrawingIntelligence,
+  onSaveLegendEntryToLibrary,
+  savingLegendKey,
+  savedLegendKeys,
+  libraryOpen,
+  libraryCount,
+  onOpenLibrary,
+  onCloseLibrary,
+  libraryProjectId,
+  libraryDocumentId,
+  libraryPageNumber,
+  libraryCanRun,
+  onLibraryRefresh,
 }: {
   activeTool: ToolId;
   onSelect: (tool: ToolId) => void;
@@ -448,6 +490,18 @@ function PdfToolGroupMenus({
   drawingAnalysisCount: number | null;
   canRunDocumentAi: boolean;
   canRunDrawingIntelligence: boolean;
+  onSaveLegendEntryToLibrary: (entry: LegendEntryRecord, index: number) => void;
+  savingLegendKey: string | null;
+  savedLegendKeys: Set<string>;
+  libraryOpen: boolean;
+  libraryCount: number | null;
+  onOpenLibrary: () => void;
+  onCloseLibrary: () => void;
+  libraryProjectId: string;
+  libraryDocumentId: string | null;
+  libraryPageNumber: number;
+  libraryCanRun: boolean;
+  onLibraryRefresh: () => void;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-line bg-bg/35 p-0.5">
@@ -582,22 +636,56 @@ function PdfToolGroupMenus({
                                 {legendWarnings[0] ?? "No legend table or symbol list found on this page."}
                               </div>
                             )}
-                            {legendEntries?.map((entry, i) => (
-                              <div
-                                key={`${entry.symbol}-${i}`}
-                                className="flex items-start gap-2 rounded border border-line/70 bg-panel/80 px-2 py-1.5"
-                              >
-                                <div className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-amber-500/35 bg-amber-500/10 font-mono text-[10px] font-semibold text-amber-500">
-                                  {entry.symbol}
+                            {legendEntries?.map((entry, i) => {
+                              const key = `${entry.symbol}-${i}`;
+                              const canSave = Boolean(entry.symbolBbox);
+                              const saving = savingLegendKey === key;
+                              const saved = savedLegendKeys.has(key);
+                              return (
+                                <div
+                                  key={key}
+                                  className="flex items-start gap-2 rounded border border-line/70 bg-panel/80 px-2 py-1.5"
+                                >
+                                  <div className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded border border-amber-500/35 bg-amber-500/10 font-mono text-[10px] font-semibold text-amber-500">
+                                    {entry.symbol}
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <div className="break-words text-[11px] leading-snug text-fg/80">{entry.label}</div>
+                                    {entry.confidence < 0.7 && (
+                                      <div className="mt-0.5 text-[10px] text-fg/35">low confidence</div>
+                                    )}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    onClick={() => onSaveLegendEntryToLibrary(entry, i)}
+                                    disabled={!canSave || saving || saved}
+                                    title={
+                                      !canSave
+                                        ? "Glyph bbox missing — Azure couldn't isolate the symbol cell"
+                                        : saved
+                                        ? "Saved to project library"
+                                        : "Save this glyph to the project Symbol Library"
+                                    }
+                                    className={cn(
+                                      "inline-flex h-6 shrink-0 items-center gap-1 rounded border px-1.5 text-[10px] font-medium transition-colors",
+                                      saved
+                                        ? "border-emerald-500/35 bg-emerald-500/10 text-emerald-500"
+                                        : "border-line/70 text-fg/55 hover:bg-panel2 hover:text-fg",
+                                      "disabled:cursor-not-allowed disabled:opacity-50",
+                                    )}
+                                  >
+                                    {saving ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : saved ? (
+                                      <Check className="h-3 w-3" />
+                                    ) : (
+                                      <Library className="h-3 w-3" />
+                                    )}
+                                    {saved ? "Saved" : "Save"}
+                                  </button>
                                 </div>
-                                <div className="min-w-0 flex-1">
-                                  <div className="break-words text-[11px] leading-snug text-fg/80">{entry.label}</div>
-                                  {entry.confidence < 0.7 && (
-                                    <div className="mt-0.5 text-[10px] text-fg/35">low confidence</div>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
@@ -609,6 +697,52 @@ function PdfToolGroupMenus({
           </Popover.Root>
         );
       })}
+
+      {/* Symbol Library — sibling popover at toolbar level. Separated from the
+          AI menu so users don't have to reopen the menu to view their saved
+          symbols and run the batch matcher. */}
+      <Popover.Root
+        open={libraryOpen}
+        onOpenChange={(open) => (open ? onOpenLibrary() : onCloseLibrary())}
+      >
+        <Popover.Trigger asChild>
+          <button
+            type="button"
+            className={cn(
+              "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-[11px] font-medium transition-colors",
+              libraryOpen
+                ? "bg-accent/15 text-accent"
+                : "text-fg/55 hover:bg-panel2 hover:text-fg/80",
+            )}
+            title="Project Symbol Library — saved few-shot templates"
+          >
+            <Library className="h-3.5 w-3.5" />
+            <span className="hidden xl:inline">Library</span>
+            {libraryCount != null && libraryCount > 0 && (
+              <span className="text-[10px] text-fg/45">{libraryCount}</span>
+            )}
+          </button>
+        </Popover.Trigger>
+        <Popover.Portal>
+          <Popover.Content
+            align="start"
+            side="bottom"
+            avoidCollisions
+            collisionPadding={12}
+            sideOffset={6}
+            className="z-[1000] outline-none"
+          >
+            <SymbolLibraryPanel
+              projectId={libraryProjectId}
+              documentId={libraryDocumentId}
+              pageNumber={libraryPageNumber}
+              canRun={libraryCanRun}
+              onLibraryChanged={onLibraryRefresh}
+              onClose={onCloseLibrary}
+            />
+          </Popover.Content>
+        </Popover.Portal>
+      </Popover.Root>
     </div>
   );
 }
@@ -978,7 +1112,7 @@ interface TakeoffTabProps {
    *  into the same drawing instead of falling back to the first document. */
   onViewStateChange?: (state: { documentId: string; page: number; zoom: number }) => void;
   /** Mirror of the current annotations array, for parents that need to render them. */
-  onAnnotationsChange?: (annotations: TakeoffAnnotation[]) => void;
+  onAnnotationsChange?: (annotations: Pickup[]) => void;
   /** Incrementing counter — when it changes, takeoff reloads its links from the server. */
   linksReloadSignal?: number;
   /** Called whenever this tab mutates links so the parent can re-fetch its own copy. */
@@ -1013,8 +1147,8 @@ interface TakeoffSyncBase {
 type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "view-change"; docId: string; page: number; zoom: number })
   | (TakeoffSyncBase & { type: "selection-change"; selection: TakeoffSelection | null })
-  | (TakeoffSyncBase & { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] })
-  | (TakeoffSyncBase & { type: "takeoff-links-mutated" })
+  | (TakeoffSyncBase & { type: "annotations-mutated"; docId: string; page: number; annotations?: Pickup[] })
+  | (TakeoffSyncBase & { type: "pickup-links-mutated" })
   | (TakeoffSyncBase & { type: "workspace-mutated" })
   | (TakeoffSyncBase & { type: "files-mutated" })
   | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null })
@@ -1025,8 +1159,8 @@ type TakeoffSyncMessage =
 type TakeoffSyncPayload =
   | { type: "view-change"; docId: string; page: number; zoom: number }
   | { type: "selection-change"; selection: TakeoffSelection | null }
-  | { type: "annotations-mutated"; docId: string; page: number; annotations?: TakeoffAnnotation[] }
-  | { type: "takeoff-links-mutated" }
+  | { type: "annotations-mutated"; docId: string; page: number; annotations?: Pickup[] }
+  | { type: "pickup-links-mutated" }
   | { type: "workspace-mutated" }
   | { type: "files-mutated" }
   | { type: "calibration-change"; calibration: Calibration | null }
@@ -1341,7 +1475,7 @@ function normalizeModelLineItemDraft(
   };
 }
 
-function toLinkedModelLineItem(link: ModelTakeoffLinkRecord): BidwrightModelLinkedLineItem | null {
+function toLinkedModelLineItem(link: ModelPickupLinkRecord): BidwrightModelLinkedLineItem | null {
   const item = link.worksheetItem;
   if (!item) return null;
 
@@ -1509,9 +1643,9 @@ function normalizeAnnotationPoints(value: unknown): Point[] {
     .filter((point): point is Point => Boolean(point));
 }
 
-function normalizeAnnotationMeasurement(value: unknown): TakeoffAnnotation["measurement"] | undefined {
+function normalizeAnnotationMeasurement(value: unknown): Pickup["measurement"] | undefined {
   const record = objectRecord(value);
-  const measurement: NonNullable<TakeoffAnnotation["measurement"]> = {
+  const measurement: NonNullable<Pickup["measurement"]> = {
     value: finiteNumberValue(record.value) ?? 0,
     unit: typeof record.unit === "string" && record.unit.length > 0 ? record.unit : "",
   };
@@ -1530,14 +1664,14 @@ function canvasDimensionFromMetadata(metadata: Record<string, unknown>, key: "ca
   return value && value > 0 ? value : undefined;
 }
 
-function annotationOptsFromMetadata(metadata: Record<string, unknown>): TakeoffAnnotation["opts"] | undefined {
+function annotationOptsFromMetadata(metadata: Record<string, unknown>): Pickup["opts"] | undefined {
   const { canvasWidth: _canvasWidth, canvasHeight: _canvasHeight, ...opts } = metadata;
-  return Object.keys(opts).length > 0 ? opts as TakeoffAnnotation["opts"] : undefined;
+  return Object.keys(opts).length > 0 ? opts as Pickup["opts"] : undefined;
 }
 
 /* ─── JSON Export Helper ─── */
 
-function exportAnnotationsJson(annotations: TakeoffAnnotation[], calibration: Calibration | null) {
+function exportAnnotationsJson(annotations: Pickup[], calibration: Calibration | null) {
   const payload = {
     exportedAt: new Date().toISOString(),
     calibration: calibration ?? null,
@@ -1795,6 +1929,11 @@ export function TakeoffTab({
   // estimator has already + Added so the row dims in the panel.
   const [photoBomResult, setPhotoBomResult] = useState<PhotoTakeoffResult | null>(null);
   const [photoBomSourcePhotoNames, setPhotoBomSourcePhotoNames] = useState<string[]>([]);
+  // Parallel array of base64 data URIs for each uploaded photo. Stored in
+  // state so the Pickups panel can render each Photo BOM row's source photo
+  // as a thumbnail without re-downloading from the API. Zero-aligned with
+  // photoBomSourcePhotoNames — indexed by `row.sourceImageIndexes[0]`.
+  const [photoBomSourcePhotoDataUris, setPhotoBomSourcePhotoDataUris] = useState<string[]>([]);
   const [photoBomLinkedRowIds, setPhotoBomLinkedRowIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -1813,16 +1952,16 @@ export function TakeoffTab({
   const [activeTool, setActiveTool] = useState<ToolId>("select");
 
   /* Annotation state */
-  const [annotations, setAnnotations] = useState<TakeoffAnnotation[]>([]);
-  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
-  const [dwgAnnotationsCache, setDwgAnnotationsCache] = useState<TakeoffAnnotation[]>([]);
+  const [annotations, setAnnotations] = useState<Pickup[]>([]);
+  const [selectedPickupId, setSelectedPickupId] = useState<string | null>(null);
+  const [dwgAnnotationsCache, setDwgAnnotationsCache] = useState<Pickup[]>([]);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
   const undoStackRef = useRef<TakeoffHistoryCommand[]>([]);
   const redoStackRef = useRef<TakeoffHistoryCommand[]>([]);
   const [historyVersion, setHistoryVersion] = useState(0);
-  const externalAnnotationSelectionId = selection?.kind === "annotation" ? selection.annotationId : null;
+  const externalPickupSelectionId = selection?.kind === "annotation" ? selection.pickupId : null;
   const lastPublishedSelectionSignatureRef = useRef<string | null>(null);
 
   function publishTakeoffSelection(next: TakeoffSelection | null) {
@@ -1834,20 +1973,20 @@ export function TakeoffTab({
   }
 
   const updateAnnotationSelection = useCallback((id: string | null) => {
-    setSelectedAnnotationId((prev) => (prev === id ? prev : id));
+    setSelectedPickupId((prev) => (prev === id ? prev : id));
     if (id) {
-      if (externalAnnotationSelectionId !== id || !onSelectionChange) {
-        publishTakeoffSelection({ kind: "annotation", annotationId: id });
+      if (externalPickupSelectionId !== id || !onSelectionChange) {
+        publishTakeoffSelection({ kind: "annotation", pickupId: id });
       }
       return;
     }
-    if (externalAnnotationSelectionId || !onSelectionChange) {
+    if (externalPickupSelectionId || !onSelectionChange) {
       publishTakeoffSelection(null);
     }
-  }, [externalAnnotationSelectionId, onSelectionChange]);
+  }, [externalPickupSelectionId, onSelectionChange]);
 
   /* ─── Takeoff Link state ─── */
-  const [takeoffLinks, setTakeoffLinks] = useState<TakeoffLinkRecord[]>([]);
+  const [pickupLinks, setTakeoffLinks] = useState<PickupLinkRecord[]>([]);
 
   /* Calibration state */
   const [calibration, setCalibration] = useState<Calibration | null>(null);
@@ -1867,6 +2006,14 @@ export function TakeoffTab({
   const [legendLoading, setLegendLoading] = useState(false);
   const [legendEntries, setLegendEntries] = useState<LegendEntryRecord[] | null>(null);
   const [legendWarnings, setLegendWarnings] = useState<string[]>([]);
+  /* Tracks which legend entries are mid-save to /from-legend, keyed by `${symbol}-${idx}`. */
+  const [savingLegendKey, setSavingLegendKey] = useState<string | null>(null);
+  /* Set of legend keys already added to the library this session — for inline UI feedback. */
+  const [savedLegendKeys, setSavedLegendKeys] = useState<Set<string>>(() => new Set());
+
+  /* Symbol Library state */
+  const [libraryOpen, setLibraryOpen] = useState(false);
+  const [libraryCount, setLibraryCount] = useState<number | null>(null);
 
   /* Drawing intelligence state */
   const [drawingAnalysisSettings, setDrawingAnalysisSettings] = useState<InspectDrawingAnalysisSettings>({
@@ -1897,6 +2044,11 @@ export function TakeoffTab({
     symbols: true,
     circles: false,
     text: false,
+    // Default-on: vector primitives are high-confidence CAD truth — the
+    // estimator wants to see them by default. The raster Hough `circles`
+    // overlay stays off by default because it's noisy on dense pages.
+    arcs: true,
+    curves: true,
   });
 
   /* Verify-scale flow: when user clicks "Verify" they re-enter the calibrate
@@ -1933,7 +2085,7 @@ export function TakeoffTab({
   const colorIndexRef = useRef(0);
   const [activeColor, setActiveColor] = useState(COLOR_CYCLE[0]);
   const [activeThickness, setActiveThickness] = useState(3);
-  const [activeOpts, setActiveOpts] = useState<TakeoffAnnotation["opts"]>({});
+  const [activeOpts, setActiveOpts] = useState<Pickup["opts"]>({});
   const [activeGroupName, setActiveGroupName] = useState<string | undefined>();
   const [activeLabel, setActiveLabel] = useState<string>("");
 
@@ -1943,15 +2095,9 @@ export function TakeoffTab({
   const [autoCountSnippet, setAutoCountSnippet] = useState<string | null>(null);
   const [autoCountThreshold, setAutoCountThreshold] = useState(0.65);
   const [autoCountScope, setAutoCountScope] = useState<"page" | "document" | "all">("page");
-  const [autoCountModalOpen, setAutoCountModalOpen] = useState(false);
-  const [autoCountPending, setAutoCountPending] = useState<{
-    matches: VisionMatch[];
-    matchPoints: Point[];
-    totalCount: number;
-    snippetImage: string | null;
-    /** Per-match inclusion — user can toggle individual matches on/off */
-    included: boolean[];
-  } | null>(null);
+  // The previous floating confirm modal was replaced by direct-to-Pickups
+  // bundling — see bundleAndSaveAutoCount. No `autoCountPending` /
+  // `autoCountModalOpen` state needed.
 
   /* Ask AI state */
   const [askAiRunning, setAskAiRunning] = useState(false);
@@ -1969,7 +2115,7 @@ export function TakeoffTab({
     count: number;
     confidence: "high" | "medium" | "low";
     notes: string;
-    annotationId?: string | null;
+    pickupId?: string | null;
   }
   const [smartCountRunning, setSmartCountRunning] = useState(false);
   const [smartCountBbox, setSmartCountBbox] = useState<VisionBoundingBox | null>(null);
@@ -2010,7 +2156,7 @@ export function TakeoffTab({
   const zoomRef = useRef(zoom);
   const zoomScrollSerialRef = useRef(0);
   const loadAnnotationsRef = useRef<() => Promise<void>>(async () => {});
-  const loadTakeoffLinksRef = useRef<() => Promise<void>>(async () => {});
+  const loadPickupLinksRef = useRef<() => Promise<void>>(async () => {});
   const loadDwgEntityLinksRef = useRef<() => Promise<void>>(async () => {});
   const onWorkspaceMutatedRef = useRef(onWorkspaceMutated);
   const calibrationRef = useRef(calibration);
@@ -2023,7 +2169,7 @@ export function TakeoffTab({
 
   const [modelAssets, setModelAssets] = useState<ModelAsset[]>([]);
   const [modelSelection, setModelSelection] = useState<BidwrightModelSelectionMessage | null>(null);
-  const [modelTakeoffLinks, setModelTakeoffLinks] = useState<ModelTakeoffLinkRecord[]>([]);
+  const [modelTakeoffLinks, setModelTakeoffLinks] = useState<ModelPickupLinkRecord[]>([]);
   const [modelElements, setModelElements] = useState<ModelElementWithQuantities[]>([]);
   const [modelElementSearch, setModelElementSearch] = useState("");
   const [modelElementsLoading, setModelElementsLoading] = useState(false);
@@ -2045,8 +2191,8 @@ export function TakeoffTab({
     | { kind: "create-elements" }
     | { kind: "create-single-element"; elementId: string; pick: InspectCategoryPick }
     | { kind: "create-element-group"; elementIds: string[]; groupLabel: string; pick: InspectCategoryPick }
-    | { kind: "create-single-annotation"; annotationId: string; pick: InspectCategoryPick }
-    | { kind: "create-annotation-group"; annotationIds: string[]; groupLabel: string; pick: InspectCategoryPick }
+    | { kind: "create-single-annotation"; pickupId: string; pick: InspectCategoryPick }
+    | { kind: "create-annotation-group"; pickupIds: string[]; groupLabel: string; pick: InspectCategoryPick }
     | { kind: "create-dwg-row"; rowId: string; rowType: "entity" | "autoCount" | "system"; pick: InspectCategoryPick }
     | { kind: "create-spreadsheet-row"; rowIndex: number; mode: SpreadsheetPanelView; pick: InspectCategoryPick }
     | { kind: "create-spreadsheet-all"; mode: SpreadsheetPanelView; pick: InspectCategoryPick };
@@ -2349,6 +2495,29 @@ export function TakeoffTab({
     fitOnLoadRef.current = true;
   }, [takeoffDocuments, initialDocumentId, safeInitialPage, safeInitialZoom]);
 
+  // Reset selection + force fit-to-page whenever the document changes. Without
+  // this, opening a PDF that already had a selected detection persisted in
+  // state caused the canvas to auto-zoom onto that detection — but the row
+  // wasn't highlighted (selection state and detection state were out of sync)
+  // and the zoom was locked. User TEST A: "loading a pdf always should be fit
+  // to page no entities highlighted". This effect is the single source of
+  // truth for "new doc opened → clean slate"; the per-action paths above
+  // already do this, but centralising it catches the doc-list-click /
+  // BroadcastChannel-sync paths that previously skipped the reset.
+  const lastResetDocIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!selectedDocId) return;
+    if (lastResetDocIdRef.current === selectedDocId) return;
+    lastResetDocIdRef.current = selectedDocId;
+    setSelectedPickupId(null);
+    setSelectedDrawingDetectionId(null);
+    setSelectedSmartCountItemId(null);
+    setSelectedModelElementIds(new Set());
+    setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
+    dwgActionsRef.current?.selectEntity(null);
+    fitOnLoadRef.current = true;
+  }, [selectedDocId]);
+
   const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
     if (!broadcastRef.current || !projectId) return;
     broadcastRef.current.postMessage({
@@ -2366,7 +2535,7 @@ export function TakeoffTab({
       ? selectedDoc.bookId
       : selectedDocId;
     try {
-      const data = await listTakeoffAnnotations(projectId, annotationDocumentId, page);
+      const data = await listPickups(projectId, annotationDocumentId, page);
       if (Array.isArray(data)) {
         setAnnotations(
           data.map((a: Record<string, unknown>) => {
@@ -2384,6 +2553,15 @@ export function TakeoffTab({
               measurement: normalizeAnnotationMeasurement(a.measurement),
               canvasWidth: canvasDimensionFromMetadata(metadata, "canvasWidth"),
               canvasHeight: canvasDimensionFromMetadata(metadata, "canvasHeight"),
+              // Round-trip the full metadata blob so source-tagged rows
+              // (auto-count, smart-count, future ones) stay segregated after
+              // any reload. Previously we silently dropped this — that's
+              // why a freshly created Auto Count row disappeared from the
+              // Pickups panel: loadAnnotations clobbered local state with
+              // a metadata-less copy, partitionAnnotations no longer saw
+              // `source: "auto-count"`, and the row routed to the Manual
+              // group (or got swallowed if filtered out).
+              metadata,
             };
           })
         );
@@ -2402,10 +2580,10 @@ export function TakeoffTab({
   }, [loadAnnotations]);
 
   /* ─── Load takeoff links ─── */
-  const loadTakeoffLinks = useCallback(async () => {
+  const loadPickupLinks = useCallback(async () => {
     if (!projectId) return;
     try {
-      const links = await listTakeoffLinks(projectId);
+      const links = await listPickupLinks(projectId);
       if (Array.isArray(links)) setTakeoffLinks(links);
     } catch {
       /* ignore */
@@ -2413,12 +2591,12 @@ export function TakeoffTab({
   }, [projectId]);
 
   useEffect(() => {
-    loadTakeoffLinksRef.current = loadTakeoffLinks;
-  }, [loadTakeoffLinks]);
+    loadPickupLinksRef.current = loadPickupLinks;
+  }, [loadPickupLinks]);
 
   useEffect(() => {
-    loadTakeoffLinks();
-  }, [loadTakeoffLinks]);
+    loadPickupLinks();
+  }, [loadPickupLinks]);
 
   // Reload links when the parent signals a mutation happened outside this tab
   // (e.g. from the side-panel link UI). Skip the first run so we don't double-fetch.
@@ -2429,8 +2607,8 @@ export function TakeoffTab({
       reloadSignalSeenRef.current = true;
       return;
     }
-    void loadTakeoffLinks();
-  }, [linksReloadSignal, loadTakeoffLinks]);
+    void loadPickupLinks();
+  }, [linksReloadSignal, loadPickupLinks]);
 
   // Publish annotations (PDF + DWG merged) to the parent so the side panel can
   // look them up by id regardless of which viewer drew them.
@@ -2442,12 +2620,12 @@ export function TakeoffTab({
   // is done by updateAnnotationSelection so local clicks cannot race a stale
   // parent null and bounce forever.
   useEffect(() => {
-    if (externalAnnotationSelectionId) {
-      setSelectedAnnotationId((prev) => (
-        prev === externalAnnotationSelectionId ? prev : externalAnnotationSelectionId
+    if (externalPickupSelectionId) {
+      setSelectedPickupId((prev) => (
+        prev === externalPickupSelectionId ? prev : externalPickupSelectionId
       ));
     }
-  }, [externalAnnotationSelectionId]);
+  }, [externalPickupSelectionId]);
 
   // Bridge for dispatching DWG annotation actions (delete) from the side panel.
   // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
@@ -2537,7 +2715,7 @@ export function TakeoffTab({
           // For DWG, route through onSelectionChange so DwgTakeoffSurface picks
           // it up via the `selection` prop; for PDF, mutate local state directly.
           if (isDwg) {
-            if (id) publishTakeoffSelection({ kind: "annotation", annotationId: id });
+            if (id) publishTakeoffSelection({ kind: "annotation", pickupId: id });
             else if (selection?.kind === "annotation" || !onSelectionChange) publishTakeoffSelection(null);
           } else {
             updateAnnotationSelection(id);
@@ -2557,13 +2735,19 @@ export function TakeoffTab({
             void dwgActionsRef.current?.deleteAnnotation(id);
           }
         },
+        toggleAutoCountMatch: (pickupId, matchIndex) => {
+          void handleToggleAutoCountMatch(pickupId, matchIndex);
+        },
+        clearAllAnnotationsForCurrentDocument: () => {
+          void handleClearAllAnnotations();
+        },
         editAnnotation: (id) => {
           if (annotations.some((a) => a.id === id)) {
             handleEditAnnotation(id);
           }
         },
         cancelAnnotationEdit: () => {
-          setEditingAnnotationId(null);
+          setEditingPickupId(null);
         },
         saveAnnotationEdit: (id, updates) => {
           handleSaveAnnotationEdit(id, updates);
@@ -2664,7 +2848,7 @@ export function TakeoffTab({
           const allAnnotations = [...annotations, ...dwgAnnotationsCache];
           const targets = ids
             .map((id) => allAnnotations.find((a) => a.id === id))
-            .filter((a): a is TakeoffAnnotation => Boolean(a));
+            .filter((a): a is Pickup => Boolean(a));
           if (targets.length === 0) return;
           await handleCreateAnnotationGroupLineItem(targets, groupLabel, pick);
         },
@@ -2744,6 +2928,7 @@ export function TakeoffTab({
         clearPhotoBomResults: () => {
           setPhotoBomResult(null);
           setPhotoBomSourcePhotoNames([]);
+          setPhotoBomSourcePhotoDataUris([]);
           setPhotoBomLinkedRowIds(new Set());
         },
         setTakeoffCategoryId: (categoryId) => {
@@ -2798,7 +2983,7 @@ export function TakeoffTab({
     onSelectionChange?.(next);
 
     if (!next) {
-      setSelectedAnnotationId(null);
+      setSelectedPickupId(null);
       setSelectedDrawingDetectionId(null);
       setSelectedSmartCountItemId(null);
       setSelectedModelElementIds(new Set());
@@ -2808,7 +2993,7 @@ export function TakeoffTab({
     }
 
     if (next.kind === "annotation") {
-      setSelectedAnnotationId((prev) => (prev === next.annotationId ? prev : next.annotationId));
+      setSelectedPickupId((prev) => (prev === next.pickupId ? prev : next.pickupId));
       setSelectedDrawingDetectionId(null);
       setSelectedSmartCountItemId(null);
       setSelectedModelElementIds(new Set());
@@ -2825,7 +3010,7 @@ export function TakeoffTab({
         setAnnotations([]);
         fitOnLoadRef.current = true;
       }
-      setSelectedAnnotationId(null);
+      setSelectedPickupId(null);
       setSelectedDrawingDetectionId(null);
       setSelectedSmartCountItemId(null);
       setSelectedModelElementIds(new Set());
@@ -2847,7 +3032,7 @@ export function TakeoffTab({
         setPage(1);
         fitOnLoadRef.current = true;
       }
-      setSelectedAnnotationId(null);
+      setSelectedPickupId(null);
       setSelectedDrawingDetectionId(null);
       setSelectedSmartCountItemId(null);
       setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
@@ -2867,7 +3052,7 @@ export function TakeoffTab({
         setPage(1);
         fitOnLoadRef.current = true;
       }
-      setSelectedAnnotationId(null);
+      setSelectedPickupId(null);
       setSelectedDrawingDetectionId(null);
       setSelectedSmartCountItemId(null);
       setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
@@ -2922,8 +3107,8 @@ export function TakeoffTab({
         return;
       }
 
-      if (msg.type === "takeoff-links-mutated") {
-        void loadTakeoffLinksRef.current();
+      if (msg.type === "pickup-links-mutated") {
+        void loadPickupLinksRef.current();
         void loadDwgEntityLinksRef.current();
         return;
       }
@@ -3348,7 +3533,7 @@ export function TakeoffTab({
     window.open(editorUrl, "_blank", "width=1400,height=900,resizable=yes");
   }
 
-  function notifyAnnotationsMutated(nextAnnotations?: TakeoffAnnotation[]) {
+  function notifyAnnotationsMutated(nextAnnotations?: Pickup[]) {
     if (!selectedDocId) return;
     postTakeoffMessage({
       type: "annotations-mutated",
@@ -3358,8 +3543,8 @@ export function TakeoffTab({
     });
   }
 
-  function notifyTakeoffLinksMutated() {
-    postTakeoffMessage({ type: "takeoff-links-mutated" });
+  function notifyPickupLinksMutated() {
+    postTakeoffMessage({ type: "pickup-links-mutated" });
   }
 
   function notifyWorkspaceMutated() {
@@ -3438,7 +3623,7 @@ export function TakeoffTab({
     updateTakeoffHistoryVersion();
   }
 
-  function annotationToApiPayload(annotation: TakeoffAnnotation) {
+  function annotationToApiPayload(annotation: Pickup) {
     const metadata: Record<string, unknown> = { ...(annotation.opts ?? {}) };
     if (Number.isFinite(annotation.canvasWidth)) metadata.canvasWidth = annotation.canvasWidth;
     if (Number.isFinite(annotation.canvasHeight)) metadata.canvasHeight = annotation.canvasHeight;
@@ -3460,7 +3645,7 @@ export function TakeoffTab({
     };
   }
 
-  function mapSavedAnnotation(saved: any, fallback: TakeoffAnnotation): TakeoffAnnotation {
+  function mapSavedAnnotation(saved: any, fallback: Pickup): Pickup {
     const metadata = objectRecord(saved?.metadata);
     return {
       ...fallback,
@@ -3479,10 +3664,10 @@ export function TakeoffTab({
     };
   }
 
-  async function recreateTakeoffAnnotation(annotation: TakeoffAnnotation): Promise<TakeoffAnnotation> {
+  async function recreatePickup(annotation: Pickup): Promise<Pickup> {
     const local = { ...annotation, id: crypto.randomUUID() };
     try {
-      const saved = await createTakeoffAnnotation(projectId, annotationToApiPayload(local));
+      const saved = await createPickup(projectId, annotationToApiPayload(local));
       const next = mapSavedAnnotation(saved, local);
       setAnnotations((prev) => [...prev, next]);
       notifyAnnotationsMutated();
@@ -3494,10 +3679,10 @@ export function TakeoffTab({
     }
   }
 
-  async function deleteTakeoffAnnotationLocal(id: string) {
+  async function deletePickupLocal(id: string) {
     setAnnotations((prev) => prev.filter((annotation) => annotation.id !== id));
     try {
-      await deleteTakeoffAnnotation(projectId, id);
+      await deletePickup(projectId, id);
     } catch {
       /* Ignore optimistic local delete failures. */
     }
@@ -3509,15 +3694,15 @@ export function TakeoffTab({
     if (!command) return;
     try {
       if (command.kind === "create") {
-        await deleteTakeoffAnnotationLocal(command.annotation.id);
+        await deletePickupLocal(command.annotation.id);
         redoStackRef.current.push(command);
       } else if (command.kind === "delete") {
-        const restored = await recreateTakeoffAnnotation(command.annotation);
+        const restored = await recreatePickup(command.annotation);
         redoStackRef.current.push({ kind: "delete", annotation: restored });
       } else {
-        const restored: TakeoffAnnotation[] = [];
+        const restored: Pickup[] = [];
         for (const annotation of command.annotations) {
-          restored.push(await recreateTakeoffAnnotation(annotation));
+          restored.push(await recreatePickup(annotation));
         }
         redoStackRef.current.push({ kind: "clear", annotations: restored });
       }
@@ -3531,14 +3716,14 @@ export function TakeoffTab({
     if (!command) return;
     try {
       if (command.kind === "create") {
-        const recreated = await recreateTakeoffAnnotation(command.annotation);
+        const recreated = await recreatePickup(command.annotation);
         undoStackRef.current.push({ kind: "create", annotation: recreated });
       } else if (command.kind === "delete") {
-        await deleteTakeoffAnnotationLocal(command.annotation.id);
+        await deletePickupLocal(command.annotation.id);
         undoStackRef.current.push(command);
       } else {
         for (const annotation of command.annotations) {
-          await deleteTakeoffAnnotationLocal(annotation.id);
+          await deletePickupLocal(annotation.id);
         }
         undoStackRef.current.push(command);
       }
@@ -3548,8 +3733,8 @@ export function TakeoffTab({
   }
 
   /* When annotation drawing is complete */
-  async function handleAnnotationComplete(data: Partial<TakeoffAnnotation>) {
-    const newAnnotation: TakeoffAnnotation = {
+  async function handleAnnotationComplete(data: Partial<Pickup>) {
+    const newAnnotation: Pickup = {
       id: crypto.randomUUID(),
       type: data.type ?? activeTool,
       label: activeLabel || data.type || activeTool,
@@ -3569,7 +3754,7 @@ export function TakeoffTab({
     /* Auto-open edit panel for notes so user can type text */
     if (newAnnotation.type === "markup-note") {
       updateAnnotationSelection(newAnnotation.id);
-      setEditingAnnotationId(newAnnotation.id);
+      setEditingPickupId(newAnnotation.id);
     }
 
     /* Cycle to next color for the next annotation */
@@ -3578,7 +3763,7 @@ export function TakeoffTab({
 
     /* Persist to API */
     try {
-      const saved = await createTakeoffAnnotation(projectId, annotationToApiPayload(newAnnotation));
+      const saved = await createPickup(projectId, annotationToApiPayload(newAnnotation));
       const savedAnnotation = mapSavedAnnotation(saved, newAnnotation);
       setAnnotations((prev) =>
         prev.map((a) => (a.id === newAnnotation.id ? savedAnnotation : a))
@@ -3593,7 +3778,7 @@ export function TakeoffTab({
 
   /* ─── Auto-Count: when user finishes drawing a selection rectangle ─── */
 
-  async function handleAutoCountSelection(data: Partial<TakeoffAnnotation>) {
+  async function handleAutoCountSelection(data: Partial<Pickup>) {
     if (!selectedDoc || !data.points || data.points.length < 2) return;
 
     const [p1, p2] = data.points;
@@ -3660,15 +3845,19 @@ export function TakeoffTab({
           return { x: centerX * sx, y: centerY * sy };
         });
 
-        // Show modal for user to accept/reject individual matches
-        setAutoCountPending({
+        // Land the result directly in the Pickups panel as ONE row (one
+        // bundled annotation with N points). The user reviews + promotes
+        // to a worksheet line item from there — no floating confirm modal
+        // blocking the canvas. If the matches are bad, delete the row and
+        // redraw with a different template / threshold.
+        await bundleAndSaveAutoCount({
           matches: result.matches,
           matchPoints,
           totalCount: result.totalCount,
           snippetImage: result.snippetImage ?? null,
-          included: result.matches.map(() => true),
         });
-        setAutoCountModalOpen(true);
+        setToastMessage(`Auto Count: ${result.totalCount} match${result.totalCount === 1 ? "" : "es"} added to Pickups.`);
+        setToastType("success");
       } else {
         setToastMessage("No matching symbols found. Try adjusting the selection area.");
         setToastType("error");
@@ -3685,7 +3874,7 @@ export function TakeoffTab({
 
   /* ─── Ask AI: when user finishes drawing a selection rectangle ─── */
 
-  async function handleAskAiSelection(data: Partial<TakeoffAnnotation>) {
+  async function handleAskAiSelection(data: Partial<Pickup>) {
     if (!selectedDoc || !data.points || data.points.length < 2) return;
 
     const [p1, p2] = data.points;
@@ -3736,7 +3925,7 @@ export function TakeoffTab({
 
   /* ─── Smart count: AI-driven region inventory ─── */
 
-  async function handleSmartCountSelection(data: Partial<TakeoffAnnotation>) {
+  async function handleSmartCountSelection(data: Partial<Pickup>) {
     if (!selectedDoc || !data.points || data.points.length < 2) return;
     const [p1, p2] = data.points;
     const bbox: VisionBoundingBox = {
@@ -3819,7 +4008,7 @@ export function TakeoffTab({
           count: Math.round(i.count),
           confidence: (i.confidence as SmartCountItem["confidence"]) ?? "medium",
           notes: typeof i.notes === "string" ? i.notes : "",
-          annotationId: null,
+          pickupId: null,
         }));
       setSmartCountItems(cleanItems);
       setSmartCountIncluded(cleanItems.map(() => true));
@@ -3901,13 +4090,13 @@ export function TakeoffTab({
     });
   }
 
-  async function saveSmartCountItemAsAnnotation(id: string): Promise<TakeoffAnnotation | null> {
+  async function saveSmartCountItemAsAnnotation(id: string): Promise<Pickup | null> {
     if (!smartCountItems || !smartCountBbox || !selectedDoc) return null;
     const index = smartCountItems.findIndex((item) => item.id === id);
     const item = index >= 0 ? smartCountItems[index] : null;
     if (!item) return null;
-    if (item.annotationId) {
-      const existing = annotations.find((annotation) => annotation.id === item.annotationId);
+    if (item.pickupId) {
+      const existing = annotations.find((annotation) => annotation.id === item.pickupId);
       if (existing) return existing;
     }
     const point = smartCountItemPoint(index, index);
@@ -3915,7 +4104,7 @@ export function TakeoffTab({
 
     const color = COLOR_CYCLE[colorIndexRef.current % COLOR_CYCLE.length];
     colorIndexRef.current += 1;
-    const localAnnotation: TakeoffAnnotation = {
+    const localAnnotation: Pickup = {
       id: crypto.randomUUID(),
       type: "count",
       label: `${item.label} (x${item.count})`,
@@ -3932,14 +4121,14 @@ export function TakeoffTab({
         smartCountLabel: item.label,
         smartCountConfidence: item.confidence,
         smartCountBbox,
-      } as unknown as TakeoffAnnotation["opts"],
+      } as unknown as Pickup["opts"],
     };
 
     setSmartCountSavingId(id);
     setAnnotations((prev) => [...prev, localAnnotation]);
     let finalAnnotation = localAnnotation;
     try {
-      const saved = await createTakeoffAnnotation(projectId, annotationToApiPayload(localAnnotation));
+      const saved = await createPickup(projectId, annotationToApiPayload(localAnnotation));
       finalAnnotation = mapSavedAnnotation(saved, localAnnotation);
       setAnnotations((prev) =>
         prev.map((annotation) => (annotation.id === localAnnotation.id ? finalAnnotation : annotation)),
@@ -3950,7 +4139,7 @@ export function TakeoffTab({
       pushTakeoffHistory({ kind: "create", annotation: finalAnnotation });
       setSmartCountItems((current) =>
         current?.map((candidate) =>
-          candidate.id === id ? { ...candidate, annotationId: finalAnnotation.id } : candidate,
+          candidate.id === id ? { ...candidate, pickupId: finalAnnotation.id } : candidate,
         ) ?? null,
       );
       setSmartCountSavingId(null);
@@ -3979,9 +4168,9 @@ export function TakeoffTab({
       if (!annotation) return;
       const created = await createLineItemFromAnnotation(annotation, pick);
       if (!created) return;
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
-      notifyTakeoffLinksMutated();
+      notifyPickupLinksMutated();
       setToastType("success");
       setToastMessage("Created line item from Smart Count row.");
     } catch (error) {
@@ -4014,8 +4203,8 @@ export function TakeoffTab({
   function smartCountSnapshotItems() {
     if (!smartCountItems) return [];
     return smartCountItems.map((item, index) => {
-      const annotationId = item.annotationId ?? null;
-      const isLinked = annotationId ? takeoffLinks.some((link) => link.annotationId === annotationId) : false;
+      const pickupId = item.pickupId ?? null;
+      const isLinked = pickupId ? pickupLinks.some((link) => link.pickupId === pickupId) : false;
       return {
         id: item.id,
         label: item.label,
@@ -4023,9 +4212,9 @@ export function TakeoffTab({
         confidence: item.confidence,
         notes: item.notes,
         included: smartCountIncluded[index] ?? true,
-        isSaved: Boolean(annotationId),
+        isSaved: Boolean(pickupId),
         isLinked,
-        annotationId,
+        pickupId,
         bbox: smartCountBbox,
       };
     });
@@ -4063,68 +4252,103 @@ export function TakeoffTab({
     }
   }
 
-  async function handleAcceptAutoCount() {
-    if (!autoCountPending) return;
-    const { included, matchPoints, matches } = autoCountPending;
-    const acceptedPoints = matchPoints.filter((_, i) => included[i]);
-    const acceptedCount = acceptedPoints.length;
-    if (acceptedCount === 0) { handleRejectAutoCount(); return; }
-
+  /** Bundle an Auto Count run into ONE Pickup with all match
+   *  positions as `points` and the per-match bboxes / confidences in
+   *  metadata. Replaces the previous N-annotations-per-run approach that
+   *  exploded the Pickups list — the user explicitly asked for one row per
+   *  unique symbol with a quantity, not one row per match. The Pickups
+   *  panel renders the row with the template thumbnail + count badge; the
+   *  worksheet line item created from this row carries quantity = count.
+   *
+   *  Scope-aware: page-level runs include per-match coords (so the canvas
+   *  can highlight each instance + the user can deselect false positives).
+   *  Document- or all-document runs only carry aggregate counts since the
+   *  underlying batch API returns per-page totals, not per-match coords —
+   *  we still produce ONE bundled Pickup row so the unified-flow promise
+   *  holds. */
+  async function bundleAndSaveAutoCount(payload: {
+    matches: VisionMatch[];
+    matchPoints: Point[];
+    totalCount: number;
+    snippetImage: string | null;
+    /** "page" (default) = matches are on the current page; "document" =
+     *  per-page rollup with no per-match coords; "all" = per-document
+     *  rollup with no per-match coords. */
+    scope?: "page" | "document" | "all";
+    /** Per-page counts when scope === "document" (multi-page rollup). */
+    perPage?: Array<{ page: number; count: number }>;
+    /** Per-document counts when scope === "all" (multi-doc rollup). */
+    perDoc?: Array<{ docId: string; docLabel: string; total: number }>;
+  }) {
+    if (payload.totalCount === 0 || !selectedDocId) return;
+    const scope = payload.scope ?? "page";
     const groupId = crypto.randomUUID().slice(0, 8);
-    const groupName = `Auto Count ${groupId}`;
-
-    // Create individual annotations for each accepted match
-    const newAnnotations: TakeoffAnnotation[] = acceptedPoints.map((pt, i) => ({
+    const groupName =
+      scope === "document" ? `Auto Count (doc) ${groupId}` :
+      scope === "all" ? `Auto Count (all) ${groupId}` :
+      `Auto Count ${groupId}`;
+    const matchRecords = payload.matches.map((m, idx) => ({
+      rect: m.rect,
+      confidence: m.confidence,
+      image: m.image ?? null,
+      pointIndex: idx,
+    }));
+    const localAnn: Pickup = {
       id: crypto.randomUUID(),
       type: "count",
-      label: `#${i + 1}`,
+      label: groupName,
       color: "#22c55e",
       thickness: 4,
-      points: [pt],
+      points: payload.matchPoints,
       visible: true,
       groupName,
       canvasWidth: canvasSize.width,
       canvasHeight: canvasSize.height,
-      measurement: { value: 1, unit: "count" },
-    }));
-
-    setAnnotations((prev) => [...prev, ...newAnnotations]);
-    setAutoCountModalOpen(false);
-    setAutoCountPending(null);
-
-    // Persist each individually
-    for (const ann of newAnnotations) {
-      try {
-        const saved = await createTakeoffAnnotation(projectId, {
-          documentId: selectedDocId,
-          pageNumber: page,
-          annotationType: "count",
-          label: ann.label,
-          color: ann.color,
-          lineThickness: ann.thickness,
-          visible: true,
-          groupName,
-          points: ann.points,
-          measurement: ann.measurement ?? {},
-          metadata: {
-            canvasWidth: ann.canvasWidth,
-            canvasHeight: ann.canvasHeight,
-          },
-        });
-        if (saved?.id) {
-          setAnnotations((prev) =>
-            prev.map((a) => (a.id === ann.id ? { ...a, id: saved.id } : a))
-          );
-        }
-      } catch { /* local is fine */ }
+      measurement: { value: payload.totalCount, unit: "count" },
+      metadata: {
+        source: "auto-count",
+        scope,
+        templateImage: payload.snippetImage ?? undefined,
+        matches: matchRecords,
+        matchCount: payload.totalCount,
+        perPage: payload.perPage,
+        perDoc: payload.perDoc,
+      },
+    };
+    setAnnotations((prev) => [...prev, localAnn]);
+    try {
+      const saved = await createPickup(projectId, {
+        documentId: selectedDocId,
+        pageNumber: page,
+        annotationType: "count",
+        label: localAnn.label,
+        color: localAnn.color,
+        lineThickness: localAnn.thickness,
+        visible: true,
+        groupName,
+        points: localAnn.points,
+        measurement: localAnn.measurement ?? {},
+        metadata: {
+          canvasWidth: localAnn.canvasWidth,
+          canvasHeight: localAnn.canvasHeight,
+          source: "auto-count",
+          scope,
+          templateImage: payload.snippetImage ?? undefined,
+          matches: matchRecords,
+          matchCount: payload.totalCount,
+          perPage: payload.perPage,
+          perDoc: payload.perDoc,
+        },
+      });
+      if (saved?.id) {
+        setAnnotations((prev) =>
+          prev.map((a) => (a.id === localAnn.id ? { ...a, id: saved.id } : a)),
+        );
+      }
+    } catch {
+      /* local-only is OK; user can retry */
     }
     notifyAnnotationsMutated();
-  }
-
-  function handleRejectAutoCount() {
-    setAutoCountModalOpen(false);
-    setAutoCountPending(null);
-    setAutoCountResults(null);
   }
 
   function handleCloseAskAiModal() {
@@ -4162,7 +4386,15 @@ export function TakeoffTab({
 
       const results = result.pages.map((p) => ({ page: p.pageNumber, count: p.totalCount }));
       setCrossPageResults(results);
-      setToastMessage(`Cross-page search: ${result.grandTotal} total across ${result.pageCount} pages`);
+      await bundleAndSaveAutoCount({
+        matches: [],
+        matchPoints: [],
+        totalCount: result.grandTotal,
+        snippetImage: autoCountSnippet ?? null,
+        scope: "document",
+        perPage: results,
+      });
+      setToastMessage(`Auto Count (all pages): ${result.grandTotal} added to Pickups.`);
       setToastType("success");
     } catch (err) {
       console.error("Cross-page search failed:", err);
@@ -4207,7 +4439,15 @@ export function TakeoffTab({
       }
 
       const total = results.filter((r) => r.total >= 0).reduce((s, r) => s + r.total, 0);
-      setToastMessage(`Multi-document search: ${total} total across ${searchableDocs.length} PDFs`);
+      await bundleAndSaveAutoCount({
+        matches: [],
+        matchPoints: [],
+        totalCount: total,
+        snippetImage: autoCountSnippet ?? null,
+        scope: "all",
+        perDoc: results,
+      });
+      setToastMessage(`Auto Count (all drawings): ${total} added to Pickups.`);
       setToastType("success");
     } catch (err) {
       console.error("Multi-document search failed:", err);
@@ -4265,6 +4505,7 @@ export function TakeoffTab({
     setLegendLoading(true);
     setLegendEntries(null);
     setLegendWarnings([]);
+    setSavedLegendKeys(new Set());
     try {
       const result = await extractLegendFromPage(projectId, docId, page);
       setLegendEntries(result.entries);
@@ -4273,6 +4514,60 @@ export function TakeoffTab({
       setLegendWarnings([err instanceof Error ? err.message : "Legend extraction failed"]);
     } finally {
       setLegendLoading(false);
+    }
+  }
+
+  /** Refresh the Symbol Library badge count from the server. */
+  const refreshLibraryCount = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const result = await listSymbolTemplates(projectId);
+      setLibraryCount(result.templates.length);
+    } catch {
+      // Non-fatal — the badge just won't update.
+    }
+  }, [projectId]);
+
+  useEffect(() => {
+    void refreshLibraryCount();
+  }, [refreshLibraryCount]);
+
+  /**
+   * Crop a legend entry's glyph and persist it as a SymbolTemplate. Idempotent
+   * from the UI's perspective — clicking twice creates two rows server-side,
+   * so the inline "saved" indicator suppresses the second click.
+   */
+  async function handleSaveLegendEntryToLibrary(entry: LegendEntryRecord, index: number) {
+    if (!selectedDoc) return;
+    if (!entry.symbolBbox) {
+      setToastType("error");
+      setToastMessage("This legend entry has no glyph bbox — open the page in the takeoff canvas and capture the symbol manually.");
+      return;
+    }
+    const docId = selectedDoc.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDoc.id;
+    const key = `${entry.symbol}-${index}`;
+    setSavingLegendKey(key);
+    try {
+      const template = await createSymbolTemplateFromLegendEntry(projectId, {
+        documentId: docId,
+        pageNumber: entry.pageNumber,
+        entry,
+      });
+      setSavedLegendKeys((cur) => {
+        const next = new Set(cur);
+        next.add(key);
+        return next;
+      });
+      setLibraryCount((cur) => (cur ?? 0) + 1);
+      setToastType("success");
+      setToastMessage(`Saved "${template.symbol || template.label}" to the project Symbol Library.`);
+    } catch (err) {
+      setToastType("error");
+      setToastMessage(err instanceof Error ? err.message : "Save to library failed");
+    } finally {
+      setSavingLegendKey(null);
     }
   }
 
@@ -4345,10 +4640,21 @@ export function TakeoffTab({
     if (circle?.bbox) return circle.bbox;
     const text = result.textRegions.find((item) => item.id === id);
     if (text) return { x: text.x, y: text.y, width: text.w, height: text.h };
+    // Phase-2 vector primitives. Their params are in PDF-point coords;
+    // project to image-pixel space (the bounds-return contract) via the
+    // analysis's coordinateSpace so focusDrawingBounds scrolls correctly.
+    const primitive = result.primitives?.find((item) => item.id === id);
+    if (primitive) {
+      const cs = result.coordinateSpace;
+      const px = cs?.imagePixelPerPdfPointX ?? 1;
+      const py = cs?.imagePixelPerPdfPointY ?? 1;
+      const bounds = primitiveScaledBounds(primitive, px, py);
+      if (bounds) return bounds;
+    }
     return null;
   }
 
-  function drawingDetectionAnnotations(id: string): TakeoffAnnotation[] {
+  function drawingDetectionAnnotations(id: string): Pickup[] {
     return annotations.filter((annotation) => {
       const metadata = (annotation.opts ?? {}) as Record<string, unknown>;
       return metadata.detectionId === id || metadata.systemId === id;
@@ -4406,7 +4712,7 @@ export function TakeoffTab({
     if (calibration && calibration.pixelsPerUnit > 0) {
       const value = Math.round((paperLengthPx / calibration.pixelsPerUnit) * 100) / 100;
       return {
-        measurement: { value, unit: calibration.unit } satisfies TakeoffAnnotation["measurement"],
+        measurement: { value, unit: calibration.unit } satisfies Pickup["measurement"],
         metadata: {
           measurementBasis: "calibrated_pdf_scale",
           analysisLengthPx,
@@ -4423,6 +4729,71 @@ export function TakeoffTab({
         requiresCalibration: true,
         analysisLengthPx,
         paperLengthPx: Math.round(paperLengthPx * 100) / 100,
+      },
+    };
+  }
+
+  /**
+   * Area-domain sibling of calibratedDrawingMeasurement. Closed primitives
+   * (circle / ellipse / full-sweep arc / rect) save as `area-polygon`
+   * annotations — the schema's invariant is that area-polygon's
+   * measurement.value carries the AREA (in squared units), not the
+   * perimeter. Without this helper, handleSaveDrawingPrimitive would put
+   * the polyline length into an area-polygon annotation, and the
+   * downstream WorksheetItem would receive perimeter where the user
+   * expects area.
+   *
+   * Conversion pipeline mirrors calibratedDrawingMeasurement but quadratic:
+   *   image-pixel² → paper-pixel² (×scale.x × scale.y)
+   *                → real-world² (÷ pixelsPerUnit²).
+   */
+  function calibratedDrawingAreaMeasurement(points: Point[]) {
+    if (points.length < 3) {
+      return {
+        measurement: undefined,
+        metadata: { measurementBasis: "polygon_too_few_points" as const },
+      };
+    }
+    // Shoelace area in image-pixel² space. Same formula used by
+    // dwg-takeoff-surface.tsx's polygonArea and apps/web/lib/takeoff-math.ts
+    // — kept inline to avoid a cross-package round-trip just for one
+    // determinant.
+    let canvasAreaPx2 = 0;
+    for (let i = 0; i < points.length; i++) {
+      const a = points[i]!;
+      const b = points[(i + 1) % points.length]!;
+      canvasAreaPx2 += a.x * b.y - b.x * a.y;
+    }
+    canvasAreaPx2 = Math.abs(canvasAreaPx2) / 2;
+    const scale = drawingAnalysisPaperScale();
+    const paperAreaPx2 = canvasAreaPx2 * scale.x * scale.y;
+    if (calibration && calibration.pixelsPerUnit > 0) {
+      const realArea = paperAreaPx2 / (calibration.pixelsPerUnit * calibration.pixelsPerUnit);
+      const value = Math.round(realArea * 100) / 100;
+      return {
+        measurement: {
+          // value + area both carry the area number — matches the
+          // user-drawn `area-polygon` convention in apps/web/lib/takeoff-math.ts:
+          // computeMeasurement returns { value, unit, area } where value === area.
+          value,
+          unit: `${calibration.unit}²`,
+          area: value,
+        } satisfies Pickup["measurement"],
+        metadata: {
+          measurementBasis: "calibrated_pdf_area" as const,
+          canvasAreaPx2: Math.round(canvasAreaPx2 * 100) / 100,
+          paperAreaPx2: Math.round(paperAreaPx2 * 100) / 100,
+          calibrationUnit: calibration.unit,
+          pixelsPerUnit: calibration.pixelsPerUnit,
+        },
+      };
+    }
+    return {
+      measurement: undefined,
+      metadata: {
+        measurementBasis: "requires_pdf_scale" as const,
+        requiresCalibration: true,
+        canvasAreaPx2: Math.round(canvasAreaPx2 * 100) / 100,
       },
     };
   }
@@ -4468,24 +4839,46 @@ export function TakeoffTab({
       width: Math.max(24, bounds.width * baseScaleX),
       height: Math.max(24, bounds.height * baseScaleY),
     };
-    const targetZoom = roundPdfZoom(
-      Math.min(
-        6,
-        Math.max(
-          0.35,
-          Math.min(
-            (container.clientWidth * 0.58) / Math.max(baseBox.width, 1),
-            (container.clientHeight * 0.58) / Math.max(baseBox.height, 1),
+    // Skip the zoom change when the bounds are already comfortably visible at
+    // the current zoom. The PDF.js rasterise pass that follows applyPdfZoom is
+    // expensive (5400x3600 image rebake) — user TEST A: "performance
+    // switching between entities where pdf zooms and moves is not
+    // acceptable". By keeping current zoom when it's "fine", we only pay the
+    // scroll cost on most clicks.
+    const renderedBoxW = baseBox.width * currentZoom;
+    const renderedBoxH = baseBox.height * currentZoom;
+    const viewportW = container.clientWidth;
+    const viewportH = container.clientHeight;
+    const viewportFractionW = renderedBoxW / Math.max(viewportW, 1);
+    const viewportFractionH = renderedBoxH / Math.max(viewportH, 1);
+    const fits = viewportFractionW >= 0.08 && viewportFractionW <= 0.85
+              && viewportFractionH >= 0.08 && viewportFractionH <= 0.85;
+    let zoomChanged = false;
+    if (!fits) {
+      const targetZoom = roundPdfZoom(
+        Math.min(
+          6,
+          Math.max(
+            0.35,
+            Math.min(
+              (viewportW * 0.58) / Math.max(baseBox.width, 1),
+              (viewportH * 0.58) / Math.max(baseBox.height, 1),
+            ),
           ),
         ),
-      ),
-    );
+      );
+      if (Math.abs(targetZoom - currentZoom) >= 0.05) {
+        applyPdfZoom(targetZoom);
+        zoomChanged = true;
+      }
+    }
     pendingDrawingFocusBoundsRef.current = bounds;
-    applyPdfZoom(targetZoom);
-    const scroll = () => scrollDrawingBoundsIntoView(bounds);
-    requestAnimationFrame(scroll);
-    window.setTimeout(scroll, 120);
-    window.setTimeout(scroll, 320);
+    // After a zoom change PDF.js needs ~one frame to repaint; do a follow-up
+    // scroll. Without zoom change, the immediate scroll is enough.
+    scrollDrawingBoundsIntoView(bounds);
+    if (zoomChanged) {
+      requestAnimationFrame(() => scrollDrawingBoundsIntoView(bounds));
+    }
   }
 
   useEffect(() => {
@@ -4532,22 +4925,35 @@ export function TakeoffTab({
       ),
     );
     const ratio = targetZoom / currentZoom;
+    // Skip the zoom rebake if the annotation is already comfortably visible
+    // (same motivation as focusDrawingBounds — PDF.js rasterise is the
+    // expensive part of switching entities). Also use instant scroll instead
+    // of smooth, because the prior 150ms smooth-scroll animation stacked on
+    // top of the rasterise cost made every click feel laggy.
+    const viewportFractionW = (box.width * currentZoom) / Math.max(container.clientWidth, 1);
+    const viewportFractionH = (box.height * currentZoom) / Math.max(container.clientHeight, 1);
+    const fits = viewportFractionW >= 0.08 && viewportFractionW <= 0.85
+              && viewportFractionH >= 0.08 && viewportFractionH <= 0.85;
+    const effectiveRatio = fits ? 1 : ratio;
     const scroll = () => {
       container.scrollTo({
-        left: Math.max(0, (box.x + box.width / 2) * ratio - container.clientWidth / 2),
-        top: Math.max(0, (box.y + box.height / 2) * ratio - container.clientHeight / 2),
-        behavior: "smooth",
+        left: Math.max(0, (box.x + box.width / 2) * effectiveRatio - container.clientWidth / 2),
+        top: Math.max(0, (box.y + box.height / 2) * effectiveRatio - container.clientHeight / 2),
+        behavior: "auto",
       });
     };
-    applyPdfZoom(targetZoom);
-    requestAnimationFrame(scroll);
-    window.setTimeout(scroll, 120);
+    if (!fits && Math.abs(targetZoom - currentZoom) >= 0.05) {
+      applyPdfZoom(targetZoom);
+      requestAnimationFrame(scroll);
+    } else {
+      scroll();
+    }
   }
 
   useEffect(() => {
-    if (!selectedAnnotationId || !isPdfDocument) return;
-    focusAnnotationSelection(selectedAnnotationId);
-  }, [selectedAnnotationId, annotations, isPdfDocument, canvasSize.width, canvasSize.height]);
+    if (!selectedPickupId || !isPdfDocument) return;
+    focusAnnotationSelection(selectedPickupId);
+  }, [selectedPickupId, annotations, isPdfDocument, canvasSize.width, canvasSize.height]);
 
   function handleSelectDrawingDetection(id: string | null) {
     setSelectedDrawingDetectionId(id);
@@ -4629,9 +5035,9 @@ export function TakeoffTab({
     thickness?: number;
     groupName?: string;
     points: Point[];
-    measurement?: TakeoffAnnotation["measurement"];
+    measurement?: Pickup["measurement"];
     opts?: Record<string, unknown>;
-  }): TakeoffAnnotation {
+  }): Pickup {
     return {
       id: input.id,
       type: input.type,
@@ -4644,19 +5050,19 @@ export function TakeoffTab({
       measurement: input.measurement,
       canvasWidth: drawingAnalysisResult?.imageWidth,
       canvasHeight: drawingAnalysisResult?.imageHeight,
-      opts: input.opts as TakeoffAnnotation["opts"],
+      opts: input.opts as Pickup["opts"],
     };
   }
 
-  function mapSavedDrawingAnnotations(saved: unknown[], fallbacks: TakeoffAnnotation[]) {
+  function mapSavedDrawingAnnotations(saved: unknown[], fallbacks: Pickup[]) {
     return saved.map((annotation, index) => mapSavedAnnotation(annotation, fallbacks[index] ?? fallbacks[0]));
   }
 
   async function handleSaveDrawingDetection(
     id: string,
-    kind: "system" | "symbol" | "circle" | "line",
+    kind: "system" | "symbol" | "circle" | "line" | "arc" | "curve",
     options: { toast?: boolean } = {},
-  ): Promise<TakeoffAnnotation[]> {
+  ): Promise<Pickup[]> {
     const result = drawingAnalysisResult;
     if (!result) return [];
     if (kind === "system") {
@@ -4671,14 +5077,151 @@ export function TakeoffTab({
       const circle = result.circles.find((item) => item.id === id);
       return circle ? handleSaveDrawingCircle(circle, options) : [];
     }
+    if (kind === "arc" || kind === "curve") {
+      // Phase-2 primitive: arcs / circles / ellipses (kind=arc) and cubic /
+      // quad beziers (kind=curve) come from analysis.primitives, get
+      // sampled to polylines, and ride the same Pickup pipeline
+      // as the other detections.
+      const primitive = (result.primitives ?? []).find((item) => item.id === id);
+      return primitive ? handleSaveDrawingPrimitive(primitive, kind, options) : [];
+    }
     const line = result.lines.find((item) => item.id === id);
     return line ? handleSaveDrawingLine(line, options) : [];
+  }
+
+  /**
+   * Persist a canonical PDF primitive (arc / circle / ellipse / bezier) as
+   * a Pickup. Coordinate flow:
+   *   1. Sample the primitive in PDF-point space via samplePdfPrimitive
+   *   2. Project each sample to image-pixel space using coordinateSpace
+   *      (the same coord space every other detection lives in)
+   *   3. Wrap as a `linear-polyline` or `area-polygon` annotation
+   *   4. Compute the calibrated real-world measurement via
+   *      calibratedDrawingMeasurement (same path as systems/lines).
+   * The annotation persists with full primitive provenance in metadata so
+   * downstream consumers can tell a saved annotation came from a canonical
+   * primitive vs a sampled-line detection.
+   */
+  async function handleSaveDrawingPrimitive(
+    primitive: NonNullable<DrawingGeometryAnalysisResult["primitives"]>[number],
+    kind: "arc" | "curve",
+    options: { toast?: boolean } = {},
+  ): Promise<Pickup[]> {
+    if (!drawingAnalysisResult || !selectedDoc) return [];
+    const docId = selectedVisionDocumentId();
+    setDrawingAnalysisSavingId(primitive.id);
+    try {
+      const cs = drawingAnalysisResult.coordinateSpace;
+      const sx = cs?.imagePixelPerPdfPointX ?? 1;
+      const sy = cs?.imagePixelPerPdfPointY ?? 1;
+      const pdfPoints = samplePdfPrimitive(primitive);
+      if (pdfPoints.length < 2) return [];
+      const points: Point[] = pdfPoints.map((p) => ({ x: p.x * sx, y: p.y * sy }));
+      const closed = isPrimitiveClosed(primitive);
+      // Closed primitives become area-polygon annotations so estimators
+      // can drop them into SF/SM line items; open primitives stay as
+      // linear-polylines for LF takeoff.
+      const annotationType = closed ? "area-polygon" : "linear-polyline";
+      const groupName = kind === "arc"
+        ? "Drawing Intelligence Vector Arcs"
+        : "Drawing Intelligence Vector Curves";
+      const color = kind === "arc" ? "#f59e0b" : "#a855f7";
+      const label = kind === "arc"
+        ? primitive.kind === "circle"
+          ? "Detected vector circle"
+          : primitive.kind === "ellipse"
+            ? "Detected vector ellipse"
+            : "Detected vector arc"
+        : primitive.kind === "quad_bezier"
+          ? "Detected quadratic curve"
+          : "Detected cubic curve";
+
+      // Use the area-domain calibration helper for closed primitives so
+      // the area-polygon annotation actually carries an AREA in
+      // measurement.value (matching the convention used by every
+      // user-drawn area-polygon). Open primitives (arcs, beziers) stay on
+      // the length-domain helper — for them the polyline length IS the
+      // takeoff quantity. Both helpers return identical
+      // { measurement, metadata } shape so the rest of this function
+      // doesn't care which one ran.
+      const calibrated = closed
+        ? calibratedDrawingAreaMeasurement(points)
+        : calibratedDrawingMeasurement(points);
+      const fallback = makeDrawingFallbackAnnotation({
+        id: primitive.id,
+        type: annotationType,
+        label,
+        color,
+        thickness: 3,
+        groupName,
+        points,
+        measurement: calibrated.measurement,
+        opts: {
+          sourceTool: "drawing-intelligence",
+          analysisId: drawingAnalysisResult.analysisId,
+          preset: drawingAnalysisPreset,
+          detectionId: primitive.id,
+          primitiveKind: primitive.kind,
+          primitiveLayer: primitive.layer,
+          primitivePaint: primitive.paint,
+          ...calibrated.metadata,
+        },
+      });
+      const result = await saveDrawingDetectionsAsAnnotations({
+        projectId,
+        documentId: docId,
+        pageNumber: page,
+        imageWidth: drawingAnalysisResult.imageWidth,
+        imageHeight: drawingAnalysisResult.imageHeight,
+        analysisId: drawingAnalysisResult.analysisId,
+        groupName,
+        color,
+        detections: [{
+          id: primitive.id,
+          kind: kind === "arc" ? "vector_arc" : "vector_curve",
+          label,
+          annotationType,
+          groupName,
+          color,
+          lineThickness: 3,
+          points,
+          source: "drawing-intelligence",
+          measurement: calibrated.measurement,
+          metadata: {
+            sourceTool: "drawing-intelligence",
+            analysisId: drawingAnalysisResult.analysisId,
+            preset: drawingAnalysisPreset,
+            detectionId: primitive.id,
+            primitiveKind: primitive.kind,
+            primitiveParams: primitive.params,
+            primitiveLayer: primitive.layer,
+            primitivePaint: primitive.paint,
+            ...calibrated.metadata,
+          },
+        }],
+      });
+      const saved = mapSavedDrawingAnnotations(result.annotations, [fallback]);
+      await loadAnnotationsRef.current();
+      notifyAnnotationsMutated();
+      if (options.toast !== false) {
+        setToastMessage(`Saved ${result.savedCount} ${kind === "arc" ? "vector arc" : "vector curve"} to takeoff.`);
+        setToastType("success");
+      }
+      return saved;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : `Could not save ${kind}`;
+      setToastMessage(message);
+      setToastType("error");
+      return [];
+    } finally {
+      setDrawingAnalysisSavingId(null);
+    }
   }
 
   async function handleSaveDrawingSystem(
     system: DrawingTracedSystem,
     options: { toast?: boolean } = {},
-  ): Promise<TakeoffAnnotation[]> {
+  ): Promise<Pickup[]> {
     if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
     const segments = drawingSystemSegments(system);
@@ -4769,7 +5312,7 @@ export function TakeoffTab({
   async function handleSaveDrawingLine(
     segment: DrawingLineSegment,
     options: { toast?: boolean } = {},
-  ): Promise<TakeoffAnnotation[]> {
+  ): Promise<Pickup[]> {
     if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
     setDrawingAnalysisSavingId(segment.id);
@@ -4845,7 +5388,7 @@ export function TakeoffTab({
   async function handleSaveDrawingCircle(
     circle: DrawingGeometryAnalysisResult["circles"][number],
     options: { toast?: boolean } = {},
-  ): Promise<TakeoffAnnotation[]> {
+  ): Promise<Pickup[]> {
     if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
     setDrawingAnalysisSavingId(circle.id);
@@ -4920,7 +5463,7 @@ export function TakeoffTab({
   async function handleSaveDrawingSymbol(
     candidate: DrawingSymbolCandidate,
     options: { toast?: boolean } = {},
-  ): Promise<TakeoffAnnotation[]> {
+  ): Promise<Pickup[]> {
     if (!drawingAnalysisResult || !selectedDoc) return [];
     const docId = selectedVisionDocumentId();
 
@@ -4993,11 +5536,18 @@ export function TakeoffTab({
 
   async function handleCreateDrawingDetectionLineItem(
     id: string,
-    kind: "system" | "symbol" | "circle" | "line",
+    kind: "system" | "symbol" | "circle" | "line" | "arc" | "curve",
     pick: InspectCategoryPick,
   ) {
     try {
-      if ((kind === "system" || kind === "line") && (!calibration || calibration.pixelsPerUnit <= 0)) {
+      // arc + curve primitives carry real geometry but the polyline they
+      // sample to needs the drawing scale before it produces an LF / SF
+      // value. Symbol + circle (which is a Hough-detected count mark) are
+      // count-only, so they don't gate on calibration.
+      if (
+        (kind === "system" || kind === "line" || kind === "arc" || kind === "curve")
+        && (!calibration || calibration.pixelsPerUnit <= 0)
+      ) {
         setToastType("error");
         setToastMessage("Set the drawing scale before adding detected linework to a worksheet.");
         return;
@@ -5022,13 +5572,17 @@ export function TakeoffTab({
       if (!created) return;
 
       await loadAnnotationsRef.current();
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(
         kind === "system"
           ? `Created line item from detected system (${targets.length} segments).`
-          : "Created line item from detected entity.",
+          : kind === "arc"
+            ? "Created line item from vector arc primitive."
+            : kind === "curve"
+              ? "Created line item from vector curve primitive."
+              : "Created line item from detected entity.",
       );
     } catch (error) {
       console.error("[takeoff] Failed to create line item from drawing detection:", error);
@@ -5041,7 +5595,7 @@ export function TakeoffTab({
     const uniqueIds = Array.from(new Set(ids));
     if (uniqueIds.length === 0) return;
     try {
-      const targets: TakeoffAnnotation[] = [];
+      const targets: Pickup[] = [];
       for (const id of uniqueIds) {
         const existing = drawingDetectionAnnotations(id);
         if (existing.length > 0) {
@@ -5059,9 +5613,9 @@ export function TakeoffTab({
       const created = await createLineItemFromAnnotationGroup(targets, label || "PDF count candidates", pick);
       if (!created) return;
       await loadAnnotationsRef.current();
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
-      notifyTakeoffLinksMutated();
+      notifyPickupLinksMutated();
       setToastType("success");
       setToastMessage(`Created count line item from ${targets.length} PDF candidate${targets.length === 1 ? "" : "s"}.`);
     } catch (error) {
@@ -5127,15 +5681,107 @@ export function TakeoffTab({
     notifyAnnotationsMutated(nextAnnotations);
   }
 
+  /** Toggle inclusion of a single match inside an Auto Count bundle. The
+   *  user clicks a thumbnail in the expanded Pickup row; we flip whether
+   *  that match index is in `metadata.excludedMatchIndexes`, then
+   *  recompute `points` + `measurement.value` so the canvas drops the
+   *  bbox marker and the worksheet line item promotion uses the new
+   *  count. Reversible — re-checking puts the match back. */
+  async function handleToggleAutoCountMatch(pickupId: string, matchIndex: number) {
+    const annotation = annotations.find((a) => a.id === pickupId);
+    if (!annotation) return;
+    const meta = (annotation.metadata ?? {}) as Record<string, unknown>;
+    const allMatches = Array.isArray(meta.matches)
+      ? (meta.matches as Array<{ rect?: { x: number; y: number; width: number; height: number } }>)
+      : [];
+    if (matchIndex < 0 || matchIndex >= allMatches.length) return;
+    const currentExcluded = new Set<number>(
+      Array.isArray(meta.excludedMatchIndexes) ? (meta.excludedMatchIndexes as number[]) : [],
+    );
+    if (currentExcluded.has(matchIndex)) {
+      currentExcluded.delete(matchIndex);
+    } else {
+      currentExcluded.add(matchIndex);
+    }
+    const excludedArr = Array.from(currentExcluded).sort((a, b) => a - b);
+    // Re-derive points from the included matches' bbox centers. We keep
+    // metadata.matches intact (all originals) so un-excluding restores
+    // the point without a re-run.
+    const baseWidth = annotation.canvasWidth ?? canvasSize.width;
+    const baseHeight = annotation.canvasHeight ?? canvasSize.height;
+    const imgW = typeof meta.imageWidth === "number" ? (meta.imageWidth as number) : baseWidth;
+    const imgH = typeof meta.imageHeight === "number" ? (meta.imageHeight as number) : baseHeight;
+    const sx = baseWidth / Math.max(imgW, 1);
+    const sy = baseHeight / Math.max(imgH, 1);
+    const newPoints = allMatches
+      .map((m, idx) => {
+        if (currentExcluded.has(idx) || !m.rect) return null;
+        return {
+          x: (m.rect.x + m.rect.width / 2) * sx,
+          y: (m.rect.y + m.rect.height / 2) * sy,
+        };
+      })
+      .filter((p): p is { x: number; y: number } => p != null);
+    const newCount = allMatches.length - currentExcluded.size;
+    const updated: Pickup = {
+      ...annotation,
+      points: newPoints,
+      measurement: { value: newCount, unit: "count" },
+      metadata: { ...meta, excludedMatchIndexes: excludedArr },
+    };
+    setAnnotations((prev) => prev.map((a) => (a.id === pickupId ? updated : a)));
+    try {
+      await updatePickup(projectId, pickupId, {
+        points: updated.points,
+        measurement: updated.measurement,
+        metadata: { ...meta, excludedMatchIndexes: excludedArr },
+      });
+    } catch {
+      /* Local change persists in-session; server resync on next reload. */
+    }
+    notifyAnnotationsMutated();
+  }
+
+  /** Wipe every Pickup for the active document — Auto Count
+   *  bundles, Smart Count items, manual markups, the lot. The estimator
+   *  invokes this from the Pickups panel settings when they want a clean
+   *  slate (e.g. a partial / mis-scoped Auto Count run, or legacy
+   *  pre-refactor per-match rows). Confirmation lives in the UI so this
+   *  fires only after the user opts in. */
+  async function handleClearAllAnnotations() {
+    if (!projectId || !selectedDocId) return;
+    const annotationDocumentId = selectedDoc?.source === "knowledge" && selectedDoc.bookId
+      ? selectedDoc.bookId
+      : selectedDocId;
+    // Local optimistic clear so the UI feels instant; if any DELETE call
+    // fails the next loadAnnotations refresh will surface the survivors.
+    const previous = annotations;
+    setAnnotations([]);
+    updateAnnotationSelection(null);
+    const results = await Promise.allSettled(
+      previous.map((ann) => deletePickup(projectId, ann.id)),
+    );
+    const failed = results.filter((r) => r.status === "rejected").length;
+    if (failed > 0) {
+      setToastType("error");
+      setToastMessage(`Cleared ${previous.length - failed} pickups; ${failed} failed (refresh to retry).`);
+    } else {
+      setToastType("success");
+      setToastMessage(`Cleared ${previous.length} pickup${previous.length === 1 ? "" : "s"} from this file.`);
+    }
+    notifyAnnotationsMutated();
+    void annotationDocumentId;
+  }
+
   async function handleDeleteAnnotation(id: string) {
     const annotation = annotations.find((a) => a.id === id);
     const nextAnnotations = annotations.filter((a) => a.id !== id);
     setAnnotations(nextAnnotations);
-    if (selectedAnnotationId === id) {
+    if (selectedPickupId === id) {
       updateAnnotationSelection(null);
     }
     try {
-      await deleteTakeoffAnnotation(projectId, id);
+      await deletePickup(projectId, id);
     } catch {
       /* Ignore */
     }
@@ -5143,26 +5789,26 @@ export function TakeoffTab({
     notifyAnnotationsMutated();
   }
 
-  const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
+  const [editingPickupId, setEditingPickupId] = useState<string | null>(null);
 
   function handleEditAnnotation(id: string) {
     updateAnnotationSelection(id);
-    setEditingAnnotationId(id);
+    setEditingPickupId(id);
   }
 
   function handleSaveAnnotationEdit(id: string, updates: { label?: string; color?: string; groupName?: string }) {
     const nextAnnotations = annotations.map((a) => (a.id === id ? { ...a, ...updates } : a));
     setAnnotations(nextAnnotations);
-    updateTakeoffAnnotation(projectId, id, updates)
+    updatePickup(projectId, id, updates)
       .then(() => notifyAnnotationsMutated())
       .catch(() => notifyAnnotationsMutated(nextAnnotations));
-    setEditingAnnotationId(null);
+    setEditingPickupId(null);
   }
 
   /* Clear all annotations */
   function handleClearAll() {
     const removed = [...annotations];
-    const deletions = annotations.map((ann) => deleteTakeoffAnnotation(projectId, ann.id).catch(() => {}));
+    const deletions = annotations.map((ann) => deletePickup(projectId, ann.id).catch(() => {}));
     setAnnotations([]);
     if (removed.length > 0) pushTakeoffHistory({ kind: "clear", annotations: removed });
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
@@ -5197,12 +5843,12 @@ export function TakeoffTab({
               : "pdf";
     const inspectAnnotations =
       mode === "dwg" ? dwgAnnotationsCache : mode === "pdf" ? annotations : [];
-    const inspectSelectedAnnotationId =
+    const inspectSelectedPickupId =
       mode === "dwg"
         ? selection?.kind === "annotation"
-          ? selection.annotationId
+          ? selection.pickupId
           : null
-        : selectedAnnotationId;
+        : selectedPickupId;
     // Both BIM and 3D-geometry modes carry model elements; PDF/DWG don't.
     const isModelMode = mode === "bim" || mode === "model";
     const inspectModelElements: InspectModelElement[] =
@@ -5263,9 +5909,9 @@ export function TakeoffTab({
     const nextSnapshot: InspectSnapshot = {
       mode,
       annotations: inspectAnnotations,
-      takeoffLinks,
-      selectedAnnotationId: inspectSelectedAnnotationId,
-      editingAnnotationId,
+      pickupLinks,
+      selectedPickupId: inspectSelectedPickupId,
+      editingPickupId,
       drawingAnalysis: mode === "pdf" && selectedDoc
         ? {
             documentId: selectedVisionDocumentId(),
@@ -5328,6 +5974,10 @@ export function TakeoffTab({
             warnings: photoBomResult.warnings,
             rows: photoBomResult.items.map((row, idx) => {
               const rowId = `photo-bom-${idx}`;
+              const firstSourceIdx = row.sourceImageIndexes[0];
+              const sourcePhotoThumbnail = typeof firstSourceIdx === "number"
+                ? photoBomSourcePhotoDataUris[firstSourceIdx] ?? null
+                : null;
               return {
                 id: rowId,
                 description: row.description,
@@ -5339,6 +5989,7 @@ export function TakeoffTab({
                 sourcePhotoNames: row.sourceImageIndexes
                   .map((i) => photoBomSourcePhotoNames[i])
                   .filter((name): name is string => Boolean(name)),
+                sourcePhotoThumbnail,
                 isLinked: photoBomLinkedRowIds.has(rowId),
               };
             }),
@@ -5374,9 +6025,9 @@ export function TakeoffTab({
     dwgAnnotationsCache,
     selection,
     page,
-    selectedAnnotationId,
-    editingAnnotationId,
-    takeoffLinks,
+    selectedPickupId,
+    editingPickupId,
+    pickupLinks,
     drawingAnalysisResult,
     drawingAnalysisSettings,
     drawingAnalysisOverlay,
@@ -5585,16 +6236,23 @@ export function TakeoffTab({
 
   /** Pick the right primary quantity off an annotation's measurement.
    *  Areas / volumes win over linear value when present; pure count
-   *  annotations fall back to qty=1. */
-  function annotationToQuantity(annotation: TakeoffAnnotation): { quantity: number; uom: string } {
+   *  annotations fall back to qty=1.
+   *
+   *  Note on `measurement.unit`: the area-polygon producer convention in
+   *  apps/web/lib/takeoff-math.ts (`computeMeasurement`) already returns
+   *  the unit in squared form for area annotations (e.g. "ft²"). Earlier
+   *  versions of this function unconditionally appended "²" on top, which
+   *  produced "ft²²" on the worksheet row. The helpers below preserve the
+   *  unit as-is when it already carries the dimension suffix and only
+   *  append when it doesn't (so a producer that stores `unit: "ft"` + a
+   *  separate area field still gets a correct "ft²" out the other side). */
+  function annotationToQuantity(annotation: Pickup): { quantity: number; uom: string } {
     const m = annotation.measurement;
     if (m?.area != null && m.area > 0) {
-      const baseUnit = m.unit ?? "";
-      return { quantity: m.area, uom: baseUnit ? `${baseUnit}²` : "SF" };
+      return { quantity: m.area, uom: areaUomFromUnit(m.unit) };
     }
     if (m?.volume != null && m.volume > 0) {
-      const baseUnit = m.unit ?? "";
-      return { quantity: m.volume, uom: baseUnit ? `${baseUnit}³` : "CF" };
+      return { quantity: m.volume, uom: volumeUomFromUnit(m.unit) };
     }
     if (typeof m?.value === "number" && Number.isFinite(m.value)) {
       return { quantity: m.value, uom: m.unit || "EA" };
@@ -5602,8 +6260,22 @@ export function TakeoffTab({
     return { quantity: 1, uom: "EA" };
   }
 
+  /** Given a producer-supplied `measurement.unit`, return the appropriate
+   *  area uom string. Handles both the "base unit" convention ("ft" →
+   *  "ft²") and the "already-squared" convention ("ft²" → "ft²"). */
+  function areaUomFromUnit(unit: string | undefined): string {
+    if (!unit) return "SF";
+    return unit.endsWith("²") || unit.endsWith("2") ? unit : `${unit}²`;
+  }
+
+  /** Volume sibling of areaUomFromUnit. */
+  function volumeUomFromUnit(unit: string | undefined): string {
+    if (!unit) return "CF";
+    return unit.endsWith("³") || unit.endsWith("3") ? unit : `${unit}³`;
+  }
+
   async function createLineItemFromAnnotation(
-    annotation: TakeoffAnnotation,
+    annotation: Pickup,
     pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
   ) {
@@ -5616,7 +6288,7 @@ export function TakeoffTab({
     const pick = normalizeTakeoffCategoryPick(pickInput);
     const ws = explicitWs ?? selectedWorksheet;
     if (!ws) {
-      setWorksheetPickerAction({ kind: "create-single-annotation", annotationId: annotation.id, pick });
+      setWorksheetPickerAction({ kind: "create-single-annotation", pickupId: annotation.id, pick });
       return null;
     }
     const takeoffCategory = entityCategories.find((c) => c.id === pick.categoryId && c.enabled);
@@ -5652,8 +6324,8 @@ export function TakeoffTab({
       .flatMap((w) => w.items)
       .find((i) => !previousItemIds.has(i.id));
     if (!createdItem) return null;
-    await createTakeoffLink(projectId, {
-      annotationId: annotation.id,
+    await createPickupLink(projectId, {
+      pickupId: annotation.id,
       worksheetItemId: createdItem.id,
     });
     return { createdItem };
@@ -5815,7 +6487,7 @@ export function TakeoffTab({
       if (!created) return;
       await loadDwgEntityLinks();
       notifyWorkspaceMutated();
-      notifyTakeoffLinksMutated();
+      notifyPickupLinksMutated();
       setToastType("success");
       setToastMessage("Created line item from DWG/DXF entity.");
     } catch (error) {
@@ -5884,11 +6556,11 @@ export function TakeoffTab({
     setToastMessage("Deleted DWG/DXF traced system from the review list.");
   }
 
-  async function handleCreateAnnotationLineItem(annotation: TakeoffAnnotation, pick: string | InspectCategoryPick) {
+  async function handleCreateAnnotationLineItem(annotation: Pickup, pick: string | InspectCategoryPick) {
     try {
       const created = await createLineItemFromAnnotation(annotation, pick);
       if (!created) return;
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage("Created line item from annotation.");
@@ -5903,7 +6575,7 @@ export function TakeoffTab({
    *  annotation gets a TakeoffLink with multiplier set so the line item's
    *  quantity stays in sync with the sum on revision diff. */
   async function createLineItemFromAnnotationGroup(
-    annotations: TakeoffAnnotation[],
+    annotations: Pickup[],
     groupLabel: string,
     pickInput: string | InspectCategoryPick,
     explicitWs?: { id: string; name: string },
@@ -5914,7 +6586,7 @@ export function TakeoffTab({
     if (!ws) {
       setWorksheetPickerAction({
         kind: "create-annotation-group",
-        annotationIds: annotations.map((a) => a.id),
+        pickupIds: annotations.map((a) => a.id),
         groupLabel,
         pick,
       });
@@ -5978,8 +6650,8 @@ export function TakeoffTab({
     // reconcile additions/removals against the same worksheet row.
     await Promise.all(
       annotations.map((ann) =>
-        createTakeoffLink(projectId, {
-          annotationId: ann.id,
+        createPickupLink(projectId, {
+          pickupId: ann.id,
           worksheetItemId: createdItem.id,
         }).catch((err) => {
           console.warn(`[takeoff] Could not link annotation ${ann.id} to summed line item:`, err);
@@ -5989,11 +6661,11 @@ export function TakeoffTab({
     return { createdItem };
   }
 
-  async function handleCreateAnnotationGroupLineItem(annotations: TakeoffAnnotation[], groupLabel: string, pick: string | InspectCategoryPick) {
+  async function handleCreateAnnotationGroupLineItem(annotations: Pickup[], groupLabel: string, pick: string | InspectCategoryPick) {
     try {
       const created = await createLineItemFromAnnotationGroup(annotations, groupLabel, pick);
       if (!created) return;
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(`Created summed line item from ${annotations.length} mark${annotations.length === 1 ? "" : "s"}.`);
@@ -6546,29 +7218,29 @@ export function TakeoffTab({
       setToastMessage(`Created summed line item from ${elements.length} model element${elements.length === 1 ? "" : "s"}.`);
     } else if (action.kind === "create-single-annotation") {
       const allAnnotations = [...annotations, ...dwgAnnotationsCache];
-      const annotation = allAnnotations.find((a) => a.id === action.annotationId);
+      const annotation = allAnnotations.find((a) => a.id === action.pickupId);
       if (!annotation) {
         setToastType("error");
         setToastMessage("That annotation is no longer available.");
         return;
       }
       await createLineItemFromAnnotation(annotation, action.pick, ws);
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage("Created line item from annotation.");
     } else if (action.kind === "create-annotation-group") {
       const allAnnotations = [...annotations, ...dwgAnnotationsCache];
-      const targets = action.annotationIds
+      const targets = action.pickupIds
         .map((id) => allAnnotations.find((a) => a.id === id))
-        .filter((a): a is TakeoffAnnotation => Boolean(a));
+        .filter((a): a is Pickup => Boolean(a));
       if (targets.length === 0) {
         setToastType("error");
         setToastMessage("Those annotations are no longer available.");
         return;
       }
       await createLineItemFromAnnotationGroup(targets, action.groupLabel, action.pick, ws);
-      await loadTakeoffLinks();
+      await loadPickupLinks();
       notifyWorkspaceMutated();
       setToastType("success");
       setToastMessage(`Created summed line item from ${targets.length} mark${targets.length === 1 ? "" : "s"}.`);
@@ -6577,7 +7249,7 @@ export function TakeoffTab({
       if (!created) return;
       await loadDwgEntityLinks();
       notifyWorkspaceMutated();
-      notifyTakeoffLinksMutated();
+      notifyPickupLinksMutated();
       setToastType("success");
       setToastMessage("Created line item from DWG/DXF entity.");
     } else if (action.kind === "create-spreadsheet-row") {
@@ -6703,7 +7375,7 @@ export function TakeoffTab({
   ];
   const activePivotSummary = activeSpreadsheetPivotSummary(spreadsheetPreview, pivotGroupBy, pivotMeasure);
   const maxPivotTotal = Math.max(...(activePivotSummary?.rows.map((row) => row.total) ?? [0]), 1);
-  const pdfSpotlightActive = Boolean(selectedAnnotationId || selectedDrawingDetectionId || selectedSmartCountItemId);
+  const pdfSpotlightActive = Boolean(selectedPickupId || selectedDrawingDetectionId || selectedSmartCountItemId);
 
   async function previewSpreadsheetFile(file: File, source: { nodeId?: string; name: string }) {
     setSpreadsheetPreviewLoading(true);
@@ -7039,9 +7711,10 @@ export function TakeoffTab({
                     workspace.currentRevision.description,
                   ].filter(Boolean).join("\n")}
                   photoFiles={photoSources}
-                  onResults={(result, sourceNames) => {
+                  onResults={(result, sourceNames, sourceDataUris) => {
                     setPhotoBomResult(result);
                     setPhotoBomSourcePhotoNames(result ? sourceNames : []);
+                    setPhotoBomSourcePhotoDataUris(result ? sourceDataUris : []);
                     setPhotoBomLinkedRowIds(new Set());
                   }}
                 />
@@ -7238,6 +7911,18 @@ export function TakeoffTab({
               drawingAnalysisCount={drawingAnalysisResult?.summary.systemCount ?? null}
               canRunDocumentAi={Boolean(selectedDoc)}
               canRunDrawingIntelligence={Boolean(isPdfDocument && selectedDoc)}
+              onSaveLegendEntryToLibrary={handleSaveLegendEntryToLibrary}
+              savingLegendKey={savingLegendKey}
+              savedLegendKeys={savedLegendKeys}
+              libraryOpen={libraryOpen}
+              libraryCount={libraryCount}
+              onOpenLibrary={() => setLibraryOpen(true)}
+              onCloseLibrary={() => setLibraryOpen(false)}
+              libraryProjectId={projectId}
+              libraryDocumentId={selectedDoc ? (selectedDoc.source === "knowledge" && selectedDoc.bookId ? selectedDoc.bookId : selectedDoc.id) : null}
+              libraryPageNumber={page}
+              libraryCanRun={Boolean(isPdfDocument && selectedDoc)}
+              onLibraryRefresh={refreshLibraryCount}
             />
 
           </>
@@ -7508,7 +8193,7 @@ export function TakeoffTab({
             </p>
             {!autoCountRunning && (
               <p className="text-[11px] text-fg/40 mt-0.5">
-                Click and drag a tight box around one example. The CV pipeline finds all visual matches and shows them in a review modal.
+                Click and drag a tight box around one example. The CV pipeline finds all visual matches and adds one Pickup row with the count.
               </p>
             )}
           </div>
@@ -7585,108 +8270,6 @@ export function TakeoffTab({
           >
             <X className="h-3.5 w-3.5" />
           </Button>
-        </div>
-      )}
-
-      {/* ─── Auto Count Results Panel (unified: this page + all pages + all docs) ─── */}
-      {autoCountResults && !isAutoCountActive && (
-        <div className="border-b border-green-500/30 bg-green-500/5 px-4 py-2.5 space-y-2 shrink-0">
-          {/* Header row */}
-          <div className="flex items-center gap-3">
-            {autoCountSnippet && (
-              <img src={autoCountSnippet} alt="Template" className="h-8 w-8 rounded border border-line object-contain bg-white shrink-0" />
-            )}
-            <div className="flex-1 min-w-0">
-              <p className="text-xs font-medium text-fg/80">
-                This page: <span className="font-semibold text-green-600">{autoCountResults.length}</span> match{autoCountResults.length !== 1 ? "es" : ""}
-              </p>
-            </div>
-
-            {/* Sensitivity */}
-            <div className="flex items-center gap-1.5 shrink-0">
-              <label className="text-[11px] text-fg/40">Sensitivity:</label>
-              <input type="range" min={30} max={95} value={Math.round(autoCountThreshold * 100)}
-                onChange={(e) => setAutoCountThreshold(parseInt(e.target.value) / 100)}
-                className="w-14 accent-green-500" title={`${Math.round(autoCountThreshold * 100)}%`} />
-              <span className="text-[11px] text-fg/50 w-6">{Math.round(autoCountThreshold * 100)}%</span>
-            </div>
-
-            <Button variant="ghost" size="xs" onClick={() => { setAutoCountResults(null); setAutoCountSnippet(null); setCrossPageResults(null); setMultiDocResults(null); }}>
-              <X className="h-3.5 w-3.5" />
-            </Button>
-          </div>
-
-          {/* Search scope buttons */}
-          {crossPageLastBbox && (
-            <div className="flex items-center gap-2 pt-1 border-t border-green-500/10">
-              {totalPages > 1 && (
-                <Button variant="secondary" size="xs" onClick={() => handleCrossPageSearch()} disabled={crossPageRunning}>
-                  {crossPageRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
-                  All Pages ({totalPages})
-                </Button>
-              )}
-              {pdfDocuments.length > 1 && (
-                <Button variant="secondary" size="xs" onClick={() => handleMultiDocSearch()} disabled={multiDocRunning}>
-                  {multiDocRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
-                  All PDFs ({pdfDocuments.length})
-                </Button>
-              )}
-              <label className="flex items-center gap-1.5 text-[11px] text-fg/50 cursor-pointer ml-auto">
-                <input type="checkbox" checked={crossScaleEnabled} onChange={(e) => setCrossScaleEnabled(e.target.checked)} className="accent-green-500" />
-                Cross-scale
-              </label>
-            </div>
-          )}
-
-          {/* Cross-page results (inline) */}
-          {crossPageResults && crossPageResults.length > 0 && (
-            <div className="pt-1 border-t border-green-500/10">
-              <div className="flex items-center gap-2 mb-1.5">
-                <p className="text-[11px] font-medium text-fg/60">
-                  All pages{!crossPageRunning && `: ${crossPageResults.reduce((s, r) => s + Math.max(0, r.count), 0)} total`}
-                  {crossPageRunning && <span className="text-fg/40 ml-1">(scanning {crossPageResults.length}/{totalPages}...)</span>}
-                </p>
-                {crossPageRunning && <Loader2 className="h-3 w-3 animate-spin text-green-500" />}
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {crossPageResults.map((r) => (
-                  <button key={r.page} onClick={() => r.count >= 0 && setPage(r.page)}
-                    className={cn("inline-flex items-center gap-1 rounded-md px-2 py-0.5 text-[11px] border transition-colors",
-                      r.count < 0 ? "border-red-300/30 bg-red-500/5 text-red-500"
-                        : r.count > 0 ? "border-green-300/30 bg-green-500/10 text-green-600 hover:bg-green-500/20 cursor-pointer"
-                        : "border-line bg-panel2/30 text-fg/40"
-                    )}>
-                    <span className="font-medium">P{r.page}</span>
-                    <span>{r.count < 0 ? "err" : r.count}</span>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Multi-doc results (inline) */}
-          {multiDocResults && multiDocResults.length > 0 && (
-            <div className="pt-1 border-t border-green-500/10">
-              <div className="flex items-center gap-2 mb-1.5">
-                <p className="text-[11px] font-medium text-fg/60">
-                  All PDFs{!multiDocRunning && `: ${multiDocResults.filter((r) => r.total >= 0).reduce((s, r) => s + r.total, 0)} total`}
-                  {multiDocRunning && <span className="text-fg/40 ml-1">(scanning {multiDocResults.length}/{pdfDocuments.length}...)</span>}
-                </p>
-                {multiDocRunning && <Loader2 className="h-3 w-3 animate-spin text-green-500" />}
-              </div>
-              <div className="space-y-0.5">
-                {multiDocResults.map((r) => (
-                  <button key={r.docId} onClick={() => { setSelectedDocId(r.docId); setPage(1); }}
-                    className={cn("flex w-full items-center gap-2 rounded-md px-2 py-1 text-[11px] transition-colors text-left",
-                      r.total < 0 ? "text-red-500" : r.total > 0 ? "hover:bg-green-500/10 text-fg/80" : "text-fg/30"
-                    )}>
-                    <span className="truncate flex-1">{r.docLabel}</span>
-                    <Badge tone={r.total > 0 ? "info" : "default"} className="text-[10px]">{r.total < 0 ? "err" : r.total}</Badge>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -7866,9 +8449,9 @@ export function TakeoffTab({
                 publishTakeoffSelection(null);
               }
             }}
-            onSelectedAnnotationChange={(annotationId) => {
-              if (annotationId) {
-                publishTakeoffSelection({ kind: "annotation", annotationId });
+            onSelectedAnnotationChange={(pickupId) => {
+              if (pickupId) {
+                publishTakeoffSelection({ kind: "annotation", pickupId });
               } else if (selection?.kind === "annotation" || !onSelectionChange) {
                 publishTakeoffSelection(null);
               }
@@ -8032,7 +8615,12 @@ export function TakeoffTab({
           </div>
         )}
 
-        {/* Center: Document viewer area */}
+        {/* Center: Document viewer area. The outer `relative` wrapper hosts
+            the processing overlay so it stays viewport-fixed regardless of
+            how the PDF inside is panned or zoomed — previously the overlay
+            sat inside the scrolling content area and slid off-screen as
+            soon as the user zoomed in. */}
+        <div className="relative flex min-h-0 min-w-0 flex-1 flex-col">
         <div
           ref={viewerContainerRef}
           className={cn(
@@ -8111,7 +8699,7 @@ export function TakeoffTab({
                     pdfCanvas={pdfCanvasRef.current}
                     snapEnabled={snapEnabled}
                     zoom={zoom}
-                    selectedAnnotationId={selectedAnnotationId}
+                    selectedPickupId={selectedPickupId}
                     spotlightActive={pdfSpotlightActive}
                   />
                   <DrawingIntelligenceOverlay
@@ -8121,6 +8709,13 @@ export function TakeoffTab({
                     visible={drawingAnalysisOverlay}
                     selectedId={selectedDrawingDetectionId}
                     spotlightActive={pdfSpotlightActive}
+                    onSelectDetection={(id, kind) => {
+                      // Canvas → panel sync. The kind hint lets the
+                      // controller scroll to the right row group when the
+                      // user clicks a detection on the overlay.
+                      handleSelectDrawingDetection(id);
+                      void kind;
+                    }}
                   />
                   <SmartCountOverlay
                     bbox={smartCountBbox}
@@ -8130,36 +8725,40 @@ export function TakeoffTab({
                     muted={pdfSpotlightActive && !selectedSmartCountItemId}
                   />
 
-                  {/* Processing overlay */}
-                  {(autoCountRunning || askAiRunning || smartCountRunning || drawingAnalysisRunning) && (
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/20 rounded-lg backdrop-blur-sm z-10">
-                      <div className="flex items-center gap-3 rounded-xl bg-panel px-5 py-3 shadow-xl border border-line">
-                        <Loader2 className="h-5 w-5 animate-spin text-accent" />
-                        <div>
-                          <p className="text-sm font-medium text-fg">
-                            {drawingAnalysisRunning
-                              ? "Analyzing drawing geometry..."
-                              : autoCountRunning
-                                ? "Running symbol detection..."
-                                : smartCountRunning
-                                  ? "Running Smart Count..."
-                                  : "Cropping region for AI analysis..."}
-                          </p>
-                          <p className="text-xs text-fg/40">
-                            {drawingAnalysisRunning
-                              ? "Tracing linework, symbols, text zones, and connected systems"
-                              : autoCountRunning
-                                ? "OpenCV template matching + feature detection"
-                                : smartCountRunning
-                                  ? "Cropping the region and extracting count rows into Entities"
-                                  : "Preparing image crop"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  )}
             </div>
           )}
+        </div>
+        {/* Processing overlay — sits in the OUTER `relative` wrapper, NOT
+            inside the scrolling PDF content. That's the whole reason for
+            the wrapper: at any zoom level, the overlay covers the viewport
+            and the loader card stays centered. */}
+        {(autoCountRunning || askAiRunning || smartCountRunning || drawingAnalysisRunning) && (
+          <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center bg-black/20 backdrop-blur-sm">
+            <div className="pointer-events-auto flex items-center gap-3 rounded-xl border border-line bg-panel px-5 py-3 shadow-xl">
+              <Loader2 className="h-5 w-5 animate-spin text-accent" />
+              <div>
+                <p className="text-sm font-medium text-fg">
+                  {drawingAnalysisRunning
+                    ? "Analyzing drawing geometry..."
+                    : autoCountRunning
+                      ? "Running symbol detection..."
+                      : smartCountRunning
+                        ? "Running Smart Count..."
+                        : "Cropping region for AI analysis..."}
+                </p>
+                <p className="text-xs text-fg/40">
+                  {drawingAnalysisRunning
+                    ? "Tracing linework, symbols, text zones, and connected systems"
+                    : autoCountRunning
+                      ? "OpenCV template matching + feature detection"
+                      : smartCountRunning
+                        ? "Cropping the region and extracting count rows into Pickups"
+                        : "Preparing image crop"}
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
         </div>
 
           </>
@@ -8591,119 +9190,11 @@ export function TakeoffTab({
       })()}
 
       {/* ─── Ask AI Slide-Up Panel ─── */}
-      {/* ─── Auto Count Results Modal ─── */}
-      {autoCountModalOpen && autoCountPending && (
-        <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
-          <Card className="border border-emerald-400/30 shadow-xl max-h-[50vh] flex flex-col">
-            <div className="flex items-center gap-2.5 px-4 py-2.5 border-b border-line shrink-0">
-              <ScanSearch className="h-4 w-4 text-emerald-500 shrink-0" />
-              <span className="text-xs font-semibold text-fg flex-1">
-                Auto Count — {autoCountPending.included.filter(Boolean).length} of {autoCountPending.totalCount} selected (this page)
-              </span>
-              <button
-                onClick={() => {
-                  const allOn = autoCountPending.included.every(Boolean);
-                  setAutoCountPending({ ...autoCountPending, included: autoCountPending.included.map(() => !allOn) });
-                }}
-                className="text-[10px] text-accent hover:underline mr-2"
-              >
-                {autoCountPending.included.every(Boolean) ? "Deselect All" : "Select All"}
-              </button>
-              <button onClick={handleRejectAutoCount} className="text-fg/30 hover:text-fg/60 transition-colors">
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            {/* Scope row — re-run the search at a wider scope without first
-                accepting/rejecting the per-page matches. */}
-            <div className="flex items-center gap-2 px-4 py-2 border-b border-line bg-emerald-500/5 shrink-0">
-              <span className="text-[10px] text-fg/45">Search scope:</span>
-              <Button size="xs" variant="ghost" disabled className="text-emerald-500 cursor-default">
-                <ScanSearch className="h-3 w-3 mr-1" /> This page
-              </Button>
-              {totalPages > 1 && (
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  onClick={() => {
-                    setAutoCountModalOpen(false);
-                    void handleCrossPageSearch();
-                  }}
-                  disabled={crossPageRunning}
-                >
-                  {crossPageRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
-                  This document ({totalPages} pages)
-                </Button>
-              )}
-              {pdfDocuments.length > 1 && (
-                <Button
-                  size="xs"
-                  variant="secondary"
-                  onClick={() => {
-                    setAutoCountModalOpen(false);
-                    void handleMultiDocSearch();
-                  }}
-                  disabled={multiDocRunning}
-                >
-                  {multiDocRunning ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <Search className="h-3 w-3 mr-1" />}
-                  All drawings ({pdfDocuments.length})
-                </Button>
-              )}
-            </div>
-            <div className="overflow-y-auto flex-1 min-h-0 divide-y divide-line">
-              {autoCountPending.matches.map((match, i) => {
-                const previewSrc = match.image ?? autoCountPending.snippetImage ?? undefined;
-                return (
-                <div
-                  key={i}
-                  className={cn(
-                    "flex items-center gap-3 px-4 py-2 text-xs cursor-pointer transition-colors",
-                    autoCountPending.included[i] ? "bg-emerald-500/5" : "bg-panel opacity-50"
-                  )}
-                  onClick={() => {
-                    const next = [...autoCountPending.included];
-                    next[i] = !next[i];
-                    setAutoCountPending({ ...autoCountPending, included: next });
-                  }}
-                >
-                  <input
-                    type="checkbox"
-                    checked={autoCountPending.included[i]}
-                    onChange={() => {}}
-                    className="h-3.5 w-3.5 rounded border-line accent-emerald-500 shrink-0"
-                  />
-                  {previewSrc && (
-                    <div className="shrink-0 rounded border border-line bg-white p-0.5">
-                      <img
-                        src={previewSrc}
-                        alt={`Match #${i + 1}`}
-                        className="h-10 w-10 object-contain"
-                      />
-                    </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <span className="font-medium text-fg">Match #{i + 1}</span>
-                    <span className="text-fg/40 ml-2">{(match.confidence * 100).toFixed(0)}% confidence</span>
-                  </div>
-                  <span className="text-[10px] text-fg/30 tabular-nums shrink-0">
-                    ({Math.round(match.rect.x)}, {Math.round(match.rect.y)})
-                  </span>
-                </div>
-              )})}
-            </div>
-            <div className="flex items-center justify-between px-4 py-2.5 border-t border-line shrink-0">
-              <span className="text-[10px] text-fg/40">
-                {autoCountPending.included.filter(Boolean).length} matches selected
-              </span>
-              <div className="flex gap-2">
-                <Button size="xs" variant="secondary" onClick={handleRejectAutoCount}>Reject All</Button>
-                <Button size="xs" variant="accent" onClick={handleAcceptAutoCount} disabled={!autoCountPending.included.some(Boolean)}>
-                  Accept ({autoCountPending.included.filter(Boolean).length})
-                </Button>
-              </div>
-            </div>
-          </Card>
-        </div>
-      )}
+      {/* Auto Count no longer has a floating confirm modal — its results
+          flow directly into the Pickups panel as a single row with the
+          template thumbnail, match count, and an Add-to-worksheet button.
+          User refines via the panel (delete + redraw with better template
+          / threshold), not via a modal blocking the canvas. */}
 
       {askAiModalOpen && askAiCropImage && (
         <div className="absolute bottom-12 left-16 right-[19rem] z-30 animate-in slide-in-from-bottom-4 duration-200">
@@ -8915,6 +9406,152 @@ function SmartCountOverlay({
   );
 }
 
+// ── Primitive → SVG path helpers ─────────────────────────────────────────
+// Used by DrawingIntelligenceOverlay to render canonical primitives over
+// the rendered PDF canvas. All inputs are in PDF-point space; outputs in
+// canvas-pixel space via the caller-supplied scale factors.
+
+function primitiveParam(value: number | number[] | undefined): number {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+/** SVG path "d" for an arc primitive. Uses the standard `A` command with
+ *  the correct large-arc / sweep flags derived from the angular sweep. */
+function arcPathDescription(
+  primitive: DrawingPrimitive,
+  scaleX: number,
+  scaleY: number,
+): string {
+  const cx = primitiveParam(primitive.params.cx) * scaleX;
+  const cy = primitiveParam(primitive.params.cy) * scaleY;
+  const rx = primitiveParam(primitive.params.r) * scaleX;
+  const ry = primitiveParam(primitive.params.r) * scaleY;
+  const start = primitiveParam(primitive.params.startAngleRad);
+  const end = primitiveParam(primitive.params.endAngleRad);
+  const startX = cx + rx * Math.cos(start);
+  const startY = cy + ry * Math.sin(start);
+  const endX = cx + rx * Math.cos(end);
+  const endY = cy + ry * Math.sin(end);
+  // Use directed sweep to pick the right large-arc flag. CCW direction
+  // maps to SVG sweep-flag 1.
+  const twoPi = Math.PI * 2;
+  let directedSweep = (end - start) % twoPi;
+  if (directedSweep < 0) directedSweep += twoPi;
+  const largeArc = directedSweep > Math.PI ? 1 : 0;
+  const sweepFlag = 1;
+  return `M ${startX.toFixed(2)} ${startY.toFixed(2)} A ${rx.toFixed(2)} ${ry.toFixed(2)} 0 ${largeArc} ${sweepFlag} ${endX.toFixed(2)} ${endY.toFixed(2)}`;
+}
+
+function cubicPathDescription(
+  primitive: DrawingPrimitive,
+  scaleX: number,
+  scaleY: number,
+): string {
+  const pts = Array.isArray(primitive.params.points) ? primitive.params.points : [];
+  if (pts.length < 8) return "";
+  const [x0, y0, x1, y1, x2, y2, x3, y3] = pts;
+  return `M ${(x0! * scaleX).toFixed(2)} ${(y0! * scaleY).toFixed(2)} `
+    + `C ${(x1! * scaleX).toFixed(2)} ${(y1! * scaleY).toFixed(2)},`
+    + ` ${(x2! * scaleX).toFixed(2)} ${(y2! * scaleY).toFixed(2)},`
+    + ` ${(x3! * scaleX).toFixed(2)} ${(y3! * scaleY).toFixed(2)}`;
+}
+
+function quadPathDescription(
+  primitive: DrawingPrimitive,
+  scaleX: number,
+  scaleY: number,
+): string {
+  const pts = Array.isArray(primitive.params.points) ? primitive.params.points : [];
+  if (pts.length < 6) return "";
+  const [x0, y0, x1, y1, x2, y2] = pts;
+  return `M ${(x0! * scaleX).toFixed(2)} ${(y0! * scaleY).toFixed(2)} `
+    + `Q ${(x1! * scaleX).toFixed(2)} ${(y1! * scaleY).toFixed(2)},`
+    + ` ${(x2! * scaleX).toFixed(2)} ${(y2! * scaleY).toFixed(2)}`;
+}
+
+/** Axis-aligned bounds of a primitive after multiplying its coordinates
+ *  by the supplied (scaleX, scaleY). Same routine serves two callers:
+ *
+ *    - Canvas overlay: scale = `coordinateSpace.imagePixelPerPdfPoint{X,Y}
+ *      × analysis-to-canvas` → bounds in canvas-pixel space.
+ *    - drawingDetectionBounds: scale = `coordinateSpace.imagePixelPerPdfPoint{X,Y}`
+ *      → bounds in image-pixel space (the contract that
+ *      focusDrawingBounds expects).
+ *
+ *  Returns null when the primitive has no usable geometry. */
+function primitiveScaledBounds(
+  primitive: DrawingPrimitive,
+  scaleX: number,
+  scaleY: number,
+): { x: number; y: number; width: number; height: number } | null {
+  const { params } = primitive;
+  switch (primitive.kind) {
+    case "line": {
+      const x1 = primitiveParam(params.x1) * scaleX;
+      const y1 = primitiveParam(params.y1) * scaleY;
+      const x2 = primitiveParam(params.x2) * scaleX;
+      const y2 = primitiveParam(params.y2) * scaleY;
+      return {
+        x: Math.min(x1, x2),
+        y: Math.min(y1, y2),
+        width: Math.abs(x2 - x1),
+        height: Math.abs(y2 - y1),
+      };
+    }
+    case "rect":
+      return {
+        x: primitiveParam(params.x) * scaleX,
+        y: primitiveParam(params.y) * scaleY,
+        width: primitiveParam(params.width) * scaleX,
+        height: primitiveParam(params.height) * scaleY,
+      };
+    case "circle": {
+      const cx = primitiveParam(params.cx) * scaleX;
+      const cy = primitiveParam(params.cy) * scaleY;
+      const r = primitiveParam(params.r) * ((scaleX + scaleY) / 2);
+      return { x: cx - r, y: cy - r, width: r * 2, height: r * 2 };
+    }
+    case "arc": {
+      // Tight bounds would require checking which cardinal points the
+      // sweep crosses; the full-circle envelope is a safe overestimate and
+      // matches what the system tracer does for ARC entities elsewhere.
+      const cx = primitiveParam(params.cx) * scaleX;
+      const cy = primitiveParam(params.cy) * scaleY;
+      const r = primitiveParam(params.r) * ((scaleX + scaleY) / 2);
+      return { x: cx - r, y: cy - r, width: r * 2, height: r * 2 };
+    }
+    case "ellipse": {
+      const cx = primitiveParam(params.cx) * scaleX;
+      const cy = primitiveParam(params.cy) * scaleY;
+      const rx = primitiveParam(params.rx) * scaleX;
+      const ry = primitiveParam(params.ry) * scaleY;
+      // The bounds widen under rotation; approximate with the major axis
+      // on both axes so the selection halo always contains the shape.
+      const radius = Math.max(rx, ry);
+      return { x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2 };
+    }
+    case "cubic_bezier":
+    case "quad_bezier": {
+      const pts = Array.isArray(params.points) ? params.points : [];
+      if (pts.length < 4) return null;
+      const xs: number[] = [];
+      const ys: number[] = [];
+      for (let i = 0; i + 1 < pts.length; i += 2) {
+        xs.push(pts[i]! * scaleX);
+        ys.push(pts[i + 1]! * scaleY);
+      }
+      if (xs.length === 0) return null;
+      const minX = Math.min(...xs);
+      const maxX = Math.max(...xs);
+      const minY = Math.min(...ys);
+      const maxY = Math.max(...ys);
+      return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+    }
+    default:
+      return null;
+  }
+}
+
 function DrawingIntelligenceOverlay({
   analysis,
   width,
@@ -8922,6 +9559,7 @@ function DrawingIntelligenceOverlay({
   visible,
   selectedId,
   spotlightActive = false,
+  onSelectDetection,
 }: {
   analysis: DrawingGeometryAnalysisResult | null;
   width: number;
@@ -8929,24 +9567,92 @@ function DrawingIntelligenceOverlay({
   visible: DrawingAnalysisOverlayState;
   selectedId?: string | null;
   spotlightActive?: boolean;
+  /** Optional canvas-side click handler. When supplied, individual
+   *  detections become pointer-interactive: clicking a line / system /
+   *  symbol / circle / arc / curve on the overlay fires this callback so
+   *  the right-hand panel can highlight the matching row. Leaves the
+   *  overlay non-blocking when omitted (the legacy behavior). */
+  onSelectDetection?: (id: string, kind: "system" | "line" | "symbol" | "circle" | "text" | "arc" | "curve") => void;
 }) {
   if (!analysis || width <= 0 || height <= 0) return null;
 
   const sx = width / Math.max(analysis.imageWidth, 1);
   const sy = height / Math.max(analysis.imageHeight, 1);
+  // Combined factor from PDF-point (primitive native units) to canvas-pixel.
+  // Falls back to `sx` / `sy` (image-pixel→canvas) when coordinateSpace is
+  // missing — that case shouldn't fire for any pipeline that emitted
+  // primitives, but we degrade gracefully rather than NaN.
+  const cs = analysis.coordinateSpace;
+  const ptToCanvasX = cs ? cs.imagePixelPerPdfPointX * sx : sx;
+  const ptToCanvasY = cs ? cs.imagePixelPerPdfPointY * sy : sy;
+  const ptToCanvasAvg = (ptToCanvasX + ptToCanvasY) / 2;
+
   const lineById = new Map(analysis.lines.map((line) => [line.id, line]));
   const systemColors = ["#0ea5e9", "#22c55e", "#f59e0b", "#a855f7", "#ef4444", "#14b8a6"];
+  // Drop text-category primitives entirely from the canvas overlay. The
+  // density grid in analyze_geometry.py flagged these as glyph strokes /
+  // decorative ticks — rendering thousands of them tanks SVG perf and
+  // adds visual noise on top of the (already rasterized) PDF page. The
+  // candidate list also filters them out, so the two views stay consistent.
+  const primitives = (analysis.primitives ?? []).filter(
+    (p) => (p.category ?? "drawing") !== "text",
+  );
+  const arcPrimitives = primitives.filter(
+    (p) => p.kind === "arc" || p.kind === "circle" || p.kind === "ellipse",
+  );
+  const curvePrimitives = primitives.filter(
+    (p) => p.kind === "cubic_bezier" || p.kind === "quad_bezier",
+  );
   const selectedSystem = selectedId ? analysis.systems.find((system) => system.id === selectedId) : null;
   const selectedLine = selectedId ? analysis.lines.find((line) => line.id === selectedId) : null;
   const selectedSymbol = selectedId ? analysis.symbolCandidates.find((candidate) => candidate.id === selectedId) : null;
   const selectedCircle = selectedId ? analysis.circles.find((circle) => circle.id === selectedId) : null;
   const selectedText = selectedId ? analysis.textRegions.find((region) => region.id === selectedId) : null;
+  const selectedPrimitive = selectedId
+    ? primitives.find((primitive) => primitive.id === selectedId) ?? null
+    : null;
+  const selectedPrimitiveBounds = selectedPrimitive
+    ? primitiveScaledBounds(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+    : null;
   const muted = (id: string) => spotlightActive && selectedId !== id;
   const selectedBounds = selectedSystem?.bbox
     ?? selectedLine?.bbox
     ?? (selectedSymbol ? { x: selectedSymbol.x, y: selectedSymbol.y, width: selectedSymbol.w, height: selectedSymbol.h } : null)
     ?? selectedCircle?.bbox
-    ?? (selectedText ? { x: selectedText.x, y: selectedText.y, width: selectedText.w, height: selectedText.h } : null);
+    ?? (selectedText ? { x: selectedText.x, y: selectedText.y, width: selectedText.w, height: selectedText.h } : null)
+    ?? (selectedPrimitiveBounds
+        ? {
+            x: selectedPrimitiveBounds.x / sx,
+            y: selectedPrimitiveBounds.y / sy,
+            width: selectedPrimitiveBounds.width / sx,
+            height: selectedPrimitiveBounds.height / sy,
+          }
+        : null);
+
+  // Each interactive shape uses `pointer-events: stroke` (lines / open
+  // arcs / curves) or `pointer-events: visible` (filled / closed shapes)
+  // so the overlay is click-through everywhere EXCEPT on a real
+  // detection. Without this, the whole SVG would swallow canvas pan
+  // / annotation interactions.
+  const interactive = Boolean(onSelectDetection);
+  const interactiveProps = (id: string, kind: Parameters<NonNullable<typeof onSelectDetection>>[1]) => interactive
+    ? {
+        onPointerDown: (event: ReactPointerEvent<SVGElement>) => {
+          event.stopPropagation();
+          onSelectDetection?.(id, kind);
+        },
+        style: { cursor: "pointer" as const, pointerEvents: "stroke" as const },
+      }
+    : { style: { pointerEvents: "none" as const } };
+  const interactiveFilledProps = (id: string, kind: Parameters<NonNullable<typeof onSelectDetection>>[1]) => interactive
+    ? {
+        onPointerDown: (event: ReactPointerEvent<SVGElement>) => {
+          event.stopPropagation();
+          onSelectDetection?.(id, kind);
+        },
+        style: { cursor: "pointer" as const, pointerEvents: "all" as const },
+      }
+    : { style: { pointerEvents: "none" as const } };
   const selectedBox = selectedBounds
     ? {
         x: selectedBounds.x * sx,
@@ -8976,6 +9682,7 @@ function DrawingIntelligenceOverlay({
           strokeWidth={selectedId === line.id ? 4 : 1.2}
           opacity={selectedId === line.id ? 0.95 : muted(line.id) ? 0.14 : 0.32}
           strokeLinecap="round"
+          {...interactiveProps(line.id, "line")}
         />
       ))}
 
@@ -8995,6 +9702,7 @@ function DrawingIntelligenceOverlay({
               strokeWidth={selectedId === system.id ? 4.5 : 2.6}
               opacity={selectedId === system.id ? 0.95 : muted(system.id) ? 0.18 : 0.72}
               strokeLinecap="round"
+              {...interactiveProps(system.id, "system")}
             />
           );
         });
@@ -9012,6 +9720,7 @@ function DrawingIntelligenceOverlay({
           strokeWidth={selectedId === candidate.id ? 3 : 1.5}
           opacity={selectedId === candidate.id ? 0.98 : muted(candidate.id) ? 0.18 : 0.8}
           rx={3}
+          {...interactiveFilledProps(candidate.id, "symbol")}
         />
       ))}
 
@@ -9025,6 +9734,7 @@ function DrawingIntelligenceOverlay({
           stroke={selectedId === circle.id ? "#f97316" : muted(circle.id) ? "#64748b" : "#ec4899"}
           strokeWidth={selectedId === circle.id ? 3 : 1.5}
           opacity={selectedId === circle.id ? 0.98 : muted(circle.id) ? 0.18 : 0.75}
+          {...interactiveProps(circle.id, "circle")}
         />
       ))}
 
@@ -9041,8 +9751,183 @@ function DrawingIntelligenceOverlay({
           strokeDasharray="4 3"
           strokeWidth={selectedId === region.id ? 2.5 : 1}
           opacity={selectedId === region.id ? 0.95 : muted(region.id) ? 0.16 : 0.65}
+          {...interactiveFilledProps(region.id, "text")}
         />
       ))}
+
+      {visible.arcs && arcPrimitives.map((primitive) => {
+        const stroke = selectedId === primitive.id
+          ? "#f97316"
+          : muted(primitive.id) ? "#64748b" : "#f59e0b";
+        const strokeWidth = selectedId === primitive.id ? 3.5 : 1.8;
+        const opacity = selectedId === primitive.id
+          ? 0.97
+          : muted(primitive.id) ? 0.18 : 0.78;
+        const filled = primitive.paint === "fill" || primitive.paint === "stroke+fill";
+        if (primitive.kind === "circle") {
+          const cx = primitiveParam(primitive.params.cx) * ptToCanvasX;
+          const cy = primitiveParam(primitive.params.cy) * ptToCanvasY;
+          const r = Math.max(primitiveParam(primitive.params.r) * ptToCanvasAvg, 2);
+          return (
+            <circle
+              key={`prim-circle-${primitive.id}`}
+              cx={cx}
+              cy={cy}
+              r={r}
+              fill={filled ? stroke : "none"}
+              fillOpacity={filled ? 0.12 : undefined}
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              opacity={opacity}
+              {...(filled ? interactiveFilledProps(primitive.id, "arc") : interactiveProps(primitive.id, "arc"))}
+            />
+          );
+        }
+        if (primitive.kind === "ellipse") {
+          const cx = primitiveParam(primitive.params.cx) * ptToCanvasX;
+          const cy = primitiveParam(primitive.params.cy) * ptToCanvasY;
+          const rx = Math.max(primitiveParam(primitive.params.rx) * ptToCanvasX, 1);
+          const ry = Math.max(primitiveParam(primitive.params.ry) * ptToCanvasY, 1);
+          const rotDeg = (primitiveParam(primitive.params.rotationRad) * 180) / Math.PI;
+          return (
+            <ellipse
+              key={`prim-ellipse-${primitive.id}`}
+              cx={cx}
+              cy={cy}
+              rx={rx}
+              ry={ry}
+              transform={`rotate(${rotDeg.toFixed(2)} ${cx.toFixed(2)} ${cy.toFixed(2)})`}
+              fill={filled ? stroke : "none"}
+              fillOpacity={filled ? 0.12 : undefined}
+              stroke={stroke}
+              strokeWidth={strokeWidth}
+              opacity={opacity}
+              {...(filled ? interactiveFilledProps(primitive.id, "arc") : interactiveProps(primitive.id, "arc"))}
+            />
+          );
+        }
+        // kind === "arc": use a <path> with the SVG A command so the
+        // partial-sweep shape renders correctly. Stroke-only (arcs aren't
+        // closed unless they're full 2π, in which case they hit the
+        // circle branch via the parser's normalizer — but we still handle
+        // the 2π-as-arc case visually).
+        const d = arcPathDescription(primitive, ptToCanvasX, ptToCanvasY);
+        return (
+          <path
+            key={`prim-arc-${primitive.id}`}
+            d={d}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+            opacity={opacity}
+            strokeLinecap="round"
+            {...interactiveProps(primitive.id, "arc")}
+          />
+        );
+      })}
+
+      {visible.curves && curvePrimitives.map((primitive) => {
+        const stroke = selectedId === primitive.id
+          ? "#f97316"
+          : muted(primitive.id) ? "#64748b" : "#a855f7";
+        const strokeWidth = selectedId === primitive.id ? 3.5 : 1.8;
+        const opacity = selectedId === primitive.id
+          ? 0.97
+          : muted(primitive.id) ? 0.18 : 0.78;
+        const d = primitive.kind === "cubic_bezier"
+          ? cubicPathDescription(primitive, ptToCanvasX, ptToCanvasY)
+          : quadPathDescription(primitive, ptToCanvasX, ptToCanvasY);
+        if (!d) return null;
+        return (
+          <path
+            key={`prim-curve-${primitive.id}`}
+            d={d}
+            fill="none"
+            stroke={stroke}
+            strokeWidth={strokeWidth}
+            opacity={opacity}
+            strokeLinecap="round"
+            {...interactiveProps(primitive.id, "curve")}
+          />
+        );
+      })}
+
+      {selectedPrimitive && selectedPrimitiveBounds && (
+        // Toggle off the layer → toggle off the halo too. Without this
+        // gate, hiding `visible.arcs` would leave an orphaned orange
+        // halo over an invisible shape (the bulk shape disappears, the
+        // halo stays). isBezierKind decides which toggle the primitive
+        // belongs to; arc/circle/ellipse live under `arcs`, both bezier
+        // kinds live under `curves`.
+        (
+          selectedPrimitive.kind === "cubic_bezier" || selectedPrimitive.kind === "quad_bezier"
+            ? visible.curves
+            : visible.arcs
+        ) && (
+        // Filled highlight that traces the same shape twice — once thick
+        // and white for contrast on busy drawings, once tinted accent on
+        // top. Matches the existing pattern for selected systems / lines.
+        <g pointerEvents="none">
+          {selectedPrimitive.kind === "circle" ? (
+            <circle
+              cx={primitiveParam(selectedPrimitive.params.cx) * ptToCanvasX}
+              cy={primitiveParam(selectedPrimitive.params.cy) * ptToCanvasY}
+              r={Math.max(primitiveParam(selectedPrimitive.params.r) * ptToCanvasAvg, 3)}
+              fill="#f97316"
+              fillOpacity={0.1}
+              stroke="#f97316"
+              strokeWidth={3}
+            />
+          ) : selectedPrimitive.kind === "ellipse" ? (
+            <ellipse
+              cx={primitiveParam(selectedPrimitive.params.cx) * ptToCanvasX}
+              cy={primitiveParam(selectedPrimitive.params.cy) * ptToCanvasY}
+              rx={Math.max(primitiveParam(selectedPrimitive.params.rx) * ptToCanvasX, 2)}
+              ry={Math.max(primitiveParam(selectedPrimitive.params.ry) * ptToCanvasY, 2)}
+              transform={`rotate(${((primitiveParam(selectedPrimitive.params.rotationRad) * 180) / Math.PI).toFixed(2)} ${(primitiveParam(selectedPrimitive.params.cx) * ptToCanvasX).toFixed(2)} ${(primitiveParam(selectedPrimitive.params.cy) * ptToCanvasY).toFixed(2)})`}
+              fill="#f97316"
+              fillOpacity={0.1}
+              stroke="#f97316"
+              strokeWidth={3}
+            />
+          ) : (
+            // Arcs + beziers: redraw the path with a white halo then an
+            // orange accent. Reuses the same path-d builder so the halo
+            // traces the exact rendered shape.
+            <>
+              <path
+                d={selectedPrimitive.kind === "arc"
+                  ? arcPathDescription(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+                  : selectedPrimitive.kind === "cubic_bezier"
+                    ? cubicPathDescription(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+                    : selectedPrimitive.kind === "quad_bezier"
+                      ? quadPathDescription(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+                      : ""}
+                fill="none"
+                stroke="#ffffff"
+                strokeWidth={7}
+                opacity={0.75}
+                strokeLinecap="round"
+              />
+              <path
+                d={selectedPrimitive.kind === "arc"
+                  ? arcPathDescription(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+                  : selectedPrimitive.kind === "cubic_bezier"
+                    ? cubicPathDescription(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+                    : selectedPrimitive.kind === "quad_bezier"
+                      ? quadPathDescription(selectedPrimitive, ptToCanvasX, ptToCanvasY)
+                      : ""}
+                fill="none"
+                stroke="#f97316"
+                strokeWidth={4}
+                opacity={0.98}
+                strokeLinecap="round"
+              />
+            </>
+          )}
+        </g>
+        )
+      )}
 
       {selectedSystem && selectedSystem.segmentIds.map((segmentId) => {
         const line = lineById.get(segmentId);
@@ -9235,7 +10120,9 @@ function DrawingIntelligencePanel({
     { key: "systems", label: "Systems" },
     { key: "lines", label: "Lines" },
     { key: "symbols", label: "Symbols" },
-    { key: "circles", label: "Circles" },
+    { key: "circles", label: "Hough" },
+    { key: "arcs", label: "Vec arc" },
+    { key: "curves", label: "Vec curve" },
     { key: "text", label: "Text" },
   ];
 
@@ -9291,7 +10178,7 @@ function DrawingIntelligencePanel({
           </Button>
         </div>
 
-        <div className="grid grid-cols-5 gap-1">
+        <div className="grid grid-cols-4 gap-1">
           {overlayOptions.map((item) => (
             <button
               key={item.key}

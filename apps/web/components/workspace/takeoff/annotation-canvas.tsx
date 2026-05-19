@@ -7,7 +7,7 @@ import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
 
-export interface TakeoffAnnotation {
+export interface Pickup {
   id: string;
   type: string;
   label: string;
@@ -26,12 +26,23 @@ export interface TakeoffAnnotation {
     spacing?: number;
   };
   measurement?: { value: number; unit: string; area?: number; volume?: number };
+  /** Per-annotation extras (source provenance, AI metadata, bbox thumbnail
+   *  data URIs, match counts, etc). The DB column already exists; this
+   *  surfaces it on the TS type so consumers can read it without an
+   *  unchecked cast. Used today for:
+   *   - source: "auto-count" | "smart-count" | "manual" | … — tags where
+   *     the annotation came from so the Pickups panel groups it under
+   *     the right source pill.
+   *   - templateImage: data URI of the user-drawn template (auto-count).
+   *   - matches: Array<{ rect, confidence }> backing a multi-point count
+   *     annotation so the row can render thumbnails / re-run scope. */
+  metadata?: Record<string, unknown>;
 }
 
 interface AnnotationCanvasProps {
   width: number;
   height: number;
-  annotations: TakeoffAnnotation[];
+  annotations: Pickup[];
   activeTool: string | null;
   /** Calibration's pixelsPerUnit is normalised to zoom 1 (paper-pixels per unit). */
   calibration: Calibration | null;
@@ -39,12 +50,12 @@ interface AnnotationCanvasProps {
   zoom: number;
   activeColor: string;
   activeThickness: number;
-  onAnnotationComplete: (data: Partial<TakeoffAnnotation>) => void;
+  onAnnotationComplete: (data: Partial<Pickup>) => void;
   onCalibrationRequest?: (points: [Point, Point]) => void;
   /** Source canvas the loupe samples from when calibrating. */
   pdfCanvas?: HTMLCanvasElement | null;
   snapEnabled?: boolean;
-  selectedAnnotationId?: string | null;
+  selectedPickupId?: string | null;
   spotlightActive?: boolean;
 }
 
@@ -242,7 +253,7 @@ function drawMeasurementLabel(
 
 function renderAnnotation(
   ctx: CanvasRenderingContext2D,
-  ann: TakeoffAnnotation,
+  ann: Pickup,
   calibration: Calibration | null,
   options: { muted?: boolean; selected?: boolean } = {},
 ) {
@@ -450,7 +461,7 @@ export function AnnotationCanvas({
   onCalibrationRequest,
   pdfCanvas,
   snapEnabled = true,
-  selectedAnnotationId = null,
+  selectedPickupId = null,
   spotlightActive = false,
 }: AnnotationCanvasProps) {
   // Scale the stored (zoom-1) calibration by the current zoom for use in math.
@@ -513,19 +524,19 @@ export function AnnotationCanvas({
       if (ann.canvasWidth && ann.canvasHeight && (ann.canvasWidth !== canvasWidth || ann.canvasHeight !== canvasHeight)) {
         const sx = canvasWidth / ann.canvasWidth;
         const sy = canvasHeight / ann.canvasHeight;
-        const scaled: TakeoffAnnotation = {
+        const scaled: Pickup = {
           ...ann,
           points: ann.points.map((p) => ({ x: p.x * sx, y: p.y * sy })),
           thickness: ann.thickness * Math.min(sx, sy),
         };
         renderAnnotation(ctx, scaled, calibration, {
-          muted: spotlightActive && selectedAnnotationId !== ann.id,
-          selected: selectedAnnotationId === ann.id,
+          muted: spotlightActive && selectedPickupId !== ann.id,
+          selected: selectedPickupId === ann.id,
         });
       } else {
         renderAnnotation(ctx, ann, calibration, {
-          muted: spotlightActive && selectedAnnotationId !== ann.id,
-          selected: selectedAnnotationId === ann.id,
+          muted: spotlightActive && selectedPickupId !== ann.id,
+          selected: selectedPickupId === ann.id,
         });
       }
     }
@@ -664,7 +675,7 @@ export function AnnotationCanvas({
     calibration,
     snapEnabled,
     snapPoint,
-    selectedAnnotationId,
+    selectedPickupId,
     spotlightActive,
   ]);
 

@@ -9636,11 +9636,11 @@ function GroupRows({
   /* Set of item IDs that have takeoff links */
   const linkedItemIds = useMemo(() => {
     const ids = new Set<string>();
-    for (const link of (workspace as any).takeoffLinks ?? []) {
+    for (const link of (workspace as any).pickupLinks ?? []) {
       ids.add(link.worksheetItemId);
     }
     return ids;
-  }, [(workspace as any).takeoffLinks]);
+  }, [(workspace as any).pickupLinks]);
 
   return (
     <>

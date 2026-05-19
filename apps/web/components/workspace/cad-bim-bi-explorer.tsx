@@ -36,7 +36,7 @@ import {
   type ModelAsset,
   type ModelElement,
   type ModelQuantity,
-  type ModelTakeoffLinkRecord,
+  type ModelPickupLinkRecord,
   type ProjectWorkspaceData,
 } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
@@ -390,7 +390,7 @@ export function CadBimBiExplorer({
   const [assets, setAssets] = useState<ModelAsset[]>(initialAssets);
   const [assetId, setAssetId] = useState<string>(initialAssets.length > 1 ? ALL_MODELS : initialAssets[0]?.id ?? "");
   const [batches, setBatches] = useState<ModelBatch[]>([]);
-  const [links, setLinks] = useState<ModelTakeoffLinkRecord[]>([]);
+  const [links, setLinks] = useState<ModelPickupLinkRecord[]>([]);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [loadingAssets, setLoadingAssets] = useState(false);

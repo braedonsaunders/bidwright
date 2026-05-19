@@ -218,7 +218,7 @@ export interface WorksheetItemSourceBasis {
   sourceName?: string;
   documentId?: string;
   pageNumber?: number;
-  annotationId?: string;
+  pickupId?: string;
   takeoffLinkId?: string;
   modelId?: string;
   modelElementId?: string;
@@ -1213,17 +1213,17 @@ export interface FileNode {
 
 // ── Takeoff Annotations ──────────────────────────────────────────────────
 
-export type TakeoffAnnotationType =
+export type PickupType =
   | "linear" | "linear-polyline" | "linear-drop"
   | "count" | "count-by-distance"
   | "area-vertical-wall" | "area-rectangle" | "area-triangle" | "area-ellipse" | "area-polygon";
 
-export interface TakeoffAnnotation {
+export interface Pickup {
   id: string;
   projectId: string;
   documentId: string;
   pageNumber: number;
-  annotationType: TakeoffAnnotationType;
+  annotationType: PickupType;
   label: string;
   color: string;
   lineThickness: number;
@@ -1238,18 +1238,71 @@ export interface TakeoffAnnotation {
   updatedAt: string;
 }
 
-// ── Takeoff Links ────────────────────────────────────────────────────────
+// ── Pickup Links ─────────────────────────────────────────────────────────
 
-export type TakeoffLinkQuantityField = "value" | "area" | "volume" | "count";
+export type PickupLinkQuantityField = "value" | "area" | "volume" | "count";
 
-export interface TakeoffLink {
+export interface PickupLink {
   id: string;
   projectId: string;
-  annotationId: string;
+  pickupId: string;
   worksheetItemId: string;
-  quantityField: TakeoffLinkQuantityField;
+  quantityField: PickupLinkQuantityField;
   multiplier: number;
   derivedQuantity: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ── Symbol Library (Few-Shot from Legend) ────────────────────────────────
+
+/** Source bbox of a SymbolTemplate in render-image-coord space. */
+export interface SymbolTemplateSourceBbox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+/** Free-form metadata persisted alongside a SymbolTemplate. */
+export interface SymbolTemplateMetadata {
+  /** Legend extraction confidence from symbol-legend-service. */
+  legendConfidence?: number;
+  /** Most recent batch-run summary, for at-a-glance UI hints. */
+  lastRun?: {
+    at: string;
+    totalMatches: number;
+    pagesSearched: number;
+  };
+  /** User-supplied notes ("only counts vacuum valves, not bleed"). */
+  notes?: string;
+  /** Anything else callers want to round-trip. */
+  [key: string]: unknown;
+}
+
+/** A reusable per-project symbol template extracted from a drawing legend. */
+export interface SymbolTemplate {
+  id: string;
+  projectId: string;
+  /** Short token from the legend ("A1", "GFI"). May be empty. */
+  symbol: string;
+  /** Human-readable description ("Standard duplex receptacle"). */
+  label: string;
+  /** PNG path relative to apiDataRoot. */
+  storagePath: string;
+  width: number;
+  height: number;
+  dpi: number;
+  sourceDocumentId?: string;
+  sourcePage: number;
+  sourceBbox: SymbolTemplateSourceBbox | Record<string, never>;
+  threshold: number;
+  crossScale: boolean;
+  enabled: boolean;
+  metadata: SymbolTemplateMetadata;
+  createdBy?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -1991,7 +2044,7 @@ export interface BidwrightStore {
   rateSchedules: RateSchedule[];
   rateScheduleTiers: RateScheduleTier[];
   rateScheduleItems: RateScheduleItem[];
-  takeoffLinks: TakeoffLink[];
+  pickupLinks: PickupLink[];
   estimateStrategies?: EstimateStrategy[];
   estimateCalibrationFeedback?: EstimateCalibrationFeedback[];
 }
@@ -2184,7 +2237,7 @@ export interface ProjectWorkspace {
   scheduleBaselineTasks: ScheduleBaselineTask[];
   scheduleResources: ScheduleResource[];
   scheduleTaskAssignments: ScheduleTaskAssignment[];
-  takeoffLinks: TakeoffLink[];
+  pickupLinks: PickupLink[];
   estimateStrategy?: EstimateStrategy | null;
   estimateFeedback?: EstimateCalibrationFeedback[];
   estimate: {

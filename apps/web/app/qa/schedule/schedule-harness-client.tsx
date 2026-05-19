@@ -425,7 +425,7 @@ function buildHarnessWorkspace(): ProjectWorkspaceData {
         aiRunCount: 0,
       },
     },
-    takeoffLinks: [],
+    pickupLinks: [],
     estimateStrategy: null,
     estimateFeedback: [],
   } as unknown as ProjectWorkspaceData;

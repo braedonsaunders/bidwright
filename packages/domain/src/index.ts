@@ -3,6 +3,7 @@ export * from "./money";
 export * from "./models";
 export * from "./uom";
 export * from "./mock-data";
+export * from "./geometry-measurement";
 export * from "./quote-engine";
 export * from "./dataset-utils";
 export * from "./plugin-calculators";

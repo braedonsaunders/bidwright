@@ -1,10 +1,20 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { readFile } from "node:fs/promises";
 import { z } from "zod";
 import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
 import { detectTitleBlockScale } from "../services/titleblock-scale-service.js";
 import { extractLegendFromPage } from "../services/symbol-legend-service.js";
-import { suggestLineItemsForAnnotation } from "../services/auto-takeoff-service.js";
+import {
+  createTemplateFromLegendEntry,
+  deleteSymbolTemplate,
+  listSymbolTemplates,
+  runLibraryOnDocument,
+  runLibraryOnPage,
+  updateSymbolTemplate,
+} from "../services/symbol-template-service.js";
+import { suggestLineItemsForPickup } from "../services/auto-takeoff-service.js";
 import { generatePhotoTakeoff } from "../services/photo-takeoff-service.js";
+import { resolveApiPath } from "../paths.js";
 
 // Azure Document Intelligence creds come exclusively from organisation
 // Settings > Integrations. There is no env-var fallback — configure them
@@ -104,19 +114,229 @@ export async function takeoffRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── POST /api/takeoff/:projectId/annotations/:annotationId/suggest-line-items ──
+  // ── Symbol Library (Few-Shot from Legend) ─────────────────────────────
+  //
+  // Templates extracted from drawing legends, persisted per-project, and
+  // re-run as a batch against any drawing page in the project. The PNG
+  // bytes live on disk; the DB row stores config and provenance.
+
+  // ── POST /api/takeoff/:projectId/symbol-templates/from-legend ─────────
+  // Crop a glyph cell from a legend page and persist it as a SymbolTemplate.
+  // Caller supplies the legend entry as returned by extract-legend
+  // (must include symbolBbox in PDF-inch coords).
+  app.post("/api/takeoff/:projectId/symbol-templates/from-legend", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const bodySchema = z.object({
+      documentId: z.string().min(1),
+      pageNumber: z.number().int().min(1),
+      entry: z.object({
+        symbol: z.string().default(""),
+        label: z.string().default(""),
+        pageNumber: z.number().int().min(1),
+        confidence: z.number().min(0).max(1).default(0.5),
+        symbolBbox: z.object({
+          x: z.number().nonnegative(),
+          y: z.number().nonnegative(),
+          width: z.number().positive(),
+          height: z.number().positive(),
+        }),
+        labelBbox: z
+          .object({
+            x: z.number().nonnegative(),
+            y: z.number().nonnegative(),
+            width: z.number().positive(),
+            height: z.number().positive(),
+          })
+          .optional(),
+      }),
+      threshold: z.number().min(0.3).max(0.95).optional(),
+      crossScale: z.boolean().optional(),
+    });
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const template = await createTemplateFromLegendEntry(request.store!, projectId, {
+        documentId: parsed.data.documentId,
+        pageNumber: parsed.data.pageNumber,
+        entry: parsed.data.entry,
+        threshold: parsed.data.threshold,
+        crossScale: parsed.data.crossScale,
+        createdBy: request.user?.id,
+      });
+      reply.code(201);
+      return template;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Template creation failed";
+      const status = /not found/i.test(message) ? 404 : 400;
+      return reply.code(status).send({ message });
+    }
+  });
+
+  // ── GET /api/takeoff/:projectId/symbol-templates ──────────────────────
+  app.get("/api/takeoff/:projectId/symbol-templates", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const query = request.query as { enabledOnly?: string };
+    try {
+      const templates = await listSymbolTemplates(request.store!, projectId, {
+        enabledOnly: query.enabledOnly === "1" || query.enabledOnly === "true",
+      });
+      return { templates };
+    } catch (err) {
+      return reply.code(404).send({ message: err instanceof Error ? err.message : "Not found" });
+    }
+  });
+
+  // ── GET /api/takeoff/:projectId/symbol-templates/:templateId/image ────
+  // Returns the cropped PNG bytes directly so the UI can render a preview
+  // without having to bake images into the JSON list response.
+  app.get(
+    "/api/takeoff/:projectId/symbol-templates/:templateId/image",
+    async (request, reply) => {
+      const { projectId, templateId } = request.params as { projectId: string; templateId: string };
+      try {
+        const template = await request.store!.getSymbolTemplate(projectId, templateId);
+        if (!template) return reply.code(404).send({ message: "Template not found" });
+        const bytes = await readFile(resolveApiPath(template.storagePath));
+        reply.header("Content-Type", "image/png");
+        reply.header("Cache-Control", "private, max-age=31536000, immutable");
+        return reply.send(bytes);
+      } catch (err) {
+        return reply.code(404).send({ message: err instanceof Error ? err.message : "Image not found" });
+      }
+    },
+  );
+
+  // ── PATCH /api/takeoff/:projectId/symbol-templates/:templateId ────────
+  app.patch(
+    "/api/takeoff/:projectId/symbol-templates/:templateId",
+    async (request, reply) => {
+      const { projectId, templateId } = request.params as { projectId: string; templateId: string };
+      const bodySchema = z
+        .object({
+          symbol: z.string().max(64).optional(),
+          label: z.string().max(500).optional(),
+          threshold: z.number().min(0.3).max(0.95).optional(),
+          crossScale: z.boolean().optional(),
+          enabled: z.boolean().optional(),
+          metadata: z.record(z.string(), z.unknown()).optional(),
+        })
+        .strict();
+      const parsed = bodySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ message: parsed.error.message });
+      }
+      try {
+        const updated = await updateSymbolTemplate(request.store!, projectId, templateId, parsed.data);
+        return updated;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Update failed";
+        const status = /not found/i.test(message) ? 404 : 400;
+        return reply.code(status).send({ message });
+      }
+    },
+  );
+
+  // ── DELETE /api/takeoff/:projectId/symbol-templates/:templateId ───────
+  app.delete(
+    "/api/takeoff/:projectId/symbol-templates/:templateId",
+    async (request, reply) => {
+      const { projectId, templateId } = request.params as { projectId: string; templateId: string };
+      try {
+        const result = await deleteSymbolTemplate(request.store!, projectId, templateId);
+        return result;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Delete failed";
+        const status = /not found/i.test(message) ? 404 : 400;
+        return reply.code(status).send({ message });
+      }
+    },
+  );
+
+  // ── POST /api/takeoff/:projectId/symbol-templates/run-on-page ─────────
+  // Run the project library against a single page. Optionally persist each
+  // match as a Pickup with autoSave=true.
+  app.post(
+    "/api/takeoff/:projectId/symbol-templates/run-on-page",
+    async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const bodySchema = z.object({
+        documentId: z.string().min(1),
+        pageNumber: z.number().int().min(1),
+        autoSave: z.boolean().optional(),
+        templateIds: z.array(z.string()).optional(),
+      });
+      const parsed = bodySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ message: parsed.error.message });
+      }
+      try {
+        const result = await runLibraryOnPage(
+          request.store!,
+          projectId,
+          parsed.data.documentId,
+          parsed.data.pageNumber,
+          {
+            autoSave: parsed.data.autoSave ?? false,
+            templateIds: parsed.data.templateIds,
+            createdBy: request.user?.id,
+          },
+        );
+        return result;
+      } catch (err) {
+        return reply.code(500).send({ message: err instanceof Error ? err.message : "Run failed" });
+      }
+    },
+  );
+
+  // ── POST /api/takeoff/:projectId/symbol-templates/run-on-document ─────
+  app.post(
+    "/api/takeoff/:projectId/symbol-templates/run-on-document",
+    async (request, reply) => {
+      const { projectId } = request.params as { projectId: string };
+      const bodySchema = z.object({
+        documentId: z.string().min(1),
+        autoSave: z.boolean().optional(),
+        templateIds: z.array(z.string()).optional(),
+      });
+      const parsed = bodySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.code(400).send({ message: parsed.error.message });
+      }
+      try {
+        const result = await runLibraryOnDocument(
+          request.store!,
+          projectId,
+          parsed.data.documentId,
+          {
+            autoSave: parsed.data.autoSave ?? false,
+            templateIds: parsed.data.templateIds,
+            createdBy: request.user?.id,
+          },
+        );
+        return result;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Run failed";
+        const status = /not found/i.test(message) ? 404 : 500;
+        return reply.code(status).send({ message });
+      }
+    },
+  );
+
+  // ── POST /api/takeoff/:projectId/pickups/:pickupId/suggest-line-items ──
   // Asks the LLM to match a takeoff annotation against the org's catalog
   // and rate-schedule items. Returns ranked line-item suggestions the user
   // can drop into a worksheet with one click.
   app.post(
-    "/api/takeoff/:projectId/annotations/:annotationId/suggest-line-items",
+    "/api/takeoff/:projectId/pickups/:pickupId/suggest-line-items",
     async (request, reply) => {
-      const { projectId, annotationId } = request.params as {
+      const { projectId, pickupId } = request.params as {
         projectId: string;
-        annotationId: string;
+        pickupId: string;
       };
       try {
-        const result = await suggestLineItemsForAnnotation(projectId, annotationId);
+        const result = await suggestLineItemsForPickup(projectId, pickupId);
         return result;
       } catch (err) {
         return reply.code(500).send({
@@ -126,12 +346,12 @@ export async function takeoffRoutes(app: FastifyInstance) {
     },
   );
 
-  // ── GET /api/takeoff/:projectId/annotations ───────────────────────────
-  app.get("/api/takeoff/:projectId/annotations", async (request, reply) => {
+  // ── GET /api/takeoff/:projectId/pickups ───────────────────────────
+  app.get("/api/takeoff/:projectId/pickups", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const query = request.query as { documentId?: string; page?: string };
     try {
-      const annotations = await request.store!.listTakeoffAnnotations(
+      const annotations = await request.store!.listPickups(
         projectId,
         query.documentId,
         query.page !== undefined ? parseInt(query.page, 10) : undefined,
@@ -142,12 +362,12 @@ export async function takeoffRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── POST /api/takeoff/:projectId/annotations ──────────────────────────
-  app.post("/api/takeoff/:projectId/annotations", async (request, reply) => {
+  // ── POST /api/takeoff/:projectId/pickups ──────────────────────────
+  app.post("/api/takeoff/:projectId/pickups", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const body = request.body as Record<string, unknown>;
     try {
-      const annotation = await request.store!.createTakeoffAnnotation(projectId, body as any);
+      const annotation = await request.store!.createPickup(projectId, body as any);
       reply.code(201);
       return annotation;
     } catch (error) {
@@ -157,23 +377,23 @@ export async function takeoffRoutes(app: FastifyInstance) {
     }
   });
 
-  // ── PATCH /api/takeoff/:projectId/annotations/:annotationId ───────────
-  app.patch("/api/takeoff/:projectId/annotations/:annotationId", async (request, reply) => {
-    const { annotationId } = request.params as { projectId: string; annotationId: string };
+  // ── PATCH /api/takeoff/:projectId/pickups/:pickupId ───────────
+  app.patch("/api/takeoff/:projectId/pickups/:pickupId", async (request, reply) => {
+    const { pickupId } = request.params as { projectId: string; pickupId: string };
     const body = request.body as Record<string, unknown>;
     try {
-      const annotation = await request.store!.updateTakeoffAnnotation(annotationId, body as any);
+      const annotation = await request.store!.updatePickup(pickupId, body as any);
       return annotation;
     } catch (error) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
     }
   });
 
-  // ── DELETE /api/takeoff/:projectId/annotations/:annotationId ──────────
-  app.delete("/api/takeoff/:projectId/annotations/:annotationId", async (request, reply) => {
-    const { annotationId } = request.params as { projectId: string; annotationId: string };
+  // ── DELETE /api/takeoff/:projectId/pickups/:pickupId ──────────
+  app.delete("/api/takeoff/:projectId/pickups/:pickupId", async (request, reply) => {
+    const { pickupId } = request.params as { projectId: string; pickupId: string };
     try {
-      await request.store!.deleteTakeoffAnnotation(annotationId);
+      await request.store!.deletePickup(pickupId);
       return { deleted: true };
     } catch (error) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
@@ -185,9 +405,9 @@ export async function takeoffRoutes(app: FastifyInstance) {
   // ── GET /api/takeoff/:projectId/links ─────────────────────────────────
   app.get("/api/takeoff/:projectId/links", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const query = request.query as { annotationId?: string; worksheetItemId?: string };
+    const query = request.query as { pickupId?: string; worksheetItemId?: string };
     try {
-      return await request.store!.listTakeoffLinks(projectId, query.annotationId, query.worksheetItemId);
+      return await request.store!.listPickupLinks(projectId, query.pickupId, query.worksheetItemId);
     } catch (error) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
     }
@@ -198,7 +418,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     const body = request.body as Record<string, unknown>;
     try {
-      const link = await request.store!.createTakeoffLink(projectId, body as any);
+      const link = await request.store!.createPickupLink(projectId, body as any);
       reply.code(201);
       return link;
     } catch (error) {
@@ -222,7 +442,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
   app.delete("/api/takeoff/:projectId/links/:linkId", async (request, reply) => {
     const { linkId } = request.params as { projectId: string; linkId: string };
     try {
-      await request.store!.deleteTakeoffLink(linkId);
+      await request.store!.deletePickupLink(linkId);
       return { deleted: true };
     } catch (error) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });

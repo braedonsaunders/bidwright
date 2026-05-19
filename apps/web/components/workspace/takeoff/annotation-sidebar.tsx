@@ -12,31 +12,31 @@ import {
   Input,
   Separator,
 } from "@/components/ui";
-import type { TakeoffAnnotation } from "./annotation-canvas";
-import type { TakeoffLinkRecord } from "@/lib/api";
+import type { Pickup } from "./annotation-canvas";
+import type { PickupLinkRecord } from "@/lib/api";
 
 const EDIT_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
 
 interface AnnotationSidebarProps {
-  annotations: TakeoffAnnotation[];
+  annotations: Pickup[];
   onToggleVisibility: (id: string) => void;
   onDelete: (id: string) => void;
   onEdit: (id: string) => void;
   onSaveEdit?: (id: string, updates: { label?: string; color?: string; groupName?: string }) => void;
   onSelectAnnotation: (id: string) => void;
-  selectedAnnotationId: string | null;
-  editingAnnotationId?: string | null;
+  selectedPickupId: string | null;
+  editingPickupId?: string | null;
   /** Takeoff links for showing link-count badges (informational only — linking happens in the side panel) */
-  takeoffLinks?: TakeoffLinkRecord[];
+  pickupLinks?: PickupLinkRecord[];
   /** When true, renders without the outer Card wrapper (for embedding in a unified card layout) */
   embedded?: boolean;
 }
 
 /* Group annotations by groupName or type */
 function groupAnnotations(
-  annotations: TakeoffAnnotation[]
-): Map<string, TakeoffAnnotation[]> {
-  const groups = new Map<string, TakeoffAnnotation[]>();
+  annotations: Pickup[]
+): Map<string, Pickup[]> {
+  const groups = new Map<string, Pickup[]>();
   for (const ann of annotations) {
     const key = ann.groupName || ann.type;
     const arr = groups.get(key) ?? [];
@@ -47,7 +47,7 @@ function groupAnnotations(
 }
 
 /* Format measurement for display */
-function formatMeasurement(ann: TakeoffAnnotation): string {
+function formatMeasurement(ann: Pickup): string {
   if (!ann.measurement) return "--";
   const { value, unit } = ann.measurement;
   if (typeof value !== "number" || !Number.isFinite(value)) return "--";
@@ -58,7 +58,7 @@ function formatMeasurement(ann: TakeoffAnnotation): string {
 /* Roll up a list of annotations into a single summary string. Linear ones
    sum into a single distance, area-* into a single area, counts into a
    total, and mixed groups fall back to "N items". */
-function formatGroupTotal(items: TakeoffAnnotation[]): string {
+function formatGroupTotal(items: Pickup[]): string {
   if (items.length === 0) return "";
   const measurements = items.filter((a) => a.measurement && a.measurement.value > 0);
   if (measurements.length === 0) return `${items.length} items`;
@@ -105,7 +105,7 @@ const TYPE_LABELS: Record<string, string> = {
 };
 
 /* Inline edit row */
-function EditRow({ ann, onSave, onCancel }: { ann: TakeoffAnnotation; onSave: (updates: { label?: string; color?: string; groupName?: string }) => void; onCancel: () => void }) {
+function EditRow({ ann, onSave, onCancel }: { ann: Pickup; onSave: (updates: { label?: string; color?: string; groupName?: string }) => void; onCancel: () => void }) {
   const [label, setLabel] = useState(ann.label);
   const [color, setColor] = useState(ann.color);
   const [group, setGroup] = useState(ann.groupName ?? "");
@@ -159,9 +159,9 @@ export function AnnotationSidebar({
   onEdit,
   onSaveEdit,
   onSelectAnnotation,
-  selectedAnnotationId,
-  editingAnnotationId,
-  takeoffLinks,
+  selectedPickupId,
+  editingPickupId,
+  pickupLinks,
   embedded,
 }: AnnotationSidebarProps) {
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
@@ -170,11 +170,11 @@ export function AnnotationSidebar({
   /* Link count per annotation */
   const linkCountMap = useMemo(() => {
     const map = new Map<string, number>();
-    for (const link of takeoffLinks ?? []) {
-      map.set(link.annotationId, (map.get(link.annotationId) ?? 0) + 1);
+    for (const link of pickupLinks ?? []) {
+      map.set(link.pickupId, (map.get(link.pickupId) ?? 0) + 1);
     }
     return map;
-  }, [takeoffLinks]);
+  }, [pickupLinks]);
 
   function toggleGroup(key: string) {
     setCollapsedGroups((prev) => {
@@ -226,7 +226,7 @@ export function AnnotationSidebar({
                 {!collapsed && (
                   <div className="ml-2 space-y-0.5">
                     {items.map((ann) =>
-                      editingAnnotationId === ann.id && onSaveEdit ? (
+                      editingPickupId === ann.id && onSaveEdit ? (
                         <EditRow
                           key={ann.id}
                           ann={ann}
@@ -239,7 +239,7 @@ export function AnnotationSidebar({
                           onClick={() => onSelectAnnotation(ann.id)}
                           className={cn(
                             "group flex items-center gap-2 rounded-md px-2 py-1.5 cursor-pointer transition-colors",
-                            selectedAnnotationId === ann.id
+                            selectedPickupId === ann.id
                               ? "bg-accent/10 border border-accent/20"
                               : "hover:bg-panel2/40 border border-transparent"
                           )}

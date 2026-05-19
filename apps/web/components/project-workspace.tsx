@@ -48,7 +48,7 @@ import type {
   EstimateFactorLibraryRecord,
   EstimateFactorScope,
   EstimateFactorSourceType,
-  ModelTakeoffLinkRecord,
+  ModelPickupLinkRecord,
   PhasePatchInput,
   ProjectPhase,
   EntityCategory,
@@ -1095,7 +1095,7 @@ function normalizeModelEditorLineItemDraft(
   };
 }
 
-function toModelEditorLinkedItem(link: ModelTakeoffLinkRecord): BidwrightModelLinkedLineItem | null {
+function toModelEditorLinkedItem(link: ModelPickupLinkRecord): BidwrightModelLinkedLineItem | null {
   const item = link.worksheetItem;
   if (!item) return null;
   return {
@@ -1480,7 +1480,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           packagePlan: workspace.estimateStrategy.packagePlan,
         }
         : null,
-      takeoffLinks: (workspace.takeoffLinks ?? []).map((link) => ({
+      pickupLinks: (workspace.pickupLinks ?? []).map((link) => ({
         id: link.id,
         worksheetItemId: link.worksheetItemId,
         itemId: link.worksheetItemId,

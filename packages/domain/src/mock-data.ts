@@ -1439,5 +1439,5 @@ export const mockStore: BidwrightStore = {
       sortOrder: 0,
     },
   ],
-  takeoffLinks: [],
+  pickupLinks: [],
 };

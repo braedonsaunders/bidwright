@@ -365,7 +365,7 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 - Pricing evidence: \`getItemConfig\`, \`recommendEstimateBasis\`, \`queryLibrary\`, \`recommendCostSource\`, \`listLaborUnitTree\`, \`listLaborUnits\`, \`getLaborUnit\`, \`previewAssembly\`, \`listRateSchedules\`, \`getRateSchedule\`, \`importRateSchedule\`, \`listRateScheduleItems\`.
 - Estimate edits: \`updateQuote\`, \`createWorksheet\`, \`createRateScheduleWorksheetItem\`, \`createWorksheetItem\`, \`updateWorksheetItem\`, \`createCondition\`, \`createPhase\`, \`applySummaryPreset\`, \`recalculateTotals\`.
 - Estimate factors: \`listEstimateFactorLibrary\`, \`listEstimateFactors\`, \`createEstimateFactor\`, \`updateEstimateFactor\`, \`deleteEstimateFactor\`. Use global factors for estimate-wide/phase/category/worksheet production adjustments; use line-level factors only for specific worksheet items after row IDs exist.
-- Drawing/takeoff: \`buildDrawingAtlas\`, \`searchDrawingRegions\`, \`inspectDrawingRegion\`, \`saveDrawingEvidenceClaim\`, \`verifyDrawingEvidenceLedger\`, \`addSourceToDrawingAtlas\`, \`listDrawingPages\`, \`scanDrawingSymbols\`, \`countSymbols\`, \`countSymbolsAllPages\`, \`renderDrawingPage\`, \`zoomDrawingRegion\`, \`listTakeoffAnnotations\`, \`linkTakeoffAnnotationToWorksheetItem\`.
+- Drawing/takeoff: \`buildDrawingAtlas\`, \`searchDrawingRegions\`, \`inspectDrawingRegion\`, \`saveDrawingEvidenceClaim\`, \`verifyDrawingEvidenceLedger\`, \`addSourceToDrawingAtlas\`, \`listDrawingPages\`, \`scanDrawingSymbols\`, \`countSymbols\`, \`countSymbolsAllPages\`, \`renderDrawingPage\`, \`zoomDrawingRegion\`, \`listPickups\`, \`linkPickupToWorksheetItem\`.
 
 ## Estimating Rules
 
@@ -663,8 +663,8 @@ These tools are for automated drawing evidence, takeoff, and symbol counting on 
 - **renderDrawingPage** â€” Render a drawing page as an image for visual symbol inspection (NOT for reading spec text â€” use \`readDocumentText\` instead)
 - **zoomDrawingRegion** â€” Zoom into a small region for tiny text or symbol details
 - **listDrawingPages** â€” List all PDF drawings with page counts
-- **listTakeoffAnnotations** â€” List saved PDF/DWG takeoff annotations that can support row quantities
-- **linkTakeoffAnnotationToWorksheetItem** â€” Link a saved takeoff annotation to a worksheet item so the row quantity stays tied to the Takeoff tab
+- **listPickups** â€” List saved PDF/DWG takeoff annotations that can support row quantities
+- **linkPickupToWorksheetItem** â€” Link a saved takeoff annotation to a worksheet item so the row quantity stays tied to the Takeoff tab
 
 **Drawing CV workflow (MANDATORY when drawings drive quantities):**
 1. \`buildDrawingAtlas\` -> precompute/reuse the package atlas before manual crops or page guesses.
@@ -679,7 +679,7 @@ These tools are for automated drawing evidence, takeoff, and symbol counting on 
 10. If a repeated tiny symbol is the quantity basis, identify one clean representative symbol in an inspected crop and call \`countSymbols\` with a tight bounding box in the original \`renderDrawingPage\` coordinate space.
 11. Use \`countSymbolsAllPages\` only after a successful single-page \`countSymbols\` call proves the representative bounding box is valid.
 12. Persist drawing coverage in \`saveEstimateScopeGraph.visualTakeoffAudit\` before pricing. For every drawing-driven package include \`packageId\`, \`documentIds\`, atlas/rendered page references, targeted \`zoomEvidence\`/crop evidence from \`inspectDrawingRegion\` when the quantity is visually counted, \`tableEvidence\` when the governing source is a BOM/schedule/parts-list table, \`quantitiesValidated\`, unresolved risks, and \`completedBeforePricing: true\`.
-13. When a saved annotation is the quantity basis, call \`linkTakeoffAnnotationToWorksheetItem\` and cite the annotation/link in \`sourceEvidence\` and \`sourceNotes\`.
+13. When a saved annotation is the quantity basis, call \`linkPickupToWorksheetItem\` and cite the annotation/link in \`sourceEvidence\` and \`sourceNotes\`.
 
 **Do NOT:**
 - rely on drawing OCR/extracted text alone for drawing-driven quantity decisions
@@ -1368,7 +1368,7 @@ Large read-only tools are compact and paginated. Use q/category/documentId/sched
 - **countSymbolsAllPages** - Count repeated symbols across all pages of a drawing set
 - **findSymbolCandidates** - Discover symbol-like candidates when you need help identifying a cluster
 - **renderDrawingPage / zoomDrawingRegion** - Use for native visual inspection; targeted zooms are mandatory when drawings drive scope or quantity
-- **listTakeoffAnnotations / linkTakeoffAnnotationToWorksheetItem** - Check and link saved takeoff evidence back to worksheet rows
+- **listPickups / linkPickupToWorksheetItem** - Check and link saved takeoff evidence back to worksheet rows
 
 ### REVIEW OUTPUT Tools (the ONLY tools you write with):
 - **saveReviewCoverage** â€” Save scope coverage checklist (call ONCE with all items)

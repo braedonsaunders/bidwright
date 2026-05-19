@@ -12,6 +12,7 @@
 
 import type {
   ExtractedTable,
+  ExtractedTableCell,
   PageSection,
   ParsedDocument,
   ParsedPage,
@@ -720,6 +721,13 @@ interface AzurePage {
   selectionMarks?: Array<{ state: string; confidence: number }>;
 }
 
+interface AzureBoundingRegion {
+  pageNumber: number;
+  /** Polygon as 8 numbers: [x1, y1, x2, y2, x3, y3, x4, y4] clockwise from
+   *  top-left, in PDF page inches (Azure DI v4 default unit). */
+  polygon?: number[];
+}
+
 interface AzureTable {
   rowCount: number;
   columnCount: number;
@@ -728,8 +736,9 @@ interface AzureTable {
     columnIndex: number;
     content: string;
     kind?: 'columnHeader' | 'rowHeader' | 'content' | 'stub';
+    boundingRegions?: AzureBoundingRegion[];
   }>;
-  boundingRegions?: Array<{ pageNumber: number }>;
+  boundingRegions?: AzureBoundingRegion[];
 }
 
 interface AzureKeyValuePair {
@@ -741,12 +750,12 @@ interface AzureKeyValuePair {
 interface AzureParagraph {
   content: string;
   role?: 'title' | 'sectionHeading' | 'footnote' | 'pageHeader' | 'pageFooter' | 'pageNumber';
-  boundingRegions?: Array<{ pageNumber: number }>;
+  boundingRegions?: AzureBoundingRegion[];
 }
 
 interface AzureDocument {
   docType?: string;
-  boundingRegions?: Array<{ pageNumber: number }>;
+  boundingRegions?: AzureBoundingRegion[];
   fields?: Record<string, AzureDocumentField>;
   confidence?: number;
 }
@@ -768,7 +777,33 @@ interface AzureDocumentField {
   valueArray?: AzureDocumentField[];
   valueObject?: Record<string, AzureDocumentField>;
   confidence?: number;
-  boundingRegions?: Array<{ pageNumber: number }>;
+  boundingRegions?: AzureBoundingRegion[];
+}
+
+/**
+ * Convert an Azure polygon (8 numbers, clockwise from top-left) into an
+ * axis-aligned bounding box in the same coordinate system. Returns undefined
+ * for malformed input — callers should treat missing bboxes as "geometry not
+ * available" and fall back to text-only handling.
+ *
+ * Exported so callers that pull AzureTable cells directly (e.g. legend
+ * extraction with custom column heuristics) can reuse the same conversion.
+ */
+export function polygonToBbox(
+  polygon: number[] | undefined,
+): { x: number; y: number; width: number; height: number } | undefined {
+  if (!polygon || polygon.length < 8) return undefined;
+  const xs = [polygon[0]!, polygon[2]!, polygon[4]!, polygon[6]!];
+  const ys = [polygon[1]!, polygon[3]!, polygon[5]!, polygon[7]!];
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  if (!Number.isFinite(minX) || !Number.isFinite(minY)) return undefined;
+  const width = maxX - minX;
+  const height = maxY - minY;
+  if (width <= 0 || height <= 0) return undefined;
+  return { x: minX, y: minY, width, height };
 }
 
 function azureFieldText(field: AzureDocumentField | undefined): string {
@@ -897,6 +932,9 @@ function mapAzureResult(
     // Build header and data rows from cell grid
     const headers: string[] = [];
     const rowMap = new Map<number, string[]>();
+    // Preserve cell-level data with bounding boxes for downstream consumers
+    // that need geometry (e.g. legend-glyph cropping for symbol templates).
+    const cells: ExtractedTableCell[] = [];
 
     for (const cell of azureTable.cells) {
       if (cell.kind === 'columnHeader' || cell.rowIndex === 0) {
@@ -907,6 +945,14 @@ function mapAzureResult(
         }
         rowMap.get(cell.rowIndex)![cell.columnIndex] = cell.content;
       }
+      const bbox = polygonToBbox(cell.boundingRegions?.[0]?.polygon);
+      cells.push({
+        rowIndex: cell.rowIndex,
+        columnIndex: cell.columnIndex,
+        content: cell.content,
+        kind: cell.kind,
+        bbox,
+      });
     }
 
     // Fill any empty header slots
@@ -924,7 +970,7 @@ function mapAzureResult(
       `| ${headers.map(() => '---').join(' | ')} |\n` +
       rows.map((r) => `| ${r.join(' | ')} |`).join('\n');
 
-    tables.push({ pageNumber, headers, rows, rawMarkdown });
+    tables.push({ pageNumber, headers, rows, rawMarkdown, cells });
   }
   tables.push(...mapAzureInvoiceItemTables(result.documents ?? []));
 

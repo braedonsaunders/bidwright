@@ -5,30 +5,30 @@ import { Link2, Loader2, Plus, Sparkles, Trash2, X } from "lucide-react";
 import {
   createDwgEntityLink,
   createModelTakeoffLink,
-  createTakeoffLink,
+  createPickupLink,
   createWorksheetItem,
   deleteDwgEntityLink,
   deleteModelTakeoffLink,
-  deleteTakeoffLink,
+  deletePickupLink,
   listDwgEntityLinks,
   listModelTakeoffLinks,
-  listTakeoffLinks,
+  listPickupLinks,
   suggestLineItemsForAnnotation,
   type DwgEntityLinkRecord,
   type EntityCategory,
   type LineItemSuggestionRecord,
-  type ModelTakeoffLinkRecord,
+  type ModelPickupLinkRecord,
   type ProjectWorkspaceData,
-  type TakeoffLinkRecord,
+  type PickupLinkRecord,
   type WorkspaceWorksheet,
 } from "@/lib/api";
 import type { BidwrightModelSelectionMessage } from "@/components/workspace/editors/bidwright-model-editor";
 import { Button, Input, Label, Select } from "@/components/ui";
-import type { TakeoffAnnotation } from "@/components/workspace/takeoff/annotation-canvas";
+import type { Pickup } from "@/components/workspace/takeoff/annotation-canvas";
 import { cn } from "@/lib/utils";
 
 export type TakeoffSelection =
-  | { kind: "annotation"; annotationId: string }
+  | { kind: "annotation"; pickupId: string }
   | {
       kind: "model-selection";
       modelId: string;
@@ -61,7 +61,7 @@ export type TakeoffSelection =
 interface TakeoffLinkViewProps {
   workspace: ProjectWorkspaceData;
   selection: TakeoffSelection | null;
-  annotations: TakeoffAnnotation[];
+  annotations: Pickup[];
   activeWorksheetId?: string;
   onLinksMutated: () => void;
   /** Bridge to TakeoffTab's handleSendModelSelectionToEstimate. */
@@ -79,7 +79,7 @@ const QUANTITY_FIELDS = [
   { value: "count", label: "Count" },
 ] as const;
 
-function availableQuantityFields(measurement?: TakeoffAnnotation["measurement"]) {
+function availableQuantityFields(measurement?: Pickup["measurement"]) {
   if (!measurement) return QUANTITY_FIELDS.filter((f) => f.value === "value");
   return QUANTITY_FIELDS.filter((f) => {
     if (f.value === "value") return measurement.value !== undefined;
@@ -114,7 +114,7 @@ export function TakeoffLinkView({
     return (
       <AnnotationLinkPane
         workspace={workspace}
-        annotationId={selection.annotationId}
+        pickupId={selection.pickupId}
         annotations={annotations}
         activeWorksheetId={activeWorksheetId}
         onLinksMutated={onLinksMutated}
@@ -166,7 +166,7 @@ function ModelSelectionLinkPane({
   onSendToEstimate?: (selection: BidwrightModelSelectionMessage) => Promise<void> | void;
 }) {
   const projectId = workspace.project.id;
-  const [links, setLinks] = useState<ModelTakeoffLinkRecord[]>([]);
+  const [links, setLinks] = useState<ModelPickupLinkRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -355,7 +355,7 @@ function ModelElementLinkPane({
   onCreateLineItem?: (elementId: string) => Promise<void> | void;
 }) {
   const projectId = workspace.project.id;
-  const [links, setLinks] = useState<ModelTakeoffLinkRecord[]>([]);
+  const [links, setLinks] = useState<ModelPickupLinkRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -948,20 +948,20 @@ function CreateDwgEntityLinkForm({
 
 function AnnotationLinkPane({
   workspace,
-  annotationId,
+  pickupId,
   annotations,
   activeWorksheetId,
   onLinksMutated,
 }: {
   workspace: ProjectWorkspaceData;
-  annotationId: string;
-  annotations: TakeoffAnnotation[];
+  pickupId: string;
+  annotations: Pickup[];
   activeWorksheetId?: string;
   onLinksMutated: () => void;
 }) {
   const projectId = workspace.project.id;
-  const annotation = annotations.find((a) => a.id === annotationId);
-  const [links, setLinks] = useState<TakeoffLinkRecord[]>([]);
+  const annotation = annotations.find((a) => a.id === pickupId);
+  const [links, setLinks] = useState<PickupLinkRecord[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -969,7 +969,7 @@ function AnnotationLinkPane({
     if (!projectId) return;
     setLoading(true);
     try {
-      const next = await listTakeoffLinks(projectId, annotationId);
+      const next = await listPickupLinks(projectId, pickupId);
       setLinks(next);
       setError(null);
     } catch (err) {
@@ -977,7 +977,7 @@ function AnnotationLinkPane({
     } finally {
       setLoading(false);
     }
-  }, [annotationId, projectId]);
+  }, [pickupId, projectId]);
 
   useEffect(() => {
     void reload();
@@ -987,7 +987,7 @@ function AnnotationLinkPane({
     async (linkId: string) => {
       if (!projectId) return;
       try {
-        await deleteTakeoffLink(projectId, linkId);
+        await deletePickupLink(projectId, linkId);
         await reload();
         onLinksMutated();
       } catch (err) {
@@ -1098,7 +1098,7 @@ function CreateLinkForm({
   onCreated,
 }: {
   projectId: string;
-  annotation: TakeoffAnnotation;
+  annotation: Pickup;
   worksheets: WorkspaceWorksheet[];
   activeWorksheetId?: string;
   onCreated: () => void | Promise<void>;
@@ -1148,8 +1148,8 @@ function CreateLinkForm({
     setSubmitting(true);
     setError(null);
     try {
-      await createTakeoffLink(projectId, {
-        annotationId: annotation.id,
+      await createPickupLink(projectId, {
+        pickupId: annotation.id,
         worksheetItemId: itemId,
         quantityField,
         multiplier,
@@ -1265,7 +1265,7 @@ function SuggestSection({
   onCreated,
 }: {
   projectId: string;
-  annotation: TakeoffAnnotation;
+  annotation: Pickup;
   worksheets: WorkspaceWorksheet[];
   activeWorksheetId?: string;
   entityCategories: EntityCategory[];
@@ -1343,8 +1343,8 @@ function SuggestSection({
         const newItem = newItems.find((i) => !knownIds.has(i.id));
 
         if (newItem) {
-          await createTakeoffLink(projectId, {
-            annotationId: annotation.id,
+          await createPickupLink(projectId, {
+            pickupId: annotation.id,
             worksheetItemId: newItem.id,
           });
         }
@@ -1469,18 +1469,25 @@ function pickCategoryForSuggestion(
   return enabled.slice().sort((a, b) => a.order - b.order)[0] ?? null;
 }
 
-function formatAnnotationMeasurement(ann: TakeoffAnnotation): string | undefined {
+function formatAnnotationMeasurement(ann: Pickup): string | undefined {
   const m = ann.measurement;
   if (!m) return undefined;
   const parts: string[] = [];
+  const baseUnit = m.unit ?? "";
+  // For area-polygon producers (apps/web/lib/takeoff-math.ts) the unit
+  // already arrives in squared form (e.g. "ft²"). Append the dimension
+  // suffix only when the unit doesn't already carry it — otherwise we'd
+  // render "ft²²" / "ft³³" on screen.
+  const areaUnit = baseUnit.endsWith("²") || baseUnit.endsWith("2") ? baseUnit : `${baseUnit}²`;
+  const volumeUnit = baseUnit.endsWith("³") || baseUnit.endsWith("3") ? baseUnit : `${baseUnit}³`;
   if (typeof m.value === "number" && Number.isFinite(m.value)) {
-    parts.push(`${m.value.toFixed(2)} ${m.unit ?? ""}`.trim());
+    parts.push(`${m.value.toFixed(2)} ${baseUnit}`.trim());
   }
   if (typeof m.area === "number" && Number.isFinite(m.area) && m.area > 0) {
-    parts.push(`${m.area.toFixed(2)} ${m.unit ?? ""}²`.trim());
+    parts.push(`${m.area.toFixed(2)} ${areaUnit}`.trim());
   }
   if (typeof m.volume === "number" && Number.isFinite(m.volume) && m.volume > 0) {
-    parts.push(`${m.volume.toFixed(2)} ${m.unit ?? ""}³`.trim());
+    parts.push(`${m.volume.toFixed(2)} ${volumeUnit}`.trim());
   }
   return parts.join(" · ");
 }

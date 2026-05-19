@@ -52,6 +52,9 @@ import type {
   ScheduleTaskAssignment,
   SourceDocument,
   SummaryRow,
+  SymbolTemplate,
+  SymbolTemplateMetadata,
+  SymbolTemplateSourceBbox,
   User,
   WorksheetItem,
 } from "@bidwright/domain";
@@ -921,7 +924,7 @@ export function mapFileNode(n: any): FileNode {
   return { id: n.id, projectId: n.projectId, parentId: n.parentId ?? null, name: n.name, type: n.type as FileNode["type"], scope: n.scope ?? "project", fileType: n.fileType ?? undefined, size: n.size ?? undefined, documentId: n.documentId ?? undefined, storagePath: n.storagePath ?? undefined, metadata: (n.metadata as Record<string, unknown>) ?? {}, createdAt: toISO(n.createdAt), updatedAt: toISO(n.updatedAt), createdBy: n.createdBy ?? undefined };
 }
 
-export function mapTakeoffAnnotation(a: any) {
+export function mapPickup(a: any) {
   return {
     id: a.id,
     projectId: a.projectId,
@@ -943,17 +946,41 @@ export function mapTakeoffAnnotation(a: any) {
   };
 }
 
-export function mapTakeoffLink(l: any) {
+export function mapPickupLink(l: any) {
   return {
     id: l.id,
     projectId: l.projectId,
-    annotationId: l.annotationId,
+    pickupId: l.pickupId,
     worksheetItemId: l.worksheetItemId,
     quantityField: l.quantityField ?? "value",
     multiplier: l.multiplier ?? 1.0,
     derivedQuantity: l.derivedQuantity ?? 0,
     createdAt: toISO(l.createdAt),
     updatedAt: toISO(l.updatedAt),
+  };
+}
+
+export function mapSymbolTemplate(t: any): SymbolTemplate {
+  const sourceBbox = (t.sourceBbox as Record<string, unknown> | null) ?? {};
+  return {
+    id: t.id,
+    projectId: t.projectId,
+    symbol: t.symbol ?? "",
+    label: t.label ?? "",
+    storagePath: t.storagePath,
+    width: t.width ?? 0,
+    height: t.height ?? 0,
+    dpi: t.dpi ?? 150,
+    sourceDocumentId: t.sourceDocumentId ?? undefined,
+    sourcePage: t.sourcePage ?? 1,
+    sourceBbox: sourceBbox as SymbolTemplateSourceBbox | Record<string, never>,
+    threshold: t.threshold ?? 0.75,
+    crossScale: t.crossScale ?? false,
+    enabled: t.enabled ?? true,
+    metadata: ((t.metadata as Record<string, unknown>) ?? {}) as SymbolTemplateMetadata,
+    createdBy: t.createdBy ?? undefined,
+    createdAt: toISO(t.createdAt),
+    updatedAt: toISO(t.updatedAt),
   };
 }
 

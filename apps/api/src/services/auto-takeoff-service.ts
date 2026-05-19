@@ -39,7 +39,7 @@ export interface LineItemSuggestion {
 }
 
 export interface SuggestLineItemsResult {
-  annotationId: string;
+  pickupId: string;
   suggestions: LineItemSuggestion[];
   warnings: string[];
 }
@@ -96,14 +96,14 @@ function describeAnnotationType(t: string): string {
   return t;
 }
 
-export async function suggestLineItemsForAnnotation(
+export async function suggestLineItemsForPickup(
   projectId: string,
-  annotationId: string,
+  pickupId: string,
 ): Promise<SuggestLineItemsResult> {
   const warnings: string[] = [];
 
-  const annotation = (await prisma.takeoffAnnotation.findFirst({
-    where: { id: annotationId, projectId },
+  const annotation = (await prisma.pickup.findFirst({
+    where: { id: pickupId, projectId },
     select: {
       id: true,
       projectId: true,
@@ -116,7 +116,7 @@ export async function suggestLineItemsForAnnotation(
 
   if (!annotation) {
     return {
-      annotationId,
+      pickupId,
       suggestions: [],
       warnings: ["Annotation not found for this project."],
     };
@@ -128,7 +128,7 @@ export async function suggestLineItemsForAnnotation(
   });
   if (!project) {
     return {
-      annotationId,
+      pickupId,
       suggestions: [],
       warnings: ["Project not found."],
     };
@@ -190,7 +190,7 @@ export async function suggestLineItemsForAnnotation(
 
   if (candidates.length === 0) {
     return {
-      annotationId,
+      pickupId,
       suggestions: [],
       warnings: [
         "No catalog or rate-schedule items found for this organization. Add items to your catalog so AI can suggest matches.",
@@ -202,7 +202,7 @@ export async function suggestLineItemsForAnnotation(
     process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
   if (!apiKey) {
     return {
-      annotationId,
+      pickupId,
       suggestions: [],
       warnings: [
         "No LLM API key configured — cannot generate AI suggestions.",
@@ -301,12 +301,12 @@ export async function suggestLineItemsForAnnotation(
     warnings.push(
       `AI suggestion failed: ${err instanceof Error ? err.message : String(err)}`,
     );
-    return { annotationId, suggestions: [], warnings };
+    return { pickupId, suggestions: [], warnings };
   }
 
   if (suggestions.length === 0) {
     warnings.push("AI returned no matching items.");
   }
 
-  return { annotationId, suggestions, warnings };
+  return { pickupId, suggestions, warnings };
 }

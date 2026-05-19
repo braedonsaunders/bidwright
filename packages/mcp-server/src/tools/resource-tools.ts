@@ -65,7 +65,7 @@ type SourceBasis = {
   sourceName?: string;
   documentId?: string;
   pageNumber?: number;
-  annotationId?: string;
+  pickupId?: string;
   takeoffLinkId?: string;
   modelId?: string;
   modelElementId?: string;
@@ -860,7 +860,7 @@ async function findTakeoffHints(input: { q?: string; limit?: number; documentId?
         query: input.q,
         documentId: stringValue(annotation.documentId),
         pageNumber: numberValue(annotation.pageNumber),
-        annotationId: stringValue(annotation.id),
+        pickupId: stringValue(annotation.id),
         metadata: {
           annotationType: stringValue(annotation.annotationType),
           measurement,
@@ -1082,7 +1082,7 @@ export function registerResourceTools(server: McpServer) {
   );
 
   server.tool(
-    "listTakeoffAnnotations",
+    "listPickups",
     "List saved PDF/DWG takeoff annotations so an estimate row can cite or link drawing quantity evidence.",
     {
       q: z.string().optional().describe("Optional scope/symbol/label search to filter annotations."),
@@ -1118,7 +1118,7 @@ export function registerResourceTools(server: McpServer) {
             query: input.q,
             documentId: stringValue(annotation.documentId),
             pageNumber: numberValue(annotation.pageNumber),
-            annotationId: stringValue(annotation.id),
+            pickupId: stringValue(annotation.id),
             metadata: {
               annotationType: stringValue(annotation.annotationType),
               measurement,
@@ -1146,10 +1146,10 @@ export function registerResourceTools(server: McpServer) {
   );
 
   server.tool(
-    "linkTakeoffAnnotationToWorksheetItem",
+    "linkPickupToWorksheetItem",
     "Link a saved takeoff annotation to a worksheet item. This makes the row quantity derive from the PDF/DWG takeoff link and gives reviewers a trail back to the Takeoff tab.",
     {
-      annotationId: z.string(),
+      pickupId: z.string(),
       worksheetItemId: z.string(),
       quantityField: takeoffQuantityFieldSchema.default("value").describe("Measurement field to use from the annotation."),
       multiplier: z.coerce.number().finite().default(1).describe("Multiplier applied to the annotation measurement."),
@@ -1172,7 +1172,7 @@ export function registerResourceTools(server: McpServer) {
                 label: "Linked takeoff annotation",
                 matchType: "exact",
                 sourceQuality: "strong",
-                annotationId: input.annotationId,
+                pickupId: input.pickupId,
                 takeoffLinkId: stringValue(asObject(link).id),
                 metadata: {
                   quantityField: input.quantityField,

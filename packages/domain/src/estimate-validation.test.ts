@@ -216,7 +216,7 @@ test("takeoff-driven quantities pass when linked at workspace level", () => {
     estimateStrategy: {
       packagePlan: [{ id: "pkg-arch", name: "Architectural", bindings: { worksheetIds: ["ws-1"] } }],
     },
-    takeoffLinks: [{ id: "tol-1", worksheetItemId: "li-1" }],
+    pickupLinks: [{ id: "tol-1", worksheetItemId: "li-1" }],
   }));
 
   assert.equal(

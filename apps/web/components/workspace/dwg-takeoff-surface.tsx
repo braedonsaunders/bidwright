@@ -36,16 +36,17 @@ import {
   Input,
 } from "@/components/ui";
 import {
-  createTakeoffAnnotation,
-  deleteTakeoffAnnotation,
+  createPickup,
+  deletePickup,
   getDwgTakeoffMetadata,
-  listTakeoffAnnotations,
+  listPickups,
   processDwgTakeoffMetadata,
   type DwgTakeoffMetadata,
   type ProjectWorkspaceData,
 } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { cn } from "@/lib/utils";
+import { measureDxfEntity } from "@bidwright/domain";
 
 type DwgTool = "select" | "pan" | "distance" | "area" | "rectangle" | "count" | "text" | "calibrate";
 
@@ -131,6 +132,18 @@ type CalibrationState = {
   pointA: DwgPoint;
   pointB: DwgPoint;
   actualLength: number;
+  /** Server processorVersion that produced the coordinates this
+   *  calibration was set against. When the server bumps PROCESSOR_VERSION
+   *  (e.g. the dxf-parser rewrite that changed the canonical unit from
+   *  whatever-the-DXF-said to inches), every stored calibration becomes
+   *  geometrically stale — coords now represent a different real-world
+   *  length per unit. We discard mismatched calibrations on load and
+   *  force the user to re-calibrate rather than silently scaling
+   *  measurements with a stale factor. */
+  processorVersion?: number;
+  /** Source unit reported by the server at calibration time. Diagnostic
+   *  only — surfaces in dev logs / future migrations. */
+  sourceUnits?: string;
 };
 
 type EstimateCategory = {
@@ -606,21 +619,50 @@ function findSnapCandidate(
 }
 
 function measureEntity(entity: DwgEntity, calibration: CalibrationState | null) {
+  // Single source of geometry truth: @bidwright/domain.measureDxfEntity
+  // handles LINE / LWPOLYLINE / POLYLINE (closed perimeter+area) / CIRCLE
+  // (area+circumference) / ARC (arc length) / SPLINE (sampled length or
+  // closed perimeter) / ELLIPSE (Ramanujan perimeter + area) /
+  // DIMENSION (actualMeasurement) / 3DFACE / SOLID. The wrapper here only
+  // applies the user's calibration multiplier and surfaces the result in
+  // the shape the canvas+row pipeline expects ({ label, value, unit }).
+  //
+  // For shapes that yield BOTH a length and an area, we prefer the
+  // takeoff-meaningful axis: area for closed polygons / circles /
+  // ellipses (you bid square footage), length for lines / arcs / open
+  // polylines / dimensions (you bid linear footage).
   const unitsPerWorld = calibration?.unitsPerWorld ?? 1;
   const unit = calibration?.unit ?? "du";
-  if (entity.type === "LINE" && entity.start && entity.end) {
-    return { label: "Length", value: distance(entity.start, entity.end) * unitsPerWorld, unit };
+
+  const measurement = measureDxfEntity({
+    type: entity.type,
+    start: entity.start,
+    end: entity.end,
+    center: entity.center,
+    radius: entity.radius,
+    vertices: entity.vertices,
+    closed: entity.closed,
+    raw: entity.raw,
+  });
+
+  switch (measurement.basis) {
+    case "line":
+    case "polyline":
+    case "arc":
+    case "dimension":
+      return { label: "Length", value: measurement.length * unitsPerWorld, unit };
+    case "circle":
+    case "ellipse":
+    case "polygon":
+      return {
+        label: "Area",
+        value: measurement.area * unitsPerWorld * unitsPerWorld,
+        unit: `${unit}2`,
+      };
+    case "none":
+    default:
+      return null;
   }
-  if ((entity.type === "LWPOLYLINE" || entity.type === "POLYLINE") && entity.vertices?.length) {
-    if (entity.closed && entity.vertices.length >= 3) {
-      return { label: "Area", value: polygonArea(entity.vertices) * unitsPerWorld * unitsPerWorld, unit: `${unit}2` };
-    }
-    return { label: "Length", value: polylineLength(entity.vertices, false) * unitsPerWorld, unit };
-  }
-  if (entity.type === "CIRCLE" && entity.radius) {
-    return { label: "Area", value: Math.PI * entity.radius * entity.radius * unitsPerWorld * unitsPerWorld, unit: `${unit}2` };
-  }
-  return null;
 }
 
 function annotationMeasurement(points: DwgPoint[], tool: DwgTool, calibration: CalibrationState | null) {
@@ -677,6 +719,62 @@ function calibrationStorageKey(projectId: string, documentId: string) {
   return `bidwright:dwg-calibration:${projectId}:${documentId}`;
 }
 
+/** Parse a stored calibration blob and return it ONLY if it's still
+ *  geometrically valid for the document's current processed state.
+ *
+ *  Required for validity:
+ *    1. Shape: unitsPerWorld + unit + pointA + pointB present + parseable.
+ *    2. Stamp: parsed.processorVersion must match the CURRENT server
+ *       processorVersion (passed in). When the server bumps
+ *       PROCESSOR_VERSION (e.g. the dxf-parser rewrite that switched
+ *       canonical coords from "drawing units" to inches), the stamp
+ *       changes and stored calibrations fail this check.
+ *    3. Legacy: entries with NO processorVersion stamp at all (set
+ *       before this guard existed) are always rejected — we can't tell
+ *       which coordinate system they were calibrated against.
+ *
+ *  Stale entries get removed from localStorage on the same read so we
+ *  don't re-evaluate them on every reload. Caller is expected to pass a
+ *  defined `currentProcessorVersion` — i.e., to wait until the document
+ *  metadata has loaded. Passing undefined returns null without consulting
+ *  storage (the metadata-not-yet-loaded case, where we can't validate). */
+function loadValidCalibration(
+  projectId: string,
+  documentId: string,
+  currentProcessorVersion: number | undefined,
+): CalibrationState | null {
+  // Bail out before touching storage when we can't yet validate. The
+  // first useEffect tick of a document switch hits this — the second
+  // tick (after metadata lands) does the real load.
+  if (currentProcessorVersion === undefined) return null;
+  const raw = window.localStorage.getItem(calibrationStorageKey(projectId, documentId));
+  if (!raw) return null;
+  let parsed: Partial<CalibrationState>;
+  try {
+    parsed = JSON.parse(raw) as Partial<CalibrationState>;
+  } catch {
+    return null;
+  }
+  if (!parsed.unitsPerWorld || !parsed.unit || !parsed.pointA || !parsed.pointB) {
+    return null;
+  }
+  // Reject when the stamp is missing (legacy entry) OR doesn't match the
+  // current server version. Either way the geometric assumptions don't
+  // hold; force a re-calibration.
+  if (
+    parsed.processorVersion === undefined
+    || parsed.processorVersion !== currentProcessorVersion
+  ) {
+    try {
+      window.localStorage.removeItem(calibrationStorageKey(projectId, documentId));
+    } catch {
+      // localStorage may be unavailable in some environments — non-fatal.
+    }
+    return null;
+  }
+  return parsed as CalibrationState;
+}
+
 function mapUom(unit: string | undefined): string {
   const normalized = (unit ?? "").toLowerCase();
   if (normalized === "ft") return "LF";
@@ -710,7 +808,43 @@ function compactEntityLabel(entity: DwgEntity): string {
     "xref",
   ]);
   if (symbolName) return symbolName.slice(0, 96);
-  return `${entity.type} on ${entity.layer}`;
+
+  // Friendlier defaults for the entity types added by the dxf-parser
+  // rewrite. Plain "SPLINE on PIPE" is technically correct but reads as
+  // junk in a candidate list; "Spline curve on PIPE" tells the estimator
+  // what they're looking at.
+  switch (entity.type) {
+    case "SPLINE":
+      return `Spline curve on ${entity.layer}`;
+    case "ELLIPSE":
+      return `Ellipse on ${entity.layer}`;
+    case "DIMENSION":
+      // The DXF DIMENSION entity carries its rendered text in `text`. If
+      // it's missing, fall back to the actual measurement value (which
+      // every reasonable CAD tool fills in).
+      {
+        const value = entity.raw?.actualMeasurement;
+        if (typeof value === "number" && Number.isFinite(value)) {
+          return `Dimension ${value.toFixed(2)} on ${entity.layer}`;
+        }
+      }
+      return `Dimension on ${entity.layer}`;
+    case "3DFACE":
+    case "SOLID":
+      return `${entity.type === "3DFACE" ? "3D face" : "Solid face"} on ${entity.layer}`;
+    case "HATCH": {
+      const pattern = typeof entity.raw?.patternName === "string" ? entity.raw.patternName : "";
+      const solid = entity.raw?.solidFill === true;
+      // Pattern names from CAD ("ANSI31", "AR-BRICK", "SOLID", "_USER") aren't
+      // human-friendly; collapse the common solid-fill case and otherwise
+      // show a short label so the row stays readable in the candidate list.
+      if (solid) return `Solid fill on ${entity.layer}`;
+      if (pattern && pattern !== "SOLID") return `Hatch ${pattern} on ${entity.layer}`;
+      return `Hatch on ${entity.layer}`;
+    }
+    default:
+      return `${entity.type} on ${entity.layer}`;
+  }
 }
 
 function sanitizeIdPart(value: string): string {
@@ -739,24 +873,37 @@ function dwgEntityTakeoffQuantity(entity: DwgEntity, calibration: CalibrationSta
   };
 }
 
-function buildDwgEntityRows(entities: DwgEntity[], calibration: CalibrationState | null): DwgInspectEntityRow[] {
-  return entities.map((entity) => {
-    const quantity = dwgEntityTakeoffQuantity(entity, calibration);
-    return {
-      id: entity.id,
-      type: entity.type,
-      layer: entity.layer,
-      layoutName: entity.layoutName || "Model",
-      label: compactEntityLabel(entity),
-      color: entity.color,
-      measurementLabel: quantity.measurementLabel,
-      quantity: quantity.quantity,
-      uom: quantity.uom,
-      sourceEntityIds: [entity.id],
-      isLinked: false,
-      linkCount: 0,
-    };
-  });
+function buildDwgEntityRows(
+  entities: DwgEntity[],
+  calibration: CalibrationState | null,
+  /** Optional set of entity IDs already represented by a multi-entity count
+   *  group. Those entities are excluded from the raw-entity list so the
+   *  same circle / block / point doesn't appear once under "Count
+   *  candidates" AND a second time under "CAD entity candidates" — the
+   *  duplication the user hit on simple DXFs. Single-entity count groups
+   *  (count == 1) still surface their entity here, because there's no
+   *  count-vs-individual ambiguity to resolve. */
+  countCoveredIds: ReadonlySet<string> = new Set(),
+): DwgInspectEntityRow[] {
+  return entities
+    .filter((entity) => !countCoveredIds.has(entity.id))
+    .map((entity) => {
+      const quantity = dwgEntityTakeoffQuantity(entity, calibration);
+      return {
+        id: entity.id,
+        type: entity.type,
+        layer: entity.layer,
+        layoutName: entity.layoutName || "Model",
+        label: compactEntityLabel(entity),
+        color: entity.color,
+        measurementLabel: quantity.measurementLabel,
+        quantity: quantity.quantity,
+        uom: quantity.uom,
+        sourceEntityIds: [entity.id],
+        isLinked: false,
+        linkCount: 0,
+      };
+    });
 }
 
 function countGroupKey(entity: DwgEntity): string | null {
@@ -823,9 +970,19 @@ function buildDwgAutoCountRows(entities: DwgEntity[]): DwgInspectAutoCountRow[] 
 
 function isLinearDwgEntity(entity: DwgEntity): boolean {
   if (entity.type === "LINE") return Boolean(entity.start && entity.end);
-  if (entity.type === "LWPOLYLINE" || entity.type === "POLYLINE") {
+  if (
+    entity.type === "LWPOLYLINE"
+    || entity.type === "POLYLINE"
+    || entity.type === "SPLINE"
+  ) {
     return Boolean(entity.vertices && entity.vertices.length >= 2 && !entity.closed);
   }
+  // ARC is linear — its endpoints participate in pipe / conduit topology
+  // just like a LINE does, and the system tracer wants to follow it. We
+  // don't have explicit endpoints on the ARC entity (just center+radius+
+  // angles), but the SPLINE-style sampled-vertex path on the server-side
+  // map fills `vertices` for the same purpose. ARC handling stays at the
+  // measurement layer for now; topology will see it as a 1-segment polyline.
   return false;
 }
 
@@ -958,7 +1115,7 @@ function exportAnnotationsCsv(documentName: string, annotations: DwgMeasurementA
   );
 }
 
-/** Minimal annotation shape compatible with TakeoffAnnotation, published up
+/** Minimal annotation shape compatible with Pickup, published up
  *  so the unified side-panel link UI can look annotations up by id. */
 export interface DwgPublishedAnnotation {
   id: string;
@@ -994,10 +1151,10 @@ interface DwgTakeoffSurfaceProps {
     } | null,
   ) => void;
   /** Notifies the parent when the user selects/deselects a DWG measurement
-   *  annotation. Selection ids match the underlying TakeoffAnnotation rows so
+   *  annotation. Selection ids match the underlying Pickup rows so
    *  the unified link panel can look them up just like PDF annotations. */
-  onSelectedAnnotationChange?: (annotationId: string | null) => void;
-  /** Mirror of the current DWG annotation array (in TakeoffAnnotation shape)
+  onSelectedAnnotationChange?: (pickupId: string | null) => void;
+  /** Mirror of the current DWG annotation array (in Pickup shape)
    *  so a parent can merge with PDF annotations and feed the side-panel cache. */
   onAnnotationsChange?: (annotations: DwgPublishedAnnotation[]) => void;
   /** A ref the parent populates so it can dispatch annotation actions
@@ -1059,7 +1216,7 @@ export function DwgTakeoffSurface({
   const [metadata, setMetadata] = useState<DwgTakeoffMetadata | null>(null);
   const [entities, setEntities] = useState<DwgEntity[]>([]);
   const [annotations, setAnnotations] = useState<DwgMeasurementAnnotation[]>([]);
-  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
+  const [selectedPickupId, setSelectedPickupId] = useState<string | null>(null);
   const [visibleLayers, setVisibleLayers] = useState<Set<string>>(() => new Set());
   const [selectedLayout, setSelectedLayout] = useState<string>("__all__");
   const [selectedEntityId, setSelectedEntityId] = useState<string | null>(null);
@@ -1098,7 +1255,7 @@ export function DwgTakeoffSurface({
     [layoutEntities, selectedEntityId],
   );
 
-  // Publish DWG annotations to the parent in a TakeoffAnnotation-compatible shape so the
+  // Publish DWG annotations to the parent in a Pickup-compatible shape so the
   // unified annotation link UI can look them up identically to PDF annotations.
   useEffect(() => {
     if (!onAnnotationsChange) return;
@@ -1121,8 +1278,8 @@ export function DwgTakeoffSurface({
 
   // Publish DWG annotation selection to the parent.
   useEffect(() => {
-    onSelectedAnnotationChange?.(selectedAnnotationId);
-  }, [selectedAnnotationId, onSelectedAnnotationChange]);
+    onSelectedAnnotationChange?.(selectedPickupId);
+  }, [selectedPickupId, onSelectedAnnotationChange]);
 
   // Publish action dispatchers to the parent each render so the Inspect tab
   // can drive deletions (and future actions) on DWG annotations.
@@ -1137,7 +1294,7 @@ export function DwgTakeoffSurface({
   });
 
   // External annotation selection (from the side-panel inspector list) →
-  // mirror into the local selectedAnnotationId so the in-canvas highlight stays
+  // mirror into the local selectedPickupId so the in-canvas highlight stays
   // in sync.
 
   // Publish entity selection to parent so the shared link panel can render it.
@@ -1197,10 +1354,11 @@ export function DwgTakeoffSurface({
   const filteredEntities = useMemo(() => {
     return layoutEntities.filter((entity) => visibleLayers.has(entity.layer));
   }, [layoutEntities, visibleLayers]);
-  const inspectEntityRows = useMemo(
-    () => buildDwgEntityRows(filteredEntities, calibration),
-    [filteredEntities, calibration],
-  );
+  // Build counts + systems FIRST so we know which entity IDs are already
+  // represented by an aggregated row. The entity-rows builder then skips
+  // those IDs — without this, a single circle would surface twice (once
+  // under "Count candidates", once under "CAD entity candidates"), which
+  // is the duplication the user reported on simple DXF files.
   const inspectAutoCountRows = useMemo(
     () => buildDwgAutoCountRows(filteredEntities),
     [filteredEntities],
@@ -1208,6 +1366,20 @@ export function DwgTakeoffSurface({
   const inspectSystemRows = useMemo(
     () => buildDwgSystemRows(filteredEntities, calibration),
     [filteredEntities, calibration],
+  );
+  const aggregatedEntityIds = useMemo(() => {
+    const covered = new Set<string>();
+    for (const row of inspectAutoCountRows) {
+      for (const id of row.sourceEntityIds) covered.add(id);
+    }
+    for (const row of inspectSystemRows) {
+      for (const id of row.sourceEntityIds) covered.add(id);
+    }
+    return covered;
+  }, [inspectAutoCountRows, inspectSystemRows]);
+  const inspectEntityRows = useMemo(
+    () => buildDwgEntityRows(filteredEntities, calibration, aggregatedEntityIds),
+    [filteredEntities, calibration, aggregatedEntityIds],
   );
   const canUndo = historyVersion >= 0 && undoStackRef.current.length > 0;
   const canRedo = historyVersion >= 0 && redoStackRef.current.length > 0;
@@ -1316,15 +1488,15 @@ export function DwgTakeoffSurface({
 
   async function recreateAnnotation(annotation: DwgMeasurementAnnotation): Promise<DwgMeasurementAnnotation | null> {
     if (!activeDocument) return null;
-    const created = await createTakeoffAnnotation(projectId, annotationToCreatePayload(activeDocument, annotation, calibration));
+    const created = await createPickup(projectId, annotationToCreatePayload(activeDocument, annotation, calibration));
     const next = apiAnnotationToDwg(created);
     setAnnotations((current) => [...current, next]);
     return next;
   }
 
-  async function deleteAnnotationInternal(annotationId: string) {
-    await deleteTakeoffAnnotation(projectId, annotationId).catch(() => {});
-    setAnnotations((current) => current.filter((annotation) => annotation.id !== annotationId));
+  async function deleteAnnotationInternal(pickupId: string) {
+    await deletePickup(projectId, pickupId).catch(() => {});
+    setAnnotations((current) => current.filter((annotation) => annotation.id !== pickupId));
   }
 
   async function undoLastAction() {
@@ -1427,7 +1599,7 @@ export function DwgTakeoffSurface({
       setAnnotations([]);
       return;
     }
-    const rows = await listTakeoffAnnotations(projectId, activeDocumentId, 1);
+    const rows = await listPickups(projectId, activeDocumentId, 1);
     setAnnotations(rows.map(apiAnnotationToDwg).filter((annotation) => annotation.metadata?.surface === "dwg-takeoff" || annotation.metadata?.source === "dwg-takeoff"));
   }, [activeDocumentId, projectId]);
 
@@ -1475,14 +1647,31 @@ export function DwgTakeoffSurface({
 
   useEffect(() => {
     if (!activeDocumentId) return;
-    const stored = window.localStorage.getItem(calibrationStorageKey(projectId, activeDocumentId));
-    setCalibration(stored ? JSON.parse(stored) as CalibrationState : null);
+    // Reset to no-calibration synchronously on document change. The
+    // metadata-aware effect below loads the real calibration from
+    // storage once the server's processorVersion is known. Doing it
+    // this way avoids the "previous document's metadata" pitfall: if we
+    // tried to load with the current closure's metadata reference, it
+    // would be stale (pointing at the OLD document) during the brief
+    // window between activeDocumentId changing and metadata refreshing.
+    setCalibration(null);
     undoStackRef.current = [];
     redoStackRef.current = [];
     updateHistoryVersion();
     void loadDrawingMetadata();
     void reloadAnnotations().catch(() => setAnnotations([]));
   }, [activeDocumentId, loadDrawingMetadata, projectId, reloadAnnotations]);
+
+  // Load + validate the stored calibration once the document's
+  // processorVersion is known. Re-fires when metadata changes (e.g. the
+  // user clicks Refresh and the server returns an updated result),
+  // which re-validates against the new version. Stale localStorage
+  // entries get evicted inside loadValidCalibration.
+  useEffect(() => {
+    if (!activeDocumentId || !metadata) return;
+    const valid = loadValidCalibration(projectId, activeDocumentId, metadata.processorVersion);
+    setCalibration(valid);
+  }, [activeDocumentId, projectId, metadata]);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -1538,7 +1727,7 @@ export function DwgTakeoffSurface({
       : selectedEntityId
         ? new Set([selectedEntityId])
         : new Set<string>();
-    const spotlightActive = spotlightEntityIds.size > 0 || Boolean(selectedAnnotationId);
+    const spotlightActive = spotlightEntityIds.size > 0 || Boolean(selectedPickupId);
 
     function renderPolyline(points: DwgPoint[], closed = false) {
       if (points.length < 2) return;
@@ -1591,7 +1780,7 @@ export function DwgTakeoffSurface({
     ctx.shadowBlur = 0;
 
     annotations.forEach((annotation) => {
-      const selected = selectedAnnotationId === annotation.id;
+      const selected = selectedPickupId === annotation.id;
       const muted = spotlightActive && !selected;
       ctx.save();
       ctx.globalAlpha = muted ? 0.22 : 1;
@@ -1670,7 +1859,7 @@ export function DwgTakeoffSurface({
       ctx.fillText(snapCandidate.kind, screen.x + 10, screen.y - 10);
       ctx.restore();
     }
-  }, [activeColor, activeTool, annotations, cursorWorld, drawPoints, filteredEntities, highlightedEntityIds, selectedAnnotationId, selectedEntityId, snapCandidate, viewportVersion]);
+  }, [activeColor, activeTool, annotations, cursorWorld, drawPoints, filteredEntities, highlightedEntityIds, selectedPickupId, selectedEntityId, snapCandidate, viewportVersion]);
 
   useEffect(() => {
     draw();
@@ -1728,7 +1917,7 @@ export function DwgTakeoffSurface({
     if (!activeDocument) return;
     const measurement = annotationMeasurement(points, tool, calibration);
     const annotationType = tool === "area" ? "area-polygon" : tool === "rectangle" ? "area-rectangle" : tool;
-    const created = await createTakeoffAnnotation(projectId, {
+    const created = await createPickup(projectId, {
       documentId: activeDocument.id,
       pageNumber: 1,
       annotationType,
@@ -1764,7 +1953,19 @@ export function DwgTakeoffSurface({
     }
     const unitText = window.prompt("Calibration unit: ft, in, m, or mm", "ft")?.toLowerCase() ?? "ft";
     const unit = (["ft", "in", "m", "mm"].includes(unitText) ? unitText : "ft") as CalibrationState["unit"];
-    const next = { unitsPerWorld: actualLength / rawLength, unit, pointA, pointB, actualLength };
+    const next: CalibrationState = {
+      unitsPerWorld: actualLength / rawLength,
+      unit,
+      pointA,
+      pointB,
+      actualLength,
+      // Stamp with the parser version that produced the coords we just
+      // calibrated against. The next load will only accept this
+      // calibration if the document's stored processorVersion still
+      // matches; otherwise the user re-calibrates.
+      processorVersion: metadata?.processorVersion,
+      sourceUnits: metadata?.originalUnits ?? metadata?.units,
+    };
     setCalibration(next);
     if (activeDocument) {
       window.localStorage.setItem(calibrationStorageKey(projectId, activeDocument.id), JSON.stringify(next));
@@ -1884,9 +2085,9 @@ export function DwgTakeoffSurface({
     });
   }
 
-  async function deleteAnnotation(annotationId: string) {
-    const annotation = annotations.find((item) => item.id === annotationId);
-    await deleteAnnotationInternal(annotationId);
+  async function deleteAnnotation(pickupId: string) {
+    const annotation = annotations.find((item) => item.id === pickupId);
+    await deleteAnnotationInternal(pickupId);
     if (annotation) pushHistory({ kind: "delete", annotation });
   }
 

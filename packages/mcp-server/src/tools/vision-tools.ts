@@ -105,7 +105,7 @@ function isPdfSourceDocument(doc: any) {
   return !isIgnoredSourceDocument(fileName) && (fileType === "application/pdf" || fileType === "pdf" || fileName.endsWith(".pdf"));
 }
 
-/** Helper: save an array of matches as TakeoffAnnotation records via the API */
+/** Helper: save an array of matches as Pickup records via the API */
 async function saveMatchesAsAnnotations(opts: {
   documentId: string;
   pageNumber: number;
@@ -322,7 +322,7 @@ INPUTS:
 - pageNumber: Page to search (1-based)
 - boundingBox: Tight bounding box around ONE example of the symbol — coordinates in renderDrawingPage's image coordinate space
 - threshold: Match confidence (0.3-0.95). Default 0.65 works well. Lower = more matches but more false positives. Higher = fewer but more confident matches
-- autoSave: If true, automatically saves all matches as TakeoffAnnotation records in the project takeoff. Default false — set to true when you want to persist count results for the user
+- autoSave: If true, automatically saves all matches as Pickup records in the project takeoff. Default false — set to true when you want to persist count results for the user
 - crossScale: If true, matches at multiple scales (0.75x-1.25x) to find the same symbol even when rendered at different sizes. ESSENTIAL for cross-document searches where different CAD sources produce different-sized symbols. ~6x slower but finds symbols that single-scale misses. Default false for same-page, set to true for cross-document.
 
 OUTPUT: totalCount (number of matches), matches array with rect/confidence/text/method for each match, duration_ms, and any errors.
@@ -355,7 +355,7 @@ COMMON PITFALLS:
       boundingBox: z.object(boundingBoxSchema).describe("Bounding box around ONE example of the symbol to find — in renderDrawingPage coordinate space"),
       threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold. 0.75 is optimal (proven across 5 packages). Lower = more matches, higher = stricter"),
       crossScale: z.boolean().default(false).describe("Enable cross-scale matching (0.75x-1.25x). ESSENTIAL for cross-document searches. ~6x slower but catches different-sized renderings of the same symbol"),
-      autoSave: z.boolean().default(false).describe("If true, automatically persist all matches as TakeoffAnnotation records"),
+      autoSave: z.boolean().default(false).describe("If true, automatically persist all matches as Pickup records"),
     },
     async ({ documentId, pageNumber, boundingBox, threshold, crossScale, autoSave }) => {
       const result = await apiPost("/api/vision/count-symbols", {
@@ -511,7 +511,7 @@ WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use
   // ── saveCountAsAnnotations ─────────────────────────────────
   server.tool(
     "saveCountAsAnnotations",
-    `Save symbol count results as takeoff annotations in the project. Creates a TakeoffAnnotation record for each match location, preserving the detection metadata.
+    `Save symbol count results as takeoff annotations in the project. Creates a Pickup record for each match location, preserving the detection metadata.
 
 WHEN TO USE: After running countSymbols (with autoSave=false), call this to persist the results if the user confirms they look correct. This is the manual alternative to countSymbols' autoSave parameter — useful when you want to review results before saving.
 
@@ -1108,7 +1108,7 @@ OUTPUT: Candidate systems with segment IDs, total length in pixels, inferred top
     "saveDetectionsAsTakeoffMarks",
     `Persist reviewed drawing-intelligence detections as normal Bidwright takeoff marks.
 
-WHEN TO USE: After analyzeDrawingGeometry or traceDrawingSystems returns detections and you have reviewed/selected the ones to keep. This creates TakeoffAnnotation rows so the user can see, edit, group, and link them to worksheet items.
+WHEN TO USE: After analyzeDrawingGeometry or traceDrawingSystems returns detections and you have reviewed/selected the ones to keep. This creates Pickup rows so the user can see, edit, group, and link them to worksheet items.
 
 INPUT DETECTION SHAPES:
 - Linear detection: {id, kind:"line", label, points:[{x,y},{x,y}], measurement?}
@@ -1623,5 +1623,156 @@ COMMON PITFALLS:
         }],
       };
     }
+  );
+
+  // ── listProjectSymbolLibrary ────────────────────────────────
+  server.tool(
+    "listProjectSymbolLibrary",
+    `List every saved symbol template in the project's Symbol Library.
+
+WHEN TO USE: Before running runProjectSymbolLibrary, call this to confirm the project has saved templates and inspect them. Useful when the user asks "what symbols can we auto-count?" or "show me the project legend".
+
+OUTPUT: Per-template id, symbol token (e.g. "GFI"), label ("Standard duplex receptacle"), threshold, crossScale, enabled flag, sourceDocumentId/sourcePage (where the legend came from), and the lastRun summary when available.`,
+    {
+      enabledOnly: z.boolean().default(false).describe("If true, return only templates with enabled=true (those that would be included in a batch run)."),
+    },
+    async ({ enabledOnly }) => {
+      const projectId = getProjectId();
+      const qs = enabledOnly ? "?enabledOnly=1" : "";
+      const result = await apiGet(`/api/takeoff/${projectId}/symbol-templates${qs}`);
+      const templates = ((result as any)?.templates ?? []).map((t: any) => ({
+        id: t.id,
+        symbol: t.symbol,
+        label: t.label,
+        threshold: t.threshold,
+        crossScale: t.crossScale,
+        enabled: t.enabled,
+        sourceDocumentId: t.sourceDocumentId,
+        sourcePage: t.sourcePage,
+        lastRun: t.metadata?.lastRun ?? null,
+      }));
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ count: templates.length, templates }, null, 2),
+        }],
+      };
+    },
+  );
+
+  // ── runProjectSymbolLibrary ─────────────────────────────────
+  server.tool(
+    "runProjectSymbolLibrary",
+    `Run the project's Symbol Library against a drawing page or an entire document. Matches every enabled saved template in one batched pass (one PDF render, N OpenCV matches).
+
+WHEN TO USE: After the user has captured a legend with extract-legend and saved templates via the Symbol Library panel, this counts every saved symbol on the chosen page(s) in a single call. This is the few-shot scale-up to the manual countSymbols flow — instead of running countSymbols once per symbol type, all saved templates run together.
+
+INPUTS:
+- documentId: Document ID from listDrawingPages
+- pageNumber: 1-based page to scan, OR omit and set scope="document" to scan every page in the document
+- scope: "page" (default) or "document"
+- autoSave: If true, persist each match as a Pickup (green count marks). Default false — set to true when the user confirms results look right.
+- templateIds: Optional array; restrict the run to specific saved templates. Omit to run every enabled template.
+
+OUTPUT (scope=page):
+{ documentId, pageNumber, imageWidth, imageHeight, dpi, duration_ms,
+  templateResults: [{ templateId, symbol, label, totalCount, matches:[{x,y,w,h,confidence}], savedAnnotationIds }],
+  errors }
+
+OUTPUT (scope=document): one entry per page in the pages array plus a grandTotal across templates and pages.
+
+TIPS:
+- Run scope="page" first while the user is reviewing one drawing; switch to scope="document" only after they confirm the per-page results look right.
+- A template's threshold lives on the template row — change it via the UI or by updating metadata; this tool does not override per-call.
+- crossScale is also per-template. The library defaults to single-scale (faster); set crossScale=true on individual templates when symbols are rendered at varying sizes across the package.`,
+    {
+      documentId: z.string().describe("Document ID of the target PDF drawing"),
+      pageNumber: z.coerce.number().int().min(1).optional().describe("1-based page number. Required when scope='page'."),
+      scope: z.enum(["page", "document"]).default("page").describe("'page' = one page, 'document' = every page in the document"),
+      autoSave: z.boolean().default(false).describe("Persist each match as a Pickup"),
+      templateIds: z.array(z.string()).optional().describe("Restrict to specific saved template ids. Default: all enabled templates."),
+    },
+    async ({ documentId, pageNumber, scope, autoSave, templateIds }) => {
+      const projectId = getProjectId();
+      if (scope === "document") {
+        const result = await apiPost(`/api/takeoff/${projectId}/symbol-templates/run-on-document`, {
+          documentId,
+          autoSave,
+          templateIds,
+        });
+        if ((result as any)?.message) {
+          return { content: [{ type: "text" as const, text: `Run failed: ${(result as any).message}` }] };
+        }
+        const pages = ((result as any)?.pages ?? []).map((p: any) => ({
+          pageNumber: p.pageNumber,
+          imageWidth: p.imageWidth,
+          imageHeight: p.imageHeight,
+          dpi: p.dpi,
+          totalsBySymbol: (p.templateResults ?? []).map((tr: any) => ({
+            templateId: tr.templateId,
+            symbol: tr.symbol,
+            label: tr.label,
+            totalCount: tr.totalCount,
+            savedAnnotationIds: tr.savedAnnotationIds ?? undefined,
+            error: tr.error,
+          })),
+          errors: p.errors?.length ? p.errors : undefined,
+        }));
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              documentId,
+              pageCount: (result as any)?.pageCount ?? pages.length,
+              grandTotal: (result as any)?.grandTotal ?? 0,
+              duration_ms: (result as any)?.duration_ms,
+              pages,
+            }, null, 2),
+          }],
+        };
+      }
+
+      if (!pageNumber) {
+        return { content: [{ type: "text" as const, text: "pageNumber is required when scope='page'" }] };
+      }
+      const result = await apiPost(`/api/takeoff/${projectId}/symbol-templates/run-on-page`, {
+        documentId,
+        pageNumber,
+        autoSave,
+        templateIds,
+      });
+      if ((result as any)?.message) {
+        return { content: [{ type: "text" as const, text: `Run failed: ${(result as any).message}` }] };
+      }
+      const summary = ((result as any)?.templateResults ?? []).map((tr: any) => ({
+        templateId: tr.templateId,
+        symbol: tr.symbol,
+        label: tr.label,
+        totalCount: tr.totalCount,
+        // Trim match payloads for the agent — the agent rarely needs every
+        // rect, just the totals + saved annotation ids when autoSave was on.
+        sampleMatches: (tr.matches ?? []).slice(0, 3).map((m: any) => ({
+          rect: { x: m.x, y: m.y, width: m.w, height: m.h },
+          confidence: m.confidence,
+        })),
+        savedAnnotationIds: tr.savedAnnotationIds,
+        error: tr.error,
+      }));
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            documentId,
+            pageNumber,
+            imageWidth: (result as any)?.imageWidth,
+            imageHeight: (result as any)?.imageHeight,
+            dpi: (result as any)?.dpi,
+            duration_ms: (result as any)?.duration_ms,
+            templateResults: summary,
+            errors: (result as any)?.errors?.length ? (result as any).errors : undefined,
+          }, null, 2),
+        }],
+      };
+    },
   );
 }

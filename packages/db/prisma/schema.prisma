@@ -203,9 +203,10 @@ model Project {
   ingestionJobs               IngestionJob[]
   workspaceState              WorkspaceState?
   pluginExecutions            PluginExecution[]
-  takeoffAnnotations          TakeoffAnnotation[]
-  takeoffLinks                TakeoffLink[]
+  pickups                     Pickup[]
+  pickupLinks                 PickupLink[]
   dwgEntityLinks              DwgEntityLink[]
+  symbolTemplates             SymbolTemplate[]
   modelAssets                 ModelAsset[]
   modelTakeoffLinks           ModelTakeoffLink[]
   modelRevisionDiffs          ModelRevisionDiff[]
@@ -242,6 +243,7 @@ model SourceDocument {
   citations   Citation[]
   modelAssets ModelAsset[]
   priceObservations PriceObservation[]
+  symbolTemplates SymbolTemplate[]
 
   @@index([projectId])
 }
@@ -420,7 +422,7 @@ model WorksheetItem {
   assemblyInstanceId String?
   assemblyInstance   AssemblyInstance? @relation(fields: [assemblyInstanceId], references: [id], onDelete: SetNull)
 
-  takeoffLinks      TakeoffLink[]
+  pickupLinks       PickupLink[]
   modelTakeoffLinks ModelTakeoffLink[]
   dwgEntityLinks    DwgEntityLink[]
 
@@ -928,9 +930,18 @@ model FileNode {
   @@index([scope])
 }
 
-// ── Takeoff Annotations ──────────────────────────────────────────────────
+// ── Pickups (everything in the takeoff Pickups panel) ───────────────────
+//
+// A Pickup is anything the estimator can promote into a worksheet line
+// item: hand-drawn annotations, Auto Count bundles, Smart Count items, and
+// any future source that produces a measurable mark on a drawing. The
+// concept replaces the older "TakeoffAnnotation" framing — the table /
+// model / API / UI all read "Pickup" end-to-end now. Schema shape stays
+// identical to TakeoffAnnotation; the `annotationType` column kept its
+// name so cached enum values ("linear", "count", "area-rectangle", …)
+// keep working without a data migration.
 
-model TakeoffAnnotation {
+model Pickup {
   id             String   @id @default(cuid())
   projectId      String
   project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
@@ -950,30 +961,30 @@ model TakeoffAnnotation {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  takeoffLinks TakeoffLink[]
+  pickupLinks PickupLink[]
 
   @@index([projectId])
   @@index([documentId])
 }
 
-// ── Takeoff Links (M:N junction: Annotation ↔ WorksheetItem) ────────────
+// ── Pickup Links (M:N junction: Pickup ↔ WorksheetItem) ──────────────────
 
-model TakeoffLink {
-  id              String            @id @default(cuid())
+model PickupLink {
+  id              String        @id @default(cuid())
   projectId       String
-  project         Project           @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  annotationId    String
-  annotation      TakeoffAnnotation @relation(fields: [annotationId], references: [id], onDelete: Cascade)
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pickupId        String
+  pickup          Pickup        @relation(fields: [pickupId], references: [id], onDelete: Cascade)
   worksheetItemId String
-  worksheetItem   WorksheetItem     @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
-  quantityField   String            @default("value") // "value" | "area" | "volume" | "count"
-  multiplier      Float             @default(1.0) // 1.1 = 10% waste
-  derivedQuantity Float             @default(0) // cached: measurement[quantityField] * multiplier
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
+  worksheetItem   WorksheetItem @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
+  quantityField   String        @default("value") // "value" | "area" | "volume" | "count"
+  multiplier      Float         @default(1.0) // 1.1 = 10% waste
+  derivedQuantity Float         @default(0) // cached: measurement[quantityField] * multiplier
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
 
-  @@unique([annotationId, worksheetItemId])
-  @@index([annotationId])
+  @@unique([pickupId, worksheetItemId])
+  @@index([pickupId])
   @@index([worksheetItemId])
   @@index([projectId])
 }
@@ -1005,6 +1016,63 @@ model DwgEntityLink {
   @@index([documentId])
   @@index([entityId])
   @@index([worksheetItemId])
+}
+
+// ── Symbol Library (Few-Shot from Legend) ────────────────────────────────
+//
+// A SymbolTemplate is a cropped image of one symbol from a drawing's legend,
+// stored per-project. After capturing the legend the user can run
+// "Count Project Library" on any drawing to detect every saved symbol at
+// once via OpenCV template matching.
+//
+// The PNG bytes live on disk at
+//   apiDataRoot/projects/<projectId>/symbol-templates/<id>.png
+// and only the relative path is stored in storagePath — matching the
+// SourceDocument.storagePath convention.
+
+model SymbolTemplate {
+  id               String          @id @default(cuid())
+  projectId        String
+  project          Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  // The short token from the legend ("A1", "GFI", "$"). May be empty when
+  // the legend cell only had a glyph and no readable text.
+  symbol           String          @default("")
+  // Human-readable label ("Standard duplex receptacle").
+  label            String          @default("")
+  // PNG storage path, relative to apiDataRoot. The on-disk file is the
+  // authoritative template image used by the OpenCV matcher.
+  storagePath      String
+  // Template image dimensions in pixels at the captured DPI. Used to size
+  // result rectangles back to the original symbol footprint.
+  width            Int             @default(0)
+  height           Int             @default(0)
+  dpi              Int             @default(150)
+  // Provenance: where in the legend the template was cropped from. SetNull
+  // so the template survives when the source document is deleted (the PNG
+  // is independent of the source PDF).
+  sourceDocumentId String?
+  sourceDocument   SourceDocument? @relation(fields: [sourceDocumentId], references: [id], onDelete: SetNull)
+  sourcePage       Int             @default(1)
+  // Source bbox in render-image-coord space:
+  // { x, y, width, height, imageWidth, imageHeight }
+  sourceBbox       Json            @default("{}")
+  // Per-template defaults. Caller can override at run time. Empirically
+  // validated optimum is threshold=0.75, crossScale=false for same-package
+  // matching; crossScale=true for cross-document searches.
+  threshold        Float           @default(0.75)
+  crossScale       Boolean         @default(false)
+  // Whether to include this template in "Run Project Library" batch runs.
+  // Lets the user mute noisy templates without deleting them.
+  enabled          Boolean         @default(true)
+  // Free-form metadata: legend extraction confidence, last-run statistics,
+  // user notes. Shape: SymbolTemplateMetadata in @bidwright/domain.
+  metadata         Json            @default("{}")
+  createdBy        String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([projectId])
+  @@index([sourceDocumentId])
 }
 
 // ── AI Runs ───────────────────────────────────────────────────────────────

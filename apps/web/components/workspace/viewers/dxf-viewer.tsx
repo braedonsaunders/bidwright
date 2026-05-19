@@ -1,3 +1,7 @@
+// File-tree DXF/DWG preview. This viewer is intentionally read-only — the
+// takeoff workflow lives in dwg-takeoff-surface.tsx, where entities turn
+// into worksheet candidates via the right-hand inspect panel. Adding
+// click-to-link here would compete with that surface.
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";

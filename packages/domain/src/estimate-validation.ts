@@ -77,7 +77,7 @@ export interface EstimateValidationWorksheetItemLike {
   tierUnits?: Record<string, number | string | null | undefined> | null;
   sourceNotes?: string | null;
   sourceEvidence?: unknown;
-  takeoffLinks?: unknown[] | null;
+  pickupLinks?: unknown[] | null;
   modelTakeoffLinks?: unknown[] | null;
   evidenceLinks?: unknown[] | null;
   citationIds?: string[] | null;
@@ -170,7 +170,7 @@ export interface EstimateValidationWorkspaceLike {
   estimateStrategy?: EstimateValidationStrategyLike | null;
   strategy?: EstimateValidationStrategyLike | null;
   packagePlan?: EstimateValidationPackagePlanEntryLike[] | null;
-  takeoffLinks?: EstimateValidationEvidenceLinkLike[] | null;
+  pickupLinks?: EstimateValidationEvidenceLinkLike[] | null;
   modelTakeoffLinks?: EstimateValidationEvidenceLinkLike[] | null;
   evidenceLinks?: EstimateValidationEvidenceLinkLike[] | null;
   rateScheduleItems?: EstimateValidationRateScheduleItemLike[] | null;
@@ -237,7 +237,7 @@ export interface EstimateValidationContext {
   categoryByName: Map<string, EstimateValidationEntityCategoryLike>;
   knownRateScheduleItemIds: Set<string>;
   knownTierIds: Set<string>;
-  takeoffLinksByItemId: Map<string, EstimateValidationEvidenceLinkLike[]>;
+  pickupLinksByItemId: Map<string, EstimateValidationEvidenceLinkLike[]>;
   modelTakeoffLinksByItemId: Map<string, EstimateValidationEvidenceLinkLike[]>;
   evidenceLinksByItemId: Map<string, EstimateValidationEvidenceLinkLike[]>;
   referenceDate: Date;
@@ -678,7 +678,7 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         }
 
         for (const link of [
-          ...(context.takeoffLinksByItemId.get(itemId) ?? []),
+          ...(context.pickupLinksByItemId.get(itemId) ?? []),
           ...(context.modelTakeoffLinksByItemId.get(itemId) ?? []),
           ...(context.evidenceLinksByItemId.get(itemId) ?? []),
         ]) {
@@ -1093,7 +1093,7 @@ function createValidationContext(
       asArray(workspace.rateScheduleTiers),
       asArray(workspace.rateSchedules).flatMap((schedule) => asArray(schedule.tiers)),
     ),
-    takeoffLinksByItemId: indexLinksByItemId(asArray(workspace.takeoffLinks)),
+    pickupLinksByItemId: indexLinksByItemId(asArray(workspace.pickupLinks)),
     modelTakeoffLinksByItemId: indexLinksByItemId(asArray(workspace.modelTakeoffLinks)),
     evidenceLinksByItemId: indexLinksByItemId(asArray(workspace.evidenceLinks)),
     referenceDate: parseDate(
@@ -1884,7 +1884,7 @@ function hasDirectQuantityEvidenceLink(
 ) {
   const itemId = normalizeText(item.id);
   if (itemId) {
-    if ((context.takeoffLinksByItemId.get(itemId)?.length ?? 0) > 0) {
+    if ((context.pickupLinksByItemId.get(itemId)?.length ?? 0) > 0) {
       return true;
     }
     if ((context.modelTakeoffLinksByItemId.get(itemId)?.length ?? 0) > 0) {
@@ -1896,7 +1896,7 @@ function hasDirectQuantityEvidenceLink(
   }
 
   const arrayEvidenceKeys = [
-    "takeoffLinks",
+    "pickupLinks",
     "modelTakeoffLinks",
     "evidenceLinks",
     "modelLinks",
@@ -1910,7 +1910,7 @@ function hasDirectQuantityEvidenceLink(
     item.modelTakeoffLinkId,
     item.evidenceLinkId,
     item.modelQuantityId,
-    item.annotationId,
+    item.pickupId,
   ].some((value) => !!normalizeText(value));
 }
 
@@ -1925,6 +1925,6 @@ function isQuantityEvidenceLink(value: unknown): boolean {
   if (Array.isArray(value.facets) && value.facets.some((facet) => normalizeToken(facet) === "quantity")) {
     return true;
   }
-  return ["derivedQuantity", "quantity", "measurement", "annotationId", "takeoffLinkId", "modelTakeoffLinkId"]
+  return ["derivedQuantity", "quantity", "measurement", "pickupId", "takeoffLinkId", "modelTakeoffLinkId"]
     .some((key) => value[key] !== undefined || nestedMetadataValue(value, key) !== undefined);
 }

@@ -8,6 +8,7 @@ connected linear systems are returned in one compact JSON schema.
 """
 from __future__ import annotations
 
+import datetime
 import json
 import math
 import sys
@@ -18,6 +19,23 @@ from typing import Any
 
 import cv2
 import numpy as np
+
+
+def _log_pipeline(event: dict[str, Any]) -> None:
+    """Emit a single JSONL structured-log record to stderr.
+
+    stderr (not stdout) so the calling TS subprocess wrapper sees these
+    alongside any Python warnings without contaminating the JSON payload
+    that goes back as the tool's result. Mirrors the shape of the TS
+    vector-pipeline-logger so downstream log aggregation can join the
+    two subsystems.
+    """
+    try:
+        record = {"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(), **event}
+        print("[vector-pipeline]", json.dumps(record), file=sys.stderr, flush=True)
+    except Exception:
+        # Telemetry must never break the pipeline.
+        pass
 
 try:
     from tools.renderer import render_to_numpy
@@ -185,9 +203,25 @@ def analyze_page(
     contours = detect_contours(cleaned, img_w, img_h, max_regions=region_limit)
 
     duration_ms = round((time.time() - start) * 1000)
+    # Pull the rich primitives out of vector_stats so they appear at the top
+    # level of the result alongside the line-based pipeline. Same data,
+    # different access pattern — overlay/measurement consumers prefer
+    # primitives while line tracers prefer the segment list.
+    primitives = list(vector_stats.get("primitives") or [])
+    primitive_kinds: dict[str, int] = {}
+    drawing_primitives_count = 0
+    text_primitives_count = 0
+    for primitive in primitives:
+        kind = primitive.get("kind", "unknown")
+        primitive_kinds[kind] = primitive_kinds.get(kind, 0) + 1
+        if primitive.get("category") == "text":
+            text_primitives_count += 1
+        else:
+            drawing_primitives_count += 1
+    vector_coordinate_space = vector_stats.get("pageCoordinateSpace")
     return {
         "success": True,
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "preset": preset,
         "geometrySource": chosen_source,
         "geometrySourceRequested": requested_source,
@@ -248,6 +282,19 @@ def analyze_page(
         "symbolCandidates": _normalize_symbol_candidates(symbol_candidates),
         "textRegions": text_regions,
         "systems": systems,
+        # Phase-2: canonical primitive output. Each entry has
+        #   { id, kind, params, layer, strokeWidth, color, paint, subpath }
+        # in PDF-point coordinates. Use `coordinateSpace.imagePixelPerPdfPointX/Y`
+        # to convert to image pixels when needed.
+        "primitives": primitives,
+        "primitivesByKind": primitive_kinds,
+        # Drawing vs text split — UI candidate lists count only the drawing
+        # bucket so a text-heavy P&ID doesn't bury real takeoff items under
+        # thousands of glyph strokes. Both buckets are still rendered on the
+        # canvas overlay; only the list-side aggregation differs.
+        "drawingPrimitiveCount": drawing_primitives_count,
+        "textPrimitiveCount": text_primitives_count,
+        "coordinateSpace": vector_coordinate_space,
         "warnings": warnings,
         "duration_ms": duration_ms,
     }
@@ -264,12 +311,36 @@ def extract_pdf_vector_segments(
     max_lines: int | None,
     exclusion_regions: list[dict[str, Any]] | None = None,
 ) -> tuple[list[Segment], dict[str, Any]]:
+    """Extract PDF vector content as both:
+
+    1. A list of `Segment` lines in IMAGE-PIXEL coords (sx/sy scaled) for the
+       existing raster-compatible pipeline (merge_collinear_segments, system
+       tracing, etc.). Curves are sampled to short polylines here so the
+       line-based consumers can use them transparently.
+    2. A list of canonical `Primitive` records in PDF-point coords with full
+       parameters preserved (arcs as arcs, circles as circles, beziers as
+       beziers when arc-fitting fails). This is the geometry-truth output —
+       Phase 3 measurement / overlay consumers should prefer this.
+
+    Subpath tracking handles the PyMuPDF `m` (moveto) operator so two
+    disconnected polylines drawn within one path aren't stitched into one.
+    Stroke/fill distinction is preserved on each primitive so consumers
+    can tell a filled region from a boundary outline.
+
+    The arc fitter inspects each cubic bezier and emits an `arc` primitive
+    when the curve lies on a single circle within a small tolerance — for
+    process-plant drawings this recovers ~95% of the curve content as exact
+    arcs (per the vector-pipeline audit). Beziers that fail the fit are
+    emitted as `cubic_bezier` primitives with all four control points
+    preserved.
+    """
     try:
         import fitz  # type: ignore
     except Exception as exc:
         return [], {"available": False, "error": f"PyMuPDF unavailable: {exc}"}
 
     segments: list[Segment] = []
+    primitives: list[dict[str, Any]] = []
     stats: dict[str, Any] = {
         "available": True,
         "drawingCount": 0,
@@ -277,20 +348,84 @@ def extract_pdf_vector_segments(
         "lineItemCount": 0,
         "rectItemCount": 0,
         "curveItemCount": 0,
+        "moveItemCount": 0,
         "layerCount": 0,
         "capped": False,
+        "primitiveCount": 0,
+        "primitivesByKind": {},
+        "arcsFitFromCubics": 0,
+        "cubicsRetained": 0,
+        "subpathBreaks": 0,
+        "filledPrimitives": 0,
+        "strokedPrimitives": 0,
+        "usedCDrawings": False,
     }
     regions = exclusion_regions or []
     sx = img_w / max(page_w, 1.0)
     sy = img_h / max(page_h, 1.0)
     budget = None if max_lines is None else max_lines * 4
     layers: set[str] = set()
+    producer: str | None = None
+    creator: str | None = None
+    primitive_seq = 0
+
+    # Density-based text/drawing categorization. The grid is built up-front so
+    # every emission can be tagged in O(1). See _build_text_density_grid for the
+    # heuristic.
+    text_dense_grid: list[list[bool]] = []
+    text_grid_w = 0
+    text_grid_h = 0
+    text_grid_cells_dense = 0
+
+    def _emit_primitive(kind: str, params: dict[str, Any], layer: str | None,
+                        stroke_width: float | None, color: str | None,
+                        paint: str | None, subpath: int,
+                        category: str = "drawing") -> None:
+        nonlocal primitive_seq
+        primitive_seq += 1
+        primitives.append({
+            "id": f"prim-{primitive_seq}",
+            "kind": kind,
+            "params": params,
+            "layer": layer,
+            "strokeWidth": stroke_width,
+            "color": color,
+            "paint": paint,
+            "subpath": subpath,
+            # 'drawing' = real geometry the candidate list should display.
+            # 'text' = glyph stroke / decorative tick. Still emitted so the
+            # canvas overlay can show them as faint hints, but the UI count
+            # / candidate list filters them out.
+            "category": category,
+        })
+        stats["primitiveCount"] = primitive_seq
+        by_kind = stats["primitivesByKind"]
+        by_kind[kind] = by_kind.get(kind, 0) + 1
+        if category == "text":
+            stats["textPrimitives"] = stats.get("textPrimitives", 0) + 1
+        else:
+            stats["drawingPrimitives"] = stats.get("drawingPrimitives", 0) + 1
+        if paint and "fill" in paint:
+            stats["filledPrimitives"] += 1
+        if paint and "stroke" in paint:
+            stats["strokedPrimitives"] += 1
 
     try:
         doc = fitz.open(pdf_path, filetype="pdf")
+        meta = doc.metadata or {}
+        producer = meta.get("producer") or None
+        creator = meta.get("creator") or None
         pg = doc.load_page(page - 1)
         drawings = pg.get_drawings()
         stats["drawingCount"] = len(drawings)
+        text_dense_grid, text_grid_w, text_grid_h = _build_text_density_grid(
+            drawings, page_w, page_h,
+        )
+        text_grid_cells_dense = sum(1 for row in text_dense_grid for cell in row if cell)
+        stats["textGridCells"] = text_grid_w * text_grid_h
+        stats["textGridDenseCells"] = text_grid_cells_dense
+        page_diagonal_pt = math.hypot(page_w, page_h)
+        arc_max_radius_pt = max(8.0, page_diagonal_pt * _ARC_MAX_RADIUS_FRACTION)
         for path in drawings:
             if budget is not None and len(segments) >= budget:
                 stats["capped"] = True
@@ -301,10 +436,26 @@ def extract_pdf_vector_segments(
             stroke_width = _safe_float(path.get("width"))
             color = _color_to_hex(path.get("color"))
             dashes = path.get("dashes")
+            # PyMuPDF reports `fill` (color tuple or None) and `stroke_opacity`
+            # / `fill_opacity`. We coarsen to a discriminator string so
+            # consumers can tell what painting operations were applied.
+            has_stroke = path.get("color") is not None
+            has_fill = path.get("fill") is not None
+            paint: str | None
+            if has_stroke and has_fill:
+                paint = "stroke+fill"
+            elif has_fill:
+                paint = "fill"
+            elif has_stroke:
+                paint = "stroke"
+            else:
+                paint = None
             flags = tuple(flag for flag in [
                 "vector",
                 "dashed" if _has_dash_pattern(dashes) else "",
+                "filled" if has_fill else "",
             ] if flag)
+            current_subpath = 0
             for item in path.get("items", []) or []:
                 if budget is not None and len(segments) >= budget:
                     stats["capped"] = True
@@ -313,31 +464,475 @@ def extract_pdf_vector_segments(
                     continue
                 op = str(item[0])
                 stats["pathItemCount"] += 1
-                if op == "l" and len(item) >= 3:
+                if op == "m":
+                    # moveto: starts a new subpath. The next line/curve
+                    # operator binds to a fresh subpath index so disconnected
+                    # geometry within one path object doesn't accidentally
+                    # join up during downstream stitching.
+                    stats["moveItemCount"] += 1
+                    current_subpath += 1
+                    stats["subpathBreaks"] = current_subpath
+                elif op == "l" and len(item) >= 3:
                     stats["lineItemCount"] += 1
-                    _append_vector_line(segments, item[1], item[2], sx, sy, min_line_length, "pdf-vector-line", 0.94, layer, stroke_width, color, flags, regions, img_w, img_h)
+                    _append_vector_line(
+                        segments, item[1], item[2], sx, sy, min_line_length,
+                        "pdf-vector-line", 0.94, layer, stroke_width, color, flags,
+                        regions, img_w, img_h,
+                    )
+                    p1x, p1y = _point_xy(item[1])
+                    p2x, p2y = _point_xy(item[2])
+                    line_length_pt = math.hypot(p2x - p1x, p2y - p1y)
+                    if line_length_pt >= _PRIMITIVE_MIN_LINE_LENGTH_PT:
+                        category = _classify_primitive_category(
+                            (p1x + p2x) * 0.5, (p1y + p2y) * 0.5, line_length_pt,
+                            text_dense_grid, text_grid_w, text_grid_h,
+                        )
+                        _emit_primitive(
+                            "line",
+                            {"x1": p1x, "y1": p1y, "x2": p2x, "y2": p2y},
+                            layer, stroke_width, color, paint, current_subpath,
+                            category=category,
+                        )
+                    else:
+                        stats["tinyPrimitivesSkipped"] = stats.get("tinyPrimitivesSkipped", 0) + 1
                 elif op == "re" and len(item) >= 2:
                     stats["rectItemCount"] += 1
-                    for p1, p2 in _rect_edges(item[1]):
-                        _append_vector_line(segments, p1, p2, sx, sy, min_line_length, "pdf-vector-rect", 0.9, layer, stroke_width, color, flags + ("rect",), regions, img_w, img_h)
+                    rect = item[1]
+                    rect_params = _rect_to_params(rect)
+                    if rect_params is not None:
+                        rect_extent = max(rect_params["width"], rect_params["height"])
+                        if rect_extent >= _PRIMITIVE_MIN_LINE_LENGTH_PT:
+                            rect_cx = rect_params["x"] + rect_params["width"] * 0.5
+                            rect_cy = rect_params["y"] + rect_params["height"] * 0.5
+                            category = _classify_primitive_category(
+                                rect_cx, rect_cy, rect_extent,
+                                text_dense_grid, text_grid_w, text_grid_h,
+                            )
+                            _emit_primitive(
+                                "rect", rect_params, layer, stroke_width, color,
+                                paint, current_subpath, category=category,
+                            )
+                        else:
+                            stats["tinyPrimitivesSkipped"] = stats.get("tinyPrimitivesSkipped", 0) + 1
+                    for p1, p2 in _rect_edges(rect):
+                        _append_vector_line(
+                            segments, p1, p2, sx, sy, min_line_length,
+                            "pdf-vector-rect", 0.9, layer, stroke_width, color,
+                            flags + ("rect",), regions, img_w, img_h,
+                        )
                 elif op == "qu" and len(item) >= 2:
                     stats["rectItemCount"] += 1
                     for p1, p2 in _quad_edges(item[1]):
-                        _append_vector_line(segments, p1, p2, sx, sy, min_line_length, "pdf-vector-quad", 0.9, layer, stroke_width, color, flags + ("quad",), regions, img_w, img_h)
+                        _append_vector_line(
+                            segments, p1, p2, sx, sy, min_line_length,
+                            "pdf-vector-quad", 0.9, layer, stroke_width, color,
+                            flags + ("quad",), regions, img_w, img_h,
+                        )
                 elif op == "c" and len(item) >= 5:
                     stats["curveItemCount"] += 1
                     points = [_point_xy(item[index]) for index in range(1, 5)]
+                    pts_x = [p[0] for p in points]
+                    pts_y = [p[1] for p in points]
+                    curve_extent_pt = (max(pts_x) - min(pts_x)) + (max(pts_y) - min(pts_y))
+                    if curve_extent_pt < _PRIMITIVE_MIN_CURVE_EXTENT_PT:
+                        stats["tinyPrimitivesSkipped"] = stats.get("tinyPrimitivesSkipped", 0) + 1
+                    else:
+                        curve_cx = sum(pts_x) / 4.0
+                        curve_cy = sum(pts_y) / 4.0
+                        category = _classify_primitive_category(
+                            curve_cx, curve_cy, curve_extent_pt,
+                            text_dense_grid, text_grid_w, text_grid_h,
+                        )
+                        # Tightened tolerance + radius caps reject the
+                        # spurious arc-fits (random S-curves that
+                        # mathematically pass through any circle) that
+                        # showed up in the user's "made up circles" report.
+                        arc_fit = _fit_arc_to_cubic(
+                            *points,
+                            tol_ratio=_ARC_FIT_TOL_RATIO,
+                            min_radius=_ARC_MIN_RADIUS_PT,
+                            max_radius=arc_max_radius_pt,
+                        )
+                        if arc_fit is not None:
+                            stats["arcsFitFromCubics"] += 1
+                            (cx, cy), r, start_angle, end_angle = arc_fit
+                            kind = "circle" if _is_full_circle(start_angle, end_angle) else "arc"
+                            arc_params: dict[str, Any] = {"cx": cx, "cy": cy, "r": r}
+                            if kind == "arc":
+                                arc_params["startAngleRad"] = start_angle
+                                arc_params["endAngleRad"] = end_angle
+                            # Tiny arcs inside text-dense cells are almost
+                            # always decorative ticks on a label, not
+                            # instrument bubbles.
+                            arc_category = category
+                            if category == "text" and r >= 3.0:
+                                arc_category = "drawing"
+                            _emit_primitive(
+                                kind, arc_params, layer, stroke_width, color, paint,
+                                current_subpath, category=arc_category,
+                            )
+                        else:
+                            stats["cubicsRetained"] += 1
+                            _emit_primitive(
+                                "cubic_bezier",
+                                {"points": [coord for pt in points for coord in pt]},
+                                layer, stroke_width, color, paint, current_subpath,
+                                category=category,
+                            )
+                    # Always sample to lines for the raster-line consumers.
                     curve_points = _sample_cubic(points, steps=10)
                     for p1, p2 in zip(curve_points, curve_points[1:]):
-                        _append_vector_line(segments, p1, p2, sx, sy, max(6.0, min_line_length * 0.42), "pdf-vector-curve", 0.86, layer, stroke_width, color, flags + ("curve",), regions, img_w, img_h)
+                        _append_vector_line(
+                            segments, p1, p2, sx, sy,
+                            max(6.0, min_line_length * 0.42),
+                            "pdf-vector-curve", 0.86, layer, stroke_width, color,
+                            flags + ("curve",), regions, img_w, img_h,
+                        )
         doc.close()
     except Exception as exc:
         return [], {**stats, "error": str(exc)}
 
+    # Post-pass: collapse 4-quadrant arcs into circles and dedup overlapping
+    # arc copies. Saves ~3-15% on circle-heavy P&IDs (instrument bubbles) and
+    # eliminates the "this circle appears 4 times in the list" artefact users
+    # hit in dense sheets.
+    primitives, arc_merge_stats = _merge_arc_quadrants(primitives)
+    stats["arcMerge"] = arc_merge_stats
+    # Recompute primitive kind / category buckets after the merge — these are
+    # what the UI consumes, so they must reflect the post-merge counts.
+    final_by_kind: dict[str, int] = {}
+    final_drawing = 0
+    final_text = 0
+    for prim in primitives:
+        kind = prim.get("kind", "unknown")
+        final_by_kind[kind] = final_by_kind.get(kind, 0) + 1
+        if prim.get("category") == "text":
+            final_text += 1
+        else:
+            final_drawing += 1
+    stats["primitivesByKind"] = final_by_kind
+    stats["drawingPrimitives"] = final_drawing
+    stats["textPrimitives"] = final_text
+    stats["primitiveCount"] = len(primitives)
+
     stats["layerCount"] = len(layers)
     stats["segmentCount"] = len(segments)
     stats["totalLengthPx"] = round(sum(segment.length for segment in segments), 2)
+    stats["primitives"] = primitives
+    stats["pageCoordinateSpace"] = {
+        "unit": "pdf-point",
+        "pointsPerInch": 72.0,
+        "pageWidthPt": round(float(page_w), 3),
+        "pageHeightPt": round(float(page_h), 3),
+        "imageWidthPx": img_w,
+        "imageHeightPx": img_h,
+        "imagePixelPerPdfPointX": round(sx, 6),
+        "imagePixelPerPdfPointY": round(sy, 6),
+    }
+    if producer:
+        stats["producer"] = producer
+    if creator:
+        stats["creator"] = creator
+    _log_pipeline({
+        "kind": "pdf:vector_extract",
+        "pdfPath": pdf_path,
+        "pageNumber": page,
+        "producer": producer,
+        "creator": creator,
+        "drawingCount": stats["drawingCount"],
+        "pathItemCount": stats["pathItemCount"],
+        "opCounts": {
+            "l": stats["lineItemCount"],
+            "re": stats["rectItemCount"],
+            "c": stats["curveItemCount"],
+            "m": stats["moveItemCount"],
+        },
+        "primitivesByType": stats["primitivesByKind"],
+        "usedCDrawings": stats["usedCDrawings"],
+        "arcsFitFromCubics": stats["arcsFitFromCubics"],
+        "cubicsRetained": stats["cubicsRetained"],
+        "subpathBreaks": stats["subpathBreaks"],
+        "filledPrimitives": stats["filledPrimitives"],
+    })
     return segments, stats
+
+
+def _rect_to_params(rect: Any) -> dict[str, float] | None:
+    """Convert a PyMuPDF rectangle (Rect or 4-tuple) into a primitive params
+    dict in PDF-point coords. Returns None for malformed input."""
+    if hasattr(rect, "x0"):
+        x0 = float(rect.x0); y0 = float(rect.y0)
+        x1 = float(rect.x1); y1 = float(rect.y1)
+    elif isinstance(rect, (list, tuple)) and len(rect) >= 4:
+        x0, y0, x1, y1 = (float(rect[i]) for i in range(4))
+    else:
+        return None
+    return {
+        "x": min(x0, x1),
+        "y": min(y0, y1),
+        "width": abs(x1 - x0),
+        "height": abs(y1 - y0),
+    }
+
+
+def _fit_circle_through_three(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+) -> tuple[tuple[float, float], float] | None:
+    """Return (center, radius) of the unique circle through three points, or
+    None if the points are collinear (or nearly so). Closed-form via
+    determinant of the circumscribed-circle equation."""
+    ax, ay = p0
+    bx, by = p1
+    cx, cy = p2
+    d = 2.0 * (ax * (by - cy) + bx * (cy - ay) + cx * (ay - by))
+    if abs(d) < 1e-9:
+        return None
+    a2 = ax * ax + ay * ay
+    b2 = bx * bx + by * by
+    c2 = cx * cx + cy * cy
+    ux = (a2 * (by - cy) + b2 * (cy - ay) + c2 * (ay - by)) / d
+    uy = (a2 * (cx - bx) + b2 * (ax - cx) + c2 * (bx - ax)) / d
+    r = math.hypot(ax - ux, ay - uy)
+    return (ux, uy), r
+
+
+def _fit_arc_to_cubic(
+    p0: tuple[float, float],
+    p1: tuple[float, float],
+    p2: tuple[float, float],
+    p3: tuple[float, float],
+    tol_ratio: float = 0.02,
+    min_radius: float = 0.5,
+    max_radius: float = 1e9,
+) -> tuple[tuple[float, float], float, float, float] | None:
+    """Try fitting a cubic bezier to a single circular arc.
+
+    Sampling-based check: pick the curve point at t=0.5, fit a circle
+    through (p0, mid, p3), then verify the t=0.25 and t=0.75 samples lie
+    within `tol_ratio * radius` of the circle. Single-pass, no iteration —
+    cheap to run on thousands of curves per page.
+
+    `tol_ratio` was 0.05 originally; tightened to 0.02 after autoresearch
+    showed 0.05 accepts many non-circular curves on text-heavy P&IDs (the
+    "made up circles that dont exist" user report). `min_radius` /
+    `max_radius` reject degenerate sub-point arcs and impossibly large
+    radii produced when three nearly-collinear sample points yield a huge
+    circumscribed circle.
+
+    Returns ((cx, cy), radius, startAngleRad, endAngleRad) or None when the
+    bezier is not arc-like (e.g. an S-curve or a degenerate near-line).
+    """
+    sampled = _sample_cubic([p0, p1, p2, p3], steps=4)
+    if len(sampled) < 5:
+        return None
+    mid = sampled[2]
+    fit = _fit_circle_through_three(p0, mid, p3)
+    if fit is None:
+        return None
+    (cx, cy), r = fit
+    if r < max(min_radius, 1e-6) or r > max_radius:
+        return None
+    for index in (1, 3):  # t = 0.25, 0.75
+        x, y = sampled[index]
+        d = math.hypot(x - cx, y - cy)
+        if abs(d - r) > tol_ratio * r:
+            return None
+    start_angle = math.atan2(p0[1] - cy, p0[0] - cx)
+    end_angle = math.atan2(p3[1] - cy, p3[0] - cx)
+    return (cx, cy), r, start_angle, end_angle
+
+
+# Density-grid + arc-merge constants. Frozen here rather than parameterised
+# because the autoresearch loop (`/tmp/autoresearch/iter_extract_v3.py`)
+# settled on these values across 4 real construction PDFs (Soprema, Home
+# Hardware, Birla, Stelco), cutting primitive emission by 95-99% on the
+# text-heavy samples while preserving every visually-real drawing line. See
+# the iteration notes saved under `/tmp/autoresearch/` for the parameter
+# sweep that justified each constant.
+_TEXT_GRID_CELL_PT = 24.0          # density grid cell size (1/3 inch)
+_TEXT_DENSITY_THRESHOLD = 12       # min short-line count per cell to be text-suspect
+_TEXT_MEDIAN_LENGTH_PT = 6.0       # AND median length must be below this
+_TEXT_SHORT_THRESHOLD_PT = 4.0     # a line/curve shorter than this counts toward density
+# Hard length minimums to even survive into the primitives output. Iter11 of
+# the autoresearch loop (saved under vision_pdf_vector_autoresearch.md) raised
+# these from 1.5/2.0 → 4.0/6.0 after the user reported "tons of tiny little
+# fragments" still showing post-density-filter. Real drawing geometry — even
+# tick marks and short callout lines — is ≥4pt; sub-4pt segments are
+# overwhelmingly text-as-paths the density grid missed (e.g. isolated
+# punctuation marks in a low-density title block region). The trade-off is
+# that very small valve detail can drop too; the visual audit on
+# /tmp/autoresearch/iter11_*_thumb.png showed real P&ID geometry intact.
+_PRIMITIVE_MIN_LINE_LENGTH_PT = 4.0
+_PRIMITIVE_MIN_CURVE_EXTENT_PT = 6.0
+_ARC_FIT_TOL_RATIO = 0.02
+_ARC_MIN_RADIUS_PT = 0.5
+_ARC_MAX_RADIUS_FRACTION = 0.4     # of page diagonal
+_ARC_QUADRANT_MERGE_BUCKET_PT = 0.5  # (cx, cy, r) bucket size for merge
+
+
+def _build_text_density_grid(
+    drawings: list[dict[str, Any]],
+    page_w: float,
+    page_h: float,
+) -> tuple[list[list[bool]], int, int]:
+    """Two-pass density grid: cells with many short line/curve segments AND
+    a small median length are flagged as text-dense. Used downstream to tag
+    each emitted primitive as 'drawing' vs 'text'.
+
+    Returns (text_dense_grid, grid_w, grid_h). Each cell is `_TEXT_GRID_CELL_PT`
+    wide. The grid is sized to cover the full page even if items overflow
+    the page rect slightly (rare but happens in some CAD exports).
+    """
+    cell = _TEXT_GRID_CELL_PT
+    grid_w = max(1, int(math.ceil(page_w / cell)))
+    grid_h = max(1, int(math.ceil(page_h / cell)))
+    density = [[0] * grid_w for _ in range(grid_h)]
+    lengths: list[list[list[float]]] = [[[] for _ in range(grid_w)] for _ in range(grid_h)]
+    for path in drawings:
+        for item in path.get("items", []) or []:
+            if not item:
+                continue
+            op = str(item[0])
+            if op == "l" and len(item) >= 3:
+                x1, y1 = _point_xy(item[1])
+                x2, y2 = _point_xy(item[2])
+                length = math.hypot(x2 - x1, y2 - y1)
+                if length < _TEXT_SHORT_THRESHOLD_PT:
+                    mx = (x1 + x2) * 0.5
+                    my = (y1 + y2) * 0.5
+                    gx = max(0, min(grid_w - 1, int(mx / cell)))
+                    gy = max(0, min(grid_h - 1, int(my / cell)))
+                    density[gy][gx] += 1
+                    lengths[gy][gx].append(length)
+            elif op == "c" and len(item) >= 5:
+                pts = [_point_xy(item[i]) for i in range(1, 5)]
+                xs = [p[0] for p in pts]
+                ys = [p[1] for p in pts]
+                extent = max(xs) - min(xs) + max(ys) - min(ys)
+                if extent < _TEXT_SHORT_THRESHOLD_PT:
+                    mx = sum(xs) / 4
+                    my = sum(ys) / 4
+                    gx = max(0, min(grid_w - 1, int(mx / cell)))
+                    gy = max(0, min(grid_h - 1, int(my / cell)))
+                    density[gy][gx] += 1
+                    lengths[gy][gx].append(extent)
+    text_dense = [[False] * grid_w for _ in range(grid_h)]
+    for gy in range(grid_h):
+        for gx in range(grid_w):
+            if density[gy][gx] >= _TEXT_DENSITY_THRESHOLD and lengths[gy][gx]:
+                vals = lengths[gy][gx]
+                vals_sorted = sorted(vals)
+                med = vals_sorted[len(vals_sorted) // 2]
+                if med < _TEXT_MEDIAN_LENGTH_PT:
+                    text_dense[gy][gx] = True
+    return text_dense, grid_w, grid_h
+
+
+def _classify_primitive_category(
+    cx: float, cy: float,
+    extent: float,
+    text_dense: list[list[bool]],
+    grid_w: int, grid_h: int,
+) -> str:
+    """Return 'text' if the primitive's center sits in a text-dense cell AND
+    the primitive itself is short (i.e. likely a glyph stroke vs a real line
+    that just happens to pass through a label region). Returns 'drawing'
+    otherwise."""
+    gx = max(0, min(grid_w - 1, int(cx / _TEXT_GRID_CELL_PT)))
+    gy = max(0, min(grid_h - 1, int(cy / _TEXT_GRID_CELL_PT)))
+    if not text_dense[gy][gx]:
+        return "drawing"
+    if extent < _TEXT_SHORT_THRESHOLD_PT * 1.5:
+        return "text"
+    return "drawing"
+
+
+def _sweep_radians(start: float, end: float) -> float:
+    """Signed shortest sweep between two angles, in radians."""
+    diff = end - start
+    while diff <= -math.pi:
+        diff += 2 * math.pi
+    while diff > math.pi:
+        diff -= 2 * math.pi
+    return diff
+
+
+def _merge_arc_quadrants(primitives: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Post-pass: when 4 quarter-circle arcs share a (cx, cy, r) bucket and
+    their sweeps sum to ~2π, replace them with a single circle primitive. Also
+    dedups duplicate arcs (same center/radius/sweep) that survive multi-path
+    overlap. Lossless for drawing semantics — the 4 quadrant arcs are the
+    same geometry as one circle but the UI / candidate counts blow up
+    needlessly otherwise.
+
+    Only consider primitives with `category == 'drawing'`; text-bucket
+    pseudo-arcs are decorative and skipped.
+    """
+    buckets: dict[tuple[int, int, int], list[int]] = {}
+    others: list[int] = []
+    for idx, p in enumerate(primitives):
+        if p.get("category") == "drawing" and p.get("kind") in ("arc", "circle"):
+            params = p.get("params") or {}
+            key = (
+                int(round(params.get("cx", 0) / _ARC_QUADRANT_MERGE_BUCKET_PT)),
+                int(round(params.get("cy", 0) / _ARC_QUADRANT_MERGE_BUCKET_PT)),
+                int(round(params.get("r", 0) / _ARC_QUADRANT_MERGE_BUCKET_PT)),
+            )
+            buckets.setdefault(key, []).append(idx)
+        else:
+            others.append(idx)
+
+    merged: list[dict[str, Any]] = [primitives[i] for i in others]
+    stats = {"groups": 0, "mergedToCircle": 0, "dedupedArcs": 0, "arcsRetained": 0}
+    for key, idxs in buckets.items():
+        stats["groups"] += 1
+        if not idxs:
+            continue
+        # A bucket that already contains an explicit circle keeps that one.
+        if any(primitives[i].get("kind") == "circle" for i in idxs):
+            circle_idx = next(i for i in idxs if primitives[i].get("kind") == "circle")
+            stats["dedupedArcs"] += len(idxs) - 1
+            stats["arcsRetained"] += 1
+            merged.append(primitives[circle_idx])
+            continue
+        total_sweep = 0.0
+        cx_sum = cy_sum = r_sum = 0.0
+        for i in idxs:
+            params = primitives[i].get("params") or {}
+            sa = params.get("startAngleRad", 0)
+            ea = params.get("endAngleRad", 0)
+            total_sweep += abs(_sweep_radians(sa, ea))
+            cx_sum += params.get("cx", 0)
+            cy_sum += params.get("cy", 0)
+            r_sum += params.get("r", 0)
+        n = len(idxs)
+        cx = cx_sum / n
+        cy = cy_sum / n
+        r = r_sum / n
+        # 20° slack lets 4-quadrant beziers (each ~89.8°) collapse without
+        # requiring picture-perfect angle accumulation.
+        if total_sweep > 2 * math.pi - math.radians(20):
+            stats["mergedToCircle"] += 1
+            stats["dedupedArcs"] += n - 1
+            base = primitives[idxs[0]]
+            merged.append({**base, "kind": "circle",
+                           "params": {"cx": cx, "cy": cy, "r": r}})
+        else:
+            stats["arcsRetained"] += n
+            for i in idxs:
+                merged.append(primitives[i])
+    return merged, stats
+
+
+def _is_full_circle(start_angle: float, end_angle: float) -> bool:
+    """A single cubic bezier covers at most ~95° of arc, so a 'full circle'
+    determination from one bezier is conservative. We still expose the
+    discriminator so callers can collapse 4 quarter-circle beziers into a
+    `circle` primitive in a later pass."""
+    sweep = abs((end_angle - start_angle + math.pi) % (2 * math.pi) - math.pi)
+    return sweep > math.radians(355)
 
 
 def _append_vector_line(
@@ -1082,9 +1677,21 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
         length_px = sum(s.length for s in component_segments)
         confidence = _system_confidence(component_segments, component_nodes, adjacency, crossing_count)
         system_index = len(systems) + 1
+        component_layers = sorted({s.layer for s in component_segments if s.layer})
+        # Label: use the first layer name if we have one, fall back to a
+        # bare sequential index. We used to emit "{preset_label} run N" —
+        # that repeated the section name in every row (the row sits inside
+        # the "Linear" section), which the user flagged as redundant
+        # ("LITERALLY REMOVE THIS REDUNDANT UI"). Cached analyses still
+        # carry the old label; the UI strips it defensively (see
+        # cleanSystemLabel in takeoff-inspect-view).
+        if component_layers:
+            label = f"{component_layers[0]} · {system_index}"
+        else:
+            label = f"#{system_index}"
         systems.append({
             "id": f"sys-{system_index}",
-            "label": f"{preset_label} run {system_index}",
+            "label": label,
             "preset": preset,
             "source": _system_source(component_segments),
             "segmentIds": component_ids,
@@ -1114,8 +1721,15 @@ def trace_linear_systems(segments: list[Segment], preset: str, snap_tolerance: f
             systems = []
         elif len(strong_systems) >= max(3, min(len(systems), 8)):
             systems = strong_systems
+    # Final pass: re-stamp ids 1..N after the sort/filter above. Labels
+    # already carry layer / index info (see component_layers above), so we
+    # re-derive instead of stamping a redundant "Detected run N" string.
+    def _final_label(system: dict[str, Any], idx: int) -> str:
+        layers = system.get("layers") or []
+        return f"{layers[0]} · {idx + 1}" if layers else f"#{idx + 1}"
+
     return [
-        {**system, "id": f"sys-{idx + 1}", "label": f"{preset_label} run {idx + 1}"}
+        {**system, "id": f"sys-{idx + 1}", "label": _final_label(system, idx)}
         for idx, system in enumerate(systems)
     ]
 

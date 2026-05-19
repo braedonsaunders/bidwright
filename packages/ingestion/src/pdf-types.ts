@@ -104,6 +104,22 @@ export interface PageImage {
   base64?: string;
 }
 
+/** A single cell of an extracted table, with optional bounding box. */
+export interface ExtractedTableCell {
+  rowIndex: number;
+  columnIndex: number;
+  content: string;
+  kind?: 'columnHeader' | 'rowHeader' | 'content' | 'stub';
+  /**
+   * Axis-aligned bounding box of the cell on its page, in page-inch coordinates
+   * (Azure Document Intelligence v4 default unit). Multiply by render DPI to
+   * convert to pixel coordinates at a chosen rendering resolution. Absent when
+   * the table came from a parser that does not surface cell geometry
+   * (e.g. markdown-fallback paths).
+   */
+  bbox?: { x: number; y: number; width: number; height: number };
+}
+
 /** A table extracted from a document. */
 export interface ExtractedTable {
   pageNumber: number;
@@ -111,6 +127,12 @@ export interface ExtractedTable {
   headers: string[];
   rows: string[][];
   rawMarkdown: string;
+  /**
+   * Cell-level data including bounding boxes when the underlying parser
+   * provides them. Consumers that only need text can keep using `headers`
+   * and `rows`. Used by symbol-legend-service to crop legend glyphs.
+   */
+  cells?: ExtractedTableCell[];
 }
 
 // ---------------------------------------------------------------------------
