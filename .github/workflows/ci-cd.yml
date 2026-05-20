@@ -162,18 +162,29 @@ jobs:
       - verify
       - publish
       - changes
-    # Production lives on the on-prem Dokploy/Swarm cluster (project
-    # "bidwright" at https://cloud.rassaun.com). The deploy step just
-    # POSTs to a Dokploy webhook URL — Dokploy then runs `docker stack
-    # deploy` on dokploy-mgr, which resolves `:latest` from GHCR and
-    # rolls each service to the new digest. No SSH, no self-hosted
-    # runners, no LAN dependency.
+    # Production lives on the on-prem Dokploy/Docker cluster (project
+    # "bidwright" at https://cloud.rassaun.com). The deploy job runs on
+    # a self-hosted, ephemeral GitHub Actions runner that lives ON the
+    # Dokploy manager node (the "github-runners" Dokploy project, service
+    # `bidwright-runner`). That runner sits on dokploy-network so it can
+    # reach dokploy-postgres + the Dokploy API directly by service name.
     #
-    # For a sha-pinned rollback, set BIDWRIGHT_TAG=sha-<old-short> in the
-    # Dokploy UI (Environment tab on the bidwright compose) and click
-    # Deploy — every commit's sha-tagged image is preserved in GHCR by
-    # the publish job above.
-    runs-on: ubuntu-latest
+    # Why not ubuntu-latest + public webhook?
+    #   Dokploy's deploy command is `docker compose up -d --build
+    #   --remove-orphans` — it does NOT pull new `:latest` digests, so a
+    #   webhook against the public URL with no env change is a no-op.
+    #   We need to bump BIDWRIGHT_TAG in Dokploy's stored env (postgres
+    #   `compose.env` column) so `docker compose` sees the service config
+    #   changed and pulls the new sha-pinned image. The env mutation has
+    #   to happen LAN-side; the runner-on-Dokploy pattern is the cleanest
+    #   path that requires no public-internet-reachable Dokploy API.
+    #
+    # Security: PRs from forks NEVER reach this job (it's gated on
+    # `push && main && ENABLE_SERVER_DEPLOY`). The runner is ephemeral
+    # (fresh container per job), has no docker.sock mount, no host
+    # filesystem mount, and only opens network sockets to dokploy-postgres
+    # + dokploy:3000.
+    runs-on: [self-hosted, linux, x64, dokploy]
     timeout-minutes: 15
     environment: production
     if: >
@@ -186,22 +197,50 @@ jobs:
       group: bidwright-production-deploy
       cancel-in-progress: false
 
-    steps:
-      - name: Assert deploy configuration
-        env:
-          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_BIDWRIGHT_WEBHOOK }}
-        run: test -n "$DOKPLOY_WEBHOOK"
+    env:
+      # The Dokploy compose row name (matches `compose.name` in the
+      # Dokploy postgres). Distinct from `appName`; this is the
+      # human-friendly identifier shown in the UI.
+      COMPOSE_NAME: bidwright
+      # The .env variable in that compose's stored env whose value
+      # we bump to the new sha tag.
+      TAG_ENV_KEY: BIDWRIGHT_TAG
 
-      - name: Trigger Dokploy redeploy
+    steps:
+      - name: Install postgres-client + curl in the ephemeral runner
+        run: |
+          # Ephemeral runner starts fresh each job; install the two
+          # binaries the deploy step needs. ~10s.
+          apt-get update -q
+          apt-get install -yq --no-install-recommends postgresql-client curl ca-certificates
+          psql --version
+
+      - name: Pin tag in Dokploy env + trigger redeploy
         env:
-          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_BIDWRIGHT_WEBHOOK }}
+          PGPASSWORD: ${{ secrets.DOKPLOY_PG_PASSWORD }}
+          REFRESH_TOKEN: ${{ secrets.DOKPLOY_REFRESH_TOKEN }}
         run: |
           set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          echo "Triggering Dokploy redeploy for bidwright (commit ${SHORT_SHA})…"
-          # Dokploy responds with {"message":"Compose deployed successfully"}
-          # synchronously after kicking off the background `docker stack deploy`.
-          # The actual rollout completes in ~30–90s on dokploy-mgr.
-          response=$(curl -sf -X GET --max-time 30 "$DOKPLOY_WEBHOOK")
+          NEW_TAG="sha-${SHORT_SHA}"
+          echo "Pinning ${TAG_ENV_KEY}=${NEW_TAG} on Dokploy compose '${COMPOSE_NAME}'…"
+
+          # Update the compose's stored env (postgres is the source of truth;
+          # Dokploy writes it to disk on each deploy). Bare-quotes the
+          # constants to keep psql/regex sane.
+          psql -h dokploy-postgres -U dokploy -d dokploy -v ON_ERROR_STOP=1 <<SQL
+          UPDATE compose
+          SET env = regexp_replace(env, '${TAG_ENV_KEY}=[^\n]*', '${TAG_ENV_KEY}=${NEW_TAG}')
+          WHERE name = '${COMPOSE_NAME}';
+          SELECT
+            (regexp_match(env, '${TAG_ENV_KEY}=([^\n]+)'))[1] AS confirmed_tag
+          FROM compose WHERE name = '${COMPOSE_NAME}';
+          SQL
+
+          echo "Triggering Dokploy redeploy…"
+          # Synchronous: Dokploy waits for compose-up to finish before
+          # responding. Allow generous time for image pull on first run.
+          response=$(curl -sf -X GET --max-time 300 \
+            "http://dokploy:3000/api/deploy/compose/${REFRESH_TOKEN}")
           echo "Dokploy response: $response"
-          echo "::notice title=Deploy triggered::Bidwright commit ${SHORT_SHA} redeploy kicked off. Watch progress at https://cloud.rassaun.com → bidwright → Logs."
+          echo "::notice title=Deploy complete::Bidwright pinned to ${NEW_TAG} and redeployed. UI: https://cloud.rassaun.com"
