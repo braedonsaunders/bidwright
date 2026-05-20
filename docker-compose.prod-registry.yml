@@ -1,27 +1,40 @@
-# Production compose — Dokploy / swarm registry mode.
+# Production compose — Dokploy compose mode (NOT swarm/stack mode).
 #
 # This file is the source of truth for what runs in production on the
-# Dokploy/Swarm cluster (project "bidwright" in the Dokploy UI at
+# Dokploy/Docker cluster (project "bidwright" in the Dokploy UI at
 # https://cloud.rassaun.com). It is mirrored into Dokploy's compose
 # storage at /etc/dokploy/compose/bidwright/code/docker-compose.yml.
+#
+# IMPORTANT: this stack runs in Dokploy's `docker-compose` mode, NOT
+# `stack` mode. Reason: the api service needs `security_opt:
+# [seccomp:unconfined, apparmor:unconfined]` for bubblewrap (bwrap) to
+# work — bwrap sandboxes per-tenant CLI sessions (claude, codex, etc.)
+# via mount + pid + ipc + uts namespacing, and the docker-default
+# apparmor profile blocks bwrap's `mount --make-slave /` call even with
+# CAP_SYS_ADMIN. Docker Swarm (`docker stack deploy`) silently DROPS
+# `security_opt`; only standalone compose honors it. The composeType is
+# stored in Dokploy's postgres compose row — if you re-create this stack
+# from scratch, make sure to set composeType='docker-compose' (not 'stack').
 #
 # Image strategy:
 #   - CI pushes both `:latest` and `:sha-<short>` tags to GHCR on every
 #     successful build of the default branch (see .github/workflows/ci-cd.yml).
 #   - This compose references `:${BIDWRIGHT_TAG:-latest}`; the live Dokploy
-#     env keeps BIDWRIGHT_TAG=latest so each webhook redeploy resolves the
-#     freshest digest via `docker stack deploy` (default
-#     --resolve-image=always).
+#     env keeps BIDWRIGHT_TAG=latest so each webhook redeploy pulls the
+#     fresh digest.
 #   - For an immutable rollback, set BIDWRIGHT_TAG=sha-<old> in the
 #     Dokploy env tab and click Deploy.
 #
-# All services are pinned to dokploy-mgr because the persistent volumes
-# (postgres, bidwright-data, agent-home) are node-local. To move to a
-# different node, drain volumes first.
+# Persistent state is in four named volumes managed by Dokploy (data
+# lives under /var/lib/docker/volumes/bidwright_bidwright-{pgdata,
+# redisdata,data,agent-home}/_data). Volumes are declared `external`
+# so a future re-create of the compose project doesn't wipe data.
 #
-# The build-mode compose (docker-compose.prod.yml) is retained as a
-# non-Dokploy fallback for clean-room reproductions; it builds images
-# locally instead of pulling from GHCR.
+# Routing: external Traefik on .96 forwards bidwright.rassaun.com →
+# https://10.0.0.101:443 with insecureSkipVerify (single backend). The
+# path-priority routing (api at /api, web at /api/proxy + catch-all) is
+# expressed via service-level `labels:` here so Dokploy's internal
+# Traefik (docker provider, watch network: dokploy-network) picks them up.
 
 networks:
   default:
@@ -31,11 +44,8 @@ networks:
 services:
   postgres:
     image: pgvector/pgvector:pg16
+    restart: unless-stopped
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.hostname == dokploy-mgr
       resources:
         limits:
           memory: 2g
@@ -55,11 +65,8 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.hostname == dokploy-mgr
       resources:
         limits:
           memory: 512m
@@ -83,20 +90,12 @@ services:
   # drops, table drops) should be authored as explicit SQL with backfill
   # blocks where data preservation matters; `migrate deploy` will apply them
   # exactly as written.
-  #
-  # In swarm-mode the long-form `depends_on: {svc: {condition: ...}}` is
-  # rejected; ordering between db-migrate, api, and worker is enforced by
-  # healthcheck-driven retries instead (api/worker restart until migrations
-  # are applied).
   db-migrate:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
-    deploy:
-      replicas: 1
-      restart_policy:
-        condition: none
-      placement:
-        constraints:
-          - node.hostname == dokploy-mgr
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
     command: ["pnpm", "--filter", "@bidwright/db", "db:migrate"]
@@ -105,41 +104,40 @@ services:
 
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.hostname == dokploy-mgr
       resources:
         limits:
           memory: 2g
-      labels:
-        - traefik.enable=true
-        - traefik.swarm.network=dokploy-network
-        # Priority 20: /api/* -> API (overridden by web-proxy at /api/proxy)
-        - traefik.http.routers.bidwright-api.rule=Host(`bidwright.rassaun.com`) && PathPrefix(`/api`)
-        - traefik.http.routers.bidwright-api.priority=20
-        - traefik.http.routers.bidwright-api.entrypoints=websecure
-        - traefik.http.routers.bidwright-api.tls=true
-        - traefik.http.routers.bidwright-api.service=bidwright-api
-        - traefik.http.services.bidwright-api.loadbalancer.server.port=3001
     # CAP_SYS_ADMIN + relaxed seccomp/apparmor are required by bubblewrap
     # (BubblewrappedHost) for per-tenant pivot_root + mount inside CLI
     # session namespaces. Scope is the api container only; bwrap drops
     # all caps before exec'ing the actual CLI child.
-    #
-    # NOTE: Docker Swarm silently ignores service-level `security_opt`
-    # (you'll see "Ignoring unsupported options: security_opt" on deploy).
-    # cap_add IS honored. If multi-tenant bwrap calls fail under swarm's
-    # default apparmor/seccomp profiles, options are: (a) switch this
-    # service to composeType=docker-compose in Dokploy (which preserves
-    # security_opt), or (b) disable BIDWRIGHT_MULTITENANT and run
-    # single-tenant.
     cap_add:
       - SYS_ADMIN
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
+    # Service-level labels — Dokploy's Traefik docker provider reads
+    # these from the container labels (it does NOT read deploy.labels;
+    # that's swarm-only).
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      # Priority 20: /api/* -> API (overridden by web-proxy at /api/proxy below)
+      - traefik.http.routers.bidwright-api.rule=Host(`bidwright.rassaun.com`) && PathPrefix(`/api`)
+      - traefik.http.routers.bidwright-api.priority=20
+      - traefik.http.routers.bidwright-api.entrypoints=websecure
+      - traefik.http.routers.bidwright-api.tls=true
+      - traefik.http.routers.bidwright-api.service=bidwright-api
+      - traefik.http.services.bidwright-api.loadbalancer.server.port=3001
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
@@ -154,8 +152,8 @@ services:
       # Required for any multi-user deployment. bwrap ships setuid root in
       # the api image so no --privileged flag is needed.
       BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-true}"
-      # The db-migrate container applies pending migrations (`prisma migrate deploy`) before
-      # api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
+      # The db-migrate container applies pending migrations (`prisma migrate deploy`)
+      # before api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
       BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"
       # Workspace snapshot/restore — see docker-compose.prod.yml for env shape.
       WORKSPACE_STORAGE_PROVIDER: "${WORKSPACE_STORAGE_PROVIDER:-}"
@@ -192,32 +190,32 @@ services:
 
   web:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-web:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.hostname == dokploy-mgr
       resources:
         limits:
           memory: 1g
-      labels:
-        - traefik.enable=true
-        - traefik.swarm.network=dokploy-network
-        # Priority 30: /api/proxy/* -> WEB (Next.js owns the proxy route;
-        # this MUST outrank the api router below or the api would steal
-        # everything under /api).
-        - traefik.http.routers.bidwright-web-proxy.rule=Host(`bidwright.rassaun.com`) && PathPrefix(`/api/proxy`)
-        - traefik.http.routers.bidwright-web-proxy.priority=30
-        - traefik.http.routers.bidwright-web-proxy.entrypoints=websecure
-        - traefik.http.routers.bidwright-web-proxy.tls=true
-        - traefik.http.routers.bidwright-web-proxy.service=bidwright-web
-        # Priority 10: catch-all -> WEB (everything not /api/*)
-        - traefik.http.routers.bidwright-web.rule=Host(`bidwright.rassaun.com`)
-        - traefik.http.routers.bidwright-web.priority=10
-        - traefik.http.routers.bidwright-web.entrypoints=websecure
-        - traefik.http.routers.bidwright-web.tls=true
-        - traefik.http.routers.bidwright-web.service=bidwright-web
-        - traefik.http.services.bidwright-web.loadbalancer.server.port=3000
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=dokploy-network
+      # Priority 30: /api/proxy/* -> WEB (Next.js owns the proxy route;
+      # this MUST outrank the api router or the api would steal everything
+      # under /api).
+      - traefik.http.routers.bidwright-web-proxy.rule=Host(`bidwright.rassaun.com`) && PathPrefix(`/api/proxy`)
+      - traefik.http.routers.bidwright-web-proxy.priority=30
+      - traefik.http.routers.bidwright-web-proxy.entrypoints=websecure
+      - traefik.http.routers.bidwright-web-proxy.tls=true
+      - traefik.http.routers.bidwright-web-proxy.service=bidwright-web
+      # Priority 10: catch-all -> WEB (everything not /api/*)
+      - traefik.http.routers.bidwright-web.rule=Host(`bidwright.rassaun.com`)
+      - traefik.http.routers.bidwright-web.priority=10
+      - traefik.http.routers.bidwright-web.entrypoints=websecure
+      - traefik.http.routers.bidwright-web.tls=true
+      - traefik.http.routers.bidwright-web.service=bidwright-web
+      - traefik.http.services.bidwright-web.loadbalancer.server.port=3000
+    depends_on:
+      api:
+        condition: service_healthy
     environment:
       NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-https://bidwright.rassaun.com}"
       INTERNAL_API_BASE_URL: "http://api:3001"
@@ -233,14 +231,18 @@ services:
 
   worker:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-worker:${BIDWRIGHT_TAG:-latest}"
+    restart: unless-stopped
     deploy:
-      replicas: 1
-      placement:
-        constraints:
-          - node.hostname == dokploy-mgr
       resources:
         limits:
           memory: 1g
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      db-migrate:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
@@ -259,6 +261,14 @@ services:
 
 volumes:
   bidwright-pgdata:
+    external: true
+    name: bidwright_bidwright-pgdata
   bidwright-redisdata:
+    external: true
+    name: bidwright_bidwright-redisdata
   bidwright-data:
+    external: true
+    name: bidwright_bidwright-data
   bidwright-agent-home:
+    external: true
+    name: bidwright_bidwright-agent-home
