@@ -1,66 +1,77 @@
-# Production compose — registry mode.
+# Production compose — Dokploy / swarm registry mode.
 #
-# Mirrors docker-compose.prod.yml but pulls prebuilt images from GHCR
-# instead of building them on the deploy host. Pin BIDWRIGHT_TAG in
-# .env.server to a specific :sha-* tag for immutable releases; rolling
-# back is then a tag swap + `docker compose up -d`.
+# This file is the source of truth for what runs in production on the
+# Dokploy/Swarm cluster (project "bidwright" in the Dokploy UI at
+# https://cloud.rassaun.com). It is mirrored into Dokploy's compose
+# storage at /etc/dokploy/compose/bidwright/code/docker-compose.yml.
+#
+# Image strategy:
+#   - CI pushes both `:latest` and `:sha-<short>` tags to GHCR on every
+#     successful build of the default branch (see .github/workflows/ci-cd.yml).
+#   - This compose references `:${BIDWRIGHT_TAG:-latest}`; the live Dokploy
+#     env keeps BIDWRIGHT_TAG=latest so each webhook redeploy resolves the
+#     freshest digest via `docker stack deploy` (default
+#     --resolve-image=always).
+#   - For an immutable rollback, set BIDWRIGHT_TAG=sha-<old> in the
+#     Dokploy env tab and click Deploy.
+#
+# All services are pinned to dokploy-mgr because the persistent volumes
+# (postgres, bidwright-data, agent-home) are node-local. To move to a
+# different node, drain volumes first.
 #
 # The build-mode compose (docker-compose.prod.yml) is retained as a
-# documented fallback path. remote-deploy.sh selects between them via
-# the COMPOSE_FILE / DEPLOY_MODE variables.
+# non-Dokploy fallback for clean-room reproductions; it builds images
+# locally instead of pulling from GHCR.
+
+networks:
+  default:
+  dokploy-network:
+    external: true
 
 services:
   postgres:
     image: pgvector/pgvector:pg16
-    restart: unless-stopped
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == dokploy-mgr
+      resources:
+        limits:
+          memory: 2g
     environment:
       POSTGRES_USER: "${POSTGRES_USER:-bidwright}"
       POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-bidwright}"
       POSTGRES_DB: "${POSTGRES_DB:-bidwright}"
     volumes:
-      - ${POSTGRES_DATA_PATH:-pgdata}:/var/lib/postgresql/data
-      - ./scripts/db/init-pgvector.sql:/docker-entrypoint-initdb.d/01-pgvector.sql:ro
+      - bidwright-pgdata:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bidwright} -d ${POSTGRES_DB:-bidwright}"]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - default
 
   redis:
     image: redis:7-alpine
-    restart: unless-stopped
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == dokploy-mgr
+      resources:
+        limits:
+          memory: 512m
     volumes:
-      - ${REDIS_DATA_PATH:-redisdata}:/data
+      - bidwright-redisdata:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
       timeout: 5s
       retries: 5
-
-  ollama:
-    image: ollama/ollama
-    profiles:
-      - embeddings
-    restart: unless-stopped
-    volumes:
-      - ${OLLAMA_DATA_PATH:-ollama_data}:/root/.ollama
-    healthcheck:
-      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 12
-      start_period: 30s
-
-  ollama-init:
-    image: curlimages/curl:latest
-    profiles:
-      - embeddings
-    depends_on:
-      ollama:
-        condition: service_healthy
-    restart: "no"
-    entrypoint: >
-      sh -c "curl -sf -X POST http://ollama:11434/api/pull -d '{\"name\":\"${EMBEDDING_MODEL:-snowflake-arctic-embed}\"}' && echo 'Model ready'"
+    networks:
+      - default
 
   # Runs `prisma migrate deploy` using the runtime API image (which carries
   # the schema, migrations, and pnpm tooling because it COPYs the full /app
@@ -72,35 +83,63 @@ services:
   # drops, table drops) should be authored as explicit SQL with backfill
   # blocks where data preservation matters; `migrate deploy` will apply them
   # exactly as written.
+  #
+  # In swarm-mode the long-form `depends_on: {svc: {condition: ...}}` is
+  # rejected; ordering between db-migrate, api, and worker is enforced by
+  # healthcheck-driven retries instead (api/worker restart until migrations
+  # are applied).
   db-migrate:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
-    depends_on:
-      postgres:
-        condition: service_healthy
+    deploy:
+      replicas: 1
+      restart_policy:
+        condition: none
+      placement:
+        constraints:
+          - node.hostname == dokploy-mgr
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
-    restart: "no"
     command: ["pnpm", "--filter", "@bidwright/db", "db:migrate"]
+    networks:
+      - default
 
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
-    restart: unless-stopped
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == dokploy-mgr
+      resources:
+        limits:
+          memory: 2g
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=dokploy-network
+        # Priority 20: /api/* -> API (overridden by web-proxy at /api/proxy)
+        - traefik.http.routers.bidwright-api.rule=Host(`bidwright.rassaun.com`) && PathPrefix(`/api`)
+        - traefik.http.routers.bidwright-api.priority=20
+        - traefik.http.routers.bidwright-api.entrypoints=websecure
+        - traefik.http.routers.bidwright-api.tls=true
+        - traefik.http.routers.bidwright-api.service=bidwright-api
+        - traefik.http.services.bidwright-api.loadbalancer.server.port=3001
     # CAP_SYS_ADMIN + relaxed seccomp/apparmor are required by bubblewrap
     # (BubblewrappedHost) for per-tenant pivot_root + mount inside CLI
     # session namespaces. Scope is the api container only; bwrap drops
     # all caps before exec'ing the actual CLI child.
+    #
+    # NOTE: Docker Swarm silently ignores service-level `security_opt`
+    # (you'll see "Ignoring unsupported options: security_opt" on deploy).
+    # cap_add IS honored. If multi-tenant bwrap calls fail under swarm's
+    # default apparmor/seccomp profiles, options are: (a) switch this
+    # service to composeType=docker-compose in Dokploy (which preserves
+    # security_opt), or (b) disable BIDWRIGHT_MULTITENANT and run
+    # single-tenant.
     cap_add:
       - SYS_ADMIN
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      db-migrate:
-        condition: service_completed_successfully
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
@@ -115,6 +154,9 @@ services:
       # Required for any multi-user deployment. bwrap ships setuid root in
       # the api image so no --privileged flag is needed.
       BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-true}"
+      # The db-migrate container applies pending migrations (`prisma migrate deploy`) before
+      # api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
+      BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"
       # Workspace snapshot/restore — see docker-compose.prod.yml for env shape.
       WORKSPACE_STORAGE_PROVIDER: "${WORKSPACE_STORAGE_PROVIDER:-}"
       WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET:-}"
@@ -124,70 +166,99 @@ services:
       WORKSPACE_S3_SECRET_ACCESS_KEY: "${WORKSPACE_S3_SECRET_ACCESS_KEY:-}"
       WORKSPACE_S3_PREFIX: "${WORKSPACE_S3_PREFIX:-bidwright/workspaces}"
       WORKSPACE_S3_FORCE_PATH_STYLE: "${WORKSPACE_S3_FORCE_PATH_STYLE:-false}"
-      # The db-migrate container applies pending migrations (`prisma migrate deploy`) before
-      # api starts, so the API's bootstrap shouldn't also try `migrate deploy`.
-      BIDWRIGHT_SKIP_BOOTSTRAP_MIGRATIONS: "1"
-      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
-      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-disabled}"
+      EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-http://ollama:11434/v1}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      # LLM provider credentials are read from this env at boot; per-tenant
+      # provider keys live in the database (BYOK) and override these.
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
+      LLM_PROVIDER: "${LLM_PROVIDER:-anthropic}"
+      LLM_MODEL: "${LLM_MODEL:-claude-sonnet-4-20250514}"
     volumes:
-      - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
-      - ${AGENT_HOME_PATH:-/opt/bidwright/data/agent-home}:/data/agent-home
-    ports:
-      - "${API_PUBLIC_PORT:-3001}:3001"
+      - bidwright-data:/data
+      - bidwright-agent-home:/data/agent-home
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3001/health >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 60s
+    networks:
+      - default
+      - dokploy-network
 
   web:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-web:${BIDWRIGHT_TAG:-latest}"
-    restart: unless-stopped
-    depends_on:
-      - api
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == dokploy-mgr
+      resources:
+        limits:
+          memory: 1g
+      labels:
+        - traefik.enable=true
+        - traefik.swarm.network=dokploy-network
+        # Priority 30: /api/proxy/* -> WEB (Next.js owns the proxy route;
+        # this MUST outrank the api router below or the api would steal
+        # everything under /api).
+        - traefik.http.routers.bidwright-web-proxy.rule=Host(`bidwright.rassaun.com`) && PathPrefix(`/api/proxy`)
+        - traefik.http.routers.bidwright-web-proxy.priority=30
+        - traefik.http.routers.bidwright-web-proxy.entrypoints=websecure
+        - traefik.http.routers.bidwright-web-proxy.tls=true
+        - traefik.http.routers.bidwright-web-proxy.service=bidwright-web
+        # Priority 10: catch-all -> WEB (everything not /api/*)
+        - traefik.http.routers.bidwright-web.rule=Host(`bidwright.rassaun.com`)
+        - traefik.http.routers.bidwright-web.priority=10
+        - traefik.http.routers.bidwright-web.entrypoints=websecure
+        - traefik.http.routers.bidwright-web.tls=true
+        - traefik.http.routers.bidwright-web.service=bidwright-web
+        - traefik.http.services.bidwright-web.loadbalancer.server.port=3000
     environment:
-      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:3001}"
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-https://bidwright.rassaun.com}"
       INTERNAL_API_BASE_URL: "http://api:3001"
-    ports:
-      - "${WEB_PUBLIC_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000 >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
-      start_period: 20s
+      start_period: 30s
+    networks:
+      - default
+      - dokploy-network
 
   worker:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-worker:${BIDWRIGHT_TAG:-latest}"
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-      db-migrate:
-        condition: service_completed_successfully
+    deploy:
+      replicas: 1
+      placement:
+        constraints:
+          - node.hostname == dokploy-mgr
+      resources:
+        limits:
+          memory: 1g
     environment:
       DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
-      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-local}"
-      EMBEDDING_BASE_URL: "http://ollama:11434/v1"
+      EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-disabled}"
+      EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-http://ollama:11434/v1}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
-      - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
+      - bidwright-data:/data
+    networks:
+      - default
 
 volumes:
-  pgdata:
-  redisdata:
-  ollama_data:
+  bidwright-pgdata:
+  bidwright-redisdata:
+  bidwright-data:
+  bidwright-agent-home:

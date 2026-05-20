@@ -162,9 +162,19 @@ jobs:
       - verify
       - publish
       - changes
-    # Deploys run from a self-hosted runner that can reach the configured target host.
-    runs-on: [self-hosted, linux, x64, bidwright-prod]
-    timeout-minutes: 180
+    # Production lives on the on-prem Dokploy/Swarm cluster (project
+    # "bidwright" at https://cloud.rassaun.com). The deploy step just
+    # POSTs to a Dokploy webhook URL — Dokploy then runs `docker stack
+    # deploy` on dokploy-mgr, which resolves `:latest` from GHCR and
+    # rolls each service to the new digest. No SSH, no self-hosted
+    # runners, no LAN dependency.
+    #
+    # For a sha-pinned rollback, set BIDWRIGHT_TAG=sha-<old-short> in the
+    # Dokploy UI (Environment tab on the bidwright compose) and click
+    # Deploy — every commit's sha-tagged image is preserved in GHCR by
+    # the publish job above.
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: production
     if: >
       (github.event_name == 'workflow_dispatch' ||
@@ -176,72 +186,22 @@ jobs:
       group: bidwright-production-deploy
       cancel-in-progress: false
 
-    env:
-      DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-      DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
-      DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-      DEPLOY_PORT: ${{ vars.DEPLOY_PORT || '22' }}
-      DEPLOY_BASE: ${{ vars.DEPLOY_BASE || '/opt/bidwright' }}
-      DEPLOY_ENV_FILE: ${{ vars.DEPLOY_ENV_FILE || '/opt/bidwright/.env.server' }}
-      DEPLOY_COMPOSE_PROJECT_NAME: ${{ vars.DEPLOY_COMPOSE_PROJECT_NAME || 'bidwright' }}
-
     steps:
-      - name: Check out repo
-        uses: actions/checkout@v4
-
       - name: Assert deploy configuration
-        run: |
-          test -n "$DEPLOY_HOST"
-          test -n "$DEPLOY_USER"
-          test -n "$DEPLOY_SSH_KEY"
+        env:
+          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_BIDWRIGHT_WEBHOOK }}
+        run: test -n "$DOKPLOY_WEBHOOK"
 
-      - name: Configure SSH
+      - name: Trigger Dokploy redeploy
+        env:
+          DOKPLOY_WEBHOOK: ${{ secrets.DOKPLOY_BIDWRIGHT_WEBHOOK }}
         run: |
-          install -m 700 -d ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/id_ed25519
-          chmod 600 ~/.ssh/id_ed25519
-          ssh-keyscan -H -p "$DEPLOY_PORT" "$DEPLOY_HOST" >> ~/.ssh/known_hosts
-
-      - name: Build release bundle
-        run: |
-          mkdir -p dist
-          tar \
-            --exclude='.git' \
-            --exclude='node_modules' \
-            --exclude='dist' \
-            --exclude='data' \
-            --exclude='backups' \
-            --exclude='tmp' \
-            --exclude='.claude' \
-            --exclude='.env' \
-            --exclude='.env.local' \
-            --exclude='.turbo' \
-            --exclude='apps/web/.next' \
-            --exclude='playwright-report' \
-            --exclude='test-results' \
-            -czf "dist/bidwright-${GITHUB_SHA}.tgz" .
-
-      - name: Upload release bundle
-        run: |
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_BASE/releases/$GITHUB_SHA'"
-          scp -P "$DEPLOY_PORT" "dist/bidwright-${GITHUB_SHA}.tgz" "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_BASE/releases/$GITHUB_SHA/release.tgz"
-
-      - name: Deploy release on server
-        run: |
+          set -euo pipefail
           SHORT_SHA="${GITHUB_SHA:0:7}"
-          ssh -p "$DEPLOY_PORT" "$DEPLOY_USER@$DEPLOY_HOST" "
-            set -euo pipefail
-            RELEASE_DIR='$DEPLOY_BASE/releases/$GITHUB_SHA'
-            mkdir -p \"\$RELEASE_DIR/app\"
-            tar -xzf \"\$RELEASE_DIR/release.tgz\" -C \"\$RELEASE_DIR/app\"
-            chmod +x \"\$RELEASE_DIR/app/scripts/deploy/remote-deploy.sh\" \"\$RELEASE_DIR/app/scripts/deploy/restore-server-state.sh\"
-            # If the env file pins BIDWRIGHT_TAG (registry mode), point it at this commit's image.
-            # Build mode doesn't carry that line and is left untouched.
-            if grep -q '^BIDWRIGHT_TAG=' '$DEPLOY_ENV_FILE'; then
-              sed -i 's/^BIDWRIGHT_TAG=.*/BIDWRIGHT_TAG=sha-$SHORT_SHA/' '$DEPLOY_ENV_FILE'
-            fi
-            DEPLOY_BASE='$DEPLOY_BASE' \
-            ENV_FILE='$DEPLOY_ENV_FILE' \
-            COMPOSE_PROJECT_NAME='$DEPLOY_COMPOSE_PROJECT_NAME' \
-            \"\$RELEASE_DIR/app/scripts/deploy/remote-deploy.sh\"
-          "
+          echo "Triggering Dokploy redeploy for bidwright (commit ${SHORT_SHA})…"
+          # Dokploy responds with {"message":"Compose deployed successfully"}
+          # synchronously after kicking off the background `docker stack deploy`.
+          # The actual rollout completes in ~30–90s on dokploy-mgr.
+          response=$(curl -sf -X GET --max-time 30 "$DOKPLOY_WEBHOOK")
+          echo "Dokploy response: $response"
+          echo "::notice title=Deploy triggered::Bidwright commit ${SHORT_SHA} redeploy kicked off. Watch progress at https://cloud.rassaun.com → bidwright → Logs."
