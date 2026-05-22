@@ -56,6 +56,7 @@ import type {
   ProjectWorkspaceData,
   QuoteRevision,
   RevisionPatchInput,
+  SourceDocument,
   WorkspaceResponse,
   WorkspaceWorksheet,
   WorkspaceWorksheetItem,
@@ -1548,6 +1549,22 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     setError(null);
   }, []);
 
+  // Lifts FileBrowser's source-document edits into the canonical workspace
+  // state so they persist across tab unmount/remount (the prop is the source
+  // of truth; the upload is already saved server-side).
+  const patchSourceDocuments = useCallback(
+    (updater: (prev: SourceDocument[]) => SourceDocument[]) => {
+      setData((prev) => ({
+        ...prev,
+        workspace: {
+          ...prev.workspace,
+          sourceDocuments: updater(prev.workspace.sourceDocuments ?? []),
+        },
+      }));
+    },
+    [],
+  );
+
   const refreshWorkspace = useCallback(async () => {
     try {
       const fresh = await getProjectWorkspace(workspace.project.id);
@@ -2316,6 +2333,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                     selectedWorksheet={selectedModelWorksheet}
                     modelEditorChannelName={modelEditorSyncChannelName}
                     onOpenInTakeoff={handleOpenFileInTakeoff}
+                    onSourceDocumentsChange={patchSourceDocuments}
                   />
                 </motion.div>
               )}

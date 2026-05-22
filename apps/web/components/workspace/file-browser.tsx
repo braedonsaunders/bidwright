@@ -172,6 +172,10 @@ export interface FileBrowserProps {
   selectedWorksheet?: WorkspaceWorksheet | null;
   modelEditorChannelName?: string;
   onOpenInTakeoff?: (documentId: string) => void;
+  /** Lifts source-document mutations (upload/rename/move/delete) up to the
+   *  workspace owner so they survive this component unmounting on tab switch.
+   *  Without it, the optimistic local edit is lost until a full page reload. */
+  onSourceDocumentsChange?: (updater: (prev: SourceDocument[]) => SourceDocument[]) => void;
 }
 
 /* ─── Constants ─── */
@@ -1597,7 +1601,7 @@ function DeleteFileModal({
 
 /* ─── Main Component ─── */
 
-export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff }: FileBrowserProps) {
+export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onSourceDocumentsChange }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -1637,8 +1641,21 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   const [editorInitialChecklist, setEditorInitialChecklist] = useState<string | null>(null);
   const [editingFileExtension, setEditingFileExtension] = useState<string | null>(null);
   const [userNodes, setUserNodes] = useState<FileNode[]>([]);
-  const [sourceDocuments, setSourceDocuments] = useState<SourceDocument[]>(workspace.sourceDocuments ?? []);
+  const [sourceDocuments, setSourceDocumentsLocal] = useState<SourceDocument[]>(workspace.sourceDocuments ?? []);
   const [loadingNodes, setLoadingNodes] = useState(true);
+
+  // Write-through setter: applies the mutation to local state for instant
+  // feedback AND lifts it to the workspace owner. The workspace prop is the
+  // source of truth, so without the lift the edit dies when this component
+  // unmounts on tab switch. Use this for all source-document mutations; use
+  // setSourceDocumentsLocal only for syncing FROM the prop.
+  const setSourceDocuments = useCallback(
+    (updater: (prev: SourceDocument[]) => SourceDocument[]) => {
+      setSourceDocumentsLocal(updater);
+      onSourceDocumentsChange?.(updater);
+    },
+    [onSourceDocumentsChange],
+  );
 
   // Upload state
   const [uploading, setUploading] = useState(false);
@@ -1678,7 +1695,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   }, [projectId]);
 
   useEffect(() => {
-    setSourceDocuments(workspace.sourceDocuments ?? []);
+    setSourceDocumentsLocal(workspace.sourceDocuments ?? []);
   }, [workspace.sourceDocuments]);
 
   // Build tree

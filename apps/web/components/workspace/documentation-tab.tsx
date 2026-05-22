@@ -17,6 +17,7 @@ import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import type {
   ProjectWorkspaceData,
   ReportSection,
+  SourceDocument,
   WorkspaceResponse,
 } from "@/lib/api";
 import {
@@ -53,6 +54,7 @@ interface DocumentationTabProps {
   selectedWorksheet?: FileBrowserProps["selectedWorksheet"];
   modelEditorChannelName?: string;
   onOpenInTakeoff?: FileBrowserProps["onOpenInTakeoff"];
+  onSourceDocumentsChange?: (updater: (prev: SourceDocument[]) => SourceDocument[]) => void;
 }
 
 /* ─── Sub-tab config ─── */
@@ -75,6 +77,7 @@ export function DocumentationTab({
   selectedWorksheet,
   modelEditorChannelName,
   onOpenInTakeoff,
+  onSourceDocumentsChange,
 }: DocumentationTabProps) {
   const [activeTab, setActiveTab] = useState<SubTab>("knowledge");
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +130,7 @@ export function DocumentationTab({
             selectedWorksheet={selectedWorksheet}
             modelEditorChannelName={modelEditorChannelName}
             onOpenInTakeoff={onOpenInTakeoff}
+            onSourceDocumentsChange={onSourceDocumentsChange}
           />
         )}
         {activeTab === "schedule" && (
