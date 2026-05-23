@@ -132,6 +132,10 @@ export interface CostIntelligenceListFilters {
   vendorName?: string;
   limit?: number;
   scope?: "aggregate" | "per_vendor" | "all";
+  /** When false, skip the heavy sourceObservation join (rawText etc.). Callers
+   *  that only need cost + resource fields (e.g. the assembly pickers) pass
+   *  false to avoid pulling thousands of large observation rows. */
+  includeObservation?: boolean;
 }
 
 export interface VendorPdfIngestFile {
@@ -3026,7 +3030,9 @@ export class CostIntelligenceService {
       orderBy: [{ updatedAt: "desc" }],
       include: {
         resource: true,
-        sourceObservation: true,
+        // Only join the (potentially large) observation when the caller needs
+        // it. The assembly pickers pull thousands of rows and use none of it.
+        ...(filters.includeObservation === false ? {} : { sourceObservation: true }),
       },
       take: clampLimit(filters.limit),
     });

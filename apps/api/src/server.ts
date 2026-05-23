@@ -1,3 +1,4 @@
+import compress from "@fastify/compress";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
 import rateLimit from "@fastify/rate-limit";
@@ -1847,6 +1848,11 @@ export function buildServer() {
   app.addHook("onClose", async () => {
     await prisma.$disconnect();
   });
+
+  // Gzip/brotli response compression. Workspace + cost/library payloads are
+  // large JSON (often several MB); without this they ship uncompressed. Only
+  // kicks in above the threshold and when the client sends Accept-Encoding.
+  app.register(compress, { global: true, threshold: 1024 });
 
   app.register(cors, {
     origin: true,

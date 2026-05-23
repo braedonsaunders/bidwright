@@ -70,7 +70,10 @@ export function AssemblyInsertModal({
   const [editInstanceParams, setEditInstanceParams] = useState<Record<string, string>>({});
   const [instanceBusy, setInstanceBusy] = useState(false);
 
-  const { catalogItems, rateItems, laborUnits, effectiveCosts } = useAssemblyAuthoringContext();
+  // Only load the heavy picker data once the modal is actually opened — the
+  // modal stays mounted (closed) in the estimate grid, so an unconditional
+  // fetch would pull thousands of cost rows on every workspace page load.
+  const { catalogItems, rateItems, laborUnits, effectiveCosts } = useAssemblyAuthoringContext({ enabled: open });
 
   const refreshList = useCallback(async () => {
     setLoading(true);

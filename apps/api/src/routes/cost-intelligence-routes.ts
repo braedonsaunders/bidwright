@@ -15,6 +15,8 @@ const listQuerySchema = z.object({
   vendorName: z.string().optional(),
   scope: z.enum(["aggregate", "per_vendor", "all"]).optional(),
   limit: z.coerce.number().int().positive().max(50000).optional(),
+  // String query param: "false" disables the heavy sourceObservation join.
+  includeObservation: z.enum(["true", "false"]).optional(),
 });
 
 const resourceSchema = z.object({
@@ -501,6 +503,7 @@ export async function costIntelligenceRoutes(app: FastifyInstance): Promise<void
       vendorName: parsed.data.vendorName,
       scope: parsed.data.scope,
       limit: parsed.data.limit,
+      includeObservation: parsed.data.includeObservation !== "false",
     });
   });
 

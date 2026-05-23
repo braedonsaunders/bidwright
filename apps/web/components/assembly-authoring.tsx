@@ -170,7 +170,13 @@ function parseMarkupPercent(value: string): number | null | undefined {
 // Loads assembly component sources from the API. Used by both the
 // settings-page authoring view and the estimate-page quick-create flow so the
 // pickers are populated identically.
-export function useAssemblyAuthoringContext() {
+export function useAssemblyAuthoringContext(options?: { enabled?: boolean }) {
+  // Gate the fetch so this heavy data (catalogs + rate schedules + labor units +
+  // thousands of effective costs) is only pulled when actually needed — e.g.
+  // when the assembly picker opens — instead of eagerly on every page that
+  // happens to mount a (closed) consumer. Defaults to enabled for standalone
+  // pages like the assembly manager.
+  const enabled = options?.enabled ?? true;
   const [catalogItems, setCatalogItems] = useState<CatalogItemRow[]>([]);
   const [rateItems, setRateItems] = useState<RateItemRow[]>([]);
   const [laborUnits, setLaborUnits] = useState<LaborUnitRow[]>([]);
@@ -178,6 +184,7 @@ export function useAssemblyAuthoringContext() {
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
+    if (!enabled || loaded) return;
     let cancelled = false;
     (async () => {
       try {
@@ -247,7 +254,9 @@ export function useAssemblyAuthoringContext() {
       }
 
       try {
-        const rows = await listEffectiveCosts({ limit: 5000 });
+        // includeObservation:false skips the heavy sourceObservation join —
+        // the picker only needs cost + resource fields.
+        const rows = await listEffectiveCosts({ limit: 5000, includeObservation: false });
         const flat: EffectiveCostRow[] = rows.map((cost: EffectiveCostRecord) => {
           const item = effectiveCostItem(cost);
           return {
@@ -280,7 +289,7 @@ export function useAssemblyAuthoringContext() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [enabled, loaded]);
 
   return { catalogItems, rateItems, laborUnits, effectiveCosts, loaded };
 }
