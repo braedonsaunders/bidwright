@@ -54,6 +54,7 @@ import {
   getCustomer,
   getDepartments,
   listLaborUnitLibraries,
+  mergeWorkspacePatch,
   reorderConditions,
   updateCondition,
   updateProjectRateScheduleItem,
@@ -107,7 +108,7 @@ export interface SetupTabProps {
   revDraft: RevisionDraft;
   setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
   isPending: boolean;
-  onApply: (next: WorkspaceResponse) => void;
+  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   onError: (msg: string) => void;
   highlightField?: string;
 }
@@ -1582,7 +1583,7 @@ function RatesSubTab({
   busy: parentBusy,
 }: {
   workspace: ProjectWorkspaceData;
-  onApply: (next: WorkspaceResponse) => void;
+  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   onError: (msg: string) => void;
   busy: boolean;
 }) {
@@ -1615,7 +1616,8 @@ function RatesSubTab({
   function handleDeleteSchedule(scheduleId: string) {
     startTransition(async () => {
       try {
-        onApply(await deleteProjectRateSchedule(workspace.project.id, scheduleId));
+        const patch = await deleteProjectRateSchedule(workspace.project.id, scheduleId);
+        onApply((prev) => mergeWorkspacePatch(prev, patch));
       } catch (e) {
         onError(e instanceof Error ? e.message : "Delete failed.");
       }
@@ -1638,14 +1640,13 @@ function RatesSubTab({
     const updatedRates = { ...item.rates, [editingCell.tierId]: newRateValue };
     startTransition(async () => {
       try {
-        onApply(
-          await updateProjectRateScheduleItem(
-            workspace.project.id,
-            editingCell.scheduleId,
-            editingCell.itemId,
-            { rates: updatedRates }
-          )
+        const patch = await updateProjectRateScheduleItem(
+          workspace.project.id,
+          editingCell.scheduleId,
+          editingCell.itemId,
+          { rates: updatedRates }
         );
+        onApply((prev) => mergeWorkspacePatch(prev, patch));
         setEditingCell(null);
         setEditValue("");
       } catch (e) {
@@ -1678,7 +1679,7 @@ function RatesSubTab({
             onClose={() => setShowImportPicker(false)}
             projectId={workspace.project.id}
             existingScheduleIds={workspace.rateSchedules.map((s) => s.id)}
-            onImported={onApply}
+            onImported={(patch) => onApply((prev) => mergeWorkspacePatch(prev, patch))}
             onError={onError}
           />
 

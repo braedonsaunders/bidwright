@@ -11409,9 +11409,96 @@ export class PrismaApiStore {
       include: rateScheduleWithChildrenInclude,
     });
     if (existing.scope === "revision" && existing.projectId) {
+      if (existing.revisionId) await this.repriceRevisionRateScheduleLines(existing.revisionId);
       await this.syncProjectEstimate(existing.projectId);
     }
     return mapRateScheduleWithChildren(updated);
+  }
+
+  /**
+   * Reprice every rate-schedule-driven worksheet item in a revision against
+   * the revision's *current* rate schedules. Run after any revision-scoped
+   * rate-schedule mutation (item rate edit, item add/remove, tier change,
+   * schedule import/delete) so linked line prices follow the new rates instead
+   * of keeping their last stored value. Totals are left for the caller to sync.
+   *
+   * Only rows that are (or were) priced from a rate book are touched, so
+   * hand-entered manual / catalog / direct-total rows are never clobbered. A
+   * stale rateScheduleItemId is healed to whichever item actually resolved,
+   * which is what lets "delete schedule A, import schedule B" re-link rows to
+   * B by name/code/resource and reprice them.
+   */
+  private async repriceRevisionRateScheduleLines(revisionId: string): Promise<number> {
+    const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
+    if (!revision) return 0;
+
+    const worksheetRows = await this.db.worksheet.findMany({
+      where: { revisionId },
+      select: { id: true },
+    });
+    const worksheetIds = worksheetRows.map((w) => w.id);
+    if (worksheetIds.length === 0) return 0;
+
+    const [scheduleRows, itemRows] = await Promise.all([
+      this.db.rateSchedule.findMany({ where: { revisionId }, include: rateScheduleCalcInclude }),
+      this.db.worksheetItem.findMany({
+        where: { worksheetId: { in: worksheetIds } },
+        include: { entityCategory: true },
+      }),
+    ]);
+
+    const rateScheduleCtx = toRateScheduleCalcContext(scheduleRows);
+    const mappedRev = mapRevision(revision);
+    let repriced = 0;
+
+    for (const row of itemRows) {
+      const domainItem = mapWorksheetItem(row);
+
+      // Skip rows that were never priced from a rate book — repricing them
+      // would overwrite a hand-entered manual/catalog/direct-total price.
+      const rateScheduleLinked =
+        !!domainItem.rateScheduleItemId || domainItem.rateResolution?.source === "rate_book";
+      if (!rateScheduleLinked) continue;
+
+      const calcType = (row.entityCategory?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
+      const calculated = calculateLineItem(domainItem, mappedRev, calcType, rateScheduleCtx);
+
+      const resolvedRateItemId =
+        calculated.rateResolution?.source === "rate_book"
+          ? calculated.rateResolution.rateBookItemId ?? null
+          : null;
+      const nextRateScheduleItemId = resolvedRateItemId ?? domainItem.rateScheduleItemId ?? null;
+      const nextCost = calculated.cost ?? domainItem.cost;
+      const nextPrice = calculated.price ?? domainItem.price;
+      const nextMarkup = calculated.markup ?? domainItem.markup;
+
+      const unchanged =
+        roundMoney(nextCost) === roundMoney(domainItem.cost) &&
+        roundMoney(nextPrice) === roundMoney(domainItem.price) &&
+        nextRateScheduleItemId === (domainItem.rateScheduleItemId ?? null);
+      if (unchanged) continue;
+
+      domainItem.cost = nextCost;
+      domainItem.price = nextPrice;
+      domainItem.markup = nextMarkup;
+      domainItem.rateScheduleItemId = nextRateScheduleItemId;
+      const costSnapshot = buildSnapshotForItem(domainItem);
+
+      await this.db.worksheetItem.update({
+        where: { id: row.id },
+        data: {
+          cost: nextCost,
+          markup: nextMarkup,
+          price: nextPrice,
+          rateScheduleItemId: nextRateScheduleItemId,
+          costSnapshot: costSnapshot as unknown as Prisma.InputJsonValue,
+          rateResolution: toPrismaJson(calculated.rateResolution ?? domainItem.rateResolution ?? {}),
+        } as any,
+      });
+      repriced++;
+    }
+
+    return repriced;
   }
 
   async deleteRateSchedule(id: string): Promise<{ deleted: boolean }> {
@@ -11419,6 +11506,7 @@ export class PrismaApiStore {
     if (!existing) throw new Error(`Rate schedule ${id} not found`);
     await this.db.rateSchedule.delete({ where: { id } });
     if (existing.scope === "revision" && existing.projectId) {
+      if (existing.revisionId) await this.repriceRevisionRateScheduleLines(existing.revisionId);
       await this.syncProjectEstimate(existing.projectId);
     }
     return { deleted: true };
@@ -11438,6 +11526,10 @@ export class PrismaApiStore {
         uom: input.uom ?? null,
       },
     });
+    if (schedule.scope === "revision" && schedule.projectId && schedule.revisionId) {
+      await this.repriceRevisionRateScheduleLines(schedule.revisionId);
+      await this.syncProjectEstimate(schedule.projectId);
+    }
     return this.getRateSchedule(scheduleId);
   }
 
@@ -11452,6 +11544,10 @@ export class PrismaApiStore {
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     if (patch.uom !== undefined) data.uom = patch.uom;
     await this.db.rateScheduleTier.update({ where: { id: tierId }, data });
+    if (schedule.scope === "revision" && schedule.projectId && schedule.revisionId) {
+      await this.repriceRevisionRateScheduleLines(schedule.revisionId);
+      await this.syncProjectEstimate(schedule.projectId);
+    }
     return this.getRateSchedule(tier.scheduleId);
   }
 
@@ -11461,6 +11557,10 @@ export class PrismaApiStore {
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: tier.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
     await this.db.rateScheduleTier.delete({ where: { id: tierId } });
+    if (schedule.scope === "revision" && schedule.projectId && schedule.revisionId) {
+      await this.repriceRevisionRateScheduleLines(schedule.revisionId);
+      await this.syncProjectEstimate(schedule.projectId);
+    }
     return this.getRateSchedule(tier.scheduleId);
   }
 
@@ -11517,6 +11617,7 @@ export class PrismaApiStore {
       },
     });
     if (schedule.scope === "revision" && schedule.projectId) {
+      if (schedule.revisionId) await this.repriceRevisionRateScheduleLines(schedule.revisionId);
       await this.syncProjectEstimate(schedule.projectId);
     }
     return this.getRateSchedule(scheduleId);
@@ -11543,6 +11644,7 @@ export class PrismaApiStore {
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     await this.db.rateScheduleItem.update({ where: { id: itemId }, data });
     if (schedule.scope === "revision" && schedule.projectId) {
+      if (schedule.revisionId) await this.repriceRevisionRateScheduleLines(schedule.revisionId);
       await this.syncProjectEstimate(schedule.projectId);
     }
     return this.getRateSchedule(item.scheduleId);
@@ -11555,6 +11657,7 @@ export class PrismaApiStore {
     if (!schedule) throw new Error(`Rate schedule not found`);
     await this.db.rateScheduleItem.delete({ where: { id: itemId } });
     if (schedule.scope === "revision" && schedule.projectId) {
+      if (schedule.revisionId) await this.repriceRevisionRateScheduleLines(schedule.revisionId);
       await this.syncProjectEstimate(schedule.projectId);
     }
     return this.getRateSchedule(item.scheduleId);
@@ -11579,7 +11682,7 @@ export class PrismaApiStore {
       return mapRateScheduleWithChildren(existing);
     }
 
-    return await this.db.$transaction(async (tx) => {
+    const imported = await this.db.$transaction(async (tx) => {
       const newSchedId = createId("rs");
       const tierIdMap = new Map<string, string>();
 
@@ -11623,6 +11726,14 @@ export class PrismaApiStore {
       });
       return mapRateScheduleWithChildren(result);
     });
+
+    // Re-link and reprice any line items that were pointing at a previously
+    // removed schedule but match this freshly imported one by name/code, so a
+    // "delete A, import B" swap lands the new rates on the quote.
+    await this.repriceRevisionRateScheduleLines(revision.id);
+    await this.syncProjectEstimate(projectId);
+
+    return imported;
   }
 
   async listRevisionRateSchedules(projectId: string): Promise<RateScheduleWithChildren[]> {
@@ -11785,6 +11896,7 @@ export class PrismaApiStore {
     }
 
     if (schedule.scope === "revision" && schedule.projectId) {
+      if (schedule.revisionId) await this.repriceRevisionRateScheduleLines(schedule.revisionId);
       await this.syncProjectEstimate(schedule.projectId);
     }
     return this.getRateSchedule(id);

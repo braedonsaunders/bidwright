@@ -1,5 +1,5 @@
 import type { FastifyInstance } from "fastify";
-import { buildWorkspaceResponse } from "../server.js";
+import { buildRateScheduleMutationResponse } from "../server.js";
 
 export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
   // ── Rate Book Assignments ──────────────────────────────────────────────
@@ -254,7 +254,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
         return { error: "scheduleId is required" };
       }
       await request.store!.importRateScheduleToRevision(projectId, scheduleId);
-      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      const payload = await buildRateScheduleMutationResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);
         return { error: "Project workspace not found" };
@@ -271,7 +271,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { projectId } = request.params as { projectId: string };
       await request.store!.importAssignedRateSchedulesToRevision(projectId);
-      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      const payload = await buildRateScheduleMutationResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);
         return { error: "Project workspace not found" };
@@ -289,7 +289,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
       const { projectId, id } = request.params as { projectId: string; id: string };
       const patch = request.body as Record<string, unknown>;
       await request.store!.updateRateSchedule(id, patch);
-      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      const payload = await buildRateScheduleMutationResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);
         return { error: "Project workspace not found" };
@@ -305,7 +305,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { projectId, id } = request.params as { projectId: string; id: string };
       await request.store!.deleteRateSchedule(id);
-      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      const payload = await buildRateScheduleMutationResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);
         return { error: "Project workspace not found" };
@@ -322,7 +322,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
       const { projectId, itemId } = request.params as { projectId: string; scheduleId: string; itemId: string };
       const patch = request.body as Record<string, unknown>;
       await request.store!.updateRateScheduleItem(itemId, patch);
-      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      const payload = await buildRateScheduleMutationResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);
         return { error: "Project workspace not found" };
@@ -338,7 +338,7 @@ export async function rateScheduleRoutes(app: FastifyInstance): Promise<void> {
     try {
       const { projectId, id } = request.params as { projectId: string; id: string };
       await request.store!.autoCalculateRateSchedule(id);
-      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      const payload = await buildRateScheduleMutationResponse(request.store!, projectId);
       if (!payload) {
         reply.code(404);
         return { error: "Project workspace not found" };

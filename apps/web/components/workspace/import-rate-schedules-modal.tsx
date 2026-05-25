@@ -4,14 +4,14 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button, ModalBackdrop } from "@/components/ui";
-import { importRateSchedule, listRateSchedules, type RateSchedule, type WorkspaceResponse } from "@/lib/api";
+import { importRateSchedule, listRateSchedules, type RateSchedule, type WorkspacePatchResponse } from "@/lib/api";
 
 interface ImportRateSchedulesModalProps {
   open: boolean;
   onClose: () => void;
   projectId: string;
   existingScheduleIds?: string[];
-  onImported: (workspace: WorkspaceResponse) => void;
+  onImported: (patch: WorkspacePatchResponse) => void;
   onError: (msg: string) => void;
 }
 
@@ -119,7 +119,7 @@ export function ImportRateSchedulesModal({
     if (selected.size === 0 || importing) return;
     setImporting(true);
     try {
-      let last: WorkspaceResponse | null = null;
+      let last: WorkspacePatchResponse | null = null;
       for (const id of selected) {
         last = await importRateSchedule(projectId, id);
       }

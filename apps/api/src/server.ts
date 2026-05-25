@@ -1584,6 +1584,48 @@ export async function buildWorkspaceResponse(store: PrismaApiStore, projectId: s
   };
 }
 
+// Heavy workspace slices a rate-schedule change never touches. They're omitted
+// from the rate-schedule mutation response and preserved on the client via a
+// shallow merge, so we don't reship documents, AI runs, the whole catalog, the
+// schedule, etc. on every rate edit. The estimate-relevant slices (worksheets,
+// rateSchedules, currentRevision, estimate totals, summary, phases, factors,
+// adjustments) are kept so the grid + totals stay correct.
+const RATE_SCHEDULE_MUTATION_OMIT_KEYS = new Set([
+  "sourceDocuments",
+  "catalogs",
+  "aiRuns",
+  "citations",
+  "scheduleTasks",
+  "scheduleDependencies",
+  "scheduleCalendars",
+  "scheduleBaselines",
+  "scheduleBaselineTasks",
+  "scheduleResources",
+  "scheduleTaskAssignments",
+  "pickupLinks",
+  "estimateFeedback",
+]);
+
+/**
+ * Lean response for revision-scoped rate-schedule mutations. Reuses the proven
+ * full-workspace computation, then ships only the estimate-affected slices plus
+ * recomputed summaryMetrics. The client merges this over its existing workspace
+ * (`mergeWorkspacePatch`), so unrelated heavy slices are preserved without being
+ * re-sent. `partial: true` tags it for that merge path.
+ */
+export async function buildRateScheduleMutationResponse(store: PrismaApiStore, projectId: string) {
+  const full = await buildWorkspaceResponse(store, projectId);
+  if (!full) return null;
+  const leanWorkspace = Object.fromEntries(
+    Object.entries(full.workspace).filter(([key]) => !RATE_SCHEDULE_MUTATION_OMIT_KEYS.has(key)),
+  );
+  return {
+    partial: true as const,
+    workspace: leanWorkspace,
+    summaryMetrics: full.summaryMetrics,
+  };
+}
+
 function buildWorksheetItemMutationResponse(
   mode: "create" | "update" | "delete",
   mutation: Awaited<ReturnType<PrismaApiStore["createWorksheetItemWithSnapshot"]>>,

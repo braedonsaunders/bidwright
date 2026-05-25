@@ -59,12 +59,31 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     }
   }
 
+  // Read the body once as text so we control parsing for both the error and
+  // success paths. Calling response.json() directly surfaces a raw
+  // "...is not valid JSON" SyntaxError whenever a proxy/gateway hands back a
+  // non-JSON body (HTML error page, truncated/compressed bytes), which is
+  // confusing and hides the real status.
+  const rawBody = await response.text().catch(() => "");
+
   if (!response.ok) {
-    const errorBody = await response.text().catch(() => "");
     throw new Error(
-      `API request failed for ${path} (${response.status} ${response.statusText})${errorBody ? `: ${errorBody}` : ""}`
+      `API request failed for ${path} (${response.status} ${response.statusText})${rawBody ? `: ${rawBody}` : ""}`
     );
   }
 
-  return (await response.json()) as T;
+  if (!rawBody) {
+    // Endpoints that legitimately return no content (e.g. 204).
+    return undefined as T;
+  }
+
+  try {
+    return JSON.parse(rawBody) as T;
+  } catch {
+    const snippet = rawBody.slice(0, 200).replace(/\s+/g, " ").trim();
+    throw new Error(
+      `API request for ${path} returned a ${response.status} response with a non-JSON body — ` +
+      `a proxy or gateway likely altered it. First bytes: ${snippet}`
+    );
+  }
 }

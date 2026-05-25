@@ -104,6 +104,7 @@ import {
   fetchQuotePdfBlobUrl,
   getQuotePdfPreviewUrl,
   importAssignedRateSchedules,
+  mergeWorkspacePatch,
   listRateBookAssignments,
   listModelTakeoffLinks,
   getEstimateFactorLibrary,
@@ -2851,7 +2852,8 @@ function SnapQuoteSheet({
         customerContactEmailString: "",
       });
       await updateProject(workspace.project.id, { clientName: selectedCustomer.name });
-      onApply(await importAssignedRateSchedules(workspace.project.id));
+      const ratePatch = await importAssignedRateSchedules(workspace.project.id);
+      onApply((prev) => mergeWorkspacePatch(prev, ratePatch));
     } catch (error) {
       setCustomerId(workspace.quote.customerId ?? "");
       onError(error instanceof Error ? error.message : "Save failed.");

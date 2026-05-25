@@ -1158,6 +1158,32 @@ export interface WorkspaceResponse {
   documents: SourceDocument[];
 }
 
+/**
+ * Lean response for rate-schedule mutations: only the estimate-affected
+ * workspace slices plus recomputed summaryMetrics. Heavy unrelated slices
+ * (documents, AI runs, catalogs, schedule, etc.) are omitted and preserved
+ * client-side via {@link mergeWorkspacePatch}. Avoids reshipping the whole
+ * workspace on every rate edit.
+ */
+export interface WorkspacePatchResponse {
+  partial: true;
+  workspace: Partial<ProjectWorkspaceData>;
+  summaryMetrics: WorkspaceResponse["summaryMetrics"];
+}
+
+/** Merge a {@link WorkspacePatchResponse} over the current workspace, keeping
+ *  every slice the patch didn't send. */
+export function mergeWorkspacePatch(
+  prev: WorkspaceResponse,
+  patch: WorkspacePatchResponse,
+): WorkspaceResponse {
+  return {
+    ...prev,
+    summaryMetrics: patch.summaryMetrics ?? prev.summaryMetrics,
+    workspace: { ...prev.workspace, ...patch.workspace },
+  };
+}
+
 export type LineItemSearchSourceType =
   | "catalog_item"
   | "rate_schedule_item"
@@ -2816,8 +2842,8 @@ export async function deleteRateBookAssignment(id: string): Promise<{ deleted: b
   return apiRequest<{ deleted: boolean }>(`/api/rate-book-assignments/${id}`, { method: "DELETE" });
 }
 
-export async function importAssignedRateSchedules(projectId: string): Promise<WorkspaceResponse> {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/import-assigned`, {
+export async function importAssignedRateSchedules(projectId: string): Promise<WorkspacePatchResponse> {
+  return apiRequest<WorkspacePatchResponse>(`/projects/${projectId}/rate-schedules/import-assigned`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({}),
@@ -2928,8 +2954,8 @@ export async function listProjectRateSchedules(projectId: string): Promise<RateS
   return apiRequest<RateSchedule[]>(`/projects/${projectId}/rate-schedules`);
 }
 
-export async function importRateSchedule(projectId: string, scheduleId: string): Promise<WorkspaceResponse> {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/import`, {
+export async function importRateSchedule(projectId: string, scheduleId: string): Promise<WorkspacePatchResponse> {
+  return apiRequest<WorkspacePatchResponse>(`/projects/${projectId}/rate-schedules/import`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ scheduleId }),
@@ -2939,30 +2965,30 @@ export async function importRateSchedule(projectId: string, scheduleId: string):
 export async function updateProjectRateSchedule(projectId: string, id: string, patch: {
   name?: string; description?: string; defaultMarkup?: number;
   effectiveDate?: string | null; expiryDate?: string | null; metadata?: Record<string, unknown>;
-}): Promise<WorkspaceResponse> {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}`, {
+}): Promise<WorkspacePatchResponse> {
+  return apiRequest<WorkspacePatchResponse>(`/projects/${projectId}/rate-schedules/${id}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
 }
 
-export async function deleteProjectRateSchedule(projectId: string, id: string): Promise<WorkspaceResponse> {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}`, { method: "DELETE" });
+export async function deleteProjectRateSchedule(projectId: string, id: string): Promise<WorkspacePatchResponse> {
+  return apiRequest<WorkspacePatchResponse>(`/projects/${projectId}/rate-schedules/${id}`, { method: "DELETE" });
 }
 
 export async function updateProjectRateScheduleItem(projectId: string, scheduleId: string, itemId: string, patch: {
   rates?: Record<string, number>;
-}): Promise<WorkspaceResponse> {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${scheduleId}/items/${itemId}`, {
+}): Promise<WorkspacePatchResponse> {
+  return apiRequest<WorkspacePatchResponse>(`/projects/${projectId}/rate-schedules/${scheduleId}/items/${itemId}`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
   });
 }
 
-export async function autoCalculateProjectRateSchedule(projectId: string, id: string): Promise<WorkspaceResponse> {
-  return apiRequest<WorkspaceResponse>(`/projects/${projectId}/rate-schedules/${id}/auto-calculate`, {
+export async function autoCalculateProjectRateSchedule(projectId: string, id: string): Promise<WorkspacePatchResponse> {
+  return apiRequest<WorkspacePatchResponse>(`/projects/${projectId}/rate-schedules/${id}/auto-calculate`, {
     method: "POST",
   });
 }
