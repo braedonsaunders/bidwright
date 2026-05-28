@@ -3724,22 +3724,52 @@ export function EstimateGrid({
 
   // ─── Cell editing ───
 
-  function beginEditingCell(rowId: string, column: EditableColumn, currentValue: string | number | null | undefined) {
-    const value = column === "markup" ? fmtPct(Number(currentValue ?? 0)) : String(currentValue ?? "");
+  function beginEditingCell(
+    rowId: string,
+    column: EditableColumn,
+    currentValue: string | number | null | undefined,
+    /**
+     * When type-to-edit enters edit mode, the keydown that triggered it was
+     * already consumed before the input mounted, so the input would otherwise
+     * drop the first character. Pass the typed key here to seed the input
+     * (replace-on-type, Excel-style) instead of formatting `currentValue`.
+     */
+    initialEditValue?: string,
+  ) {
+    const value = initialEditValue
+      ?? (column === "markup" ? fmtPct(Number(currentValue ?? 0)) : String(currentValue ?? ""));
     setEditingCell({ rowId, column });
     setSelectedCell({ rowId, column });
     setEditValue(value);
     setSelectedRowId(rowId);
 
     setTimeout(() => {
-      editInputRef.current?.focus();
-      if (editInputRef.current && "select" in editInputRef.current) {
-        (editInputRef.current as HTMLInputElement).select();
+      const input = editInputRef.current as HTMLInputElement | null;
+      if (!input) return;
+      input.focus();
+      if (initialEditValue !== undefined) {
+        // Type-to-edit seeded the input with the typed character — put the
+        // caret at the end so the user keeps typing after it. Selecting-all
+        // here would let the very next keystroke wipe the seed, reproducing
+        // the bug we just fixed.
+        const end = input.value.length;
+        if (typeof input.setSelectionRange === "function") {
+          input.setSelectionRange(end, end);
+        }
+      } else if (typeof input.select === "function") {
+        // Enter/F2/double-click → select-all so typing replaces the value
+        // (standard Excel behavior).
+        input.select();
       }
     }, 0);
   }
 
-  function startEditing(rowId: string, column: EditableColumn, currentValue: string | number) {
+  function startEditing(
+    rowId: string,
+    column: EditableColumn,
+    currentValue: string | number,
+    initialEditValue?: string,
+  ) {
     const row = visibleRows.find((r) => r.id === rowId);
     if (!row) return;
 
@@ -3754,7 +3784,7 @@ export function EstimateGrid({
     const catDef = findCategoryForRow(row, entityCategories);
     if (isCellDisabledByCategory(catDef, column)) return;
 
-    beginEditingCell(rowId, column, currentValue);
+    beginEditingCell(rowId, column, currentValue, initialEditValue);
   }
 
   function commitEdit() {
@@ -3958,13 +3988,18 @@ export function EstimateGrid({
           setSelectedCell(null);
           return;
       }
-      // Printable single char → enter edit mode and let the input replace value
+      // Printable single char → enter edit mode and seed with the typed
+      // character (Excel-style replace-on-type). Seeding is required because
+      // the keydown that fired this handler has already been consumed by the
+      // time the input mounts, so without it the first character would be
+      // dropped.
       if (e.key === "?") return;
       if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        e.preventDefault();
         const row = visibleRows.find((r) => r.id === selectedCell.rowId);
         if (!row) return;
         const rawVal = getEditableValue(row, selectedCell.column);
-        startEditing(selectedCell.rowId, selectedCell.column, rawVal as string | number);
+        startEditing(selectedCell.rowId, selectedCell.column, rawVal as string | number, e.key);
       }
     };
     document.addEventListener("keydown", handler);
