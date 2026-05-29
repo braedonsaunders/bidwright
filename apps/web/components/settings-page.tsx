@@ -837,10 +837,23 @@ export function SettingsPage({
     const newUser: UserRecord = { id: tempId, name: "", email: "", role: "Estimator", active: true };
     setSettings((s) => ({ ...s, users: [...s.users, newUser] }));
     try {
-      const created = await apiCreateUser({ name: "", email: `new-${Date.now()}@placeholder.com`, role: "estimator" });
+      // Server requires non-empty name/email/role on POST /users (returns 400
+      // otherwise). The empty name we used to send silently failed and left a
+      // dangling temp-id row in the UI that 404'd on every subsequent
+      // saveUser PATCH — i.e. "I added a user but it doesn't save." The
+      // placeholder name gets overwritten as soon as the operator types into
+      // the row (onBlur PATCH); same pattern as the placeholder email.
+      const created = await apiCreateUser({
+        name: "New User",
+        email: `new-${Date.now()}@placeholder.com`,
+        role: "estimator",
+      });
       setSettings((s) => ({ ...s, users: s.users.map((u) => (u.id === tempId ? { ...u, id: created.id } : u)) }));
-    } catch {
-      // User added locally
+    } catch (err) {
+      // Roll back the optimistic row so a real failure (network, server
+      // error) doesn't leave a row that silently 404s on every save.
+      console.error("Failed to create user:", err);
+      setSettings((s) => ({ ...s, users: s.users.filter((u) => u.id !== tempId) }));
     }
   };
   const removeUser = useCallback(async (id: string) => {
