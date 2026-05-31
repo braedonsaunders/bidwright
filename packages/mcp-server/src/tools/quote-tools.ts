@@ -1683,6 +1683,21 @@ export function registerQuoteTools(server: McpServer) {
     }
   );
 
+  // ── deleteWorksheet ───────────────────────────────────────
+  server.tool(
+    "deleteWorksheet",
+    "Delete a worksheet (an entire cost section) from the current revision. Cascades to any remaining line items — only call this once the worksheet is empty or you intentionally want to drop its lines and recalc totals.",
+    { worksheetId: z.string().describe("ID of the worksheet to remove") },
+    async ({ worksheetId }) => {
+      await apiDelete(projectPath(`/worksheets/${worksheetId}`));
+      invalidateWs();
+      return { content: [{ type: "text" as const, text: toolUiText(`Deleted worksheet ${worksheetId}`, {
+        kind: "worksheet.deleted",
+        worksheetId,
+      }) }] };
+    }
+  );
+
   // ── moveWorksheet ─────────────────────────────────────────
   server.tool(
     "moveWorksheet",

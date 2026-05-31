@@ -3575,7 +3575,10 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               <button
                 onClick={() => setFollowAgent((value) => !value)}
                 className={cn(
-                  "hidden items-center gap-1.5 rounded-md border px-2 py-1 text-[10px] font-medium transition-colors sm:inline-flex",
+                  // h-8 matches the Setup button and the dock-position select
+                  // beside this; without it the Follow toggle sat ~6px shorter
+                  // because it was using py-1 instead of an explicit height.
+                  "hidden h-8 items-center gap-1.5 rounded-md border px-2 text-[10px] font-medium transition-colors sm:inline-flex",
                   followAgent ? "border-accent/25 bg-accent/10 text-accent" : "border-line bg-panel2 text-fg/45 hover:text-fg/70",
                 )}
                 title="Follow agent navigation"

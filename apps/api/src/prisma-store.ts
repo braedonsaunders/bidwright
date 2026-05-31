@@ -12793,6 +12793,24 @@ export class PrismaApiStore {
       };
     }
 
+    if (toolId === "deleteWorksheet") {
+      return {
+        id: `synthetic-${run.id}-${index}`,
+        projectId,
+        revisionId: run.revisionId ?? null,
+        type: "worksheet_deleted",
+        data: {
+          ...baseData,
+          worksheetId: typeof input.worksheetId === "string" ? input.worksheetId : null,
+          worksheetName: typeof input.worksheetName === "string" ? input.worksheetName : null,
+        },
+        userId: null,
+        userName: "Bidwright AI",
+        revertible: false,
+        createdAt,
+      };
+    }
+
     return null;
   }
 

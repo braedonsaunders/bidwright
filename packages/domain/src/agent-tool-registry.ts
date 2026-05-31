@@ -26,6 +26,7 @@ export const AGENT_TOOL_REGISTRY = {
   getWorksheetTree: { id: "getWorksheetTree", displayName: "Read worksheet tree", category: "worksheet" },
   getItemConfig: { id: "getItemConfig", displayName: "Read line item config", category: "worksheet" },
   createWorksheet: { id: "createWorksheet", displayName: "Create worksheet", category: "worksheet", mutates: true },
+  deleteWorksheet: { id: "deleteWorksheet", displayName: "Delete worksheet", category: "worksheet", mutates: true },
   createWorksheetFolder: { id: "createWorksheetFolder", displayName: "Create worksheet folder", category: "worksheet", mutates: true },
   updateWorksheetFolder: { id: "updateWorksheetFolder", displayName: "Update worksheet folder", category: "worksheet", mutates: true },
   deleteWorksheetFolder: { id: "deleteWorksheetFolder", displayName: "Delete worksheet folder", category: "worksheet", mutates: true },
