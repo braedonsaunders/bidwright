@@ -705,6 +705,47 @@ function writeTierSlotHours(
   return next;
 }
 
+/**
+ * Sum of all tierUnits values on a row — the single "Units" / "Duration" count
+ * for duration_rate (equipment) and unit_rate (travel/per-diem) categories.
+ */
+function rowSingleUnits(row: { tierUnits?: Record<string, number> | undefined }): number {
+  return Object.values(row.tierUnits ?? {}).reduce(
+    (sum, value) => sum + (Number(value) > 0 ? Number(value) : 0),
+    0,
+  );
+}
+
+/**
+ * The tierUnits key to store a single Units/Duration count under. For a rate-book
+ * line (duration_rate) we prefer the tier whose UoM matches the row's UoM so the
+ * stored data lines up with how the engine prices it; otherwise (unit_rate / no
+ * schedule) a synthetic key. The engine reads the *sum* of tierUnits, so the key
+ * only affects which tier the count visually associates with — pricing is driven
+ * by the row's UoM (duration) or the sum (single).
+ */
+function singleUnitsTierKey(
+  row: { uom?: string | null | undefined; tierUnits?: Record<string, number> | undefined },
+  schedule: RateSchedule | null,
+): string {
+  const tiers = schedule?.tiers ?? [];
+  if (tiers.length > 0) {
+    const uom = (row.uom ?? "").trim().toLowerCase();
+    if (uom) {
+      const byUom = tiers.find((tier) => (tier.uom ?? "").trim().toLowerCase() === uom);
+      if (byUom) return byUom.id;
+    }
+    const existingKeys = Object.keys(row.tierUnits ?? {});
+    if (existingKeys.length === 1 && tiers.some((tier) => tier.id === existingKeys[0])) {
+      return existingKeys[0]!;
+    }
+    const mult1 = tiers.find((tier) => Number(tier.multiplier) === 1);
+    if (mult1) return mult1.id;
+    return tiers[0]!.id;
+  }
+  return "__unit";
+}
+
 function getRowSlotHours(
   row: WorkspaceWorksheetItem,
   schedules: RateSchedule[],
@@ -2516,13 +2557,28 @@ export function EstimateGrid({
       patch.price === undefined &&
       (patch.quantity !== undefined ||
         patch.cost !== undefined ||
-        patch.markup !== undefined)
+        patch.markup !== undefined ||
+        patch.tierUnits !== undefined)
     ) {
-      nextRow.price = roundMoney(nextRow.cost * nextRow.quantity * (1 + nextRow.markup));
+      const mode = categoryUnitInputMode(findCategoryForRow(nextRow, entityCategories));
+      if (mode === "single") {
+        // Quantity × Units × Cost (e.g. travel/per-diem). Units default to 1 so a
+        // row with no usage yet still prices as a plain qty × cost line.
+        const units = rowSingleUnits(nextRow) || 1;
+        nextRow.price = roundMoney(nextRow.cost * nextRow.quantity * units * (1 + nextRow.markup));
+      } else if (
+        patch.quantity !== undefined ||
+        patch.cost !== undefined ||
+        patch.markup !== undefined
+      ) {
+        // Preserve prior behaviour for freeform lines; rate-book lines are
+        // re-priced authoritatively by the server on save.
+        nextRow.price = roundMoney(nextRow.cost * nextRow.quantity * (1 + nextRow.markup));
+      }
     }
 
     return nextRow;
-  }, []);
+  }, [entityCategories]);
 
   const commitItemPatch = useCallback((
     rowId: string,
@@ -3295,11 +3351,15 @@ export function EstimateGrid({
   const getEditableValue = useCallback(
     (row: WorkspaceWorksheetItem, column: EditableColumn) => {
       if (column === "unit1" || column === "unit2" || column === "unit3") {
+        if (column === "unit1") {
+          const mode = categoryUnitInputMode(findCategoryForRow(row, entityCategories));
+          if (mode === "duration" || mode === "single") return rowSingleUnits(row);
+        }
         return getRowHourBreakdown(row)[column];
       }
       return row[column as keyof WorkspaceWorksheetItem];
     },
-    [getRowHourBreakdown],
+    [entityCategories, getRowHourBreakdown],
   );
 
   // Toggle sort on column click
@@ -3822,9 +3882,17 @@ export function EstimateGrid({
       }
       if (column === "unit1" || column === "unit2" || column === "unit3") {
         const schedule = findScheduleForRow(row, workspace.rateSchedules);
-        patch = {
-          tierUnits: writeTierSlotHours(row.tierUnits, schedule, column, numVal),
-        };
+        const mode = categoryUnitInputMode(findCategoryForRow(row, entityCategories));
+        if ((mode === "duration" || mode === "single") && column === "unit1") {
+          // Single Units/Duration input: store the whole value under one key. The
+          // engine reads the sum of tierUnits — duration prices at the UoM tier,
+          // single multiplies qty × units × cost.
+          patch = { tierUnits: { [singleUnitsTierKey(row, schedule)]: numVal } };
+        } else {
+          patch = {
+            tierUnits: writeTierSlotHours(row.tierUnits, schedule, column, numVal),
+          };
+        }
       } else {
         patch = { [column]: numVal };
       }
@@ -4689,6 +4757,10 @@ export function EstimateGrid({
   // ─── Row operations ───
 
   const addNewItem = useCallback((_categoryOverride?: string) => {
+    if (activeTab === "all") {
+      onError("Select a specific worksheet to add items — the “All” view spans every worksheet and has no add target.");
+      return;
+    }
     const wsId = activeWorksheetForActions?.id;
     if (!wsId) {
       if (activeFolderId) {
@@ -4728,13 +4800,14 @@ export function EstimateGrid({
       }
 
       if ((workspace.worksheets ?? []).length === 0) return;
+      if (activeTab === "all") return; // No add target on the "All" view.
       e.preventDefault();
       addNewItem();
     };
 
     document.addEventListener("keydown", handler);
     return () => document.removeEventListener("keydown", handler);
-  }, [addNewItem, editingCell, entityDropdownRowId, isPending, workspace.worksheets]);
+  }, [activeTab, addNewItem, editingCell, entityDropdownRowId, isPending, workspace.worksheets]);
 
   // ─── Extended keyboard shortcuts ───
   useEffect(() => {
@@ -5405,6 +5478,10 @@ export function EstimateGrid({
   }
 
   function handleAddSelectedItems() {
+    if (activeTab === "all") {
+      onError("Select a specific worksheet to add items — the “All” view has no add target.");
+      return;
+    }
     const wsId = activeWorksheetForActions?.id;
     if (!wsId) return;
 
@@ -5868,23 +5945,27 @@ export function EstimateGrid({
     const isTemporary = isTemporaryWorksheetItemId(row.id);
     const unitMode = categoryUnitInputMode(catDef);
 
-    // Duration/usage categories (e.g. owned equipment on a Daily/Weekly/Monthly
-    // ratebook) price by a single usage count entered in the Qty column at the
-    // rate for the selected UoM — no per-tier input and no label in this column.
-    if (unitMode === "duration") {
-      return <td className="border-b border-line px-1 py-0.5" onClick={(e) => e.stopPropagation()} />;
-    }
-
+    // Single-input categories show ONE Units count instead of per-tier hours:
+    //  - "duration" (e.g. equipment on a Daily/Weekly/Monthly book): the count is
+    //    the duration, priced at the rate for the row's UoM (the UoM column picks
+    //    the tier). e.g. 5 (weeks) at the Weekly rate × quantity.
+    //  - "single" (e.g. travel/per-diem): the count multiplies quantity × cost.
+    //    e.g. 6 people (qty) × 5 days (units) × per-diem rate.
+    const isSingleMode = unitMode === "duration" || unitMode === "single";
     const hasTieredUnits = unitMode === "multiplier";
     const hourBreakdown = getRowHourBreakdown(row);
+    const singleUnits = rowSingleUnits(row);
     const unitLabels = getRowUnitSlotLabels(row, catDef);
+    const singleLabel = unitMode === "duration" ? "Duration" : "Units";
     const hasDerivedSecondaryUnits = hourBreakdown.unit2 > 0 || hourBreakdown.unit3 > 0;
     const visibleUnitSlots =
-      hasTieredUnits
-        ? (["unit1", "unit2", "unit3"] as const)
-        : hasDerivedSecondaryUnits
-          ? ((["unit1", "unit2", "unit3"] as const).filter((slot) => hourBreakdown[slot] > 0))
-          : (["unit1"] as const);
+      isSingleMode
+        ? (["unit1"] as const)
+        : hasTieredUnits
+          ? (["unit1", "unit2", "unit3"] as const)
+          : hasDerivedSecondaryUnits
+            ? ((["unit1", "unit2", "unit3"] as const).filter((slot) => hourBreakdown[slot] > 0))
+            : (["unit1"] as const);
 
     const renderUnitSlot = (
       field: "unit1" | "unit2" | "unit3",
@@ -5963,7 +6044,11 @@ export function EstimateGrid({
           {visibleUnitSlots.map((field, index) => (
             <div key={field} className="contents">
               {index > 0 ? <span className="text-fg/15 text-[9px] select-none">{"\u00B7"}</span> : null}
-              {renderUnitSlot(field, hourBreakdown[field], unitLabels[field])}
+              {renderUnitSlot(
+                field,
+                isSingleMode && field === "unit1" ? singleUnits : hourBreakdown[field],
+                isSingleMode && field === "unit1" ? singleLabel : unitLabels[field],
+              )}
             </div>
           ))}
         </div>
@@ -7340,9 +7425,11 @@ export function EstimateGrid({
               size="xs"
               className="rounded-md"
               onClick={() => addNewItem()}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0 || activeTab === "all"}
               title={
-                (workspace.worksheets ?? []).length === 0
+                activeTab === "all"
+                  ? "Select a worksheet to add items (the All view has no add target)"
+                  : (workspace.worksheets ?? []).length === 0
                   ? "Create a worksheet first"
                   : "Add one line item"
               }
@@ -7354,9 +7441,11 @@ export function EstimateGrid({
               variant="ghost"
               className="rounded-md"
               onClick={() => setShowAddItemsPicker(true)}
-              disabled={isPending || (workspace.worksheets ?? []).length === 0}
+              disabled={isPending || (workspace.worksheets ?? []).length === 0 || activeTab === "all"}
               title={
-                (workspace.worksheets ?? []).length === 0
+                activeTab === "all"
+                  ? "Select a worksheet to add items (the All view has no add target)"
+                  : (workspace.worksheets ?? []).length === 0
                   ? "Create a worksheet first"
                   : "Add multiple line items"
               }

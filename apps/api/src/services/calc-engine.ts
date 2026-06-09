@@ -149,13 +149,16 @@ function calcTieredRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
 }
 
 function calcDurationRate(item: WorksheetItem, ctx: CalcContext): CalcResult {
-  // Duration pricing prefers a linked rate schedule (DAY/WEEK/MONTH tiers,
-  // hours in `tierUnits`). If no schedule is attached, treat the row as a
-  // plain markup line so the user-entered cost/qty/markup still produces a
-  // sensible price — important for ad-hoc / vendor-quote style entries.
+  // Duration pricing prefers a linked rate schedule (DAY/WEEK/MONTH tiers); the
+  // resolver prices rate(UoM tier) × duration × quantity. With NO schedule
+  // attached (e.g. a freeform rental / vendor-quote line) there is no per-period
+  // rate to look up, so we fall back to Quantity × Units × Cost — the single
+  // Units count (held in tierUnits) is the duration, e.g. 2 machines × 5 days ×
+  // day-rate. Units default to 1, so a row with no duration yet prices as a
+  // plain qty × cost line (preserving prior behaviour).
   const rsResult = calcRateSchedule(item, undefined, ctx);
   if (rsResult) return rsResult;
-  return calcManual(item);
+  return calcUnitRate(item);
 }
 
 function calcQuantityMarkup(item: WorksheetItem): CalcResult {
@@ -177,6 +180,26 @@ function calcManual(item: WorksheetItem): CalcResult {
   const markup = normalizeMarkupRatio(item.markup);
   const price = asLineTotal(item.quantity * item.cost * (1 + markup));
   return { price, markup };
+}
+
+/**
+ * Quantity × Units × Cost.
+ *
+ * A single "units" count (stored as the sum of `tierUnits`, edited via one units
+ * input in the grid) multiplies quantity × cost. Example: 6 people (quantity) ×
+ * 5 days (units) × per-diem cost. Units default to 1 so a freshly-added row with
+ * no usage yet still prices as a plain qty × cost line. Used for per-diem,
+ * travel, and other "N of something for M periods" categories.
+ */
+function calcUnitRate(item: WorksheetItem): CalcResult {
+  const markup = normalizeMarkupRatio(item.markup);
+  const unitsTotal = Object.values(item.tierUnits ?? {}).reduce(
+    (sum, value) => sum + (Number(value) > 0 ? Number(value) : 0),
+    0,
+  );
+  const units = unitsTotal > 0 ? unitsTotal : 1;
+  const price = asLineTotal(item.quantity * units * item.cost * (1 + markup));
+  return { cost: asPerUnitCost(item.cost), price, markup };
 }
 
 function calcDirectTotal(_item: WorksheetItem): CalcResult {
@@ -259,6 +282,8 @@ export function calculateItem(
       return calcQuantityMarkup(item);
     case "unit_markup":
       return calcUnitMarkup(item);
+    case "unit_rate":
+      return calcUnitRate(item);
     case "direct_total":
       return calcDirectTotal(item);
     case "formula":

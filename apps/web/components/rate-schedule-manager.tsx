@@ -955,6 +955,40 @@ export function RateScheduleManager({
     }
   }, [detail, newTierName, newTierMultiplier, newTierUom, applyScheduleUpdate]);
 
+  // One-click tier presets so a new rate book is set up correctly:
+  //  - "labour": multiplier tiers (Reg 1.0 / OT 1.5 / DT 2.0), UoM left blank —
+  //    paired with a "Tiered Rate Schedule" category (the per-tier hours grid).
+  //  - "duration": UoM tiers (Day / Week / Month) — paired with a "Duration /
+  //    Usage Pricing" category (the UoM picks the rate; quantity × duration).
+  const handleApplyTierPreset = useCallback(
+    async (preset: "labour" | "duration") => {
+      if (!detail) return;
+      const presetTiers =
+        preset === "labour"
+          ? [
+              { name: "Regular", multiplier: 1.0, uom: null },
+              { name: "Overtime", multiplier: 1.5, uom: null },
+              { name: "Double Time", multiplier: 2.0, uom: null },
+            ]
+          : [
+              { name: "Daily", multiplier: 1.0, uom: "DAY" },
+              { name: "Weekly", multiplier: 1.0, uom: "WK" },
+              { name: "Monthly", multiplier: 1.0, uom: "MO" },
+            ];
+      try {
+        let updated = detail;
+        for (const tier of presetTiers) {
+          updated = await addRateScheduleTier(detail.id, tier);
+        }
+        applyScheduleUpdate(updated);
+        setShowAddTier(false);
+      } catch (err) {
+        console.error("Failed to apply tier preset:", err);
+      }
+    },
+    [detail, applyScheduleUpdate],
+  );
+
   const handleDeleteTier = useCallback(
     async (tierId: string) => {
       if (!detail) return;
@@ -1849,7 +1883,21 @@ export function RateScheduleManager({
                       </div>
                     )}
                     {detail.tiers.length === 0 ? (
-                      <p className="text-xs text-fg/30 py-2">No tiers. Add tiers such as Each, Day, Week, Regular, or Overtime.</p>
+                      <div className="py-2 space-y-2.5">
+                        <p className="text-xs text-fg/40">No tiers yet. Start from a preset, or use <span className="text-fg/60">Add</span> for custom tiers.</p>
+                        <div className="flex flex-wrap gap-2">
+                          <Button size="xs" onClick={() => handleApplyTierPreset("labour")}>
+                            <Plus className="h-3 w-3" /> Labour · Reg / OT / DT
+                          </Button>
+                          <Button size="xs" onClick={() => handleApplyTierPreset("duration")}>
+                            <Plus className="h-3 w-3" /> Equipment · Day / Week / Month
+                          </Button>
+                        </div>
+                        <p className="text-[10px] leading-relaxed text-fg/35">
+                          Set a <span className="text-fg/55 font-medium">multiplier</span> per tier (Reg 1.0 / OT 1.5 / DT 2.0) for a <span className="text-fg/55">Tiered Rate Schedule</span> category — the worksheet shows the per-tier hours grid.
+                          Set a <span className="text-fg/55 font-medium">UoM</span> per tier (Day / Week / Month) for a <span className="text-fg/55">Duration / Usage Pricing</span> category — the worksheet UoM picks the rate.
+                        </p>
+                      </div>
                     ) : (
                       <div className="flex flex-wrap gap-2">
                         {detail.tiers.sort((a, b) => a.sortOrder - b.sortOrder).map((tier) => (

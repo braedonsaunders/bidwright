@@ -242,20 +242,31 @@ export function resolveRateBookLine(
   const { rateBook, rateBookItem } = match;
   const rawTierUnits = item.tierUnits ?? {};
   const defaultTier = defaultTierForItem(rateBook, item);
-  // Duration/usage lines (owned equipment on a Daily/Weekly/Monthly book) hold a
-  // single usage count in `quantity` and price against the tier matching the
-  // row's UoM. Treat empty OR all-zero tierUnits as "use the UoM tier once" so
-  // changing UoM or quantity re-prices. Scoped to duration_rate so multi-tier
-  // Labour lines with 0 hours still correctly price at $0.
+  // Duration/usage lines (e.g. owned or rented equipment on a Daily / Weekly /
+  // Monthly book) price as: rate(UoM tier) × duration × quantity. The row's UoM
+  // — resolved into `defaultTier` via tier.uom — is authoritative for *which* tier
+  // (and therefore which rate) applies, so changing the UoM re-prices regardless
+  // of which tier the stored count was originally keyed under. The "duration" is
+  // the single usage count entered in the grid (stored as the sum of tierUnits),
+  // defaulting to 1 when empty/zero. Scoped to duration_rate so multi-tier Labour
+  // lines with genuine 0-hour tiers still price at $0.
   const isDurationLine = category?.calculationType === "duration_rate";
-  const hasUsableTierUnits = isDurationLine
-    ? Object.values(rawTierUnits).some((value) => Number(value) > 0)
-    : Object.keys(rawTierUnits).length > 0;
-  const tierUnits = hasUsableTierUnits
-    ? rawTierUnits
-    : defaultTier
-      ? { [defaultTier.id]: 1 }
-      : { "__unit": 1 };
+  let tierUnits: Record<string, number>;
+  if (isDurationLine) {
+    const durationTotal = Object.values(rawTierUnits).reduce(
+      (sum, value) => sum + (Number(value) > 0 ? Number(value) : 0),
+      0,
+    );
+    const duration = durationTotal > 0 ? durationTotal : 1;
+    tierUnits = defaultTier ? { [defaultTier.id]: duration } : { "__unit": duration };
+  } else {
+    tierUnits =
+      Object.keys(rawTierUnits).length > 0
+        ? rawTierUnits
+        : defaultTier
+          ? { [defaultTier.id]: 1 }
+          : { "__unit": 1 };
+  }
 
   const quantity = numberValue(item.quantity, 1);
   const rates = rateBookItem.rates ?? {};

@@ -41,6 +41,14 @@ export interface ItemDetailDrawerProps {
   onClose: () => void;
 }
 
+/** Sum of tierUnits — the single Units/Duration count for duration_rate & unit_rate categories. */
+function sumTierUnits(tierUnits: Record<string, number> | undefined): number {
+  return Object.values(tierUnits ?? {}).reduce(
+    (sum, value) => sum + (Number(value) > 0 ? Number(value) : 0),
+    0,
+  );
+}
+
 export function ItemDetailDrawer({
   item,
   workspace,
@@ -74,6 +82,7 @@ export function ItemDetailDrawer({
     unit1: initialBuckets.reg,
     unit2: initialBuckets.ot,
     unit3: initialBuckets.dt,
+    unitsSingle: sumTierUnits(item.tierUnits),
     phaseId: item.phaseId ?? "",
     masterFormatCode: getClassificationCode(item.classification, "masterformat"),
     costCode: getClassificationCode(item.classification, "costCode", item.costCode),
@@ -96,6 +105,7 @@ export function ItemDetailDrawer({
       unit1: buckets.reg,
       unit2: buckets.ot,
       unit3: buckets.dt,
+      unitsSingle: sumTierUnits(item.tierUnits),
       phaseId: item.phaseId ?? "",
       masterFormatCode: getClassificationCode(item.classification, "masterformat"),
       costCode: getClassificationCode(item.classification, "costCode", item.costCode),
@@ -232,6 +242,25 @@ export function ItemDetailDrawer({
     return next;
   }
 
+  // tierUnits key for a single Units/Duration count: prefer the tier whose UoM
+  // matches the row (duration_rate), else a synthetic key (unit_rate / no book).
+  function singleUnitsKey(): string {
+    const tiers = rowSchedule?.tiers ?? [];
+    if (tiers.length > 0) {
+      const uom = (form.uom ?? "").trim().toLowerCase();
+      if (uom) {
+        const byUom = tiers.find((t) => (t.uom ?? "").trim().toLowerCase() === uom);
+        if (byUom) return byUom.id;
+      }
+      const existing = Object.keys(item.tierUnits ?? {});
+      if (existing.length === 1 && tiers.some((t) => t.id === existing[0])) return existing[0]!;
+      const mult1 = tiers.find((t) => Number(t.multiplier) === 1);
+      if (mult1) return mult1.id;
+      return tiers[0]!.id;
+    }
+    return "__unit";
+  }
+
   function handleFieldBlur(field: string, value: string | number) {
     let patch: Record<string, unknown> = {};
 
@@ -251,6 +280,10 @@ export function ItemDetailDrawer({
       const num = Number(value);
       if (!Number.isFinite(num)) return;
       patch = { tierUnits: buildNextTierUnits(field, num) };
+    } else if (field === "unitsSingle") {
+      const num = Number(value);
+      if (!Number.isFinite(num)) return;
+      patch = { tierUnits: { [singleUnitsKey()]: num } };
     } else if (field === "phaseId") {
       patch = { phaseId: value || null };
     } else if (field === "masterFormatCode") {
@@ -269,7 +302,7 @@ export function ItemDetailDrawer({
 
   const isEditable = (field: string) => {
     if (!catDef) return true;
-    if (field === "unit1" || field === "unit2" || field === "unit3") {
+    if (field === "unit1" || field === "unit2" || field === "unit3" || field === "unitsSingle") {
       return categoryAllowsEditingTierUnits(catDef);
     }
     if (field === "tierUnits") return categoryAllowsEditingTierUnits(catDef);
@@ -509,8 +542,7 @@ export function ItemDetailDrawer({
               </div>
             </div>
 
-            {/* Multiplier-tier inputs (Labour Reg/OT/DT). Duration and freeform
-                categories price from Qty/UoM/cost, so the tier grid is hidden. */}
+            {/* Multiplier-tier inputs (Labour Reg/OT/DT). */}
             {categoryUnitInputMode(catDef) === "multiplier" && (
               <div className="grid grid-cols-3 gap-3">
                 {renderNumericField(
@@ -527,6 +559,20 @@ export function ItemDetailDrawer({
                   "unit3",
                   getSlotLabel("unit3", "DT"),
                   form.unit3,
+                )}
+              </div>
+            )}
+
+            {/* Single Units/Duration input. Duration (equipment) prices the count
+                at the rate for the row's UoM; single (travel/per-diem) multiplies
+                quantity × units × cost. */}
+            {(categoryUnitInputMode(catDef) === "duration" ||
+              categoryUnitInputMode(catDef) === "single") && (
+              <div className="grid grid-cols-2 gap-3">
+                {renderNumericField(
+                  "unitsSingle",
+                  categoryUnitInputMode(catDef) === "duration" ? "Duration" : "Units",
+                  form.unitsSingle,
                 )}
               </div>
             )}

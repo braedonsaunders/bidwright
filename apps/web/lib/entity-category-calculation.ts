@@ -3,7 +3,7 @@ import type { CalculationType, EntityCategory } from "@/lib/api";
 type EditableFieldMap = EntityCategory["editableFields"];
 type UnitLabelMap = EntityCategory["unitLabels"];
 
-export type CategoryUnitMode = "none" | "tiered";
+export type CategoryUnitMode = "none" | "tiered" | "single";
 
 export interface CalculationTypeOption {
   value: CalculationType;
@@ -75,6 +75,15 @@ export const CALCULATION_TYPE_OPTIONS: CalculationTypeOption[] = [
     recommendedEditableFields: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
     recommendedUnitLabels: {},
   },
+  {
+    value: "unit_rate",
+    label: "Quantity × Units × Cost",
+    description:
+      "Multiplies quantity by a single Units count and unit cost — e.g. 6 people × 5 days × per-diem rate. One Units input per row (no rate schedule needed). Best for travel, per diem, and other “N of something for M periods” lines.",
+    unitMode: "single",
+    recommendedEditableFields: { quantity: true, cost: true, markup: true, price: false, tierUnits: true },
+    recommendedUnitLabels: {},
+  },
 ];
 
 const CALCULATION_TYPE_MAP = new Map(
@@ -93,15 +102,17 @@ export function categoryUsesTieredUnits(category: Pick<EntityCategory, "calculat
   return getCalculationTypeOption(category?.calculationType).unitMode === "tiered";
 }
 
-export type CategoryUnitInputMode = "none" | "multiplier" | "duration";
+export type CategoryUnitInputMode = "none" | "multiplier" | "duration" | "single";
 
 /**
  * How a category's per-row "units" are entered:
  *  - "multiplier": one input per rate-schedule tier, keyed by tier multiplier
  *    (Labour Reg/OT/DT). Hours are entered per tier in tierUnits.
- *  - "duration": a single usage/duration count (held in the row's quantity)
- *    priced against the rate tier that matches the row's UoM — for owned
- *    equipment on a Daily/Weekly/Monthly ratebook. No per-tier inputs.
+ *  - "duration": a single usage/duration count priced against the rate tier that
+ *    matches the row's UoM — owned/rented equipment on a Daily/Weekly/Monthly
+ *    ratebook. One Units input; the UoM picks the tier/rate.
+ *  - "single": a single Units count (no rate schedule) that multiplies
+ *    quantity × cost — e.g. travel/per-diem priced as people × days × rate.
  *  - "none": no tier units; priced from quantity/cost/markup/price (e.g. a
  *    freeform vendor-quote rental, material, etc.).
  * Driven purely by category config so it generalises across org setups.
@@ -109,7 +120,14 @@ export type CategoryUnitInputMode = "none" | "multiplier" | "duration";
 export function categoryUnitInputMode(
   category: Pick<EntityCategory, "calculationType" | "itemSource"> | undefined,
 ): CategoryUnitInputMode {
-  if (category?.calculationType === "duration_rate") return "duration";
+  if (category?.calculationType === "duration_rate") {
+    // A rate-book-backed duration line prices at the UoM tier (rate × duration ×
+    // qty) so the UoM picks the rate. A *freeform* duration line has no rate book
+    // to look up, so it is a single Quantity × Units × Cost line (same one-input
+    // UI; the engine prices it differently).
+    return category?.itemSource === "rate_schedule" ? "duration" : "single";
+  }
+  if (getCalculationTypeOption(category?.calculationType).unitMode === "single") return "single";
   if (categoryUsesTieredUnits(category)) return "multiplier";
   return "none";
 }

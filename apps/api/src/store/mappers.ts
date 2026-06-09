@@ -1225,6 +1225,7 @@ const EDITABLE_FIELD_PRESETS: Record<EntityCategory["calculationType"], EntityCa
   manual: DEFAULT_ENTITY_EDITABLE_FIELDS,
   unit_markup: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
   quantity_markup: { quantity: true, cost: true, markup: true, price: false, tierUnits: false },
+  unit_rate: { quantity: true, cost: true, markup: true, price: false, tierUnits: true },
   tiered_rate: { quantity: true, cost: false, markup: false, price: false, tierUnits: true },
   duration_rate: { quantity: true, cost: false, markup: false, price: false, tierUnits: true },
   direct_total: { quantity: false, cost: false, markup: false, price: true, tierUnits: false },

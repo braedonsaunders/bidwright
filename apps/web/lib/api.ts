@@ -1236,6 +1236,7 @@ export type CalculationType =
   | "manual"
   | "unit_markup"
   | "quantity_markup"
+  | "unit_rate"
   | "tiered_rate"
   | "duration_rate"
   | "direct_total"

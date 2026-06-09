@@ -89,7 +89,7 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
     coverPage: true,
     scopeOfWork: true,
     leadLetter: true,
-    lineItems: true,
+    lineItems: false,
     phases: false,
     modifiers: true,
     conditions: true,

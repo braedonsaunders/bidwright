@@ -43,15 +43,22 @@ trap cleanup SIGINT SIGTERM EXIT
 lsof -ti :4001 2>/dev/null | xargs kill -9 2>/dev/null || true
 lsof -ti :3000 2>/dev/null | xargs kill -9 2>/dev/null || true
 
-echo "[*] Starting Postgres + Redis + Ollama..."
-docker compose up -d postgres redis ollama 2>&1 | grep -v "level=warning"
+# Only run a local Postgres when DATABASE_URL is local; otherwise use the shared cluster.
+case "$DATABASE_URL" in *@localhost:*|*@127.0.0.1:*) BW_LOCAL_DB=1;; *) BW_LOCAL_DB=0;; esac
 
-echo -n "[*] Waiting for Postgres"
-until docker compose exec -T postgres pg_isready -U bidwright -d bidwright >/dev/null 2>&1; do
-  echo -n "."
-  sleep 1
-done
-echo " ready!"
+if [ "$BW_LOCAL_DB" = "1" ]; then
+  echo "[*] Starting Postgres + Redis + Ollama..."
+  docker compose up -d postgres redis ollama 2>&1 | grep -v "level=warning"
+  echo -n "[*] Waiting for Postgres"
+  until docker compose exec -T postgres pg_isready -U bidwright -d bidwright >/dev/null 2>&1; do
+    echo -n "."
+    sleep 1
+  done
+  echo " ready!"
+else
+  echo "[*] Remote/shared DATABASE_URL — using cluster DB; starting Redis + Ollama only..."
+  docker compose up -d redis ollama 2>&1 | grep -v "level=warning"
+fi
 
 echo -n "[*] Waiting for Redis"
 until docker compose exec -T redis redis-cli ping >/dev/null 2>&1; do
@@ -100,8 +107,16 @@ fi
 echo "[*] Generating Prisma client..."
 pnpm db:generate >/dev/null 2>&1
 
-echo "[*] Pushing schema to database..."
-yes | pnpm db:push -- --accept-data-loss --skip-generate >/dev/null 2>&1 || true
+# Only run destructive schema sync against a LOCAL database. When DATABASE_URL
+# points at a remote/shared cluster (prod-shared), the schema is owned by prod's
+# migration flow — never db:push --accept-data-loss or seed against it.
+case "$DATABASE_URL" in *@localhost:*|*@127.0.0.1:*) BW_LOCAL_DB=1;; *) BW_LOCAL_DB=0;; esac
+if [ "$BW_LOCAL_DB" = "1" ]; then
+  echo "[*] Pushing schema to database..."
+  yes | pnpm db:push -- --accept-data-loss --skip-generate >/dev/null 2>&1 || true
+else
+  echo "[*] Remote/shared DATABASE_URL detected — skipping destructive db:push (schema managed by prod)."
+fi
 
 EMBED_DIM="${EMBEDDING_DIMENSIONS:-768}"
 echo "[*] Setting up pgvector (${EMBED_DIM} dimensions)..."
@@ -134,6 +149,9 @@ CREATE INDEX IF NOT EXISTS idx_vector_records_org ON vector_records (organizatio
 CREATE INDEX IF NOT EXISTS idx_vector_records_project ON vector_records (project_id);
 SQL
 
+if [ "$BW_LOCAL_DB" != "1" ]; then
+  echo "[*] Remote/shared DATABASE_URL — skipping seed (data managed by prod)."
+else
 ADMIN_COUNT=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "SELECT count(*) FROM \"SuperAdmin\";" 2>/dev/null | tr -d ' ' || echo "0")
 ORG_COUNT=$(docker compose exec -T postgres psql -U bidwright -d bidwright -tAc "SELECT count(*) FROM \"Organization\";" 2>/dev/null | tr -d ' ' || echo "0")
 if [ "$ADMIN_COUNT" = "0" ]; then
@@ -143,6 +161,7 @@ elif [ "$ORG_COUNT" = "0" ]; then
   pnpm seed 2>&1 | grep -E "^\[seed\]" || echo "  (seed failed; continuing)"
 else
   echo "[*] Database has data ($ORG_COUNT org(s)); skipping seed."
+fi
 fi
 
 echo ""
