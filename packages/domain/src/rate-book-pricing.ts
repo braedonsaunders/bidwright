@@ -242,7 +242,16 @@ export function resolveRateBookLine(
   const { rateBook, rateBookItem } = match;
   const rawTierUnits = item.tierUnits ?? {};
   const defaultTier = defaultTierForItem(rateBook, item);
-  const tierUnits = Object.keys(rawTierUnits).length > 0
+  // Duration/usage lines (owned equipment on a Daily/Weekly/Monthly book) hold a
+  // single usage count in `quantity` and price against the tier matching the
+  // row's UoM. Treat empty OR all-zero tierUnits as "use the UoM tier once" so
+  // changing UoM or quantity re-prices. Scoped to duration_rate so multi-tier
+  // Labour lines with 0 hours still correctly price at $0.
+  const isDurationLine = category?.calculationType === "duration_rate";
+  const hasUsableTierUnits = isDurationLine
+    ? Object.values(rawTierUnits).some((value) => Number(value) > 0)
+    : Object.keys(rawTierUnits).length > 0;
+  const tierUnits = hasUsableTierUnits
     ? rawTierUnits
     : defaultTier
       ? { [defaultTier.id]: 1 }

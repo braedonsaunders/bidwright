@@ -39,11 +39,13 @@ export interface PdfLayoutOptions {
     phases: boolean;
     modifiers: boolean;
     conditions: boolean;
+    terms: boolean;
     pricingSummary: boolean;
     hoursSummary: boolean;
     labourSummary: boolean;
     notes: boolean;
     reportSections: boolean;
+    schedule: boolean;
   };
   sectionOrder: string[];
   lineItemOptions: {
@@ -78,7 +80,7 @@ export interface PdfLayoutOptions {
   }>;
 }
 
-type PdfTemplateType = "main" | "backup" | "sitecopy" | "closeout" | "schedule";
+type PdfTemplateType = "main" | "backup" | "sitecopy";
 type LineItemGroupBy = PdfLayoutOptions["lineItemOptions"]["groupBy"];
 type CustomSection = PdfLayoutOptions["customSections"][number];
 
@@ -91,15 +93,17 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
     phases: false,
     modifiers: true,
     conditions: true,
+    terms: true,
     pricingSummary: true,
     hoursSummary: false,
     labourSummary: false,
     notes: true,
     reportSections: true,
+    schedule: false,
   },
   sectionOrder: [
     "coverPage", "scopeOfWork", "notes", "leadLetter", "lineItems", "phases",
-    "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary",
+    "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary", "schedule", "terms",
   ],
   lineItemOptions: { showCostColumn: true, showMarkupColumn: true, groupBy: "worksheet" },
   branding: { accentColor: "#3b82f6", headerBgColor: "#1a1a1a", fontFamily: "sans" },
@@ -124,18 +128,18 @@ const SECTION_LABELS: Record<string, string> = {
   phases: "Phases",
   modifiers: "Adjustments",
   conditions: "Conditions",
+  terms: "Terms & Conditions",
   hoursSummary: "Hours Summary",
   labourSummary: "Labour Summary",
   notes: "Notes",
   reportSections: "Report Sections",
+  schedule: "Project Schedule",
 };
 
 const DOCUMENT_TYPES: Array<{ id: PdfTemplateType; label: string; description: string }> = [
   { id: "main", label: "Proposal", description: "Primary quote package for client delivery" },
-  { id: "backup", label: "Backup", description: "Detailed backup with worksheet pricing detail" },
+  { id: "backup", label: "Cost", description: "Internal copy — shows cost, markup, margin & hours" },
   { id: "sitecopy", label: "Site Copy", description: "Field/site issue version of the quote" },
-  { id: "closeout", label: "Closeout", description: "Closeout package without estimate detail" },
-  { id: "schedule", label: "Schedule", description: "Project schedule and task sequence" },
 ];
 
 function normalizeTemplateType(value: unknown): PdfTemplateType {
@@ -143,14 +147,16 @@ function normalizeTemplateType(value: unknown): PdfTemplateType {
     case "main":
     case "backup":
     case "sitecopy":
-    case "closeout":
-    case "schedule":
       return value;
     case "detailed":
       return "backup";
+    // Closeout and Schedule are no longer standalone types — Schedule is now a
+    // section toggle. Legacy values fall back to the Proposal layout.
     case "standard":
     case "summary":
     case "client":
+    case "closeout":
+    case "schedule":
     default:
       return "main";
   }
@@ -548,6 +554,9 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
 
   const applyTemplate = (templateId: PdfTemplateType) => {
     setActiveTemplate(templateId);
+    // Cost visibility is driven by the document type (no separate toggle):
+    // only the Cost copy exposes internal cost / markup / margin / profit.
+    setOptions((prev) => ({ ...prev, customerFacing: templateId !== "backup" }));
     setDirty(true);
   };
 
@@ -605,35 +614,25 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                       expanded={expandedPanels.has("documentType")}
                       onToggle={() => togglePanel("documentType")}
                     >
-                      <div className="grid grid-cols-2 gap-1.5">
+                      <div className="grid grid-cols-3 gap-1.5">
                         {DOCUMENT_TYPES.map((t) => (
                           <button
                             key={t.id}
                             onClick={() => applyTemplate(t.id)}
+                            title={t.description}
                             className={cn(
-                              "rounded-lg border p-2 text-left transition-all",
+                              "rounded-lg border px-1.5 py-2 text-center transition-all",
                               activeTemplate === t.id
                                 ? "border-accent bg-accent/5 ring-1 ring-accent/20"
                                 : "border-line hover:border-fg/20 hover:bg-panel2/50"
                             )}
                           >
                             <div className="text-[11px] font-medium leading-snug">{t.label}</div>
-                            <div className="mt-0.5 text-[9px] text-fg/40 leading-snug">{t.description}</div>
                           </button>
                         ))}
                       </div>
-                      <div className="mt-3 flex items-center justify-between rounded-md border border-line px-3 py-2">
-                        <div>
-                          <div className="text-xs font-medium">Customer-Facing Output</div>
-                          <div className="text-[10px] text-fg/40">Hide internal cost, markup, margin, and profit</div>
-                        </div>
-                        <Toggle
-                          checked={options.customerFacing}
-                          onChange={(v) => {
-                            setOptions((prev) => ({ ...prev, customerFacing: v }));
-                            setDirty(true);
-                          }}
-                        />
+                      <div className="mt-2 text-[10px] leading-snug text-fg/40">
+                        {DOCUMENT_TYPES.find((t) => t.id === activeTemplate)?.description}
                       </div>
                     </SidebarPanel>
 

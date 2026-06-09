@@ -7,16 +7,6 @@ import type {
   WorkspaceWorksheetItem,
 } from "@/lib/api";
 
-function replaceWorksheet(
-  worksheets: WorkspaceWorksheet[],
-  worksheetId: string,
-  update: (worksheet: WorkspaceWorksheet) => WorkspaceWorksheet,
-) {
-  return worksheets.map((worksheet) =>
-    worksheet.id === worksheetId ? update(worksheet) : worksheet,
-  );
-}
-
 function sortWorksheetItems(items: WorkspaceWorksheetItem[]) {
   return [...items].sort((left, right) => {
     if (left.lineOrder !== right.lineOrder) {
@@ -66,23 +56,34 @@ export function applyWorksheetItemUpsert(
   currentRevisionOverride?: QuoteRevision,
   estimateTotals?: ProjectWorkspaceData["estimate"]["totals"],
 ) {
-  const nextWorksheets = current.workspace.worksheets.some(
+  const targetExists = current.workspace.worksheets.some(
     (worksheet) => worksheet.id === item.worksheetId,
-  )
-    ? replaceWorksheet(current.workspace.worksheets, item.worksheetId, (worksheet) => {
-        const existingIndex = worksheet.items.findIndex(
-          (worksheetItem) => worksheetItem.id === item.id,
-        );
-        const nextItems = [...worksheet.items];
-        if (existingIndex >= 0) {
-          nextItems[existingIndex] = item;
-        } else {
-          nextItems.push(item);
+  );
+
+  const nextWorksheets = targetExists
+    ? current.workspace.worksheets.map((worksheet) => {
+        if (worksheet.id === item.worksheetId) {
+          // Upsert into the target worksheet.
+          const existingIndex = worksheet.items.findIndex(
+            (worksheetItem) => worksheetItem.id === item.id,
+          );
+          const nextItems = [...worksheet.items];
+          if (existingIndex >= 0) {
+            nextItems[existingIndex] = item;
+          } else {
+            nextItems.push(item);
+          }
+          return { ...worksheet, items: sortWorksheetItems(nextItems) };
         }
-        return {
-          ...worksheet,
-          items: sortWorksheetItems(nextItems),
-        };
+        // Remove the item from any other worksheet so a cross-worksheet move
+        // doesn't leave a stale duplicate row in the source worksheet.
+        if (worksheet.items.some((worksheetItem) => worksheetItem.id === item.id)) {
+          return {
+            ...worksheet,
+            items: worksheet.items.filter((worksheetItem) => worksheetItem.id !== item.id),
+          };
+        }
+        return worksheet;
       })
     : current.workspace.worksheets;
 

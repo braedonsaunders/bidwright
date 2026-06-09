@@ -95,6 +95,7 @@ import {
 } from "@/lib/worksheet-hours";
 import {
   categoryAllowsEditingTierUnits,
+  categoryUnitInputMode,
   categoryUsesTieredUnits,
   getTierLabel,
 } from "@/lib/entity-category-calculation";
@@ -5091,10 +5092,7 @@ export function EstimateGrid({
       try {
         let last: WorkspaceResponse | null = null;
         for (const id of ids) {
-          // Moving means updating worksheetId - but the API takes item id and patch
-          // We need to delete from old and create in new, or if the API supports worksheetId update
-          // For now, let's try setting worksheetId via update
-          last = await updateWorksheetItem(workspace.project.id, id, { worksheetId: targetWsId } as Record<string, unknown>);
+          last = await updateWorksheetItem(workspace.project.id, id, { worksheetId: targetWsId });
         }
         if (last) onApply(last);
         setSelectedIds(new Set());
@@ -5201,7 +5199,7 @@ export function EstimateGrid({
       setContextMenu(null);
       return;
     }
-    commitItemPatch(row.id, { worksheetId } as WorksheetItemPatchInput, "Move failed.");
+    commitItemPatch(row.id, { worksheetId }, "Move failed.");
     setContextMenu(null);
   }
 
@@ -5375,7 +5373,9 @@ export function EstimateGrid({
       sourceEvidence: item.sourceEvidence ?? {},
     };
 
-    if (item.rateScheduleItemId) {
+    // Only multiplier-tier categories (Labour Reg/OT/DT) seed per-tier hours.
+    // Duration categories keep tierUnits empty and price by Qty × the UoM rate.
+    if (item.rateScheduleItemId && categoryUnitInputMode(targetCategory) === "multiplier") {
       const schedule = (workspace.rateSchedules ?? []).find((entry) =>
         entry.items.some((scheduleItem) => scheduleItem.id === item.rateScheduleItemId),
       );
@@ -5866,7 +5866,16 @@ export function EstimateGrid({
   function renderResolvedUnitsCell(row: WorkspaceWorksheetItem) {
     const catDef = findCategoryForRow(row, entityCategories);
     const isTemporary = isTemporaryWorksheetItemId(row.id);
-    const hasTieredUnits = categoryUsesTieredUnits(catDef);
+    const unitMode = categoryUnitInputMode(catDef);
+
+    // Duration/usage categories (e.g. owned equipment on a Daily/Weekly/Monthly
+    // ratebook) price by a single usage count entered in the Qty column at the
+    // rate for the selected UoM — no per-tier input and no label in this column.
+    if (unitMode === "duration") {
+      return <td className="border-b border-line px-1 py-0.5" onClick={(e) => e.stopPropagation()} />;
+    }
+
+    const hasTieredUnits = unitMode === "multiplier";
     const hourBreakdown = getRowHourBreakdown(row);
     const unitLabels = getRowUnitSlotLabels(row, catDef);
     const hasDerivedSecondaryUnits = hourBreakdown.unit2 > 0 || hourBreakdown.unit3 > 0;
@@ -6761,7 +6770,17 @@ export function EstimateGrid({
 			                      {renderGroupCollection(manualEntryGroups, "accent", "manual-launchpad")}
 			                    </div>
 			                  )}
-			                  {!showBrowseLaunchpad && renderCategorySelection()}
+			                  {!showBrowseLaunchpad && (
+                    <button
+                      type="button"
+                      className="flex w-full items-center gap-1.5 border-b border-line/70 px-3 py-2 text-[11px] font-medium text-fg/55 transition-colors hover:bg-accent/5 hover:text-accent"
+                      onClick={() => { setEntityBrowseMode(null); setEntitySearchTerm(""); }}
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                      Back to all sources
+                    </button>
+                  )}
+                  {!showBrowseLaunchpad && renderCategorySelection()}
 			                  {!showBrowseLaunchpad && entitySearchLoading && entityFlatItems.length === 0 && (
 			                    <div className="flex items-center justify-center gap-2 px-3 py-8 text-xs text-fg/45">
 			                      <Loader2 className="h-4 w-4 animate-spin text-accent" />
@@ -6778,7 +6797,7 @@ export function EstimateGrid({
 			                      No matches. Keep typing or create a freeform item.
 			                    </div>
 				                  )}
-				                  {!showBrowseLaunchpad && renderGroupCollection(orderedGroups, "muted", "ordered")}
+				                  {!showBrowseLaunchpad && renderGroupCollection(browseCard ? orderedGroups.filter((group) => group.source !== "freeform") : orderedGroups, "muted", "ordered")}
 				                  {!showBrowseLaunchpad && entitySearchLoadingMore && (
 				                    <div className="flex items-center justify-center gap-2 py-3 text-[11px] text-fg/40">
 				                      <Loader2 className="h-3.5 w-3.5 animate-spin text-accent" />
@@ -6947,7 +6966,14 @@ export function EstimateGrid({
 		            if (isDropdownOpen) {
 		              closeEntityDropdown(row.id);
 		            } else {
-	              openEntityDropdown(row.id, e.currentTarget as HTMLTableCellElement);
+	              // Rate-schedule categories (e.g. Labour ratebook) open straight into the
+	              // browsable rate books so the user doesn't have to search on every row.
+	              const rowCategory = findCategoryForRow(row, entityCategories);
+	              openEntityDropdown(
+	                row.id,
+	                e.currentTarget as HTMLTableCellElement,
+	                categoryRequiresRateSchedule(rowCategory) ? { browseMode: "rate_books" } : undefined,
+	              );
 	            }
           }}
 	        >

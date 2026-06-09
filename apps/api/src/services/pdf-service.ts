@@ -94,6 +94,14 @@ export interface PdfDataPackage {
     parentSectionId: string | null;
   }>;
   orgTermsAndConditions: string;
+  scheduleTasks: Array<{
+    name: string;
+    phaseName: string;
+    startDate: string | null;
+    endDate: string | null;
+    duration: number;
+    status: string;
+  }>;
 }
 
 export interface PdfLayoutOptions {
@@ -106,11 +114,13 @@ export interface PdfLayoutOptions {
     phases: boolean;
     modifiers: boolean;
     conditions: boolean;
+    terms: boolean;
     pricingSummary: boolean;
     hoursSummary: boolean;
     labourSummary: boolean;
     notes: boolean;
     reportSections: boolean;
+    schedule: boolean;
   };
   // Section display order (array of section keys)
   sectionOrder: string[];
@@ -163,15 +173,17 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
       phases: false,
       modifiers: true,
       conditions: true,
+      terms: true,
       pricingSummary: true,
       hoursSummary: false,
       labourSummary: false,
       notes: true,
       reportSections: true,
+      schedule: false,
     },
     sectionOrder: [
       "coverPage", "scopeOfWork", "notes", "leadLetter", "lineItems", "phases",
-      "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary",
+      "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary", "schedule", "terms",
     ],
     lineItemOptions: {
       showCostColumn: true,
@@ -335,6 +347,14 @@ export function buildPdfDataPackage(
       parentSectionId: s.parentSectionId ?? null,
     })),
     orgTermsAndConditions: organization.termsAndConditions ?? "",
+    scheduleTasks: (workspace.scheduleTasks ?? []).map((t: any) => ({
+      name: t.name ?? "",
+      phaseName: t.phaseId ? ((workspace.phases ?? []).find((p: any) => p.id === t.phaseId)?.name ?? "") : "",
+      startDate: t.startDate ?? null,
+      endDate: t.endDate ?? null,
+      duration: t.duration ?? 0,
+      status: t.status ?? "not_started",
+    })),
   };
 }
 
@@ -376,13 +396,41 @@ function insertCustomSectionBeforePricing(order: string[], key: string) {
   else order.splice(pricingIndex, 0, key);
 }
 
+// Per-document-type layout presets. These force the characteristics that DEFINE
+// each document type on top of the user's saved layout options, so the variants
+// render as meaningfully different documents:
+//   • backup   = internal estimating copy (cost/markup columns, hours + labour)
+//   • sitecopy = field copy with no pricing of any kind
+// Other types (main/closeout/schedule) have no preset and use the raw options.
+const TEMPLATE_PRESETS: Record<string, Record<string, unknown>> = {
+  // Proposal is always customer-facing — internal cost/markup/margin never leak,
+  // regardless of saved options (cost visibility is driven by document type).
+  main: {
+    customerFacing: true,
+  },
+  backup: {
+    customerFacing: false,
+    lineItemOptions: { showCostColumn: true, showMarkupColumn: true },
+    sections: { hoursSummary: true, labourSummary: true },
+  },
+  sitecopy: {
+    customerFacing: true,
+    lineItemOptions: { showCostColumn: false, showMarkupColumn: false },
+    sections: { modifiers: false, pricingSummary: false, hoursSummary: false, labourSummary: false },
+  },
+};
+
 export function generatePdfHtml(
   data: PdfDataPackage,
   templateType: string,
   options?: Partial<PdfLayoutOptions>
 ): string {
   const defaults = getDefaultPdfLayoutOptions();
-  const opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
+  let opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
+  const templatePreset = TEMPLATE_PRESETS[templateType];
+  if (templatePreset) {
+    opts = deepMerge(opts, templatePreset);
+  }
 
   // Ensure any new section keys present in defaults are added to sectionOrder
   for (const key of defaults.sectionOrder) {
@@ -420,6 +468,10 @@ export function generatePdfHtml(
       maximumFractionDigits: 2,
     })}`;
   const formatPct = (v: number) => `${(v * 100).toFixed(1)}%`;
+
+  const isSiteCopy = templateType === "sitecopy";
+  const docBadgeLabel = isSiteCopy ? "SITE COPY" : data.type;
+  const docBadgeStyle = isSiteCopy ? ' style="background:#b91c1c;color:#fff"' : "";
 
   // --- Section renderers ---
 
@@ -612,8 +664,12 @@ export function generatePdfHtml(
     if (templateType === "closeout") return "";
 
     const backupCol = templateType === "backup";
+    const fieldCopy = templateType === "sitecopy";
     const showCost = opts.customerFacing ? false : opts.lineItemOptions.showCostColumn;
     const showMarkup = opts.customerFacing ? false : opts.lineItemOptions.showMarkupColumn;
+    // Site copies are field documents — strip hours and all pricing.
+    const showHours = !fieldCopy;
+    const showPrice = !fieldCopy;
     const groupBy = opts.lineItemOptions.groupBy;
     const showWorksheetColumn = backupCol && groupBy !== "worksheet";
     const descriptorColumnCount = showWorksheetColumn ? 6 : 5;
@@ -630,8 +686,8 @@ export function generatePdfHtml(
         <td>${escapeHtml(item.uom)}</td>
         ${showCost ? `<td class="num">${formatMoney(item.cost)}</td>` : ""}
         ${showMarkup ? `<td class="num">${formatPct(item.markup)}</td>` : ""}
-        <td class="num">${hours > 0 ? hours.toLocaleString() : ""}</td>
-        <td class="num"><strong>${formatMoney(item.price)}</strong></td>
+        ${showHours ? `<td class="num">${hours > 0 ? hours.toLocaleString() : ""}</td>` : ""}
+        ${showPrice ? `<td class="num"><strong>${formatMoney(item.price)}</strong></td>` : ""}
       </tr>`;
       return row;
     };
@@ -643,7 +699,9 @@ export function generatePdfHtml(
       let row = `<tr class="totals"><td colspan="${descriptorColumnCount}">${escapeHtml(label)}</td>`;
       if (showCost) row += `<td class="num">${formatMoney(totalCost)}</td>`;
       if (showMarkup) row += `<td></td>`;
-      row += `<td class="num">${totalHrs.toLocaleString()}</td><td class="num">${formatMoney(totalPrice)}</td></tr>`;
+      if (showHours) row += `<td class="num">${totalHrs.toLocaleString()}</td>`;
+      if (showPrice) row += `<td class="num">${formatMoney(totalPrice)}</td>`;
+      row += `</tr>`;
       return row;
     };
 
@@ -658,7 +716,8 @@ export function generatePdfHtml(
           <th class="num">Qty</th><th>UOM</th>
           ${showCost ? '<th class="num">Cost</th>' : ""}
           ${showMarkup ? '<th class="num">Markup</th>' : ""}
-          <th class="num">Hours</th><th class="num">Price</th>
+          ${showHours ? '<th class="num">Hours</th>' : ""}
+          ${showPrice ? '<th class="num">Price</th>' : ""}
         </tr></thead><tbody>`;
       for (const item of items) table += renderItemRow(item);
       table += renderTotalsRow(items);
@@ -714,22 +773,45 @@ export function generatePdfHtml(
 
   const renderConditions = (): string => {
     const hasConditions = inclusions.length > 0 || exclusions.length > 0;
-    const hasOrgTerms = !!data.orgTermsAndConditions?.trim();
-    if (!hasConditions && !hasOrgTerms) return "";
+    if (!hasConditions) return "";
     let result = `<h2>Conditions</h2>`;
-    if (hasConditions) {
-      result += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
-      if (inclusions.length > 0) {
-        result += `<div><h3>Inclusions</h3><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
-      }
-      if (exclusions.length > 0) {
-        result += `<div><h3>Exclusions</h3><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
-      }
-      result += `</div>`;
+    result += `<div style="display:grid;grid-template-columns:1fr 1fr;gap:24px">`;
+    if (inclusions.length > 0) {
+      result += `<div><h3>Inclusions</h3><ul>${inclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
     }
-    if (hasOrgTerms) {
-      result += `<div class="section-body" style="margin-top:16px;white-space:pre-wrap">${escapeHtml(data.orgTermsAndConditions)}</div>`;
+    if (exclusions.length > 0) {
+      result += `<div><h3>Exclusions</h3><ul>${exclusions.map((c) => `<li>${escapeHtml(c.value)}</li>`).join("")}</ul></div>`;
     }
+    result += `</div>`;
+    return result;
+  };
+
+  const renderTerms = (): string => {
+    if (!data.orgTermsAndConditions?.trim()) return "";
+    return `<h2>Terms &amp; Conditions</h2><div class="section-body" style="white-space:pre-wrap">${escapeHtml(data.orgTermsAndConditions)}</div>`;
+  };
+
+  const renderSchedule = (): string => {
+    const tasks = data.scheduleTasks ?? [];
+    if (tasks.length === 0) return "";
+    const fmtDate = (d: string | null) =>
+      d ? new Date(d).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" }) : "";
+    const statusLabels: Record<string, string> = {
+      not_started: "Not Started", in_progress: "In Progress", complete: "Complete", on_hold: "On Hold",
+    };
+    let result = `<h2>Project Schedule</h2>
+      <table><thead><tr><th>Task</th><th>Phase</th><th>Start</th><th>Finish</th><th class="num">Days</th><th>Status</th></tr></thead><tbody>`;
+    for (const task of tasks) {
+      result += `<tr>
+        <td>${escapeHtml(task.name)}</td>
+        <td>${escapeHtml(task.phaseName)}</td>
+        <td>${fmtDate(task.startDate)}</td>
+        <td>${fmtDate(task.endDate)}</td>
+        <td class="num">${task.duration || ""}</td>
+        <td>${escapeHtml(statusLabels[task.status] ?? task.status)}</td>
+      </tr>`;
+    }
+    result += `</tbody></table>`;
     return result;
   };
 
@@ -841,6 +923,8 @@ export function generatePdfHtml(
     phases: renderPhases,
     modifiers: renderAdjustments,
     conditions: renderConditions,
+    terms: renderTerms,
+    schedule: renderSchedule,
     hoursSummary: renderHoursSummary,
     labourSummary: renderLabourSummary,
     notes: renderNotes,
@@ -942,6 +1026,9 @@ export function generatePdfHtml(
   .report-nested .report-section-icon { width: 26px; height: 26px; font-size: 12px; }
   .report-nested .report-section-title { font-size: 13px; }
 
+  ${isSiteCopy ? `
+  body::before { content: "SITE COPY"; position: fixed; top: 45%; left: 50%; transform: translate(-50%, -50%) rotate(-30deg); font-size: 130px; font-weight: 800; letter-spacing: 0.12em; color: rgba(185, 28, 28, 0.10); pointer-events: none; z-index: 0; white-space: nowrap; }
+  ` : ""}
   @media print { body { margin: 0; padding: ${PDF_BODY_PADDING_PX}px; } }
 </style></head><body>`;
 
@@ -976,7 +1063,7 @@ export function generatePdfHtml(
           <div class="meta">Quote ${escapeHtml(data.quoteNumber)} &middot; Revision ${data.revisionNumber}</div>
         </div>
         <div style="text-align:right">
-          <span class="badge">${escapeHtml(data.type)}</span>
+          <span class="badge"${docBadgeStyle}>${escapeHtml(docBadgeLabel)}</span>
           ${data.dateQuote ? `<div class="meta" style="margin-top:4px">Date: ${escapeHtml(data.dateQuote)}</div>` : ""}
           ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
         </div>
@@ -1012,7 +1099,7 @@ export function generatePdfHtml(
             <div class="meta">Quote ${escapeHtml(data.quoteNumber)} &middot; Revision ${data.revisionNumber}</div>
           </div>
           <div style="text-align:right">
-            <span class="badge">${escapeHtml(data.type)}</span>
+            <span class="badge"${docBadgeStyle}>${escapeHtml(docBadgeLabel)}</span>
             ${data.dateQuote ? `<div class="meta" style="margin-top:4px">Date: ${escapeHtml(data.dateQuote)}</div>` : ""}
             ${data.dateDue ? `<div class="meta">Due: ${escapeHtml(data.dateDue)}</div>` : ""}
           </div>

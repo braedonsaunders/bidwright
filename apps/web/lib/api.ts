@@ -1819,6 +1819,7 @@ export async function makeRevisionZero(projectId: string) {
 // ---------------------------------------------------------------------------
 
 export interface WorksheetItemPatchInput {
+  worksheetId?: string;
   phaseId?: string | null;
   categoryId?: string | null;
   category?: string;

@@ -198,6 +198,7 @@ const quotePatchSchema = z.object({
   userId: z.string().nullable().optional()
 });
 const worksheetItemPatchSchema = z.object({
+  worksheetId: z.string().min(1).optional(),
   phaseId: z.string().nullable().optional(),
   categoryId: z.string().nullable().optional(),
   category: z.string().min(1).optional(),

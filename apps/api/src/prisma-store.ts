@@ -700,6 +700,7 @@ export interface QuotePatchInput {
 }
 
 export interface WorksheetItemPatchInput {
+  worksheetId?: string;
   phaseId?: string | null;
   categoryId?: string | null;
   category?: string;
@@ -1999,8 +2000,17 @@ function firstPluginSearchField(tool: { ui?: { sections?: Array<{ fields?: Array
 
 // ── Main Store Class ──────────────────────────────────────────────────────────
 
+// Stable key for the Postgres advisory lock that serialises the one-time
+// line-item search DDL across concurrent requests and API processes.
+const LINE_ITEM_SEARCH_DDL_LOCK = 4823170192;
+
 export class PrismaApiStore {
   private static lineItemSearchInfrastructureReady = false;
+  // Single-flight memo for the one-time search DDL. `CREATE ... IF NOT EXISTS` is
+  // NOT concurrency-safe — parallel first-time callers race on pg_class and one
+  // fails with unique violation 23505. Concurrent callers await one shared promise
+  // instead of each running the DDL.
+  private static lineItemSearchInfrastructurePromise: Promise<void> | null = null;
   // Single-flight in-flight rebuilds keyed by `${organizationId}|${projectId ?? ""}` so concurrent
   // searchLineItemCandidates callers on a cold index don't trigger N redundant full rebuilds racing
   // each other through Postgres locks.
@@ -2059,8 +2069,29 @@ export class PrismaApiStore {
     if (PrismaApiStore.lineItemSearchInfrastructureReady) {
       return;
     }
-    await this.db.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
-    await this.db.$executeRawUnsafe(`
+    if (!PrismaApiStore.lineItemSearchInfrastructurePromise) {
+      PrismaApiStore.lineItemSearchInfrastructurePromise = this.buildLineItemSearchInfrastructure()
+        .then(() => {
+          PrismaApiStore.lineItemSearchInfrastructureReady = true;
+        })
+        .catch((err) => {
+          // Reset so a later request can retry the DDL.
+          PrismaApiStore.lineItemSearchInfrastructurePromise = null;
+          throw err;
+        });
+    }
+    await PrismaApiStore.lineItemSearchInfrastructurePromise;
+  }
+
+  private async buildLineItemSearchInfrastructure() {
+    // Run all DDL in one transaction behind a Postgres advisory lock. `CREATE ...
+    // IF NOT EXISTS` is not concurrency-safe: two parallel runs both see "not
+    // exists", then race to insert into pg_class and one fails with 23505. The
+    // advisory lock serialises this across requests AND across API processes.
+    await this.db.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${LINE_ITEM_SEARCH_DDL_LOCK})`);
+      await tx.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
+      await tx.$executeRawUnsafe(`
       CREATE TABLE IF NOT EXISTS "LineItemSearchDocument" (
         "id" TEXT PRIMARY KEY,
         "organizationId" TEXT NOT NULL,
@@ -2084,20 +2115,20 @@ export class PrismaApiStore {
         "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
-    await this.db.$executeRawUnsafe(`ALTER TABLE "LineItemSearchDocument" ADD COLUMN IF NOT EXISTS "searchVector" tsvector NOT NULL DEFAULT ''::tsvector`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_idx" ON "LineItemSearchDocument"("organizationId")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_projectId_idx" ON "LineItemSearchDocument"("organizationId", "projectId")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_projectId_sourceType_idx" ON "LineItemSearchDocument"("organizationId", "projectId", "sourceType")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_sourceType_idx" ON "LineItemSearchDocument"("organizationId", "sourceType")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_category_idx" ON "LineItemSearchDocument"("organizationId", "category")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_entityType_idx" ON "LineItemSearchDocument"("organizationId", "entityType")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchVector_fts_idx" ON "LineItemSearchDocument" USING GIN ("searchVector")`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_fts_idx" ON "LineItemSearchDocument" USING GIN (to_tsvector('english', "searchText"))`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_trgm_idx" ON "LineItemSearchDocument" USING GIN ("searchText" gin_trgm_ops)`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_title_trgm_idx" ON "LineItemSearchDocument" USING GIN ("title" gin_trgm_ops)`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_code_trgm_idx" ON "LineItemSearchDocument" USING GIN ("code" gin_trgm_ops)`);
-    await this.db.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_subtitle_trgm_idx" ON "LineItemSearchDocument" USING GIN ("subtitle" gin_trgm_ops)`);
-    PrismaApiStore.lineItemSearchInfrastructureReady = true;
+      await tx.$executeRawUnsafe(`ALTER TABLE "LineItemSearchDocument" ADD COLUMN IF NOT EXISTS "searchVector" tsvector NOT NULL DEFAULT ''::tsvector`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_idx" ON "LineItemSearchDocument"("organizationId")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_projectId_idx" ON "LineItemSearchDocument"("organizationId", "projectId")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_projectId_sourceType_idx" ON "LineItemSearchDocument"("organizationId", "projectId", "sourceType")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_sourceType_idx" ON "LineItemSearchDocument"("organizationId", "sourceType")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_category_idx" ON "LineItemSearchDocument"("organizationId", "category")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_organizationId_entityType_idx" ON "LineItemSearchDocument"("organizationId", "entityType")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchVector_fts_idx" ON "LineItemSearchDocument" USING GIN ("searchVector")`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_fts_idx" ON "LineItemSearchDocument" USING GIN (to_tsvector('english', "searchText"))`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_searchText_trgm_idx" ON "LineItemSearchDocument" USING GIN ("searchText" gin_trgm_ops)`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_title_trgm_idx" ON "LineItemSearchDocument" USING GIN ("title" gin_trgm_ops)`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_code_trgm_idx" ON "LineItemSearchDocument" USING GIN ("code" gin_trgm_ops)`);
+      await tx.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "LineItemSearchDocument_subtitle_trgm_idx" ON "LineItemSearchDocument" USING GIN ("subtitle" gin_trgm_ops)`);
+    }, { timeout: 30000 });
   }
 
   private async upsertLineItemSearchDocument(doc: LineItemSearchDocumentInput) {
@@ -8510,6 +8541,25 @@ export class PrismaApiStore {
       throw new Error(`Worksheet item ${itemId} not found for project ${projectId}`);
     }
 
+    // ── Worksheet move support ───────────────────────────────────────
+    // When the patch carries a worksheetId different from the row's current
+    // worksheet, move the row: the target must belong to the current revision,
+    // and the row is appended to the end of the target's line ordering.
+    let nextWorksheetId = item.worksheetId;
+    let movedLineOrder: number | null = null;
+    if (typeof patch.worksheetId === "string" && patch.worksheetId !== item.worksheetId) {
+      const targetWorksheet = await this.db.worksheet.findFirst({ where: { id: patch.worksheetId } });
+      if (!targetWorksheet || targetWorksheet.revisionId !== revision.id) {
+        throw new Error(`Target worksheet ${patch.worksheetId} not found in the current revision for project ${projectId}.`);
+      }
+      nextWorksheetId = targetWorksheet.id;
+      const maxOrder = await this.db.worksheetItem.aggregate({
+        where: { worksheetId: targetWorksheet.id },
+        _max: { lineOrder: true },
+      });
+      movedLineOrder = Number(maxOrder._max.lineOrder ?? -1) + 1;
+    }
+
     const normalizedPatch: WorksheetItemPatchInput = {
       ...patch,
       ...(typeof patch.entityName === "string" ? { entityName: decodeHtmlEntities(patch.entityName) } : {}),
@@ -8693,7 +8743,8 @@ export class PrismaApiStore {
         cost: domainItem.cost,
         markup: domainItem.markup,
         price: domainItem.price,
-        lineOrder: domainItem.lineOrder,
+        worksheetId: nextWorksheetId,
+        lineOrder: movedLineOrder ?? domainItem.lineOrder,
         rateScheduleItemId: domainItem.rateScheduleItemId ?? null,
         itemId: domainItem.itemId ?? null,
         tierUnits: domainItem.tierUnits ?? {},

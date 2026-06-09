@@ -12,6 +12,7 @@ import type {
 import { listPluginExecutions } from "@/lib/api";
 import {
   categoryAllowsEditingTierUnits,
+  categoryUnitInputMode,
   getCalculationTypeOption,
   getTierLabel,
 } from "@/lib/entity-category-calculation";
@@ -508,23 +509,27 @@ export function ItemDetailDrawer({
               </div>
             </div>
 
-            <div className="grid grid-cols-3 gap-3">
-              {renderNumericField(
-                "unit1",
-                getSlotLabel("unit1", "Reg"),
-                form.unit1,
-              )}
-              {renderNumericField(
-                "unit2",
-                getSlotLabel("unit2", "OT"),
-                form.unit2,
-              )}
-              {renderNumericField(
-                "unit3",
-                getSlotLabel("unit3", "DT"),
-                form.unit3,
-              )}
-            </div>
+            {/* Multiplier-tier inputs (Labour Reg/OT/DT). Duration and freeform
+                categories price from Qty/UoM/cost, so the tier grid is hidden. */}
+            {categoryUnitInputMode(catDef) === "multiplier" && (
+              <div className="grid grid-cols-3 gap-3">
+                {renderNumericField(
+                  "unit1",
+                  getSlotLabel("unit1", "Reg"),
+                  form.unit1,
+                )}
+                {renderNumericField(
+                  "unit2",
+                  getSlotLabel("unit2", "OT"),
+                  form.unit2,
+                )}
+                {renderNumericField(
+                  "unit3",
+                  getSlotLabel("unit3", "DT"),
+                  form.unit3,
+                )}
+              </div>
+            )}
 
             <div>
               <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">

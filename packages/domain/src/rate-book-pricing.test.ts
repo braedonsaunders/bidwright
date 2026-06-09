@@ -126,6 +126,84 @@ test("resource identity wins over name fallback when resolving rate book items",
   assert.equal(resolution.price, 25);
 });
 
+const durationCategory: EntityCategory = {
+  ...category,
+  id: "cat-equip",
+  name: "Equipment",
+  entityType: "equipment",
+  shortform: "EQ",
+  defaultUom: "DAY",
+  validUoms: ["DAY", "WK", "EA"],
+  calculationType: "duration_rate",
+  itemSource: "catalog",
+};
+
+function equipmentRateBooks() {
+  return [{
+    id: "rb-equip",
+    name: "Owned equipment rates",
+    tiers: [
+      { id: "day", name: "Daily", multiplier: 1, sortOrder: 1, uom: "DAY" },
+      { id: "week", name: "Weekly", multiplier: 5, sortOrder: 2, uom: "WK" },
+      { id: "each", name: "Each", multiplier: 1, sortOrder: 3, uom: "EA" },
+    ],
+    items: [{
+      id: "rsi-exc",
+      catalogItemId: "ci-exc",
+      catalogUnitCost: 60,
+      name: "Excavator",
+      code: "EXC",
+      unit: "DAY",
+      rates: { day: 100, week: 450, each: 80 },
+    }],
+  }];
+}
+
+test("duration line prices by the UoM-matched tier rate x quantity (Bug 4)", () => {
+  const day = resolveRateBookLine(
+    worksheetItem({ itemId: "ci-exc", entityName: "Excavator", quantity: 4, uom: "DAY", tierUnits: {} }),
+    durationCategory,
+    { rateBooks: equipmentRateBooks() },
+  );
+  assert.ok(day);
+  assert.equal(day.price, 400); // 100/day x qty 4
+
+  const week = resolveRateBookLine(
+    worksheetItem({ itemId: "ci-exc", entityName: "Excavator", quantity: 4, uom: "WK", tierUnits: {} }),
+    durationCategory,
+    { rateBooks: equipmentRateBooks() },
+  );
+  assert.ok(week);
+  assert.equal(week.price, 1800); // 450/wk x 4 — switching UoM re-prices against the weekly tier
+});
+
+test("duration line treats seeded all-zero tier units as one UoM unit so quantity drives price (Bug 5)", () => {
+  const each = resolveRateBookLine(
+    worksheetItem({ itemId: "ci-exc", entityName: "Excavator", quantity: 3, uom: "EA", tierUnits: { day: 0, week: 0, each: 0 } }),
+    durationCategory,
+    { rateBooks: equipmentRateBooks() },
+  );
+  assert.ok(each);
+  assert.equal(each.price, 240); // 80/each x 3 — quantity changes price despite seeded-zero tiers
+});
+
+test("non-duration line with all-zero tier units still prices at zero (no Labour regression)", () => {
+  const resolution = resolveRateBookLine(
+    worksheetItem({ costResourceId: "res-pump", quantity: 3, uom: "EA", tierUnits: { "tier-ea": 0 } }),
+    category, // quantity_markup, not duration
+    {
+      rateBooks: [{
+        id: "rb-1",
+        name: "Acme",
+        tiers: [{ id: "tier-ea", name: "Each", multiplier: 1, sortOrder: 1, uom: "EA" }],
+        items: [{ id: "rsi-1", resourceId: "res-pump", catalogUnitCost: 90, name: "Pump", code: "PMP", unit: "EA", rates: { "tier-ea": 150 } }],
+      }],
+    },
+  );
+  assert.ok(resolution);
+  assert.equal(resolution.price, 0); // present-but-zero tiers => no sell, unchanged for tiered/Labour lines
+});
+
 test("rate book cost uses generic tier multipliers and schedule-level components", () => {
   const resolution = resolveRateBookLine(
     worksheetItem({

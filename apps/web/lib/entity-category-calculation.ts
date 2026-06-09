@@ -93,6 +93,27 @@ export function categoryUsesTieredUnits(category: Pick<EntityCategory, "calculat
   return getCalculationTypeOption(category?.calculationType).unitMode === "tiered";
 }
 
+export type CategoryUnitInputMode = "none" | "multiplier" | "duration";
+
+/**
+ * How a category's per-row "units" are entered:
+ *  - "multiplier": one input per rate-schedule tier, keyed by tier multiplier
+ *    (Labour Reg/OT/DT). Hours are entered per tier in tierUnits.
+ *  - "duration": a single usage/duration count (held in the row's quantity)
+ *    priced against the rate tier that matches the row's UoM — for owned
+ *    equipment on a Daily/Weekly/Monthly ratebook. No per-tier inputs.
+ *  - "none": no tier units; priced from quantity/cost/markup/price (e.g. a
+ *    freeform vendor-quote rental, material, etc.).
+ * Driven purely by category config so it generalises across org setups.
+ */
+export function categoryUnitInputMode(
+  category: Pick<EntityCategory, "calculationType" | "itemSource"> | undefined,
+): CategoryUnitInputMode {
+  if (category?.calculationType === "duration_rate") return "duration";
+  if (categoryUsesTieredUnits(category)) return "multiplier";
+  return "none";
+}
+
 export function categoryAllowsEditingTierUnits(
   category: Pick<EntityCategory, "calculationType" | "editableFields" | "itemSource"> | undefined,
 ) {

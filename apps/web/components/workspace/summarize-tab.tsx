@@ -198,6 +198,23 @@ const ADJUSTMENT_TEMPLATES: Array<{ id: string; label: string; build: () => Crea
     }),
   },
   {
+    id: "surcharge",
+    label: "Surcharge %",
+    build: () => ({
+      kind: "modifier",
+      pricingMode: "modifier",
+      name: "Surcharge",
+      type: "Surcharge",
+      financialCategory: "fee",
+      calculationBase: "selected_scope",
+      active: true,
+      appliesTo: "All",
+      percentage: 0,
+      amount: null,
+      show: "Yes",
+    }),
+  },
+  {
     id: "allowance",
     label: "Fixed Allowance",
     build: () => ({
@@ -2592,13 +2609,7 @@ function AdjustmentSectionRows({
     <>
       <tr className="bg-panel/70">
         <td colSpan={colSpan} className="px-0 py-0">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-3">
-            <div>
-              <div className="text-sm font-semibold text-fg">Adjustments</div>
-              <div className="mt-1 text-[11px] text-fg/55">
-                Quote-level modifiers, alternates, allowances, and custom totals that feed into the final quoted total.
-              </div>
-            </div>
+          <div className="flex flex-wrap items-center justify-end gap-3 px-3 py-3">
             <div className="flex w-full max-w-[420px] gap-2 sm:w-auto">
               <BuilderSelect
                 value={nextAdjustmentTemplate}
@@ -2748,87 +2759,122 @@ function AdjustmentTableRow({
       <td className="px-3 py-2">
         <CommitInput value={adjustment.name} onCommit={(value) => onPatch(adjustment.id, { name: value })} disabled={busy} className="h-8 text-xs" />
       </td>
-      <td className="px-3 py-2">
-        <BuilderSelect
-          value={adjustment.pricingMode}
-          onValueChange={(value) => {
-            const pricingMode = value as AdjustmentPricingMode;
-            onPatch(adjustment.id, {
-              pricingMode,
-              kind: pricingMode === "modifier" ? "modifier" : "line_item",
-              percentage: pricingMode === "modifier" ? adjustment.percentage ?? 0 : null,
-              type: lineItemAdjustmentType(pricingMode) ?? adjustment.type,
-              calculationBase: pricingMode === "modifier" ? adjustment.calculationBase || "selected_scope" : "line_subtotal",
-            });
-          }}
-          disabled={busy}
-          options={ADJUSTMENT_MODE_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
-          className="h-8 text-xs"
-        />
-        <BuilderSelect
-          value={adjustment.financialCategory || "other"}
-          onValueChange={(value) => onPatch(adjustment.id, { financialCategory: value })}
-          disabled={busy}
-          options={FINANCIAL_CATEGORY_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
-          className="mt-2 h-8 text-xs"
-        />
+      <td className="px-3 py-2 align-top">
+        <div className="space-y-2">
+          <div>
+            <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Mode</div>
+            <BuilderSelect
+              value={adjustment.pricingMode}
+              onValueChange={(value) => {
+                const pricingMode = value as AdjustmentPricingMode;
+                onPatch(adjustment.id, {
+                  pricingMode,
+                  kind: pricingMode === "modifier" ? "modifier" : "line_item",
+                  percentage: pricingMode === "modifier" ? adjustment.percentage ?? 0 : null,
+                  type: lineItemAdjustmentType(pricingMode) ?? adjustment.type,
+                  calculationBase: pricingMode === "modifier" ? adjustment.calculationBase || "selected_scope" : "line_subtotal",
+                });
+              }}
+              disabled={busy}
+              options={ADJUSTMENT_MODE_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+              className="h-8 text-xs"
+            />
+          </div>
+          <div>
+            <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Category</div>
+            <BuilderSelect
+              value={adjustment.financialCategory || "other"}
+              onValueChange={(value) => onPatch(adjustment.id, { financialCategory: value })}
+              disabled={busy}
+              options={FINANCIAL_CATEGORY_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+              className="h-8 text-xs"
+            />
+          </div>
+        </div>
       </td>
-      <td className="px-3 py-2">
+      <td className="px-3 py-2 align-top">
         {isModifier ? (
           <div className="space-y-2">
-            <BuilderSelect
-              value={adjustment.calculationBase || "selected_scope"}
-              onValueChange={(value) => onPatch(adjustment.id, { calculationBase: value })}
-              disabled={busy}
-              options={CALCULATION_BASE_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
-              className="h-8 text-xs"
-            />
-            <BuilderSelect
-              value={adjustment.appliesTo || "All"}
-              onValueChange={(value) => onPatch(adjustment.id, { appliesTo: value })}
-              disabled={busy}
-              options={categoryOptions.map((option) => ({ value: option.id, label: option.label }))}
-              className="h-8 text-xs"
-            />
-            <div className="text-[11px] text-fg/45">Percent is calculated from the selected financial base.</div>
+            <div>
+              <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Base</div>
+              <BuilderSelect
+                value={adjustment.calculationBase || "selected_scope"}
+                onValueChange={(value) => onPatch(adjustment.id, { calculationBase: value })}
+                disabled={busy}
+                options={CALCULATION_BASE_OPTIONS.map((option) => ({ value: option.id, label: option.label }))}
+                className="h-8 text-xs"
+              />
+            </div>
+            <div>
+              <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Scope</div>
+              <BuilderSelect
+                value={adjustment.appliesTo || "All"}
+                onValueChange={(value) => onPatch(adjustment.id, { appliesTo: value })}
+                disabled={busy}
+                options={categoryOptions.map((option) => ({ value: option.id, label: option.label }))}
+                className="h-8 text-xs"
+              />
+            </div>
           </div>
         ) : (
           <div className="space-y-2">
-            <CommitInput value={adjustment.description} onCommit={(value) => onPatch(adjustment.id, { description: value })} placeholder="Proposal note" disabled={busy} className="h-8 text-xs" />
+            <div>
+              <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Note</div>
+              <CommitInput value={adjustment.description} onCommit={(value) => onPatch(adjustment.id, { description: value })} placeholder="Proposal note" disabled={busy} className="h-8 w-full text-xs" />
+            </div>
             <div className="text-[11px] text-fg/45">{adjustmentModeLabel(adjustment.pricingMode)}</div>
           </div>
         )}
       </td>
-      <td className="px-3 py-2 text-right">
-        <div className="font-mono text-[11px] font-semibold text-fg">{formatMoney(totals?.value ?? adjustment.amount ?? 0)}</div>
-        <div className="mt-2 space-y-2">
-          {isModifier ? (
-            <div className="grid grid-cols-2 gap-2">
+      <td className="px-3 py-2 align-top">
+        {isModifier ? (
+          <div className="space-y-2">
+            <div>
+              <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Percent %</div>
               <CommitInput
                 value={percentDisplay}
                 onCommit={(value) => onPatch(adjustment.id, { percentage: value === "" ? null : parseNum(value) / 100 })}
-                placeholder="%"
+                placeholder="0.00"
                 disabled={busy}
-                className="h-8 text-xs"
+                inputMode="decimal"
+                className="h-8 w-full min-w-[88px] px-2 text-right text-xs"
               />
+            </div>
+            <div>
+              <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Fixed $</div>
               <CommitInput
                 value={adjustment.amount == null ? "" : String(adjustment.amount)}
                 onCommit={(value) => onPatch(adjustment.id, { amount: value === "" ? null : parseNum(value) })}
-                placeholder="Fixed add"
+                placeholder="0"
                 disabled={busy}
-                className="h-8 text-xs"
+                inputMode="decimal"
+                className="h-8 w-full min-w-[88px] px-2 text-right text-xs"
               />
             </div>
-          ) : (
-            <CommitInput
-              value={adjustment.amount == null ? "" : String(adjustment.amount)}
-              onCommit={(value) => onPatch(adjustment.id, { amount: value === "" ? null : parseNum(value) })}
-              placeholder="Amount"
-              disabled={busy}
-              className="h-8 text-xs"
-            />
-          )}
-        </div>
+            <div className="flex items-center justify-between border-t border-line/60 pt-1.5">
+              <span className="text-[9px] font-medium uppercase tracking-wide text-fg/40">Total</span>
+              <span className="font-mono text-xs font-semibold text-fg">{formatMoney(totals?.value ?? 0)}</span>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <div>
+              <div className="mb-0.5 text-[9px] font-medium uppercase tracking-wide text-fg/40">Amount $</div>
+              <CommitInput
+                value={adjustment.amount == null ? "" : String(adjustment.amount)}
+                onCommit={(value) => onPatch(adjustment.id, { amount: value === "" ? null : parseNum(value) })}
+                placeholder="0"
+                disabled={busy}
+                inputMode="decimal"
+                className="h-8 w-full min-w-[88px] px-2 text-right text-xs"
+              />
+            </div>
+            <div className="flex items-center justify-between border-t border-line/60 pt-1.5">
+              <span className="text-[9px] font-medium uppercase tracking-wide text-fg/40">Total</span>
+              <span className="font-mono text-xs font-semibold text-fg">{formatMoney(totals?.value ?? adjustment.amount ?? 0)}</span>
+            </div>
+          </div>
+        )}
       </td>
       <MetricCell value={formatMoney(totals?.cost ?? 0)} />
       <MetricCell value={formatPercent(totals?.margin ?? 0)} />
