@@ -405,7 +405,13 @@ export function SetupTab({
     if (dirty.has("description")) payload.description = revDraft.description;
     if (dirty.has("notes")) payload.notes = revDraft.notes;
     if (dirty.has("breakoutStyle")) payload.breakoutStyle = revDraft.breakoutStyle;
-    Object.assign(payload, patch);
+    // Only merge an explicit patch object — never a (synthetic) event accidentally
+    // passed by a raw event-handler binding (e.g. onBlur={saveRevision}). An event's
+    // circular nativeEvent/target/view refs would break JSON serialization of the
+    // request body ("circular JSON" error on save).
+    if (patch && typeof patch === "object" && !("nativeEvent" in patch) && !(patch instanceof Event)) {
+      Object.assign(payload, patch);
+    }
 
     // Nothing to save
     if (Object.keys(payload).length === 0) return;
@@ -1557,7 +1563,7 @@ function NotesSubTab({
           <CardTitle>Notes</CardTitle>
         </CardHeader>
         <CardBody className="flex-1 min-h-0 flex flex-col">
-          <div onBlur={saveRevision} onInput={() => markDirty("notes")} className="flex-1 flex flex-col min-h-[200px]">
+          <div onBlur={() => saveRevision()} onInput={() => markDirty("notes")} className="flex-1 flex flex-col min-h-[200px]">
             <RichTextEditor
               value={revDraft.notes}
               onChange={(html) => setRevDraft((d) => ({ ...d, notes: html }))}
