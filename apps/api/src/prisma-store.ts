@@ -332,6 +332,24 @@ function categoryOwnsCalculatedPricing(category: { itemSource?: string | null; c
   return category?.itemSource === "rate_schedule" || calcType === "formula";
 }
 
+/**
+ * How a category enters per-row "units" — mirrors the web's categoryUnitInputMode
+ * so server-side category-change reconciliation knows whether carried tierUnits
+ * are still compatible. "duration": UoM-tier rate book; "single": one count
+ * (freeform duration / unit_rate); "multiplier": per-tier hours (Reg/OT/DT or a
+ * rate book); "none": no tier units.
+ */
+function worksheetItemUnitMode(
+  category: { itemSource?: string | null; calculationType?: string | null } | null | undefined,
+): "none" | "multiplier" | "duration" | "single" {
+  const calc = category?.calculationType;
+  const src = category?.itemSource;
+  if (calc === "duration_rate") return src === "rate_schedule" ? "duration" : "single";
+  if (calc === "unit_rate") return "single";
+  if (calc === "tiered_rate" || calc === "formula" || src === "rate_schedule") return "multiplier";
+  return "none";
+}
+
 function worksheetItemNeedsRateScheduleContext(
   category: { itemSource?: string | null; calculationType?: string | null } | null | undefined,
   item: { rateScheduleItemId?: string | null; tierUnits?: Record<string, number> | null } | null | undefined,
@@ -8696,6 +8714,82 @@ export class PrismaApiStore {
 
     if (domainItem.tierUnits && Object.keys(domainItem.tierUnits).length > 0) {
       domainItem.tierUnits = resolveTierUnitKeys(domainItem.tierUnits, revisionScheduleRows);
+    }
+
+    // ── Category-change reconciliation ──────────────────────────────────
+    // When the row's category actually changes, the pricing MODEL can change
+    // (rate-book-derived ↔ freeform cost+markup ↔ labour multiplier tiers). Bring
+    // the row into a clean state for the new category: drop now-stale library
+    // links, seed defaults for fields that newly become user-driven, and snap
+    // UoM / tier units onto the new category — mirroring how a freshly-added line
+    // is seeded. Driven by itemSource / calculationType / editableFields so it
+    // generalises across org category setups (no hardcoded category names).
+    const oldCatDefForChange = item.entityCategory;
+    if (oldCatDefForChange?.id !== updateCatDef.id) {
+      // Full Prisma row for the new category (updateCatDef is narrowed and lacks
+      // editableFields/validUoms/defaultUom).
+      const newCatFull = updateEntityCats.find((c) => c.id === updateCatDef.id);
+      const oldOwnedPricing = categoryOwnsCalculatedPricing(oldCatDefForChange);
+      const nowFreeform = updateCatDef.itemSource === "freeform";
+      const wasLibraryBacked =
+        oldCatDefForChange?.itemSource === "rate_schedule" ||
+        oldCatDefForChange?.itemSource === "catalog";
+      const newEditable = (newCatFull?.editableFields ?? {}) as Record<string, boolean | undefined>;
+
+      // (1) Leaving a library source for a freeform one: drop the stale rate-book
+      // / catalog / cost-resource links so the line honours the user-entered cost
+      // instead of silently re-pricing from the old source. Respect an explicit
+      // link the patch set on purpose.
+      if (wasLibraryBacked && nowFreeform) {
+        if (normalizedPatch.rateScheduleItemId === undefined) domainItem.rateScheduleItemId = null;
+        if (normalizedPatch.itemId === undefined) domainItem.itemId = null;
+        if (normalizedPatch.costResourceId === undefined) domainItem.costResourceId = null;
+        if (normalizedPatch.effectiveCostId === undefined) domainItem.effectiveCostId = null;
+      }
+
+      // (2) Markup becomes user-driven: when the old category owned calculated
+      // pricing (markup was a derived 0 placeholder) and the new one lets the
+      // user drive it, seed the estimate's default markup — matching new lines.
+      // Never overwrite a real markup the caller sent or the row already carries.
+      if (
+        newEditable.markup === true &&
+        oldOwnedPricing &&
+        normalizedPatch.markup === undefined &&
+        (!Number.isFinite(domainItem.markup) || domainItem.markup === 0)
+      ) {
+        domainItem.markup = revision.defaultMarkup ?? 0.2;
+      }
+
+      // (3) UoM hygiene: snap to the new category's default when the carried UoM
+      // isn't one of its valid UoMs.
+      const newValidUoms = (newCatFull?.validUoms ?? []) as string[];
+      if (
+        normalizedPatch.uom === undefined &&
+        newValidUoms.length > 0 &&
+        domainItem.uom &&
+        !newValidUoms.some((u) => u.toLowerCase() === String(domainItem.uom).toLowerCase())
+      ) {
+        domainItem.uom = newCatFull?.defaultUom ?? newValidUoms[0] ?? domainItem.uom;
+      }
+
+      // (4) Unit-input mode change: carried tierUnits keys belong to the old
+      // category's tiers. If the new category enters units a different way,
+      // collapse a still-meaningful count into a single value (duration/single)
+      // or clear it (multiplier/none, where the old count can't map cleanly).
+      if (normalizedPatch.tierUnits === undefined && domainItem.tierUnits) {
+        const oldMode = worksheetItemUnitMode(oldCatDefForChange);
+        const newMode = worksheetItemUnitMode(updateCatDef);
+        if (oldMode !== newMode) {
+          const total = Object.values(domainItem.tierUnits).reduce(
+            (sum, value) => sum + (Number(value) > 0 ? Number(value) : 0),
+            0,
+          );
+          domainItem.tierUnits =
+            (newMode === "single" || newMode === "duration") && total > 0
+              ? { __unit: total }
+              : {};
+        }
+      }
     }
 
     // ── Auto-resolve EffectiveCost on cost-resource changes ──────────
