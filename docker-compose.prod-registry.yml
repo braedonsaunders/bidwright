@@ -34,9 +34,12 @@
 #   - Uploads / projects / knowledge (`/data`): on the Synology NAS
 #     (10.0.1.106) over NFSv4, volume `bidwright-data` below. Survives a
 #     compose re-create and host loss.
-#   - agent-home (per-user CLI auth + bwrap homes) and redis stay on
-#     local Dokploy volumes (declared `external`) — NFS is a poor fit for
-#     bwrap mount/locking and for redis AOF.
+#   - Redis: NOT in this compose. Uses the shared Hyper-V HA redis;
+#     `REDIS_URL` in the Dokploy env points at the floating master VIP
+#     10.0.0.90:6379 on db 4 (isolated keyspace; the instance is
+#     maxmemory-policy=noeviction, which BullMQ requires).
+#   - agent-home (per-user CLI auth + bwrap homes) stays on a local Dokploy
+#     volume (declared `external`) — NFS is a poor fit for bwrap mount/locking.
 #
 # Routing: external Traefik on .96 forwards bidwright.rassaun.com →
 # https://10.0.0.101:443 with insecureSkipVerify (single backend). The
@@ -50,23 +53,6 @@ networks:
     external: true
 
 services:
-  redis:
-    image: redis:7-alpine
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512m
-    volumes:
-      - bidwright-redisdata:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - default
-
   # Runs `prisma migrate deploy` using the runtime API image (which carries
   # the schema, migrations, and pnpm tooling because it COPYs the full /app
   # from the builder stage). No build target needed — we run the same image
@@ -118,15 +104,15 @@ services:
       - traefik.http.routers.bidwright-api.service=bidwright-api
       - traefik.http.services.bidwright-api.loadbalancer.server.port=3001
     depends_on:
-      redis:
-        condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
     environment:
       # Real cluster URL (with creds) is set in the Dokploy env; this default
       # is a non-functional placeholder that documents the HA leader VIP.
       DATABASE_URL: "${DATABASE_URL:-postgresql://postgres:CHANGEME@10.0.0.85:5432/bidwright?connect_timeout=10}"
-      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      # Real redis URL (with creds) is set in the Dokploy env; placeholder
+      # points at the Hyper-V HA redis master VIP on db 4 (isolated keyspace).
+      REDIS_URL: "${REDIS_URL:-redis://:CHANGEME@10.0.0.90:6379/4}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
       # Multi-tenant server mode: per-user CLI auth namespaces under
@@ -223,15 +209,15 @@ services:
         limits:
           memory: 1g
     depends_on:
-      redis:
-        condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
     environment:
       # Real cluster URL (with creds) is set in the Dokploy env; this default
       # is a non-functional placeholder that documents the HA leader VIP.
       DATABASE_URL: "${DATABASE_URL:-postgresql://postgres:CHANGEME@10.0.0.85:5432/bidwright?connect_timeout=10}"
-      REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
+      # Real redis URL (with creds) is set in the Dokploy env; placeholder
+      # points at the Hyper-V HA redis master VIP on db 4 (isolated keyspace).
+      REDIS_URL: "${REDIS_URL:-redis://:CHANGEME@10.0.0.90:6379/4}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
       EMBEDDING_PROVIDER: "${EMBEDDING_PROVIDER:-disabled}"
@@ -246,9 +232,6 @@ services:
       - default
 
 volumes:
-  bidwright-redisdata:
-    external: true
-    name: bidwright_bidwright-redisdata
   # Uploads / projects / knowledge live on the Synology NAS over NFSv4.
   # Docker mounts the share when a container attaches this volume; the data
   # physically lives at 10.0.1.106:/volume1/dokploy-storage/bidwright.
