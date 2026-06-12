@@ -885,7 +885,9 @@ export function generatePdfHtml(
 
   const renderNotes = (): string => {
     if (!data.notes) return "";
-    return `<h2>Notes</h2><div class="section-body">${escapeHtml(data.notes)}</div>`;
+    // Notes are rich text (HTML) from the editor — render as HTML like Scope of
+    // Work and Lead Letter, not escaped (which showed the raw tags).
+    return `<h2>Notes</h2><div class="section-body">${data.notes}</div>`;
   };
 
   const renderReportSections = (): string => {
