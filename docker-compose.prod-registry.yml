@@ -25,10 +25,18 @@
 #   - For an immutable rollback, set BIDWRIGHT_TAG=sha-<old> in the
 #     Dokploy env tab and click Deploy.
 #
-# Persistent state is in four named volumes managed by Dokploy (data
-# lives under /var/lib/docker/volumes/bidwright_bidwright-{pgdata,
-# redisdata,data,agent-home}/_data). Volumes are declared `external`
-# so a future re-create of the compose project doesn't wipe data.
+# Data layout:
+#   - Postgres: NOT in this compose. The database lives on the Rassaun
+#     Postgres HA cluster (Patroni); `DATABASE_URL` in the Dokploy env
+#     points at the floating leader VIP 10.0.0.85:5432/bidwright. The
+#     VIP follows the current primary on failover (vip-manager), so this
+#     is the correct HA endpoint — do NOT pin a data node (.86/.87).
+#   - Uploads / projects / knowledge (`/data`): on the Synology NAS
+#     (10.0.1.106) over NFSv4, volume `bidwright-data` below. Survives a
+#     compose re-create and host loss.
+#   - agent-home (per-user CLI auth + bwrap homes) and redis stay on
+#     local Dokploy volumes (declared `external`) — NFS is a poor fit for
+#     bwrap mount/locking and for redis AOF.
 #
 # Routing: external Traefik on .96 forwards bidwright.rassaun.com →
 # https://10.0.0.101:443 with insecureSkipVerify (single backend). The
@@ -42,27 +50,6 @@ networks:
     external: true
 
 services:
-  postgres:
-    image: pgvector/pgvector:pg16
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 2g
-    environment:
-      POSTGRES_USER: "${POSTGRES_USER:-bidwright}"
-      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-bidwright}"
-      POSTGRES_DB: "${POSTGRES_DB:-bidwright}"
-    volumes:
-      - bidwright-pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bidwright} -d ${POSTGRES_DB:-bidwright}"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-    networks:
-      - default
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
@@ -93,11 +80,10 @@ services:
   db-migrate:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
     restart: "no"
-    depends_on:
-      postgres:
-        condition: service_healthy
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
+      # Real cluster URL (with creds) is set in the Dokploy env; this default
+      # is a non-functional placeholder that documents the HA leader VIP.
+      DATABASE_URL: "${DATABASE_URL:-postgresql://postgres:CHANGEME@10.0.0.85:5432/bidwright?connect_timeout=10}"
     command: ["pnpm", "--filter", "@bidwright/db", "db:migrate"]
     networks:
       - default
@@ -132,14 +118,14 @@ services:
       - traefik.http.routers.bidwright-api.service=bidwright-api
       - traefik.http.services.bidwright-api.loadbalancer.server.port=3001
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
+      # Real cluster URL (with creds) is set in the Dokploy env; this default
+      # is a non-functional placeholder that documents the HA leader VIP.
+      DATABASE_URL: "${DATABASE_URL:-postgresql://postgres:CHANGEME@10.0.0.85:5432/bidwright?connect_timeout=10}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
@@ -237,14 +223,14 @@ services:
         limits:
           memory: 1g
     depends_on:
-      postgres:
-        condition: service_healthy
       redis:
         condition: service_healthy
       db-migrate:
         condition: service_completed_successfully
     environment:
-      DATABASE_URL: "${DATABASE_URL:-postgresql://bidwright:bidwright@postgres:5432/bidwright}"
+      # Real cluster URL (with creds) is set in the Dokploy env; this default
+      # is a non-functional placeholder that documents the HA leader VIP.
+      DATABASE_URL: "${DATABASE_URL:-postgresql://postgres:CHANGEME@10.0.0.85:5432/bidwright?connect_timeout=10}"
       REDIS_URL: "${REDIS_URL:-redis://redis:6379}"
       DATA_DIR: "${DATA_DIR:-/data}"
       API_PORT: "${API_PORT:-3001}"
@@ -260,15 +246,21 @@ services:
       - default
 
 volumes:
-  bidwright-pgdata:
-    external: true
-    name: bidwright_bidwright-pgdata
   bidwright-redisdata:
     external: true
     name: bidwright_bidwright-redisdata
+  # Uploads / projects / knowledge live on the Synology NAS over NFSv4.
+  # Docker mounts the share when a container attaches this volume; the data
+  # physically lives at 10.0.1.106:/volume1/dokploy-storage/bidwright.
+  # Named distinctly from the legacy local volume (bidwright_bidwright-data),
+  # which is retained as rollback during the migration window.
   bidwright-data:
-    external: true
-    name: bidwright_bidwright-data
+    name: bidwright-data-nas
+    driver: local
+    driver_opts:
+      type: nfs
+      o: "addr=10.0.1.106,nfsvers=4,nolock,soft,timeo=30,retrans=3,rw"
+      device: ":/volume1/dokploy-storage/bidwright"
   bidwright-agent-home:
     external: true
     name: bidwright_bidwright-agent-home
