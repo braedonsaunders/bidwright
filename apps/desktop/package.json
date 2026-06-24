@@ -71,6 +71,7 @@
       }
     ],
     "asar": false,
+    "npmRebuild": false,
     "mac": {
       "category": "public.app-category.business",
       "target": [
