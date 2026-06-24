@@ -80,6 +80,31 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Bundle both macOS Postgres binaries (cross-arch dmg fix)
+        # macos-latest is an arm64 (Apple Silicon) runner, so a default
+        # `pnpm install` only materialises @embedded-postgres/darwin-arm64
+        # (the platform packages are gated by os/cpu in their package.json).
+        # But this one host emits BOTH an arm64 AND an x64 dmg
+        # (apps/desktop build.mac.target arch: ["arm64", "x64"]). Without the
+        # x64 Postgres binary present in node_modules at package time, the x64
+        # dmg launches on Intel Macs with:
+        #   Cannot find package '@embedded-postgres/darwin-x64'
+        # pnpm's supportedArchitectures forces the installer to also fetch the
+        # x64 binary. Scoped to this job (and injected, not committed) so the
+        # hot-path ci-cd.yml and local installs stay lean — each Postgres
+        # binary is ~144 MB.
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: |
+          node -e '
+            const fs = require("fs");
+            const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+            pkg.pnpm = pkg.pnpm || {};
+            pkg.pnpm.supportedArchitectures = { os: ["current"], cpu: ["x64", "arm64"] };
+            fs.writeFileSync("package.json", JSON.stringify(pkg, null, 2) + "\n");
+          '
+          echo "Injected pnpm.supportedArchitectures (darwin x64 + arm64) for cross-arch packaging"
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
