@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from "react";
 import {
   Circle,
-  Copy,
   Eraser,
   FolderOpen,
   GitBranch,
@@ -12,14 +11,12 @@ import {
   Loader2,
   Maximize2,
   MousePointer2,
-  Move,
-  PenLine,
   Redo2,
   RotateCw,
+  Ruler,
   Save,
   Square,
   Undo2,
-  Waypoints,
 } from "lucide-react";
 import { Button, EmptyState, Select } from "@/components/ui";
 import { saveFileNodeContent, uploadFile, type ProjectWorkspaceData } from "@/lib/api";
@@ -77,14 +74,11 @@ export interface CadTakeoffSurfaceProps {
 const COMMANDS = [
   { id: "select", label: "Select", icon: MousePointer2, command: "select" },
   { id: "pan", label: "Pan", icon: Hand, command: "pan" },
-  { id: "line", label: "Line", icon: PenLine, command: "line" },
-  { id: "pline", label: "Polyline", icon: Waypoints, command: "pline" },
-  { id: "circle", label: "Circle", icon: Circle, command: "circle" },
-  { id: "rect", label: "Rectangle", icon: Square, command: "rectang" },
-  { id: "move", label: "Move", icon: Move, command: "move" },
-  { id: "copy", label: "Copy", icon: Copy, command: "copy" },
-  { id: "rotate", label: "Rotate", icon: RotateCw, command: "rotate" },
-  { id: "erase", label: "Erase", icon: Eraser, command: "erase" },
+  { id: "measure-distance", label: "Distance", icon: Ruler, command: "measuredistance" },
+  { id: "measure-area", label: "Area", icon: Square, command: "measurearea" },
+  { id: "measure-angle", label: "Angle", icon: RotateCw, command: "measureangle" },
+  { id: "measure-arc", label: "Arc", icon: Circle, command: "measurearc" },
+  { id: "clear-measurements", label: "Clear Measurements", icon: Eraser, command: "clearmeasurements" },
 ] as const;
 
 function ensureDxfName(fileName: string): string {

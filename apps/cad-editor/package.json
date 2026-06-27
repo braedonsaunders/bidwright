@@ -16,7 +16,7 @@
   "scripts": {
     "analyze": "nx run-many -t analyze",
     "build": "nx run-many -t build",
-    "build:deps": "pnpm --filter @mlightcad/common build && pnpm --filter @mlightcad/geometry-engine build && pnpm --filter @mlightcad/graphic-interface build && pnpm --filter @mlightcad/data-model build && pnpm --filter @mlightcad/dxf-json-converter build && pnpm --filter @mlightcad/libredwg-converter build && pnpm --filter @mlightcad/three-renderer build && pnpm --filter @mlightcad/cad-simple-viewer build && pnpm --filter @mlightcad/cad-html-plugin build",
+    "build:deps": "pnpm --filter @mlightcad/common build && pnpm --filter @mlightcad/geometry-engine build && pnpm --filter @mlightcad/graphic-interface build && pnpm --filter @mlightcad/data-model build && pnpm --filter @mlightcad/dxf-json-converter build && pnpm --filter @mlightcad/libredwg-converter build && pnpm --filter @mlightcad/three-renderer build && pnpm --filter @mlightcad/cad-simple-viewer build && pnpm --filter @mlightcad/cad-html-plugin build && pnpm --filter @mlightcad/cad-svg-plugin build && pnpm --filter @mlightcad/cad-pdf-plugin build && pnpm --filter @mlightcad/cad-viewer build",
     "build:bidwright": "pnpm run build:deps && pnpm --filter @bidwright/cad-editor build",
     "clean": "nx run-many -t clean",
     "dev": "nx run @mlightcad/cad-viewer-example:dev",

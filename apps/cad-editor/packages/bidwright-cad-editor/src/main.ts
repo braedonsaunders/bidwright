@@ -1,8 +1,14 @@
+import "element-plus/dist/index.css";
+
 import {
   AcApDocManager,
+  AcApOpenViewMode,
   type AcApOpenDatabaseOptions,
   AcEdOpenMode,
 } from "@mlightcad/cad-simple-viewer";
+import { MlCadViewer, i18n } from "@mlightcad/cad-viewer";
+import { createApp, defineComponent, h, onMounted, ref, shallowRef } from "vue";
+
 import "./styles.css";
 
 type SourceKind = "source_document" | "file_node";
@@ -73,119 +79,80 @@ type HostMessage =
 type AnyRecord = Record<string, unknown>;
 
 const SOURCE = "bidwright-cad-editor";
+const CAD_DATA_BASE_URL = "https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/";
 
-class BidwrightCadEditorApp {
-  private readonly options: BidwrightCadEditorBootOptions;
-  private readonly container: HTMLDivElement;
-  private readonly statusText: HTMLSpanElement;
+class BidwrightCadBridge {
+  protected readonly options: BidwrightCadEditorBootOptions;
   private readonly channel: BroadcastChannel | null;
   private loaded = false;
   private snapshot: CadIntelligenceSnapshot | null = null;
-  private selectionListenerBound = false;
+  private hostMessagesBound = false;
+  private selectionSet: AnyRecord | null = null;
+  private readonly hostMessageListener = (event: MessageEvent) => {
+    const message = event.data as Partial<HostMessage> | undefined;
+    if (!message || message.source !== "bidwright-cad-host") return;
+    this.handleHostMessage(message as HostMessage);
+  };
+  private readonly channelMessageListener = (event: MessageEvent) => {
+    const message = event.data as Partial<HostMessage> | undefined;
+    if (!message || message.source !== "bidwright-cad-host") return;
+    this.handleHostMessage(message as HostMessage);
+  };
 
   constructor(options: BidwrightCadEditorBootOptions) {
     this.options = options;
-    this.container = mustGetElement<HTMLDivElement>("cad-container");
-    this.statusText = mustGetElement<HTMLSpanElement>("status-text");
     this.channel = options.syncChannelName && "BroadcastChannel" in window
       ? new BroadcastChannel(options.syncChannelName)
       : null;
   }
 
-  async start(): Promise<void> {
-    this.setStatus("Initializing CAD editor");
-    this.createManager();
+  attach(): void {
     this.bindHostMessages();
     this.post("bidwright:cad-ready", {});
-
-    if (this.options.fileUrl) {
-      await this.openUrl(this.options.fileUrl);
-    } else {
-      this.setStatus("Ready for a DXF or DWG file");
-      this.publishSnapshot("ready");
-    }
-  }
-
-  private createManager(): void {
-    AcApDocManager.createInstance({
-      container: this.container,
-      busyIndicatorHost: this.container,
-      autoResize: true,
-      baseUrl: "https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/",
-      commandAliases: {
-        LINE: ["L"],
-        PLINE: ["PL"],
-        RECTANG: ["REC"],
-        CIRCLE: ["C"],
-        ERASE: ["E"],
-        MOVE: ["M"],
-        COPY: ["CO"],
-        ROTATE: ["RO"],
-        OFFSET: ["O"],
-        SELECT: ["SE"],
-        ZOOM: ["Z"],
-        UNDO: ["U"],
-      },
-      webworkerFileUrls: {
-        dxfParser: "./workers/dxf-parser-worker.js",
-        dwgParser: "./workers/libredwg-parser-worker.js",
-        mtextRender: "./workers/mtext-renderer-worker.js",
-      },
-      htmlViewerRuntimeUrl: "./viewer-runtime.iife.js",
+    AcApDocManager.instance.events.documentActivated.addEventListener(() => {
+      this.handleDocumentActivated();
     });
 
-    AcApDocManager.instance.events.documentActivated.addEventListener((args) => {
-      this.setStatus(`Loaded ${args.doc.docTitle || this.options.fileName}`);
-      this.bindSelectionEvents();
-      this.loaded = true;
-      this.publishSnapshot("ready");
-      this.post("bidwright:cad-loaded", {
-        documentId: this.documentId,
-        fileName: this.options.fileName,
-        entityCount: this.snapshot?.entityCount ?? 0,
-      });
-    });
-  }
-
-  private async openUrl(url: string): Promise<void> {
-    this.setStatus(`Opening ${this.options.fileName}`);
-    this.publishSnapshot("processing");
     try {
-      const response = await fetch(url, { credentials: "include", cache: "no-store" });
-      if (!response.ok) {
-        throw new Error(`Download failed with ${response.status}`);
+      if (AcApDocManager.instance.curDocument) {
+        this.handleDocumentActivated();
       }
-      const content = await response.arrayBuffer();
-      const options: AcApOpenDatabaseOptions = {
-        minimumChunkSize: 1000,
-        mode: AcEdOpenMode.Write,
-        sysVars: {
-          lwdisplay: false,
-        },
-      };
-      const success = await AcApDocManager.instance.openDocument(this.options.fileName, content, options);
-      if (!success) {
-        throw new Error("The CAD parser could not open this file.");
-      }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : "Unknown CAD load error";
-      this.setStatus(message);
-      this.post("bidwright:cad-error", { message });
-      this.publishSnapshot("error");
+    } catch {
+      this.publishSnapshot("idle");
     }
+  }
+
+  dispose(): void {
+    window.removeEventListener("message", this.hostMessageListener);
+    this.channel?.removeEventListener("message", this.channelMessageListener);
+    this.channel?.close();
+  }
+
+  protected setStatus(_text: string): void {
+    // The full native editor owns its status UI. The compact takeoff shell
+    // overrides this to mirror status into the BidWright toolbar.
+  }
+
+  protected publishStatus(type: "ready" | "processing" | "error"): void {
+    this.publishSnapshot(type);
   }
 
   private bindHostMessages(): void {
-    window.addEventListener("message", (event) => {
-      const message = event.data as Partial<HostMessage> | undefined;
-      if (!message || message.source !== "bidwright-cad-host") return;
-      this.handleHostMessage(message as HostMessage);
-    });
+    if (this.hostMessagesBound) return;
+    this.hostMessagesBound = true;
+    window.addEventListener("message", this.hostMessageListener);
+    this.channel?.addEventListener("message", this.channelMessageListener);
+  }
 
-    this.channel?.addEventListener("message", (event) => {
-      const message = event.data as Partial<HostMessage> | undefined;
-      if (!message || message.source !== "bidwright-cad-host") return;
-      this.handleHostMessage(message as HostMessage);
+  private handleDocumentActivated(): void {
+    this.loaded = true;
+    this.setStatus(`Loaded ${this.options.fileName}`);
+    this.bindSelectionEvents();
+    this.publishSnapshot("ready");
+    this.post("bidwright:cad-loaded", {
+      documentId: this.documentId,
+      fileName: this.options.fileName,
+      entityCount: this.snapshot?.entityCount ?? 0,
     });
   }
 
@@ -208,12 +175,12 @@ class BidwrightCadEditorApp {
   }
 
   private bindSelectionEvents(): void {
-    if (this.selectionListenerBound) return;
-    this.selectionListenerBound = true;
-    const selectionSet = AcApDocManager.instance.curView.selectionSet;
-    const publish = () => this.publishSelection(selectionSet.ids);
-    selectionSet.events.selectionAdded.addEventListener(publish);
-    selectionSet.events.selectionRemoved.addEventListener(publish);
+    const selectionSet = asRecord(AcApDocManager.instance.curView.selectionSet);
+    if (selectionSet === this.selectionSet) return;
+    this.selectionSet = selectionSet;
+    const publish = () => this.publishSelection(arrayValue(selectionSet.ids).map(String));
+    asEventManager(selectionSet.events, "selectionAdded")?.addEventListener(publish);
+    asEventManager(selectionSet.events, "selectionRemoved")?.addEventListener(publish);
   }
 
   private runCommand(command: string): void {
@@ -294,7 +261,7 @@ class BidwrightCadEditorApp {
     }
 
     const db = AcApDocManager.instance.curDocument.database as unknown as AnyRecord;
-    const selectedIds = new Set(AcApDocManager.instance.curView.selectionSet.ids);
+    const selectedIds = new Set(arrayValue(AcApDocManager.instance.curView.selectionSet.ids).map(String));
     const layouts = collectLayouts(db);
     const layerColorByName = collectLayerColors(db);
     const rows: CadEntityRow[] = [];
@@ -356,13 +323,174 @@ class BidwrightCadEditorApp {
     this.channel?.postMessage(message);
   }
 
-  private setStatus(text: string): void {
-    this.statusText.textContent = text;
-  }
-
   private get documentId(): string {
     return this.options.documentId || this.options.fileName;
   }
+}
+
+class BidwrightTakeoffCadApp extends BidwrightCadBridge {
+  private readonly container: HTMLDivElement;
+  private readonly statusText: HTMLSpanElement;
+
+  constructor(options: BidwrightCadEditorBootOptions) {
+    createTakeoffShell();
+    super(options);
+    this.container = mustGetElement<HTMLDivElement>("cad-container");
+    this.statusText = mustGetElement<HTMLSpanElement>("status-text");
+  }
+
+  async start(): Promise<void> {
+    this.setStatus("Initializing CAD takeoff");
+    this.createManager();
+    this.attach();
+    if (this.options.fileUrl) {
+      await this.openUrl(this.options.fileUrl);
+    } else {
+      this.setStatus("Ready for a DXF or DWG file");
+      this.publishStatus("ready");
+    }
+  }
+
+  protected setStatus(text: string): void {
+    this.statusText.textContent = text;
+  }
+
+  private createManager(): void {
+    AcApDocManager.createInstance({
+      container: this.container,
+      busyIndicatorHost: this.container,
+      autoResize: true,
+      baseUrl: CAD_DATA_BASE_URL,
+      commandAliases: {
+        MEASUREDISTANCE: ["DI", "DIST"],
+        MEASUREAREA: ["AA", "AREA"],
+        MEASUREANGLE: ["ANG"],
+        PAN: ["P"],
+        SELECT: ["SE"],
+        ZOOM: ["Z"],
+        UNDO: ["U"],
+      },
+      webworkerFileUrls: {
+        dxfParser: "./workers/dxf-parser-worker.js",
+        dwgParser: "./workers/libredwg-parser-worker.js",
+        mtextRender: "./workers/mtext-renderer-worker.js",
+      },
+      htmlViewerRuntimeUrl: "./viewer-runtime.iife.js",
+    });
+  }
+
+  private async openUrl(url: string): Promise<void> {
+    this.setStatus(`Opening ${this.options.fileName}`);
+    this.publishStatus("processing");
+    try {
+      const response = await fetch(url, { credentials: "include", cache: "no-store" });
+      if (!response.ok) {
+        throw new Error(`Download failed with ${response.status}`);
+      }
+      const content = await response.arrayBuffer();
+      const options: AcApOpenDatabaseOptions = {
+        minimumChunkSize: 1000,
+        mode: AcEdOpenMode.Review,
+        openViewMode: AcApOpenViewMode.Extents,
+        sysVars: {
+          lwdisplay: false,
+        },
+      };
+      const success = await AcApDocManager.instance.openDocument(this.options.fileName, content, options);
+      if (!success) {
+        throw new Error("The CAD parser could not open this file.");
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Unknown CAD load error";
+      this.setStatus(message);
+      window.parent?.postMessage({
+        source: SOURCE,
+        type: "bidwright:cad-error",
+        message,
+        projectId: this.options.projectId,
+        documentId: this.options.documentId || this.options.fileName,
+        mode: this.options.mode,
+      }, "*");
+      this.publishStatus("error");
+    }
+  }
+}
+
+function mountNativeEditor(options: BidwrightCadEditorBootOptions): void {
+  const NativeCadEditorApp = defineComponent({
+    name: "BidwrightNativeCadEditorApp",
+    setup() {
+      const localFile = shallowRef<File>();
+      const loading = ref(Boolean(options.fileUrl));
+      const error = ref<string | null>(null);
+      const bridge = new BidwrightCadBridge(options);
+
+      onMounted(async () => {
+        if (!options.fileUrl) return;
+        try {
+          const response = await fetch(options.fileUrl, {
+            credentials: "include",
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            throw new Error(`Download failed with ${response.status}`);
+          }
+          const content = await response.arrayBuffer();
+          localFile.value = new File([content], options.fileName, {
+            type: cadMimeType(options.fileName),
+          });
+        } catch (loadError) {
+          const message = loadError instanceof Error ? loadError.message : "Unknown CAD load error";
+          error.value = message;
+          window.parent?.postMessage({
+            source: SOURCE,
+            type: "bidwright:cad-error",
+            message,
+            projectId: options.projectId,
+            documentId: options.documentId || options.fileName,
+            mode: options.mode,
+          }, "*");
+        } finally {
+          loading.value = false;
+        }
+      });
+
+      return () => h("div", { class: "bidwright-native-cad-shell" }, [
+        h(MlCadViewer, {
+          locale: "en",
+          localFile: localFile.value,
+          mode: AcEdOpenMode.Write,
+          useMainThreadDraw: false,
+          drawNoPlotLayers: false,
+          progressiveRendering: false,
+          baseUrl: CAD_DATA_BASE_URL,
+          htmlViewerRuntimeUrl: "./viewer-runtime.iife.js",
+          onCreate: () => bridge.attach(),
+          onDestroy: () => bridge.dispose(),
+        }),
+        loading.value
+          ? h("div", { class: "bidwright-native-cad-overlay" }, "Opening drawing...")
+          : null,
+        error.value
+          ? h("div", { class: "bidwright-native-cad-error" }, error.value)
+          : null,
+      ]);
+    },
+  });
+
+  const app = createApp(NativeCadEditorApp);
+  app.use(i18n);
+  app.mount("#app");
+}
+
+function createTakeoffShell(): void {
+  const app = mustGetElement<HTMLDivElement>("app");
+  app.innerHTML = `
+    <div id="cad-container" aria-label="CAD takeoff viewport"></div>
+    <div id="status-strip">
+      <span id="status-text">Initializing CAD takeoff</span>
+    </div>
+  `;
 }
 
 function collectLayouts(db: AnyRecord): Array<{ name: string; btrId: string | null; block?: AnyRecord }> {
@@ -578,6 +706,13 @@ function methodIterable(record: AnyRecord, methodName: string): unknown[] {
   }
 }
 
+function asEventManager(events: unknown, key: string): { addEventListener: (listener: () => void) => void } | null {
+  const manager = asRecord(asRecord(events)[key]);
+  return typeof manager.addEventListener === "function"
+    ? manager as { addEventListener: (listener: () => void) => void }
+    : null;
+}
+
 function formatNumber(value: number): string {
   if (value >= 100) return value.toFixed(0);
   if (value >= 10) return value.toFixed(1);
@@ -587,6 +722,12 @@ function formatNumber(value: number): string {
 function ensureDxfName(fileName: string): string {
   const cleaned = fileName.trim() || "Drawing";
   return cleaned.toLowerCase().endsWith(".dxf") ? cleaned : `${cleaned.replace(/\.[^.]+$/, "")}.dxf`;
+}
+
+function cadMimeType(fileName: string): string {
+  return fileName.toLowerCase().endsWith(".dwg")
+    ? "application/acad"
+    : "application/dxf";
 }
 
 function readBootOptions(): BidwrightCadEditorBootOptions {
@@ -610,4 +751,9 @@ function mustGetElement<T extends HTMLElement>(id: string): T {
   return element as T;
 }
 
-void new BidwrightCadEditorApp(readBootOptions()).start();
+const options = readBootOptions();
+if (options.mode === "takeoff") {
+  void new BidwrightTakeoffCadApp(options).start();
+} else {
+  mountNativeEditor(options);
+}

@@ -20,6 +20,38 @@ body {
   flex-direction: column;
 }
 
+.bidwright-native-cad-shell {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
+  background: #090b10;
+}
+
+.bidwright-native-cad-overlay,
+.bidwright-native-cad-error {
+  position: fixed;
+  left: 50%;
+  top: 50%;
+  z-index: 1000;
+  max-width: min(420px, calc(100vw - 48px));
+  transform: translate(-50%, -50%);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.94);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.32);
+  padding: 12px 14px;
+  color: rgba(226, 232, 240, 0.82);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.bidwright-native-cad-error {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: #fecaca;
+}
+
 #cad-container {
   position: relative;
   min-height: 0;
