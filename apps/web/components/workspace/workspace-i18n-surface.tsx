@@ -417,6 +417,7 @@ const ENTRIES: Array<[string, ...string[]]> = [
   ["Line Sell Subtotal", "Subtotal de venta de líneas", "Sous-total de vente des lignes", "Zeilen-Verkaufszwischensumme", "Subtotal de venda das linhas", "明细销售小计", "行売価小計", "라인 판매 소계", "लाइन विक्रय उप-योग", "المجموع الفرعي لبيع البنود"],
   ["Search resources, vendors, phases", "Buscar recursos, proveedores, fases", "Rechercher ressources, fournisseurs, phases", "Ressourcen, Anbieter, Phasen suchen", "Buscar recursos, fornecedores, fases", "搜索资源、供应商、阶段", "リソース、ベンダー、フェーズを検索", "리소스, 공급업체, 단계 검색", "संसाधन, विक्रेता, चरण खोजें", "البحث في الموارد والمورّدين والمراحل"],
   ["3D Model", "Modelo 3D", "Modèle 3D", "3D-Modell", "Modelo 3D", "3D 模型", "3Dモデル", "3D 모델", "3D मॉडल", "نموذج ثلاثي الأبعاد"],
+  ["2D CAD", "CAD 2D", "CAO 2D", "2D-CAD", "CAD 2D", "2D CAD", "2D CAD", "2D CAD", "2D CAD", "كاد ثنائي الأبعاد"],
   ["3D surface area", "Área de superficie 3D", "Surface 3D", "3D-Oberfläche", "Área de superfície 3D", "3D 表面积", "3D表面積", "3D 표면적", "3D सतह क्षेत्र", "مساحة سطح ثلاثية الأبعاد"],
   ["3D volume", "Volumen 3D", "Volume 3D", "3D-Volumen", "Volume 3D", "3D 体积", "3D体積", "3D 부피", "3D आयतन", "حجم ثلاثي الأبعاد"],
   ["3D selected elements", "Elementos 3D seleccionados", "Éléments 3D sélectionnés", "Ausgewählte 3D-Elemente", "Elementos 3D selecionados", "选定 3D 元素", "選択した3D要素", "선택한 3D 요소", "चयनित 3D तत्व", "العناصر ثلاثية الأبعاد المحددة"],

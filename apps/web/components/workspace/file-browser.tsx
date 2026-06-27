@@ -284,6 +284,69 @@ function nextUntitledModelName(nodes: FileNode[]): string {
   }
 }
 
+function nextUntitledCadName(nodes: FileNode[]): string {
+  const names = new Set(nodes.map((node) => node.name.toLowerCase()));
+  const base = "Untitled Drawing";
+  let index = 0;
+  while (true) {
+    const candidate = index === 0 ? `${base}.dxf` : `${base} ${index + 1}.dxf`;
+    if (!names.has(candidate.toLowerCase())) return candidate;
+    index += 1;
+  }
+}
+
+const STARTER_DXF_CONTENT = [
+  "0",
+  "SECTION",
+  "2",
+  "HEADER",
+  "9",
+  "$ACADVER",
+  "1",
+  "AC1015",
+  "0",
+  "ENDSEC",
+  "0",
+  "SECTION",
+  "2",
+  "TABLES",
+  "0",
+  "TABLE",
+  "2",
+  "LAYER",
+  "70",
+  "1",
+  "0",
+  "LAYER",
+  "2",
+  "0",
+  "70",
+  "0",
+  "62",
+  "7",
+  "6",
+  "CONTINUOUS",
+  "0",
+  "ENDTAB",
+  "0",
+  "ENDSEC",
+  "0",
+  "SECTION",
+  "2",
+  "BLOCKS",
+  "0",
+  "ENDSEC",
+  "0",
+  "SECTION",
+  "2",
+  "ENTITIES",
+  "0",
+  "ENDSEC",
+  "0",
+  "EOF",
+  "",
+].join("\n");
+
 type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "zip" | "rtf" | "none";
 type EditorMode = "none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist" | "model";
 
@@ -2338,6 +2401,26 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [activeFileParentId, projectId, showError, userNodes, notifyFilesMutated]);
 
+  const handleCreateCadDocument = useCallback(async () => {
+    try {
+      const name = nextUntitledCadName(userNodes);
+      const file = new globalThis.File([STARTER_DXF_CONTENT], name, {
+        type: "application/dxf",
+      });
+      const node = await uploadFile(projectId, file, activeFileParentId);
+      setUserNodes((prev) => [...prev, node]);
+      notifyFilesMutated();
+      if (activeFileParentId) {
+        setExpandedFolders((prev) => new Set([...prev, activeFileParentId]));
+      }
+      setSelectedId(node.id);
+      setEditorMode("none");
+      setEditorFileName(node.name);
+    } catch (err) {
+      showError(`Failed to create CAD drawing: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [activeFileParentId, projectId, showError, userNodes, notifyFilesMutated]);
+
   const handleModelDocumentSave = useCallback(async (message: BidwrightModelDocumentSaveMessage) => {
     try {
       const selectedNativeNode = selectedItem?.fileNode && getFileExtension(selectedItem.fileNode.name) === "cd"
@@ -2700,6 +2783,15 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                     >
                       <Box className="h-3.5 w-3.5" />
                       3D Model
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item
+                      className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
+                      onSelect={() => {
+                        void handleCreateCadDocument();
+                      }}
+                    >
+                      <Ruler className="h-3.5 w-3.5" />
+                      2D CAD
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
