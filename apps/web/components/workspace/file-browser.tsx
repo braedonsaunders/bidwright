@@ -1464,7 +1464,7 @@ function TreeNode({
   );
 }
 
-type FileContextAction = "open" | "open-takeoff" | "new-folder" | "upload" | "rename" | "move" | "delete";
+type FileContextAction = "open" | "open-fullscreen" | "open-takeoff" | "new-folder" | "upload" | "rename" | "move" | "delete";
 
 function FileTreeContextMenu({
   menu,
@@ -1551,6 +1551,7 @@ function FileTreeContextMenu({
       onPointerDown={(e) => e.stopPropagation()}
     >
       {button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
+      {item.type === "file" && button("open-fullscreen", "Open Fullscreen", <Maximize2 className="h-3.5 w-3.5" />)}
       {takeoffDocumentId && button("open-takeoff", "Open in Takeoff", <Ruler className="h-3.5 w-3.5" />)}
       {downloadUrl && (
         <a
@@ -2047,12 +2048,18 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     setContextMenu(null);
     if (action === "open") {
       handleSelect(item);
+      setPreviewTab("file");
       if (item.type === "directory") {
         setExpandedFolders((prev) => new Set([...prev, item.id]));
       }
+    } else if (action === "open-fullscreen" && item.type === "file") {
+      handleSelect(item);
+      setPreviewTab("file");
+      setIsFullscreen(true);
     } else if (action === "open-takeoff") {
       const takeoffDocumentId = getTakeoffDocumentIdForItem(item);
       if (takeoffDocumentId) {
+        handleSelect(item);
         onOpenInTakeoff?.(takeoffDocumentId);
       }
     } else if (action === "new-folder" && item.fileNode && item.type === "directory") {

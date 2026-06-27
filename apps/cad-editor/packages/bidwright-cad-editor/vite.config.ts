@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import vue from "@vitejs/plugin-vue";
 import { defineConfig } from "vite";
+import svgLoader from "vite-svg-loader";
 import { viteStaticCopy } from "vite-plugin-static-copy";
 import { exampleRollupOutput } from "../vite-config/pluginRollupOutput";
 
@@ -34,9 +36,12 @@ export default defineConfig(() => {
       },
     },
     plugins: [
+      vue(),
+      svgLoader(),
       viteStaticCopy({
         targets: [
           { src: workerSource, dest: "workers" },
+          { src: workerSource, dest: "assets" },
           { src: htmlRuntimeSource, dest: "" },
         ],
       }),
