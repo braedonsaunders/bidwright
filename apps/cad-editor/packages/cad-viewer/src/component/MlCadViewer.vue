@@ -90,7 +90,7 @@ import {
   AcEdOpenMode,
   eventBus
 } from '@mlightcad/cad-simple-viewer'
-import { log } from '@mlightcad/data-model'
+import { AcDbSystemVariables, log } from '@mlightcad/data-model'
 import { ElConfigProvider, ElMessage } from 'element-plus'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -199,11 +199,32 @@ const props = withDefaults(defineProps<Props>(), {
   openViewMode: undefined
 })
 
+const sysVarColorFromRgb = (value: number): string => {
+  const color = value & 0xffffff
+  const red = (color >> 16) & 0xff
+  const green = (color >> 8) & 0xff
+  const blue = color & 0xff
+  return `RGB:${red},${green},${blue}`
+}
+
 const buildOpenOptions = (): AcApOpenDatabaseOptions => ({
   minimumChunkSize: 1000,
   mode: props.mode,
   drawNoPlotLayers: props.drawNoPlotLayers,
   progressiveRendering: props.progressiveRendering,
+  sysVars: {
+    [AcDbSystemVariables.COLORTHEME]: props.theme === 'light' ? 1 : 0,
+    ...(props.background != null
+      ? {
+          [AcDbSystemVariables.MODELBKCOLOR]: sysVarColorFromRgb(
+            props.background
+          ),
+          [AcDbSystemVariables.PAPERBKCOLOR]: sysVarColorFromRgb(
+            props.background
+          )
+        }
+      : {})
+  },
   ...(props.openViewMode != null ? { openViewMode: props.openViewMode } : {})
 })
 
