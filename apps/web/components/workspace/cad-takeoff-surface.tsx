@@ -208,7 +208,7 @@ export function CadTakeoffSurface({
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col overflow-hidden bg-panel">
+    <div className="flex h-full min-h-0 w-full flex-col overflow-hidden bg-panel">
       <div className="flex min-h-[42px] shrink-0 items-center gap-2 border-b border-line bg-bg px-2 py-1.5">
         {toolbarStart}
         {documents.length > 1 ? (
@@ -264,7 +264,7 @@ export function CadTakeoffSurface({
         </div>
         {toolbarEnd}
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 w-full flex-1 overflow-hidden">
         <BidwrightCadEditor
           ref={editorRef}
           key={activeDocument.id}

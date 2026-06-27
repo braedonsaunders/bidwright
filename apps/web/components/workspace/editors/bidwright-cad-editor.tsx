@@ -56,6 +56,7 @@ export interface BidwrightCadSelectionMessage {
 export interface BidwrightCadEditorHandle {
   sendCommand: (command: string) => void;
   fit: () => void;
+  resize: () => void;
   save: () => void;
   selectEntities: (entityIds: string[]) => void;
 }
@@ -129,6 +130,7 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
     },
     ref,
   ) {
+    const containerRef = useRef<HTMLDivElement | null>(null);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
     const src = useMemo(
       () => buildCadEditorUrl(fileUrl, fileName, { projectId, documentId, sourceKind, mode, syncChannelName }),
@@ -139,12 +141,35 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
       iframeRef.current?.contentWindow?.postMessage({ source: "bidwright-cad-host", ...message }, "*");
     }, []);
 
+    const resizeEditor = useCallback(() => {
+      postToEditor({ type: "bidwright:cad-resize" });
+    }, [postToEditor]);
+
     useImperativeHandle(ref, () => ({
       sendCommand: (command) => postToEditor({ type: "bidwright:cad-command", command }),
-      fit: () => postToEditor({ type: "bidwright:cad-fit" }),
+      fit: () => {
+        resizeEditor();
+        postToEditor({ type: "bidwright:cad-fit" });
+      },
+      resize: resizeEditor,
       save: () => postToEditor({ type: "bidwright:cad-save" }),
       selectEntities: (entityIds) => postToEditor({ type: "bidwright:cad-select-entities", entityIds }),
-    }), [postToEditor]);
+    }), [postToEditor, resizeEditor]);
+
+    useEffect(() => {
+      const element = containerRef.current;
+      if (!element || typeof ResizeObserver === "undefined") return;
+      let frame = 0;
+      const observer = new ResizeObserver(() => {
+        window.cancelAnimationFrame(frame);
+        frame = window.requestAnimationFrame(resizeEditor);
+      });
+      observer.observe(element);
+      return () => {
+        window.cancelAnimationFrame(frame);
+        observer.disconnect();
+      };
+    }, [resizeEditor, src]);
 
     useEffect(() => {
       function handleMessage(event: MessageEvent) {
@@ -179,13 +204,19 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
     }, [documentId, fileName, onError, onIntelligenceChange, onLoaded, onReady, onSaveDocument, onSelectionChange]);
 
     return (
-      <iframe
-        ref={iframeRef}
-        title={`${fileName} CAD editor`}
-        src={src}
-        className={cn("h-full min-h-0 w-full flex-1 border-0 bg-[#090b10]", className)}
-        sandbox="allow-downloads allow-forms allow-modals allow-same-origin allow-scripts"
-      />
+      <div ref={containerRef} className={cn("flex h-full min-h-0 w-full flex-1 overflow-hidden bg-[#090b10]", className)}>
+        <iframe
+          ref={iframeRef}
+          title={`${fileName} CAD editor`}
+          src={src}
+          className="block h-full min-h-0 w-full flex-1 border-0 bg-[#090b10]"
+          sandbox="allow-downloads allow-forms allow-modals allow-same-origin allow-scripts"
+          onLoad={() => {
+            window.setTimeout(resizeEditor, 50);
+            window.setTimeout(() => postToEditor({ type: "bidwright:cad-fit" }), 250);
+          }}
+        />
+      </div>
     );
   },
 );
