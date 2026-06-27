@@ -1,10 +1,11 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
 
 export type BidwrightCadSourceKind = "source_document" | "file_node";
 export type BidwrightCadMode = "preview" | "takeoff";
+export type BidwrightCadTheme = "light" | "dark";
 
 export interface BidwrightCadEntityRow {
   id: string;
@@ -94,6 +95,7 @@ export function buildCadEditorUrl(
     documentId?: string | null;
     sourceKind?: BidwrightCadSourceKind | null;
     mode?: BidwrightCadMode;
+    theme?: BidwrightCadTheme;
     syncChannelName?: string | null;
   } = {},
 ) {
@@ -106,8 +108,17 @@ export function buildCadEditorUrl(
   if (options.documentId) params.set("documentId", options.documentId);
   if (options.sourceKind) params.set("sourceKind", options.sourceKind);
   if (options.mode) params.set("mode", options.mode);
+  if (options.theme) params.set("theme", options.theme);
   if (options.syncChannelName) params.set("syncChannelName", options.syncChannelName);
   return `/cad-editor/index.html?${params.toString()}`;
+}
+
+function resolveHostCadTheme(): BidwrightCadTheme {
+  if (typeof window === "undefined") return "light";
+  const root = document.documentElement;
+  if (root.classList.contains("dark")) return "dark";
+  if (root.classList.contains("light")) return "light";
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, BidwrightCadEditorProps>(
@@ -132,8 +143,17 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
   ) {
     const containerRef = useRef<HTMLDivElement | null>(null);
     const iframeRef = useRef<HTMLIFrameElement | null>(null);
+    const initialThemeRef = useRef<BidwrightCadTheme>(resolveHostCadTheme());
+    const [theme, setTheme] = useState<BidwrightCadTheme>(initialThemeRef.current);
     const src = useMemo(
-      () => buildCadEditorUrl(fileUrl, fileName, { projectId, documentId, sourceKind, mode, syncChannelName }),
+      () => buildCadEditorUrl(fileUrl, fileName, {
+        projectId,
+        documentId,
+        sourceKind,
+        mode,
+        theme: initialThemeRef.current,
+        syncChannelName,
+      }),
       [documentId, fileName, fileUrl, mode, projectId, sourceKind, syncChannelName],
     );
 
@@ -145,6 +165,10 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
       postToEditor({ type: "bidwright:cad-resize" });
     }, [postToEditor]);
 
+    const syncThemeToEditor = useCallback((nextTheme: BidwrightCadTheme = theme) => {
+      postToEditor({ type: "bidwright:cad-theme", theme: nextTheme });
+    }, [postToEditor, theme]);
+
     useImperativeHandle(ref, () => ({
       sendCommand: (command) => postToEditor({ type: "bidwright:cad-command", command }),
       fit: () => {
@@ -155,6 +179,26 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
       save: () => postToEditor({ type: "bidwright:cad-save" }),
       selectEntities: (entityIds) => postToEditor({ type: "bidwright:cad-select-entities", entityIds }),
     }), [postToEditor, resizeEditor]);
+
+    useEffect(() => {
+      const sync = () => setTheme(resolveHostCadTheme());
+      sync();
+
+      const root = document.documentElement;
+      const observer = new MutationObserver(sync);
+      observer.observe(root, { attributeFilter: ["class"] });
+
+      const media = window.matchMedia?.("(prefers-color-scheme: dark)");
+      media?.addEventListener("change", sync);
+      return () => {
+        observer.disconnect();
+        media?.removeEventListener("change", sync);
+      };
+    }, []);
+
+    useEffect(() => {
+      syncThemeToEditor(theme);
+    }, [syncThemeToEditor, theme]);
 
     useEffect(() => {
       const element = containerRef.current;
@@ -204,14 +248,15 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
     }, [documentId, fileName, onError, onIntelligenceChange, onLoaded, onReady, onSaveDocument, onSelectionChange]);
 
     return (
-      <div ref={containerRef} className={cn("flex h-full min-h-0 w-full flex-1 overflow-hidden bg-[#090b10]", className)}>
+      <div ref={containerRef} className={cn("flex h-full min-h-0 w-full flex-1 overflow-hidden bg-bg", className)}>
         <iframe
           ref={iframeRef}
           title={`${fileName} CAD editor`}
           src={src}
-          className="block h-full min-h-0 w-full flex-1 border-0 bg-[#090b10]"
+          className="block h-full min-h-0 w-full flex-1 border-0 bg-bg"
           sandbox="allow-downloads allow-forms allow-modals allow-same-origin allow-scripts"
           onLoad={() => {
+            syncThemeToEditor(theme);
             window.setTimeout(resizeEditor, 50);
             window.setTimeout(() => postToEditor({ type: "bidwright:cad-fit" }), 250);
           }}

@@ -4,11 +4,13 @@ import {
   type AcApOpenDatabaseOptions,
   AcEdOpenMode,
 } from "@mlightcad/cad-simple-viewer";
+import { AcDbSystemVariables, AcDbSysVarManager } from "@mlightcad/data-model";
 
 import "./styles.css";
 
 type SourceKind = "source_document" | "file_node";
 type CadMode = "preview" | "takeoff";
+type CadTheme = "light" | "dark";
 
 interface BidwrightCadEditorBootOptions {
   fileUrl: string | null;
@@ -17,6 +19,7 @@ interface BidwrightCadEditorBootOptions {
   documentId: string | null;
   sourceKind: SourceKind | null;
   mode: CadMode;
+  theme: CadTheme;
   syncChannelName: string | null;
 }
 
@@ -71,6 +74,7 @@ type HostMessage =
   | { source: "bidwright-cad-host"; type: "bidwright:cad-select-entities"; entityIds: string[] }
   | { source: "bidwright-cad-host"; type: "bidwright:cad-fit" }
   | { source: "bidwright-cad-host"; type: "bidwright:cad-resize" }
+  | { source: "bidwright-cad-host"; type: "bidwright:cad-theme"; theme: CadTheme }
   | { source: "bidwright-cad-host"; type: "bidwright:cad-save" };
 
 type AnyRecord = Record<string, unknown>;
@@ -78,6 +82,8 @@ type AnyRecord = Record<string, unknown>;
 const SOURCE = "bidwright-cad-editor";
 const CAD_DATA_BASE_URL = "https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/";
 const TAKEOFF_ENTITY_ROW_LIMIT = 2000;
+const CAD_LIGHT_BACKGROUND = "#f8fafc";
+const CAD_DARK_BACKGROUND = "#0b0f14";
 
 class BidwrightCadBridge {
   protected readonly options: BidwrightCadEditorBootOptions;
@@ -99,6 +105,7 @@ class BidwrightCadBridge {
 
   constructor(options: BidwrightCadEditorBootOptions) {
     this.options = options;
+    applyShellTheme(options.theme);
     this.channel = options.syncChannelName && "BroadcastChannel" in window
       ? new BroadcastChannel(options.syncChannelName)
       : null;
@@ -170,9 +177,19 @@ class BidwrightCadBridge {
       this.forceResizeAndFit(false);
       return;
     }
+    if (message.type === "bidwright:cad-theme") {
+      this.applyTheme(message.theme);
+      return;
+    }
     if (message.type === "bidwright:cad-save") {
       this.saveDxf();
     }
+  }
+
+  private applyTheme(theme: CadTheme): void {
+    this.options.theme = theme;
+    applyShellTheme(theme);
+    this.applyActiveViewTheme();
   }
 
   private bindSelectionEvents(): void {
@@ -285,6 +302,23 @@ class BidwrightCadBridge {
     window.requestAnimationFrame(run);
     window.setTimeout(run, 120);
     window.setTimeout(run, 500);
+  }
+
+  private applyActiveViewTheme(): void {
+    try {
+      const db = AcApDocManager.instance.curDocument.database;
+      const sysVarManager = AcDbSysVarManager.instance();
+      sysVarManager.setVar(AcDbSystemVariables.COLORTHEME, this.options.theme === "light" ? 1 : 0, db);
+      sysVarManager.setVar(AcDbSystemVariables.MODELBKCOLOR, themeCanvasBackgroundSysVar(this.options.theme), db);
+      sysVarManager.setVar(AcDbSystemVariables.PAPERBKCOLOR, themeCanvasBackgroundSysVar(this.options.theme), db);
+
+      const view = AcApDocManager.instance.curView as unknown as { backgroundColor?: number };
+      if (typeof view.backgroundColor === "number") {
+        view.backgroundColor = themeCanvasBackgroundNumber(this.options.theme);
+      }
+    } catch {
+      // Theme can arrive before the CAD manager has opened a view.
+    }
   }
 
   private buildEmptySnapshot(status: CadIntelligenceSnapshot["status"]): CadIntelligenceSnapshot {
@@ -453,7 +487,10 @@ class BidwrightTakeoffCadApp extends BidwrightCadBridge {
         mode: AcEdOpenMode.Review,
         openViewMode: AcApOpenViewMode.Extents,
         sysVars: {
+          colortheme: this.options.theme === "light" ? 1 : 0,
           lwdisplay: false,
+          modelbkcolor: themeCanvasBackgroundSysVar(this.options.theme),
+          paperbkcolor: themeCanvasBackgroundSysVar(this.options.theme),
         },
       };
       const success = await AcApDocManager.instance.openDocument(this.options.fileName, content, options);
@@ -526,6 +563,8 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
         h(MlCadViewer, {
           locale: "en",
           localFile: localFile.value,
+          theme: options.theme,
+          background: themeCanvasBackgroundNumber(options.theme),
           mode: AcEdOpenMode.Write,
           useMainThreadDraw: false,
           drawNoPlotLayers: false,
@@ -558,6 +597,29 @@ function createTakeoffShell(): void {
       <span id="status-text">Initializing CAD takeoff</span>
     </div>
   `;
+}
+
+function applyShellTheme(theme: CadTheme): void {
+  const root = document.documentElement;
+  root.classList.toggle("dark", theme === "dark");
+  root.classList.toggle("light", theme === "light");
+  root.style.setProperty("--bidwright-cad-view-background", themeCanvasBackgroundCss(theme));
+}
+
+function themeCanvasBackgroundCss(theme: CadTheme): string {
+  return theme === "light" ? CAD_LIGHT_BACKGROUND : CAD_DARK_BACKGROUND;
+}
+
+function themeCanvasBackgroundSysVar(theme: CadTheme): string {
+  const color = themeCanvasBackgroundNumber(theme);
+  const red = (color >> 16) & 0xff;
+  const green = (color >> 8) & 0xff;
+  const blue = color & 0xff;
+  return `RGB:${red},${green},${blue}`;
+}
+
+function themeCanvasBackgroundNumber(theme: CadTheme): number {
+  return Number.parseInt(themeCanvasBackgroundCss(theme).slice(1), 16);
 }
 
 function collectLayouts(db: AnyRecord): Array<{ name: string; btrId: string | null; block?: AnyRecord }> {
@@ -799,6 +861,11 @@ function cadMimeType(fileName: string): string {
 
 function readBootOptions(): BidwrightCadEditorBootOptions {
   const params = new URLSearchParams(window.location.search);
+  const theme = params.get("theme") === "dark"
+    ? "dark"
+    : params.get("theme") === "light"
+      ? "light"
+      : resolveSystemTheme();
   return {
     fileUrl: params.get("url"),
     fileName: params.get("fileName") || "Drawing.dxf",
@@ -808,8 +875,13 @@ function readBootOptions(): BidwrightCadEditorBootOptions {
       ? params.get("sourceKind") as SourceKind
       : null,
     mode: params.get("mode") === "takeoff" ? "takeoff" : "preview",
+    theme,
     syncChannelName: params.get("syncChannelName"),
   };
+}
+
+function resolveSystemTheme(): CadTheme {
+  return window.matchMedia?.("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function mustGetElement<T extends HTMLElement>(id: string): T {
@@ -819,6 +891,7 @@ function mustGetElement<T extends HTMLElement>(id: string): T {
 }
 
 const options = readBootOptions();
+applyShellTheme(options.theme);
 if (options.mode === "takeoff") {
   void new BidwrightTakeoffCadApp(options).start();
 } else {
