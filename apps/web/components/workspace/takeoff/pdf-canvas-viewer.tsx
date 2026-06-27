@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, useCallback } from "react";
 import { loadPdfJs, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "@/lib/pdfjs-loader";
+import { buildPdfPrewarmQueue } from "@/lib/pdf-page-prewarm";
 
 interface PdfFocusTarget {
   key: string;
@@ -28,6 +29,15 @@ interface PageTextLayout {
   normalizedText: string;
   entries: PageTextLayoutEntry[];
 }
+
+interface CachedPageRender {
+  canvas: HTMLCanvasElement;
+  width: number;
+  height: number;
+  lastUsed: number;
+}
+
+const SINGLE_PAGE_CACHE_LIMIT = 7;
 
 type PdfTextItem = {
   str: string;
@@ -217,6 +227,91 @@ export function PdfCanvasViewer({
   const pageHostRefs = useRef(new Map<number, HTMLDivElement>());
   const visibilityRatiosRef = useRef(new Map<number, number>());
   const currentVisiblePageRef = useRef(1);
+  const singlePageCacheRef = useRef(new Map<string, CachedPageRender>());
+  const singlePagePrewarmingRef = useRef(new Set<string>());
+
+  const singlePageCacheKey = useCallback(
+    (targetPageNumber: number) => `${documentUrl}::${targetPageNumber}::${zoom.toFixed(4)}`,
+    [documentUrl, zoom],
+  );
+
+  const trimSinglePageCache = useCallback(() => {
+    const cache = singlePageCacheRef.current;
+    if (cache.size <= SINGLE_PAGE_CACHE_LIMIT) return;
+    const staleKeys = Array.from(cache.entries())
+      .sort((left, right) => left[1].lastUsed - right[1].lastUsed)
+      .slice(0, Math.max(0, cache.size - SINGLE_PAGE_CACHE_LIMIT))
+      .map(([key]) => key);
+    for (const key of staleKeys) cache.delete(key);
+  }, []);
+
+  const drawCachedSinglePage = useCallback((
+    targetPageNumber: number,
+    targetCanvas: HTMLCanvasElement,
+  ) => {
+    const key = singlePageCacheKey(targetPageNumber);
+    const cached = singlePageCacheRef.current.get(key);
+    if (!cached) return false;
+    cached.lastUsed = Date.now();
+    targetCanvas.width = cached.width;
+    targetCanvas.height = cached.height;
+    targetCanvas.style.width = `${cached.width}px`;
+    targetCanvas.style.height = `${cached.height}px`;
+    targetCanvas.getContext("2d")?.drawImage(cached.canvas, 0, 0);
+    onCanvasResize?.(cached.width, cached.height);
+    return true;
+  }, [onCanvasResize, singlePageCacheKey]);
+
+  const rememberSinglePageCanvas = useCallback((
+    targetPageNumber: number,
+    sourceCanvas: HTMLCanvasElement,
+  ) => {
+    if (sourceCanvas.width <= 0 || sourceCanvas.height <= 0) return;
+    const copy = document.createElement("canvas");
+    copy.width = sourceCanvas.width;
+    copy.height = sourceCanvas.height;
+    copy.getContext("2d")?.drawImage(sourceCanvas, 0, 0);
+    singlePageCacheRef.current.set(singlePageCacheKey(targetPageNumber), {
+      canvas: copy,
+      width: sourceCanvas.width,
+      height: sourceCanvas.height,
+      lastUsed: Date.now(),
+    });
+    trimSinglePageCache();
+  }, [singlePageCacheKey, trimSinglePageCache]);
+
+  const renderSinglePageIntoCache = useCallback(async (targetPageNumber: number) => {
+    const doc = pdfDocRef.current;
+    if (!doc) return;
+    const clampedPage = Math.max(1, Math.min(targetPageNumber, doc.numPages));
+    const key = singlePageCacheKey(clampedPage);
+    if (singlePageCacheRef.current.has(key) || singlePagePrewarmingRef.current.has(key)) return;
+
+    singlePagePrewarmingRef.current.add(key);
+    try {
+      const page = await doc.getPage(clampedPage);
+      const viewport = page.getViewport({ scale: zoom });
+      const canvas = document.createElement("canvas");
+      canvas.width = viewport.width;
+      canvas.height = viewport.height;
+      canvas.style.width = `${viewport.width}px`;
+      canvas.style.height = `${viewport.height}px`;
+      await page.render({ canvas, viewport }).promise;
+      singlePageCacheRef.current.set(key, {
+        canvas,
+        width: viewport.width,
+        height: viewport.height,
+        lastUsed: Date.now(),
+      });
+      trimSinglePageCache();
+    } catch (err: unknown) {
+      if (!(err instanceof Error && err.message?.includes("Rendering cancelled"))) {
+        // Prewarm failures should never block visible rendering.
+      }
+    } finally {
+      singlePagePrewarmingRef.current.delete(key);
+    }
+  }, [singlePageCacheKey, trimSinglePageCache, zoom]);
 
   const buildPageTextLayout = useCallback(async (targetPageNumber: number) => {
     const doc = pdfDocRef.current;
@@ -276,6 +371,8 @@ export function PdfCanvasViewer({
       try {
         setLoading(true);
         setError(null);
+        singlePageCacheRef.current.clear();
+        singlePagePrewarmingRef.current.clear();
 
         if (pdfDocRef.current) {
           pdfDocRef.current.destroy();
@@ -339,6 +436,10 @@ export function PdfCanvasViewer({
     const clampedPage = Math.max(1, Math.min(pageNumber, doc.numPages));
 
     try {
+      if (drawCachedSinglePage(clampedPage, canvas)) {
+        return;
+      }
+
       /* Cancel any in-flight render */
       if (renderTaskRef.current) {
         renderTaskRef.current.cancel();
@@ -363,11 +464,12 @@ export function PdfCanvasViewer({
 
       await renderTask.promise;
       renderTaskRef.current = null;
+      rememberSinglePageCanvas(clampedPage, canvas);
     } catch (err: unknown) {
       /* Ignore cancellation errors */
       if (err instanceof Error && err.message?.includes("Rendering cancelled")) return;
     }
-  }, [pageNumber, zoom, canvasRef, onCanvasResize]);
+  }, [canvasRef, drawCachedSinglePage, onCanvasResize, pageNumber, rememberSinglePageCanvas, zoom]);
 
   const renderContinuousPage = useCallback(async (targetPageNumber: number) => {
     const doc = pdfDocRef.current;
@@ -412,6 +514,26 @@ export function PdfCanvasViewer({
       renderPage();
     }
   }, [canvasRef, error, loading, mode, renderPage]);
+
+  useEffect(() => {
+    if (mode !== "single" || loading || error || pageCount === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    const queue = buildPdfPrewarmQueue(pageNumber, pageCount, { radius: 2 });
+    const prewarm = async () => {
+      for (const targetPage of queue) {
+        if (cancelled) return;
+        await renderSinglePageIntoCache(targetPage);
+      }
+    };
+    void prewarm();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [error, loading, mode, pageCount, pageNumber, renderSinglePageIntoCache]);
 
   useEffect(() => {
     if (mode !== "continuous" || loading || error || pageCount === 0 || !containerRef.current) {

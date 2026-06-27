@@ -30,6 +30,7 @@ import {
 import { Badge, Button, CompactSelect, Input, Label } from "@/components/ui";
 import { SearchablePicker, type SearchablePickerOption } from "@/components/shared/searchable-picker";
 import { UomSelect } from "@/components/shared/uom-select";
+import { appendFormulaVariable, extractFormulaVariables } from "@/lib/assembly-template-preview";
 
 export interface CatalogItemRow {
   id: string;
@@ -502,6 +503,42 @@ function validateExpression(expr: string, scope: Record<string, number>): { ok: 
   }
 }
 
+function FormulaParameterChips({
+  parameters,
+  expression,
+  onPick,
+}: {
+  parameters: AssemblyParameterRecord[];
+  expression: string;
+  onPick: (key: string) => void;
+}) {
+  if (parameters.length === 0) return null;
+  const used = new Set(extractFormulaVariables(expression));
+  return (
+    <div className="flex min-w-0 flex-wrap gap-1">
+      {parameters.map((parameter) => {
+        const active = used.has(parameter.key);
+        return (
+          <button
+            key={parameter.id}
+            type="button"
+            onClick={() => onPick(parameter.key)}
+            title={parameter.label || parameter.key}
+            className={cn(
+              "max-w-full rounded border px-1.5 py-0.5 font-mono text-[9px] transition-colors",
+              active
+                ? "border-accent/40 bg-accent/10 text-accent"
+                : "border-line/70 text-fg/40 hover:border-accent/35 hover:text-fg/75",
+            )}
+          >
+            {parameter.key}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
 function ParameterRow({
   parameter,
   onPatch,
@@ -804,7 +841,14 @@ export function ComponentsEditor({
                   emptyMessage={refEmptyMessage}
                 />
               </div>
-              <Input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="qty / expr" className="h-7 min-w-0 text-xs font-mono" />
+              <div className="flex min-w-0 flex-col gap-1">
+                <Input value={draftQty} onChange={(e) => setDraftQty(e.target.value)} placeholder="qty / expr" className="h-7 min-w-0 text-xs font-mono" />
+                <FormulaParameterChips
+                  parameters={parameters}
+                  expression={draftQty}
+                  onPick={(key) => setDraftQty((current) => appendFormulaVariable(current, key))}
+                />
+              </div>
               <UomSelect
                 compact
                 value={draftUom}
@@ -1043,6 +1087,11 @@ function ComponentRow({
         {qtyValidation.ok && qtyValidation.value !== undefined && parameters.length > 0 && (
           <div className="text-[9px] text-fg/35">≈ {formatNumber(qtyValidation.value)} with defaults</div>
         )}
+        <FormulaParameterChips
+          parameters={parameters}
+          expression={qty}
+          onPick={(key) => setQty((current) => appendFormulaVariable(current, key))}
+        />
       </div>
       <div className="flex min-w-0 flex-col gap-0.5">
         <UomSelect

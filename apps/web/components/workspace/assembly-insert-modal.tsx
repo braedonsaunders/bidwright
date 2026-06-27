@@ -21,6 +21,7 @@ import {
   resyncAssemblyInstance,
 } from "@/lib/api";
 import { Button, Input, Label, ModalBackdrop, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
+import { summarizeAssemblyTemplate } from "@/lib/assembly-template-preview";
 import {
   AssemblyHeaderEditor,
   ComponentsEditor,
@@ -211,6 +212,20 @@ export function AssemblyInsertModal({
     () => list.filter((a) => a.id !== detail?.id).map((a) => ({ id: a.id, label: a.name, unit: a.unit })),
     [list, detail?.id],
   );
+
+  const templateSummary = useMemo(
+    () => detail ? summarizeAssemblyTemplate(detail.parameters, detail.components) : null,
+    [detail],
+  );
+
+  const componentTypeSummary = useMemo(() => {
+    if (!detail) return [];
+    const counts = new Map<string, number>();
+    for (const component of detail.components) {
+      counts.set(component.componentType, (counts.get(component.componentType) ?? 0) + 1);
+    }
+    return Array.from(counts.entries()).sort((left, right) => right[1] - left[1]);
+  }, [detail]);
 
   const handleCreate = useCallback(async () => {
     setError(null);
@@ -472,6 +487,57 @@ export function AssemblyInsertModal({
                 </div>
                 <div className="p-4 overflow-y-auto flex-1 space-y-3">
                   {detail.description && <div className="text-xs text-fg/50">{detail.description}</div>}
+
+                  <div className="rounded-md border border-fg/10 bg-panel2/40 p-3">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-xs font-medium text-fg">Template recipe</div>
+                        <div className="mt-1 flex flex-wrap gap-1.5">
+                          {componentTypeSummary.length > 0 ? componentTypeSummary.map(([type, count]) => (
+                            <span key={type} className="rounded border border-line/70 px-1.5 py-0.5 text-[10px] text-fg/55">
+                              {type.replace(/_/g, " ")} {count}
+                            </span>
+                          )) : (
+                            <span className="text-[11px] text-fg/40">No components yet</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="shrink-0 text-right text-[10px] text-fg/45">
+                        <div>{detail.components.length} component{detail.components.length === 1 ? "" : "s"}</div>
+                        <div>{templateSummary?.formulaCount ?? 0} formula{templateSummary?.formulaCount === 1 ? "" : "s"}</div>
+                      </div>
+                    </div>
+                    {detail.parameters.length > 0 && (
+                      <div className="mt-3">
+                        <div className="mb-1 text-[10px] uppercase tracking-wide text-fg/35">Formula inputs</div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {detail.parameters.map((parameter) => {
+                            const referenced = templateSummary?.referencedParameterKeys.includes(parameter.key);
+                            return (
+                              <span
+                                key={parameter.id}
+                                title={parameter.label || parameter.key}
+                                className={cn(
+                                  "rounded border px-1.5 py-0.5 font-mono text-[10px]",
+                                  referenced
+                                    ? "border-accent/40 bg-accent/10 text-accent"
+                                    : "border-line/70 text-fg/45",
+                                )}
+                              >
+                                {parameter.key}
+                                {parameter.unit ? <span className="ml-1 font-sans text-[9px] opacity-60">{parameter.unit}</span> : null}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        {templateSummary && templateSummary.unusedParameterKeys.length > 0 && (
+                          <div className="mt-1 text-[10px] text-fg/35">
+                            Unused: {templateSummary.unusedParameterKeys.join(", ")}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
 
                   <div>
                     <Label className="text-[10px]">Quantity (number of {detail.unit || "EA"})</Label>

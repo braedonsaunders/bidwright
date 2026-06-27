@@ -146,6 +146,13 @@ import { isPrimitiveClosed, samplePdfPrimitive } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
+import { parseConstructionDimensionToUnit } from "@/lib/construction-dimension";
+import {
+  TAKEOFF_SHORTCUT_PRESET_OPTIONS,
+  resolveTakeoffShortcut,
+  takeoffShortcutLabel,
+  type TakeoffShortcutPreset,
+} from "@/lib/takeoff-shortcuts";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 import type {
   BidwrightModelLineItemDraft,
@@ -319,7 +326,18 @@ function removeDrawingAnalysisEntity(
 type TakeoffHistoryCommand =
   | { kind: "create"; annotation: Pickup }
   | { kind: "delete"; annotation: Pickup }
-  | { kind: "clear"; annotations: Pickup[] };
+  | { kind: "clear"; annotations: Pickup[] }
+  | { kind: "update"; before: Pickup; after: Pickup }
+  | {
+      kind: "calibration";
+      docId: string;
+      page: number;
+      applyToAllPages: boolean;
+      before: Calibration | null;
+      after: Calibration | null;
+      beforeDocCache: Record<string, Calibration> | null;
+      afterDocCache: Record<string, Calibration> | null;
+    };
 
 function getFileExtension(fileName: string): string {
   return fileName.split(".").pop()?.toLowerCase() ?? "";
@@ -351,6 +369,16 @@ function isSpreadsheetFile(fileName: string): boolean {
 
 function isPhotoFile(fileName: string): boolean {
   return PHOTO_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isTakeoffShortcutPreset(value: string | null): value is TakeoffShortcutPreset {
+  return value === "bidwright" || value === "planswift";
+}
+
+function isTextEditingTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  const editable = target.closest("input, textarea, select, [contenteditable='true'], [role='textbox']");
+  return Boolean(editable);
 }
 
 /* ─── Tool definitions ─── */
@@ -475,6 +503,7 @@ function PdfToolGroupMenus({
   libraryPageNumber,
   libraryCanRun,
   onLibraryRefresh,
+  shortcutPreset,
 }: {
   activeTool: ToolId;
   onSelect: (tool: ToolId) => void;
@@ -502,6 +531,7 @@ function PdfToolGroupMenus({
   libraryPageNumber: number;
   libraryCanRun: boolean;
   onLibraryRefresh: () => void;
+  shortcutPreset: TakeoffShortcutPreset;
 }) {
   return (
     <div className="flex shrink-0 items-center gap-0.5 rounded-md border border-line bg-bg/35 p-0.5">
@@ -552,6 +582,7 @@ function PdfToolGroupMenus({
                         {sectionTools.map((tool) => {
                           const Icon = tool.icon;
                           const active = tool.id === activeTool;
+                          const shortcut = takeoffShortcutLabel({ kind: "tool", toolId: tool.id }, shortcutPreset);
                           return (
                             <Popover.Close asChild key={tool.id}>
                               <button
@@ -563,10 +594,11 @@ function PdfToolGroupMenus({
                                     ? "bg-accent/15 text-accent"
                                     : "text-fg/70 hover:bg-panel2 hover:text-fg",
                                 )}
-                                title={TOOL_STATUS_TEXT[tool.id] ?? tool.label}
+                                title={`${TOOL_STATUS_TEXT[tool.id] ?? tool.label}${shortcut ? ` (${shortcut})` : ""}`}
                               >
                                 <Icon className="h-3.5 w-3.5 shrink-0" />
                                 <span className="min-w-0 flex-1 truncate font-medium">{tool.label}</span>
+                                {shortcut && <span className="shrink-0 rounded border border-line/70 px-1 py-0.5 font-mono text-[9px] text-fg/35">{shortcut}</span>}
                                 {active && <Check className="h-3 w-3 shrink-0" />}
                               </button>
                             </Popover.Close>
@@ -1950,6 +1982,16 @@ export function TakeoffTab({
   const [zoom, setZoom] = useState(safeInitialZoom);
   const [totalPages, setTotalPages] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
+  const [shortcutPreset, setShortcutPreset] = useState<TakeoffShortcutPreset>("bidwright");
+
+  useEffect(() => {
+    const saved = window.localStorage.getItem("bidwright.takeoff.shortcutPreset");
+    if (isTakeoffShortcutPreset(saved)) setShortcutPreset(saved);
+  }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem("bidwright.takeoff.shortcutPreset", shortcutPreset);
+  }, [shortcutPreset]);
 
   /* Annotation state */
   const [annotations, setAnnotations] = useState<Pickup[]>([]);
@@ -2078,6 +2120,65 @@ export function TakeoffTab({
     const docCache = calibrationCacheRef.current[docId];
     if (!docCache) return null;
     return docCache[pageNumber] ?? docCache.__default ?? null;
+  }
+
+  function cloneCalibrationDocCache(docId: string): Record<string, Calibration> | null {
+    const docCache = calibrationCacheRef.current[docId];
+    if (!docCache) return null;
+    const entries = Object.entries(docCache)
+      .filter((entry): entry is [string, Calibration] => Boolean(entry[1]))
+      .map(([key, value]) => [key, { ...value }] as const);
+    return entries.length > 0 ? Object.fromEntries(entries) : null;
+  }
+
+  function applyCalibrationDocCacheSnapshot(docId: string, snapshot: Record<string, Calibration> | null) {
+    const nextCache = { ...calibrationCacheRef.current };
+    if (snapshot && Object.keys(snapshot).length > 0) {
+      nextCache[docId] = { ...(snapshot as CalibrationDocCache) };
+    } else {
+      delete nextCache[docId];
+    }
+    calibrationCacheRef.current = nextCache;
+    if (docId === selectedDocId) {
+      setCalibration(lookupCalibrationFromCache(docId, page));
+    }
+    void updateWorkspaceState(projectId, { takeoffCalibrations: nextCache }).catch(() => {});
+  }
+
+  function applyCalibrationSnapshot(
+    docId: string,
+    pageNumber: number,
+    next: Calibration | null,
+    applyToAllPages: boolean,
+  ) {
+    const docCache = { ...(calibrationCacheRef.current[docId] ?? {}) };
+    if (applyToAllPages) {
+      for (const key of Object.keys(docCache)) {
+        if (key !== "__default") delete docCache[Number(key)];
+      }
+      if (next) {
+        docCache.__default = next;
+      } else {
+        delete docCache.__default;
+      }
+    } else if (next) {
+      docCache[pageNumber] = next;
+    } else {
+      delete docCache[pageNumber];
+    }
+
+    const nextCache = { ...calibrationCacheRef.current };
+    if (Object.keys(docCache).length > 0) {
+      nextCache[docId] = docCache;
+    } else {
+      delete nextCache[docId];
+    }
+    calibrationCacheRef.current = nextCache;
+
+    if (docId === selectedDocId) {
+      setCalibration(lookupCalibrationFromCache(docId, page));
+    }
+    void updateWorkspaceState(projectId, { takeoffCalibrations: nextCache }).catch(() => {});
   }
 
   /* Drawing config (from modal or defaults) */
@@ -3223,7 +3324,7 @@ export function TakeoffTab({
     return () => window.clearInterval(interval);
   }, [detached, onDetachedWindowChange]);
 
-  /* Escape key: cancel drawing and return to Select */
+  /* Takeoff keyboard shortcuts: tool presets, undo/redo, page nav, zoom. */
   useEffect(() => {
     function handleKeyDown(e: KeyboardEvent) {
       if (e.key === "Escape") {
@@ -3234,11 +3335,56 @@ export function TakeoffTab({
         setMultiDocResults(null);
         setAskAiModalOpen(false);
         setAskAiCropImage(null);
+        return;
+      }
+
+      if (isTextEditingTarget(e.target)) return;
+
+      const action = resolveTakeoffShortcut(
+        {
+          key: e.key,
+          altKey: e.altKey,
+          ctrlKey: e.ctrlKey,
+          metaKey: e.metaKey,
+          shiftKey: e.shiftKey,
+        },
+        shortcutPreset,
+      );
+      if (!action) return;
+
+      e.preventDefault();
+      if (action.kind === "tool") {
+        const tool = TOOLS.find((candidate) => candidate.id === action.toolId)?.id;
+        if (tool && isPdfDocument) handleToolSelect(tool);
+        return;
+      }
+      if (action.kind === "undo") {
+        void undoTakeoffAction();
+        return;
+      }
+      if (action.kind === "redo") {
+        void redoTakeoffAction();
+        return;
+      }
+      if (action.kind === "next-page") {
+        setPage((current) => Math.min(totalPages, current + 1));
+        return;
+      }
+      if (action.kind === "previous-page") {
+        setPage((current) => Math.max(1, current - 1));
+        return;
+      }
+      if (action.kind === "zoom-in") {
+        applyPdfZoom(zoom * 1.1);
+        return;
+      }
+      if (action.kind === "zoom-out") {
+        applyPdfZoom(zoom / 1.1);
       }
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, []);
+  }, [applyPdfZoom, isPdfDocument, shortcutPreset, totalPages, zoom]);
 
   /* Sync annotation canvas size with PDF canvas.
      Poll briefly after mount/doc-change since PdfCanvasViewer is dynamically
@@ -3689,6 +3835,26 @@ export function TakeoffTab({
     notifyAnnotationsMutated();
   }
 
+  async function updatePickupLocal(annotation: Pickup) {
+    const payload = annotationToApiPayload(annotation);
+    setAnnotations((prev) => prev.map((candidate) => (candidate.id === annotation.id ? annotation : candidate)));
+    try {
+      await updatePickup(projectId, annotation.id, {
+        label: annotation.label,
+        color: annotation.color,
+        groupName: annotation.groupName,
+        points: annotation.points,
+        measurement: annotation.measurement,
+        metadata: payload.metadata,
+        lineThickness: annotation.thickness,
+        visible: annotation.visible,
+      });
+    } catch {
+      /* Keep the in-session update; a later reload will reconcile server state. */
+    }
+    notifyAnnotationsMutated();
+  }
+
   async function undoTakeoffAction() {
     const command = undoStackRef.current.pop();
     if (!command) return;
@@ -3699,12 +3865,18 @@ export function TakeoffTab({
       } else if (command.kind === "delete") {
         const restored = await recreatePickup(command.annotation);
         redoStackRef.current.push({ kind: "delete", annotation: restored });
-      } else {
+      } else if (command.kind === "clear") {
         const restored: Pickup[] = [];
         for (const annotation of command.annotations) {
           restored.push(await recreatePickup(annotation));
         }
         redoStackRef.current.push({ kind: "clear", annotations: restored });
+      } else if (command.kind === "update") {
+        await updatePickupLocal(command.before);
+        redoStackRef.current.push(command);
+      } else if (command.kind === "calibration") {
+        applyCalibrationDocCacheSnapshot(command.docId, command.beforeDocCache);
+        redoStackRef.current.push(command);
       }
     } finally {
       updateTakeoffHistoryVersion();
@@ -3721,10 +3893,16 @@ export function TakeoffTab({
       } else if (command.kind === "delete") {
         await deletePickupLocal(command.annotation.id);
         undoStackRef.current.push(command);
-      } else {
+      } else if (command.kind === "clear") {
         for (const annotation of command.annotations) {
           await deletePickupLocal(annotation.id);
         }
+        undoStackRef.current.push(command);
+      } else if (command.kind === "update") {
+        await updatePickupLocal(command.after);
+        undoStackRef.current.push(command);
+      } else if (command.kind === "calibration") {
+        applyCalibrationDocCacheSnapshot(command.docId, command.afterDocCache);
         undoStackRef.current.push(command);
       }
     } finally {
@@ -5641,8 +5819,8 @@ export function TakeoffTab({
 
   function handleCalibrationConfirm() {
     if (!calibrationPoints || !calibrationInput) return;
-    const knownDist = parseFloat(calibrationInput);
-    if (knownDist <= 0 || isNaN(knownDist)) return;
+    const knownDist = parseConstructionDimensionToUnit(calibrationInput, calibrationUnit);
+    if (knownDist === null || knownDist <= 0 || !Number.isFinite(knownDist)) return;
 
     const [a, b] = calibrationPoints;
     const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
@@ -5650,7 +5828,9 @@ export function TakeoffTab({
     // measurements stay correct at any later zoom level.
     const pixelsPerUnit = (pixelDist / knownDist) / Math.max(zoom, 0.0001);
 
+    const previous = selectedDocId ? lookupCalibrationFromCache(selectedDocId, page) : calibration;
     const next: Calibration = { pixelsPerUnit, unit: calibrationUnit };
+    const beforeDocCache = selectedDocId ? cloneCalibrationDocCache(selectedDocId) : null;
     setCalibration(next);
     setCalibrationPromptOpen(false);
     setCalibrationInput("");
@@ -5659,17 +5839,20 @@ export function TakeoffTab({
     // Persist on WorkspaceState so the calibration survives reloads and
     // syncs to other open tabs / devices.
     if (selectedDocId) {
-      const docCache = { ...(calibrationCacheRef.current[selectedDocId] ?? {}) };
-      if (calibrationApplyToAllPages) {
-        // Mark this calibration as the document-wide default and clear any
-        // page-specific overrides so every page picks it up.
-        docCache.__default = next;
-      } else {
-        docCache[page] = next;
+      applyCalibrationSnapshot(selectedDocId, page, next, calibrationApplyToAllPages);
+      if (!sameCalibration(previous, next)) {
+        const afterDocCache = cloneCalibrationDocCache(selectedDocId);
+        pushTakeoffHistory({
+          kind: "calibration",
+          docId: selectedDocId,
+          page,
+          applyToAllPages: calibrationApplyToAllPages,
+          before: previous,
+          after: next,
+          beforeDocCache,
+          afterDocCache,
+        });
       }
-      const nextCache = { ...calibrationCacheRef.current, [selectedDocId]: docCache };
-      calibrationCacheRef.current = nextCache;
-      void updateWorkspaceState(projectId, { takeoffCalibrations: nextCache }).catch(() => {});
     }
     setActiveTool("select");
   }
@@ -5730,6 +5913,7 @@ export function TakeoffTab({
       metadata: { ...meta, excludedMatchIndexes: excludedArr },
     };
     setAnnotations((prev) => prev.map((a) => (a.id === pickupId ? updated : a)));
+    pushTakeoffHistory({ kind: "update", before: annotation, after: updated });
     try {
       await updatePickup(projectId, pickupId, {
         points: updated.points,
@@ -5758,6 +5942,7 @@ export function TakeoffTab({
     const previous = annotations;
     setAnnotations([]);
     updateAnnotationSelection(null);
+    if (previous.length > 0) pushTakeoffHistory({ kind: "clear", annotations: previous });
     const results = await Promise.allSettled(
       previous.map((ann) => deletePickup(projectId, ann.id)),
     );
@@ -5797,8 +5982,13 @@ export function TakeoffTab({
   }
 
   function handleSaveAnnotationEdit(id: string, updates: { label?: string; color?: string; groupName?: string }) {
-    const nextAnnotations = annotations.map((a) => (a.id === id ? { ...a, ...updates } : a));
+    const before = annotations.find((a) => a.id === id) ?? null;
+    const after = before ? { ...before, ...updates } : null;
+    const nextAnnotations = annotations.map((a) => (a.id === id && after ? after : a));
     setAnnotations(nextAnnotations);
+    if (before && after && JSON.stringify(before) !== JSON.stringify(after)) {
+      pushTakeoffHistory({ kind: "update", before, after });
+    }
     updatePickup(projectId, id, updates)
       .then(() => notifyAnnotationsMutated())
       .catch(() => notifyAnnotationsMutated(nextAnnotations));
@@ -7923,6 +8113,7 @@ export function TakeoffTab({
               libraryPageNumber={page}
               libraryCanRun={Boolean(isPdfDocument && selectedDoc)}
               onLibraryRefresh={refreshLibraryCount}
+              shortcutPreset={shortcutPreset}
             />
 
           </>
@@ -8066,6 +8257,14 @@ export function TakeoffTab({
 
         {isPdfDocument && (
           <>
+            <Select
+              value={shortcutPreset}
+              onValueChange={(value) => {
+                if (isTakeoffShortcutPreset(value)) setShortcutPreset(value);
+              }}
+              options={TAKEOFF_SHORTCUT_PRESET_OPTIONS}
+              className="h-7 w-[112px] shrink-0 text-[11px]"
+            />
             <Button
               variant="ghost"
               size="xs"
@@ -8784,9 +8983,9 @@ export function TakeoffTab({
         const vPixelDist = Math.sqrt((vb.x - va.x) ** 2 + (vb.y - va.y) ** 2);
         // Same math as live measurements: cal stored at zoom 1, multiply by current zoom.
         const measured = vPixelDist / Math.max(calibration.pixelsPerUnit * zoom, 0.0001);
-        const expected = parseFloat(verifyExpected);
+        const expected = parseConstructionDimensionToUnit(verifyExpected, calibration.unit);
         const errorPct =
-          expected > 0 && Number.isFinite(expected) ? ((measured - expected) / expected) * 100 : null;
+          expected !== null && expected > 0 && Number.isFinite(expected) ? ((measured - expected) / expected) * 100 : null;
         const errorAbs = errorPct !== null ? Math.abs(errorPct) : null;
         const errorTone =
           errorAbs === null ? "neutral" :
@@ -8828,10 +9027,9 @@ export function TakeoffTab({
                   <div className="grid grid-cols-[1fr_80px] gap-2">
                     <Input
                       className="text-base h-10"
-                      type="number"
-                      min={0.001}
-                      step={0.001}
-                      placeholder="Enter known dimension"
+                      type="text"
+                      inputMode="decimal"
+                      placeholder={`10, 10' 6", or 126 in`}
                       value={verifyExpected}
                       onChange={(e) => setVerifyExpected(e.target.value)}
                       autoFocus
@@ -8900,8 +9098,8 @@ export function TakeoffTab({
       {calibrationPromptOpen && calibrationPoints && (() => {
         const [a, b] = calibrationPoints;
         const pixelDist = Math.sqrt((b.x - a.x) ** 2 + (b.y - a.y) ** 2);
-        const distNum = parseFloat(calibrationInput);
-        const livePerUnit = distNum > 0 ? (pixelDist / distNum) : null;
+        const distNum = parseConstructionDimensionToUnit(calibrationInput, calibrationUnit);
+        const livePerUnit = distNum !== null && distNum > 0 ? (pixelDist / distNum) : null;
         // pdfjs renders at 72 DPI × zoom, so 1 page-inch = 72 × zoom canvas px.
         const paperInches = pixelDist / (72 * zoom);
         // Sanity warnings: surface common calibration mistakes.
@@ -8975,10 +9173,9 @@ export function TakeoffTab({
                 <div className="grid grid-cols-[1fr_80px] gap-2">
                   <Input
                     className="text-base h-10"
-                    type="number"
-                    min={0.01}
-                    step={0.01}
-                    placeholder="Distance the line represents"
+                    type="text"
+                    inputMode="decimal"
+                    placeholder={`10, 10' 6", 10-6, or 3 m`}
                     value={calibrationInput}
                     onChange={(e) => setCalibrationInput(e.target.value)}
                     autoFocus
@@ -9096,7 +9293,7 @@ export function TakeoffTab({
                         }}
                         className={cn(
                           "rounded-md border px-2 py-1 text-[11px] transition-colors",
-                          parseFloat(calibrationInput) === p.value && calibrationUnit === p.unit
+                          distNum !== null && Math.abs(distNum - p.value) < 0.000001 && calibrationUnit === p.unit
                             ? "border-amber-500/50 bg-amber-500/10 text-amber-500"
                             : "border-line text-fg/60 hover:border-amber-500/30 hover:text-fg",
                         )}
