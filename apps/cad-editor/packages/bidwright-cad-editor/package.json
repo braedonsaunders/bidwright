@@ -1,0 +1,25 @@
+{
+  "name": "@bidwright/cad-editor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "BidWright first-party 2D CAD editor shell for DWG/DXF takeoff workflows.",
+  "scripts": {
+    "build": "tsc && vite build",
+    "clean": "rimraf dist tsconfig.tsbuildinfo",
+    "dev": "vite",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "dependencies": {
+    "@mlightcad/cad-html-plugin": "workspace:*",
+    "@mlightcad/cad-simple-viewer": "workspace:*",
+    "@mlightcad/data-model": "workspace:*",
+    "three": "^0.172.0"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.5.2",
+    "vite": "^5.4.19",
+    "vite-plugin-static-copy": "^3.1.1"
+  }
+}

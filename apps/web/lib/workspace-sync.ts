@@ -15,6 +15,10 @@ export function modelEditorChannelName(projectId: string): string {
   return `bw-model-editor-${projectId}`;
 }
 
+export function cadEditorChannelName(projectId: string): string {
+  return `bw-cad-editor-${projectId}`;
+}
+
 export function postWorkspaceMutation(
   projectId: string,
   options: { originId?: string; reason?: string } = {},

@@ -1,0 +1,18 @@
+{
+  "main": "dist/dxf-json-converter.umd.cjs",
+  "worker": "dist/dxf-parser-worker.js",
+  "forbiddenInMain": [
+    "encodingFailureFatal",
+    "thumbnailImageFormat",
+    "parseStream",
+    "parseSync",
+    "CommonEntitySnippets",
+    "DxfArrayScanner"
+  ],
+  "requiredInWorker": [
+    "encodingFailureFatal",
+    "thumbnailImageFormat",
+    "parseBuffer",
+    "parseSync"
+  ]
+}

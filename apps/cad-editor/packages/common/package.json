@@ -1,0 +1,46 @@
+{
+  "name": "@mlightcad/common",
+  "version": "1.6.14",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mlightcad/realdwg-web"
+  },
+  "keywords": [
+    "autocad",
+    "cad",
+    "dwg",
+    "dxf",
+    "mlight",
+    "mlightcad",
+    "objectarx",
+    "realdwg"
+  ],
+  "files": [
+    "dist",
+    "lib",
+    "README.md",
+    "package.json"
+  ],
+  "sideEffects": [
+    "./lib/AcCmLogUtil.js"
+  ],
+  "main": "./dist/common.umd.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    "types": "./lib/index.d.ts",
+    "import": "./lib/index.js",
+    "require": "./dist/common.umd.cjs"
+  },
+  "scripts": {
+    "clean": "rimraf dist lib tsconfig.tsbuildinfo",
+    "build": "tsc && vite build",
+    "lint": "eslint src/",
+    "lint:fix": "eslint --fix --quiet src/"
+  },
+  "dependencies": {
+    "loglevel": "^1.9.1"
+  }
+}

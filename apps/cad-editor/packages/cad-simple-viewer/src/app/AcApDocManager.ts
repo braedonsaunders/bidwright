@@ -1,0 +1,1535 @@
+import {
+  AcCmColor,
+  AcCmEventManager,
+  AcDbDatabaseConverterManager,
+  AcDbFileType,
+  acdbHostApplicationServices,
+  AcDbProgressdEventArgs,
+  AcDbSysVarManager,
+  AcGeBox2d,
+  log
+} from '@mlightcad/data-model'
+import { AcDbDxfConverter } from '@mlightcad/dxf-json-converter'
+import { AcDbLibreDwgConverter } from '@mlightcad/libredwg-converter'
+import { FontManager } from '@mlightcad/mtext-renderer'
+import { AcTrMTextRenderer } from '@mlightcad/three-renderer'
+
+import {
+  AcApArcCmd,
+  AcApCacheFontCmd,
+  AcApCircleCmd,
+  AcApClearMeasurementsCmd,
+  AcApConvertToDxfCmd,
+  AcApConvertToPngCmd,
+  AcApCopyCmd,
+  AcApDimLinearCmd,
+  AcApEllipseCmd,
+  AcApEraseCmd,
+  AcApHatchCmd,
+  AcApHideObjectsCmd,
+  AcApLayerCloseCmd,
+  AcApLayerCmd,
+  AcApLayerCurCmd,
+  AcApLayerDelCmd,
+  AcApLayerFreezeCmd,
+  AcApLayerIsoCmd,
+  AcApLayerLockCmd,
+  AcApLayerOnCmd,
+  AcApLayerPCmd,
+  AcApLayerThawCmd,
+  AcApLayerUnisoCmd,
+  AcApLayerUnlockCmd,
+  AcApLayoffCmd,
+  AcApLineCmd,
+  AcApLogCmd,
+  AcApMeasureAngleCmd,
+  AcApMeasureArcCmd,
+  AcApMeasureAreaCmd,
+  AcApMeasureDistanceCmd,
+  AcApMLineCmd,
+  AcApMoveCmd,
+  AcApMTextCmd,
+  AcApOffsetCmd,
+  AcApOpenCmd,
+  AcApPanCmd,
+  AcApPointCmd,
+  AcApPolygonCmd,
+  AcApPolylineCmd,
+  AcApQNewCmd,
+  AcApRayCmd,
+  AcApRectCmd,
+  AcApRedoCmd,
+  AcApRegenCmd,
+  AcApRevCircleCmd,
+  AcApRevCloudCmd,
+  AcApRevRectCmd,
+  AcApRevVisibilityCmd,
+  AcApRotateCmd,
+  AcApSelectCmd,
+  AcApSketchCmd,
+  AcApSplineCmd,
+  AcApSwitchBgCmd,
+  AcApSysVarCmd,
+  AcApUndoCmd,
+  AcApUnisolateObjectsCmd,
+  AcApXLineCmd,
+  AcApZoomCmd
+} from '../command'
+import {
+  AcEdCalculateSizeCallback,
+  AcEdCommand,
+  AcEdCommandStack,
+  AcEdOpenMode,
+  eventBus
+} from '../editor'
+import { AcApI18n } from '../i18n'
+import { AcApPluginManager } from '../plugin/AcApPluginManager'
+import { AcTrView2d } from '../view'
+import { AcApContext } from './AcApContext'
+import { AcApDocument } from './AcApDocument'
+import { AcApFontLoader } from './AcApFontLoader'
+import { AcApProgress } from './AcApProgress'
+import {
+  AcApOpenDatabaseOptions,
+  AcApOpenViewMode
+} from './AcDbOpenDatabaseOptions'
+import { isOpenFileProgressComplete } from './openFileProgress'
+
+const DEFAULT_BASE_URL = 'https://cdn.jsdelivr.net/gh/mlightcad/cad-data'
+/**
+ * Built-in command alias table used when users do not provide explicit alias overrides.
+ *
+ * Rules:
+ * - Key is the command global name in uppercase.
+ * - Value is one or more aliases in uppercase.
+ * - This table is intentionally partial; commands not listed here simply have no default aliases.
+ *
+ * Notes:
+ * - Runtime lookup is case-insensitive because all aliases are normalized to uppercase.
+ * - User-provided aliases in `AcApDocManagerOptions.commandAliases` have higher priority
+ *   and will fully replace the defaults for the same command name.
+ */
+const DEFAULT_COMMAND_ALIASES: Record<string, string[]> = {
+  ARC: ['A'],
+  CIRCLE: ['C'],
+  ELLIPSE: ['EL'],
+  ERASE: ['E'],
+  DIMLINEAR: ['DLI'],
+  MEASUREDISTANCE: ['DI', 'DIST'],
+  MEASUREAREA: ['AA', 'AREA'],
+  MEASUREANGLE: ['ANG'],
+  '-HATCH': ['-H'],
+  LAYER: ['LA'],
+  '-LAYER': ['-LA'],
+  LINE: ['L'],
+  MLINE: ['ML'],
+  MTEXT: ['T'],
+  MOVE: ['M'],
+  OFFSET: ['O'],
+  COPY: ['CO'],
+  ROTATE: ['RO'],
+  OPEN: ['OP'],
+  PAN: ['P'],
+  POINT: ['PO'],
+  POLYGON: ['POL'],
+  PLINE: ['PL'],
+  RAY: ['RA'],
+  RECTANG: ['REC'],
+  REGEN: ['RE'],
+  SELECT: ['SE'],
+  SPLINE: ['SPL'],
+  XLINE: ['XL'],
+  ZOOM: ['Z'],
+  UNDO: ['U'],
+  REDO: ['REDO']
+}
+
+/**
+ * Event arguments for document-related events.
+ */
+export interface AcDbDocumentEventArgs {
+  /** The document involved in the event */
+  doc: AcApDocument
+  /** The access mode used for the document open lifecycle */
+  mode: AcEdOpenMode
+}
+
+/**
+ * Defines URLs for Web Worker JavaScript bundles used by the CAD viewer.
+ *
+ * Each entry points to a standalone worker script responsible for
+ * off-main-thread processing such as file parsing or text rendering.
+ */
+export interface AcApWebworkerFiles {
+  /**
+   * URL of the Web Worker bundle responsible for parsing DXF files.
+   *
+   * This worker performs DXF decoding and entity extraction in a
+   * background thread to avoid blocking the UI.
+   */
+  dxfParser?: string | URL
+
+  /**
+   * URL of the Web Worker bundle responsible for parsing DWG files.
+   *
+   * DWG parsing is computationally expensive and must be executed
+   * in a Web Worker to maintain UI responsiveness.
+   */
+  dwgParser?: string | URL
+
+  /**
+   * URL of the Web Worker bundle responsible for rendering MTEXT entities.
+   *
+   * This worker handles MTEXT layout, formatting, and glyph processing
+   * independently from the main rendering thread.
+   */
+  mtextRender?: string | URL
+}
+
+/** AutoCAD-era default font fallback chain used when glyphs are missing. */
+const DEFAULT_FONTS_PRESET = 'modern' as const
+
+/**
+ * Options for creating AcApDocManager instance
+ */
+export interface AcApDocManagerOptions {
+  /**
+   * Optional HTML container element for rendering. If not provided, a new container will be created
+   */
+  container?: HTMLElement
+  /**
+   * Width of the canvas element. If not provided, use container's width
+   */
+  width?: number
+  /**
+   * Height of the canvas element. If not provided, use container's height
+   */
+  height?: number
+  /**
+   * The flag whether to auto resize canvas when container size changed. Default is false.
+   */
+  autoResize?: boolean
+  /**
+   * Base URL to load resources (such as fonts annd drawing templates) needed
+   */
+  baseUrl?: string
+  /**
+   * The flag whether to use main thread or webwork to render drawing.
+   * - true: use main thread to render drawing. This approach take less memory and take longer time to show
+   *         rendering results.
+   * - false: use web worker to render drawing. This approach take more memory and take shorter time to show
+   *         rendering results.
+   */
+  useMainThreadDraw?: boolean
+
+  /**
+   * The flag whether to load default fonts when initializing viewer. If no default font loaded,
+   * texts with fonts which can't be found in font repository will not be shown correctly.
+   */
+  notLoadDefaultFonts?: boolean
+  /**
+   * URLs for Web Worker JavaScript bundles used by the CAD viewer.
+   */
+  webworkerFileUrls?: AcApWebworkerFiles
+
+  /**
+   * URL of the offline HTML viewer runtime bundle (`viewer-runtime.iife.js`).
+   * Used by the HTML export plugin when packaging standalone HTML files.
+   */
+  htmlViewerRuntimeUrl?: string | URL
+
+  /**
+   * Host element for the busy overlay (e.g. HTML export spinner).
+   * Set to the viewer shell so the mask covers ribbon, toolbars, and status bar.
+   * Defaults to the canvas container when omitted.
+   */
+  busyIndicatorHost?: HTMLElement
+
+  /**
+   * Configuration for automatic plugin loading.
+   *
+   * Plugins can be loaded automatically during initialization from:
+   * - A configuration array of plugin instances or factory functions
+   * - A folder path with a list of plugin files to load
+   *
+   * @example
+   * ```typescript
+   * // Load plugins from configuration
+   * AcApDocManager.createInstance({
+   *   plugins: {
+   *     fromConfig: [
+   *       new MyPlugin1(),
+   *       () => new MyPlugin2()
+   *     ]
+   *   }
+   * });
+   *
+   * // Load plugins from folder
+   * AcApDocManager.createInstance({
+   *   plugins: {
+   *     fromFolder: {
+   *       folderPath: './plugins',
+   *       pluginList: ['Plugin1.js', 'Plugin2.js'],
+   *       continueOnError: true
+   *     }
+   *   }
+   * });
+   * ```
+   */
+  plugins?: {
+    /**
+     * Load plugins from a configuration array.
+     * Each item can be a plugin instance or a factory function that returns a plugin.
+     */
+    fromConfig?: Array<
+      | import('../plugin/AcApPlugin').AcApPlugin
+      | (() => import('../plugin/AcApPlugin').AcApPlugin)
+    >
+    /**
+     * Load plugins from a folder using dynamic imports.
+     */
+    fromFolder?: {
+      /** Path to the folder containing plugin files */
+      folderPath: string
+      /** List of plugin file names to load */
+      pluginList: string[]
+      /** Continue loading other plugins if one fails (default: false) */
+      continueOnError?: boolean
+    }
+  }
+
+  /**
+   * Optional command alias overrides.
+   *
+   * Key is command global name, value is one alias or alias list.
+   * If a command is not configured here, built-in default aliases are used.
+   *
+   * @example
+   * ```typescript
+   * commandAliases: {
+   *   LINE: ['L', 'LN'],
+   *   CIRCLE: 'CI'
+   * }
+   * ```
+   */
+  commandAliases?: Record<string, string | string[]>
+}
+
+/**
+ * Document manager that handles CAD document lifecycle and provides the main entry point for the CAD viewer.
+ *
+ * This singleton class manages:
+ * - Document creation and opening (from URLs or file content)
+ * - View and context management
+ * - Command registration and execution
+ * - Font loading for text rendering
+ * - Event handling for document lifecycle
+ *
+ * The manager follows a singleton pattern to ensure only one instance manages the application state.
+ */
+export class AcApDocManager {
+  /** The current application context binding document and view */
+  private _context: AcApContext
+  /** Font loader for managing CAD text fonts */
+  private _fontLoader: AcApFontLoader
+  /** Base URL to get fonts, templates, and example files */
+  private _baseUrl: string
+  /** URL of the HTML viewer runtime bundle for export */
+  private _htmlViewerRuntimeUrl?: string | URL
+  /** Progress animation while opening/parsing files */
+  private _progress: AcApProgress
+  /** Full-viewer busy overlay (e.g. HTML export) */
+  private _busyProgress: AcApProgress
+  /** Command manager */
+  private _commandManager: AcEdCommandStack
+  /** Plugin manager */
+  private _pluginManager: AcApPluginManager
+  /**
+   * Alias overrides provided by caller options.
+   *
+   * Storage format:
+   * - Key: normalized command global name (uppercase)
+   * - Value: normalized alias list (uppercase, deduplicated)
+   *
+   * The map is prepared once during manager initialization and reused when
+   * registering built-in and system-variable commands.
+   */
+  private _commandAliasOverrides: Map<string, string[]>
+  /** Peak open-file percentage for the current open operation (monotonic) */
+  private _openFileProgressPeak = 0
+  /** Last open-file progress stage (FETCH_FILE or CONVERSION) */
+  private _openFileProgressStage?: AcDbProgressdEventArgs['stage']
+  /** Singleton instance */
+  private static _instance?: AcApDocManager
+
+  /** Events fired during document lifecycle */
+  public readonly events = {
+    /** Fired before a document starts opening */
+    documentToBeOpened: new AcCmEventManager<AcDbDocumentEventArgs>(),
+    /** Fired when a new document is created */
+    documentCreated: new AcCmEventManager<AcDbDocumentEventArgs>(),
+    /** Fired when a document becomes active */
+    documentActivated: new AcCmEventManager<AcDbDocumentEventArgs>()
+  }
+
+  /**
+   * Private constructor for singleton pattern.
+   *
+   * Creates an empty document with a 2D view and sets up the application context.
+   * Registers default commands and creates an example document.
+   *
+   * @param options -Options for creating AcApDocManager instance
+   * @private
+   */
+  private constructor(options: AcApDocManagerOptions = {}) {
+    this._baseUrl = options.baseUrl ?? DEFAULT_BASE_URL
+    this._htmlViewerRuntimeUrl = options.htmlViewerRuntimeUrl
+    this._commandAliasOverrides = this.normalizeCommandAliasConfig(
+      options.commandAliases
+    )
+    if (options.useMainThreadDraw) {
+      AcTrMTextRenderer.getInstance().setRenderMode('main')
+    } else {
+      AcTrMTextRenderer.getInstance().setRenderMode('worker')
+    }
+    FontManager.instance.setDefaultFonts(DEFAULT_FONTS_PRESET)
+
+    this.events.documentToBeOpened.addEventListener(() => {
+      this.resetOpenFileProgress()
+    })
+
+    // Create one empty drawing
+    const doc = new AcApDocument()
+    doc.database.events.openProgress.addEventListener(args => {
+      const progress = this.normalizeOpenFileProgress({
+        database: doc.database,
+        percentage: args.percentage,
+        stage: args.stage,
+        subStage: args.subStage,
+        subStageStatus: args.subStageStatus,
+        data: args.data
+      })
+      eventBus.emit('open-file-progress', progress)
+      this.updateProgress(progress)
+
+      // After doc header is loaded, need to set global ltscale and celtscale
+      // It's too late when subStage is 'END'
+      if (args.subStage === 'HEADER') {
+        this.curView.ltscale = doc.database.ltscale
+        this.curView.celtscale = doc.database.celtscale
+        this.curView.renderer.showLineWeight = doc.database.lwdisplay
+      }
+    })
+
+    const initialSize = options.container?.getBoundingClientRect() ?? {
+      width: 300,
+      height: 150
+    }
+    const callback: AcEdCalculateSizeCallback = () => {
+      if (options.autoResize) {
+        const box = options.container?.getBoundingClientRect()
+        return {
+          width: box?.width ?? initialSize.width,
+          height: box?.height ?? initialSize.height
+        }
+      } else {
+        return {
+          width: options.width ?? initialSize.width,
+          height: options.height ?? initialSize.height
+        }
+      }
+    }
+    const view = new AcTrView2d({
+      container: options.container,
+      calculateSizeCallback: callback
+    })
+    this._context = new AcApContext(view, doc)
+
+    this._fontLoader = new AcApFontLoader()
+    this._fontLoader.baseUrl = this._baseUrl + 'fonts/'
+    acdbHostApplicationServices().workingDatabase = doc.database
+
+    this._commandManager = new AcEdCommandStack()
+    this.registerCommands()
+    this._pluginManager = new AcApPluginManager(
+      this._context,
+      this._commandManager
+    )
+    this._progress = new AcApProgress({ host: view.container })
+    this._progress.hide()
+    const busyHost = options.busyIndicatorHost ?? view.container
+    this._busyProgress = new AcApProgress({ host: busyHost })
+    this._busyProgress.hide()
+    if (!options.notLoadDefaultFonts) {
+      this.loadDefaultFonts()
+    }
+    this.registerWorkers(options.webworkerFileUrls)
+    // Load plugins asynchronously (don't await to avoid blocking initialization)
+    this.loadPlugins(options.plugins).catch(error => {
+      log.error('[AcApDocManager] Error loading plugins:', error)
+    })
+  }
+
+  /**
+   * Creates the singleton instance with an optional canvas element.
+   *
+   * This method should be called before accessing the `instance` property
+   * if you want to provide a specific canvas element.
+   *
+   * @param options -Options for creating AcApDocManager instance
+   * @returns The singleton instance
+   */
+  static createInstance(options: AcApDocManagerOptions = {}) {
+    if (AcApDocManager._instance == null) {
+      AcApDocManager._instance = new AcApDocManager(options)
+    }
+    return this._instance
+  }
+
+  /**
+   * Gets the singleton instance of the document manager.
+   * Throw one exception if the instance isn't created yet.
+   *
+   * @returns The singleton document manager instance
+   */
+  static get instance() {
+    if (!AcApDocManager._instance) {
+      throw new Error('AcApDocManager instance is not created yet!')
+    }
+    return AcApDocManager._instance
+  }
+
+  /**
+   * Destroy the view and unload all plugins
+   */
+  async destroy() {
+    await this._pluginManager.unloadAllPlugins()
+    AcTrMTextRenderer.resetInstance()
+    AcApDocManager._instance = undefined
+  }
+
+  /**
+   * Gets the current application context.
+   *
+   * The context binds the current document with its associated view.
+   *
+   * @returns The current application context
+   */
+  get context() {
+    return this._context
+  }
+
+  /**
+   * Gets the currently open CAD document.
+   *
+   * @returns The current document instance
+   */
+  get curDocument() {
+    return this._context.doc
+  }
+
+  /**
+   * Gets the currently active document.
+   *
+   * For now, this is the same as `curDocument` since only one document
+   * can be active at a time.
+   *
+   * @returns The current active document
+   */
+  get mdiActiveDocument() {
+    return this._context.doc
+  }
+
+  /**
+   * Gets the current 2D view used to display the drawing.
+   *
+   * @returns The current 2D view instance
+   */
+  get curView() {
+    return this._context.view as AcTrView2d
+  }
+
+  /**
+   * Gets the editor instance for handling user input.
+   *
+   * @returns The current editor instance
+   */
+  get editor() {
+    return this._context.view.editor
+  }
+
+  /**
+   * Gets command manager to look up and register commands
+   *
+   * @returns The command manager
+   */
+  get commandManager() {
+    return this._commandManager
+  }
+
+  /**
+   * Gets plugin manager to load and unload plugins
+   *
+   * @returns The plugin manager
+   */
+  get pluginManager() {
+    return this._pluginManager
+  }
+
+  /**
+   * Base URL to load fonts
+   */
+  get baseUrl() {
+    return this._baseUrl
+  }
+
+  /**
+   * URL of the offline HTML viewer runtime bundle used for HTML export.
+   */
+  get htmlViewerRuntimeUrl() {
+    return this._htmlViewerRuntimeUrl
+  }
+
+  /**
+   * Resolves colors for creating new entities.
+   *
+   * Returns:
+   * - `entityColor`: the resolved RGB color (24-bit) to use for newly created entities.
+   * - `layerColor`: the current layer's resolved RGB color (24-bit).
+   */
+  resolveColors(): { entityColor: number; layerColor: number } {
+    const db = this.curDocument.database
+    const layer = db.tables.layerTable.getAt(db.clayer)
+    const layerColorValue = this.resolveColorToRgb(layer?.color)
+
+    let resolved: AcCmColor | undefined = db.cecolor
+    if (resolved?.isByLayer) {
+      resolved = layer?.color
+    }
+
+    return {
+      entityColor: this.resolveColorToRgb(resolved),
+      layerColor: layerColorValue
+    }
+  }
+
+  /**
+   * Resolves an AcCmColor into a 24-bit RGB number.
+   * Falls back to ACI 7 when the color is ByLayer/ByBlock or undefined.
+   */
+  private resolveColorToRgb(color?: AcCmColor): number {
+    if (
+      !color ||
+      color.isByLayer ||
+      color.isByBlock ||
+      (color.isByACI && color.colorIndex === 7)
+    ) {
+      return this.resolveAci7ForBackground()
+    }
+    const rgbValue = color.RGB
+    return rgbValue ?? this.resolveAci7ForBackground()
+  }
+
+  /**
+   * Resolves ACI 7 based on the current viewer background color.
+   * - Light background (white): use black.
+   * - Dark background: use white.
+   */
+  private resolveAci7ForBackground(): number {
+    const bg = this.curView.backgroundColor
+    return bg === 0xffffff ? 0x000000 : 0xffffff
+  }
+
+  /**
+   * Gets the list of available fonts that can be loaded.
+   *
+   * Note: These fonts are available for loading but may not be loaded yet.
+   *
+   * @returns Array of available font names
+   */
+  get avaiableFonts() {
+    return this._fontLoader.avaiableFonts
+  }
+
+  /**
+   * Loads the specified fonts for text rendering.
+   *
+   * @param fonts - Array of font names to load
+   * @returns Promise that resolves when fonts are loaded
+   *
+   * @example
+   * ```typescript
+   * await docManager.loadFonts(['Arial', 'Times New Roman']);
+   * ```
+   */
+  async loadFonts(fonts: string[]) {
+    await this._fontLoader.load(fonts)
+  }
+
+  /**
+   * Loads default fonts for CAD text rendering.
+   *
+   * This method loads either the specified fonts or the configured default font
+   * fallback chains ({@link DEFAULT_FONTS_PRESET}, currently `modern`: text
+   * `hztxt` → `simsun`, symbol `amgdt`) if no fonts are provided. The loaded
+   * fonts are used for rendering CAD text entities like MText and Text in the viewer.
+   *
+   * It is better to load default fonts when viewer is initialized so that the viewer can
+   * render text correctly if fonts used in the document are not available.
+   *
+   * @param fonts - Optional array of font names to load. If not provided or null,
+   *               loads the active {@link FontManager.getFontsToLoad} chains
+   * @returns Promise that resolves when all specified fonts are loaded
+   *
+   * @example
+   * ```typescript
+   * // Load the modern default font chain
+   * await docManager.loadDefaultFonts();
+   *
+   * // Load specific fonts
+   * await docManager.loadDefaultFonts(['Arial', 'SimSun']);
+   *
+   * // Load no fonts (empty array)
+   * await docManager.loadDefaultFonts([]);
+   * ```
+   *
+   * @see {@link AcApFontLoader.load} - The underlying font loading implementation
+   * @see {@link createExampleDoc} - Method that uses this for example document creation
+   */
+  async loadDefaultFonts(fonts?: string[]) {
+    if (fonts == null) {
+      await this._fontLoader.load([...FontManager.instance.getFontsToLoad()])
+    } else {
+      await this._fontLoader.load(fonts)
+    }
+  }
+
+  /**
+   * Opens a CAD document from a URL.
+   *
+   * This method loads a document from the specified URL and replaces the current document.
+   * It handles the complete document lifecycle including before/after open events.
+   *
+   * @param url - The URL of the CAD file to open
+   * @param options - Optional database opening options. If not provided, default options with font loader will be used
+   * @returns Promise that resolves to true if the document was successfully opened, false otherwise
+   *
+   * @example
+   * ```typescript
+   * const success = await docManager.openUrl('https://example.com/drawing.dwg');
+   * if (success) {
+   *   log.info('Document opened successfully');
+   * }
+   * ```
+   */
+  async openUrl(url: string, options?: AcApOpenDatabaseOptions) {
+    options = this.setOptions(options)
+    this.onBeforeOpenDocument(options)
+    // TODO: The correct way is to create one new context instead of using old context and document
+    const isSuccess = await this.context.doc.openUri(url, options)
+    this.onAfterOpenDocument(isSuccess, options)
+    return isSuccess
+  }
+
+  /**
+   * Opens a CAD document from file content.
+   *
+   * This method loads a document from the provided file content (binary data)
+   * and replaces the current document. It handles the complete document lifecycle
+   * including before/after open events.
+   *
+   * @param fileName - The name of the file being opened (used for format detection)
+   * @param content - The file content
+   * @param options - Database opening options including font loader settings
+   * @returns Promise that resolves to true if the document was successfully opened, false otherwise
+   *
+   * @example
+   * ```typescript
+   * const fileContent = await file.arrayBuffer();
+   * const success = await docManager.openDocument('drawing.dwg', fileContent, options);
+   * ```
+   */
+  async openDocument(
+    fileName: string,
+    content: ArrayBuffer,
+    options: AcApOpenDatabaseOptions
+  ) {
+    options = this.setOptions(options)
+    this.onBeforeOpenDocument(options)
+    // TODO: The correct way is to create one new context instead of using old context and document
+    const isSuccess = await this.context.doc.openDocument(
+      fileName,
+      content,
+      options
+    )
+    this.onAfterOpenDocument(isSuccess, options)
+    return isSuccess
+  }
+
+  /**
+   * Redraws the current view. Currently it is used once you modified font mapping
+   * for missed fonts so that the drawing can apply new fonts.
+   */
+  regen() {
+    this.curView.clear()
+    this.context.doc.database.regen()
+  }
+
+  /**
+   * Search through all of the local and translated names in all of the command groups in the command stack
+   * starting at the top of the stack trying to find a match with cmdName. If a match is found, the matched
+   * AcEdCommand object is returned. Otherwise undefined is returned to indicate that the command could not
+   * be found. If more than one command of the same name is present in the command stack (that is, in
+   * separate command groups), then the first one found is used.
+   *
+   * The command which is compatible with the open mode of the current document is only returned
+   *
+   * @param cmdName - Input the command name to search for
+   * @returns Return the matched AcEdCommand object if a match is found and compatible with the open mode of
+   * the current document. Otherwise, return undefined.
+   */
+  lookupLocalCmd(cmdName: string) {
+    return this._commandManager.lookupLocalCmd(
+      cmdName,
+      this.curDocument.openMode
+    )
+  }
+
+  /**
+   * Search through all of the global and untranslated names in all of the command groups in the command
+   * stack starting at the top of the stack trying to find a match with cmdName. If a match is found, the
+   * matched AcEdCommand object is returned. Otherwise undefined is returned to indicate that the command
+   * could not be found. If more than one command of the same name is present in the command stack (that
+   * is, in separate command groups), then the first one found is used.
+   *
+   * The command is only returned if it is compatible with that open mode of the current document.
+   * Higher value modes are compatible with lower value modes.
+   *
+   * @param cmdName - Input the command name to search for
+   * @returns Return the matched AcEdCommand object if a match is found and compatible with the open mode
+   * of the current document. Otherwise, return undefined.
+   */
+  lookupGlobalCmd(cmdName: string) {
+    return this._commandManager.lookupGlobalCmd(
+      cmdName,
+      this.curDocument.openMode
+    )
+  }
+
+  /**
+   * Fuzzy search for commands by prefix using the command iterator.
+   *
+   * This method iterates through all commands in all command groups and returns those
+   * whose global or local names start with the provided prefix. The search is case-insensitive.
+   * Only commands which are compatible with that open mode of the current document are returned.
+   * Higher value modes are compatible with lower value modes.
+   *
+   * @param prefix - The prefix string to search for. Case-insensitive.
+   * @returns An array of objects containing matched commands and their corresponding group names.
+   */
+  searchCommandsByPrefix(prefix: string) {
+    return this._commandManager.searchCommandsByPrefix(
+      prefix,
+      this.curDocument.openMode
+    )
+  }
+
+  /**
+   * Registers all default commands available in the CAD viewer.
+   *
+   * This method sets up the command system by registering built-in commands including:
+   * - cdxf: Convert to DXF
+   * - pngout: Export to PNG
+   * - log: Output debug information in console
+   * - open: Open document
+   * - qnew: Quick new document
+   * - pan: Pan/move the view
+   * - select: Select entities
+   * - zoom: Zoom in/out
+   *
+   * All commands are registered under the system command group.
+   */
+  private registerCommands() {
+    const register = this._commandManager
+    /**
+     * Helper for registering one built-in system command with resolved aliases.
+     *
+     * Alias resolution order:
+     * 1. User override from `options.commandAliases`
+     * 2. Built-in defaults from `DEFAULT_COMMAND_ALIASES`
+     * 3. Empty list (no alias)
+     *
+     * @param cmdGlobalName - Global command name (language-neutral)
+     * @param cmdLocalName - Localized/display command name
+     * @param cmd - Command implementation instance
+     */
+    const addSystemCommand = (
+      cmdGlobalName: string,
+      cmdLocalName: string,
+      cmd: AcEdCommand
+    ) => {
+      const defaults =
+        DEFAULT_COMMAND_ALIASES[cmdGlobalName.toUpperCase()] ?? []
+      register.addCommand(
+        AcEdCommandStack.SYSTEMT_COMMAND_GROUP_NAME,
+        cmdGlobalName,
+        cmdLocalName,
+        cmd,
+        this.resolveCommandAliases(cmdGlobalName, defaults)
+      )
+    }
+
+    addSystemCommand('arc', 'arc', new AcApArcCmd())
+    addSystemCommand('cachefont', 'cachefont', new AcApCacheFontCmd())
+    addSystemCommand('circle', 'circle', new AcApCircleCmd())
+    addSystemCommand('cdxf', 'cdxf', new AcApConvertToDxfCmd())
+    addSystemCommand('pngout', 'pngout', new AcApConvertToPngCmd())
+    addSystemCommand('ellipse', 'ellipse', new AcApEllipseCmd())
+    addSystemCommand('erase', 'erase', new AcApEraseCmd())
+    addSystemCommand('hideobjects', 'hideobjects', new AcApHideObjectsCmd())
+    addSystemCommand('dimlinear', 'dimlinear', new AcApDimLinearCmd())
+    addSystemCommand(
+      'measuredistance',
+      'measuredistance',
+      new AcApMeasureDistanceCmd()
+    )
+    addSystemCommand('measurearea', 'measurearea', new AcApMeasureAreaCmd())
+    addSystemCommand('measureangle', 'measureangle', new AcApMeasureAngleCmd())
+    addSystemCommand('measurearc', 'measurearc', new AcApMeasureArcCmd())
+    addSystemCommand(
+      'clearmeasurements',
+      'clearmeasurements',
+      new AcApClearMeasurementsCmd()
+    )
+    addSystemCommand('-hatch', '-hatch', new AcApHatchCmd())
+    addSystemCommand('-layer', '-layer', new AcApLayerCmd())
+    addSystemCommand('laycur', 'laycur', new AcApLayerCurCmd())
+    addSystemCommand('laydel', 'laydel', new AcApLayerDelCmd())
+    addSystemCommand('layfrz', 'layfrz', new AcApLayerFreezeCmd())
+    addSystemCommand('layiso', 'layiso', new AcApLayerIsoCmd())
+    addSystemCommand('laylck', 'laylck', new AcApLayerLockCmd())
+    addSystemCommand('layon', 'layon', new AcApLayerOnCmd())
+    addSystemCommand('layoff', 'layoff', new AcApLayoffCmd())
+    addSystemCommand('laythw', 'laythw', new AcApLayerThawCmd())
+    addSystemCommand('layuniso', 'layuniso', new AcApLayerUnisoCmd())
+    addSystemCommand('layulk', 'layulk', new AcApLayerUnlockCmd())
+    addSystemCommand('layerp', 'layerp', new AcApLayerPCmd())
+    addSystemCommand('layerclose', 'layerclose', new AcApLayerCloseCmd())
+    addSystemCommand('line', 'line', new AcApLineCmd())
+    addSystemCommand('mline', 'mline', new AcApMLineCmd())
+    addSystemCommand('mtext', 'mtext', new AcApMTextCmd())
+    addSystemCommand('copy', 'copy', new AcApCopyCmd())
+    addSystemCommand('move', 'move', new AcApMoveCmd())
+    addSystemCommand('offset', 'offset', new AcApOffsetCmd())
+    addSystemCommand('rotate', 'rotate', new AcApRotateCmd())
+    addSystemCommand('log', 'log', new AcApLogCmd())
+    addSystemCommand('open', 'open', new AcApOpenCmd())
+    addSystemCommand('pan', 'pan', new AcApPanCmd())
+    addSystemCommand('point', 'point', new AcApPointCmd())
+    addSystemCommand('polygon', 'polygon', new AcApPolygonCmd())
+    addSystemCommand('pline', 'pline', new AcApPolylineCmd())
+    addSystemCommand('qnew', 'qnew', new AcApQNewCmd())
+    addSystemCommand('ray', 'ray', new AcApRayCmd())
+    addSystemCommand('rectang', 'rectang', new AcApRectCmd())
+    addSystemCommand('regen', 'regen', new AcApRegenCmd())
+    addSystemCommand('revcircle', 'revcircle', new AcApRevCircleCmd())
+    addSystemCommand('revcloud', 'revcloud', new AcApRevCloudCmd())
+    addSystemCommand('revrect', 'revrect', new AcApRevRectCmd())
+    addSystemCommand('revvis', 'revvis', new AcApRevVisibilityCmd())
+    addSystemCommand('select', 'select', new AcApSelectCmd())
+    addSystemCommand('sketch', 'sketch', new AcApSketchCmd())
+    addSystemCommand('spline', 'spline', new AcApSplineCmd())
+    addSystemCommand('switchbg', 'switchbg', new AcApSwitchBgCmd())
+    addSystemCommand(
+      'unisolateobjects',
+      'unisolateobjects',
+      new AcApUnisolateObjectsCmd()
+    )
+    addSystemCommand('xline', 'xline', new AcApXLineCmd())
+    addSystemCommand('undo', 'undo', new AcApUndoCmd())
+    addSystemCommand('redo', 'redo', new AcApRedoCmd())
+    addSystemCommand('zoom', 'zoom', new AcApZoomCmd())
+
+    // Register system variables as commands
+    const sysVars = AcDbSysVarManager.instance().getAllDescriptors()
+    sysVars.forEach(sysVar => {
+      register.addCommand(
+        AcEdCommandStack.SYSTEMT_COMMAND_GROUP_NAME,
+        sysVar.name,
+        sysVar.name,
+        new AcApSysVarCmd(),
+        this.resolveCommandAliases(sysVar.name, [])
+      )
+    })
+  }
+
+  /**
+   * Normalizes external command alias configuration into an internal map.
+   *
+   * Normalization rules:
+   * - Command names and aliases are trimmed and converted to uppercase.
+   * - Empty command names are ignored.
+   * - Alias strings are deduplicated per command.
+   * - Alias values identical to the command name are ignored.
+   *
+   * This method does not validate cross-command conflicts; conflict checks are
+   * handled by `AcEdCommandStack.addCommand` during registration.
+   *
+   * @param config - Optional command alias configuration from user options
+   * @returns Normalized alias override map keyed by command global name
+   */
+  private normalizeCommandAliasConfig(
+    config?: AcApDocManagerOptions['commandAliases']
+  ) {
+    const map = new Map<string, string[]>()
+    if (!config) {
+      return map
+    }
+
+    Object.entries(config).forEach(([commandName, aliases]) => {
+      const normalizedCommandName = commandName.trim().toUpperCase()
+      if (!normalizedCommandName) {
+        return
+      }
+      const aliasList = Array.isArray(aliases) ? aliases : [aliases]
+      const normalizedAliases = new Set<string>()
+      aliasList.forEach(alias => {
+        const normalizedAlias = alias.trim().toUpperCase()
+        if (normalizedAlias && normalizedAlias !== normalizedCommandName) {
+          normalizedAliases.add(normalizedAlias)
+        }
+      })
+      map.set(normalizedCommandName, [...normalizedAliases])
+    })
+
+    return map
+  }
+
+  /**
+   * Resolves the final alias list for a command.
+   *
+   * Behavior:
+   * - If the user configured aliases for this command, return that list directly.
+   * - Otherwise, return normalized built-in defaults.
+   *
+   * All returned aliases are uppercase and deduplicated. Any alias equal to the
+   * command name itself is dropped to avoid redundant/ambiguous registration.
+   *
+   * @param commandName - Command global name
+   * @param defaultAliases - Built-in default aliases for this command
+   * @returns Final aliases used for command registration
+   */
+  private resolveCommandAliases(commandName: string, defaultAliases: string[]) {
+    const normalizedCommandName = commandName.trim().toUpperCase()
+    const configuredAliases = this._commandAliasOverrides.get(
+      normalizedCommandName
+    )
+
+    if (configuredAliases) {
+      return [...configuredAliases]
+    }
+
+    const normalizedDefaults = new Set<string>()
+    defaultAliases.forEach(alias => {
+      const normalizedAlias = alias.trim().toUpperCase()
+      if (normalizedAlias && normalizedAlias !== normalizedCommandName) {
+        normalizedDefaults.add(normalizedAlias)
+      }
+    })
+    return [...normalizedDefaults]
+  }
+
+  /**
+   * Executes a command by its string name.
+   *
+   * This method looks up a registered command by name and executes it with the current context.
+   * If the command is not registered yet, it attempts to load a lazy plugin whose trigger
+   * matches the command name (see {@link AcApPluginManager.loadByTrigger}).
+   * It checks if the command's required mode is compatible with the document's current mode.
+   * If the command is not found or not compatible, an error is thrown.
+   *
+   * @param cmdStr - The command string to execute (e.g., 'pan', 'zoom', 'select')
+   * @throws {Error} If the command is not found or if the command's mode is not compatible with the document's mode
+   *
+   * @example
+   * ```typescript
+   * docManager.sendStringToExecute('zoom');
+   * docManager.sendStringToExecute('pan');
+   * ```
+   */
+  sendStringToExecute(cmdStr: string) {
+    void this.executeCommandString(cmdStr).catch(error => {
+      const message = error instanceof Error ? error.message : String(error)
+      this.editor.showMessage(message, 'error')
+      log.error(`[AcApDocManager] Command failed: ${cmdStr}`, error)
+    })
+  }
+
+  /**
+   * Executes a command script, loading lazy plugins when needed.
+   *
+   * When the command is missing from the command stack, {@link AcApPluginManager.loadByTrigger}
+   * is invoked so plugins registered via {@link AcApPluginManager.registerLazyPlugin} can load.
+   *
+   * @param cmdStr - Command script (first line is the command name)
+   */
+  private async executeCommandString(cmdStr: string) {
+    const lines = this.splitCommandScript(cmdStr)
+    if (!lines.length) {
+      throw new Error('Command string is empty')
+    }
+
+    const [cmdName, ...scriptInputs] = lines
+    const documentMode = this.context.doc.openMode
+    let cmd =
+      this._commandManager.lookupGlobalCmd(cmdName) ??
+      this._commandManager.lookupLocalCmd(cmdName, documentMode)
+
+    if (!cmd) {
+      const loaded = await this._pluginManager.loadByTrigger(cmdName)
+      if (loaded) {
+        cmd =
+          this._commandManager.lookupGlobalCmd(cmdName) ??
+          this._commandManager.lookupLocalCmd(cmdName, documentMode)
+      }
+    }
+
+    if (!cmd) {
+      throw new Error(`Command '${cmdName}' not found`)
+    }
+
+    // Check mode compatibility: document mode must be >= command mode
+    if (documentMode < cmd.mode) {
+      throw new Error(
+        `Command '${cmdName}' requires mode '${AcEdOpenMode[cmd.mode]}' but document is in mode '${AcEdOpenMode[documentMode]}'!`
+      )
+    }
+
+    this.editor.clearScriptInputs()
+    this.editor.enqueueScriptInputs(scriptInputs)
+    await cmd.trigger(this.context).finally(() => {
+      this.editor.clearScriptInputs()
+    })
+  }
+
+  /**
+   * Splits command script into Enter-separated values.
+   * First line is command name, remaining lines are queued inputs for getXXX.
+   */
+  private splitCommandScript(commandScript: string) {
+    const source =
+      commandScript.includes('\n') || commandScript.includes('\r')
+        ? commandScript
+        : commandScript.replace(/\\n/g, '\n')
+
+    const lines = source.replace(/\r\n/g, '\n').split('\n')
+    if (!lines.length) return []
+
+    const cmdName = lines[0].trim()
+    if (!cmdName) return []
+
+    return [cmdName, ...lines.slice(1)]
+  }
+
+  /**
+   * Configures layout information for the current view.
+   *
+   * Sets up the active layout block table record ID and model space block table
+   * record ID based on the current document's space configuration.
+   */
+  setActiveLayout() {
+    const currentView = this.curView as AcTrView2d
+    const db = this.curDocument.database
+    currentView.activeLayoutBtrId = db.currentSpaceId
+    currentView.modelSpaceBtrId = db.tables.blockTable.modelSpace.objectId
+  }
+
+  /**
+   * Performs cleanup operations before opening a new document.
+   *
+   * This protected method is called automatically before any document opening operation.
+   * It clears the current view to prepare for the new document content.
+   *
+   * @protected
+   */
+  protected onBeforeOpenDocument(options?: AcApOpenDatabaseOptions) {
+    this.events.documentToBeOpened.dispatch({
+      doc: this.context.doc,
+      mode: this.getDocumentEventMode(options)
+    })
+    ;(this.curView as AcTrView2d).progressiveRendering =
+      options?.progressiveRendering ?? false
+    this.curView.clear()
+  }
+
+  /**
+   * Performs setup operations after a document opening attempt.
+   *
+   * This protected method is called automatically after any document opening operation.
+   * If the document was successfully opened, it dispatches the documentActivated event,
+   * sets up layout information, and zooms the view to fit the content.
+   *
+   * @param isSuccess - Whether the document was successfully opened
+   * @protected
+   */
+  protected onAfterOpenDocument(
+    isSuccess: boolean,
+    options?: AcApOpenDatabaseOptions
+  ) {
+    if (isSuccess) {
+      const doc = this.context.doc
+      this.events.documentActivated.dispatch({
+        doc,
+        mode: this.getDocumentEventMode(options)
+      })
+      this.setActiveLayout()
+      ;(this.curView as AcTrView2d).syncDisplaySysVars(doc.database)
+      const db = doc.database
+
+      // View framing at document open time (see `openViewMode`):
+      //
+      // 1. **Paper space + has LIMMIN/LIMMAX**: frame the authoritative
+      //    paper sheet rectangle (`AcDbLayout.limits`). Real-world DWGs
+      //    frequently mix scales inside paper space (e.g. a title block
+      //    authored in mm alongside viewport rectangles authored in m),
+      //    so the entity bounding box is unreliable here — it gets
+      //    dominated by the largest-scale outliers and shrinks the
+      //    actual paper to a grain.
+      //
+      // 2. **Extents** (Read/Review default): poll `zoomToFitDrawing`
+      //    and frame batch-derived geometry bounds once entities land.
+      //
+      // 3. **Saved** (Write default) in model space: restore VPORT
+      //    `*ACTIVE`, then frame EXTMIN/EXTMAX when no saved view exists.
+      //
+      // 4. **Fallback** (paper without limits, or model with empty
+      //    extents — typically DXF): poll `zoomToFitDrawing` and frame
+      //    the populated layout bounding box once entities land.
+      //
+      // The pre-fix code used `db.extmin/db.extmax` (always model-space
+      // EXTMIN/EXTMAX sysvars) even when opening into paper, landing on
+      // coordinates that don't exist in paper WCS. Paper layout would
+      // render zoomed into a random quadrant — title block looking
+      // giant, viewport collapsed to pixels. See
+      // `next_14_viewports_full.md` Bug C-open.
+      const modelSpaceId = db.tables.blockTable.modelSpace.objectId
+      const isPaperSpaceActive = db.currentSpaceId !== modelSpaceId
+      const activeLayout =
+        acdbHostApplicationServices().layoutManager.getActiveLayout(db)
+      const layoutLimits = activeLayout?.limits
+      const openViewMode = this.resolveOpenViewMode(options)
+
+      const view = this.curView as AcTrView2d
+      const progressiveRendering = options?.progressiveRendering ?? false
+      if (isPaperSpaceActive && layoutLimits && !layoutLimits.isEmpty()) {
+        view.zoomTo(layoutLimits)
+      } else if (openViewMode === AcApOpenViewMode.Extents) {
+        if (progressiveRendering) {
+          view.beginProgressiveOpenFit()
+        }
+        view.zoomToFitDrawing()
+      } else if (!isPaperSpaceActive) {
+        const canvasAspect = view.width / Math.max(view.height, 1)
+        const vport = db.tables.viewportTable.getActiveVport()
+        // Restore AutoCAD's saved *ACTIVE view without EXTMIN/EXTMAX heuristics.
+        // Many real drawings store a valid saved view far from $EXTMIN/$EXTMAX
+        // (e.g. title-block extents vs. model content at large coordinates).
+        const activeModelViewBox = vport?.modelViewBox(canvasAspect)
+
+        if (activeModelViewBox) {
+          view.zoomTo(activeModelViewBox)
+        } else if (!db.extents.isEmpty()) {
+          view.zoomTo(new AcGeBox2d(db.extmin, db.extmax))
+        } else {
+          if (progressiveRendering) {
+            view.beginProgressiveOpenFit()
+          }
+          view.zoomToFitDrawing()
+        }
+      } else {
+        if (progressiveRendering) {
+          view.beginProgressiveOpenFit()
+        }
+        view.zoomToFitDrawing()
+      }
+
+      // Tell the view we've already framed the startup layout, so that
+      // when the user later switches to a different tab and back, the
+      // `layoutSwitched` handler doesn't re-zoom and trash their pan/zoom
+      // state on this layout. Cast is intentional: `setActiveLayout`
+      // above relies on `curView` being an `AcTrView2d`, and the
+      // markLayoutAsInitialized method is part of that contract.
+      ;(this.curView as AcTrView2d).markLayoutAsInitialized(db.currentSpaceId)
+    }
+  }
+
+  /**
+   * Sets up or validates database opening options.
+   *
+   * This private method ensures that the options object has a font loader configured.
+   * If no options are provided, creates new options with the font loader.
+   * If options are provided but missing a font loader, adds the font loader.
+   *
+   * @param options - Optional database opening options to validate/modify
+   * @returns The validated options object with font loader configured
+   * @private
+   */
+  private setOptions(options?: AcApOpenDatabaseOptions) {
+    if (options == null) {
+      options = {
+        fontLoader: this._fontLoader,
+        drawNoPlotLayers: false,
+        progressiveRendering: false
+      }
+    } else {
+      if (options.fontLoader == null) {
+        options.fontLoader = this._fontLoader
+      }
+      if (options.drawNoPlotLayers == null) {
+        options.drawNoPlotLayers = false
+      }
+      if (options.progressiveRendering == null) {
+        options.progressiveRendering = false
+      }
+    }
+    return options
+  }
+
+  /**
+   * Resolves the open mode used in document lifecycle events.
+   *
+   * When callers omit `mode`, document open APIs default to read mode.
+   */
+  private getDocumentEventMode(options?: AcApOpenDatabaseOptions) {
+    return options?.mode ?? AcEdOpenMode.Read
+  }
+
+  /**
+   * Resolves how the view is framed when a document finishes opening.
+   *
+   * Explicit `openViewMode` wins; otherwise Read/Review zoom to the drawing and
+   * Write restores AutoCAD's saved view.
+   */
+  private resolveOpenViewMode(
+    options?: AcApOpenDatabaseOptions
+  ): AcApOpenViewMode {
+    if (options?.openViewMode != null) {
+      return options.openViewMode
+    }
+    const mode = this.getDocumentEventMode(options)
+    return mode === AcEdOpenMode.Write
+      ? AcApOpenViewMode.Saved
+      : AcApOpenViewMode.Extents
+  }
+
+  /**
+   * Shows a spinner overlay without text (e.g. HTML export).
+   */
+  showBusyIndicator(): void {
+    this._busyProgress.setMessage('')
+    this._busyProgress.show()
+  }
+
+  /**
+   * Hides the spinner overlay shown by {@link showBusyIndicator}.
+   */
+  hideBusyIndicator(): void {
+    this._busyProgress.hide()
+  }
+
+  /**
+   * Resets tracked open-file progress for a new open operation.
+   */
+  private resetOpenFileProgress() {
+    this._openFileProgressPeak = 0
+    this._openFileProgressStage = undefined
+  }
+
+  /**
+   * Returns monotonic open-file progress for UI display.
+   *
+   * Entity conversion reports 0–100% within the ENTITY sub-stage while the
+   * pipeline accumulator is still ~33%; sub-stage END callbacks can therefore
+   * briefly report a lower percentage after IN-PROGRESS already reached 100%.
+   */
+  private normalizeOpenFileProgress(
+    data: AcDbProgressdEventArgs
+  ): AcDbProgressdEventArgs {
+    const stage = data.stage
+    if (stage !== this._openFileProgressStage) {
+      if (
+        this._openFileProgressStage === 'FETCH_FILE' &&
+        stage === 'CONVERSION'
+      ) {
+        this._openFileProgressPeak = 0
+      }
+      this._openFileProgressStage = stage
+    }
+    this._openFileProgressPeak = Math.max(
+      this._openFileProgressPeak,
+      data.percentage
+    )
+    return { ...data, percentage: this._openFileProgressPeak }
+  }
+
+  /**
+   * Shows progress animation and progress message
+   * @param data - Progress data
+   */
+  private updateProgress(data: AcDbProgressdEventArgs) {
+    if (data.stage === 'CONVERSION') {
+      if (data.subStage) {
+        const key =
+          'main.progress.' + data.subStage.replace(/_/g, '').toLowerCase()
+        this._progress.setMessage(AcApI18n.t(key))
+      }
+    } else if (data.stage === 'FETCH_FILE') {
+      this._progress.setMessage(AcApI18n.t('main.message.fetchingDrawingFile'))
+    }
+
+    if (isOpenFileProgressComplete(data)) {
+      this._progress.hide()
+      this.resetOpenFileProgress()
+    } else {
+      this._progress.show()
+    }
+  }
+
+  /**
+   * Registers file format converters for CAD file processing.
+   *
+   * This function initializes and registers both DXF and DWG converters with the
+   * global database converter manager. Each converter is configured to use web workers
+   * for improved performance during file parsing operations.
+   *
+   * The function handles registration errors gracefully by logging them to the console
+   * without throwing exceptions, ensuring that the application can continue to function
+   * even if one or more converters fail to register.
+   */
+  private registerConverters(webworkerFileUrls?: AcApWebworkerFiles) {
+    // Register DXF converter
+    try {
+      const converter = new AcDbDxfConverter({
+        convertByEntityType: false,
+        useWorker: true,
+        parserWorkerUrl:
+          webworkerFileUrls && webworkerFileUrls.dxfParser
+            ? webworkerFileUrls.dxfParser
+            : './assets/dxf-parser-worker.js'
+      })
+      AcDbDatabaseConverterManager.instance.register(
+        AcDbFileType.DXF,
+        converter
+      )
+    } catch (error) {
+      log.error('Failed to register dxf converter: ', error)
+    }
+
+    // Register DWG converter
+    try {
+      const converter = new AcDbLibreDwgConverter({
+        convertByEntityType: false,
+        useWorker: true,
+        parserWorkerUrl:
+          webworkerFileUrls && webworkerFileUrls.dwgParser
+            ? webworkerFileUrls.dwgParser
+            : './assets/libredwg-parser-worker.js'
+      })
+      AcDbDatabaseConverterManager.instance.register(
+        AcDbFileType.DWG,
+        converter
+      )
+    } catch (error) {
+      log.error('Failed to register dwg converter: ', error)
+    }
+  }
+
+  /**
+   * Initializes background workers used by the viewer runtime.
+   *
+   * This function performs two tasks:
+   * - Ensures DXF/DWG converters are registered with worker-based parsers for
+   *   off-main-thread file processing.
+   * - Initializes the MText renderer by pointing it to its dedicated Web Worker
+   *   script for text layout and shaping.
+   *
+   * The function is safe to call during application startup. Errors during
+   * initialization are handled inside the respective registration routines.
+   */
+  private registerWorkers(webworkerFileUrls?: AcApWebworkerFiles) {
+    this.registerConverters(webworkerFileUrls)
+    const mtextRenderer = AcTrMTextRenderer.getInstance()
+    mtextRenderer.initialize(
+      webworkerFileUrls && webworkerFileUrls.mtextRender
+        ? webworkerFileUrls.mtextRender
+        : './assets/mtext-renderer-worker.js'
+    )
+    void mtextRenderer.setDefaultFonts(DEFAULT_FONTS_PRESET)
+  }
+
+  /**
+   * Loads plugins automatically based on the provided configuration.
+   *
+   * This method is called during initialization if plugins are configured.
+   * It supports loading from both configuration arrays and folder paths.
+   *
+   * @param pluginsConfig - Plugin loading configuration
+   * @private
+   */
+  private async loadPlugins(pluginsConfig?: AcApDocManagerOptions['plugins']) {
+    if (!pluginsConfig) {
+      return
+    }
+
+    // Load plugins from configuration array
+    if (pluginsConfig.fromConfig && pluginsConfig.fromConfig.length > 0) {
+      try {
+        const result = await this._pluginManager.loadPluginsFromConfig(
+          pluginsConfig.fromConfig,
+          { continueOnError: true }
+        )
+        if (result.loaded.length > 0) {
+          log.info(
+            `[AcApDocManager] Loaded ${result.loaded.length} plugin(s) from config:`,
+            result.loaded
+          )
+        }
+        if (result.failed.length > 0) {
+          log.warn(
+            `[AcApDocManager] Failed to load ${result.failed.length} plugin(s):`,
+            result.failed.map(f => `${f.name}: ${f.error.message}`)
+          )
+        }
+      } catch (error) {
+        log.error('[AcApDocManager] Error loading plugins from config:', error)
+      }
+    }
+
+    // Load plugins from folder
+    if (pluginsConfig.fromFolder) {
+      try {
+        const result = await this._pluginManager.loadPluginsFromFolder(
+          pluginsConfig.fromFolder.folderPath,
+          {
+            pluginList: pluginsConfig.fromFolder.pluginList,
+            continueOnError: pluginsConfig.fromFolder.continueOnError ?? true
+          }
+        )
+        if (result.loaded.length > 0) {
+          log.info(
+            `[AcApDocManager] Loaded ${result.loaded.length} plugin(s) from folder:`,
+            result.loaded
+          )
+        }
+        if (result.failed.length > 0) {
+          log.warn(
+            `[AcApDocManager] Failed to load ${result.failed.length} plugin(s) from folder:`,
+            result.failed.map(f => `${f.name}: ${f.error.message}`)
+          )
+        }
+      } catch (error) {
+        log.error('[AcApDocManager] Error loading plugins from folder:', error)
+      }
+    }
+  }
+}

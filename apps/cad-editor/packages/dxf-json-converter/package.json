@@ -1,0 +1,58 @@
+{
+  "name": "@mlightcad/dxf-json-converter",
+  "version": "1.9.14",
+  "license": "GPL-3.0",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mlightcad/realdwg-web"
+  },
+  "keywords": [
+    "autocad",
+    "cad",
+    "dwg",
+    "dxf",
+    "dxf-json",
+    "mlight",
+    "mlightcad",
+    "objectarx",
+    "realdwg"
+  ],
+  "files": [
+    "dist",
+    "lib",
+    "README.md",
+    "package.json"
+  ],
+  "sideEffects": false,
+  "main": "./dist/dxf-json-converter.umd.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    "types": "./lib/index.d.ts",
+    "import": "./lib/index.js",
+    "require": "./dist/dxf-json-converter.umd.cjs"
+  },
+  "scripts": {
+    "analyze": "pnpm run analyze:lib && pnpm run analyze:worker",
+    "analyze:lib": "vite build --mode analyze --config vite.config.main.ts",
+    "analyze:worker": "vite build --mode analyze --config vite.config.worker.ts",
+    "clean": "rimraf dist lib tsconfig.tsbuildinfo",
+    "build": "tsc && vite build -c vite.config.main.ts && vite build -c vite.config.worker.ts && node ../../tools/verify-build.mjs verify-build.profile.json",
+    "build:main": "vite build -c vite.config.main.ts && node ../../tools/verify-build.mjs verify-build.profile.json --main-only",
+    "build:worker": "vite build -c vite.config.worker.ts",
+    "verify:build": "node ../../tools/verify-build.mjs verify-build.profile.json",
+    "lint": "eslint src/",
+    "lint:fix": "eslint --fix --quiet src/"
+  },
+  "dependencies": {
+    "@mlightcad/dxf-json": "^1.2.5"
+  },
+  "devDependencies": {
+    "@mlightcad/data-model": "workspace:*",
+    "vite": "^5.2.10"
+  },
+  "peerDependencies": {
+    "@mlightcad/data-model": "workspace:*"
+  }
+}

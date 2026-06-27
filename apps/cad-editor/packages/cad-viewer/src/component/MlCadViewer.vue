@@ -1,0 +1,818 @@
+<!--
+  MlCadViewer - Main CAD Viewer Component
+  
+  This is the primary component for displaying and interacting with CAD files (DWG, DXF, etc.).
+  It provides a complete CAD viewing experience with file loading, layer management, 
+  command execution, and various viewing tools.
+  
+  USAGE EXAMPLE:
+  MlCadViewer with locale="en", url="path/to/file.dwg"
+  
+  FEATURES:
+  - File loading from local files (drag & drop or file dialog) or remote URLs
+  - Layer management and visibility control
+  - Command line interface for CAD operations
+  - Toolbars with common CAD tools (zoom, pan, select, etc.)
+  - Entity information display
+  - Multi-language support (English/Chinese)
+  - Dark/light theme support
+  - Status bar with progress and settings
+  - Customizable base URL for fonts, templates, and example files
+  
+  COMPONENTS INCLUDED:
+  - Main menu and language selector
+  - Toolbars with CAD commands
+  - Layer manager for controlling entity visibility
+  - Command line for text-based commands
+  - Status bar with various controls
+  - File reader for local file uploads (supports drag & drop and file dialog)
+  - Entity info panel for object details
+  
+  EVENTS HANDLED:
+  - File loading and error handling
+  - Font loading notifications
+  - General message display
+  - File opening failures
+  
+  DEPENDENCIES:
+  - @mlightcad/cad-simple-viewer: Core CAD functionality
+  - @mlightcad/data-model: File format support
+  - Element Plus: UI components
+  - Vue 3 Composition API
+-->
+
+<script setup lang="ts">
+/**
+ * MlCadViewer Component
+ *
+ * A comprehensive CAD viewer component that provides a complete interface for viewing
+ * and interacting with CAD files (DWG, DXF, etc.). This component integrates multiple
+ * sub-components to deliver a full-featured CAD viewing experience.
+ *
+ * @example
+ * ```vue
+ * // Basic usage with remote file
+ * <MlCadViewer
+ *   :locale="'en'"
+ *   :url="'https://example.com/drawing.dwg'"
+ * />
+ *
+ * // Basic usage with local file (File object)
+ * <MlCadViewer
+ *   :locale="'en'"
+ *   :local-file="selectedFile"
+ * />
+ *
+ * // Basic usage for manual file loading (no URL or localFile needed)
+ * <MlCadViewer
+ *   :locale="'en'"
+ * />
+ *
+ * // Usage with custom baseUrl for fonts and templates
+ * <MlCadViewer
+ *   :locale="'en'"
+ *   :base-url="'https://my-cdn.com/cad-data/'"
+ * />
+ *
+ * // Import statement
+ * import { MlCadViewer } from '@mlightcad/cad-viewer'
+ * ```
+ *
+ * @see {@link https://github.com/mlightcad/cad-viewer | Project Repository}
+ * @see {@link https://github.com/mlightcad/cad-viewer/blob/main/packages/cad-viewer/src/component/MlCadViewer.vue | Source Code}
+ */
+import {
+  AcApDocManager,
+  AcApFontUtil,
+  AcApOpenDatabaseOptions,
+  AcApOpenViewMode,
+  AcEdMTextEditor,
+  AcEdOpenMode,
+  eventBus
+} from '@mlightcad/cad-simple-viewer'
+import { log } from '@mlightcad/data-model'
+import { ElConfigProvider, ElMessage } from 'element-plus'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+import { initializeCadViewer, store } from '../app'
+import {
+  ensureColorThemeSync,
+  isDark,
+  provideViewerRect,
+  setColorTheme,
+  toggleDark,
+  useDocument,
+  useEntityDrawStyle,
+  useLocale,
+  useNotificationCenter,
+  useSettings
+} from '../composable'
+import { LocaleProp } from '../locale'
+import { MlDialogManager, MlFileReader, MlFontFileReader } from './common'
+import {
+  MlEntityDrawStyleToolbar,
+  MlEntityInfo,
+  MlLanguageSelector,
+  MlMainMenu,
+  MlToolBars
+} from './layout'
+import { MlNotificationCenter } from './notification'
+import { MlPaletteManager } from './palette'
+import { MlRibbonCommands } from './ribbon'
+import { MlStatusBar } from './statusBar'
+
+const emit = defineEmits<{
+  /**
+   * Fired after CAD viewer is fully created and ready to use
+   */
+  (e: 'create'): void
+
+  /**
+   * Fired right before CAD viewer is destroyed
+   */
+  (e: 'destroy'): void
+}>()
+
+// Define component props with their purposes
+interface Props {
+  /** Language locale for internationalization ('en', 'zh', or 'default') */
+  locale?: LocaleProp
+  /** Optional URL to automatically load a CAD file on component mount */
+  url?: string
+  /** Optional local File object to automatically load a CAD file on component mount */
+  localFile?: File
+  /** Background color as 24-bit hexadecimal RGB number (e.g., 0x000000) */
+  background?: number
+  /** Base URL for loading fonts, templates, and example files (e.g., 'https://example.com/cad-data/') */
+  baseUrl?: string
+  /**
+   * URL of the offline HTML viewer runtime (`viewer-runtime.iife.js`).
+   * Required for File menu “Export to HTML”; copy the file from
+   * `@mlightcad/cad-html-plugin` build output into your app assets.
+   */
+  htmlViewerRuntimeUrl?: string | URL
+  /**
+   * The flag whether to use main thread or webwork to render drawing.
+   * - true: use main thread
+   * - false: use web worker
+   */
+  useMainThreadDraw?: boolean
+  /** Initial theme of the viewer */
+  theme?: 'light' | 'dark'
+  /**
+   * Access mode for opening CAD files.
+   * - Read (0): Read-only access
+   * - Review (4): Review access, compatible with Read
+   * - Write (8): Full read/write access, compatible with Review and Read
+   */
+  mode?: AcEdOpenMode
+  /**
+   * Whether entities on non-plottable ("no-plot") layers are drawn.
+   * When omitted, {@link AcApDocManager} defaults to `false` (web viewer semantics).
+   */
+  drawNoPlotLayers?: boolean
+  /**
+   * Whether to render entities incrementally while a drawing is opening.
+   * When omitted, {@link AcApDocManager} defaults to `false`.
+   */
+  progressiveRendering?: boolean
+  /**
+   * How to frame the view when the document finishes opening.
+   * When omitted, Read and Review use {@link AcApOpenViewMode.Extents};
+   * Write uses {@link AcApOpenViewMode.Saved}.
+   */
+  openViewMode?: AcApOpenViewMode
+}
+
+const props = withDefaults(defineProps<Props>(), {
+  locale: 'default',
+  url: undefined,
+  localFile: undefined,
+  background: undefined,
+  baseUrl: undefined,
+  htmlViewerRuntimeUrl: './assets/viewer-runtime.iife.js',
+  useMainThreadDraw: true,
+  theme: 'dark',
+  mode: AcEdOpenMode.Write,
+  progressiveRendering: false,
+  openViewMode: undefined
+})
+
+const buildOpenOptions = (): AcApOpenDatabaseOptions => ({
+  minimumChunkSize: 1000,
+  mode: props.mode,
+  drawNoPlotLayers: props.drawNoPlotLayers,
+  progressiveRendering: props.progressiveRendering,
+  ...(props.openViewMode != null ? { openViewMode: props.openViewMode } : {})
+})
+
+const { t } = useI18n()
+const { effectiveLocale, elementPlusLocale } = useLocale(props.locale)
+const {
+  info,
+  warning,
+  error,
+  success,
+  removeWhere,
+  removeResolvedFontMissedNotifications
+} = useNotificationCenter()
+
+const fontMissedNotificationOptions = (fontNames: string[]) => ({
+  source: 'font-missed' as const,
+  fontNames
+})
+
+const formatFontWithReplacement = (fontName: string) =>
+  t('main.message.fontMissedReplacement', {
+    font: fontName,
+    replacement: AcApFontUtil.getReplacementFontName(fontName)
+  })
+
+const formatFontsWithReplacement = (fontNames: string[]) =>
+  fontNames.map(formatFontWithReplacement).join(', ')
+
+const syncFontMissedNotifications = () => {
+  const missedFonts = Object.keys(
+    AcApDocManager.instance.curView.missedData.fonts
+  )
+  removeResolvedFontMissedNotifications(missedFonts)
+}
+
+// Canvas element reference
+const containerRef = ref<HTMLDivElement>()
+const layoutRef = ref<HTMLDivElement>()
+const headerRef = ref<HTMLElement>()
+
+// Referenence to the root element used to switch theme
+// Editor reference that gets updated after initialization
+const editorRef = ref<AcApDocManager | null>(null)
+
+// Computed property to ensure proper typing
+const editor = computed(() => editorRef.value as AcApDocManager)
+
+// Notification center visibility
+const showNotificationCenter = ref(false)
+
+const viewerThemeClass = computed(() =>
+  isDark.value ? 'ml-theme-dark' : 'ml-theme-light'
+)
+
+const features = useSettings()
+const {
+  beginDocumentOpening,
+  endDocumentOpening,
+  openMode: docOpenMode,
+  displayName
+} = useDocument()
+const pendingOpenMode = ref<AcEdOpenMode>()
+const effectiveOpenMode = computed(
+  () => pendingOpenMode.value ?? docOpenMode.value
+)
+const isWriteMode = computed(
+  () => effectiveOpenMode.value === AcEdOpenMode.Write
+)
+const headerHeightPx = ref(0)
+
+watch(
+  isWriteMode,
+  value => {
+    AcEdMTextEditor.setDefaultToolbarEnabled(!value)
+  },
+  { immediate: true }
+)
+
+const { isShowToolbar } = useEntityDrawStyle(editor)
+provideViewerRect(containerRef)
+
+let headerResizeObserver: ResizeObserver | undefined
+
+const updateHeaderHeight = () => {
+  headerHeightPx.value = headerRef.value?.getBoundingClientRect().height ?? 0
+}
+
+const bindHeaderObserver = () => {
+  if (!headerRef.value) {
+    headerHeightPx.value = 0
+    return
+  }
+  headerResizeObserver?.disconnect()
+  if (typeof ResizeObserver !== 'undefined') {
+    headerResizeObserver = new ResizeObserver(() => {
+      updateHeaderHeight()
+    })
+    headerResizeObserver.observe(headerRef.value)
+  }
+  updateHeaderHeight()
+}
+
+const beginPendingOpen = (mode: AcEdOpenMode) => {
+  pendingOpenMode.value = mode
+}
+
+const endPendingOpen = () => {
+  pendingOpenMode.value = undefined
+}
+
+/**
+ * Handles file read events from the file reader component
+ * Opens the file content using the document manager
+ *
+ * This function is called when a user selects a local file through:
+ * - The main menu "Open" option (triggers file dialog)
+ * - Drag and drop functionality (if implemented)
+ * - Any other local file selection method
+ *
+ * @param fileName - Name of the uploaded file
+ * @param fileContent - File content as string (DXF) or ArrayBuffer (DWG)
+ */
+const handleFileRead = async (fileName: string, fileContent: ArrayBuffer) => {
+  const options = buildOpenOptions()
+  beginDocumentOpening()
+  beginPendingOpen(options.mode ?? AcEdOpenMode.Read)
+  try {
+    const success = await AcApDocManager.instance.openDocument(
+      fileName,
+      fileContent,
+      options
+    )
+    if (!success) {
+      throw new Error('Failed to open file')
+    }
+  } finally {
+    endDocumentOpening()
+    endPendingOpen()
+  }
+}
+
+/**
+ * Fetches and opens a CAD file from a remote URL
+ * Used when the url prop is provided to automatically load files
+ *
+ * @param url - Remote URL to the CAD file
+ */
+const openFileFromUrl = async (url: string) => {
+  const options = buildOpenOptions()
+  beginDocumentOpening()
+  beginPendingOpen(options.mode ?? AcEdOpenMode.Read)
+  try {
+    await AcApDocManager.instance.openUrl(url, options)
+  } catch (error) {
+    log.error('Failed to open file from URL:', error)
+    ElMessage({
+      message: t('main.message.failedToOpenFile', { fileName: url }),
+      grouping: true,
+      type: 'error',
+      showClose: true
+    })
+  } finally {
+    endDocumentOpening()
+    endPendingOpen()
+  }
+}
+
+/**
+ * Opens a local CAD file from a File object
+ * Used when the localFile prop is provided to automatically load files
+ *
+ * @param file - Local File object containing the CAD file
+ */
+const openLocalFile = async (file: File) => {
+  const options = buildOpenOptions()
+  beginDocumentOpening()
+  beginPendingOpen(options.mode ?? AcEdOpenMode.Read)
+  try {
+    const reader = new FileReader()
+    reader.readAsArrayBuffer(file)
+
+    // Wait for file reading to complete
+    const fileContent = await new Promise<ArrayBuffer>((resolve, reject) => {
+      reader.onload = event => {
+        const result = event.target?.result
+        if (result) {
+          resolve(result as ArrayBuffer)
+        } else {
+          reject(new Error('Failed to read file content'))
+        }
+      }
+      reader.onerror = () => reject(new Error('Failed to read file'))
+    })
+
+    // Open the file using the document manager
+    const success = await AcApDocManager.instance.openDocument(
+      file.name,
+      fileContent,
+      options
+    )
+    if (!success) {
+      throw new Error('Failed to open local file')
+    }
+  } catch {
+    ElMessage({
+      message: t('main.message.failedToOpenFile', { fileName: file.name }),
+      grouping: true,
+      type: 'error',
+      showClose: true
+    })
+  } finally {
+    endDocumentOpening()
+    endPendingOpen()
+  }
+}
+
+// Watch for URL changes and automatically open new files
+// This allows dynamic loading of different CAD files without component remounting
+watch(
+  () => props.url,
+  async newUrl => {
+    if (newUrl) {
+      openFileFromUrl(newUrl)
+    }
+  }
+)
+
+// Watch for local file changes and automatically open new files
+// This allows dynamic loading of different local CAD files without component remounting
+watch(
+  () => props.localFile,
+  async newFile => {
+    if (newFile) {
+      openLocalFile(newFile)
+    }
+  }
+)
+
+// Watch for background color changes and apply to the view
+watch(
+  () => props.background,
+  newBg => {
+    if (newBg != null) {
+      AcApDocManager.instance.curView.backgroundColor = newBg
+    }
+  }
+)
+
+// Watch for theme changes and apply to the view
+watch(
+  () => props.theme,
+  newTheme => {
+    setColorTheme(newTheme)
+  }
+)
+
+// Component lifecycle: Initialize and load initial file if URL or localFile is provided
+onMounted(async () => {
+  if (props.url || props.localFile) {
+    beginDocumentOpening()
+    beginPendingOpen(props.mode)
+  }
+
+  // Initialize the CAD viewer with the internal canvas
+  if (containerRef.value && layoutRef.value) {
+    initializeCadViewer({
+      container: containerRef.value,
+      busyIndicatorHost: layoutRef.value,
+      baseUrl: props.baseUrl,
+      htmlViewerRuntimeUrl: props.htmlViewerRuntimeUrl,
+      autoResize: true,
+      useMainThreadDraw: props.useMainThreadDraw
+    })
+    // AcApDocManager.instance is guaranteed only after viewer initialization.
+    editorRef.value = AcApDocManager.instance
+    ensureColorThemeSync()
+  } else {
+    log.warn('MlCadViewer: containerRef is unavailable on mount')
+  }
+
+  await nextTick()
+  bindHeaderObserver()
+
+  // If URL prop is provided, automatically load the file on mount
+  if (props.url) {
+    openFileFromUrl(props.url)
+  }
+  // If localFile prop is provided, automatically load the file on mount
+  else if (props.localFile) {
+    openLocalFile(props.localFile)
+  }
+
+  // Apply initial background color if provided
+  if (props.background != null) {
+    AcApDocManager.instance.curView.backgroundColor = props.background
+  }
+
+  // Set initial theme from props
+  setColorTheme(props.theme)
+
+  // FINAL STEP: viewer is now ready
+  emit('create')
+})
+
+// Destroy the CAD viewer when the component is unmounted
+onUnmounted(() => {
+  // Notify consumers first
+  emit('destroy')
+
+  AcEdMTextEditor.setDefaultToolbarEnabled(true)
+  headerResizeObserver?.disconnect()
+  AcApDocManager.instance.destroy()
+})
+
+watch(
+  [editorRef, isWriteMode, () => features.isShowToolbar],
+  async () => {
+    await nextTick()
+    bindHeaderObserver()
+  },
+  { immediate: true }
+)
+
+// Set up global event listeners for various CAD operations and notifications
+// These events are emitted by the underlying CAD engine and other components
+
+// Handle general messages from the CAD system (info, warnings, errors)
+eventBus.on('message', params => {
+  // Show both ElMessage and notification center
+  ElMessage({
+    message: params.message,
+    grouping: true,
+    type: params.type,
+    showClose: true
+  })
+
+  // Also add to notification center
+  switch (params.type) {
+    case 'success':
+      success('System Message', params.message)
+      break
+    case 'warning':
+      warning('System Warning', params.message)
+      break
+    case 'error':
+      error('System Error', params.message)
+      break
+    default:
+      info('System Info', params.message)
+      break
+  }
+})
+
+// Handle failure that fonts can't be loaded from remote font repository
+eventBus.on('fonts-not-loaded', params => {
+  const fontNames = params.fonts.map(font => font.fontName)
+  const message = t('main.message.fontsNotLoaded', {
+    fonts: formatFontsWithReplacement(fontNames)
+  })
+  error(t('main.notification.title.fontNotFound'), message, {
+    ...fontMissedNotificationOptions(fontNames),
+    persistent: true
+  })
+})
+
+// Handle failure that fonts can't be found in remote font repository
+eventBus.on('fonts-not-found', params => {
+  const message = t('main.message.fontsNotFound', {
+    fonts: formatFontsWithReplacement(params.fonts)
+  })
+  warning(t('main.notification.title.fontNotFound'), message, {
+    ...fontMissedNotificationOptions(params.fonts)
+  })
+})
+
+// Handle fonts required by the drawing that are not available during rendering
+eventBus.on('font-not-found', params => {
+  const fontName = params.fontName.trim()
+  if (!fontName) return
+
+  removeWhere(
+    notification =>
+      notification.source === 'font-missed' &&
+      notification.fontNames?.includes(fontName) === true
+  )
+
+  warning(
+    t('main.notification.title.fontNotFound'),
+    t('main.message.fontMissedInDrawing', {
+      font: fontName,
+      count: params.count,
+      replacementFont: AcApFontUtil.getReplacementFontName(fontName)
+    }),
+    fontMissedNotificationOptions([fontName])
+  )
+})
+
+eventBus.on('missed-data-changed', () => {
+  syncFontMissedNotifications()
+})
+
+// Handle failures when trying to get available fonts from the system
+eventBus.on('failed-to-get-avaiable-fonts', params => {
+  ElMessage({
+    message: t('main.message.failedToGetAvaiableFonts', { url: params.url }),
+    grouping: true,
+    type: 'error',
+    showClose: true
+  })
+})
+
+// Handle file opening failures with user-friendly error messages
+eventBus.on('failed-to-open-file', params => {
+  const message = t('main.message.failedToOpenFile', {
+    fileName: params.fileName
+  })
+  ElMessage({
+    message,
+    grouping: true,
+    type: 'error',
+    showClose: true
+  })
+  error('File Opening Failed', message)
+})
+
+// Mirror AutoCAD's LAYERCLOSE behavior: only close when the layer tab is open.
+eventBus.on('close-layer-manager', () => {
+  if (!store.dialogs.layerManager) return
+  if (store.dialogs.activePaletteTab !== 'layerManager') return
+  store.dialogs.layerManager = false
+})
+
+// Toggle notification center visibility
+const toggleNotificationCenter = () => {
+  showNotificationCenter.value = !showNotificationCenter.value
+}
+
+// Close notification center
+const closeNotificationCenter = () => {
+  showNotificationCenter.value = false
+}
+</script>
+
+<template>
+  <!-- Main CAD viewer container with complete UI layout -->
+  <div
+    :class="viewerThemeClass"
+    :style="{ '--ml-header-height': `${headerHeightPx}px` }"
+    class="ml-cad-viewer-container"
+  >
+    <!-- Element Plus configuration provider for internationalization -->
+    <el-config-provider :locale="elementPlusLocale">
+      <div ref="layoutRef" class="ml-cad-layout">
+        <!-- Header section with main menu and language selector -->
+        <header v-if="editorRef" ref="headerRef" class="ml-cad-header">
+          <ml-ribbon-commands
+            v-if="isWriteMode"
+            :current-locale="effectiveLocale"
+          />
+          <ml-main-menu v-if="!isWriteMode" />
+          <ml-language-selector
+            v-if="!isWriteMode"
+            :current-locale="effectiveLocale"
+          />
+        </header>
+
+        <!-- Main content area with CAD viewing tools and controls -->
+        <main class="ml-cad-main">
+          <!-- Canvas element for CAD rendering -->
+          <div
+            :class="viewerThemeClass"
+            ref="containerRef"
+            class="ml-cad-container"
+          ></div>
+
+          <!-- Display current filename at the top center -->
+          <div
+            v-if="
+              editorRef &&
+              !isWriteMode &&
+              features.isShowFileName &&
+              !isShowToolbar
+            "
+            class="ml-file-name"
+          >
+            {{ displayName }}
+          </div>
+
+          <!-- Toolbar for entity draw style -->
+          <ml-entity-draw-style-toolbar
+            v-if="editorRef"
+            :editor="editor"
+            class="ml-rev-tool-bar"
+          />
+
+          <!-- Toolbar with common CAD operations (zoom, pan, select, etc.) -->
+          <ml-tool-bars v-if="editorRef" />
+
+          <!-- Layer manager palette and entity properties palette for controlling entity visibility and properties -->
+          <ml-palette-manager v-if="editorRef" :editor="editor" />
+
+          <!-- Dialog manager for modal dialogs and settings -->
+          <ml-dialog-manager v-if="editorRef" />
+        </main>
+
+        <!-- Footer section with command line and status information -->
+        <footer v-if="editorRef" class="ml-cad-footer">
+          <!-- Status bar with progress, settings, and theme controls -->
+          <ml-status-bar
+            :is-dark="isDark"
+            :toggle-dark="toggleDark"
+            @toggle-notification-center="toggleNotificationCenter"
+          />
+        </footer>
+      </div>
+
+      <!-- Hidden components for file handling and entity information -->
+      <!-- File reader for local file uploads -->
+      <ml-file-reader v-if="editorRef" @file-read="handleFileRead" />
+      <ml-font-file-reader v-if="editorRef" />
+
+      <!-- Entity info panel for displaying object properties -->
+      <ml-entity-info v-if="editorRef" />
+
+      <!-- Notification center -->
+      <ml-notification-center
+        v-if="editorRef && showNotificationCenter"
+        @close="closeNotificationCenter"
+      />
+    </el-config-provider>
+  </div>
+</template>
+
+<!-- Component-specific styles -->
+<style>
+/* Container element styling */
+.ml-cad-container {
+  position: absolute;
+  inset: 0;
+  display: block;
+  outline: none;
+  z-index: 1; /* Canvas below UI overlays inside main */
+  pointer-events: auto; /* Ensure container can receive mouse events */
+}
+
+/* Main CAD viewer container styling */
+.ml-cad-viewer-container {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  pointer-events: auto;
+  overflow: hidden;
+}
+
+.ml-cad-layout {
+  position: relative;
+  width: 100%;
+  height: 100%;
+}
+
+.ml-cad-viewer-container > .el-config-provider {
+  display: block;
+  height: 100%;
+}
+
+.ml-cad-header {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 6;
+}
+
+.ml-cad-main {
+  position: absolute;
+  top: var(--ml-header-height);
+  left: 0;
+  right: 0;
+  bottom: var(--ml-status-bar-height);
+  min-height: 0;
+}
+
+.ml-cad-footer {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 6;
+}
+
+/* Position the filename display at the top center of the viewer */
+.ml-file-name {
+  position: fixed;
+  top: 20px;
+  left: 50%;
+  color: var(--el-text-color-regular);
+  transform: translateX(-50%);
+  text-align: center;
+  pointer-events: none; /* Allow mouse events to pass through to container */
+  z-index: 3; /* Ensure it's above canvas but doesn't block events */
+}
+
+/* Position the filename display at the top center of the viewer */
+.ml-rev-tool-bar {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 20px;
+  z-index: 2; /* Ensure it's above canvas but doesn't block events */
+}
+</style>

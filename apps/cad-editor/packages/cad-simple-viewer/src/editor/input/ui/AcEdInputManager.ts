@@ -1,0 +1,2039 @@
+import {
+  AcDbEntity,
+  acdbHostApplicationServices,
+  AcDbSystemVariables,
+  AcDbSysVarManager,
+  AcGeBox2d,
+  AcGePoint2dLike,
+  AcGePoint3dLike
+} from '@mlightcad/data-model'
+
+import { AcApDocManager, AcApSettingManager } from '../../../app'
+import { AcApI18n } from '../../../i18n'
+import { AcEdBaseView } from '../../view'
+import { AcEdInputModifiers } from '../AcEdInputModifiers'
+import { AcEdInputToggles } from '../AcEdInputToggles'
+import { AcEdSelectionSet } from '../AcEdSelectionSet'
+import {
+  AcEdAngleHandler,
+  AcEdDistanceHandler,
+  AcEdDoubleHandler,
+  AcEdInputHandler,
+  AcEdIntegerHandler,
+  AcEdNumericalHandler,
+  AcEdPointHandler,
+  AcEdStringHandler
+} from '../handler'
+import { AcEdPointInputContext } from '../handler/AcEdInputHandler'
+import { AcEdKeywordHandler } from '../handler/AcEdKeywordHandler'
+import {
+  AcEdPromptAngleOptions,
+  AcEdPromptBoxOptions,
+  AcEdPromptBoxResult,
+  AcEdPromptDistanceOptions,
+  AcEdPromptDoubleOptions,
+  AcEdPromptDoubleResult,
+  AcEdPromptEntityOptions,
+  AcEdPromptEntityResult,
+  AcEdPromptIntegerOptions,
+  AcEdPromptIntegerResult,
+  AcEdPromptKeywordOptions,
+  AcEdPromptNumericalOptions,
+  AcEdPromptOptions,
+  AcEdPromptPointOptions,
+  AcEdPromptPointResult,
+  AcEdPromptResult,
+  AcEdPromptSelectionOptions,
+  AcEdPromptSelectionResult,
+  AcEdPromptStatus,
+  AcEdPromptStringOptions
+} from '../prompt'
+import { AcEdPromptInputMode } from '../session/AcEdPromptInputSession'
+import { AcEdCommandLine } from './AcEdCommandLine'
+import { AcEdFloatingInput } from './AcEdFloatingInput'
+import {
+  AcEdFloatingInputBoxCount,
+  AcEdFloatingInputCommitCallback,
+  AcEdFloatingInputDrawPreviewCallback,
+  AcEdFloatingInputDynamicValueCallback,
+  AcEdFloatingInputRawData
+} from './AcEdFloatingInputTypes'
+import { AcEdFloatingMessage } from './AcEdFloatingMessage'
+import { AcEdMessageType } from './AcEdMessageType'
+
+/**
+ * Internal control-flow error used to propagate keyword picks out of
+ * floating-input loops.
+ *
+ * This error is intentionally caught by prompt wrappers and converted into
+ * `AcEdPromptStatus.Keyword` results.
+ */
+class AcEdKeywordInputError extends Error {
+  /**
+   * Canonical keyword token resolved by the prompt parser.
+   */
+  readonly keyword: string
+
+  /**
+   * Creates a keyword control-flow error.
+   *
+   * @param keyword - Canonical keyword token to bubble to prompt callers.
+   */
+  constructor(keyword: string) {
+    super('keyword')
+    this.keyword = keyword
+  }
+}
+
+/**
+ * Internal control-flow error used to represent Enter/RightClick None input.
+ */
+class AcEdNoneInputError extends Error {
+  constructor() {
+    super('none')
+  }
+}
+
+/**
+ * A fully type-safe TypeScript class providing CAD-style interactive user input
+ * using floating HTML input boxes and mouse events. Supports collecting points,
+ * distances, angles, numbers, strings, and selecting a 2-point rectangular box
+ * using an HTML overlay rectangle (suitable when the main canvas is a THREE.js
+ * WebGL canvas).
+ */
+export class AcEdInputManager {
+  /** Inject styles only once */
+  private static stylesInjected = false
+
+  /** The view associated with this input operation */
+  protected view: AcEdBaseView
+
+  /** Stores last confirmed point from getPoint() or getBox() */
+  private lastPoint: AcGePoint2dLike | null = null
+
+  /** Command line UI component */
+  private _commandLine: AcEdCommandLine
+  /** Buffered command-line style inputs (each item is one Enter-confirmed value). */
+  private _scriptInputs: string[] = []
+  /** Current modifier key state during input sessions. */
+  private _modifierState: AcEdInputModifiers = {
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+    metaKey: false
+  }
+  /** Toggle-style Ctrl flip state (press Ctrl once to flip arc direction). */
+  private _ctrlArcFlip: boolean = false
+
+  /**
+   * The flag to indicate whether it is currently in an “input acquisition” mode (e.g., point
+   * selection, distance/angle prompt, string prompt, etc.),
+   */
+  private active: boolean = false
+  /**
+   * True only when the current input session explicitly expects entity selection
+   * (getEntity/getSelection). Used to gate view-level selection behavior.
+   */
+  private entitySelectionActive: boolean = false
+
+  /**
+   * Construct the manager and attach mousemove listener used for floating input
+   * positioning and live preview updates.
+   *
+   * @param view - The view associated with the input manager
+   */
+  constructor(view: AcEdBaseView) {
+    this.view = view
+    this.injectCSS()
+    // Newly added UI overlays (command line, previews) are container-local.
+    // Ensure absolute-positioned children are anchored to this view only.
+    const containerPosition = getComputedStyle(this.view.container).position
+    if (containerPosition === 'static') {
+      this.view.container.style.position = 'relative'
+    }
+    const commandLine = new AcEdCommandLine(this.view.container)
+    this._commandLine = commandLine
+    commandLine.visible = AcApSettingManager.instance.isShowCommandLine
+    AcApSettingManager.instance.events.modified.addEventListener(() => {
+      commandLine.visible = AcApSettingManager.instance.isShowCommandLine
+    })
+  }
+
+  /**
+   * The flag to indicate whether it is currently in an “input acquisition” mode (e.g., point
+   * selection, distance/angle prompt, string prompt, etc.),
+   */
+  get isActive() {
+    return this.active
+  }
+  /**
+   * Whether current input session allows entity selection in the view.
+   */
+  get isEntitySelectionActive() {
+    return this.entitySelectionActive
+  }
+
+  /**
+   * Current modifier key state (Ctrl/Shift/Alt/Meta) during input sessions.
+   */
+  get modifiers() {
+    return this._modifierState
+  }
+
+  /**
+   * Toggle-style input states (press once to flip, persists after keyup).
+   */
+  get toggles(): AcEdInputToggles {
+    return { ctrlArcFlip: this._ctrlArcFlip }
+  }
+
+  /** Reset toggle-style inputs to their default state. */
+  resetToggles() {
+    this._ctrlArcFlip = false
+  }
+
+  /**
+   * Queue scripted inputs for subsequent getXXX calls.
+   * One array item equals one Enter-confirmed value.
+   */
+  enqueueScriptInputs(inputs: string[]) {
+    if (!inputs.length) return
+    this._scriptInputs.push(...inputs)
+  }
+
+  /** Clears any pending scripted inputs. */
+  clearScriptInputs() {
+    this._scriptInputs.length = 0
+  }
+
+  /**
+   * Displays a typed message in the command-line message panel.
+   *
+   * @param message - Message text to render
+   * @param type - Message severity controlling the rendered style
+   * @param msgKey - Optional localization key associated with the message
+   */
+  showMessage(
+    message: string,
+    type: AcEdMessageType = 'info',
+    msgKey?: string
+  ) {
+    this._commandLine.showMessage(message, type, msgKey)
+  }
+
+  /**
+   * Returns the next scripted token without consuming it.
+   *
+   * @returns Next queued scripted token, or `undefined` when empty.
+   */
+  peekScriptInput() {
+    return this._scriptInputs[0]
+  }
+
+  /**
+   * Consumes and returns the next scripted token.
+   *
+   * @returns Next queued scripted token, or `undefined` when empty.
+   */
+  consumeScriptInput() {
+    return this.dequeueScriptInput()
+  }
+
+  /**
+   * Injects minimal CSS required for the floating input and preview rectangle.
+   * Useful when you do not have a separate CSS file.
+   */
+  private injectCSS() {
+    if (AcEdInputManager.stylesInjected) return
+    AcEdInputManager.stylesInjected = true
+
+    const style = document.createElement('style')
+    style.textContent = `
+      .ml-jig-preview-rect {
+        position: absolute;
+        border: 1px dashed var(--line-color, var(--ml-ui-canvas-line, #0f0));
+        background: var(--ml-ui-canvas-fill-mix, var(--ml-ui-canvas-fill, rgba(64, 158, 255, 0.12)));
+        pointer-events: none;
+        z-index: 1;
+      }
+      .ml-jig-preview-line {
+        position: absolute;
+        height: 1px;
+        background: var(--line-color, var(--ml-ui-canvas-line, #0f0));
+        transform-origin: 0 0;
+        pointer-events: none;
+        z-index: 1;
+      }
+    `
+    document.head.appendChild(style)
+  }
+
+  /**
+   * Format a number for display in dynamic input boxes using the drawing formatter.
+   * @param value The numeric value
+   * @param type Optional type: 'point' | 'distance' | 'angle'
+   */
+  private formatNumber(
+    value: number,
+    type: 'point' | 'distance' | 'angle'
+  ): string {
+    const db = AcApDocManager.instance.curDocument?.database
+    if (!db) {
+      switch (type) {
+        case 'angle':
+          return value.toFixed(2)
+        case 'distance':
+        case 'point':
+        default:
+          return value.toFixed(3)
+      }
+    }
+    switch (type) {
+      case 'angle':
+        return db.formatter.formatAngle((value * Math.PI) / 180, {
+          applyAngbaseAngdir: false
+        })
+      case 'distance':
+      case 'point':
+      default:
+        return db.formatter.formatLength(value)
+    }
+  }
+
+  /**
+   * Returns whether the supplied prompt defines any keywords.
+   *
+   * Keyword-aware prompts need extra command-line wiring so textual input can
+   * be interpreted as keyword picks instead of free-form values. This helper
+   * centralizes the check and gracefully handles prompts that expose no keyword
+   * collection.
+   *
+   * @param options - Prompt options to inspect
+   * @returns `true` when at least one keyword is registered on the prompt
+   */
+  private hasKeywords(options: AcEdPromptOptions<unknown>) {
+    const keywords = options.keywords?.toArray() ?? []
+    return keywords.length > 0
+  }
+
+  /**
+   * Builds a keyword-only prompt options object from a general prompt.
+   *
+   * Several input flows support optional keywords in parallel with their main
+   * acquisition mode. Rather than duplicating keyword definitions manually, the
+   * original prompt's keyword metadata is cloned into a dedicated
+   * `AcEdPromptKeywordOptions` instance that can be passed to the command-line
+   * keyword session.
+   *
+   * @typeParam T - Value type produced by the source prompt
+   * @param options - Source prompt whose keyword definitions should be copied
+   * @returns A keyword prompt configured with the same message and keyword set
+   */
+  private buildKeywordOptions<T>(
+    options: AcEdPromptOptions<T>
+  ): AcEdPromptKeywordOptions {
+    const keywordOptions = new AcEdPromptKeywordOptions(options.message)
+    keywordOptions.appendKeywordsToMessage = options.appendKeywordsToMessage
+
+    const keywords = options.keywords?.toArray() ?? []
+    keywords.forEach(kw => {
+      const added = keywordOptions.keywords.add(
+        kw.displayName,
+        kw.globalName,
+        kw.localName,
+        kw.enabled,
+        kw.visible
+      )
+      if (options.keywords.default === kw) {
+        keywordOptions.keywords.default = added
+      }
+    })
+
+    return keywordOptions
+  }
+
+  /**
+   * Copies keyword definitions from one prompt options object to another.
+   *
+   * This is primarily used by composite prompts such as `getBox()`, which break
+   * a higher-level workflow into multiple sub-prompts while preserving the same
+   * keyword vocabulary and default keyword behavior across each stage.
+   *
+   * @param source - Prompt options providing the keyword definitions
+   * @param target - Prompt options receiving the cloned keyword definitions
+   */
+  private copyKeywords(
+    source: AcEdPromptOptions<unknown>,
+    target: AcEdPromptOptions<unknown>
+  ) {
+    target.appendKeywordsToMessage = source.appendKeywordsToMessage
+    const keywords = source.keywords?.toArray() ?? []
+    keywords.forEach(kw => {
+      const added = target.keywords.add(
+        kw.displayName,
+        kw.globalName,
+        kw.localName,
+        kw.enabled,
+        kw.visible
+      )
+      if (source.keywords.default === kw) {
+        target.keywords.default = added
+      }
+    })
+  }
+
+  /**
+   * Resolves a picked object id back to its database entity instance.
+   *
+   * View-level picking only returns lightweight hit-test data such as object
+   * ids and bounding information. Prompt validation, however, needs access to
+   * the backing `AcDbEntity` so it can inspect runtime metadata like the entity
+   * type and layer.
+   *
+   * @param objectId - Object id returned by the spatial pick query
+   * @returns The matching database entity, or `undefined` if it can no longer be found
+   */
+  private getEntityById(objectId: string): AcDbEntity | undefined {
+    return AcApDocManager.instance.curDocument.database.tables.blockTable.getEntityById(
+      objectId
+    )
+  }
+
+  /**
+   * Returns whether the specified entity belongs to a locked layer.
+   *
+   * The entity itself only stores its layer name, so this helper resolves the
+   * layer record from the current drawing database and inspects its lock state.
+   * Missing layer records are treated as unlocked to avoid rejecting input due
+   * to incomplete metadata.
+   *
+   * @param entity - Entity being evaluated for prompt selection
+   * @returns `true` if the entity's layer exists and is locked; otherwise `false`
+   */
+  private isEntityOnLockedLayer(entity: AcDbEntity): boolean {
+    const layerName = entity.layer
+    if (!layerName) {
+      return false
+    }
+
+    return !!AcApDocManager.instance.curDocument.database.tables.layerTable.getAt(
+      layerName
+    )?.isLocked
+  }
+
+  /**
+   * Checks whether a picked entity satisfies the prompt's allowed-class filter.
+   *
+   * Different parts of the stack expose the entity type in slightly different
+   * forms. The data-model layer provides a short CAD type name through
+   * `entity.type` (for example `Line`), while runtime inspection exposes the
+   * TypeScript constructor name (for example `AcDbLine`). To maximize
+   * compatibility with existing caller expectations, both forms are tested
+   * against the prompt's allow-list.
+   *
+   * @param entity - Picked entity being validated
+   * @param options - Prompt options containing the configured allowed classes
+   * @returns `true` when the entity matches at least one allowed class, or when
+   * no class restriction has been configured
+   */
+  private isEntityClassAllowed(
+    entity: AcDbEntity,
+    options: AcEdPromptEntityOptions
+  ): boolean {
+    const candidates = new Set<string>()
+
+    if (entity.type) {
+      candidates.add(entity.type)
+    }
+
+    const constructorName = entity.constructor?.name
+    if (constructorName) {
+      candidates.add(constructorName)
+    }
+
+    for (const candidate of candidates) {
+      if (options.isClassAllowed(candidate)) {
+        return true
+      }
+    }
+
+    return false
+  }
+
+  /**
+   * Starts a keyword-only command-line session for prompts that do not accept
+   * typed geometric values (selection, entity pick, etc.).
+   */
+  private startKeywordSession(
+    options: AcEdPromptOptions<unknown>,
+    allowTyping: boolean
+  ) {
+    if (!this.hasKeywords(options)) return undefined
+    const keywordOptions = this.buildKeywordOptions(options)
+    return {
+      promise: this._commandLine.getKeywords(keywordOptions, allowTyping),
+      cancel: () => this._commandLine.cancelActiveSession()
+    }
+  }
+
+  /**
+   * Starts a mixed command-line session for floating-input prompts.
+   *
+   * AutoCAD-style precedence is applied: geometric or numeric values are parsed
+   * before keywords for point/distance/angle/number prompts; string prompts try
+   * keywords first because arbitrary text is otherwise always valid.
+   */
+  private startPromptInputSession<T>(
+    options: AcEdPromptOptions<T>,
+    handler: AcEdInputHandler<T>,
+    inputCount: AcEdFloatingInputBoxCount,
+    allowTyping: boolean
+  ) {
+    const keywordOptions = this.buildKeywordOptions(options)
+    const allowNone =
+      'allowNone' in options
+        ? (options as { allowNone: boolean }).allowNone
+        : false
+
+    return {
+      promise: this._commandLine.getPromptInput(
+        keywordOptions,
+        text => this.parseCommandLineInput(text, handler, inputCount, options),
+        {
+          mode: this.resolvePromptInputMode(handler),
+          allowNone,
+          allowTyping
+        }
+      ),
+      cancel: () => this._commandLine.cancelActiveSession()
+    }
+  }
+
+  /**
+   * Resolves command-line precedence rules for the active handler.
+   */
+  private resolvePromptInputMode(
+    handler: AcEdInputHandler<unknown>
+  ): AcEdPromptInputMode {
+    return handler instanceof AcEdStringHandler ? 'string' : 'geometric'
+  }
+
+  /**
+   * Builds command-line point context for {@link AcEdPointHandler.parseCommandLine}.
+   */
+  private resolvePointInputContext(
+    promptOptions: AcEdPromptOptions<unknown>
+  ): AcEdPointInputContext {
+    const promptDefaults = this.resolvePromptDefaults(promptOptions)
+    const referencePoint =
+      promptDefaults.useBasePoint && promptDefaults.basePoint
+        ? promptDefaults.basePoint
+        : (this.lastPoint ?? undefined)
+
+    return {
+      referencePoint,
+      cursorPoint: this.view.screenToWorld(
+        this.view.viewportToCanvas(this.view.curMousePos)
+      )
+    }
+  }
+
+  /**
+   * Parses one command-line token into the value expected by the active prompt.
+   */
+  private parseCommandLineInput<T>(
+    text: string,
+    handler: AcEdInputHandler<T>,
+    inputCount: AcEdFloatingInputBoxCount,
+    promptOptions: AcEdPromptOptions<T>
+  ): T | null {
+    const trimmed = text.trim()
+    if (!trimmed) return null
+
+    const pointContext =
+      handler instanceof AcEdPointHandler || inputCount === 2
+        ? this.resolvePointInputContext(promptOptions)
+        : undefined
+
+    return handler.parseCommandLine(trimmed, pointContext)
+  }
+
+  /**
+   * Narrows an unknown error value to the internal keyword control-flow error.
+   *
+   * Prompt implementations use {@link AcEdKeywordInputError} as a private
+   * mechanism for bubbling a keyword pick out of deeply nested async UI flows.
+   * This type guard keeps the outer prompt wrappers readable while preserving
+   * strong typing for the extracted keyword token.
+   *
+   * @param error - Unknown error value thrown from an input workflow
+   * @returns `true` if the error represents a keyword selection
+   */
+  private isPromptKeyword(error: unknown): error is AcEdKeywordInputError {
+    return error instanceof AcEdKeywordInputError
+  }
+
+  /**
+   * Converts internal prompt control-flow errors to typed prompt results.
+   *
+   * @typeParam T - Prompt result type to construct
+   * @param error - Unknown error thrown from prompt workflow
+   * @param handlers - Result factories for mapped prompt statuses
+   * @returns Mapped prompt result when recognized; otherwise `undefined`
+   */
+  private mapPromptError<T>(
+    error: unknown,
+    handlers: {
+      none?: () => T
+      cancel?: () => T
+      keyword?: (keyword: string) => T
+    }
+  ): T | undefined {
+    if (handlers.none && this.isPromptNone(error)) {
+      return handlers.none()
+    }
+    if (handlers.cancel && this.isPromptCancelled(error)) {
+      return handlers.cancel()
+    }
+    if (handlers.keyword && this.isPromptKeyword(error)) {
+      return handlers.keyword(error.keyword)
+    }
+    return undefined
+  }
+
+  /**
+   * Attaches keyword text to a prompt result and returns it.
+   */
+  private withKeywordResult<T extends AcEdPromptResult>(
+    result: T,
+    keyword: string
+  ): T {
+    result.stringResult = keyword
+    return result
+  }
+
+  /**
+   * Maps internal control-flow errors to prompt results by status constructor.
+   *
+   * @typeParam T - Prompt result type
+   * @param error - Unknown error thrown from prompt workflow
+   * @param create - Factory creating a result from target status
+   * @param options - Toggles for supported mapped statuses
+   */
+  private mapPromptErrorToResult<T extends AcEdPromptResult>(
+    error: unknown,
+    create: (status: AcEdPromptStatus) => T,
+    options?: {
+      none?: boolean
+      cancel?: boolean
+      keyword?: boolean
+    }
+  ): T | undefined {
+    const includeNone = options?.none ?? true
+    const includeCancel = options?.cancel ?? true
+    const includeKeyword = options?.keyword ?? true
+
+    return this.mapPromptError(error, {
+      none: includeNone ? () => create(AcEdPromptStatus.None) : undefined,
+      cancel: includeCancel ? () => create(AcEdPromptStatus.Cancel) : undefined,
+      keyword: includeKeyword
+        ? keyword =>
+            this.withKeywordResult(create(AcEdPromptStatus.Keyword), keyword)
+        : undefined
+    })
+  }
+
+  /**
+   * Executes prompt workflow with centralized try/catch mapping.
+   *
+   * @typeParam T - Raw successful value from prompt workflow
+   * @typeParam R - Prompt result type
+   * @param run - Async prompt workflow that may throw control-flow errors
+   * @param onOk - Maps successful workflow value to result object
+   * @param create - Creates a result object from mapped prompt status
+   * @param options - Toggles for supported mapped statuses
+   */
+  private async executePrompt<T, R extends AcEdPromptResult>(
+    run: () => Promise<T>,
+    onOk: (value: T) => R,
+    create: (status: AcEdPromptStatus) => R,
+    options?: {
+      none?: boolean
+      cancel?: boolean
+      keyword?: boolean
+    }
+  ): Promise<R> {
+    try {
+      const value = await run()
+      return onOk(value)
+    } catch (error) {
+      const mapped = this.mapPromptErrorToResult(error, create, options)
+      if (mapped) return mapped
+      throw error
+    }
+  }
+
+  /**
+   * Extracts default-value behavior from prompt options when supported.
+   */
+  private resolvePromptDefaultValue<T>(promptOptions: AcEdPromptOptions<T>): {
+    useDefaultValue: boolean
+    defaultValue?: T
+  } {
+    if (
+      'useDefaultValue' in promptOptions &&
+      'defaultValue' in promptOptions &&
+      (promptOptions as { useDefaultValue: boolean }).useDefaultValue
+    ) {
+      return {
+        useDefaultValue: true,
+        defaultValue: (promptOptions as { defaultValue: T }).defaultValue
+      }
+    }
+    return { useDefaultValue: false }
+  }
+
+  /**
+   * Prompts the user to specify a point.
+   *
+   * The point may be supplied by clicking in the view, typing coordinates into
+   * the floating input, or consuming a queued scripted input token. Keywords are
+   * also supported when configured on the prompt options.
+   *
+   * @param options - Point prompt options controlling messaging, base-point
+   * behavior, jig integration, and keywords
+   * @returns A prompt result containing the picked point, cancel status, or keyword
+   */
+  async getPoint(
+    options: AcEdPromptPointOptions
+  ): Promise<AcEdPromptPointResult> {
+    return this.executePrompt(
+      () => this.getPointInternal(options),
+      value => new AcEdPromptPointResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptPointResult(status)
+    )
+  }
+
+  /**
+   * Prompts the user for a purely typed numeric value through floating input.
+   *
+   * This helper is shared by distance, angle, double, and integer prompts when
+   * no mouse-driven geometric reference is needed. Validation is delegated to
+   * the supplied handler so the floating UI can mark invalid values and keep
+   * the prompt alive until the user enters an acceptable number.
+   *
+   * @param options - Numeric prompt options describing the message and keyword set
+   * @param handler - Parser/validator responsible for converting raw text into a number
+   * @returns A promise that resolves to the parsed numeric value
+   */
+  private getNumberTyped(
+    options: AcEdPromptNumericalOptions | AcEdPromptAngleOptions,
+    handler: AcEdNumericalHandler | AcEdAngleHandler
+  ): Promise<number> {
+    const getDynamicValue = () => {
+      return {
+        value: 0,
+        raw: { x: '' }
+      }
+    }
+
+    return this.makeFloatingInputPromise<number>({
+      inputCount: 1,
+      promptOptions: options,
+      handler,
+      getDynamicValue
+    })
+  }
+
+  /**
+   * Resolves the reference point used by {@link getDistance}.
+   *
+   * Returns the explicit `basePoint` when `useBasePoint` is enabled, matching
+   * AutoCAD `PromptDistanceOptions`.
+   */
+  private resolveDistanceBasePoint(
+    options: AcEdPromptDistanceOptions
+  ): AcGePoint2dLike | undefined {
+    if (!options.useBasePoint) return undefined
+    if (options.basePoint) {
+      return { x: options.basePoint.x, y: options.basePoint.y }
+    }
+    return undefined
+  }
+
+  /**
+   * Builds the live distance preview callback for a fixed base point.
+   */
+  private createDistanceDynamicValue(
+    basePoint: AcGePoint2dLike
+  ): AcEdFloatingInputDynamicValueCallback<number> {
+    return (pos: AcGePoint2dLike) => {
+      const dx = pos.x - basePoint.x
+      const dy = pos.y - basePoint.y
+      const dist = Math.sqrt(dx * dx + dy * dy)
+      return {
+        value: dist,
+        raw: { x: this.formatNumber(dist, 'distance') }
+      }
+    }
+  }
+
+  /**
+   * Acquires distance by two screen picks when no reference point is available.
+   *
+   * The user may still type a numeric distance instead of clicking. The first
+   * click records the start point and enables rubber-band preview; the second
+   * click returns the distance between the two points.
+   */
+  private async getDistanceTwoPoint(
+    options: AcEdPromptDistanceOptions,
+    handler: AcEdDistanceHandler
+  ): Promise<number> {
+    let firstPoint: AcGePoint2dLike | undefined
+    let floatingInput: AcEdFloatingInput<number> | undefined
+
+    const getDynamicValue = (pos: AcGePoint2dLike) => {
+      if (!firstPoint) {
+        return { value: 0, raw: { x: '' } }
+      }
+      return this.createDistanceDynamicValue(firstPoint)(pos)
+    }
+
+    return await this.makeFloatingInputPromise<number>({
+      inputCount: 1,
+      promptOptions: options,
+      handler,
+      getDynamicValue,
+      onFloatingInputCreated: input => {
+        floatingInput = input
+      },
+      onCommit: (_val, pos) => {
+        if (firstPoint) {
+          return true
+        }
+        if (pos) {
+          firstPoint = { x: pos.x, y: pos.y }
+          floatingInput?.setBasePoint(firstPoint, {
+            showBaseLineOnly: !options.useDashedLine
+          })
+          return false
+        }
+        return true
+      }
+    })
+  }
+
+  /**
+   * Prompts the user to specify a distance value.
+   *
+   * When `useBasePoint` is true and a base point is specified, the floating
+   * input previews the live distance from that reference point to the cursor.
+   * Otherwise the user picks two points on screen with rubber-band preview
+   * between them. Typed numeric entry is supported in both modes. Scripted
+   * inputs and keywords are supported as well.
+   *
+   * @param options - Distance prompt options controlling base-point behavior and messaging
+   * @returns A prompt result containing the resolved distance, cancel status, or keyword
+   */
+  async getDistance(
+    options: AcEdPromptDistanceOptions
+  ): Promise<AcEdPromptDoubleResult> {
+    const handler = new AcEdDistanceHandler(options)
+    const scriptedValue = this.tryGetScriptedNumber(handler, options)
+    if (scriptedValue != null) {
+      return new AcEdPromptDoubleResult(AcEdPromptStatus.OK, scriptedValue)
+    }
+
+    const basePoint = this.resolveDistanceBasePoint(options)
+
+    return this.executePrompt(
+      async () => {
+        if (basePoint) {
+          return await this.makeFloatingInputPromise<number>({
+            inputCount: 1,
+            promptOptions: options,
+            handler,
+            getDynamicValue: this.createDistanceDynamicValue(basePoint)
+          })
+        }
+
+        return await this.getDistanceTwoPoint(options, handler)
+      },
+      value => new AcEdPromptDoubleResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptDoubleResult(status)
+    )
+  }
+
+  /**
+   * Prompts the user to specify an angle in degrees.
+   *
+   * If a base point is available, the cursor position is converted into a live
+   * angular preview relative to that point and the optional prompt base angle.
+   * Without a geometric reference, the method accepts typed numeric input only.
+   *
+   * @param options - Angle prompt options controlling base point, base angle, and messaging
+   * @returns A prompt result containing the resolved angle, cancel status, or keyword
+   */
+  async getAngle(
+    options: AcEdPromptAngleOptions
+  ): Promise<AcEdPromptDoubleResult> {
+    const handler = new AcEdAngleHandler(options)
+    const scriptedValue = this.tryGetScriptedNumber(handler, options)
+    if (scriptedValue != null) {
+      return new AcEdPromptDoubleResult(AcEdPromptStatus.OK, scriptedValue)
+    }
+
+    const basePoint =
+      options.useBasePoint && options.basePoint
+        ? options.basePoint
+        : this.lastPoint
+
+    // No reference point available: fallback to typed angle input only.
+    if (!basePoint) {
+      return this.executePrompt(
+        () => this.getNumberTyped(options, handler),
+        value => new AcEdPromptDoubleResult(AcEdPromptStatus.OK, value),
+        status => new AcEdPromptDoubleResult(status)
+      )
+    }
+
+    const getDynamicValue = (pos: AcGePoint2dLike) => {
+      const dx = pos.x - basePoint.x
+      const dy = pos.y - basePoint.y
+      const rawAngleRad = Math.atan2(dy, dx)
+      const baseAngleRad = (options.baseAngle * Math.PI) / 180
+      let angleRad = rawAngleRad - baseAngleRad
+      while (angleRad <= -Math.PI) angleRad += Math.PI * 2
+      while (angleRad > Math.PI) angleRad -= Math.PI * 2
+      const angleDeg = (angleRad * 180) / Math.PI
+      return {
+        value: angleDeg,
+        raw: { x: this.formatNumber(angleDeg, 'angle') }
+      }
+    }
+
+    return this.executePrompt(
+      () =>
+        this.makeFloatingInputPromise<number>({
+          inputCount: 1,
+          promptOptions: options,
+          handler,
+          getDynamicValue
+        }),
+      value => new AcEdPromptDoubleResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptDoubleResult(status)
+    )
+  }
+
+  /**
+   * Prompts the user for a floating-point number.
+   *
+   * This is the generic free-form numeric entry path used when no geometric
+   * interpretation such as distance or angle is required.
+   *
+   * @param options - Double prompt options controlling validation and messaging
+   * @returns A prompt result containing the parsed number, cancel status, or keyword
+   */
+  async getDouble(
+    options: AcEdPromptDoubleOptions
+  ): Promise<AcEdPromptDoubleResult> {
+    const handler = new AcEdDoubleHandler(options)
+    const scriptedValue = this.tryGetScriptedNumber(handler, options)
+    if (scriptedValue != null) {
+      return new AcEdPromptDoubleResult(AcEdPromptStatus.OK, scriptedValue)
+    }
+
+    return this.executePrompt(
+      () => this.getNumberTyped(options, handler),
+      value => new AcEdPromptDoubleResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptDoubleResult(status)
+    )
+  }
+
+  /**
+   * Prompts the user for an integer value.
+   *
+   * The supplied integer handler enforces integer-only parsing for both typed
+   * input and scripted command input.
+   *
+   * @param options - Integer prompt options controlling validation and messaging
+   * @returns A prompt result containing the parsed integer, cancel status, or keyword
+   */
+  async getInteger(
+    options: AcEdPromptIntegerOptions
+  ): Promise<AcEdPromptIntegerResult> {
+    const scriptedValue = this.tryGetScriptedNumber(
+      new AcEdIntegerHandler(options),
+      options
+    )
+    if (scriptedValue != null) {
+      return new AcEdPromptIntegerResult(AcEdPromptStatus.OK, scriptedValue)
+    }
+
+    return this.executePrompt(
+      () => this.getNumberTyped(options, new AcEdIntegerHandler(options)),
+      value => new AcEdPromptIntegerResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptIntegerResult(status)
+    )
+  }
+
+  /**
+   * Prompts the user to type an arbitrary string.
+   *
+   * The value is collected through the shared floating-input pipeline so it can
+   * participate in the same cancellation, keyword, and scripted-input behavior
+   * as the other prompt types.
+   *
+   * @param options - String prompt options controlling the prompt message and keywords
+   * @returns A prompt result containing the entered string, cancel status, or keyword
+   */
+  async getString(options: AcEdPromptStringOptions): Promise<AcEdPromptResult> {
+    const scriptedValue = this.tryGetScriptedValue(
+      new AcEdStringHandler(options),
+      options
+    )
+    if (scriptedValue != null) {
+      return new AcEdPromptResult(AcEdPromptStatus.OK, scriptedValue)
+    }
+
+    return this.executePrompt(
+      async () => {
+        const getDynamicValue = () => {
+          return {
+            value: '',
+            raw: { x: '' }
+          }
+        }
+
+        const handler = new AcEdStringHandler(options)
+        return await this.makeFloatingInputPromise<string>({
+          inputCount: 1,
+          promptOptions: options,
+          handler,
+          getDynamicValue
+        })
+      },
+      value => new AcEdPromptResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptResult(status)
+    )
+  }
+
+  /**
+   * Prompts the user to enter one of the configured keywords.
+   *
+   * Unlike the mixed-mode keyword sessions used by other prompt types, this
+   * method runs a dedicated keyword prompt and returns the chosen keyword as the
+   * result value.
+   *
+   * @param options - Keyword prompt options describing the allowed keywords
+   * @returns A prompt result containing the chosen keyword or cancel status
+   */
+  async getKeywords(
+    options: AcEdPromptKeywordOptions
+  ): Promise<AcEdPromptResult> {
+    return this.executePrompt(
+      async () => {
+        const scriptedValue = this.tryGetScriptedValue(
+          new AcEdKeywordHandler(options),
+          options
+        )
+        if (scriptedValue != null) {
+          return scriptedValue
+        }
+
+        const result = await this._commandLine.getKeywords(options, true)
+        if (!result) {
+          if (options.allowNone) {
+            throw new AcEdNoneInputError()
+          }
+          throw new Error('cancelled')
+        }
+        return result
+      },
+      value => new AcEdPromptResult(AcEdPromptStatus.OK, value),
+      status => new AcEdPromptResult(status),
+      { keyword: false }
+    )
+  }
+
+  /**
+   * Prompts the user to select one or more entities by mouse interaction.
+   *
+   * This method supports two selection modes:
+   *
+   * - **Click selection**: Clicking on an entity selects the entity under the cursor.
+   * - **Box selection**:
+   *   - left-to-right drag: window selection (entities fully inside the box)
+   *   - right-to-left drag: crossing selection (entities intersecting the box)
+   *
+   * The selection operation behaves similarly to AutoCAD's
+   * `Editor.GetSelection()` API:
+   *
+   * - Press **Enter** to accept the current selection set.
+   * - Press **Escape** to cancel the operation.
+   * - If {@link AcEdPromptSelectionOptions.singleOnly} is `true`, the selection
+   *   completes immediately after the first entity is selected.
+   *
+   * This method does not use floating input boxes. Instead, it relies entirely on
+   * mouse gestures and keyboard input. A floating prompt message and command line
+   * prompt are displayed during the operation.
+   *
+   * @param options - Selection prompt options that control user messaging and
+   *                  whether only a single entity may be selected.
+   * @returns A promise that resolves to an array of selected entity IDs.
+   *          The array is empty if no entities are selected and the user presses Enter.
+   *          The promise is rejected if the operation is cancelled.
+   */
+  async getSelection(
+    options: AcEdPromptSelectionOptions
+  ): Promise<AcEdPromptSelectionResult> {
+    return this.executePrompt(
+      () =>
+        new Promise<string[]>((resolve, reject) => {
+          this.active = true
+          this.entitySelectionActive = true
+          const keywordSession = this.startKeywordSession(options, true)
+          if (!keywordSession) {
+            this._commandLine.setPrompt(options.message)
+          }
+
+          const floatingMessage = new AcEdFloatingMessage(this.view, {
+            parent: this.view.canvas,
+            message: options.message
+          })
+
+          const selected = new Set<string>()
+          let startWcs: AcGePoint2dLike | null = null
+          let startCanvas: AcGePoint2dLike | null = null
+          let previewEl: HTMLDivElement | null = null
+          let lastDragEvent: MouseEvent | null = null
+
+          const updateSelectionPreview = (e: MouseEvent) => {
+            if (!startWcs || !previewEl || !startCanvas) return
+
+            const curWcs = this.view.screenToWorld(
+              this.view.viewportToCanvas({ x: e.clientX, y: e.clientY })
+            )
+            const curCanvas = this.view.viewportToCanvas({
+              x: e.clientX,
+              y: e.clientY
+            })
+            const p1 = this.view.worldToScreen(startWcs)
+            const p2 = this.view.worldToScreen(curWcs)
+
+            const left = Math.min(p1.x, p2.x)
+            const top = Math.min(p1.y, p2.y)
+            const width = Math.abs(p1.x - p2.x)
+            const height = Math.abs(p1.y - p2.y)
+            const mode = this.view.getSelectionMode(startCanvas, curCanvas)
+            const action = this.view.getSelectionActionFromEvent(e, 'add')
+            const style = this.view.getSelectionPreviewStyle(mode, action)
+
+            Object.assign(previewEl.style, {
+              left: `${left}px`,
+              top: `${top}px`,
+              width: `${width}px`,
+              height: `${height}px`,
+              borderStyle: style.borderStyle,
+              background: style.background
+            })
+            previewEl.style.setProperty('--line-color', style.lineColor)
+          }
+
+          const onViewChanged = () => {
+            if (lastDragEvent) {
+              updateSelectionPreview(lastDragEvent)
+            }
+          }
+
+          let settled = false
+          const cleanup = () => {
+            if (settled) return
+            settled = true
+            this.active = false
+            this.entitySelectionActive = false
+            floatingMessage?.dispose()
+            previewEl?.remove()
+            keywordSession?.cancel()
+            this._commandLine.clear()
+
+            document.removeEventListener('keydown', keyHandler)
+            this.view.canvas.removeEventListener('mousedown', mouseDown)
+            this.view.canvas.removeEventListener('mousemove', mouseMove)
+            this.view.canvas.removeEventListener('mouseup', mouseUp)
+            this.view.canvas.removeEventListener(
+              'contextmenu',
+              contextMenuHandler
+            )
+            this.view.events.viewChanged.removeEventListener(onViewChanged)
+            this.view.events.viewResize.removeEventListener(onViewChanged)
+          }
+
+          keywordSession?.promise.then(keyword => {
+            if (settled) return
+            if (!keyword) {
+              cleanup()
+              reject(new Error('cancelled'))
+              return
+            }
+            cleanup()
+            reject(new AcEdKeywordInputError(keyword))
+          })
+
+          /** ---------- Keyboard ---------- */
+
+          const keyHandler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+              cleanup()
+              reject(new Error('cancelled'))
+              return
+            }
+
+            if (e.key === 'Enter') {
+              cleanup()
+              resolve([...selected])
+            }
+          }
+
+          /** ---------- Mouse ---------- */
+          const contextMenuHandler = (e: MouseEvent) => {
+            if (this.shouldUseRightClickEnter()) {
+              e.preventDefault()
+            }
+          }
+
+          const mouseDown = (e: MouseEvent) => {
+            if (e.button === 2) {
+              if (this.shouldUseRightClickEnter()) {
+                e.preventDefault()
+                cleanup()
+                resolve([...selected])
+              }
+              return
+            }
+            if (e.button !== 0) return
+
+            startCanvas = this.view.viewportToCanvas({
+              x: e.clientX,
+              y: e.clientY
+            })
+            startWcs = this.view.screenToWorld(startCanvas)
+
+            previewEl = document.createElement('div')
+            previewEl.className = 'ml-jig-preview-rect'
+            this.view.container.appendChild(previewEl)
+          }
+
+          const mouseMove = (e: MouseEvent) => {
+            if (e.buttons !== 1) return
+            if (!startWcs || !previewEl || !startCanvas) return
+
+            lastDragEvent = e
+            updateSelectionPreview(e)
+          }
+
+          const mouseUp = (e: MouseEvent) => {
+            if (e.button !== 0) return
+            if (!startWcs || !startCanvas) return
+
+            const endWcs = this.view.screenToWorld(
+              this.view.viewportToCanvas({ x: e.clientX, y: e.clientY })
+            )
+            const endCanvas = this.view.viewportToCanvas({
+              x: e.clientX,
+              y: e.clientY
+            })
+            previewEl?.remove()
+            previewEl = null
+            lastDragEvent = null
+
+            // Click selection
+            const action = this.view.getSelectionActionFromEvent(e, 'add')
+
+            if (this.view.isSelectionClick(startCanvas, endCanvas)) {
+              const picked = this.view.pick(endWcs)
+              if (picked.length > 0) {
+                this.view.applySelection([picked[0].id], action)
+              } else if (action === 'replace') {
+                this.view.selectionSet.clear()
+              }
+            } else {
+              // Box selection
+              const box = new AcGeBox2d()
+                .expandByPoint(startWcs)
+                .expandByPoint(endWcs)
+              const mode = this.view.getSelectionMode(startCanvas, endCanvas)
+              this.view.selectByBoxWithMode(box, mode, action)
+            }
+
+            selected.clear()
+            for (const id of this.view.selectionSet.ids) {
+              selected.add(id)
+            }
+
+            if (options.singleOnly && action !== 'remove') {
+              if (selected.size > 0) {
+                cleanup()
+                resolve([...selected])
+              }
+            }
+
+            startWcs = null
+            startCanvas = null
+          }
+
+          document.addEventListener('keydown', keyHandler)
+          this.view.canvas.addEventListener('mousedown', mouseDown)
+          this.view.canvas.addEventListener('mousemove', mouseMove)
+          this.view.canvas.addEventListener('mouseup', mouseUp)
+          this.view.canvas.addEventListener('contextmenu', contextMenuHandler)
+          this.view.events.viewChanged.addEventListener(onViewChanged)
+          this.view.events.viewResize.addEventListener(onViewChanged)
+        }),
+      value =>
+        new AcEdPromptSelectionResult(
+          AcEdPromptStatus.OK,
+          new AcEdSelectionSet(value)
+        ),
+      status => new AcEdPromptSelectionResult(status),
+      { none: false }
+    )
+  }
+
+  /**
+   * Prompts the user to select a single entity.
+   *
+   * Selection is performed by clicking in the view and validating the first
+   * hit-tested entity under the cursor. The picked entity may be rejected when
+   * it belongs to a locked layer or does not satisfy the prompt's allowed-class
+   * filter, in which case the rejection message is shown and the prompt remains
+   * active. Keywords and `AllowNone` behavior are also supported.
+   *
+   * @param options - Entity prompt options controlling filtering, messaging, and keywords
+   * @returns A prompt result containing the selected entity id, picked point,
+   * cancel status, or keyword
+   */
+  async getEntity(
+    options: AcEdPromptEntityOptions
+  ): Promise<AcEdPromptEntityResult> {
+    let pickedPoint: AcGePoint3dLike | undefined
+    return this.executePrompt(
+      () =>
+        new Promise<string | null>((resolve, reject) => {
+          this.active = true
+          this.entitySelectionActive = true
+          const keywordSession = this.startKeywordSession(options, true)
+          const floatingMessage = new AcEdFloatingMessage(this.view, {
+            parent: this.view.canvas,
+            message: options.message
+          })
+          if (!keywordSession) {
+            this._commandLine.setPrompt(options.message)
+          }
+          let settled = false
+          const cleanup = () => {
+            if (settled) return
+            settled = true
+            this.active = false
+            this.entitySelectionActive = false
+            options.jig?.end()
+            document.removeEventListener('keydown', keyHandler)
+            this.view.canvas.removeEventListener('mousedown', mouseDownHandler)
+            this.view.canvas.removeEventListener('click', clickHandler)
+            this.view.canvas.removeEventListener(
+              'contextmenu',
+              contextMenuHandler
+            )
+            floatingMessage?.dispose()
+            keywordSession?.cancel()
+            this._commandLine.clear()
+          }
+
+          keywordSession?.promise.then(keyword => {
+            if (settled) return
+            if (!keyword) {
+              cleanup()
+              reject(new Error('cancelled'))
+              return
+            }
+            cleanup()
+            reject(new AcEdKeywordInputError(keyword))
+          })
+
+          const mouseDownHandler = (e: MouseEvent) => {
+            if (e.button === 2) {
+              if (this.shouldUseRightClickEnter() && options.allowNone) {
+                e.preventDefault()
+                cleanup()
+                resolve(null)
+              }
+              return
+            }
+          }
+
+          /** Mouse click → try select entity */
+          const clickHandler = (e: MouseEvent) => {
+            if (e.button !== 0) return
+
+            const pos = this.view.screenToWorld(
+              this.view.viewportToCanvas({ x: e.clientX, y: e.clientY })
+            )
+            const picked = this.view.pick(pos, undefined, true)
+
+            // Clicked empty space
+            if (picked.length == 0) {
+              this._commandLine.showMessage(options.rejectMessage, 'warning')
+              return
+            }
+
+            const entity = this.getEntityById(picked[0].id)
+            if (!entity) {
+              this._commandLine.showMessage(options.rejectMessage, 'warning')
+              return
+            }
+
+            if (
+              !options.allowObjectOnLockedLayer &&
+              this.isEntityOnLockedLayer(entity)
+            ) {
+              this._commandLine.showMessage(options.rejectMessage, 'warning')
+              return
+            }
+
+            if (!this.isEntityClassAllowed(entity, options)) {
+              this._commandLine.showMessage(options.rejectMessage, 'warning')
+              return
+            }
+
+            pickedPoint = { x: pos.x, y: pos.y, z: 0 }
+            cleanup()
+            resolve(picked[0].id)
+          }
+
+          /** Keyboard handling */
+          const keyHandler = (e: KeyboardEvent) => {
+            if (e.key === 'Escape') {
+              cleanup()
+              reject(new Error('cancelled'))
+              return
+            }
+
+            if (e.key === 'Enter' && options.allowNone) {
+              cleanup()
+              resolve(null)
+            }
+          }
+
+          const contextMenuHandler = (e: MouseEvent) => {
+            if (this.shouldUseRightClickEnter()) {
+              e.preventDefault()
+            }
+          }
+
+          document.addEventListener('keydown', keyHandler)
+          this.view.canvas.addEventListener('mousedown', mouseDownHandler)
+          this.view.canvas.addEventListener('click', clickHandler)
+          this.view.canvas.addEventListener('contextmenu', contextMenuHandler)
+        }),
+      value =>
+        new AcEdPromptEntityResult(
+          AcEdPromptStatus.OK,
+          value || undefined,
+          pickedPoint
+        ),
+      status => new AcEdPromptEntityResult(status),
+      { none: false }
+    )
+  }
+
+  /**
+   * Prompt the user to specify a rectangular box by selecting two corners.
+   * Each corner may be specified by clicking on the canvas or typing "x,y".
+   * A live HTML overlay rectangle previews the box as the user moves the mouse.
+   *
+   * The box prompt is implemented as two chained point prompts. Keywords from
+   * the original box prompt are copied into each corner prompt so the caller
+   * sees a consistent interaction model across both stages.
+   *
+   * @param options - Box prompt options controlling corner messages, preview behavior, and keywords
+   * @returns A prompt result containing the final 2D box, cancel status, or keyword
+   */
+  async getBox(options: AcEdPromptBoxOptions): Promise<AcEdPromptBoxResult> {
+    return this.executePrompt(
+      async () => {
+        // Get first point
+        const message1 =
+          options.firstCornerMessage ||
+          AcApI18n.t('main.inputManager.firstCorner')
+        const options1 = new AcEdPromptPointOptions(message1)
+        this.copyKeywords(options, options1)
+        options1.useDashedLine = options.useDashedLine
+        options1.useBasePoint = options.useBasePoint
+        options1.disableOSnap = options.disableOSnap
+        const p1Result = await this.getPoint(options1)
+        if (p1Result.status !== AcEdPromptStatus.OK) {
+          return new AcEdPromptBoxResult(
+            p1Result.status,
+            undefined,
+            p1Result.stringResult
+          )
+        }
+        const p1 = p1Result.value!
+        const cwcsP1 = this.view.worldToScreen(p1)
+
+        // Create preview rectangle
+        const previewEl = document.createElement('div')
+        previewEl.className = 'ml-jig-preview-rect'
+        this.view.container.appendChild(previewEl)
+
+        const cleanup = () => {
+          previewEl.remove()
+        }
+
+        const drawPreview = (pos: AcGePoint2dLike) => {
+          const cwcsP2 = this.view.worldToScreen(pos)
+          const left = Math.min(cwcsP2.x, cwcsP1.x)
+          const top = Math.min(cwcsP2.y, cwcsP1.y)
+          const width = Math.abs(cwcsP2.x - cwcsP1.x)
+          const height = Math.abs(cwcsP2.y - cwcsP1.y)
+
+          Object.assign(previewEl.style, {
+            left: `${left}px`,
+            top: `${top}px`,
+            width: `${width}px`,
+            height: `${height}px`
+          })
+        }
+
+        // Second point
+        const message2 =
+          options.secondCornerMessage ||
+          AcApI18n.t('main.inputManager.secondCorner')
+        const options2 = new AcEdPromptPointOptions(message2)
+        this.copyKeywords(options, options2)
+        options2.useDashedLine = options.useDashedLine
+        options2.useBasePoint = options.useBasePoint
+        options2.disableOSnap = options.disableOSnap
+        const p2 = await this.getPointInternal(options2, cleanup, drawPreview)
+
+        const box = new AcGeBox2d().expandByPoint(p1).expandByPoint(p2)
+        return new AcEdPromptBoxResult(AcEdPromptStatus.OK, box)
+      },
+      value => value,
+      status => new AcEdPromptBoxResult(status)
+    )
+  }
+
+  /**
+   * Shared point input logic used by getPoint() and getBox(). Accepts "x,y"
+   * typed input OR mouse click.
+   *
+   * This helper optionally wires extra cleanup and preview callbacks so
+   * higher-level workflows can overlay additional temporary graphics while
+   * reusing the same point acquisition behavior.
+   *
+   * @param options - Point prompt options controlling the interaction
+   * @param cleanup - Optional callback invoked when the point prompt ends
+   * @param drawPreview - Optional callback invoked as the cursor moves for live preview rendering
+   * @returns A promise that resolves to the chosen point
+   */
+  private async getPointInternal(
+    options: AcEdPromptPointOptions,
+    cleanup?: () => void,
+    drawPreview?: AcEdFloatingInputDrawPreviewCallback
+  ) {
+    const scriptedValue = this.tryGetScriptedPoint(options)
+    if (scriptedValue != null) {
+      cleanup?.()
+      return Promise.resolve(scriptedValue)
+    }
+
+    const getDynamicValue = (pos: AcGePoint2dLike) => {
+      return {
+        value: { x: pos.x, y: pos.y, z: 0 },
+        raw: {
+          x: this.formatNumber(pos.x, 'point'),
+          y: this.formatNumber(pos.y, 'point')
+        }
+      }
+    }
+
+    const handler = new AcEdPointHandler(options)
+    return this.makeFloatingInputPromise<AcGePoint3dLike>({
+      inputCount: 2,
+      promptOptions: options,
+      disableOSnap: options.disableOSnap,
+      cleanup,
+      handler,
+      getDynamicValue,
+      drawPreview
+    })
+  }
+
+  /**
+   * Attempts to consume one scripted input and parse it as a point.
+   * Supported forms: "x,y", "x,y,z", or "x y".
+   *
+   * Successful scripted points also update `lastPoint` so subsequent prompts
+   * that rely on prior geometric context behave the same way as with manual
+   * point picking.
+   *
+   * @param options - Point prompt options used to validate the scripted coordinates
+   * @returns Parsed point value, or `undefined` when no scripted token is queued
+   * @throws Error if a queued scripted token cannot be parsed as a valid point
+   */
+  private tryGetScriptedPoint(
+    options: AcEdPromptPointOptions
+  ): AcGePoint3dLike | undefined {
+    const token = this.dequeueScriptInput()
+    if (token === undefined) return undefined
+
+    const trimmed = token.trim()
+    if (!trimmed && options.allowNone) {
+      throw new AcEdNoneInputError()
+    }
+
+    const handler = new AcEdPointHandler(options)
+    const value = handler.parseCommandLine(
+      token,
+      this.resolvePointInputContext(options)
+    )
+    if (value != null) {
+      this.lastPoint = { x: value.x, y: value.y }
+      return value
+    }
+
+    this.tryResolveScriptedKeyword(trimmed, options)
+    throw new Error(`Invalid point input '${token}'`)
+  }
+
+  /**
+   * Throws {@link AcEdKeywordInputError} when a scripted token matches a keyword.
+   */
+  private tryResolveScriptedKeyword(
+    token: string,
+    options?: AcEdPromptOptions<unknown>
+  ) {
+    if (!token || !options?.keywords) return
+    const keyword = options.keywords.findByName(token)
+    if (keyword) {
+      throw new AcEdKeywordInputError(keyword.globalName)
+    }
+  }
+
+  /**
+   * Attempts to consume one scripted input and parse it with the supplied handler.
+   *
+   * Scripted input is used to emulate command-line entry in automated or
+   * replayed workflows. This helper keeps the parsing path consistent with
+   * interactive input by delegating to the same handler implementation used by
+   * the floating-input UI.
+   *
+   * @typeParam T - Parsed value type
+   * @param handler - Input handler used to parse the queued token
+   * @returns Parsed value, or `undefined` when no scripted token is available
+   * @throws Error if a queued token exists but fails validation
+   */
+  private tryGetScriptedValue<T>(
+    handler: AcEdInputHandler<T>,
+    options?: AcEdPromptOptions<unknown>
+  ): T | undefined {
+    const token = this.dequeueScriptInput()
+    if (token === undefined) return undefined
+
+    const trimmed = token.trim()
+    if (
+      !trimmed &&
+      options &&
+      'allowNone' in options &&
+      (options as { allowNone: boolean }).allowNone
+    ) {
+      throw new AcEdNoneInputError()
+    }
+
+    if (handler instanceof AcEdStringHandler) {
+      this.tryResolveScriptedKeyword(trimmed, options)
+      const stringValue = handler.parse(token)
+      if (stringValue != null) return stringValue
+      throw new Error(`Invalid scripted input '${token}'`)
+    }
+
+    const value = this.parseCommandLineInput(
+      token,
+      handler,
+      handler instanceof AcEdPointHandler ? 2 : 1,
+      (options ?? new AcEdPromptOptions('')) as AcEdPromptOptions<T>
+    )
+    if (value != null) {
+      return value as T
+    }
+
+    this.tryResolveScriptedKeyword(trimmed, options)
+    throw new Error(`Invalid scripted input '${token}'`)
+  }
+
+  /**
+   * Attempts to consume one scripted numeric token.
+   *
+   * This is a thin specialization of {@link tryGetScriptedValue} that narrows
+   * the accepted handler types to those used by numeric-style prompts.
+   *
+   * @param handler - Numeric handler used to parse the queued token
+   * @returns Parsed numeric value, or `undefined` when no scripted token is queued
+   */
+  private tryGetScriptedNumber(
+    handler: AcEdNumericalHandler | AcEdAngleHandler,
+    options?: AcEdPromptOptions<unknown>
+  ): number | undefined {
+    return this.tryGetScriptedValue(handler, options)
+  }
+
+  /**
+   * Removes and returns the next queued scripted input token.
+   *
+   * @returns The next scripted token, or `undefined` when the queue is empty
+   */
+  private dequeueScriptInput() {
+    if (!this._scriptInputs.length) return undefined
+    return this._scriptInputs.shift()
+  }
+
+  /**
+   * Returns whether an unknown error value represents prompt cancellation.
+   *
+   * Prompt flows normalize cancellation to a regular `Error` with the message
+   * `'cancelled'`. This helper keeps the outer result-conversion code concise
+   * and consistent across prompt types.
+   *
+   * @param error - Unknown error value thrown from an input workflow
+   * @returns `true` if the error represents prompt cancellation
+   */
+  private isPromptCancelled(error: unknown): boolean {
+    return error instanceof Error && error.message === 'cancelled'
+  }
+
+  /**
+   * Returns whether an unknown error value represents PromptStatus.None.
+   *
+   * @param error - Unknown error value thrown from an input workflow
+   * @returns `true` if the error represents "no input" confirmation
+   */
+  private isPromptNone(error: unknown): boolean {
+    return error instanceof AcEdNoneInputError
+  }
+
+  /**
+   * Reads SHORTCUTMENU value from current working database.
+   *
+   * @returns Normalized 0..3 shortcut-menu mode
+   */
+  private getShortcutMenuMode(): number {
+    const db = acdbHostApplicationServices().workingDatabase
+    const raw = AcDbSysVarManager.instance().getVar(
+      AcDbSystemVariables.SHORTCUTMENU,
+      db
+    )
+    const value = Math.trunc(Number(raw))
+    if (Number.isNaN(value)) return 0
+    const normalized = value & 0x3
+    return normalized
+  }
+
+  /**
+   * Resolves right-click behavior for current prompt session.
+   *
+   * SHORTCUTMENU:
+   * 0 => always Enter
+   * 1 => Enter in command, menu when idle
+   * 2 => menu in command
+   * 3 => always menu
+   */
+  private shouldUseRightClickEnter() {
+    const mode = this.getShortcutMenuMode()
+    if (mode === 0) return true
+    if (mode === 1) return this.active
+    return false
+  }
+
+  /**
+   * Synchronizes the stored modifier-key snapshot with a DOM keyboard event.
+   *
+   * Floating preview rendering depends on modifier state for behaviors such as
+   * temporary mode switches. This helper updates the cached modifier snapshot
+   * and reports whether anything actually changed so callers can avoid
+   * unnecessary preview refreshes.
+   *
+   * @param e - Keyboard-like event carrying modifier-key flags
+   * @returns `true` if any modifier flag changed; otherwise `false`
+   */
+  private updateModifierStateFromEvent(e: {
+    ctrlKey?: boolean
+    shiftKey?: boolean
+    altKey?: boolean
+    metaKey?: boolean
+  }) {
+    const next: AcEdInputModifiers = {
+      ctrlKey: !!e.ctrlKey,
+      shiftKey: !!e.shiftKey,
+      altKey: !!e.altKey,
+      metaKey: !!e.metaKey
+    }
+
+    const prev = this._modifierState
+    const changed =
+      prev.ctrlKey !== next.ctrlKey ||
+      prev.shiftKey !== next.shiftKey ||
+      prev.altKey !== next.altKey ||
+      prev.metaKey !== next.metaKey
+
+    if (changed) {
+      this._modifierState = next
+    }
+    return changed
+  }
+
+  /**
+   * Handles the sticky Ctrl toggle used by certain jig interactions.
+   *
+   * Instead of tracking Ctrl as a purely held modifier, some commands treat a
+   * Ctrl key press as a persistent toggle. This helper flips that toggle on the
+   * first non-repeating keydown event for the Control key.
+   *
+   * @param e - Keyboard event to inspect
+   * @returns `true` if the toggle state changed and previews should refresh
+   */
+  private handleCtrlToggleKey(e: KeyboardEvent) {
+    if (e.key !== 'Control' || e.repeat) return false
+    if (e.type !== 'keydown') return false
+    this._ctrlArcFlip = !this._ctrlArcFlip
+    return true
+  }
+
+  /**
+   * Extracts cross-prompt defaults from a prompt options object.
+   *
+   * Not every prompt type exposes the same optional properties, but the
+   * floating-input pipeline needs a normalized shape for values such as base
+   * point, dashed-baseline behavior, jig, and base angle. This helper performs
+   * those property-existence checks in one place.
+   *
+   * @typeParam T - Value type produced by the prompt
+   * @param options - Prompt options to normalize
+   * @returns A normalized object containing only the floating-input defaults it understands
+   */
+  private resolvePromptDefaults<T>(options: AcEdPromptOptions<T>) {
+    const hasBasePoint = 'basePoint' in options
+    const hasUseBasePoint = 'useBasePoint' in options
+    const hasUseDashedLine = 'useDashedLine' in options
+    const hasBaseAngle = 'baseAngle' in options
+
+    const basePoint =
+      hasBasePoint && options.basePoint
+        ? (options.basePoint as unknown as AcGePoint2dLike)
+        : undefined
+    const useBasePoint = hasUseBasePoint ? options.useBasePoint : false
+    const showBaseLineOnly = hasUseDashedLine ? !options.useDashedLine : false
+    const baseAngle = hasBaseAngle ? (options.baseAngle as number) : undefined
+
+    return {
+      message: options.message,
+      jig: options.jig,
+      basePoint,
+      useBasePoint,
+      showBaseLineOnly,
+      baseAngle
+    }
+  }
+
+  /**
+   * Runs a floating-input prompt and resolves it to a parsed value.
+   *
+   * This is the core interaction primitive used by most non-selection prompts.
+   * It wires together command-line keyword handling, floating input creation,
+   * validation, preview refreshes, jig updates, cancellation handling, and
+   * cleanup. The method guarantees that temporary UI and event listeners are
+   * torn down no matter how the prompt completes.
+   *
+   * @typeParam T - Value type produced by the prompt
+   * @param options - Configuration describing how the floating prompt should parse,
+   * validate, preview, and commit its value
+   * @returns A promise that resolves with the committed value or rejects on cancel/keyword
+   */
+  private async makeFloatingInputPromise<T>(options: {
+    promptOptions: AcEdPromptOptions<T>
+    inputCount?: AcEdFloatingInputBoxCount
+    disableOSnap?: boolean
+    handler: AcEdInputHandler<T>
+    cleanup?: () => void
+    allowPrompt?: boolean
+    getDynamicValue: AcEdFloatingInputDynamicValueCallback<T>
+    drawPreview?: AcEdFloatingInputDrawPreviewCallback
+    onCommit?: AcEdFloatingInputCommitCallback<T>
+    onFloatingInputCreated?: (input: AcEdFloatingInput<T>) => void
+  }): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      this.active = true
+      this.entitySelectionActive = false
+      let settled = false
+      const validate = (raw: AcEdFloatingInputRawData) => {
+        const value = options.handler.parse(raw.x, raw.y)
+        return {
+          isValid: value != null,
+          value: value ?? undefined
+        }
+      }
+
+      const promptDefaults = this.resolvePromptDefaults(options.promptOptions)
+      const promptInputSession = this.startPromptInputSession(
+        options.promptOptions,
+        options.handler,
+        options.inputCount ?? 1,
+        true
+      )
+
+      let basePoint: AcGePoint2dLike | undefined = undefined
+      if (promptDefaults.useBasePoint && promptDefaults.basePoint) {
+        basePoint = promptDefaults.basePoint
+      }
+
+      const orthoReferencePoint =
+        promptDefaults.useBasePoint && promptDefaults.basePoint
+          ? promptDefaults.basePoint
+          : (this.lastPoint ?? undefined)
+      const allowNone =
+        'allowNone' in options.promptOptions
+          ? (options.promptOptions as { allowNone: boolean }).allowNone
+          : false
+      const defaultBehavior = this.resolvePromptDefaultValue(
+        options.promptOptions
+      )
+      const floatingInput = new AcEdFloatingInput(this.view, {
+        parent: this.view.canvas,
+        inputCount: options.inputCount,
+        message: promptDefaults.message,
+        disableOSnap: options.disableOSnap,
+        showBaseLineOnly: promptDefaults.showBaseLineOnly,
+        basePoint,
+        orthoReferencePoint,
+        baseAngle: promptDefaults.baseAngle,
+        allowPrompt: options.allowPrompt !== false,
+        allowNone,
+        useDefaultValue: defaultBehavior.useDefaultValue,
+        defaultValue: defaultBehavior.defaultValue,
+        validate: validate,
+        getDynamicValue: options.getDynamicValue,
+        drawPreview: (pos: AcGePoint2dLike) => {
+          if (promptDefaults.jig) {
+            const defaults = options.getDynamicValue(pos)
+            promptDefaults.jig.update(defaults.value)
+            promptDefaults.jig.render()
+          }
+          options.drawPreview?.(pos)
+        },
+        onCommit: (val: T, pos?: AcGePoint2dLike) => {
+          let result = false
+          if (!options.onCommit || options.onCommit(val, pos)) {
+            resolver(val)
+            result = true
+          }
+          if (result && floatingInput.lastPoint) {
+            this.lastPoint = {
+              x: floatingInput.lastPoint.x,
+              y: floatingInput.lastPoint.y
+            }
+          }
+          return result
+        },
+        onCancel: () => rejector(),
+        onNone: () => noneRejector()
+      })
+      options.onFloatingInputCreated?.(floatingInput)
+      const cleanup = () => {
+        if (settled) return
+        settled = true
+        this.active = false
+        this.entitySelectionActive = false
+        options.cleanup?.()
+        promptDefaults.jig?.end()
+        document.removeEventListener('keydown', escHandler)
+        document.removeEventListener('keydown', modifierHandler)
+        document.removeEventListener('keyup', modifierHandler)
+        this.view.canvas.removeEventListener('contextmenu', contextMenuHandler)
+        floatingInput.dispose()
+        promptInputSession.cancel()
+        this._commandLine.clear()
+      }
+
+      const resolver = (value: T) => {
+        cleanup()
+        resolve(value)
+      }
+
+      const rejector = (err?: Error) => {
+        cleanup()
+        reject(err ?? new Error('cancelled'))
+      }
+
+      const noneRejector = () => {
+        rejector(new AcEdNoneInputError())
+      }
+
+      const keywordRejector = (keyword: string) => {
+        rejector(new AcEdKeywordInputError(keyword))
+      }
+
+      const escHandler = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          rejector()
+        }
+      }
+      const modifierHandler = (e: KeyboardEvent) => {
+        const toggled = this.handleCtrlToggleKey(e)
+        const changed = this.updateModifierStateFromEvent(e)
+        if (toggled || changed) {
+          floatingInput.requestPreviewRefresh()
+        }
+      }
+      const contextMenuHandler = (e: MouseEvent) => {
+        if (!this.shouldUseRightClickEnter()) return
+        e.preventDefault()
+        noneRejector()
+      }
+      document.addEventListener('keydown', escHandler)
+      document.addEventListener('keydown', modifierHandler)
+      document.addEventListener('keyup', modifierHandler)
+      this.view.canvas.addEventListener('contextmenu', contextMenuHandler)
+      // showAt() expects viewport coordinates; curMousePos is canvas-local.
+      floatingInput.showAt(this.view.canvasToViewport(this.view.curMousePos))
+
+      promptInputSession.promise.then(result => {
+        if (settled) return
+        switch (result.kind) {
+          case 'value':
+            if (options.handler instanceof AcEdPointHandler) {
+              const point = result.value as unknown as AcGePoint3dLike
+              if (
+                point &&
+                Number.isFinite(point.x) &&
+                Number.isFinite(point.y)
+              ) {
+                this.lastPoint = { x: point.x, y: point.y }
+              }
+            }
+            resolver(result.value)
+            break
+          case 'keyword':
+            keywordRejector(result.keyword)
+            break
+          case 'none':
+            if (allowNone) {
+              noneRejector()
+            } else {
+              rejector()
+            }
+            break
+        }
+      })
+    })
+  }
+}

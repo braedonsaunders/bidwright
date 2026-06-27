@@ -1,0 +1,232 @@
+import { AcGePoint2dLike } from '@mlightcad/data-model'
+
+/**
+ * Supported marker shapes.
+ */
+export type AcEdMarkerType = 'circle' | 'triangle' | 'rect' | 'diamond' | 'x'
+
+/**
+ * Represents a single marker displayed in screen coordinates.
+ *
+ * A marker is a small shape (circle, triangle, or rectangle) rendered using DOM elements.
+ * Its appearance is determined by type, size, and color.
+ *
+ * The marker:
+ * - Is absolutely positioned on the screen.
+ * - Cannot receive pointer events.
+ * - Automatically injects required CSS once globally.
+ */
+export class AcEdMarker {
+  /** DOM element representing the marker */
+  private _el: HTMLElement
+  /** Host element where the marker DOM is mounted */
+  private _host: HTMLElement
+
+  /** Size (width = height) of the marker in pixels */
+  private _size: number
+
+  /** Marker shape type */
+  private _type: AcEdMarkerType
+
+  /** Marker stroke or fill color */
+  private _color: string
+
+  /**
+   * Creates a new OSNAP marker instance.
+   *
+   * @param type - Shape type of the marker (`circle`, `triangle`, `rect`)
+   * @param size - Size of the marker (width/height in px; triangle uses font-size)
+   * @param color - Marker color (CSS color string)
+   * @param host - Host container where marker DOM is mounted and positioned
+   */
+  constructor(
+    type: AcEdMarkerType = 'rect',
+    size: number = 12,
+    color: string = 'var(--ml-ui-canvas-line, green)',
+    host: HTMLElement
+  ) {
+    this._type = type
+    this._size = size
+    this._color = color
+    this._host = host
+
+    // Ensure CSS is injected once
+    AcEdMarker.injectCSS()
+
+    // Markers are now anchored to an explicit host (usually view.container),
+    // so they stay inside the current view instead of global viewport space.
+    const hostPosition = getComputedStyle(this._host).position
+    if (hostPosition === 'static') {
+      this._host.style.position = 'relative'
+    }
+
+    // Create marker DOM
+    this._el = document.createElement('div')
+    this._el.classList.add('ml-marker')
+    this._el.style.color = color
+
+    this.applyShape()
+
+    // Attach to host
+    this._host.appendChild(this._el)
+  }
+
+  /**
+   * Gets the current marker color.
+   */
+  public get color(): string {
+    return this._color
+  }
+
+  /**
+   * Sets marker color and updates DOM immediately.
+   */
+  public set color(value: string) {
+    this._color = value
+    this._el.style.color = value
+  }
+
+  /**
+   * Gets the current marker type.
+   */
+  public get type(): AcEdMarkerType {
+    return this._type
+  }
+
+  /**
+   * Sets the marker type and updates DOM shape instantly.
+   */
+  public set type(value: AcEdMarkerType) {
+    this._type = value
+    this.applyShape()
+  }
+
+  /**
+   * Injects required CSS into the document.
+   * Ensures that CSS is only injected one time.
+   */
+  private static injectCSS() {
+    if (document.getElementById('ml-marker-style')) return
+
+    const style = document.createElement('style')
+    style.id = 'ml-marker-style'
+    style.textContent = `
+      .ml-marker {
+        position: absolute;
+        pointer-events: none;
+        transform: translate(-50%, -50%);
+        z-index: 1;
+        box-sizing: border-box;
+      }
+    
+      .ml-marker-circle {
+        border-radius: 50%;
+        border: 2px solid currentColor;
+        background: transparent;
+      }
+    
+      .ml-marker-rect {
+        border: 2px solid currentColor;
+        background: transparent;
+      }
+    
+      .ml-marker-triangle {
+        background: currentColor;
+        clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
+        /* Centroid of the upward triangle is 2/3 of the height from the apex. */
+        transform: translate(-50%, -66.6667%);
+      }
+    
+      .ml-marker-diamond {
+        border: 2px solid currentColor;
+        background: transparent;
+        transform: translate(-50%, -50%) rotate(45deg);
+      }
+    
+      .ml-marker-x::before,
+      .ml-marker-x::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 100%;
+        height: 2px;
+        background: currentColor;
+        transform-origin: center;
+      }
+    
+      .ml-marker-x::before {
+        transform: translate(-50%, -50%) rotate(45deg);
+      }
+    
+      .ml-marker-x::after {
+        transform: translate(-50%, -50%) rotate(-45deg);
+      }
+    `
+
+    document.head.appendChild(style)
+  }
+
+  /**
+   * Applies the appropriate CSS class and size properties
+   * according to the marker's chosen shape type.
+   */
+  private applyShape() {
+    // Reset
+    this._el.className = 'ml-marker'
+    this._el.style.width = ''
+    this._el.style.height = ''
+    this._el.style.fontSize = ''
+    this._el.style.transform = 'translate(-50%, -50%)'
+
+    switch (this._type) {
+      case 'circle':
+        this._el.classList.add('ml-marker-circle')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+
+      case 'rect':
+        this._el.classList.add('ml-marker-rect')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+
+      case 'triangle':
+        this._el.classList.add('ml-marker-triangle')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+
+      case 'diamond':
+        this._el.classList.add('ml-marker-diamond')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+
+      case 'x':
+        this._el.classList.add('ml-marker-x')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+    }
+  }
+
+  /**
+   * Sets the screen position of the marker.
+   *
+   * @param pos - Position in screen coordinate in pixels
+   */
+  public setPosition(pos: AcGePoint2dLike) {
+    this._el.style.left = `${pos.x}px`
+    this._el.style.top = `${pos.y}px`
+  }
+
+  /**
+   * Removes the marker from DOM and cleans up resources.
+   * Should be called when the marker is no longer needed.
+   */
+  public destroy() {
+    this._el.remove()
+  }
+}

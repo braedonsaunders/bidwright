@@ -1,0 +1,437 @@
+import {
+  type AcGiHatchPatternLine,
+  AcGiSubEntityTraits,
+  log
+} from '@mlightcad/data-model'
+import * as THREE from 'three'
+
+import {
+  AcTrGradientBounds,
+  createGradientHatchShaderMaterial,
+  normalizeGradientBounds
+} from './AcTrGradientHatchShaders'
+import {
+  AcTrPatternLine,
+  createHatchPatternShaderMaterial
+} from './AcTrHatchPatternShaders'
+import { AcTrMaterialManager, AcTrMaterialSide } from './AcTrMaterialManager'
+import {
+  getMaterialMetadata,
+  setMaterialMetadata
+} from './AcTrMaterialMetadata'
+
+export interface AcTrFillMaterialOptions {
+  rebaseOffset: THREE.Vector2
+  gradientBounds?: AcTrGradientBounds
+  /**
+   * Which face the rasteriser keeps.  Defaults to `'front'`.
+   *
+   * Mirrored block references (negative-determinant transforms) reverse
+   * triangle winding, causing `FrontSide` fills to be culled.  The
+   * batching layer requests `'back'` for those meshes so the culler
+   * keeps the (now CW-wound) triangles — with zero fillrate overhead.
+   */
+  side?: AcTrMaterialSide
+}
+
+/**
+ * Material manager for hatch and solid fill entities.
+ *
+ * Responsibilities:
+ * - Returns THREE.MeshBasicMaterial for solid fills or empty/unsupported hatches.
+ * - Returns custom shader materials for patterned and gradient hatches.
+ * - Caches MeshBasicMaterials and hatch shader materials.
+ * - Provides `clear()` method to dispose of all cached materials.
+ */
+export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMaterialOptions> {
+  /**
+   * Returns a `BackSide` variant of the given fill material.
+   *
+   * The variant is cached under a separate key so that mirrored and
+   * non-mirrored fills land in different batches (same draw-call cost
+   * per fragment, no `DoubleSide` overhead).
+   */
+  getBackSideVariant(material: THREE.Material): THREE.Material {
+    const metadata = getMaterialMetadata(material)
+    const key = metadata.materialKey
+    if (!key) return material
+
+    // Already a back-side material — return as-is (idempotent).
+    if (metadata.side === 'back') return material
+
+    const traits = this.keyToTraits[key]
+    if (!traits) return material
+
+    // `keyToTraits` stores the full options alongside traits, so we
+    // preserve the original draw-order tier and only override `side`.
+    return this.getMaterial(traits, { ...traits, side: 'back' })
+  }
+
+  /**
+   * Fill meshes at the linework tier (`drawOrder >= 0`) follow
+   * layout-background ACI-7 inversion so content stays legible. This covers
+   * MText glyphs and wide polylines — meshes that are rasterized as
+   * fill but represent linework.
+   *
+   * Patterned hatches at the hatch tier (`drawOrder < 0` with non-empty
+   * `definitionLines`) also invert: their visible component is the
+   * pattern lines themselves, which must stay legible against both
+   * light and dark canvases.
+   *
+   * Solid foreground hatches are deliberately excluded from this
+   * branch — they go through `shouldTrackBackground` instead so they
+   * fuse with the canvas bg (matching AutoCAD's reference rendering;
+   * see `images-ex/hatch-bg-bug-refact-lee/autocad/tower-*.png`).
+   */
+  protected shouldTrackForeground(
+    traits: AcGiSubEntityTraits,
+    _options: AcTrFillMaterialOptions
+  ): boolean {
+    if (!traits.color.isForeground) return false
+    const drawOrder = traits.drawOrder ?? 0
+    if (drawOrder >= 0) return true
+    const style = traits.fillType
+    const isPatterned = !style.gradient && !!style.definitionLines?.length
+    return isPatterned
+  }
+
+  /**
+   * Solid foreground hatch fills (ACI 7, `drawOrder < 0`, no pattern,
+   * no gradient) follow the canvas background colour rather than carry
+   * an absolute RGB. AutoCAD renders them as if they were painted with
+   * the paper colour, so they fuse into both light and dark canvases
+   * and only the overlaid wireframe remains visible.
+   *
+   * Hatches with an explicit RGB (including a literal truecolor white
+   * 0xFFFFFF) fall outside this rule — `traits.color.isForeground` is
+   * only true for the ACI 7 / foreground pseudo-colour, so a DWG
+   * author who picked `255,255,255` via the truecolor picker still
+   * gets a literal white hatch.
+   */
+  protected shouldTrackBackground(
+    traits: AcGiSubEntityTraits,
+    _options: AcTrFillMaterialOptions
+  ): boolean {
+    if (!traits.color.isForeground) return false
+    if ((traits.drawOrder ?? 0) >= 0) return false
+    const style = traits.fillType
+    if (style.gradient) return false
+    const isSolid = !style.definitionLines || style.definitionLines.length === 0
+    return isSolid
+  }
+
+  /**
+   * Create either MeshBasicMaterial or hatch shader material
+   */
+  protected createMaterialImpl(
+    traits: AcGiSubEntityTraits,
+    options: AcTrFillMaterialOptions
+  ): THREE.Material {
+    const style = traits.fillType
+    const side = options.side ?? 'front'
+    const threeSide = side === 'back' ? THREE.BackSide : THREE.FrontSide
+    const rgb = this.shouldTrackBackground(traits, options)
+      ? this.options.currentBackgroundColor
+      : this.resolveTraitsRgb(traits)
+
+    let material: THREE.Material
+    if (style.gradient) {
+      material = this.createGradientShaderMaterial(
+        traits,
+        rgb,
+        options,
+        threeSide
+      )
+    } else if (!style.definitionLines || style.definitionLines.length < 1) {
+      material = this.createMeshBasicMaterial(rgb, threeSide)
+    } else if (
+      style.definitionLines.some(line => !this.isValidDefinitionLine(line))
+    ) {
+      log.warn(
+        'Invalid hatch pattern definition line, fallback to solid fill',
+        style
+      )
+      material = this.createMeshBasicMaterial(rgb, threeSide)
+    } else {
+      material = this.createHatchShaderMaterial(traits, rgb, options, threeSide)
+    }
+
+    // Store side in userData so getBackSideVariant can check idempotency.
+    // Draw-order metadata is stamped by the base material manager from
+    // `traits.drawOrder`.
+    setMaterialMetadata(material, {
+      side
+    })
+    return material
+  }
+
+  private createGradientShaderMaterial(
+    traits: AcGiSubEntityTraits,
+    rgb: number,
+    options: AcTrFillMaterialOptions,
+    threeSide: THREE.Side
+  ): THREE.Material {
+    return createGradientHatchShaderMaterial(
+      traits.fillType.gradient!,
+      normalizeGradientBounds(options.gradientBounds),
+      new THREE.Color(rgb),
+      threeSide
+    )
+  }
+
+  /**
+   * Create a hatch shader material and cache it
+   */
+  private createHatchShaderMaterial(
+    traits: AcGiSubEntityTraits,
+    rgb: number,
+    options: AcTrFillMaterialOptions,
+    threeSide: THREE.Side
+  ): THREE.Material {
+    const style = traits.fillType
+    const RATIO_FOR_NONDOT_PATTERN = 0.005
+    const RATIO_FOR_DOT_PATTERN = 0.05
+
+    // Get a max size to be used for all patternLines, this value will be used during
+    // glsl compile time, and it cannot be 0 (compile error) and cannot be 1 (run time warning).
+    let maxPatternSegmentCount = 2
+    style.definitionLines.forEach(definitionLine => {
+      maxPatternSegmentCount = Math.max(
+        definitionLine.dashLengths.length,
+        maxPatternSegmentCount
+      )
+    })
+
+    let currentUniformCount = 0
+
+    const patternLines: AcTrPatternLine[] = []
+    const tempCenter = new THREE.Vector2()
+    for (const hatchPatternLine of style.definitionLines) {
+      const base = new THREE.Vector2(
+        hatchPatternLine.base.x,
+        hatchPatternLine.base.y
+      ).sub(options.rebaseOffset)
+
+      const offset = new THREE.Vector2(
+        hatchPatternLine.offset.x,
+        hatchPatternLine.offset.y
+      ).rotateAround(tempCenter, -hatchPatternLine.angle)
+
+      if (offset.y === 0) {
+        log.warn('offset.y is zero, skipping pattern line')
+        continue
+      }
+
+      const numberOfDashes = hatchPatternLine.dashLengths.length
+      // Indicates the dot pattern when the dashPatterns contain only 0 and negative numbers
+      let bDotPattern = true
+      // calculates the total length of the pattern
+      let length = 0
+      for (let i = 0; i < numberOfDashes; ++i) {
+        const value = hatchPatternLine.dashLengths[i]
+        if (value > 0) {
+          bDotPattern = false
+        }
+        length += Math.abs(value)
+      }
+
+      // TODO: because we cannot (or, it's kind of hard to) draw a dot, let's draw a short dash.
+      const ratio = bDotPattern
+        ? RATIO_FOR_DOT_PATTERN
+        : RATIO_FOR_NONDOT_PATTERN
+
+      const dashLengths: number[] = []
+      let patternLength = 0
+      for (let i = 0; i < numberOfDashes; ++i) {
+        dashLengths[i] = hatchPatternLine.dashLengths[i]
+        if (dashLengths[i] === 0) {
+          dashLengths[i] = ratio * length
+        }
+        patternLength += Math.abs(dashLengths[i])
+      }
+
+      // fill 0 for extra pattern segments in case a pattern doesn't have maxPatternSegmentCount segments
+      for (let i = numberOfDashes; i < maxPatternSegmentCount; ++i) {
+        dashLengths[i] = 0
+      }
+
+      const angle = hatchPatternLine.angle
+      const patternLine = {
+        angle,
+        base,
+        offset,
+        dashLengths,
+        patternLength
+      }
+
+      currentUniformCount += 4 // angle, base, offset, patternLength
+      currentUniformCount += maxPatternSegmentCount // dashLengths, consistent with HatchPatternShader
+      currentUniformCount += 4 // patternLength
+      if (currentUniformCount > this.options.maxFragmentUniforms) {
+        log.warn(
+          'There will be warning in fragment shader when number of uniforms exceeds 1024, so extra hatch line patterns are ignored here!'
+        )
+        break
+      }
+      patternLines.push(patternLine)
+    }
+
+    const material = createHatchPatternShaderMaterial(
+      patternLines,
+      style.patternAngle,
+      AcTrMaterialManager.CameraZoomUniform,
+      new THREE.Color(rgb),
+      0,
+      threeSide
+    )
+    material.defines = {
+      MAX_PATTERN_SEGMENT_COUNT: maxPatternSegmentCount
+    }
+    return material
+  }
+
+  private createMeshBasicMaterial(
+    rgb: number,
+    side: THREE.Side
+  ): THREE.Material {
+    return new THREE.MeshBasicMaterial({ color: rgb, side })
+  }
+
+  /**
+   * Build a deterministic caching key based on traits and options.
+   *
+   * Three partitioning dimensions beyond colour/layer/pattern:
+   *
+   * - `side`: `'back'` variant goes in a separate key so mirrored
+   *   fills don't steal the front-side material of the common path.
+   * - `drawOrder`: hatch fills must not share a material instance with
+   *   line-like fill meshes (wide polylines, text glyphs) because the
+   *   batcher groups by material id and applies one `renderOrder` tier
+   *   per batch.
+   * - `_bgfill`: background-tracked fills (solid foreground hatches)
+   *   get their own partition so `changeBackground` can mutate them
+   *   in place without affecting any literal-RGB hatch that happens
+   *   to share layer + colour (e.g. a truecolor 0xFFFFFF hatch on the
+   *   same layer as an ACI 7 hatch).
+   *
+   * All suffixes are appended only when they differ from the default,
+   * keeping existing keys stable and avoiding unnecessary cache
+   * fragmentation on the common path.
+   */
+  protected buildKey(
+    traits: AcGiSubEntityTraits,
+    options: AcTrFillMaterialOptions
+  ): string {
+    const style = traits.fillType
+    const sideSuffix = options.side === 'back' ? '_back' : ''
+    const drawOrderSuffix = this.buildDrawOrderSuffix(traits)
+    const bgSuffix = this.shouldTrackBackground(traits, options)
+      ? '_bgfill'
+      : ''
+    const rgb = this.shouldTrackBackground(traits, options)
+      ? this.options.currentBackgroundColor
+      : this.resolveTraitsRgb(traits)
+    // Use color + layer + rebaseOffset + pattern info for key
+    if (style.gradient) {
+      const gradient = style.gradient
+      const bounds = normalizeGradientBounds(options.gradientBounds)
+      return [
+        'gradient',
+        traits.layer,
+        rgb,
+        gradient.name || 'LINEAR',
+        gradient.angle ?? 0,
+        gradient.shift ?? 0,
+        gradient.oneColorMode ? 1 : 0,
+        gradient.shadeTintValue ?? 0,
+        gradient.startColor ?? '',
+        gradient.endColor ?? '',
+        bounds.minX,
+        bounds.minY,
+        bounds.maxX,
+        bounds.maxY,
+        sideSuffix,
+        drawOrderSuffix
+      ].join('_')
+    }
+
+    const isSolid = !style.definitionLines || style.definitionLines.length === 0
+    if (isSolid) {
+      return `solid_${traits.layer}_${rgb}${sideSuffix}${drawOrderSuffix}${bgSuffix}`
+    }
+
+    const patternHash = style.definitionLines
+      .map(pl => {
+        if (!this.isValidDefinitionLine(pl)) {
+          return 'invalid'
+        }
+
+        const dash = pl.dashLengths!.join(',')
+        const angle = Number.isFinite(pl.angle) ? pl.angle : 0
+        const baseX = pl.base!.x!
+        const baseY = pl.base!.y!
+        const offsetX = pl.offset!.x!
+        const offsetY = pl.offset!.y!
+        return `${dash}@${angle},${baseX},${baseY},${offsetX},${offsetY}`
+      })
+      .join('|')
+
+    return [
+      'hatch',
+      traits.layer,
+      rgb,
+      style.patternAngle,
+      options.rebaseOffset.x,
+      options.rebaseOffset.y,
+      patternHash,
+      sideSuffix,
+      drawOrderSuffix
+    ].join('_')
+  }
+
+  /**
+   * Normalizes one hatch pattern definition line in-place and validates it.
+   *
+   * DXF payloads occasionally contain partial pattern-line records. To keep
+   * hatch rendering resilient, this method applies fallback defaults:
+   * - `base` missing  -> `{ x: 0, y: 0 }`
+   * - `offset` missing -> `{ x: 0, y: 0 }`
+   * - `angle` missing  -> `0`
+   *
+   * `dashLengths` must still be an array; when absent or malformed, the line is
+   * considered invalid and the caller can fall back to solid fill rendering.
+   *
+   * @param line Candidate value read from hatch pattern data.
+   * @returns `true` when the line is usable for hatch shader generation.
+   */
+  private isValidDefinitionLine(line: AcGiHatchPatternLine) {
+    if (!line || typeof line !== 'object') return false
+    const mutable = line as AcGiHatchPatternLine & {
+      angle?: unknown
+      dashLengths?: unknown
+      base?: { x?: unknown; y?: unknown } | null
+      offset?: { x?: unknown; y?: unknown } | null
+    }
+
+    if (!Array.isArray(mutable.dashLengths)) return false
+
+    mutable.base = {
+      x: this.toFiniteNumber(mutable.base?.x, 0),
+      y: this.toFiniteNumber(mutable.base?.y, 0)
+    }
+    mutable.offset = {
+      x: this.toFiniteNumber(mutable.offset?.x, 0),
+      y: this.toFiniteNumber(mutable.offset?.y, 0)
+    }
+    mutable.angle = this.toFiniteNumber(mutable.angle, 0)
+    mutable.dashLengths = mutable.dashLengths.map(item =>
+      this.toFiniteNumber(item, 0)
+    )
+
+    return true
+  }
+
+  private toFiniteNumber(value: unknown, fallback = 0): number {
+    return Number.isFinite(value) ? (value as number) : fallback
+  }
+}

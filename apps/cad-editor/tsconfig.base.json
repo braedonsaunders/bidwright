@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "es5",
+    "module": "es2020",
+    "declaration": true,
+    "declarationMap": true,
+    "allowJs": false,
+    "sourceMap": true,
+
+    /* Linting */
+    "strict": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+
+    "esModuleInterop": true,
+    "emitDecoratorMetadata": true,
+    "experimentalDecorators": true,
+    "skipLibCheck": true,
+    "downlevelIteration": true,
+    "jsx": "react-jsx",
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@mlightcad/dxf-json/types": [
+        "packages/dxf-json-converter/node_modules/@mlightcad/dxf-json/dist/esm/types/types-entry.d.ts"
+      ]
+    }
+  },
+  "ts-node": {
+    "esm": true,
+  },
+}
+ 

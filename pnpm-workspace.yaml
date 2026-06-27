@@ -1,6 +1,7 @@
 packages:
   - apps/*
   - '!apps/model-editor'
+  - '!apps/cad-editor'
   - packages/*
 
 ignoredBuiltDependencies:

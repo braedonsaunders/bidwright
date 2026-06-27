@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CAD Simple Viewer Example</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        background: #111827;
+        color: #e5e7eb;
+        height: 100vh;
+        overflow: hidden;
+      }
+
+      .app-shell {
+        display: flex;
+        width: 100vw;
+        height: 100vh;
+      }
+
+      .file-sidebar {
+        flex: 0 0 20%;
+        min-width: 220px;
+        max-width: 360px;
+        background: #0f172a;
+        border-right: 1px solid #1f2937;
+        padding: 1rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.8rem;
+        overflow: auto;
+      }
+
+      .file-sidebar-toggle {
+        display: none;
+      }
+
+      .sidebar-title {
+        font-size: 0.95rem;
+        font-weight: 600;
+        color: #93c5fd;
+      }
+
+      .sidebar-help {
+        font-size: 0.82rem;
+        color: #9ca3af;
+        line-height: 1.4;
+      }
+
+      .file-list {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+      }
+
+      .file-list-item {
+        width: 100%;
+        border: 1px solid #374151;
+        border-radius: 8px;
+        background: #1f2937;
+        color: #e5e7eb;
+        text-align: left;
+        padding: 0.65rem 0.7rem;
+        font-size: 0.88rem;
+        cursor: pointer;
+        transition: background 0.2s ease, border-color 0.2s ease;
+      }
+
+      .file-list-item:hover {
+        background: #273447;
+        border-color: #60a5fa;
+      }
+
+      .file-list-item.active {
+        border-color: #60a5fa;
+        background: #1d4f91;
+      }
+
+      .viewer-pane {
+        position: relative;
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
+        background: #111827;
+      }
+
+      .viewer-toolbar {
+        height: 48px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0 0.75rem;
+        border-bottom: 1px solid #1f2937;
+        background: #0b1220;
+      }
+
+      .toolbar-button {
+        border: 1px solid #374151;
+        border-radius: 6px;
+        background: #1f2937;
+        color: #e5e7eb;
+        padding: 0.35rem 0.7rem;
+        font-size: 0.82rem;
+        cursor: pointer;
+      }
+
+      .toolbar-button:hover {
+        background: #273447;
+      }
+
+      .toolbar-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+        background: #111827;
+      }
+
+      .viewer-canvas-area {
+        position: relative;
+        flex: 1;
+        min-height: 0;
+      }
+
+      #cad-container {
+        position: absolute;
+        inset: 0;
+      }
+
+      .empty-state {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 20;
+        pointer-events: none;
+      }
+
+      .empty-state.hidden {
+        display: none;
+      }
+
+      .open-main-button {
+        pointer-events: auto;
+        border: 1px solid #60a5fa;
+        background: #2563eb;
+        color: #ffffff;
+        border-radius: 10px;
+        padding: 0.7rem 1.2rem;
+        font-size: 0.95rem;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      .open-main-button:hover {
+        background: #1d4ed8;
+      }
+
+      #fileInputElement {
+        display: none;
+      }
+
+      @media (max-width: 960px) {
+        .app-shell {
+          flex-direction: column;
+        }
+
+        .file-sidebar {
+          flex: 0 0 auto;
+          max-width: none;
+          min-width: 0;
+          height: auto;
+          padding: 0;
+          overflow: visible;
+          border-right: none;
+          border-bottom: 1px solid #1f2937;
+        }
+
+        .sidebar-title-desktop {
+          display: none;
+        }
+
+        .file-sidebar-toggle {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          width: 100%;
+          gap: 0.75rem;
+          padding: 0.65rem 0.85rem;
+          border: none;
+          background: #0f172a;
+          color: inherit;
+          cursor: pointer;
+          text-align: left;
+        }
+
+        .file-sidebar-toggle:hover {
+          background: #111827;
+        }
+
+        .file-sidebar-toggle-label {
+          display: flex;
+          flex-direction: column;
+          gap: 0.15rem;
+          min-width: 0;
+        }
+
+        .file-sidebar-toggle-subtitle {
+          font-size: 0.75rem;
+          font-weight: 400;
+          color: #9ca3af;
+          white-space: nowrap;
+          overflow: hidden;
+          text-overflow: ellipsis;
+        }
+
+        .file-sidebar-chevron {
+          flex: 0 0 auto;
+          font-size: 0.7rem;
+          color: #9ca3af;
+          transition: transform 0.2s ease;
+        }
+
+        .file-sidebar.expanded .file-sidebar-chevron {
+          transform: rotate(180deg);
+        }
+
+        .file-sidebar-body {
+          display: none;
+          flex-direction: column;
+          gap: 0.65rem;
+          padding: 0 0.85rem 0.75rem;
+          max-height: min(42vh, 320px);
+          overflow: auto;
+        }
+
+        .file-sidebar.expanded .file-sidebar-body {
+          display: flex;
+        }
+
+        .viewer-pane {
+          flex: 1;
+          min-height: 0;
+        }
+
+        .viewer-toolbar {
+          flex-wrap: wrap;
+          height: auto;
+          min-height: 48px;
+          padding: 0.45rem 0.75rem;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="file-sidebar" id="fileSidebar">
+        <h2 class="sidebar-title sidebar-title-desktop">Predefined Files</h2>
+        <button
+          type="button"
+          class="file-sidebar-toggle"
+          id="fileSidebarToggle"
+          aria-expanded="false"
+          aria-controls="fileSidebarBody"
+        >
+          <span class="file-sidebar-toggle-label">
+            <span class="sidebar-title">Predefined Files</span>
+            <span class="file-sidebar-toggle-subtitle" id="fileSidebarSubtitle">
+              Tap to browse sample files
+            </span>
+          </span>
+          <span class="file-sidebar-chevron" aria-hidden="true">▼</span>
+        </button>
+        <div class="file-sidebar-body" id="fileSidebarBody">
+          <p class="sidebar-help">Select one file below or open a local DXF/DWG file.</p>
+          <div class="file-list" id="predefinedFileList">
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/canteen.dwg"
+          >
+            canteen.dwg
+          </button>
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/baseline-sample.dwg"
+          >
+            baseline-sample.dwg
+          </button>
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/hatch.dxf"
+          >
+            hatch.dxf
+          </button>
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/block-color.dxf"
+          >
+            block-color.dxf
+          </button>
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/lockers.dwg"
+          >
+            lockers.dwg
+          </button>
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/map-of-uae.dwg"
+          >
+            map-of-uae.dwg
+          </button>
+          <button
+            type="button"
+            class="file-list-item"
+            data-file-url="https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/data/patient-chairs.dwg"
+          >
+            patient-chairs.dwg
+          </button>
+          </div>
+        </div>
+      </aside>
+
+      <main class="viewer-pane" id="viewerPane">
+        <header class="viewer-toolbar">
+          <button type="button" class="toolbar-button" id="toolbarOpenButton">Open</button>
+          <button
+            type="button"
+            class="toolbar-button"
+            id="toolbarZoomButton"
+            disabled
+          >
+            Zoom Fit
+          </button>
+          <button
+            type="button"
+            class="toolbar-button"
+            id="toolbarZoomWindowButton"
+            disabled
+          >
+            Zoom to Window
+          </button>
+          <button type="button" class="toolbar-button" id="toolbarBgButton" disabled>
+            Switch BG
+          </button>
+          <button
+            type="button"
+            class="toolbar-button"
+            id="toolbarPickboxButton"
+            disabled
+          >
+            Set Pickbox
+          </button>
+          <button
+            type="button"
+            class="toolbar-button"
+            id="toolbarLineWeightButton"
+            disabled
+          >
+            LineWeight: On
+          </button>
+          <button
+            type="button"
+            class="toolbar-button"
+            id="toolbarExportHtmlButton"
+            disabled
+          >
+            Export HTML
+          </button>
+          <button
+            type="button"
+            class="toolbar-button"
+            id="toolbarExportPdfButton"
+            disabled
+          >
+            Export PDF
+          </button>
+        </header>
+
+        <section class="viewer-canvas-area">
+          <div class="empty-state" id="emptyState">
+            <button type="button" class="open-main-button" id="centerOpenButton">Open File</button>
+          </div>
+          <input type="file" id="fileInputElement" accept=".dxf,.dwg" />
+          <div id="cad-container"></div>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

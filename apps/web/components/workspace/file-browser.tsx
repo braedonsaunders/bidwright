@@ -64,6 +64,10 @@ const BidwrightModelEditor = dynamic(
   () => import("./editors/bidwright-model-editor").then((m) => ({ default: m.BidwrightModelEditor })),
   { ssr: false }
 );
+const BidwrightCadEditor = dynamic(
+  () => import("./editors/bidwright-cad-editor").then((m) => ({ default: m.BidwrightCadEditor })),
+  { ssr: false }
+);
 const WhiteboardEditor = dynamic(
   () => import("./editors/whiteboard-editor").then((m) => ({ default: m.WhiteboardEditor })),
   { ssr: false }
@@ -86,10 +90,6 @@ const XlsxViewer = dynamic(
 );
 const EmailViewer = dynamic(
   () => import("./viewers/email-viewer").then((m) => ({ default: m.EmailViewer })),
-  { ssr: false }
-);
-const DxfViewer = dynamic(
-  () => import("./viewers/dxf-viewer").then((m) => ({ default: m.DxfViewer })),
   { ssr: false }
 );
 const ZipViewer = dynamic(
@@ -144,8 +144,10 @@ import {
 import { BidwrightMark } from "@/components/brand-logo";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
+import { cadEditorChannelName } from "@/lib/workspace-sync";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 import type { BidwrightModelDocumentSaveMessage } from "./editors/bidwright-model-editor";
+import type { BidwrightCadDocumentSaveMessage } from "./editors/bidwright-cad-editor";
 
 /* ─── Types ─── */
 
@@ -264,6 +266,11 @@ function getTakeoffDocumentIdForItem(item: TreeItem): string | null {
 function ensureModelDocumentName(name?: string | null): string {
   const cleaned = name?.trim() || "Untitled Model";
   return cleaned.toLowerCase().endsWith(".cd") ? cleaned : `${cleaned.replace(/\.[^.]+$/, "")}.cd`;
+}
+
+function ensureCadDxfDocumentName(name?: string | null): string {
+  const cleaned = name?.trim() || "Drawing";
+  return cleaned.toLowerCase().endsWith(".dxf") ? cleaned : `${cleaned.replace(/\.[^.]+$/, "")}.dxf`;
 }
 
 function nextUntitledModelName(nodes: FileNode[]): string {
@@ -1604,6 +1611,7 @@ function DeleteFileModal({
 export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onSourceDocumentsChange }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cadEditorSyncChannelName = useMemo(() => cadEditorChannelName(projectId), [projectId]);
 
   /** Broadcast a "files changed" signal on the shared takeoff channel so
    *  the Takeoff tab (running in this window or a detached one) can refresh
@@ -2369,6 +2377,33 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [editorFileName, modelEditorFileNodeId, projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes, notifyFilesMutated]);
 
+  const handleCadDocumentSave = useCallback(async (message: BidwrightCadDocumentSaveMessage) => {
+    try {
+      const selectedNativeNode = selectedItem?.fileNode && getFileExtension(selectedItem.fileNode.name) === "dxf"
+        ? selectedItem.fileNode
+        : undefined;
+      const messageNativeNode = message.sourceKind === "file_node" && message.documentId
+        ? userNodes.find((node) => node.id === message.documentId && getFileExtension(node.name) === "dxf")
+        : undefined;
+      const nativeNode = selectedNativeNode ?? messageNativeNode;
+      const fileName = ensureCadDxfDocumentName(nativeNode?.name ?? message.fileName ?? selectedItem?.name ?? "Drawing");
+      const file = new globalThis.File([message.dxfContent], fileName, { type: "application/dxf" });
+
+      const savedNode = nativeNode
+        ? await saveFileNodeContent(projectId, nativeNode.id, file)
+        : await uploadFile(projectId, file, selectedItem?.fileNode?.parentId ?? null);
+      if (!nativeNode) notifyFilesMutated();
+
+      setUserNodes((prev) => {
+        const exists = prev.some((node) => node.id === savedNode.id);
+        return exists ? prev.map((node) => (node.id === savedNode.id ? savedNode : node)) : [...prev, savedNode];
+      });
+      setSelectedId(savedNode.id);
+    } catch (err) {
+      showError(`Failed to save CAD drawing: ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+  }, [projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes, notifyFilesMutated]);
+
   // Reset to file tab when selection changes
   useEffect(() => {
     setPreviewTab("file");
@@ -2498,7 +2533,21 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 sourceId={ingestSourceRef?.sourceId}
               />
             )}
-            {filePreviewType === "dxf" && previewUrl && <div className="flex-1 min-h-[400px]"><DxfViewer key={previewUrl} url={previewUrl} fileName={selectedItem.name} projectId={projectId} sourceKind={ingestSourceRef?.sourceKind} sourceId={ingestSourceRef?.sourceId} /></div>}
+            {filePreviewType === "dxf" && previewUrl && (
+              <div className="flex-1 min-h-[400px]">
+                <BidwrightCadEditor
+                  key={previewUrl}
+                  fileUrl={previewUrl}
+                  fileName={selectedItem.name}
+                  projectId={projectId}
+                  documentId={ingestSourceRef?.sourceId}
+                  sourceKind={ingestSourceRef?.sourceKind}
+                  mode="preview"
+                  syncChannelName={cadEditorSyncChannelName}
+                  onSaveDocument={handleCadDocumentSave}
+                />
+              </div>
+            )}
             {filePreviewType === "zip" && previewUrl && (
               <ZipViewer
                 key={previewUrl}

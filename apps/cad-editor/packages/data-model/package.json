@@ -1,0 +1,53 @@
+{
+  "name": "@mlightcad/data-model",
+  "version": "1.9.14",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mlightcad/realdwg-web"
+  },
+  "keywords": [
+    "autocad",
+    "cad",
+    "dwg",
+    "dxf",
+    "mlight",
+    "mlightcad",
+    "objectarx",
+    "realdwg"
+  ],
+  "files": [
+    "dist",
+    "lib",
+    "README.md",
+    "package.json"
+  ],
+  "sideEffects": [
+    "./lib/base/AcDbHostApplicationServices.js"
+  ],
+  "main": "./dist/data-model.cjs",
+  "module": "./lib/index.js",
+  "types": "./lib/index.d.ts",
+  "exports": {
+    "types": "./lib/index.d.ts",
+    "import": "./lib/index.js",
+    "require": "./dist/data-model.cjs"
+  },
+  "scripts": {
+    "analyze": "pnpm run analyze:lib",
+    "analyze:lib": "vite build --mode analyze --config vite.config.main.ts",
+    "clean": "rimraf dist lib tsconfig.tsbuildinfo",
+    "build": "tsc && pnpm run build:lib",
+    "build:lib": "vite build --config vite.config.main.ts",
+    "lint": "eslint src/",
+    "lint:fix": "eslint --fix --quiet src/"
+  },
+  "dependencies": {
+    "@mlightcad/common": "workspace:*",
+    "@mlightcad/geometry-engine": "workspace:*",
+    "@mlightcad/graphic-interface": "workspace:*",
+    "iconv-lite": "^0.7.0",
+    "uid": "^2.0.2"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "main": "dist/libredwg-converter.umd.cjs",
+  "worker": "dist/libredwg-parser-worker.js",
+  "forbiddenInMain": [
+    "WebAssembly",
+    "wasmBinary",
+    "__wasm_call_ctors",
+    "HEAP8"
+  ]
+}

@@ -172,8 +172,8 @@ const CadViewer = dynamic(
   () => import("./editors/cad-viewer").then((m) => ({ default: m.CadViewer })),
   { ssr: false }
 );
-const DwgTakeoffSurface = dynamic(
-  () => import("./dwg-takeoff-surface").then((m) => ({ default: m.DwgTakeoffSurface })),
+const CadTakeoffSurface = dynamic(
+  () => import("./cad-takeoff-surface").then((m) => ({ default: m.CadTakeoffSurface })),
   { ssr: false }
 );
 import {
@@ -2728,8 +2728,8 @@ export function TakeoffTab({
     }
   }, [externalPickupSelectionId]);
 
-  // Bridge for dispatching DWG annotation actions (delete) from the side panel.
-  // Populated by DwgTakeoffSurface, consumed by inspectActionsRef below.
+  // Bridge for dispatching CAD annotation/entity actions from the side panel.
+  // Populated by CadTakeoffSurface, consumed by inspectActionsRef below.
   const dwgActionsRef = useRef<{
     deleteAnnotation: (id: string) => Promise<void> | void;
     selectEntity: (id: string | null) => void;
@@ -2813,8 +2813,8 @@ export function TakeoffTab({
       const isDwg = isDwgDocument;
       inspectActionsRef.current = {
         selectAnnotation: (id) => {
-          // For DWG, route through onSelectionChange so DwgTakeoffSurface picks
-          // it up via the `selection` prop; for PDF, mutate local state directly.
+          // For CAD, route through onSelectionChange so CadTakeoffSurface picks
+          // it up through the editor bridge; for PDF, mutate local state directly.
           if (isDwg) {
             if (id) publishTakeoffSelection({ kind: "annotation", pickupId: id });
             else if (selection?.kind === "annotation" || !onSelectionChange) publishTakeoffSelection(null);
@@ -4933,9 +4933,8 @@ export function TakeoffTab({
       };
     }
     // Shoelace area in image-pixel² space. Same formula used by
-    // dwg-takeoff-surface.tsx's polygonArea and apps/web/lib/takeoff-math.ts
-    // — kept inline to avoid a cross-package round-trip just for one
-    // determinant.
+    // apps/web/lib/takeoff-math.ts; kept inline to avoid a cross-package
+    // round-trip just for one determinant.
     let canvasAreaPx2 = 0;
     for (let i = 0; i < points.length; i++) {
       const a = points[i]!;
@@ -7710,7 +7709,7 @@ export function TakeoffTab({
     },
     {
       id: "dwg",
-      title: "DWG",
+      title: "2D CAD",
       detail: "Open CAD sheets on the dedicated takeoff surface.",
       metric: dwgDocumentCount.toLocaleString(),
       metricLabel: "CAD files",
@@ -7770,9 +7769,9 @@ export function TakeoffTab({
         }
       : activeIntakeOption === "dwg"
         ? {
-            title: "DWG sources",
+            title: "CAD drawings",
             detail: sourceCountText(dwgDocumentCount, "DWG/DXF", "DWG/DXF files") || "CAD drawings ready for takeoff",
-            emptyLabel: "No DWG sources",
+            emptyLabel: "No CAD drawings",
             docs: dwgDocuments,
             icon: FileJson,
           }
@@ -8595,9 +8594,9 @@ export function TakeoffTab({
             )}
           </div>
         ) : isDwgDocument ? (
-          <DwgTakeoffSurface
+          <CadTakeoffSurface
             projectId={projectId}
-            // The DWG processing API keys off FileNode / SourceDocument ids,
+            // The CAD editor and entity-link API key off FileNode / SourceDocument ids,
             // not the prefixed TakeoffDocument wrapper id ("file-…" /
             // "model-asset-…"). Hand it the underlying backend id explicitly
             // — fall back to doc.id when neither prefix applies (those are
@@ -8607,7 +8606,7 @@ export function TakeoffTab({
               label: doc.label,
               fileName: doc.fileName,
               fileUrl: buildPdfUrl(doc),
-              sourceKind: doc.fileNodeId ? "file_node" as const : undefined,
+              sourceKind: doc.fileNodeId ? ("file_node" as const) : ("source_document" as const),
             }))}
             selectedDocumentId={
               selectedDoc?.kind === "dwg" ? (selectedDoc.fileNodeId ?? selectedDoc.id) : undefined

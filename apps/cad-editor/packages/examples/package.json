@@ -1,0 +1,21 @@
+{
+  "name": "@mlightcad/cad-viewer-examples",
+  "version": "1.5.6",
+  "private": true,
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mlightcad/cad-viewer.git"
+  },
+  "scripts": {
+    "pre-serve": "node ./copyDist.js",
+    "serve": "npm run pre-serve && serve ./public/"
+  },
+  "devDependencies": {
+    "@mlightcad/cad-simple-viewer-example": "workspace:*",
+    "@mlightcad/cad-viewer-example": "workspace:*",
+    "@types/fs-extra": "^11.0.4",
+    "fs-extra": "^11.3.1",
+    "serve": "^14.2.4"
+  }
+}
