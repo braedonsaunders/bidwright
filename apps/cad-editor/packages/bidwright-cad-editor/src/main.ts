@@ -1,13 +1,9 @@
-import "element-plus/dist/index.css";
-
 import {
   AcApDocManager,
   AcApOpenViewMode,
   type AcApOpenDatabaseOptions,
   AcEdOpenMode,
 } from "@mlightcad/cad-simple-viewer";
-import { MlCadViewer, i18n } from "@mlightcad/cad-viewer";
-import { createApp, defineComponent, h, onMounted, ref, shallowRef } from "vue";
 
 import "./styles.css";
 
@@ -74,18 +70,20 @@ type HostMessage =
   | { source: "bidwright-cad-host"; type: "bidwright:cad-command"; command: string }
   | { source: "bidwright-cad-host"; type: "bidwright:cad-select-entities"; entityIds: string[] }
   | { source: "bidwright-cad-host"; type: "bidwright:cad-fit" }
+  | { source: "bidwright-cad-host"; type: "bidwright:cad-resize" }
   | { source: "bidwright-cad-host"; type: "bidwright:cad-save" };
 
 type AnyRecord = Record<string, unknown>;
 
 const SOURCE = "bidwright-cad-editor";
 const CAD_DATA_BASE_URL = "https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/";
+const TAKEOFF_ENTITY_ROW_LIMIT = 2000;
 
 class BidwrightCadBridge {
   protected readonly options: BidwrightCadEditorBootOptions;
   private readonly channel: BroadcastChannel | null;
   private loaded = false;
-  private snapshot: CadIntelligenceSnapshot | null = null;
+  private cancelSnapshotTask: (() => void) | null = null;
   private hostMessagesBound = false;
   private selectionSet: AnyRecord | null = null;
   private readonly hostMessageListener = (event: MessageEvent) => {
@@ -112,17 +110,10 @@ class BidwrightCadBridge {
     AcApDocManager.instance.events.documentActivated.addEventListener(() => {
       this.handleDocumentActivated();
     });
-
-    try {
-      if (AcApDocManager.instance.curDocument) {
-        this.handleDocumentActivated();
-      }
-    } catch {
-      this.publishSnapshot("idle");
-    }
   }
 
   dispose(): void {
+    this.cancelScheduledSnapshot();
     window.removeEventListener("message", this.hostMessageListener);
     this.channel?.removeEventListener("message", this.channelMessageListener);
     this.channel?.close();
@@ -148,12 +139,18 @@ class BidwrightCadBridge {
     this.loaded = true;
     this.setStatus(`Loaded ${this.options.fileName}`);
     this.bindSelectionEvents();
-    this.publishSnapshot("ready");
+    const snapshot = this.options.mode === "takeoff"
+      ? this.publishLightweightSnapshot("ready")
+      : this.publishSnapshot("ready");
     this.post("bidwright:cad-loaded", {
       documentId: this.documentId,
       fileName: this.options.fileName,
-      entityCount: this.snapshot?.entityCount ?? 0,
+      entityCount: snapshot.entityCount,
     });
+    this.forceResizeAndFit();
+    if (this.options.mode === "takeoff") {
+      this.scheduleSnapshot("ready", TAKEOFF_ENTITY_ROW_LIMIT);
+    }
   }
 
   private handleHostMessage(message: HostMessage): void {
@@ -166,7 +163,11 @@ class BidwrightCadBridge {
       return;
     }
     if (message.type === "bidwright:cad-fit") {
-      this.runCommand("zoom\nall");
+      this.forceResizeAndFit();
+      return;
+    }
+    if (message.type === "bidwright:cad-resize") {
+      this.forceResizeAndFit(false);
       return;
     }
     if (message.type === "bidwright:cad-save") {
@@ -220,7 +221,7 @@ class BidwrightCadBridge {
   }
 
   private publishSelection(entityIds: string[]): void {
-    const snapshot = this.publishSnapshot("ready");
+    const snapshot = this.publishSnapshot("ready", this.options.mode === "takeoff" ? TAKEOFF_ENTITY_ROW_LIMIT : undefined);
     const selectedEntities = entityIds
       .map((id) => snapshot.entities.find((entity) => entity.id === id))
       .filter((entity): entity is CadEntityRow => Boolean(entity));
@@ -231,33 +232,85 @@ class BidwrightCadBridge {
     });
   }
 
-  private publishSnapshot(status: CadIntelligenceSnapshot["status"]): CadIntelligenceSnapshot {
-    const snapshot = this.buildSnapshot(status);
-    this.snapshot = snapshot;
+  private publishSnapshot(status: CadIntelligenceSnapshot["status"], maxEntityRows?: number): CadIntelligenceSnapshot {
+    const snapshot = this.buildSnapshot(status, maxEntityRows);
     this.post("bidwright:cad-intelligence", { snapshot });
     return snapshot;
   }
 
-  private buildSnapshot(status: CadIntelligenceSnapshot["status"]): CadIntelligenceSnapshot {
+  private publishLightweightSnapshot(status: CadIntelligenceSnapshot["status"]): CadIntelligenceSnapshot {
+    const snapshot = this.buildEmptySnapshot(status);
+    this.post("bidwright:cad-intelligence", { snapshot });
+    return snapshot;
+  }
+
+  private scheduleSnapshot(status: CadIntelligenceSnapshot["status"], maxEntityRows?: number): void {
+    this.cancelScheduledSnapshot();
+    const run = () => {
+      this.cancelSnapshotTask = null;
+      if (!this.loaded) return;
+      this.publishSnapshot(status, maxEntityRows);
+      this.forceResizeAndFit(false);
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const taskId = window.requestIdleCallback(run, { timeout: 1400 });
+      this.cancelSnapshotTask = () => window.cancelIdleCallback(taskId);
+      return;
+    }
+    const taskId = window.setTimeout(run, 450);
+    this.cancelSnapshotTask = () => window.clearTimeout(taskId);
+  }
+
+  private cancelScheduledSnapshot(): void {
+    this.cancelSnapshotTask?.();
+    this.cancelSnapshotTask = null;
+  }
+
+  private forceResizeAndFit(fit = true): void {
+    const run = () => {
+      try {
+        window.dispatchEvent(new Event("resize"));
+        const view = AcApDocManager.instance.curView as unknown as AnyRecord;
+        const resize = view.onWindowResize;
+        if (typeof resize === "function") {
+          resize.call(view);
+        }
+        if (fit && this.loaded) {
+          AcApDocManager.instance.sendStringToExecute("zoom\nall");
+        }
+      } catch {
+        // Resize/fitting is best-effort; loading and command handling continue.
+      }
+    };
+    window.requestAnimationFrame(run);
+    window.setTimeout(run, 120);
+    window.setTimeout(run, 500);
+  }
+
+  private buildEmptySnapshot(status: CadIntelligenceSnapshot["status"]): CadIntelligenceSnapshot {
+    return {
+      documentId: this.documentId,
+      fileName: this.options.fileName,
+      selectedLayout: "Model",
+      selectedEntityId: null,
+      savingEntityId: null,
+      entityCount: 0,
+      visibleEntityCount: 0,
+      layerCount: 0,
+      annotationCount: 0,
+      layouts: [],
+      layers: [],
+      entities: [],
+      autoCounts: [],
+      systems: [],
+      status,
+      processedAt: new Date().toISOString(),
+    };
+  }
+
+  private buildSnapshot(status: CadIntelligenceSnapshot["status"], maxEntityRows?: number): CadIntelligenceSnapshot {
     if (!this.loaded || status === "error") {
-      return {
-        documentId: this.documentId,
-        fileName: this.options.fileName,
-        selectedLayout: "Model",
-        selectedEntityId: null,
-        savingEntityId: null,
-        entityCount: 0,
-        visibleEntityCount: 0,
-        layerCount: 0,
-        annotationCount: 0,
-        layouts: [],
-        layers: [],
-        entities: [],
-        autoCounts: [],
-        systems: [],
-        status,
-        processedAt: new Date().toISOString(),
-      };
+      return this.buildEmptySnapshot(status);
     }
 
     const db = AcApDocManager.instance.curDocument.database as unknown as AnyRecord;
@@ -267,14 +320,21 @@ class BidwrightCadBridge {
     const rows: CadEntityRow[] = [];
     const layoutCounts = new Map<string, number>();
     const layerCounts = new Map<string, number>();
+    let totalEntityCount = 0;
 
     for (const layout of layouts) {
       const entities = collectLayoutEntities(db, layout);
+      totalEntityCount += entities.length;
       layoutCounts.set(layout.name, entities.length);
       for (const entity of entities) {
-        const row = toEntityRow(entity, layout.name, layerColorByName);
-        rows.push(row);
-        layerCounts.set(row.layer, (layerCounts.get(row.layer) ?? 0) + 1);
+        if (maxEntityRows == null || rows.length < maxEntityRows) {
+          const row = toEntityRow(entity, layout.name, layerColorByName);
+          rows.push(row);
+          layerCounts.set(row.layer, (layerCounts.get(row.layer) ?? 0) + 1);
+        } else {
+          const layer = stringValue(entity.layer) || "0";
+          layerCounts.set(layer, (layerCounts.get(layer) ?? 0) + 1);
+        }
       }
     }
 
@@ -293,8 +353,8 @@ class BidwrightCadBridge {
       selectedLayout: layouts[0]?.name ?? "Model",
       selectedEntityId: [...selectedIds][0] ?? null,
       savingEntityId: null,
-      entityCount: rows.length,
-      visibleEntityCount: rows.length,
+      entityCount: totalEntityCount,
+      visibleEntityCount: totalEntityCount,
       layerCount: layers.length,
       annotationCount: 0,
       layouts: layouts.map((layout) => ({
@@ -416,7 +476,14 @@ class BidwrightTakeoffCadApp extends BidwrightCadBridge {
   }
 }
 
-function mountNativeEditor(options: BidwrightCadEditorBootOptions): void {
+async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promise<void> {
+  const [, cadViewer, vue] = await Promise.all([
+    import("element-plus/dist/index.css"),
+    import("@mlightcad/cad-viewer"),
+    import("vue"),
+  ]);
+  const { MlCadViewer, i18n } = cadViewer;
+  const { createApp, defineComponent, h, onMounted, ref, shallowRef } = vue;
   const NativeCadEditorApp = defineComponent({
     name: "BidwrightNativeCadEditorApp",
     setup() {
@@ -755,5 +822,5 @@ const options = readBootOptions();
 if (options.mode === "takeoff") {
   void new BidwrightTakeoffCadApp(options).start();
 } else {
-  mountNativeEditor(options);
+  void mountNativeEditor(options);
 }
