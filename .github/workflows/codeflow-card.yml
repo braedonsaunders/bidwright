@@ -22,6 +22,10 @@ concurrency:
 jobs:
   card:
     runs-on: ubuntu-latest
+    # The card normally renders in seconds; if analysis wedges, fail fast
+    # instead of burning a 6-hour runner (which is what vendored CAD bundles
+    # did before the exclude patterns below existed).
+    timeout-minutes: 10
     # Skip PR-close events that weren't merged (avoids running on closed-without-merge).
     if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     steps:
@@ -41,3 +45,9 @@ jobs:
           show-score: false
           # Flip to true to enable thermal-receipt PR comments on every merge.
           receipts: false
+          # Vendored CAD editor (absorbed third-party tree + built minified
+          # workers). Analyzing it hangs buildAnalysisData for hours and it
+          # isn't our code — keep it out of the stats.
+          exclude: |
+            apps/cad-editor/**
+            apps/web/public/cad-editor/**
