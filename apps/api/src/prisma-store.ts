@@ -2299,6 +2299,49 @@ export class PrismaApiStore {
       projectId ?? null,
     );
 
+    await this.upsertCatalogItemSearchDocuments(projectId);
+    await this.upsertRateScheduleItemSearchDocuments(projectId);
+    return this.finishLineItemSearchIndexRebuild(projectId);
+  }
+
+  /**
+   * Refresh the rate-book-affected slices of the line-item search index for
+   * one project: revision-scoped rate schedule items plus catalog items
+   * (whose payloads embed linked-rate info). Called after every
+   * revision-scoped rate-schedule mutation so freshly imported or edited
+   * rate books show up in the worksheet picker/search immediately — the
+   * full rebuild only runs when a project has no search documents at all.
+   * Failures are logged, never thrown: search staleness must not fail the
+   * mutation that triggered the refresh.
+   */
+  private async refreshRateScheduleSearchDocuments(projectId: string): Promise<void> {
+    try {
+      await this.ensureLineItemSearchInfrastructure();
+      await this.db.$executeRawUnsafe(
+        `
+          DELETE FROM "LineItemSearchDocument"
+          WHERE "organizationId" = $1::text
+            AND "projectId" = $2::text
+            AND "sourceType" IN ('catalog_item', 'rate_schedule_item')
+        `,
+        this.organizationId,
+        projectId,
+      );
+      await this.upsertCatalogItemSearchDocuments(projectId);
+      await this.upsertRateScheduleItemSearchDocuments(projectId);
+    } catch (err) {
+      console.error(
+        `[line-item-search] rate-schedule refresh failed for project=${projectId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  /**
+   * Catalog-item slice of the search index. Split out of the full rebuild so
+   * refreshRateScheduleSearchDocuments can re-run it for a single project.
+   */
+  private async upsertCatalogItemSearchDocuments(projectId?: string): Promise<void> {
     await this.db.$executeRawUnsafe(
       `
         INSERT INTO "LineItemSearchDocument" (
@@ -2457,7 +2500,14 @@ export class PrismaApiStore {
       this.organizationId,
       projectId ?? null,
     );
+  }
 
+  /**
+   * Rate-schedule-item slice of the search index (current revision only).
+   * Split out of the full rebuild so refreshRateScheduleSearchDocuments can
+   * re-run it for a single project.
+   */
+  private async upsertRateScheduleItemSearchDocuments(projectId?: string): Promise<void> {
     await this.db.$executeRawUnsafe(
       `
         INSERT INTO "LineItemSearchDocument" (
@@ -2554,7 +2604,15 @@ export class PrismaApiStore {
       this.organizationId,
       projectId ?? null,
     );
+  }
 
+  /**
+   * Org-wide remainder of the full search-index rebuild (effective costs,
+   * labor units, assemblies, plugin actions) plus the final count. Only
+   * runLineItemSearchIndexRebuild calls this — the per-project
+   * rate-schedule refresh intentionally skips these heavy slices.
+   */
+  private async finishLineItemSearchIndexRebuild(projectId?: string): Promise<{ indexed: number }> {
     await this.db.$executeRawUnsafe(
       `
         INSERT INTO "LineItemSearchDocument" (
@@ -11576,6 +11634,19 @@ export class PrismaApiStore {
   private async repriceRevisionRateScheduleLines(revisionId: string): Promise<number> {
     const revision = await this.db.quoteRevision.findFirst({ where: { id: revisionId } });
     if (!revision) return 0;
+
+    // Every revision-scoped rate-schedule mutation funnels through here, so
+    // this is also where the line-item search index learns about imported /
+    // edited / deleted rate books. Must run before the empty-worksheet early
+    // return: importing a rate book into a quote with no worksheets yet still
+    // has to show up in the picker.
+    const quote = await this.db.quote.findFirst({
+      where: { id: revision.quoteId },
+      select: { projectId: true },
+    });
+    if (quote?.projectId) {
+      await this.refreshRateScheduleSearchDocuments(quote.projectId);
+    }
 
     const worksheetRows = await this.db.worksheet.findMany({
       where: { revisionId },

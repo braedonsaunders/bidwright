@@ -12,6 +12,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { quoteWindowsArg } from "../cli-adapters/shared.js";
+import { stripBlankCredentialEnv } from "./env-sanitize.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
 
 export const localProcessHost: AgentRuntimeHost = {
@@ -26,7 +27,7 @@ export const localProcessHost: AgentRuntimeHost = {
       );
       const child = spawn(plan.cliCmd, plan.args, {
         cwd: projectDir,
-        env: { ...process.env, ...cliEnv },
+        env: stripBlankCredentialEnv({ ...process.env, ...cliEnv }),
         stdio: ["ignore", "pipe", "pipe"],
       });
       console.log(`[cli:spawn] pid=${child.pid}`);
@@ -79,7 +80,7 @@ export const localProcessHost: AgentRuntimeHost = {
     console.log(`[cli:spawn:win] bat=${batFile} cmd=${resolvedCmd}`);
     const child = spawn("cmd.exe", ["/c", batFile], {
       cwd: projectDir,
-      env: { ...process.env, ...cliEnv },
+      env: stripBlankCredentialEnv({ ...process.env, ...cliEnv }),
       stdio: ["ignore", "pipe", "pipe"],
     });
     console.log(`[cli:spawn:win] pid=${child.pid}`);
