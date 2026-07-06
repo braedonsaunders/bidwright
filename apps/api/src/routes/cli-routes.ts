@@ -21,6 +21,7 @@ import {
 import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "../services/cli-adapters/registry.js";
 import { generateInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
+import { stripBlankCredentialEnv } from "../services/agent-host/env-sanitize.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { join } from "node:path";
 import { prisma } from "@bidwright/db";
@@ -1758,7 +1759,7 @@ ${message}`;
       if (askEffort) args.push("--effort", askEffort);
 
       // Build env — pass API key if configured (user override wins over org default)
-      const env: Record<string, string> = { ...process.env as any };
+      const env: Record<string, string> = stripBlankCredentialEnv({ ...process.env as any });
       if (integrations.anthropicKey) env.ANTHROPIC_API_KEY = integrations.anthropicKey;
 
       const result = execSync(

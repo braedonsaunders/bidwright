@@ -36,6 +36,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 
 import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
+import { stripBlankCredentialEnv } from "./env-sanitize.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
 
 const BWRAP_BIN = process.env.BIDWRIGHT_BWRAP_PATH || "/usr/bin/bwrap";
@@ -222,7 +223,7 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       agentHomeDir,
       cliCmd: plan.cliCmd,
       cliArgs: plan.args,
-      cliEnv: { ...process.env as Record<string, string>, ...cliEnv, ...proxyEnv },
+      cliEnv: stripBlankCredentialEnv({ ...process.env as Record<string, string>, ...cliEnv, ...proxyEnv }),
     });
 
     console.log(
