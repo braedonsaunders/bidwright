@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/braedonsaunders-bidwright-badge.png)](https://mseep.ai/app/braedonsaunders-bidwright)
+
 <p align="center">
   <img src="./bidwright-readme.png" alt="Bidwright construction estimating platform" width="100%" />
 </p>
