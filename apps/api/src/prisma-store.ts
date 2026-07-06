@@ -115,7 +115,7 @@ import {
   parseAzureDocumentIntelligenceQueryFields,
 } from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
-import { prisma as sharedPrisma, mergeIntegrations } from "@bidwright/db";
+import { prisma as sharedPrisma, mergeIntegrations, dropInvalidProviderKeys } from "@bidwright/db";
 import { decodeHtmlEntities } from "./text-utils.js";
 import {
   attachNativePdfMetadata,
@@ -16715,13 +16715,21 @@ export class PrismaApiStore {
     options: { isSuperAdmin?: boolean } = {},
   ): Promise<Record<string, any>> {
     const orgSettings = await this.getSettings();
-    const orgIntegrations = ((orgSettings as any)?.integrations ?? {}) as Record<string, any>;
+    // Drop provider-key values that cannot be real keys (pasted passwords,
+    // autofill junk) BEFORE the merge — a junk user override must not shadow
+    // a valid org key, and junk anywhere must not outrank OAuth downstream.
+    const orgIntegrations = dropInvalidProviderKeys(
+      ((orgSettings as any)?.integrations ?? {}) as Record<string, any>,
+    ) as Record<string, any>;
     if (!userId) return orgIntegrations;
     try {
       const personal = options.isSuperAdmin
         ? await this.getSuperAdminSettings(userId)
         : await this.getUserSettings(userId);
-      return mergeIntegrations(orgIntegrations, personal.integrations) as Record<string, any>;
+      return mergeIntegrations(
+        orgIntegrations,
+        dropInvalidProviderKeys(personal.integrations ?? {}),
+      ) as Record<string, any>;
     } catch {
       // Row missing or out-of-org — fall back to org defaults rather
       // than leaking an error to a CLI spawn / model call.

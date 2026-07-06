@@ -15,6 +15,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
+import { invalidProviderKeys } from "@bidwright/db";
+
 const integrationsPatchSchema = z.record(z.unknown());
 const preferencesPatchSchema = z.record(z.unknown());
 
@@ -45,6 +47,18 @@ export async function userRoutes(app: FastifyInstance): Promise<void> {
     const parsed = userSettingsPatchSchema.safeParse(request.body);
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+    // Reject values that cannot be real provider keys (pasted passwords,
+    // autofill junk) — a stored junk key outranks OAuth and 401s every
+    // agent session. Empty strings pass through: they mean "clear".
+    const keyProblems = invalidProviderKeys(parsed.data.integrations);
+    if (keyProblems.length > 0) {
+      return reply.code(400).send({
+        error:
+          "That doesn't look like a valid API key: " +
+          keyProblems.map((p) => `${p.field} (${p.hint})`).join("; ") +
+          ". Leave the field empty to use OAuth sign-in or the organization default.",
+      });
     }
     if (request.user?.isSuperAdmin) {
       return request.store!.updateSuperAdminSettings(userId, parsed.data);

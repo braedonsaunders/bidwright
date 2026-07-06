@@ -1,6 +1,8 @@
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
+import { invalidProviderKeys } from "@bidwright/db";
+
 import type { CreateUserInput, PrismaApiStore, UserPatchInput } from "../prisma-store.js";
 import { testEmailConnection, type EmailConfig } from "../services/email-service.js";
 
@@ -48,8 +50,21 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
 
   app.get("/settings", async (request) => request.store!.getSettings());
 
-  app.patch("/settings", async (request) => {
+  app.patch("/settings", async (request, reply) => {
     const patch = request.body as Record<string, unknown>;
+    // Same guard as PATCH /user/settings: don't let pasted passwords or
+    // autofill junk get stored as provider API keys at the org level.
+    const keyProblems = invalidProviderKeys(
+      patch.integrations as Record<string, unknown> | undefined,
+    );
+    if (keyProblems.length > 0) {
+      return reply.code(400).send({
+        error:
+          "That doesn't look like a valid API key: " +
+          keyProblems.map((p) => `${p.field} (${p.hint})`).join("; ") +
+          ". Leave the field empty to use OAuth sign-in instead.",
+      });
+    }
     return request.store!.updateSettings(patch as Parameters<PrismaApiStore["updateSettings"]>[0]);
   });
 

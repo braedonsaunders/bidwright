@@ -32,6 +32,7 @@ import { randomUUID } from "node:crypto";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 
 import type { AgentRuntime } from "./cli-runtime.js";
+import { stripBlankCredentialEnv } from "./agent-host/env-sanitize.js";
 import { getUserAgentHome, ensureUserAgentHome } from "./agent-home.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
@@ -158,13 +159,13 @@ export async function startLoginSession(opts: {
   const agentHomeDir = await ensureUserAgentHome(opts.userId);
   const extraEnv = await buildLoginEnv(opts.runtime, agentHomeDir);
 
-  const env: Record<string, string> = {
+  const env: Record<string, string> = stripBlankCredentialEnv({
     ...(process.env as Record<string, string>),
     ...extraEnv,
     // Force interactive output even if the CLI peeks at process.stdout.isTTY
     // and we somehow lose the TTY flag through env passthrough.
     TERM: process.env.TERM || "xterm-256color",
-  };
+  });
 
   let pty: IPty;
   try {

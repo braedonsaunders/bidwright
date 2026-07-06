@@ -106,3 +106,68 @@ export function readApiKey(
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
 }
+
+/**
+ * Provider API key plausibility rules.
+ *
+ * Users paste passwords or random text into the "API key" fields (password
+ * managers autofill them), and a stored junk "key" silently outranks working
+ * OAuth credentials all the way down the credential chain — observed in
+ * prod: `anthropicKey: "22Boswell"` made every agent session fail with a
+ * 401 while the status pill claimed "Auth: API key".
+ *
+ * Prefixes for Anthropic / OpenAI / OpenRouter keys are documented and
+ * stable. For Google we only reject values that cannot be any credential
+ * (too short, or containing whitespace) since key shapes vary more.
+ */
+const PROVIDER_KEY_RULES: Record<string, { hint: string; valid: (v: string) => boolean }> = {
+  anthropicKey: {
+    hint: 'Anthropic API keys start with "sk-ant-"',
+    valid: (v) => v.startsWith("sk-ant-"),
+  },
+  openaiKey: {
+    hint: 'OpenAI API keys start with "sk-"',
+    valid: (v) => v.startsWith("sk-"),
+  },
+  openrouterKey: {
+    hint: 'OpenRouter API keys start with "sk-or-"',
+    valid: (v) => v.startsWith("sk-or-"),
+  },
+  geminiKey: {
+    hint: "Google AI API keys are at least 20 characters with no spaces",
+    valid: (v) => v.length >= 20 && !/\s/.test(v),
+  },
+};
+
+/**
+ * Save-time validation: return one problem per provider-key field whose
+ * (non-empty) value cannot be a real key. Empty/absent values are fine —
+ * they mean "unset".
+ */
+export function invalidProviderKeys(
+  integrations: IntegrationsBlob | null | undefined,
+): Array<{ field: string; hint: string }> {
+  const problems: Array<{ field: string; hint: string }> = [];
+  if (!integrations) return problems;
+  for (const [field, rule] of Object.entries(PROVIDER_KEY_RULES)) {
+    const value = integrations[field];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    if (!rule.valid(trimmed)) problems.push({ field, hint: rule.hint });
+  }
+  return problems;
+}
+
+/**
+ * Read-time defense for rows written before save-time validation existed:
+ * return a copy of the blob with implausible provider-key values removed,
+ * so junk can never reach checkAuth / spawn / model calls.
+ */
+export function dropInvalidProviderKeys(integrations: IntegrationsBlob): IntegrationsBlob {
+  const cleaned: IntegrationsBlob = { ...integrations };
+  for (const { field } of invalidProviderKeys(integrations)) {
+    delete cleaned[field];
+  }
+  return cleaned;
+}
