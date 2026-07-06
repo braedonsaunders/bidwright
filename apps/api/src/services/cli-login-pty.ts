@@ -29,6 +29,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { statSync } from "node:fs";
 import { spawn as ptySpawn, type IPty } from "node-pty";
 
 import type { AgentRuntime } from "./cli-runtime.js";
@@ -337,6 +338,58 @@ export async function killLoginSession(
   }
   sessions.delete(sessionId);
   return true;
+}
+
+/**
+ * Paths where each runtime's login flow writes its OAuth credential inside
+ * the user's namespace. Mirrors each adapter's checkAuth logic — keep in
+ * sync if an adapter's credential location changes.
+ */
+function credentialPathsForRuntime(runtime: AgentRuntime, agentHomeDir: string): string[] {
+  switch (runtime) {
+    case "claude-code":
+      return [join(agentHomeDir, ".claude", ".credentials.json")];
+    case "codex":
+      return [join(agentHomeDir, ".codex", "auth.json")];
+    case "opencode":
+      return [join(agentHomeDir, "data", "opencode", "auth.json")];
+    case "gemini":
+      return [
+        join(agentHomeDir, ".gemini", "credentials.json"),
+        join(agentHomeDir, ".gemini", "oauth_creds.json"),
+      ];
+    default:
+      return [];
+  }
+}
+
+/**
+ * True when this login session's OAuth flow actually wrote (or refreshed) a
+ * credentials file AFTER the session started. Existence alone is not enough:
+ * a stale/revoked credential file from an earlier login would make every
+ * "Sign in" modal declare success within seconds and close before the user
+ * can complete the real OAuth dance — leaving the dead credential in place
+ * forever (observed in prod as a permanent 401 on every agent session).
+ *
+ * If the old credential is still refreshable, the CLI rewrites the file on
+ * startup and this check passes immediately — auto-close then means the
+ * credential demonstrably works. Desktop mode (no namespace) keeps the
+ * legacy existence semantics since the host home is user-managed.
+ */
+export function loginWroteFreshCredentials(sessionId: string): boolean {
+  const session = sessions.get(sessionId);
+  if (!session) return false;
+  const agentHomeDir = getUserAgentHome(session.userId);
+  if (!agentHomeDir) return true;
+  const SKEW_MS = 2_000; // pty spawn vs filesystem timestamp slack
+  for (const credPath of credentialPathsForRuntime(session.runtime, agentHomeDir)) {
+    try {
+      if (statSync(credPath).mtimeMs >= session.startedAt - SKEW_MS) return true;
+    } catch {
+      // File missing — check the runtime's other candidate paths.
+    }
+  }
+  return false;
 }
 
 /**
