@@ -15,6 +15,7 @@ import {
   getLoginSession,
   getLoginSessionStatus,
   markSessionAuthenticated,
+  loginWroteFreshCredentials,
   LoginCliMissingError,
   LoginNotSupportedError,
 } from "../services/cli-login-pty.js";
@@ -2351,8 +2352,11 @@ Merge tables that span multiple pages. Skip non-data pages.
     // dance has completed (credentials file wrote successfully). We do not
     // mark the session authenticated unless we positively detect it; the
     // browser polls until exited or authenticated to close the modal.
+    // Freshness matters: a stale credential file left over from an earlier
+    // login must not auto-close the modal, or the user can never replace a
+    // dead credential (every re-auth would "succeed" in seconds).
     const auth = checkCliAuth(session.runtime, undefined, userId);
-    if (auth.authenticated && auth.method !== "api_key") {
+    if (auth.authenticated && auth.method !== "api_key" && loginWroteFreshCredentials(sessionId)) {
       markSessionAuthenticated(sessionId);
     }
 
@@ -2447,7 +2451,12 @@ Merge tables that span multiple pages. Skip non-data pages.
         // after the redirect lands.
         const authPoll = setInterval(() => {
           const auth = checkCliAuth(session.runtime, undefined, userId);
-          if (auth.authenticated && auth.method !== "api_key" && !session.authenticatedAt) {
+          if (
+            auth.authenticated &&
+            auth.method !== "api_key" &&
+            !session.authenticatedAt &&
+            loginWroteFreshCredentials(sessionId)
+          ) {
             markSessionAuthenticated(sessionId);
             send({ type: "auth-ok" });
           }
