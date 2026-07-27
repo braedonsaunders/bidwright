@@ -17,6 +17,7 @@ import {
   getExtendedWorksheetUnitBreakdown,
   getWorksheetHourBreakdown,
   inferSummaryPresetFromBuilder,
+  isWorksheetCostLibraryManaged,
   materializeSummaryRowsFromBuilder,
   normalizeSummaryBuilderConfig,
   normalizeCalculationType,
@@ -8347,8 +8348,10 @@ export class PrismaApiStore {
       description: normalizedInput.description,
       quantity: normalizedInput.quantity,
       uom: normalizedInput.uom,
-      cost: normalizedInput.cost ?? linkedCatalogUnitCost ?? 0,
-      markup: normalizedInput.markup ?? 0,
+      // A linked catalogue owns its unit cost even when the estimate category
+      // (for example Material) normally permits manual cost entry.
+      cost: linkedCatalogUnitCost ?? normalizedInput.cost ?? 0,
+      markup: normalizedInput.markup ?? revision.defaultMarkup ?? 0.2,
       price: normalizedInput.price ?? 0,
       lineOrder,
       rateScheduleItemId: normalizedInput.rateScheduleItemId ?? null,
@@ -8751,9 +8754,13 @@ export class PrismaApiStore {
     }
 	    await this.validateWorksheetItemProvenanceRefs(domainItem);
     let linkedCatalogClassification: Record<string, unknown> = {};
-    if (normalizedPatch.itemId !== undefined && domainItem.itemId) {
+    let linkedCatalogUnitCost: number | null = null;
+    if (domainItem.itemId) {
       const linkedCatalogItem = await this.requireCatalogItem(domainItem.itemId);
-      linkedCatalogClassification = catalogClassificationFromMetadata(linkedCatalogItem.metadata);
+      linkedCatalogUnitCost = linkedCatalogItem.unitCost;
+      if (normalizedPatch.itemId !== undefined) {
+        linkedCatalogClassification = catalogClassificationFromMetadata(linkedCatalogItem.metadata);
+      }
     }
     domainItem.classification = mergeWorksheetClassifications(
       previousClassification,
@@ -8957,6 +8964,19 @@ export class PrismaApiStore {
       // If costResourceId is set but effectiveCostId isn't, snap to the
       // best-matching cost basis row.
       await this.autoResolveEffectiveCost(domainItem);
+    }
+
+    if (
+      !domainItem.costResourceId
+      && !domainItem.effectiveCostId
+      && !domainItem.rateScheduleItemId
+      && isWorksheetCostLibraryManaged(domainItem)
+      && linkedCatalogUnitCost !== null
+    ) {
+      // Provenance, rather than the reporting category, owns this value.
+      // Manual Material rows remain editable; Stock Item-linked Material rows
+      // always re-price from their catalogue snapshot.
+      domainItem.cost = linkedCatalogUnitCost;
     }
 
     if (categoryOwnsCalculatedPricing(updateCatDef)) {

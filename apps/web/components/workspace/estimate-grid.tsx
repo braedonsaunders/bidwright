@@ -89,6 +89,7 @@ import {
 } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { formatMoney, formatPercent } from "@/lib/format";
+import { isWorksheetCostLibraryManaged } from "@bidwright/domain";
 import {
   rollupWorksheetUnits,
 } from "@/lib/worksheet-hours";
@@ -777,11 +778,21 @@ function getTierSlotLabel(
 
 function isCellDisabledByCategory(
   category: EntityCategory | undefined,
-  column: EditableColumn
+  column: EditableColumn,
+  row?: Pick<WorkspaceWorksheetItem, "itemId" | "costResourceId" | "effectiveCostId" | "rateScheduleItemId">,
 ): boolean {
   if (!category) return false;
   if (column === "entityName" || column === "vendor" || column === "description" || column === "phaseId") {
     return false;
+  }
+  // Category controls the calculation model; provenance controls ownership.
+  // A manually-entered Material line may edit cost, while the same Material
+  // category linked to a stock/catalog record must retain the library cost.
+  if (
+    column === "cost"
+    && isWorksheetCostLibraryManaged(row)
+  ) {
+    return true;
   }
   if (column === "unit1" || column === "unit2" || column === "unit3") {
     return !categoryAllowsEditingTierUnits(category);
@@ -3843,7 +3854,7 @@ export function EstimateGrid({
     if (isTemporaryWorksheetItemId(row.id)) return;
 
     const catDef = findCategoryForRow(row, entityCategories);
-    if (isCellDisabledByCategory(catDef, column)) return;
+    if (isCellDisabledByCategory(catDef, column, row)) return;
 
     beginEditingCell(rowId, column, currentValue, initialEditValue);
   }
@@ -3929,7 +3940,7 @@ export function EstimateGrid({
     // Try remaining columns in current row
     for (let i = colIdx + 1; i < EDITABLE_COLUMNS_ORDER.length; i++) {
       const nextCol = EDITABLE_COLUMNS_ORDER[i];
-      if (!isCellDisabledByCategory(catDef, nextCol)) {
+      if (!isCellDisabledByCategory(catDef, nextCol, row)) {
         const rawVal = getEditableValue(row, nextCol);
         startEditing(rowId, nextCol, rawVal as string | number);
         return;
@@ -3941,7 +3952,7 @@ export function EstimateGrid({
       const nextRow = visibleRows[rowIdx + 1];
       const nextCatDef = findCategoryForRow(nextRow, entityCategories);
       for (const col of EDITABLE_COLUMNS_ORDER) {
-        if (!isCellDisabledByCategory(nextCatDef, col)) {
+        if (!isCellDisabledByCategory(nextCatDef, col, nextRow)) {
           const rawVal = getEditableValue(nextRow, col);
           startEditing(nextRow.id, col, rawVal as string | number);
           return;
@@ -3957,7 +3968,7 @@ export function EstimateGrid({
     const colIdx = EDITABLE_COLUMNS_ORDER.indexOf(column);
     for (let i = colIdx - 1; i >= 0; i--) {
       const prevCol = EDITABLE_COLUMNS_ORDER[i];
-      if (!isCellDisabledByCategory(catDef, prevCol)) {
+      if (!isCellDisabledByCategory(catDef, prevCol, row)) {
         const rawVal = getEditableValue(row, prevCol);
         startEditing(rowId, prevCol, rawVal as string | number);
         return;
@@ -3970,7 +3981,7 @@ export function EstimateGrid({
       const prevCatDef = findCategoryForRow(prevRow, entityCategories);
       for (let i = EDITABLE_COLUMNS_ORDER.length - 1; i >= 0; i--) {
         const col = EDITABLE_COLUMNS_ORDER[i];
-        if (!isCellDisabledByCategory(prevCatDef, col)) {
+        if (!isCellDisabledByCategory(prevCatDef, col, prevRow)) {
           const rawVal = getEditableValue(prevRow, col);
           startEditing(prevRow.id, col, rawVal as string | number);
           return;
@@ -3992,7 +4003,7 @@ export function EstimateGrid({
       const step = dir === "right" ? 1 : -1;
       for (let i = colIdx + step; i >= 0 && i < EDITABLE_COLUMNS_ORDER.length; i += step) {
         const c = EDITABLE_COLUMNS_ORDER[i];
-        if (!isCellDisabledByCategory(catDef, c)) {
+        if (!isCellDisabledByCategory(catDef, c, row)) {
           setSelectedCell({ rowId, column: c });
           return;
         }
@@ -4006,7 +4017,7 @@ export function EstimateGrid({
     for (let i = rowIdx + step; i >= 0 && i < visibleRows.length; i += step) {
       const candidate = visibleRows[i];
       const candCat = findCategoryForRow(candidate, entityCategories);
-      if (!isCellDisabledByCategory(candCat, column)) {
+      if (!isCellDisabledByCategory(candCat, column, candidate)) {
         setSelectedCell({ rowId: candidate.id, column });
         setSelectedRowId(candidate.id);
         return;
@@ -5865,7 +5876,7 @@ export function EstimateGrid({
       label: string
     ) => {
       const isEditing = editingCell?.rowId === row.id && editingCell?.column === field;
-      const disabled = isCellDisabledByCategory(catDef, field);
+      const disabled = isCellDisabledByCategory(catDef, field, row);
 
       if (isEditing) {
         return (
@@ -5965,7 +5976,7 @@ export function EstimateGrid({
       label: string,
     ) => {
       const isEditing = editingCell?.rowId === row.id && editingCell?.column === field;
-      const disabled = isTemporary || isCellDisabledByCategory(catDef, field);
+      const disabled = isTemporary || isCellDisabledByCategory(catDef, field, row);
       const isSelected = selectedCell?.rowId === row.id && selectedCell?.column === field;
 
       if (isEditing) {
@@ -6900,7 +6911,7 @@ export function EstimateGrid({
   ) {
     const isEditing = editingCell?.rowId === row.id && editingCell?.column === column;
     const catDef = findCategoryForRow(row, entityCategories);
-    const disabled = isTemporaryWorksheetItemId(row.id) || isCellDisabledByCategory(catDef, column);
+    const disabled = isTemporaryWorksheetItemId(row.id) || isCellDisabledByCategory(catDef, column, row);
 
     if (isEditing) {
       if (column === "uom" || column === "phaseId") {
