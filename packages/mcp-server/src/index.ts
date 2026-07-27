@@ -15,6 +15,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { isAgentToolMutating } from "@bidwright/domain";
 import { registerQuoteTools } from "./tools/quote-tools.js";
 import { registerKnowledgeTools } from "./tools/knowledge-tools.js";
 import { registerSystemTools } from "./tools/system-tools.js";
@@ -33,6 +34,20 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
+const readOnlyMode = process.env.BIDWRIGHT_AGENT_MODE === "qa";
+if (readOnlyMode) {
+  const rawTool = (server as any).tool.bind(server);
+  (server as any).tool = (name: string, ...args: unknown[]) => {
+    if (isAgentToolMutating(name)) return undefined;
+    return rawTool(name, ...args);
+  };
+  const rawRegisterTool = (server as any).registerTool.bind(server);
+  (server as any).registerTool = (name: string, ...args: unknown[]) => {
+    if (isAgentToolMutating(name)) return undefined;
+    return rawRegisterTool(name, ...args);
+  };
+}
+
 // Register all tool groups
 registerQuoteTools(server);
 registerKnowledgeTools(server);
@@ -45,7 +60,9 @@ registerReviewTools(server);
 registerEstimateTools(server);
 registerResourceTools(server);
 registerCalculatorTools(server);
-await registerIntegrationTools(server);
+if (!readOnlyMode) {
+  await registerIntegrationTools(server);
+}
 
 // Start stdio transport (Claude Code / Codex communicate via stdin/stdout)
 const transport = new StdioServerTransport();

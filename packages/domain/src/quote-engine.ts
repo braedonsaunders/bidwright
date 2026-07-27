@@ -242,11 +242,14 @@ interface ItemHourTotals {
 function computeItemHours(
   item: WorksheetItem,
   schedules: WorksheetHourRateScheduleLike[],
+  categoryLookup: CategoryLookup,
 ): ItemHourTotals {
-  // Items contribute to the labour-hours rollup only when their rate-schedule
-  // tier breakdown is populated. Material / Subcontractor / Equipment etc.
-  // never have tierUnits, so they short-circuit to zero — no hardcoded
-  // category-name check required.
+  // tierUnits is shared storage for labour tiers, equipment duration, and
+  // other semantic units. Only categories configured as labour contribute to
+  // the quote's labour-hour rollup.
+  if (!isLabourLikeItem(item, categoryLookup)) {
+    return { total: 0, reg: 0, ot: 0, dt: 0, tierUnits: {} };
+  }
   const hasTierUnits = !!item.tierUnits && Object.keys(item.tierUnits).length > 0;
   const linkedToSchedule = !!item.rateScheduleItemId;
   if (!hasTierUnits && !linkedToSchedule) {
@@ -1115,7 +1118,8 @@ function categoryAnalyticsBucketForItem(item: WorksheetItem, lookup: CategoryLoo
 function isLabourLikeItem(item: WorksheetItem, lookup: CategoryLookup) {
   const bucket = normalizeBreakdownType(categoryAnalyticsBucketForItem(item, lookup));
   if (bucket === "labour") return true;
-  if (item.laborUnitId || item.rateScheduleItemId) return true;
+  if (bucket && bucket !== "other") return false;
+  if (item.laborUnitId) return true;
   return normalizeBreakdownType(`${categoryLabelForItem(item, lookup)} ${item.entityType} ${item.entityName}`) === "labour";
 }
 
@@ -1356,13 +1360,21 @@ function scaleTierUnits(tierUnits: WorksheetItem["tierUnits"], multiplier: numbe
   return Object.fromEntries(Object.entries(tierUnits).map(([key, value]) => [key, roundMoney((Number(value) || 0) * multiplier)]));
 }
 
-function computeTotalHours(items: WorksheetItem[], schedules: WorksheetHourRateScheduleLike[]) {
-  const hours = items.map((item) => computeItemHours(item, schedules));
+function computeTotalHours(
+  items: WorksheetItem[],
+  schedules: WorksheetHourRateScheduleLike[],
+  categoryLookup: CategoryLookup,
+) {
+  const hours = items.map((item) => computeItemHours(item, schedules, categoryLookup));
   return roundMoney(hours.reduce((sum, entry) => sum + entry.total, 0));
 }
 
-function computeItemTotalHours(item: WorksheetItem, schedules: WorksheetHourRateScheduleLike[]) {
-  return roundMoney(computeItemHours(item, schedules).total);
+function computeItemTotalHours(
+  item: WorksheetItem,
+  schedules: WorksheetHourRateScheduleLike[],
+  categoryLookup: CategoryLookup,
+) {
+  return roundMoney(computeItemHours(item, schedules, categoryLookup).total);
 }
 
 function applyEstimateFactorToItem(
@@ -1425,7 +1437,7 @@ function applyEstimateFactorsToLineItems(
 
     const baseValue = roundMoney(targetIndexes.reduce((sum, { item }) => sum + item.price, 0));
     const baseCost = roundMoney(targetIndexes.reduce((sum, { item }) => sum + computeItemCost(item), 0));
-    const baseHours = roundMoney(targetIndexes.reduce((sum, { item }) => sum + computeItemTotalHours(item, schedules), 0));
+    const baseHours = roundMoney(targetIndexes.reduce((sum, { item }) => sum + computeItemTotalHours(item, schedules, categoryLookup), 0));
     const multiplier = resolveEstimateFactorMultiplier(factor, baseHours);
     const targetLineItemIds = targetIndexes.map(({ item }) => item.id);
 
@@ -1469,7 +1481,7 @@ function applyEstimateFactorsToLineItems(
     const effectiveItems = targetIndexes.map(({ index }) => nextLineItems[index]);
     const effectiveValue = roundMoney(effectiveItems.reduce((sum, item) => sum + item.price, 0));
     const effectiveCost = roundMoney(effectiveItems.reduce((sum, item) => sum + computeItemCost(item), 0));
-    const effectiveHours = roundMoney(effectiveItems.reduce((sum, item) => sum + computeItemTotalHours(item, schedules), 0));
+    const effectiveHours = roundMoney(effectiveItems.reduce((sum, item) => sum + computeItemTotalHours(item, schedules, categoryLookup), 0));
 
     factorTotals.push({
       id: factor.id,
@@ -1539,7 +1551,7 @@ export function calculateTotals(
 
   const lineSubtotalBeforeFactors = roundMoney(rawLineItems.reduce((sum, item) => sum + item.price, 0));
   const costBeforeFactors = roundMoney(rawLineItems.reduce((sum, item) => sum + computeItemCost(item), 0));
-  const totalHoursBeforeFactors = computeTotalHours(rawLineItems, revisionSchedules);
+  const totalHoursBeforeFactors = computeTotalHours(rawLineItems, revisionSchedules, categoryLookup);
   const lineSubtotal = roundMoney(lineItems.reduce((sum, item) => sum + item.price, 0));
   let subtotal = lineSubtotal;
   const cost = roundMoney(lineItems.reduce((sum, item) => sum + computeItemCost(item), 0));
@@ -1885,7 +1897,7 @@ export function calculateTotals(
   updateSourceMargins(worksheetClassificationTotalsMap.values());
   updateSourceMargins(categoryClassificationTotalsMap.values());
 
-  const allItemHours = lineItems.map((item) => computeItemHours(item, revisionSchedules));
+  const allItemHours = lineItems.map((item) => computeItemHours(item, revisionSchedules, categoryLookup));
   const regHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.reg, 0));
   const overHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.ot, 0));
   const doubleHours = roundMoney(allItemHours.reduce((sum, hours) => sum + hours.dt, 0));

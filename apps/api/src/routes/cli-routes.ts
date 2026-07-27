@@ -5,7 +5,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentRuntime } from "../services/cli-runtime.js";
+import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
 import {
   startLoginSession,
   attachLoginSession,
@@ -20,7 +20,7 @@ import {
   LoginNotSupportedError,
 } from "../services/cli-login-pty.js";
 import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "../services/cli-adapters/registry.js";
-import { generateInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { generateInstructionFiles, generateQaInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { stripBlankCredentialEnv } from "../services/agent-host/env-sanitize.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
@@ -28,6 +28,18 @@ import { join } from "node:path";
 import { prisma } from "@bidwright/db";
 import { getAgentToolDisplayName } from "@bidwright/domain";
 import { getSessionCookieToken } from "../services/session-cookie.js";
+
+const CLI_RUN_KINDS = ["cli-intake", "cli-qa", "cli-assist"] as const;
+
+function normalizeAgentChatMode(value: unknown): AgentChatMode {
+  return value === "assist_edit" || value === "build_estimate" ? value : "qa";
+}
+
+function runKindForMode(mode: AgentChatMode) {
+  if (mode === "qa") return "cli-qa";
+  if (mode === "assist_edit") return "cli-assist";
+  return "cli-intake";
+}
 
 /** Extract session token from Authorization header, cookie, or query param */
 function extractAuthToken(request: FastifyRequest): string {
@@ -477,7 +489,7 @@ function readCliRunEvents(run: { output?: unknown } | null | undefined): Persist
 
 async function getCliRunById(projectId: string, runId: string): Promise<PersistedCliRunRef | null> {
   const run = await prisma.aiRun.findFirst({
-    where: { id: runId, projectId, kind: "cli-intake" },
+    where: { id: runId, projectId, kind: { in: [...CLI_RUN_KINDS] } },
     select: { id: true, output: true },
   });
   if (!run) return null;
@@ -486,7 +498,7 @@ async function getCliRunById(projectId: string, runId: string): Promise<Persiste
 
 async function findCliRunByQuestionId(projectId: string, questionId: string): Promise<PersistedCliRunRef | null> {
   const runs = await prisma.aiRun.findMany({
-    where: { projectId, kind: "cli-intake" },
+    where: { projectId, kind: { in: [...CLI_RUN_KINDS] } },
     orderBy: { createdAt: "desc" },
     select: { id: true, output: true },
   });
@@ -518,7 +530,7 @@ async function getCliRunContext(
   }
 
   const latestRun = await prisma.aiRun.findFirst({
-    where: { projectId, kind: "cli-intake" },
+    where: { projectId, kind: { in: [...CLI_RUN_KINDS] } },
     orderBy: { createdAt: "desc" },
     select: {
       id: true,
@@ -960,6 +972,7 @@ async function prepareCliAgentWorkspace(input: {
   runtime: AgentRuntime;
   scope?: string;
   personaId?: string;
+  mode?: AgentChatMode;
 }) {
   const { request, workspace, projectId, runtime } = input;
   const store = request.store!;
@@ -1020,7 +1033,7 @@ async function prepareCliAgentWorkspace(input: {
   const estimateDefaults = (settings as any)?.defaults || {};
   const persona = await resolveEstimatorPersonaForPrompt(store, input.personaId);
 
-  await generateInstructionFiles(runtime, {
+  const instructionParams = {
     projectDir,
     projectName: project.name || "Untitled Project",
     clientName: project.clientName || "",
@@ -1035,7 +1048,12 @@ async function prepareCliAgentWorkspace(input: {
     estimateDefaults,
     maxConcurrentSubAgents: integrations.maxConcurrentSubAgents ?? 2,
     persona,
-  });
+  };
+  if (input.mode === "qa") {
+    await generateQaInstructionFiles(runtime, instructionParams);
+  } else {
+    await generateInstructionFiles(runtime, instructionParams);
+  }
 
   return {
     projectDir,
@@ -1352,7 +1370,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       kind: "cli-intake",
       status: "running",
       model: model || adapter.defaultModel,
-      input: { runtime, scope: effectiveScope, documentCount: documents.length } as any,
+      input: { runtime, scope: effectiveScope, documentCount: documents.length, mode: "build_estimate" } as any,
       output: { events: seededEvents } as any,
     });
 
@@ -1448,6 +1466,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         customCliPath: resolveCliPathOverride(runtime, integrations),
         userId: request.user?.id ?? null,
         organizationId: request.user?.organizationId ?? null,
+        agentMode: "build_estimate",
         ...buildSpawnApiKeys(integrations),
       });
 
@@ -1537,11 +1556,19 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
 
     const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
     const latestRun = await prisma.aiRun.findFirst({
-      where: { projectId, kind: "cli-intake" },
+      where: { projectId, kind: { in: [...CLI_RUN_KINDS] } },
       orderBy: { createdAt: "desc" },
-      select: { id: true, model: true, input: true },
+      select: { id: true, model: true, input: true, kind: true },
     });
     const latestRuntime = (latestRun?.input as any)?.runtime;
+    const mode = (latestRun?.input as any)?.mode
+      ? normalizeAgentChatMode((latestRun?.input as any)?.mode)
+      : latestRun?.kind === "cli-intake"
+        ? "build_estimate"
+        : latestRun?.kind === "cli-assist"
+          ? "assist_edit"
+          : "qa";
+    const runKind = runKindForMode(mode);
     const runtime: AgentRuntime = isCliRuntime(latestRuntime)
       ? latestRuntime
       : isCliRuntime(integrations.agentRuntime)
@@ -1568,13 +1595,14 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
+        agentMode: mode,
       });
 
       await store.createAiRun({
         id: aiRunId,
         projectId,
         revisionId: workspace.currentRevision.id,
-        kind: "cli-intake",
+        kind: runKind,
         status: "running",
         model,
         input: {
@@ -1583,10 +1611,13 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
           cliSessionId: session.sessionId || null,
+          mode,
         } as any,
         output: { events: [] } as any,
       });
-      await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, aiRunId);
+      if (mode !== "qa") {
+        await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, aiRunId);
+      }
       attachCliRunPersistence(aiRunId, session);
 
       return { sessionId: aiRunId, status: "running" };
@@ -1595,7 +1626,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         id: aiRunId,
         projectId,
         revisionId: workspace.currentRevision.id,
-        kind: "cli-intake",
+        kind: runKind,
         status: "failed",
         model,
         input: {
@@ -1603,6 +1634,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
           prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
+          mode,
         } as any,
         output: { events: [] } as any,
       }).catch(() => {});
@@ -1615,12 +1647,13 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
   // or returns error if a session is already running.
   app.post("/api/cli/:projectId/message", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope } = (request.body || {}) as {
+    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope, mode: requestedMode } = (request.body || {}) as {
       message: string;
       runtime?: AgentRuntime;
       model?: string;
       personaId?: string;
       scope?: string;
+      mode?: AgentChatMode;
     };
 
     if (!message) return reply.code(400).send({ error: "Message required" });
@@ -1637,12 +1670,14 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) return reply.code(404).send({ error: "Project not found" });
     const project = workspace.project || {} as any;
+    const mode = normalizeAgentChatMode(requestedMode);
+    const runKind = runKindForMode(mode);
     const ingestionBlock = ingestionStartBlock(project);
     if (ingestionBlock) return reply.code(409).send(ingestionBlock);
 
     const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
     const latestRun = await prisma.aiRun.findFirst({
-      where: { projectId, kind: "cli-intake" },
+      where: { projectId, kind: runKind },
       orderBy: { createdAt: "desc" },
       select: { id: true, model: true, input: true },
     });
@@ -1663,13 +1698,22 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
       runtime,
       scope,
       personaId,
+      mode,
     });
     const adapter = getAdapter(runtime);
-    const questionPrompt = `Read ${adapter.primaryInstructionFile} now. Use the three search lanes to gather evidence: queryProjectFile for THIS project's documents (RFQ, specs, drawings), queryKnowledgeBook for GLOBAL estimator manuals, queryKnowledgeDataset for structured productivity/rate tables. For cost candidates use queryLibrary / recommendCostSource; for labour-unit lookups use listLaborUnitTree / listLaborUnits / getLaborUnit; for catalog SKUs use searchCatalogs; for rate-schedule items use listRateScheduleItems. Do not read large JSONL snapshots, all-library.search.txt, or files-manifest.jsonl wholesale.
-
-This is a user chat question, not a full intake run. Answer the question against the current quote/workspace/documents. Call getWorkspace and getEstimateStrategy before making claims about the quote. Use readDocumentText/readSpreadsheet/getDocumentStructured only for the specific documents or page ranges needed. If the question needs drawing evidence, you may build/reuse the drawing atlas, searchDrawingRegions, and inspectDrawingRegion for targeted crops; do not execute the full staged estimate workflow, create worksheets/items, or finalize strategy unless the user explicitly asks you to do that.
+    const questionPrompt = mode === "qa"
+      ? `Read ${adapter.primaryInstructionFile} now. You are in read-only Project Q&A mode. Answer the user's question directly, using targeted project-document and workspace evidence. Include filenames and page references for document-derived claims. Do not suggest finishing the quote or adding worksheets. Mutating tools are unavailable. If the request requires a quote change, ask the user to switch to Assist edit or Build estimate mode.
 
 User question:
+${message}`
+      : mode === "assist_edit"
+        ? `Read ${adapter.primaryInstructionFile} now. This is an estimator-directed edit, not an autonomous intake. Inspect the current workspace, make only the changes explicitly requested below, recalculate if needed, and summarize exactly what changed. Do not continue into unrelated quote-completion stages.
+
+Requested change:
+${message}`
+        : `Read ${adapter.primaryInstructionFile} now and continue the full estimating workflow for the user's request.
+
+User request:
 ${message}`;
 
     const sessionId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -1687,7 +1731,7 @@ ${message}`;
       id: sessionId,
       projectId,
       revisionId: workspace.currentRevision.id,
-      kind: "cli-intake",
+      kind: runKind,
       status: "running",
       model,
       input: {
@@ -1699,10 +1743,13 @@ ${message}`;
         scope: prepared.effectiveScope,
         documentCount: prepared.documents.length,
         personaId: personaId || null,
+        mode,
       } as any,
       output: { events: [userMessageEvent] } as any,
     });
-    await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, sessionId);
+    if (mode !== "qa") {
+      await bindEstimateStrategyRun(projectId, workspace.currentRevision.id, sessionId);
+    }
 
     try {
       const session = await spawnSession({
@@ -1721,6 +1768,7 @@ ${message}`;
         ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
         emitCompletionMessage: false,
+        agentMode: mode,
       });
 
       attachCliRunPersistence(sessionId, session);
@@ -1786,14 +1834,14 @@ ${message}`;
     const { projectId } = request.params as { projectId: string };
     const session = getSession(projectId);
 
-    // Get ALL intake runs for this project, oldest first.
+    // Get all interactive agent modes for this project, oldest first.
     // Background runs (id prefix "cli-background-") capture interrupt-style
     // notifications and are not meant for display — their events are already
     // mirrored into the main run's transcript via SSE. Filter them out before
     // merging or picking latestRun so chronological ordering, latestRun
     // selection, and completion derivation are based on real interactive runs.
     const runsRaw = await prisma.aiRun.findMany({
-      where: { projectId, kind: "cli-intake" },
+      where: { projectId, kind: { in: [...CLI_RUN_KINDS] } },
       orderBy: { createdAt: "asc" },
     });
     const runs = runsRaw.filter((run) => !(typeof run.id === "string" && run.id.startsWith("cli-background-")));
@@ -1909,6 +1957,8 @@ ${message}`;
     return {
       status: currentStatus,
       runtime: (latestRun?.input as any)?.runtime || session?.runtime,
+      mode: (latestRun?.input as any)?.mode
+        || (latestRun?.kind === "cli-intake" ? "build_estimate" : latestRun?.kind === "cli-assist" ? "assist_edit" : "qa"),
       sessionId: latestRun?.id || session?.sessionId,
       startedAt: runs[0]?.createdAt?.toISOString?.() || "",
       source: session?.status === "running" ? "live" : "db",

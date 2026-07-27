@@ -1274,6 +1274,18 @@ export interface EntityCategory {
   enabled: boolean;
 }
 
+export interface CatalogCategoryMapping {
+  id: string;
+  organizationId: string;
+  catalogId: string;
+  sourceCategory: string;
+  entityCategoryId: string;
+  catalog: { id: string; name: string; kind: string };
+  entityCategory: { id: string; name: string; entityType: string };
+  createdAt: string;
+  updatedAt: string;
+}
+
 export async function getEntityCategories() {
   return apiRequest<EntityCategory[]>("/entity-categories");
 }
@@ -1305,6 +1317,28 @@ export async function reorderEntityCategories(orderedIds: string[]) {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ orderedIds }),
+  });
+}
+
+export async function getCatalogCategoryMappings() {
+  return apiRequest<CatalogCategoryMapping[]>("/catalog-category-mappings");
+}
+
+export async function saveCatalogCategoryMapping(input: {
+  catalogId: string;
+  sourceCategory?: string | null;
+  entityCategoryId: string;
+}) {
+  return apiRequest<CatalogCategoryMapping>("/catalog-category-mappings", {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteCatalogCategoryMapping(id: string) {
+  return apiRequest<{ ok: true }>(`/catalog-category-mappings/${id}`, {
+    method: "DELETE",
   });
 }
 
@@ -5390,7 +5424,13 @@ export async function resumeCliSession(projectId: string, prompt?: string) {
 export async function sendCliMessage(
   projectId: string,
   message: string,
-  options: { runtime?: string | null; model?: string | null; personaId?: string | null; scope?: string | null } = {}
+  options: {
+    runtime?: string | null;
+    model?: string | null;
+    personaId?: string | null;
+    scope?: string | null;
+    mode?: "qa" | "assist_edit" | "build_estimate";
+  } = {}
 ) {
   return apiRequest<{ sent?: boolean; sessionId?: string; status?: string; message?: string }>(`/api/cli/${projectId}/message`, {
     method: "POST",
@@ -5401,6 +5441,7 @@ export async function sendCliMessage(
       model: options.model || undefined,
       personaId: options.personaId || undefined,
       scope: options.scope || undefined,
+      mode: options.mode || "qa",
     }),
   });
 }
@@ -5418,6 +5459,7 @@ export async function getCliStatus(projectId: string) {
   return apiRequest<{
     status: string;
     runtime?: string;
+    mode?: "qa" | "assist_edit" | "build_estimate";
     sessionId?: string;
     startedAt?: string;
     source?: "live" | "db";

@@ -48,6 +48,8 @@ interface ChatMessage {
   timestamp: string;
 }
 
+type AgentChatMode = "qa" | "assist_edit" | "build_estimate";
+
 interface AgentChatProps {
   projectId: string;
   open: boolean;
@@ -2324,6 +2326,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const [cliPendingQuestion, setCliPendingQuestion] = useState<PendingQuestionPrompt | null>(null);
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
+  const [chatMode, setChatMode] = useState<AgentChatMode>("qa");
   const [sseConnected, setSseConnected] = useState(false);
   const [intakeScope, setIntakeScope] = useState("");
   const [thinkingBlocks, setThinkingBlocks] = useState<Array<{ id: string; content: string }>>([]);
@@ -2614,6 +2617,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       .then((data) => {
         if (data.status === "none") throw new Error("no cli session");
         restoredFromDb.current = true;
+        if (data.mode) setChatMode(data.mode);
         setIntakeSessionId(data.sessionId || null);
         const events = data.events || [];
         setIntakeStatus({
@@ -2736,6 +2740,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           model: cliAgentModel,
           personaId: selectedPersonaId,
           scope: intakeScope.trim() || undefined,
+          mode: chatMode,
         });
         if (result.sessionId) {
           // A new session was started
@@ -2773,6 +2778,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   }
 
   async function handleStartIntake(): Promise<boolean> {
+    setChatMode("build_estimate");
     setIntakeLoading(true);
     setLiveToolCalls([]);
     setThinkingBlocks([]);
@@ -3497,6 +3503,9 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                 <div className="text-sm font-semibold">Bidwright Agent</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-fg/35">
                   <span>{cliRuntime ? `${cliRuntimeMap?.[cliRuntime]?.displayName || cliRuntime} \u00B7 ${effectiveCliModel}` : "CLI runtime required"}</span>
+                  <span className="rounded-full bg-accent/10 px-1.5 py-0.5 font-medium text-accent">
+                    {chatMode === "qa" ? "Project Q&A" : chatMode === "assist_edit" ? "Assist edit" : "Build estimate"}
+                  </span>
                   {(intakeStatus || isRunStarting) && (
                     <>
                       <span className="text-fg/20">/</span>
@@ -3890,12 +3899,24 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           {/* Input */}
           {!showBlockingAgentPanel && <div className="border-t border-line p-3">
             <div className="flex items-center gap-2">
+              <select
+                value={chatMode}
+                onChange={(event) => setChatMode(event.target.value as AgentChatMode)}
+                disabled={isLoading || isIntakeRunning}
+                className="h-9 rounded-lg border border-line bg-bg/50 px-2 text-xs text-fg outline-none focus:border-accent/50"
+                aria-label="Agent mode"
+                title="Project Q&A is read-only. Assist edit changes only what you request. Build estimate runs the full workflow."
+              >
+                <option value="qa">Project Q&A</option>
+                <option value="assist_edit">Assist edit</option>
+                <option value="build_estimate">Build estimate</option>
+              </select>
               <input
                 ref={inputRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Ask about this project..."
+                placeholder={chatMode === "qa" ? "Ask about specs, drawings, or this quote..." : chatMode === "assist_edit" ? "Describe the exact quote change..." : "Tell the estimator what to build..."}
                 disabled={isLoading}
                 className="h-9 w-full flex-1 rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none placeholder:text-fg/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
               />

@@ -100,6 +100,10 @@ import {
   updateEntityCategory as apiUpdateCategory,
   deleteEntityCategory as apiDeleteCategory,
   reorderEntityCategories as apiReorderCategories,
+  getCatalogs as apiGetCatalogs,
+  getCatalogCategoryMappings as apiGetCatalogCategoryMappings,
+  saveCatalogCategoryMapping as apiSaveCatalogCategoryMapping,
+  deleteCatalogCategoryMapping as apiDeleteCatalogCategoryMapping,
   getDepartments as apiGetDepartments,
   createDepartment as apiCreateDepartment,
   updateDepartment as apiUpdateDepartment,
@@ -108,6 +112,8 @@ import {
   type BrandProfile,
   type CalculationType,
   type EntityCategory,
+  type CatalogCategoryMapping,
+  type CatalogSummary,
   type Department,
   testProviderKey as apiTestProviderKey,
   fetchProviderModels as apiFetchProviderModels,
@@ -2747,6 +2753,11 @@ function EntityCategorySettingsPanel({
   onCategoriesChange?: (categories: EntityCategory[]) => void;
 }) {
   const [categories, setCategories] = useState<EntityCategory[]>([]);
+  const [catalogs, setCatalogs] = useState<CatalogSummary[]>([]);
+  const [catalogMappings, setCatalogMappings] = useState<CatalogCategoryMapping[]>([]);
+  const [mappingCatalogId, setMappingCatalogId] = useState("");
+  const [mappingSourceCategory, setMappingSourceCategory] = useState("");
+  const [mappingEntityCategoryId, setMappingEntityCategoryId] = useState("");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -2773,14 +2784,54 @@ function EntityCategorySettingsPanel({
     setLoading(true);
     setError(null);
     try {
-      const rows = await apiGetCategories();
+      const [rows, catalogRows, mappingRows] = await Promise.all([
+        apiGetCategories(),
+        apiGetCatalogs(),
+        apiGetCatalogCategoryMappings(),
+      ]);
       publishCategories(rows);
+      setCatalogs(catalogRows);
+      setCatalogMappings(mappingRows);
+      setMappingCatalogId((current) => current || catalogRows[0]?.id || "");
+      setMappingEntityCategoryId((current) => current || rows[0]?.id || "");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Failed to load categories");
     } finally {
       setLoading(false);
     }
   }, [publishCategories]);
+
+  const saveCatalogMapping = async () => {
+    if (!mappingCatalogId || !mappingEntityCategoryId) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await apiSaveCatalogCategoryMapping({
+        catalogId: mappingCatalogId,
+        sourceCategory: mappingSourceCategory,
+        entityCategoryId: mappingEntityCategoryId,
+      });
+      setCatalogMappings(await apiGetCatalogCategoryMappings());
+      setMappingSourceCategory("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to save library mapping");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeCatalogMapping = async (id: string) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await apiDeleteCatalogCategoryMapping(id);
+      setCatalogMappings((current) => current.filter((mapping) => mapping.id !== id));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to remove library mapping");
+    } finally {
+      setSaving(false);
+    }
+  };
 
   useEffect(() => {
     void loadCategories();
@@ -2988,6 +3039,64 @@ function EntityCategorySettingsPanel({
             })}
           </div>
         )}
+
+        <div className="rounded-lg border border-line bg-bg/25 p-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold text-fg">Library → Estimate Category Mapping</div>
+              <p className="mt-1 text-[11px] text-fg/45">
+                Resolve imported catalogue taxonomy to a stable estimate category. Source category is the value from item metadata; leave it blank to set the catalogue default.
+              </p>
+            </div>
+          </div>
+          <div className="mt-3 grid gap-2 md:grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_auto]">
+            <Select
+              value={mappingCatalogId}
+              onValueChange={setMappingCatalogId}
+              options={catalogs.map((catalog) => ({ value: catalog.id, label: catalog.name }))}
+              placeholder="Library catalogue"
+            />
+            <Input
+              value={mappingSourceCategory}
+              onChange={(event) => setMappingSourceCategory(event.target.value)}
+              placeholder="Source category (or blank)"
+            />
+            <Select
+              value={mappingEntityCategoryId}
+              onValueChange={setMappingEntityCategoryId}
+              options={categories.map((category) => ({ value: category.id, label: category.name }))}
+              placeholder="Estimate category"
+            />
+            <Button
+              variant="secondary"
+              size="sm"
+              disabled={saving || !mappingCatalogId || !mappingEntityCategoryId}
+              onClick={() => void saveCatalogMapping()}
+            >
+              Save Mapping
+            </Button>
+          </div>
+          <div className="mt-3 overflow-hidden rounded-md border border-line">
+            {catalogMappings.length === 0 ? (
+              <div className="px-3 py-4 text-center text-xs text-fg/40">No explicit library mappings configured.</div>
+            ) : catalogMappings.map((mapping) => (
+              <div key={mapping.id} className="grid grid-cols-[1fr_1fr_1fr_auto] items-center gap-2 border-t border-line px-3 py-2 text-xs first:border-t-0">
+                <div className="font-medium text-fg/75">{mapping.catalog.name}</div>
+                <div className="text-fg/55">{mapping.sourceCategory || "All source categories"}</div>
+                <div className="text-fg/75">→ {mapping.entityCategory.name}</div>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  disabled={saving}
+                  onClick={() => void removeCatalogMapping(mapping.id)}
+                  title="Remove mapping"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
       </CardBody>
 
       {drawer && draft && typeof document !== "undefined" && createPortal(

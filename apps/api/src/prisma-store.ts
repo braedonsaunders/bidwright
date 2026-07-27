@@ -14,6 +14,7 @@ import {
   expandAssembly,
   findAssemblyCycles,
   getExtendedWorksheetHourBreakdown,
+  getExtendedWorksheetUnitBreakdown,
   getWorksheetHourBreakdown,
   inferSummaryPresetFromBuilder,
   materializeSummaryRowsFromBuilder,
@@ -2356,8 +2357,8 @@ export class PrismaApiStore {
           'catalog_item',
           ci."id",
           'select',
-          COALESCE(linked_rate."entityCategoryName", NULLIF(ci."metadata"->>'category', ''), c."kind", ''),
-          COALESCE(linked_rate."entityCategoryType", c."kind"),
+          COALESCE(linked_rate."entityCategoryName", mapped_category."entityCategoryName", NULLIF(ci."metadata"->>'category', ''), c."kind", ''),
+          COALESCE(linked_rate."entityCategoryType", mapped_category."entityCategoryType", c."kind"),
           COALESCE(NULLIF(ci."name", ''), 'Catalog item'),
           c."name",
           ci."code",
@@ -2365,8 +2366,8 @@ export class PrismaApiStore {
           COALESCE(NULLIF(linked_rate."rateUnit", ''), NULLIF(ci."unit", ''), 'EA'),
           COALESCE(linked_rate."rateUnitCost", ci."unitCost"),
           ci."unitPrice",
-          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", left(COALESCE(ci."metadata"::text, ''), 500)),
-          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", linked_rate."entityCategoryName", linked_rate."entityCategoryType", left(COALESCE(ci."metadata"::text, ''), 500))),
+          concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", COALESCE(linked_rate."entityCategoryName", mapped_category."entityCategoryName"), COALESCE(linked_rate."entityCategoryType", mapped_category."entityCategoryType"), left(COALESCE(ci."metadata"::text, ''), 500)),
+          to_tsvector('english', concat_ws(' ', ci."name", ci."code", ci."unit", c."name", c."kind", c."description", linked_rate."scheduleName", linked_rate."scheduleCategory", COALESCE(linked_rate."entityCategoryName", mapped_category."entityCategoryName"), COALESCE(linked_rate."entityCategoryType", mapped_category."entityCategoryType"), left(COALESCE(ci."metadata"::text, ''), 500))),
           jsonb_build_object(
             'source', 'catalog',
             'itemId', ci."id",
@@ -2378,9 +2379,10 @@ export class PrismaApiStore {
             'scheduleId', linked_rate."scheduleId",
             'scheduleName', linked_rate."scheduleName",
             'scheduleCategory', linked_rate."scheduleCategory",
-            'entityCategoryId', linked_rate."entityCategoryId",
-            'entityCategoryName', linked_rate."entityCategoryName",
-            'entityCategoryType', linked_rate."entityCategoryType",
+            'entityCategoryId', COALESCE(linked_rate."entityCategoryId", mapped_category."entityCategoryId"),
+            'entityCategoryName', COALESCE(linked_rate."entityCategoryName", mapped_category."entityCategoryName"),
+            'entityCategoryType', COALESCE(linked_rate."entityCategoryType", mapped_category."entityCategoryType"),
+            'catalogCategoryMappingId', mapped_category."mappingId",
             'rateScheduleLinked', linked_rate."rateScheduleItemId" IS NOT NULL,
             'vendor', COALESCE(ci."metadata"->>'vendor', ''),
             'description', ci."name",
@@ -2411,6 +2413,23 @@ export class PrismaApiStore {
           CURRENT_TIMESTAMP
         FROM "CatalogItem" ci
         JOIN "Catalog" c ON c."id" = ci."catalogId"
+        LEFT JOIN LATERAL (
+          SELECT
+            mapping."id" AS "mappingId",
+            ec."id" AS "entityCategoryId",
+            ec."name" AS "entityCategoryName",
+            ec."entityType" AS "entityCategoryType"
+          FROM "CatalogCategoryMapping" mapping
+          JOIN "EntityCategory" ec ON ec."id" = mapping."entityCategoryId"
+          WHERE mapping."organizationId" = $1::text
+            AND mapping."catalogId" = c."id"
+            AND (
+              mapping."sourceCategory" = ''
+              OR lower(mapping."sourceCategory") = lower(COALESCE(ci."metadata"->>'category', ''))
+            )
+          ORDER BY CASE WHEN mapping."sourceCategory" = '' THEN 1 ELSE 0 END
+          LIMIT 1
+        ) mapped_category ON TRUE
         LEFT JOIN LATERAL (
           SELECT
             rsi."id" AS "rateScheduleItemId",
@@ -3741,7 +3760,15 @@ export class PrismaApiStore {
       if (!item) {
         return { reg: 0, over: 0, double: 0, total: 0 };
       }
-      const breakdown = getExtendedWorksheetHourBreakdown(item, revisionSchedules, item.quantity);
+      const breakdown = getExtendedWorksheetUnitBreakdown(
+        item,
+        revisionSchedules,
+        entityCategoryRows,
+        item.quantity,
+      );
+      if (breakdown.kind !== "labour_hours") {
+        return { reg: 0, over: 0, double: 0, total: 0 };
+      }
       let reg = 0;
       let over = 0;
       let double = 0;
@@ -4218,14 +4245,20 @@ export class PrismaApiStore {
   }
 
   private estimateItemExtendedHours(item: {
+    categoryId?: string | null;
     category?: string | null;
     entityType?: string | null;
     quantity?: number | null;
     tierUnits?: Record<string, number> | null;
     rateScheduleItemId?: string | null;
+    laborUnitId?: string | null;
   }) {
-    // Hours roll up only from rate-schedule-linked items (tier unit breakdown);
-    // any other category contributes zero hours.
+    // tierUnits also stores equipment duration and other unit counts. This
+    // compatibility path is used by strategy snapshots that do not carry the
+    // full category definitions, so only explicitly labour-like rows qualify.
+    const categoryIdentity = `${item.category ?? ""} ${item.entityType ?? ""}`.toLowerCase();
+    const labourLike = Boolean(item.laborUnitId) || /\blabou?r\b/.test(categoryIdentity);
+    if (!labourLike) return 0;
     const hasTierUnits = !!item.tierUnits && Object.keys(item.tierUnits).length > 0;
     const linkedToSchedule = !!item.rateScheduleItemId;
     if (!hasTierUnits && !linkedToSchedule) {
@@ -7661,6 +7694,67 @@ export class PrismaApiStore {
       orderBy: { order: "asc" },
     });
     return categories.map(mapEntityCategory);
+  }
+
+  async listCatalogCategoryMappings() {
+    return this.db.catalogCategoryMapping.findMany({
+      where: { organizationId: this.organizationId },
+      include: {
+        catalog: { select: { id: true, name: true, kind: true } },
+        entityCategory: { select: { id: true, name: true, entityType: true } },
+      },
+      orderBy: [
+        { catalog: { name: "asc" } },
+        { sourceCategory: "asc" },
+      ],
+    });
+  }
+
+  async upsertCatalogCategoryMapping(input: {
+    catalogId: string;
+    sourceCategory?: string | null;
+    entityCategoryId: string;
+  }) {
+    await this.requireCatalog(input.catalogId);
+    const entityCategory = await this.db.entityCategory.findFirst({
+      where: { id: input.entityCategoryId, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!entityCategory) throw new Error("Estimate category not found");
+    const sourceCategory = input.sourceCategory?.trim() ?? "";
+    const mapping = await this.db.catalogCategoryMapping.upsert({
+      where: {
+        organizationId_catalogId_sourceCategory: {
+          organizationId: this.organizationId,
+          catalogId: input.catalogId,
+          sourceCategory,
+        },
+      },
+      create: {
+        id: createId("ccm"),
+        organizationId: this.organizationId,
+        catalogId: input.catalogId,
+        sourceCategory,
+        entityCategoryId: input.entityCategoryId,
+      },
+      update: { entityCategoryId: input.entityCategoryId },
+      include: {
+        catalog: { select: { id: true, name: true, kind: true } },
+        entityCategory: { select: { id: true, name: true, entityType: true } },
+      },
+    });
+    await this.rebuildLineItemSearchIndex();
+    return mapping;
+  }
+
+  async deleteCatalogCategoryMapping(id: string) {
+    const mapping = await this.db.catalogCategoryMapping.findFirst({
+      where: { id, organizationId: this.organizationId },
+      select: { id: true },
+    });
+    if (!mapping) throw new Error("Catalog category mapping not found");
+    await this.db.catalogCategoryMapping.delete({ where: { id } });
+    await this.rebuildLineItemSearchIndex();
   }
 
   async getEntityCategory(id: string): Promise<EntityCategory | null> {

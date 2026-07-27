@@ -16,7 +16,6 @@ import {
   getCalculationTypeOption,
   getTierLabel,
 } from "@/lib/entity-category-calculation";
-import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
@@ -49,6 +48,54 @@ function sumTierUnits(tierUnits: Record<string, number> | undefined): number {
   );
 }
 
+function findScheduleForItem(
+  item: WorkspaceWorksheetItem,
+  schedules: ProjectWorkspaceData["rateSchedules"],
+) {
+  if (item.rateScheduleItemId) {
+    const direct = schedules.find((schedule) =>
+      (schedule.items ?? []).some((candidate) => candidate.id === item.rateScheduleItemId),
+    );
+    if (direct) return direct;
+  }
+  const entityName = item.entityName?.trim();
+  return entityName
+    ? schedules.find((schedule) =>
+        (schedule.items ?? []).some(
+          (candidate) => candidate.name === entityName || candidate.code === entityName,
+        ),
+      ) ?? null
+    : null;
+}
+
+function sortedScheduleTiers(
+  schedule: ProjectWorkspaceData["rateSchedules"][number] | null,
+) {
+  return [...(schedule?.tiers ?? [])].sort(
+    (left, right) =>
+      Number(left.sortOrder ?? Number.POSITIVE_INFINITY)
+        - Number(right.sortOrder ?? Number.POSITIVE_INFINITY)
+      || Number(left.multiplier) - Number(right.multiplier),
+  );
+}
+
+function readConfiguredTierSlots(
+  item: WorkspaceWorksheetItem,
+  schedules: ProjectWorkspaceData["rateSchedules"],
+) {
+  const schedule = findScheduleForItem(item, schedules);
+  const tiers = sortedScheduleTiers(schedule);
+  const read = (index: number, fallback: string) => {
+    const tierId = tiers[index]?.id;
+    return Number(item.tierUnits?.[tierId ?? fallback] ?? item.tierUnits?.[fallback]) || 0;
+  };
+  return {
+    unit1: read(0, "__reg"),
+    unit2: read(1, "__ot"),
+    unit3: read(2, "__dt"),
+  };
+}
+
 export function ItemDetailDrawer({
   item,
   workspace,
@@ -66,10 +113,9 @@ export function ItemDetailDrawer({
   const [classificationDraftKey, setClassificationDraftKey] = useState<ClassificationKey>("masterformat");
   const [classificationDraftValue, setClassificationDraftValue] = useState("");
 
-  // Reg/OT/DT slot hours derived by bucketing tierUnits via the matching schedule.
-  const initialBuckets = bucketHoursByMultiplier(
-    getWorksheetHourBreakdown(item, workspace.rateSchedules ?? []),
-  );
+  // UI slots follow the configured rate-schedule order; their labels and
+  // multipliers are tenant-defined.
+  const initialSlots = readConfiguredTierSlots(item, workspace.rateSchedules ?? []);
   const [form, setForm] = useState({
     entityName: item.entityName,
     vendor: item.vendor ?? "",
@@ -79,9 +125,9 @@ export function ItemDetailDrawer({
     cost: item.cost,
     markup: item.markup,
     price: item.price,
-    unit1: initialBuckets.reg,
-    unit2: initialBuckets.ot,
-    unit3: initialBuckets.dt,
+    unit1: initialSlots.unit1,
+    unit2: initialSlots.unit2,
+    unit3: initialSlots.unit3,
     unitsSingle: sumTierUnits(item.tierUnits),
     phaseId: item.phaseId ?? "",
     masterFormatCode: getClassificationCode(item.classification, "masterformat"),
@@ -90,9 +136,7 @@ export function ItemDetailDrawer({
   });
 
   useEffect(() => {
-    const buckets = bucketHoursByMultiplier(
-      getWorksheetHourBreakdown(item, workspace.rateSchedules ?? []),
-    );
+    const slots = readConfiguredTierSlots(item, workspace.rateSchedules ?? []);
     setForm({
       entityName: item.entityName,
       vendor: item.vendor ?? "",
@@ -102,9 +146,9 @@ export function ItemDetailDrawer({
       cost: item.cost,
       markup: item.markup,
       price: item.price,
-      unit1: buckets.reg,
-      unit2: buckets.ot,
-      unit3: buckets.dt,
+      unit1: slots.unit1,
+      unit2: slots.unit2,
+      unit3: slots.unit3,
       unitsSingle: sumTierUnits(item.tierUnits),
       phaseId: item.phaseId ?? "",
       masterFormatCode: getClassificationCode(item.classification, "masterformat"),
@@ -189,30 +233,8 @@ export function ItemDetailDrawer({
   }
 
   // Find rate schedule for this row (by rateScheduleItemId or entity name).
-  const rowSchedule = (() => {
-    const schedules = workspace.rateSchedules ?? [];
-    if (item.rateScheduleItemId) {
-      const direct = schedules.find((schedule) =>
-        (schedule.items ?? []).some((s) => s.id === item.rateScheduleItemId),
-      );
-      if (direct) return direct;
-    }
-    const entityName = item.entityName?.trim();
-    if (entityName) {
-      return (
-        schedules.find((schedule) =>
-          (schedule.items ?? []).some(
-            (s) => s.name === entityName || s.code === entityName,
-          ),
-        ) ?? null
-      );
-    }
-    return null;
-  })();
-
-  function findTierIdForMultiplier(multiplier: number): string | null {
-    return rowSchedule?.tiers.find((t) => Number(t.multiplier) === multiplier)?.id ?? null;
-  }
+  const rowSchedule = findScheduleForItem(item, workspace.rateSchedules ?? []);
+  const rowTiers = sortedScheduleTiers(rowSchedule);
 
   const TIER_FALLBACK_KEY = { unit1: "__reg", unit2: "__ot", unit3: "__dt" } as const;
 
@@ -220,8 +242,8 @@ export function ItemDetailDrawer({
     field: "unit1" | "unit2" | "unit3",
     nextValue: number,
   ): Record<string, number> {
-    const multiplier = field === "unit1" ? 1 : field === "unit2" ? 1.5 : 2;
-    const tierId = findTierIdForMultiplier(multiplier);
+    const tierIndex = field === "unit1" ? 0 : field === "unit2" ? 1 : 2;
+    const tierId = rowTiers[tierIndex]?.id ?? null;
     const next: Record<string, number> = { ...(item.tierUnits ?? {}) };
     if (tierId) {
       if (nextValue === 0) {
@@ -311,8 +333,8 @@ export function ItemDetailDrawer({
   };
 
   function getSlotLabel(slot: "unit1" | "unit2" | "unit3", fallback: string): string {
-    const multiplier = slot === "unit1" ? 1 : slot === "unit2" ? 1.5 : 2;
-    const tier = rowSchedule?.tiers.find((t) => Number(t.multiplier) === multiplier);
+    const tierIndex = slot === "unit1" ? 0 : slot === "unit2" ? 1 : 2;
+    const tier = rowTiers[tierIndex];
     if (tier) {
       return getTierLabel(catDef, tier.id, tier.name ?? fallback);
     }
@@ -542,22 +564,22 @@ export function ItemDetailDrawer({
               </div>
             </div>
 
-            {/* Multiplier-tier inputs (Labour Reg/OT/DT). */}
+            {/* Tenant-configured multiplier-tier inputs. */}
             {categoryUnitInputMode(catDef) === "multiplier" && (
               <div className="grid grid-cols-3 gap-3">
                 {renderNumericField(
                   "unit1",
-                  getSlotLabel("unit1", "Reg"),
+                  getSlotLabel("unit1", "Unit 1"),
                   form.unit1,
                 )}
                 {renderNumericField(
                   "unit2",
-                  getSlotLabel("unit2", "OT"),
+                  getSlotLabel("unit2", "Unit 2"),
                   form.unit2,
                 )}
                 {renderNumericField(
                   "unit3",
-                  getSlotLabel("unit3", "DT"),
+                  getSlotLabel("unit3", "Unit 3"),
                   form.unit3,
                 )}
               </div>
