@@ -17,6 +17,7 @@ import {
   getTierLabel,
 } from "@/lib/entity-category-calculation";
 import { formatMoney } from "@/lib/format";
+import { isWorksheetCostLibraryManaged } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
 import { UomSelect } from "@/components/shared/uom-select";
@@ -323,6 +324,12 @@ export function ItemDetailDrawer({
   }
 
   const isEditable = (field: string) => {
+    if (
+      field === "cost"
+      && isWorksheetCostLibraryManaged(item)
+    ) {
+      return false;
+    }
     if (!catDef) return true;
     if (field === "unit1" || field === "unit2" || field === "unit3" || field === "unitsSingle") {
       return categoryAllowsEditingTierUnits(catDef);
