@@ -390,20 +390,24 @@ export function Toggle({
   checked,
   onChange,
   className,
+  disabled = false,
 }: {
   checked: boolean;
   onChange: (checked: boolean) => void;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       className={cn(
         "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border border-line transition-colors duration-200",
         checked ? "bg-accent" : "bg-panel2",
+        disabled && "cursor-not-allowed opacity-50",
         className
       )}
     >

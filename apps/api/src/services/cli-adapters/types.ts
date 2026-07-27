@@ -68,6 +68,7 @@ export interface McpEnv {
   BIDWRIGHT_PROJECT_ID: string;
   BIDWRIGHT_REVISION_ID: string;
   BIDWRIGHT_QUOTE_ID: string;
+  BIDWRIGHT_AGENT_MODE: "qa" | "assist_edit" | "build_estimate";
 }
 
 export interface PrepareWorkspaceCtx {

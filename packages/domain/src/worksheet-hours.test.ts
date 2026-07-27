@@ -1,7 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { getExtendedWorksheetHourBreakdown, getWorksheetHourBreakdown } from "./worksheet-hours";
+import {
+  getExtendedWorksheetHourBreakdown,
+  getWorksheetHourBreakdown,
+  getWorksheetUnitKind,
+  rollupWorksheetUnits,
+} from "./worksheet-hours";
 
 const labourSchedules = [
   {
@@ -104,4 +109,71 @@ test("getWorksheetHourBreakdown sorts tiers by sortOrder then multiplier", () =>
     breakdown.tiers.map((t) => t.tierId),
     ["tier-dt", "tier-reg"],
   );
+});
+
+test("getExtendedWorksheetHourBreakdown preserves a zero quantity", () => {
+  const breakdown = getExtendedWorksheetHourBreakdown(
+    {
+      rateScheduleItemId: "rsi-labour",
+      tierUnits: { "tier-reg": 8 },
+    },
+    labourSchedules,
+    0,
+  );
+  assert.equal(breakdown.total, 0);
+});
+
+test("semantic unit kind comes from category analytics instead of tier presence", () => {
+  const categories = [
+    { id: "cat-labour", name: "Crew", analyticsBucket: "labour", calculationType: "tiered_rate" },
+    { id: "cat-equipment", name: "Rental", analyticsBucket: "equipment", calculationType: "duration_rate" },
+  ];
+  assert.equal(getWorksheetUnitKind({ categoryId: "cat-labour", tierUnits: { daily: 1 } }, categories), "labour_hours");
+  assert.equal(getWorksheetUnitKind({ categoryId: "cat-equipment", tierUnits: { regular: 8 } }, categories), "equipment_duration");
+});
+
+test("rollupWorksheetUnits keeps equipment duration out of labour hours and extends quantity once", () => {
+  const schedules = [
+    ...labourSchedules,
+    {
+      tiers: [
+        { id: "tier-day", name: "Daily", multiplier: 1, sortOrder: 1, uom: "DAY" },
+        { id: "tier-week", name: "Weekly", multiplier: 3, sortOrder: 2, uom: "WK" },
+      ],
+      items: [{ id: "rsi-equipment", name: "Lift", code: "LIFT" }],
+    },
+  ];
+  const categories = [
+    { id: "cat-labour", name: "Labour", analyticsBucket: "labour", calculationType: "tiered_rate" },
+    { id: "cat-equipment", name: "Equipment", analyticsBucket: "equipment", calculationType: "duration_rate" },
+  ];
+  const rollup = rollupWorksheetUnits(
+    [
+      {
+        categoryId: "cat-labour",
+        rateScheduleItemId: "rsi-labour",
+        tierUnits: { "tier-reg": 8, "tier-ot": 2 },
+        quantity: 2,
+      },
+      {
+        categoryId: "cat-equipment",
+        rateScheduleItemId: "rsi-equipment",
+        tierUnits: { "tier-day": 5, "tier-week": 1 },
+        quantity: 3,
+      },
+    ],
+    schedules,
+    categories,
+  );
+
+  assert.equal(rollup.labourHours.total, 20);
+  assert.deepEqual(rollup.labourHours.tiers.map((tier) => [tier.name, tier.total]), [
+    ["Regular", 16],
+    ["Overtime", 4],
+  ]);
+  assert.equal(rollup.equipmentDuration.total, 18);
+  assert.deepEqual(rollup.equipmentDuration.tiers.map((tier) => [tier.name, tier.total]), [
+    ["Daily", 15],
+    ["Weekly", 3],
+  ]);
 });

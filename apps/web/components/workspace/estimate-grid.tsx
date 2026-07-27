@@ -90,8 +90,7 @@ import {
 import { downloadCsv } from "@/lib/csv";
 import { formatMoney, formatPercent } from "@/lib/format";
 import {
-  bucketHoursByMultiplier,
-  getWorksheetHourBreakdown,
+  rollupWorksheetUnits,
 } from "@/lib/worksheet-hours";
 import {
   categoryAllowsEditingTierUnits,
@@ -352,9 +351,9 @@ const COLUMN_LABELS: Record<ColumnId, string> = {
   uom: "UOM",
   factors: "Factors",
   units: "Units",
-  unit1: "Reg",
-  unit2: "OT",
-  unit3: "DT",
+  unit1: "Unit 1",
+  unit2: "Unit 2",
+  unit3: "Unit 3",
   cost: "Cost",
   markup: "Markup",
   price: "Price",
@@ -603,9 +602,9 @@ function buildEstimatePhaseOptions(phases: EstimatePhase[]) {
 
 /* ─── Tier slot helpers (unit1/2/3 are UI-only column ids) ─── */
 
-const TIER_SLOT_MULTIPLIER: Record<"unit1" | "unit2" | "unit3", number> = {
-  unit1: 1,
-  unit2: 1.5,
+const TIER_SLOT_INDEX: Record<"unit1" | "unit2" | "unit3", number> = {
+  unit1: 0,
+  unit2: 1,
   unit3: 2,
 };
 
@@ -616,10 +615,19 @@ const TIER_SLOT_FALLBACK_KEY: Record<"unit1" | "unit2" | "unit3", string> = {
 };
 
 const TIER_SLOT_FALLBACK_LABEL: Record<"unit1" | "unit2" | "unit3", string> = {
-  unit1: "Reg",
-  unit2: "OT",
-  unit3: "DT",
+  unit1: "Unit 1",
+  unit2: "Unit 2",
+  unit3: "Unit 3",
 };
+
+function sortedScheduleTiers(schedule: RateSchedule | null) {
+  return [...(schedule?.tiers ?? [])].sort(
+    (left, right) =>
+      Number(left.sortOrder ?? Number.POSITIVE_INFINITY)
+        - Number(right.sortOrder ?? Number.POSITIVE_INFINITY)
+      || Number(left.multiplier) - Number(right.multiplier),
+  );
+}
 
 function findScheduleForRow(row: WorkspaceWorksheetItem, schedules: RateSchedule[]): RateSchedule | null {
   if (row.rateScheduleItemId) {
@@ -645,8 +653,7 @@ function findTierIdForSlot(
   slot: "unit1" | "unit2" | "unit3",
 ): string | null {
   if (!schedule) return null;
-  const target = TIER_SLOT_MULTIPLIER[slot];
-  const tier = (schedule.tiers ?? []).find((t) => Number(t.multiplier) === target);
+  const tier = sortedScheduleTiers(schedule)[TIER_SLOT_INDEX[slot]];
   return tier?.id ?? null;
 }
 
@@ -661,14 +668,11 @@ function readTierSlotHours(
     const v = Number(tierUnits[tierId]);
     return Number.isFinite(v) ? v : 0;
   }
-  // Look for any tier in the schedule with the target multiplier even via prefix.
+  // Accept shortened legacy tier IDs for the configured tier in this slot.
   if (schedule) {
-    const target = TIER_SLOT_MULTIPLIER[slot];
+    const configuredTierId = findTierIdForSlot(schedule, slot);
     for (const [key, raw] of Object.entries(tierUnits)) {
-      const matched = (schedule.tiers ?? []).find(
-        (t) => (t.id === key || t.id.startsWith(key)) && Number(t.multiplier) === target,
-      );
-      if (matched) {
+      if (configuredTierId && (configuredTierId === key || configuredTierId.startsWith(key))) {
         const v = Number(raw);
         return Number.isFinite(v) ? v : 0;
       }
@@ -750,19 +754,12 @@ function getRowSlotHours(
   row: WorkspaceWorksheetItem,
   schedules: RateSchedule[],
 ): { unit1: number; unit2: number; unit3: number } {
-  const breakdown = getWorksheetHourBreakdown(row, schedules);
-  const buckets = bucketHoursByMultiplier(breakdown);
-  // If the breakdown found nothing (no tier match), fall back to synthetic keys
-  // and any positive unmatched tierUnits values.
-  if (buckets.reg === 0 && buckets.ot === 0 && buckets.dt === 0) {
-    const tierUnits = row.tierUnits ?? {};
-    return {
-      unit1: Number(tierUnits["__reg"]) || 0,
-      unit2: Number(tierUnits["__ot"]) || 0,
-      unit3: Number(tierUnits["__dt"]) || 0,
-    };
-  }
-  return { unit1: buckets.reg, unit2: buckets.ot, unit3: buckets.dt };
+  const schedule = findScheduleForRow(row, schedules);
+  return {
+    unit1: readTierSlotHours(row, schedule, "unit1"),
+    unit2: readTierSlotHours(row, schedule, "unit2"),
+    unit3: readTierSlotHours(row, schedule, "unit3"),
+  };
 }
 
 function getTierSlotLabel(
@@ -3510,15 +3507,18 @@ export function EstimateGrid({
 
   // Totals
   const totals = useMemo(() => {
+    const unitRollup = rollupWorksheetUnits(
+      visibleRows.map((row) => displayLineItem(row)),
+      workspace.rateSchedules ?? [],
+      entityCategories,
+    );
     return {
       cost: visibleRows.reduce((sum, r) => sum + displayLineItem(r).cost * r.quantity, 0),
       price: visibleRows.reduce((sum, r) => sum + displayLineItem(r).price, 0),
-      regHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(displayLineItem(r)).unit1 * r.quantity, 0),
-      otHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(displayLineItem(r)).unit2 * r.quantity, 0),
-      dtHrs: visibleRows.reduce((sum, r) => sum + getRowHourBreakdown(displayLineItem(r)).unit3 * r.quantity, 0),
+      unitRollup,
       count: visibleRows.length,
     };
-  }, [visibleRows, getRowHourBreakdown, displayLineItem]);
+  }, [visibleRows, displayLineItem, workspace.rateSchedules, entityCategories]);
 
   const lineFactorsByItemId = useMemo(() => {
     const map = new Map<string, EstimateFactor[]>();
@@ -4203,15 +4203,13 @@ export function EstimateGrid({
         const existingUnit2 = incomingUnit2 || existingSlots.unit2;
         const existingUnit3 = incomingUnit3 || existingSlots.unit3;
         const hasProductivityHours = !!(catalogData?.laborUnitId ?? row?.laborUnitId) && (existingUnit1 > 0 || existingUnit2 > 0 || existingUnit3 > 0);
-        const sortedTiers = [...schedule.tiers].sort((left, right) => left.multiplier - right.multiplier || left.sortOrder - right.sortOrder);
+        const sortedTiers = sortedScheduleTiers(schedule);
         const tierUnits: Record<string, number> = {};
         if (hasProductivityHours) {
-          const regular = sortedTiers.find((tier) => tier.multiplier === 1) ?? sortedTiers[0];
-          const overtime = sortedTiers.find((tier) => tier.multiplier === 1.5);
-          const doubletime = sortedTiers.find((tier) => tier.multiplier === 2);
-          if (regular && existingUnit1 > 0) tierUnits[regular.id] = existingUnit1;
-          if (overtime && existingUnit2 > 0) tierUnits[overtime.id] = existingUnit2;
-          if (doubletime && existingUnit3 > 0) tierUnits[doubletime.id] = existingUnit3;
+          const [firstTier, secondTier, thirdTier] = sortedTiers;
+          if (firstTier && existingUnit1 > 0) tierUnits[firstTier.id] = existingUnit1;
+          if (secondTier && existingUnit2 > 0) tierUnits[secondTier.id] = existingUnit2;
+          if (thirdTier && existingUnit3 > 0) tierUnits[thirdTier.id] = existingUnit3;
         } else {
           for (const tier of schedule.tiers) {
             tierUnits[tier.id] = 0;
@@ -4487,12 +4485,10 @@ export function EstimateGrid({
       );
       if (schedule) {
         const next: Record<string, number> = {};
-        const reg = schedule.tiers.find((t) => Number(t.multiplier) === 1);
-        const ot = schedule.tiers.find((t) => Number(t.multiplier) === 1.5);
-        const dt = schedule.tiers.find((t) => Number(t.multiplier) === 2);
-        if (reg && item.unit1) next[reg.id] = Number(item.unit1) || 0;
-        if (ot && item.unit2) next[ot.id] = Number(item.unit2) || 0;
-        if (dt && item.unit3) next[dt.id] = Number(item.unit3) || 0;
+        const [firstTier, secondTier, thirdTier] = sortedScheduleTiers(schedule);
+        if (firstTier && item.unit1) next[firstTier.id] = Number(item.unit1) || 0;
+        if (secondTier && item.unit2) next[secondTier.id] = Number(item.unit2) || 0;
+        if (thirdTier && item.unit3) next[thirdTier.id] = Number(item.unit3) || 0;
         tierUnits = next;
       }
     } else if (itemNeedsLaborRateSelection(item) && (item.unit1 || item.unit2 || item.unit3)) {
@@ -4697,12 +4693,10 @@ export function EstimateGrid({
         );
         if (schedule) {
           const nextTierUnits: Record<string, number> = {};
-          const regular = schedule.tiers.find((tier) => Number(tier.multiplier) === 1);
-          const overtime = schedule.tiers.find((tier) => Number(tier.multiplier) === 1.5);
-          const doubletime = schedule.tiers.find((tier) => Number(tier.multiplier) === 2);
-          if (regular && item.unit1) nextTierUnits[regular.id] = Number(item.unit1) || 0;
-          if (overtime && item.unit2) nextTierUnits[overtime.id] = Number(item.unit2) || 0;
-          if (doubletime && item.unit3) nextTierUnits[doubletime.id] = Number(item.unit3) || 0;
+          const [firstTier, secondTier, thirdTier] = sortedScheduleTiers(schedule);
+          if (firstTier && item.unit1) nextTierUnits[firstTier.id] = Number(item.unit1) || 0;
+          if (secondTier && item.unit2) nextTierUnits[secondTier.id] = Number(item.unit2) || 0;
+          if (thirdTier && item.unit3) nextTierUnits[thirdTier.id] = Number(item.unit3) || 0;
           stagedPatch.tierUnits = nextTierUnits;
         }
       }
@@ -5446,7 +5440,7 @@ export function EstimateGrid({
       sourceEvidence: item.sourceEvidence ?? {},
     };
 
-    // Only multiplier-tier categories (Labour Reg/OT/DT) seed per-tier hours.
+    // Only multiplier-tier categories seed per-tier hours.
     // Duration categories keep tierUnits empty and price by Qty × the UoM rate.
     if (item.rateScheduleItemId && categoryUnitInputMode(targetCategory) === "multiplier") {
       const schedule = (workspace.rateSchedules ?? []).find((entry) =>
@@ -5456,12 +5450,10 @@ export function EstimateGrid({
         const seeded: Record<string, number> = Object.fromEntries(
           schedule.tiers.map((tier) => [tier.id, 0]),
         );
-        const reg = schedule.tiers.find((t) => Number(t.multiplier) === 1);
-        const ot = schedule.tiers.find((t) => Number(t.multiplier) === 1.5);
-        const dt = schedule.tiers.find((t) => Number(t.multiplier) === 2);
-        if (reg && item.unit1) seeded[reg.id] = Number(item.unit1) || 0;
-        if (ot && item.unit2) seeded[ot.id] = Number(item.unit2) || 0;
-        if (dt && item.unit3) seeded[dt.id] = Number(item.unit3) || 0;
+        const [firstTier, secondTier, thirdTier] = sortedScheduleTiers(schedule);
+        if (firstTier && item.unit1) seeded[firstTier.id] = Number(item.unit1) || 0;
+        if (secondTier && item.unit2) seeded[secondTier.id] = Number(item.unit2) || 0;
+        if (thirdTier && item.unit3) seeded[thirdTier.id] = Number(item.unit3) || 0;
         payload.tierUnits = seeded;
       }
     }
@@ -7886,16 +7878,22 @@ export function EstimateGrid({
                     {isColVisible("factors") && <td className="border-t border-line px-2 py-2" />}
                     {isColVisible("units") && (
                       <td className="border-t border-line px-1 py-2">
-                        <div className="flex items-center justify-center gap-1 tabular-nums text-xs">
-                          <span title="Regular">{totals.regHrs > 0 ? totals.regHrs.toLocaleString() : ""}</span>
-                          {(totals.otHrs > 0 || totals.dtHrs > 0) && (
-                            <>
-                              <span className="text-fg/15">·</span>
-                              <span title="Overtime">{totals.otHrs > 0 ? totals.otHrs.toLocaleString() : "0"}</span>
-                              <span className="text-fg/15">·</span>
-                              <span title="Double Time">{totals.dtHrs > 0 ? totals.dtHrs.toLocaleString() : "0"}</span>
-                            </>
-                          )}
+                        <div className="space-y-0.5 text-center tabular-nums text-[10px]">
+                          {totals.unitRollup.labourHours.tiers.map((tier) => (
+                            <div key={`labour-${tier.tierId}`} title={`${tier.name} labour hours`}>
+                              <span className="text-fg/45">{tier.name}</span>{" "}
+                              <span>{tier.total.toLocaleString()} h</span>
+                            </div>
+                          ))}
+                          {totals.unitRollup.equipmentDuration.tiers.map((tier) => (
+                            <div key={`equipment-${tier.tierId}`} title={`${tier.name} equipment usage`}>
+                              <span className="text-fg/45">{tier.name}</span>{" "}
+                              <span>{tier.total.toLocaleString()} {tier.uom || "units"}</span>
+                            </div>
+                          ))}
+                          {totals.unitRollup.labourHours.total === 0
+                            && totals.unitRollup.equipmentDuration.total === 0
+                            && <span className="text-fg/30">—</span>}
                         </div>
                       </td>
                     )}

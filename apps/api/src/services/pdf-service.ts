@@ -1,3 +1,12 @@
+import {
+  PDF_DOCUMENT_PROFILES,
+  PDF_SECTION_KEYS,
+  getExtendedWorksheetUnitBreakdown,
+  normalizePdfDocumentType,
+  type PricingLadderSnapshot,
+  type WorksheetUnitKind,
+} from "@bidwright/domain";
+
 export interface PdfDataPackage {
   quoteNumber: string;
   revisionNumber: number;
@@ -17,6 +26,7 @@ export interface PdfDataPackage {
   estimatedProfit: number;
   estimatedMargin: number;
   totalHours: number;
+  pricingLadder: PricingLadderSnapshot | null;
   breakoutPackage: unknown[];
   lineItems: Array<{
     lineOrder: number;
@@ -27,12 +37,17 @@ export interface PdfDataPackage {
     cost: number;
     markup: number;
     price: number;
-    /** Per-unit hour breakdown bucketed by canonical tier multiplier. */
-    regHours: number;
-    otHours: number;
-    dtHours: number;
-    /** Per-unit total hours including tiers outside the reg/ot/dt buckets. */
-    itemTotalHours: number;
+    unitKind: WorksheetUnitKind;
+    unitTiers: Array<{
+      tierId: string;
+      name: string;
+      multiplier: number;
+      sortOrder: number;
+      uom: string;
+      units: number;
+    }>;
+    /** Per-unit semantic units. Quantity is applied by summary renderers. */
+    itemTotalUnits: number;
     vendor: string;
     description: string;
     phaseName?: string;
@@ -244,40 +259,32 @@ export function buildPdfDataPackage(
 ): PdfDataPackage {
   const rev = workspace.currentRevision;
 
-  // Build a tierId → multiplier map across all schedules so we can bucket
-  // per-item tierUnits hours into reg/ot/dt and compute itemTotalHours.
-  const tierMultipliers = new Map<string, number>();
-  for (const schedule of (workspace.rateSchedules ?? []) as Array<{ tiers?: Array<{ id: string; multiplier?: number | null }> }>) {
-    for (const tier of schedule.tiers ?? []) {
-      tierMultipliers.set(tier.id, Number(tier.multiplier) || 0);
-    }
-  }
-  const bucketHours = (tierUnits: Record<string, number> | null | undefined) => {
-    let regHours = 0;
-    let otHours = 0;
-    let dtHours = 0;
-    let itemTotalHours = 0;
-    for (const [tierId, rawHours] of Object.entries(tierUnits ?? {})) {
-      const hours = Number(rawHours) || 0;
-      if (hours <= 0) continue;
-      itemTotalHours += hours;
-      const m = tierMultipliers.get(tierId) ?? 0;
-      if (m === 1) regHours += hours;
-      else if (m === 1.5) otHours += hours;
-      else if (m === 2) dtHours += hours;
-    }
-    return { regHours, otHours, dtHours, itemTotalHours };
-  };
-
   const lineItems = (workspace.worksheets ?? []).flatMap((ws: any) =>
-    (ws.items ?? []).map((item: any) => ({
-      ...item,
-      ...bucketHours(item.tierUnits),
-      worksheetName: ws.name,
-      phaseName: (workspace.phases ?? []).find(
-        (p: any) => p.id === item.phaseId
-      )?.name,
-    }))
+    (ws.items ?? []).map((item: any) => {
+      const units = getExtendedWorksheetUnitBreakdown(
+        item,
+        workspace.rateSchedules ?? [],
+        workspace.entityCategories ?? [],
+        1,
+      );
+      return {
+        ...item,
+        unitKind: units.kind,
+        unitTiers: units.tiers.map((tier) => ({
+          tierId: tier.tierId,
+          name: tier.name,
+          multiplier: tier.multiplier,
+          sortOrder: tier.sortOrder,
+          uom: tier.uom,
+          units: tier.hours,
+        })),
+        itemTotalUnits: units.total,
+        worksheetName: ws.name,
+        phaseName: (workspace.phases ?? []).find(
+          (p: any) => p.id === item.phaseId
+        )?.name,
+      };
+    })
   );
 
   return {
@@ -299,6 +306,7 @@ export function buildPdfDataPackage(
     estimatedProfit: rev?.estimatedProfit ?? 0,
     estimatedMargin: rev?.estimatedMargin ?? 0,
     totalHours: rev?.totalHours ?? 0,
+    pricingLadder: workspace.estimate?.totals?.pricingLadder ?? rev?.pricingLadder ?? null,
     breakoutPackage: rev?.breakoutPackage ?? [],
     lineItems,
     phases: (workspace.phases ?? []).map((p: any) => ({
@@ -396,29 +404,30 @@ function insertCustomSectionBeforePricing(order: string[], key: string) {
   else order.splice(pricingIndex, 0, key);
 }
 
-// Per-document-type layout presets. These force the characteristics that DEFINE
-// each document type on top of the user's saved layout options, so the variants
-// render as meaningfully different documents:
-//   • backup   = internal estimating copy (cost/markup columns, hours + labour)
-//   • sitecopy = field copy with no pricing of any kind
-// Other types (main/closeout/schedule) have no preset and use the raw options.
-const TEMPLATE_PRESETS: Record<string, Record<string, unknown>> = {
-  // Proposal is always customer-facing — internal cost/markup/margin never leak,
-  // regardless of saved options (cost visibility is driven by document type).
-  main: {
-    customerFacing: true,
-  },
-  backup: {
-    customerFacing: false,
-    lineItemOptions: { showCostColumn: true, showMarkupColumn: true },
-    sections: { hoursSummary: true, labourSummary: true },
-  },
-  sitecopy: {
-    customerFacing: true,
-    lineItemOptions: { showCostColumn: false, showMarkupColumn: false },
-    sections: { modifiers: false, pricingSummary: false, hoursSummary: false, labourSummary: false },
-  },
-};
+function applyDocumentProfile(
+  options: PdfLayoutOptions,
+  templateType: string,
+  useProfileDefaults: boolean,
+) {
+  if (!["main", "backup", "sitecopy"].includes(templateType)) return options;
+  const profile = PDF_DOCUMENT_PROFILES[normalizePdfDocumentType(templateType)];
+  const next: PdfLayoutOptions = {
+    ...options,
+    customerFacing: profile.customerFacing,
+    sections: { ...options.sections },
+    lineItemOptions: { ...options.lineItemOptions },
+  };
+  for (const key of PDF_SECTION_KEYS) {
+    const capability = profile.sections[key];
+    if (!capability.available) next.sections[key] = false;
+    else if (useProfileDefaults || capability.locked) next.sections[key] = capability.defaultEnabled;
+  }
+  if (profile.customerFacing) {
+    next.lineItemOptions.showCostColumn = false;
+    next.lineItemOptions.showMarkupColumn = false;
+  }
+  return next;
+}
 
 export function generatePdfHtml(
   data: PdfDataPackage,
@@ -427,10 +436,7 @@ export function generatePdfHtml(
 ): string {
   const defaults = getDefaultPdfLayoutOptions();
   let opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
-  const templatePreset = TEMPLATE_PRESETS[templateType];
-  if (templatePreset) {
-    opts = deepMerge(opts, templatePreset);
-  }
+  opts = applyDocumentProfile(opts, templateType, !options);
 
   // Ensure any new section keys present in defaults are added to sectionOrder
   for (const key of defaults.sectionOrder) {
@@ -524,6 +530,36 @@ export function generatePdfHtml(
 
   const renderPricingSummary = (): string => {
     const showCost = !opts.customerFacing;
+    const ladder = data.pricingLadder;
+    if (ladder?.rows?.length) {
+      const rows = ladder.rows.filter((row) =>
+        row.visible
+        && row.rowType !== "profit"
+        && (!opts.customerFacing || row.financialCategory !== "direct_cost"),
+      );
+      let result = `<h2>Price Build</h2>`;
+      result += `<div class="summary-grid">`;
+      if (showCost) {
+        result += `<div class="summary-card"><div class="summary-card-label">Direct Cost</div><div class="summary-card-value">${formatMoney(ladder.directCost)}</div></div>`;
+        result += `<div class="summary-card"><div class="summary-card-label">Line Subtotal</div><div class="summary-card-value">${formatMoney(ladder.lineSubtotal)}</div></div>`;
+      }
+      result += `<div class="summary-card"><div class="summary-card-label">Customer Total</div><div class="summary-card-value">${formatMoney(ladder.grandTotal)}</div></div>`;
+      if (showCost) {
+        result += `<div class="summary-card"><div class="summary-card-label">Margin</div><div class="summary-card-value">${formatPct(ladder.internalMargin)}</div></div>`;
+      }
+      result += `</div>`;
+      result += `<table><thead><tr><th>Layer</th>${showCost ? '<th class="num">Base</th>' : ""}<th class="num">Amount</th><th class="num">Running</th></tr></thead><tbody>`;
+      for (const row of rows) {
+        result += `<tr${row.rowType === "total" ? ' class="totals"' : ""}>
+          <td><strong>${escapeHtml(row.label)}</strong>${row.active ? "" : '<br><span style="color:#888">Inactive</span>'}</td>
+          ${showCost ? `<td class="num">${formatMoney(row.baseAmount)}</td>` : ""}
+          <td class="num">${formatMoney(row.value)}</td>
+          <td class="num"><strong>${formatMoney(row.runningTotal)}</strong></td>
+        </tr>`;
+      }
+      result += `</tbody></table>`;
+      return result;
+    }
     const builder = data.summaryBuilder;
     const summaryTotals = data.summaryTotals;
 
@@ -667,16 +703,21 @@ export function generatePdfHtml(
     const fieldCopy = templateType === "sitecopy";
     const showCost = opts.customerFacing ? false : opts.lineItemOptions.showCostColumn;
     const showMarkup = opts.customerFacing ? false : opts.lineItemOptions.showMarkupColumn;
-    // Site copies are field documents — strip hours and all pricing.
-    const showHours = !fieldCopy;
+    // Semantic units (labour hours, equipment duration, etc.) are operational
+    // data and remain available on field copies; only financial columns hide.
+    const showUnits = true;
     const showPrice = !fieldCopy;
     const groupBy = opts.lineItemOptions.groupBy;
     const showWorksheetColumn = backupCol && groupBy !== "worksheet";
     const descriptorColumnCount = showWorksheetColumn ? 6 : 5;
-    const getItemHours = (item: PdfDataPackage["lineItems"][0]) => item.itemTotalHours;
+    const getItemUnits = (item: PdfDataPackage["lineItems"][0]) => item.itemTotalUnits;
+    const formatItemUnits = (item: PdfDataPackage["lineItems"][0]) =>
+      item.unitTiers
+        .filter((tier) => tier.units > 0)
+        .map((tier) => `${tier.name}: ${tier.units.toLocaleString()}${item.unitKind === "labour_hours" ? " h" : tier.uom ? ` ${tier.uom}` : ""}`)
+        .join("<br>");
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
-      const hours = getItemHours(item);
       let row = `<tr>
         <td>${item.lineOrder}</td>
         <td><strong>${escapeHtml(item.entityName)}</strong>${item.description ? `<br><span style="color:#888">${escapeHtml(item.description)}</span>` : ""}</td>
@@ -686,20 +727,19 @@ export function generatePdfHtml(
         <td>${escapeHtml(item.uom)}</td>
         ${showCost ? `<td class="num">${formatMoney(item.cost)}</td>` : ""}
         ${showMarkup ? `<td class="num">${formatPct(item.markup)}</td>` : ""}
-        ${showHours ? `<td class="num">${hours > 0 ? hours.toLocaleString() : ""}</td>` : ""}
+        ${showUnits ? `<td class="num">${formatItemUnits(item)}</td>` : ""}
         ${showPrice ? `<td class="num"><strong>${formatMoney(item.price)}</strong></td>` : ""}
       </tr>`;
       return row;
     };
 
     const renderTotalsRow = (items: PdfDataPackage["lineItems"], label = `Total (${items.length} items)`) => {
-      const totalCost = items.reduce((sum, item) => sum + item.cost, 0);
+      const totalCost = items.reduce((sum, item) => sum + item.cost * item.quantity, 0);
       const totalPrice = items.reduce((sum, item) => sum + item.price, 0);
-      const totalHrs = items.reduce((sum, item) => sum + getItemHours(item), 0);
       let row = `<tr class="totals"><td colspan="${descriptorColumnCount}">${escapeHtml(label)}</td>`;
       if (showCost) row += `<td class="num">${formatMoney(totalCost)}</td>`;
       if (showMarkup) row += `<td></td>`;
-      if (showHours) row += `<td class="num">${totalHrs.toLocaleString()}</td>`;
+      if (showUnits) row += `<td></td>`;
       if (showPrice) row += `<td class="num">${formatMoney(totalPrice)}</td>`;
       row += `</tr>`;
       return row;
@@ -714,9 +754,9 @@ export function generatePdfHtml(
           <th>#</th><th>Item</th><th>Category</th>
           ${showWorksheetColumn ? "<th>Worksheet</th>" : ""}
           <th class="num">Qty</th><th>UOM</th>
-          ${showCost ? '<th class="num">Cost</th>' : ""}
+          ${showCost ? '<th class="num">Unit Cost</th>' : ""}
           ${showMarkup ? '<th class="num">Markup</th>' : ""}
-          ${showHours ? '<th class="num">Hours</th>' : ""}
+          ${showUnits ? '<th class="num">Units / Hours</th>' : ""}
           ${showPrice ? '<th class="num">Price</th>' : ""}
         </tr></thead><tbody>`;
       for (const item of items) table += renderItemRow(item);
@@ -817,67 +857,91 @@ export function generatePdfHtml(
 
   const renderHoursSummary = (): string => {
     if (templateType === "closeout") return "";
-    return `<h2>Hours Summary</h2>
-      <table><thead><tr><th>Regular</th><th>Overtime (1.5x)</th><th>Double Time (2x)</th><th>Total</th></tr></thead>
+    const labourItems = data.lineItems.filter((item) => item.unitKind === "labour_hours");
+    const tierMap = new Map<string, { name: string; multiplier: number; sortOrder: number }>();
+    for (const item of labourItems) {
+      for (const tier of item.unitTiers) {
+        tierMap.set(tier.tierId, {
+          name: tier.name,
+          multiplier: tier.multiplier,
+          sortOrder: tier.sortOrder,
+        });
+      }
+    }
+    const tiers = [...tierMap.entries()].sort(([, left], [, right]) =>
+      left.sortOrder - right.sortOrder || left.multiplier - right.multiplier
+    );
+    if (tiers.length === 0) return "";
+    const tierTotal = (tierId: string) => labourItems.reduce(
+      (sum, item) => sum + (item.unitTiers.find((tier) => tier.tierId === tierId)?.units ?? 0) * item.quantity,
+      0,
+    );
+    const total = tiers.reduce((sum, [tierId]) => sum + tierTotal(tierId), 0);
+    return `<h2>Labour Hours Summary</h2>
+      <table><thead><tr>${tiers.map(([, tier]) => `<th class="num">${escapeHtml(tier.name)}${tier.multiplier !== 1 ? ` (${tier.multiplier}x)` : ""}</th>`).join("")}<th class="num">Total</th></tr></thead>
       <tbody><tr>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.regHours * i.quantity, 0).toLocaleString()}</td>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.otHours * i.quantity, 0).toLocaleString()}</td>
-        <td class="num">${data.lineItems.reduce((s, i) => s + i.dtHours * i.quantity, 0).toLocaleString()}</td>
-        <td class="num"><strong>${data.totalHours.toLocaleString()}</strong></td>
+        ${tiers.map(([tierId]) => `<td class="num">${tierTotal(tierId).toLocaleString()}</td>`).join("")}
+        <td class="num"><strong>${total.toLocaleString()}</strong></td>
       </tr></tbody></table>`;
   };
 
   const renderLabourSummary = (): string => {
-    if (opts.customerFacing) return "";
-    // Group labour by phase and compute totals
-    const phaseLabour = new Map<string, { reg: number; ot: number; dt: number; total: number; cost: number }>();
-    for (const item of data.lineItems) {
+    const labourItems = data.lineItems.filter((item) => item.unitKind === "labour_hours");
+    const tierMap = new Map<string, { name: string; multiplier: number; sortOrder: number }>();
+    for (const item of labourItems) {
+      for (const tier of item.unitTiers) {
+        tierMap.set(tier.tierId, {
+          name: tier.name,
+          multiplier: tier.multiplier,
+          sortOrder: tier.sortOrder,
+        });
+      }
+    }
+    const tiers = [...tierMap.entries()].sort(([, left], [, right]) =>
+      left.sortOrder - right.sortOrder || left.multiplier - right.multiplier
+    );
+    const phaseLabour = new Map<string, { tiers: Record<string, number>; total: number; cost: number }>();
+    for (const item of labourItems) {
       const key = item.phaseName || "Unphased";
-      const existing = phaseLabour.get(key) ?? { reg: 0, ot: 0, dt: 0, total: 0, cost: 0 };
-      const reg = item.regHours * item.quantity;
-      const ot = item.otHours * item.quantity;
-      const dt = item.dtHours * item.quantity;
-      existing.reg += reg;
-      existing.ot += ot;
-      existing.dt += dt;
-      existing.total += reg + ot + dt;
-      existing.cost += item.cost;
+      const existing = phaseLabour.get(key) ?? { tiers: {}, total: 0, cost: 0 };
+      for (const tier of item.unitTiers) {
+        const extended = tier.units * item.quantity;
+        existing.tiers[tier.tierId] = (existing.tiers[tier.tierId] ?? 0) + extended;
+        existing.total += extended;
+      }
+      existing.cost += item.cost * item.quantity;
       phaseLabour.set(key, existing);
     }
 
     if (phaseLabour.size === 0) return "";
 
     let result = `<h2>Labour Summary</h2><table>
-      <thead><tr><th>Phase</th><th class="num">Reg Hours</th><th class="num">OT Hours</th><th class="num">DT Hours</th><th class="num">Total Hours</th><th class="num">Rate</th><th class="num">Cost</th></tr></thead><tbody>`;
+      <thead><tr><th>Phase</th>${tiers.map(([, tier]) => `<th class="num">${escapeHtml(tier.name)}${tier.multiplier !== 1 ? ` (${tier.multiplier}x)` : ""}</th>`).join("")}<th class="num">Total Hours</th>${opts.customerFacing ? "" : '<th class="num">Rate</th><th class="num">Cost</th>'}</tr></thead><tbody>`;
 
-    let grandReg = 0, grandOt = 0, grandDt = 0, grandTotal = 0, grandCost = 0;
+    const grandTiers: Record<string, number> = {};
+    let grandTotal = 0;
+    let grandCost = 0;
     for (const [phase, v] of phaseLabour) {
       const rate = v.total > 0 ? v.cost / v.total : 0;
-      grandReg += v.reg;
-      grandOt += v.ot;
-      grandDt += v.dt;
+      for (const [tierId, value] of Object.entries(v.tiers)) {
+        grandTiers[tierId] = (grandTiers[tierId] ?? 0) + value;
+      }
       grandTotal += v.total;
       grandCost += v.cost;
       result += `<tr>
         <td>${escapeHtml(phase)}</td>
-        <td class="num">${v.reg.toLocaleString()}</td>
-        <td class="num">${v.ot.toLocaleString()}</td>
-        <td class="num">${v.dt.toLocaleString()}</td>
+        ${tiers.map(([tierId]) => `<td class="num">${(v.tiers[tierId] ?? 0).toLocaleString()}</td>`).join("")}
         <td class="num"><strong>${v.total.toLocaleString()}</strong></td>
-        <td class="num">${formatMoney(rate)}</td>
-        <td class="num">${formatMoney(v.cost)}</td>
+        ${opts.customerFacing ? "" : `<td class="num">${formatMoney(rate)}</td><td class="num">${formatMoney(v.cost)}</td>`}
       </tr>`;
     }
 
     const grandRate = grandTotal > 0 ? grandCost / grandTotal : 0;
     result += `<tr class="totals">
       <td>Total</td>
-      <td class="num">${grandReg.toLocaleString()}</td>
-      <td class="num">${grandOt.toLocaleString()}</td>
-      <td class="num">${grandDt.toLocaleString()}</td>
+      ${tiers.map(([tierId]) => `<td class="num">${(grandTiers[tierId] ?? 0).toLocaleString()}</td>`).join("")}
       <td class="num"><strong>${grandTotal.toLocaleString()}</strong></td>
-      <td class="num">${formatMoney(grandRate)}</td>
-      <td class="num">${formatMoney(grandCost)}</td>
+      ${opts.customerFacing ? "" : `<td class="num">${formatMoney(grandRate)}</td><td class="num">${formatMoney(grandCost)}</td>`}
     </tr>`;
     result += `</tbody></table>`;
     return result;
@@ -1544,7 +1608,12 @@ let _browser: import("playwright").Browser | null = null;
 async function getBrowser(): Promise<import("playwright").Browser> {
   if (_browser && _browser.isConnected()) return _browser;
   const { chromium } = await import("playwright");
-  _browser = await chromium.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
+  const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH?.trim() || undefined;
+  _browser = await chromium.launch({
+    headless: true,
+    executablePath,
+    args: ["--no-sandbox", "--disable-setuid-sandbox"],
+  });
   return _browser;
 }
 

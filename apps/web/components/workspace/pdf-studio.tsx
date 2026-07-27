@@ -27,6 +27,13 @@ import { Button, Input, Label, Select, Toggle } from "@/components/ui";
 import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl, getPdfPreferences, savePdfPreferences } from "@/lib/api";
 import { loadPdfJs, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "@/lib/pdfjs-loader";
 import { cn } from "@/lib/utils";
+import {
+  PDF_DOCUMENT_PROFILES,
+  PDF_SECTION_KEYS,
+  normalizePdfDocumentType,
+  type PdfDocumentType,
+  type PdfSectionKey,
+} from "@bidwright/domain";
 
 // ─── Types ────────────────────────────────────────────────────────────
 
@@ -80,7 +87,7 @@ export interface PdfLayoutOptions {
   }>;
 }
 
-type PdfTemplateType = "main" | "backup" | "sitecopy";
+type PdfTemplateType = PdfDocumentType;
 type LineItemGroupBy = PdfLayoutOptions["lineItemOptions"]["groupBy"];
 type CustomSection = PdfLayoutOptions["customSections"][number];
 
@@ -119,47 +126,43 @@ const BASE_SECTION_KEYS = new Set(DEFAULT_SECTION_ORDER);
 const CUSTOM_SECTION_PREFIX = "custom:";
 const PDF_PREVIEW_BASE_SCALE = 96 / 72;
 
-const SECTION_LABELS: Record<string, string> = {
-  coverPage: "Cover Page",
-  scopeOfWork: "Scope of Work",
-  leadLetter: "Lead Letter",
-  pricingSummary: "Pricing Summary",
-  lineItems: "Line Items",
-  phases: "Phases",
-  modifiers: "Adjustments",
-  conditions: "Conditions",
-  terms: "Terms & Conditions",
-  hoursSummary: "Hours Summary",
-  labourSummary: "Labour Summary",
-  notes: "Notes",
-  reportSections: "Report Sections",
-  schedule: "Project Schedule",
-};
+const SECTION_LABELS: Record<string, string> = Object.fromEntries(
+  PDF_SECTION_KEYS.map((key) => [key, PDF_DOCUMENT_PROFILES.main.sections[key].label]),
+);
 
-const DOCUMENT_TYPES: Array<{ id: PdfTemplateType; label: string; description: string }> = [
-  { id: "main", label: "Proposal", description: "Primary quote package for client delivery" },
-  { id: "backup", label: "Cost", description: "Internal copy — shows cost, markup, margin & hours" },
-  { id: "sitecopy", label: "Site Copy", description: "Field/site issue version of the quote" },
-];
+const DOCUMENT_TYPES = Object.values(PDF_DOCUMENT_PROFILES);
 
 function normalizeTemplateType(value: unknown): PdfTemplateType {
-  switch (value) {
-    case "main":
-    case "backup":
-    case "sitecopy":
-      return value;
-    case "detailed":
-      return "backup";
-    // Closeout and Schedule are no longer standalone types — Schedule is now a
-    // section toggle. Legacy values fall back to the Proposal layout.
-    case "standard":
-    case "summary":
-    case "client":
-    case "closeout":
-    case "schedule":
-    default:
-      return "main";
+  return normalizePdfDocumentType(value);
+}
+
+function optionsForDocumentType(
+  templateType: PdfTemplateType,
+  source: PdfLayoutOptions = DEFAULT_OPTIONS,
+  useProfileDefaults = false,
+) {
+  const profile = PDF_DOCUMENT_PROFILES[templateType];
+  const next = deepMergeOptions(DEFAULT_OPTIONS, source);
+  next.customerFacing = profile.customerFacing;
+  for (const key of PDF_SECTION_KEYS) {
+    const capability = profile.sections[key];
+    if (!capability.available) next.sections[key] = false;
+    else if (useProfileDefaults || capability.locked) next.sections[key] = capability.defaultEnabled;
   }
+  if (profile.customerFacing) {
+    next.lineItemOptions.showCostColumn = false;
+    next.lineItemOptions.showMarkupColumn = false;
+  }
+  next.sectionOrder = normalizeSectionOrder(next.sectionOrder, next.customSections);
+  return next;
+}
+
+function defaultDocumentLayouts(): Record<PdfTemplateType, PdfLayoutOptions> {
+  return {
+    main: optionsForDocumentType("main", DEFAULT_OPTIONS, true),
+    backup: optionsForDocumentType("backup", DEFAULT_OPTIONS, true),
+    sitecopy: optionsForDocumentType("sitecopy", DEFAULT_OPTIONS, true),
+  };
 }
 
 function normalizeLineItemGroupBy(value: unknown): LineItemGroupBy {
@@ -235,7 +238,10 @@ interface PdfStudioProps {
 // ─── Component ────────────────────────────────────────────────────────
 
 export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
-  const [options, setOptions] = useState<PdfLayoutOptions>(DEFAULT_OPTIONS);
+  const [options, setOptions] = useState<PdfLayoutOptions>(() => defaultDocumentLayouts().main);
+  const [documentLayouts, setDocumentLayouts] = useState<Record<PdfTemplateType, PdfLayoutOptions>>(
+    () => defaultDocumentLayouts(),
+  );
   const [activeTemplate, setActiveTemplate] = useState<PdfTemplateType>("main");
   const [customSectionDrafts, setCustomSectionDrafts] = useState<Record<string, { title: string; content: string }>>({});
   const [previewKey, setPreviewKey] = useState(0);
@@ -282,23 +288,43 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
     getPdfPreferences(projectId)
       .then((saved) => {
         if (saved && Object.keys(saved).length > 0) {
-          const merged = deepMergeOptions(DEFAULT_OPTIONS, saved as Partial<PdfLayoutOptions>);
-          merged.lineItemOptions.groupBy = normalizeLineItemGroupBy(merged.lineItemOptions.groupBy);
-          merged.sectionOrder = normalizeSectionOrder(merged.sectionOrder, merged.customSections);
+          const active = normalizeTemplateType((saved as any).activeTemplate);
+          const defaults = defaultDocumentLayouts();
+          const savedLayouts = (saved as any).layouts;
+          const layouts = savedLayouts && typeof savedLayouts === "object"
+            ? {
+                main: optionsForDocumentType("main", deepMergeOptions(defaults.main, savedLayouts.main ?? {})),
+                backup: optionsForDocumentType("backup", deepMergeOptions(defaults.backup, savedLayouts.backup ?? {})),
+                sitecopy: optionsForDocumentType("sitecopy", deepMergeOptions(defaults.sitecopy, savedLayouts.sitecopy ?? {})),
+              }
+            : {
+                ...defaults,
+                [active]: optionsForDocumentType(active, deepMergeOptions(defaults[active], saved as Partial<PdfLayoutOptions>)),
+              };
+          for (const layout of Object.values(layouts)) {
+            layout.lineItemOptions.groupBy = normalizeLineItemGroupBy(layout.lineItemOptions.groupBy);
+            layout.sectionOrder = normalizeSectionOrder(layout.sectionOrder, layout.customSections);
+          }
+          const merged = layouts[active];
+          setDocumentLayouts(layouts);
           setOptions(merged);
           setCustomSectionDrafts(Object.fromEntries(
             merged.customSections.map((section) => [section.id, { title: section.title, content: section.content }])
           ));
-          setActiveTemplate(normalizeTemplateType((saved as any).activeTemplate));
+          setActiveTemplate(active);
         } else {
-          setOptions(DEFAULT_OPTIONS);
+          const layouts = defaultDocumentLayouts();
+          setDocumentLayouts(layouts);
+          setOptions(layouts.main);
           setCustomSectionDrafts({});
           setActiveTemplate("main");
         }
         setDirty(false);
       })
       .catch(() => {
-        setOptions(DEFAULT_OPTIONS);
+        const layouts = defaultDocumentLayouts();
+        setDocumentLayouts(layouts);
+        setOptions(layouts.main);
         setCustomSectionDrafts({});
         setActiveTemplate("main");
       })
@@ -342,12 +368,13 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
     if (!open || !dirty || loadingPrefs) return;
     if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current);
     saveDebounceRef.current = setTimeout(() => {
-      const payload = { ...options, activeTemplate } as Record<string, unknown>;
+      const layouts = { ...documentLayouts, [activeTemplate]: options };
+      const payload = { layouts, activeTemplate } as Record<string, unknown>;
       savePdfPreferences(projectId, payload).catch(() => {});
       setDirty(false);
     }, 2000);
     return () => { if (saveDebounceRef.current) clearTimeout(saveDebounceRef.current); };
-  }, [open, dirty, options, activeTemplate, projectId, loadingPrefs]);
+  }, [open, dirty, options, documentLayouts, activeTemplate, projectId, loadingPrefs]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -356,7 +383,9 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       if (committedOptions !== options) {
         setOptions(committedOptions);
       }
-      const payload = { ...committedOptions, activeTemplate } as Record<string, unknown>;
+      const layouts = { ...documentLayouts, [activeTemplate]: committedOptions };
+      setDocumentLayouts(layouts);
+      const payload = { layouts, activeTemplate } as Record<string, unknown>;
       await savePdfPreferences(projectId, payload);
       setDirty(false);
     } catch (e) {
@@ -379,7 +408,9 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
         setOptions(committedOptions);
       }
       // Save preferences before downloading
-      const payload = { ...committedOptions, activeTemplate } as Record<string, unknown>;
+      const layouts = { ...documentLayouts, [activeTemplate]: committedOptions };
+      setDocumentLayouts(layouts);
+      const payload = { layouts, activeTemplate } as Record<string, unknown>;
       savePdfPreferences(projectId, payload).catch(() => {});
 
       const blobUrl = await fetchQuotePdfBlobUrl(projectId, activeTemplate, committedOptions as unknown as Record<string, unknown>);
@@ -553,14 +584,23 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   };
 
   const applyTemplate = (templateId: PdfTemplateType) => {
+    const layouts = { ...documentLayouts, [activeTemplate]: options };
+    const next = optionsForDocumentType(templateId, layouts[templateId]);
+    setDocumentLayouts(layouts);
     setActiveTemplate(templateId);
-    // Cost visibility is driven by the document type (no separate toggle):
-    // only the Cost copy exposes internal cost / markup / margin / profit.
-    setOptions((prev) => ({ ...prev, customerFacing: templateId !== "backup" }));
+    setOptions(next);
+    setCustomSectionDrafts(Object.fromEntries(
+      next.customSections.map((section) => [section.id, { title: section.title, content: section.content }]),
+    ));
     setDirty(true);
   };
 
-  const orderedSectionKeys = normalizeSectionOrder(options.sectionOrder, options.customSections);
+  const activeProfile = PDF_DOCUMENT_PROFILES[activeTemplate];
+  const orderedSectionKeys = normalizeSectionOrder(options.sectionOrder, options.customSections)
+    .filter((key) => {
+      const customId = getCustomSectionId(key);
+      return customId ? true : activeProfile.sections[key as PdfSectionKey]?.available;
+    });
   const customSectionsById = new Map(options.customSections.map((section) => [section.id, section] as const));
 
   return (
@@ -691,9 +731,10 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                           const customSectionId = getCustomSectionId(key);
                           const customSection = customSectionId ? customSectionsById.get(customSectionId) : null;
                           const draft = customSectionId ? customSectionDrafts[customSectionId] : null;
+                          const capability = customSectionId ? null : activeProfile.sections[key as PdfSectionKey];
                           const label = customSection
                             ? (draft?.title || customSection.title || "Custom Section")
-                            : SECTION_LABELS[key];
+                            : capability?.label ?? SECTION_LABELS[key];
                           if (!label) return null;
                           const enabled = customSection ? true : options.sections[key as keyof typeof options.sections];
                           const hasSubOptions = key === "lineItems" || key === "coverPage";
@@ -768,6 +809,11 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                                 )}
 
                                 <span className="flex-1 text-xs text-fg/70">{label}</span>
+                                {capability?.locked && capability.reason && (
+                                  <span className="max-w-[115px] text-right text-[9px] leading-tight text-fg/35" title={capability.reason}>
+                                    Required
+                                  </span>
+                                )}
                                 {isCustomSection ? (
                                   <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-accent">
                                     Drag
@@ -775,6 +821,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                                 ) : (
                                   <Toggle
                                     checked={enabled}
+                                    disabled={capability?.locked}
                                     onChange={(v) => updateSections(key, v)}
                                   />
                                 )}
@@ -785,20 +832,24 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                                 <div className="ml-8 mb-2 space-y-2 border-l-2 border-line pl-3 pt-1">
                                   {key === "lineItems" && (
                                     <>
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-[11px] text-fg/50">Show Cost Column</span>
-                                        <Toggle
-                                          checked={options.lineItemOptions.showCostColumn}
-                                          onChange={(v) => updateLineItemOptions("showCostColumn", v)}
-                                        />
-                                      </div>
-                                      <div className="flex items-center justify-between">
-                                        <span className="text-[11px] text-fg/50">Show Markup Column</span>
-                                        <Toggle
-                                          checked={options.lineItemOptions.showMarkupColumn}
-                                          onChange={(v) => updateLineItemOptions("showMarkupColumn", v)}
-                                        />
-                                      </div>
+                                      {!options.customerFacing && (
+                                        <>
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-[11px] text-fg/50">Show Cost Column</span>
+                                            <Toggle
+                                              checked={options.lineItemOptions.showCostColumn}
+                                              onChange={(v) => updateLineItemOptions("showCostColumn", v)}
+                                            />
+                                          </div>
+                                          <div className="flex items-center justify-between">
+                                            <span className="text-[11px] text-fg/50">Show Markup Column</span>
+                                            <Toggle
+                                              checked={options.lineItemOptions.showMarkupColumn}
+                                              onChange={(v) => updateLineItemOptions("showMarkupColumn", v)}
+                                            />
+                                          </div>
+                                        </>
+                                      )}
                                       <div>
                                         <span className="text-[11px] text-fg/50">Group By</span>
                                         <Select

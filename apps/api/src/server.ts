@@ -4450,6 +4450,44 @@ export function buildServer() {
     return { ok: true };
   });
 
+  app.get("/catalog-category-mappings", async (request) =>
+    request.store!.listCatalogCategoryMappings()
+  );
+
+  app.put("/catalog-category-mappings", async (request, reply) => {
+    const body = request.body as {
+      catalogId?: string;
+      sourceCategory?: string | null;
+      entityCategoryId?: string;
+    };
+    if (!body.catalogId || !body.entityCategoryId) {
+      return reply.code(400).send({ message: "catalogId and entityCategoryId are required" });
+    }
+    try {
+      return await request.store!.upsertCatalogCategoryMapping({
+        catalogId: body.catalogId,
+        sourceCategory: body.sourceCategory,
+        entityCategoryId: body.entityCategoryId,
+      });
+    } catch (error) {
+      return reply.code(400).send({
+        message: error instanceof Error ? error.message : "Failed to save catalog category mapping",
+      });
+    }
+  });
+
+  app.delete("/catalog-category-mappings/:id", async (request, reply) => {
+    const { id } = request.params as { id: string };
+    try {
+      await request.store!.deleteCatalogCategoryMapping(id);
+      return { ok: true };
+    } catch (error) {
+      return reply.code(404).send({
+        message: error instanceof Error ? error.message : "Catalog category mapping not found",
+      });
+    }
+  });
+
   // ── Customers ──────────────────────────────────────────────────────────
 
   app.get("/customers", async (request) => {

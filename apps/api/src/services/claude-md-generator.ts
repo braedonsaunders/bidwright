@@ -1241,6 +1241,53 @@ export async function generateInstructionFiles(
   }
 }
 
+export async function generateQaInstructionFiles(
+  _runtime: string,
+  params: ClaudeMdParams,
+): Promise<void> {
+  await prepareInstructionWorkspace(params);
+  const documentList = params.documents.length > 0
+    ? params.documents.map((document) => `- ${document.fileName} (${document.pageCount || "unknown"} pages, id: ${document.id})`).join("\n")
+    : "- No project documents are currently attached.";
+  const persona = params.persona
+    ? `\nEstimator perspective: ${params.persona.name} / ${params.persona.trade}\n${truncateInstructionText(params.persona.systemPrompt, 1800)}`
+    : "";
+  const content = `# Bidwright Project Q&A
+
+You are in read-only project Q&A mode. Answer the user's question directly from the current quote, project documents, drawings, and approved organization knowledge.
+
+## Hard boundaries
+
+- Do not create, update, delete, move, recalculate, apply, save, finalize, import, link, or otherwise mutate quote data.
+- Do not run the staged estimating workflow, finish the quote, create worksheets, or propose worksheet work unless the user explicitly switches to an editing/build mode.
+- Mutating Bidwright tools are unavailable in this mode.
+- Use getWorkspace for current quote context and targeted document/search tools for evidence.
+- Read only the documents and page ranges needed for the question.
+- Cite document filename and page number or page range for document-derived claims. Clearly label assumptions or gaps.
+- If the user asks for a quote change, explain that they must switch the sidebar to Assist edit or Build estimate mode.
+
+## Project
+
+- Name: ${params.projectName}
+- Client: ${params.clientName || "Not specified"}
+- Location: ${params.location || "Not specified"}
+- Quote: ${params.quoteNumber || "Not assigned"}
+- Scope: ${params.scope || "Not specified"}
+${persona}
+
+## Project documents
+
+${documentList}
+
+## Useful read-only tools
+
+getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath.
+`;
+  for (const filename of ALL_INSTRUCTION_FILENAMES) {
+    await writeFile(join(params.projectDir, filename), content, "utf-8");
+  }
+}
+
 /**
  * Generate a review-specific CLAUDE.md for quote review sessions.
  * The review agent analyzes documents against the existing estimate

@@ -35,7 +35,7 @@ import {
 } from "./cli-adapters/registry.js";
 import { ensureUserAgentHome, getUserAgentHome } from "./agent-home.js";
 import { getAgentRuntimeHost } from "./agent-host/index.js";
-import { BIDWRIGHT_PERMISSIONS } from "./cli-adapters/shared.js";
+import { BIDWRIGHT_PERMISSIONS, BIDWRIGHT_QA_PERMISSIONS } from "./cli-adapters/shared.js";
 import {
   getWorkspaceStorage,
   restoreWorkspaceIfPresent,
@@ -273,6 +273,7 @@ function buildMcpEnv(opts: {
   projectId: string;
   revisionId?: string;
   quoteId?: string;
+  agentMode?: AgentChatMode;
 }): McpEnv {
   return {
     BIDWRIGHT_API_URL: opts.apiBaseUrl || "http://localhost:4001",
@@ -280,6 +281,7 @@ function buildMcpEnv(opts: {
     BIDWRIGHT_PROJECT_ID: opts.projectId,
     BIDWRIGHT_REVISION_ID: opts.revisionId || "",
     BIDWRIGHT_QUOTE_ID: opts.quoteId || "",
+    BIDWRIGHT_AGENT_MODE: opts.agentMode || "build_estimate",
   };
 }
 
@@ -394,6 +396,7 @@ export interface SpawnSessionOpts {
   stoppedMessage?: string;
   failedMessagePrefix?: string;
   emitCompletionMessage?: boolean;
+  agentMode?: AgentChatMode;
   /**
    * The Bidwright user this session belongs to. In server mode the runtime
    * resolves this to a per-user agent-home dir (CLAUDE_CONFIG_DIR / CODEX_HOME
@@ -408,6 +411,8 @@ export interface SpawnSessionOpts {
    */
   organizationId?: string | null;
 }
+
+export type AgentChatMode = "qa" | "assist_edit" | "build_estimate";
 
 export interface ResumeSessionOpts extends Partial<SpawnSessionOpts> {
   projectId: string;
@@ -622,7 +627,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     mcpRunner,
     mcpArgs,
     mcpEnv,
-    permissions: [...BIDWRIGHT_PERMISSIONS],
+    permissions: [...(opts.agentMode === "qa" ? BIDWRIGHT_QA_PERMISSIONS : BIDWRIGHT_PERMISSIONS)],
     isWin,
     isResume: false,
     agentHomeDir,
@@ -885,7 +890,7 @@ async function spawnResumedSession(
     mcpRunner,
     mcpArgs,
     mcpEnv,
-    permissions: [...BIDWRIGHT_PERMISSIONS],
+    permissions: [...(opts.agentMode === "qa" ? BIDWRIGHT_QA_PERMISSIONS : BIDWRIGHT_PERMISSIONS)],
     isWin,
     isResume: true,
     agentHomeDir,

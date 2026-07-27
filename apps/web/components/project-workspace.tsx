@@ -120,7 +120,7 @@ import {
   workspaceChannelName,
   type WorkspaceSyncMessage,
 } from "@/lib/workspace-sync";
-import { bucketHoursByMultiplier, getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
+import { getWorksheetHourBreakdown } from "@/lib/worksheet-hours";
 import { AgentChat, type AgentNavigationIntent, type AgentRunState } from "@/components/workspace/agent-chat";
 import { EstimateGrid } from "@/components/workspace/estimate-grid";
 import { FactorParameterEditor } from "@/components/workspace/factor-parameter-editor";
@@ -406,10 +406,9 @@ function worksheetItemExtendedHours(
 ): ResourceHourFields {
   const quantity = Number(item.quantity) || 0;
   const breakdown = getWorksheetHourBreakdown(item, rateSchedules ?? []);
-  const buckets = bucketHoursByMultiplier(breakdown);
-  const hoursUnit1 = roundResourceHours(buckets.reg * quantity);
-  const hoursUnit2 = roundResourceHours(buckets.ot * quantity);
-  const hoursUnit3 = roundResourceHours(buckets.dt * quantity);
+  const hoursUnit1 = roundResourceHours((breakdown.tiers[0]?.hours ?? 0) * quantity);
+  const hoursUnit2 = roundResourceHours((breakdown.tiers[1]?.hours ?? 0) * quantity);
+  const hoursUnit3 = roundResourceHours((breakdown.tiers[2]?.hours ?? 0) * quantity);
   return {
     hoursUnit1,
     hoursUnit2,
