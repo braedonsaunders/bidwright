@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
+import { Button } from "@appkit/ui";
 import { ProjectWorkspace } from "@/components/project-workspace";
 import { getProjectWorkspace, type WorkspaceResponse } from "@/lib/api";
 
@@ -9,6 +10,7 @@ export default function ProjectPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [workspacePayload, setWorkspacePayload] = useState<WorkspaceResponse | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     if (!projectId) return;
@@ -17,7 +19,9 @@ export default function ProjectPage() {
     Promise.allSettled([getProjectWorkspace(projectId)]).then(
       ([workspaceResult]) => {
         if (cancelled) return;
-        setWorkspacePayload(workspaceResult.status === "fulfilled" ? workspaceResult.value : null);
+        const succeeded = workspaceResult.status === "fulfilled";
+        setWorkspacePayload(succeeded ? workspaceResult.value : null);
+        setLoadFailed(!succeeded);
         setLoading(false);
       },
     );
@@ -41,12 +45,21 @@ export default function ProjectPage() {
         <ProjectWorkspace initialData={workspacePayload} />
       </Suspense>
     ) : (
-      <div className="rounded-[28px] border border-line bg-panel/80 p-8">
-        <p className="text-sm uppercase tracking-[0.24em] text-fg/55">Workspace unavailable</p>
-        <h1 className="mt-3 text-3xl font-semibold tracking-tight">The live API did not return this project.</h1>
+      <div className="rounded-xl border border-line bg-panel p-8">
+        <p className="text-sm font-medium text-fg/55">Quote unavailable</p>
+        <h1 className="mt-2 text-2xl font-semibold tracking-tight">
+          {loadFailed ? "We couldn’t load this quote." : "This quote could not be found."}
+        </h1>
         <p className="mt-4 max-w-2xl text-sm text-fg/70">
-          The shell is connected to the live project list, but the workspace payload could not be loaded right now.
+          {loadFailed
+            ? "Try again. If the problem continues, contact your administrator."
+            : "It may have been removed, or you may no longer have access to it."}
         </p>
+        {loadFailed ? (
+          <Button className="mt-6" onClick={() => window.location.reload()}>
+            Try again
+          </Button>
+        ) : null}
       </div>
     )
   );
