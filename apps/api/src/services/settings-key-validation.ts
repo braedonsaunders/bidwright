@@ -1,59 +1,40 @@
-import { unsealSettingsSecrets } from "./settings-secret-crypto.js";
+import { createContextualSealer } from "@appkit/crypto";
 
-type StoredCredentialRecords = {
-  organizations: Array<{
-    organizationId: string;
-    email: unknown;
-    integrations: unknown;
-  }>;
-  users: Array<{
-    userId: string;
-    organizationId: string;
-    integrations: unknown;
-  }>;
-  superAdmins: Array<{
-    id: string;
-    integrations: unknown;
-  }>;
+import { readIntegrationsEncryptionKey } from "./settings-secret-crypto.js";
+
+const PROBE_HKDF_INFO = "bidwright:settings:key-probe:v1";
+const PROBE_PLAINTEXT = "bidwright-integrations-key-probe:v1";
+const PROBE_CONTEXT = {
+  salt: "bidwright-integrations-key-probe:v1",
+  additionalData: "bidwright:integrations-encryption-key:probe:v1",
 };
 
-export function validateStoredSettingsCredentials(
-  records: StoredCredentialRecords,
-): { checkedRecords: number } {
-  try {
-    for (const settings of records.organizations) {
-      const scope = {
-        kind: "organization" as const,
-        id: settings.organizationId,
-        tenantId: settings.organizationId,
-      };
-      unsealSettingsSecrets(settings.email, scope);
-      unsealSettingsSecrets(settings.integrations, scope);
-    }
-    for (const settings of records.users) {
-      unsealSettingsSecrets(settings.integrations, {
-        kind: "user",
-        id: settings.userId,
-        tenantId: settings.organizationId,
-      });
-    }
-    for (const admin of records.superAdmins) {
-      unsealSettingsSecrets(admin.integrations, {
-        kind: "super-admin",
-        id: admin.id,
-      });
-    }
-  } catch (error) {
-    const detail = error instanceof Error ? error.message : "credential decryption failed";
+export function createIntegrationsEncryptionKeyProbe(encodedKey: string): string {
+  const sealer = createContextualSealer(readIntegrationsEncryptionKey(encodedKey), {
+    hkdfInfo: PROBE_HKDF_INFO,
+  });
+  return sealer.sealSecret(PROBE_PLAINTEXT, PROBE_CONTEXT);
+}
+
+/**
+ * Validate the configured key without consulting tenant-owned data. A probe is
+ * optional for self-hosted/local installs, but production deployment supplies
+ * one created with the established key so a different valid key is rejected.
+ */
+export function validateIntegrationsEncryptionKey(
+  encodedKey = process.env.INTEGRATIONS_ENCRYPTION_KEY,
+  probe = process.env.INTEGRATIONS_ENCRYPTION_KEY_PROBE,
+): { probeVerified: boolean } {
+  const masterKey = readIntegrationsEncryptionKey(encodedKey);
+  if (!probe) return { probeVerified: false };
+
+  const plaintext = createContextualSealer(masterKey, {
+    hkdfInfo: PROBE_HKDF_INFO,
+  }).unsealSecret(probe, PROBE_CONTEXT);
+  if (plaintext !== PROBE_PLAINTEXT) {
     throw new Error(
-      `INTEGRATIONS_ENCRYPTION_KEY does not match stored settings credentials: ${detail}`,
+      "INTEGRATIONS_ENCRYPTION_KEY does not match INTEGRATIONS_ENCRYPTION_KEY_PROBE.",
     );
   }
-
-  return {
-    checkedRecords:
-      records.organizations.length +
-      records.users.length +
-      records.superAdmins.length,
-  };
+  return { probeVerified: true };
 }
