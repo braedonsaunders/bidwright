@@ -226,16 +226,7 @@ export const opencodeAdapter: CliAdapter = {
   },
 
   checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
-    if (
-      apiKeys.anthropic ||
-      apiKeys.openai ||
-      apiKeys.google ||
-      apiKeys.openrouter ||
-      process.env.ANTHROPIC_API_KEY ||
-      process.env.OPENAI_API_KEY ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.OPENROUTER_API_KEY
-    ) {
+    if (apiKeys.anthropic || apiKeys.openai || apiKeys.google || apiKeys.openrouter) {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {

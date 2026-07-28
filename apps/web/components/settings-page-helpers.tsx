@@ -370,7 +370,7 @@ export function AgentRuntimeSettings({
       <CardContent className="space-y-4">
         <p className="text-sm text-fg-muted">
           {isServerMode
-            ? "Choose the centrally managed runtime used for estimating and project questions. Provider credentials are managed under API Keys; users do not install or sign in to local tools."
+            ? "Choose the centrally managed runtime used for estimating and project questions. Provider credentials are managed under AI Providers; users do not install or sign in to local tools."
             : "Choose the local runtime used for estimating and project questions on this desktop."}
         </p>
         <div className="rounded-lg border border-line p-4 space-y-3">
@@ -542,7 +542,11 @@ export function AgentRuntimeSettings({
           {isServerMode ? (
             <>
               <p>
-                Organization provider keys configured in the API Keys tab are the default for every managed agent run.
+                Organization provider keys configured in{' '}
+                <a href="/settings?group=integrations&tab=llm" className="underline-offset-4 hover:underline text-fg/60">
+                  AI Providers
+                </a>{' '}
+                are the default for every managed agent run.
                 They are encrypted at rest and never exposed to estimators.
               </p>
               <p>
@@ -558,7 +562,7 @@ export function AgentRuntimeSettings({
                 <a href="/profile/credentials" className="underline-offset-4 hover:underline text-fg/60">My credentials</a>{' '}
                 page.
               </p>
-              <p>API keys configured in the API Keys tab are used as the organization fallback.</p>
+              <p>API keys configured in AI Providers are used as the organization fallback.</p>
             </>
           )}
         </div>

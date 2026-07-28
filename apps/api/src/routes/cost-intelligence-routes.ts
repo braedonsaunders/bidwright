@@ -605,17 +605,10 @@ function resolveCostAgentCliPath(runtime: AgentRuntime, integrations: Record<str
 
 function buildCostAgentApiKeys(integrations: Record<string, unknown>) {
   return {
-    anthropicApiKey:
-      (integrations.anthropicKey as string) || process.env.ANTHROPIC_API_KEY || undefined,
-    openaiApiKey:
-      (integrations.openaiKey as string) || process.env.OPENAI_API_KEY || undefined,
-    googleApiKey:
-      (integrations.geminiKey as string) ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GEMINI_API_KEY ||
-      undefined,
-    openrouterApiKey:
-      (integrations.openrouterKey as string) || process.env.OPENROUTER_API_KEY || undefined,
+    anthropicApiKey: (integrations.anthropicKey as string) || undefined,
+    openaiApiKey: (integrations.openaiKey as string) || undefined,
+    googleApiKey: (integrations.geminiKey as string) || undefined,
+    openrouterApiKey: (integrations.openrouterKey as string) || undefined,
   };
 }
 

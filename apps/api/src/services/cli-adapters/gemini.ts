@@ -175,12 +175,7 @@ export const geminiAdapter: CliAdapter = {
   },
 
   checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
-    if (
-      apiKeys.google ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GEMINI_API_KEY ||
-      process.env.GOOGLE_GENAI_API_KEY
-    ) {
+    if (apiKeys.google) {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {

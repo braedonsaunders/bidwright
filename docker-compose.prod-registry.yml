@@ -137,13 +137,9 @@ services:
       EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-http://ollama:11434/v1}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
-      # LLM provider credentials are read from this env at boot; per-tenant
-      # provider keys live in the database (BYOK) and override these.
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
-      OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
-      LLM_PROVIDER: "${LLM_PROVIDER:-anthropic}"
-      LLM_MODEL: "${LLM_MODEL:-claude-sonnet-4-20250514}"
+      # Provider credentials are intentionally absent. Server-mode AI calls
+      # resolve the signed-in user's override or the tenant's encrypted
+      # Settings → Integrations credential; deployment env is not a fallback.
     volumes:
       - bidwright-data:/data
       - bidwright-agent-home:/data/agent-home
@@ -221,8 +217,11 @@ services:
       EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-http://ollama:11434/v1}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      # Application crypto material lets the worker decrypt the tenant-owned
+      # credential selected for each queued job. This is not a provider key.
+      INTEGRATIONS_ENCRYPTION_KEY: "${INTEGRATIONS_ENCRYPTION_KEY}"
+      # Provider credentials are tenant-owned encrypted settings, never
+      # deployment environment variables.
     volumes:
       - bidwright-data:/data
     networks:

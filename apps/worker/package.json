@@ -10,6 +10,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@bidwright/agent": "workspace:*",
     "@bidwright/ai": "workspace:*",
     "@bidwright/db": "workspace:*",
     "@bidwright/ingestion": "workspace:*",

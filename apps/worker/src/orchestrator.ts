@@ -15,6 +15,8 @@ export interface WorkflowJob<TInput = unknown, TOutput = unknown> {
 }
 
 export interface WorkerContext {
+  organizationId?: string;
+  userId?: string;
   packageId: string;
   packageName: string;
   sourceKind: PackageSourceKind;

@@ -141,7 +141,7 @@ export const openRouterAdapter: CliAdapter = {
   },
 
   checkAuth({ apiKeys }): CliAuthStatus {
-    if (apiKeys.openrouter || process.env.OPENROUTER_API_KEY) {
+    if (apiKeys.openrouter) {
       return { authenticated: true, method: "api_key" };
     }
     return { authenticated: false, method: "none" };
