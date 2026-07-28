@@ -5,8 +5,16 @@ import {
   AlertCircle, CheckCircle2, Globe, Loader2, Plus, RefreshCw, Search, Settings, Webhook, X,
 } from "lucide-react";
 import {
-  Badge, Button, Card, CardBody, CardHeader, CardTitle, Input,
-} from "@/components/ui";
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import {
   listManifests, listIntegrations, installIntegration, uninstallIntegration,
@@ -308,7 +316,7 @@ function ManifestCard(props: {
           {manifest.authType}
         </Badge>
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <p className="text-sm text-fg/70 line-clamp-3 min-h-[3em]">{manifest.description}</p>
         <div className="mt-3 flex items-center justify-between">
           <div className="text-xs text-fg/55">
@@ -331,7 +339,7 @@ function ManifestCard(props: {
             )}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }
@@ -364,7 +372,7 @@ function InstalledCard(props: {
           {i.status.replace("_", " ")}
         </span>
       </CardHeader>
-      <CardBody>
+      <CardContent>
         {i.lastError ? (
           <p className="text-xs text-red-600 line-clamp-2">{i.lastError}</p>
         ) : (
@@ -376,7 +384,7 @@ function InstalledCard(props: {
           </div>
           <div className="flex gap-1">
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               onClick={async () => { setTesting(true); try { await onTest(); } finally { setTesting(false); } }}
               disabled={testing}
@@ -384,12 +392,12 @@ function InstalledCard(props: {
               {testing ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
               Test
             </Button>
-            <Button size="xs" variant="ghost" onClick={onOpen}>
+            <Button size="sm" variant="ghost" onClick={onOpen}>
               <Settings className="h-3 w-3" /> Open
             </Button>
             <Button
-              size="xs"
-              variant="danger"
+              size="sm"
+              variant="destructive"
               onClick={async () => { setUninstalling(true); try { await onUninstall(); } finally { setUninstalling(false); } }}
               disabled={uninstalling}
             >
@@ -397,7 +405,7 @@ function InstalledCard(props: {
             </Button>
           </div>
         </div>
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

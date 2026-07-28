@@ -17,19 +17,21 @@ import {
 } from "lucide-react";
 
 import {
-  Badge,
   Button,
   Input,
   Label,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
   MultiSelect,
   Select,
   Tabs,
   TabsContent,
   TabsList,
   TabsTrigger,
-  Textarea,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import {
   createPersona,
   deletePersona,
@@ -532,7 +534,7 @@ export function EstimatingPlaybooksManager({
               <div className="text-xs font-semibold text-fg">Estimators</div>
               <div className="mt-0.5 truncate text-[11px] text-fg/45">Reusable estimator behavior, policy, and source bindings</div>
             </div>
-            <Button size="xs" variant="accent" onClick={addPlaybook}>
+            <Button size="sm" variant="default" onClick={addPlaybook}>
               <Plus className="h-3.5 w-3.5" />
               Add
             </Button>
@@ -613,20 +615,20 @@ export function EstimatingPlaybooksManager({
                 <div className="flex shrink-0 items-center gap-1.5">
                   {deleteConfirmId === selected.id ? (
                     <>
-                      <Button size="xs" variant="danger" onClick={() => deletePlaybook(selected)}>
+                      <Button size="sm" variant="destructive" onClick={() => deletePlaybook(selected)}>
                         <Check className="h-3.5 w-3.5" />
                         Confirm
                       </Button>
-                      <Button size="xs" variant="ghost" onClick={() => setDeleteConfirmId(null)}>
+                      <Button size="sm" variant="ghost" onClick={() => setDeleteConfirmId(null)}>
                         <X className="h-3.5 w-3.5" />
                       </Button>
                     </>
                   ) : (
-                    <Button size="xs" variant="ghost" onClick={() => setDeleteConfirmId(selected.id)}>
+                    <Button size="sm" variant="ghost" onClick={() => setDeleteConfirmId(selected.id)}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  <Button size="xs" variant="accent" onClick={() => savePlaybook(selected)} disabled={savingId === selected.id}>
+                  <Button size="sm" variant="default" onClick={() => savePlaybook(selected)} disabled={savingId === selected.id}>
                     <Save className="h-3.5 w-3.5" />
                     {savingId === selected.id ? "Saving" : "Save"}
                   </Button>
@@ -818,7 +820,7 @@ export function EstimatingPlaybooksManager({
                       <div className="flex items-center justify-between gap-2">
                         <Label className="mb-0">Roles</Label>
                         <Button
-                          size="xs"
+                          size="sm"
                           variant="secondary"
                           onClick={() => updateEdit(selected.id, {
                             productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
@@ -856,7 +858,7 @@ export function EstimatingPlaybooksManager({
                               <Input value={role.label} onChange={(event) => patchRole({ label: event.target.value })} placeholder="Role label" />
                               <Input value={role.aliases.join(", ")} onChange={(event) => patchRole({ aliases: splitList(event.target.value) })} placeholder="aliases" />
                               <Button
-                                size="xs"
+                                size="sm"
                                 variant="ghost"
                                 onClick={() => updateEdit(selected.id, {
                                   productivityGuidance: patchProductivityRoleCoverage(productivityGuidance, {
@@ -1017,7 +1019,7 @@ export function EstimatingPlaybooksManager({
               <div className="mt-1 max-w-sm text-xs leading-relaxed text-fg/45">
                 Create an estimator to bind domain method, source priorities, commercial policy, and review behavior.
               </div>
-              <Button className="mt-4" size="sm" variant="accent" onClick={addPlaybook}>
+              <Button className="mt-4" size="sm" variant="default" onClick={addPlaybook}>
                 <Plus className="h-3.5 w-3.5" />
                 Add Estimator
               </Button>

@@ -2,7 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { normalizeUomCode, normalizeUomLibrary, type UnitOfMeasure } from "@bidwright/domain";
-import { CompactSelect, Select, type CompactSelectOption, type SelectOption } from "@/components/ui";
+import {
+  CompactSelect,
+  Select,
+  type CompactSelectOption,
+  type SelectOption,
+} from "@/components/legacy-controls";
 import { getSettings } from "@/lib/api";
 import { useAuth } from "@/components/auth-provider";
 

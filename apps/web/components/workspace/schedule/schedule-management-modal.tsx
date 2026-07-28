@@ -3,15 +3,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { Trash2, X } from "lucide-react";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
   Input,
   Label,
+} from "@appkit/ui";
+import {
+  Badge,
   ModalBackdrop,
   Select,
   Tabs,
@@ -19,7 +21,7 @@ import {
   TabsList,
   TabsTrigger,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import type {
   CreateScheduleBaselineInput,
   CreateScheduleCalendarInput,
@@ -215,7 +217,7 @@ export function ScheduleManagementModal({
                       <CardTitle>Saved Baselines</CardTitle>
                       <CardDescription>Keep multiple snapshots and choose the active comparison baseline.</CardDescription>
                     </CardHeader>
-                    <CardBody className="space-y-3">
+                    <CardContent className="space-y-3">
                       {sortedBaselines.length === 0 ? (
                         <p className="text-xs text-fg/40">No saved baselines yet.</p>
                       ) : (
@@ -241,7 +243,7 @@ export function ScheduleManagementModal({
                             <div className="mt-3 flex gap-2">
                               <Button
                                 variant="secondary"
-                                size="xs"
+                                size="sm"
                                 onClick={() => onActiveBaselineChange(baseline.id)}
                                 data-testid={`baseline-activate-${baseline.id}`}
                               >
@@ -251,7 +253,7 @@ export function ScheduleManagementModal({
                           </div>
                         ))
                       )}
-                    </CardBody>
+                    </CardContent>
                   </Card>
 
                   <Card>
@@ -259,7 +261,7 @@ export function ScheduleManagementModal({
                       <CardTitle>Create Baseline</CardTitle>
                       <CardDescription>Save a new comparison snapshot from the current schedule state.</CardDescription>
                     </CardHeader>
-                    <CardBody className="space-y-3">
+                    <CardContent className="space-y-3">
                       <div>
                         <Label>New Baseline</Label>
                         <Input
@@ -290,10 +292,10 @@ export function ScheduleManagementModal({
                         </div>
                         <Toggle checked={baselinePrimary} onChange={setBaselinePrimary} />
                       </div>
-                      <Button variant="accent" size="sm" onClick={() => void handleCreateBaseline()} data-testid="baseline-create">
+                      <Button variant="default" size="sm" onClick={() => void handleCreateBaseline()} data-testid="baseline-create">
                         Save Snapshot
                       </Button>
-                    </CardBody>
+                    </CardContent>
                   </Card>
                 </div>
               </TabsContent>
@@ -305,7 +307,7 @@ export function ScheduleManagementModal({
                       <CardTitle>Project Calendars</CardTitle>
                       <CardDescription>Define working-day patterns, shift windows, and the default planning calendar.</CardDescription>
                     </CardHeader>
-                    <CardBody className="space-y-3">
+                    <CardContent className="space-y-3">
                       {calendars.map((calendar) => (
                         <div key={calendar.id} className="rounded-xl border border-line bg-panel2/20 p-3">
                           <div className="flex items-start justify-between gap-3">
@@ -336,7 +338,7 @@ export function ScheduleManagementModal({
                           {!calendar.isDefault && (
                             <Button
                               variant="secondary"
-                              size="xs"
+                              size="sm"
                               className="mt-3"
                               onClick={() => void onUpdateCalendar(calendar.id, { isDefault: true })}
                             >
@@ -345,7 +347,7 @@ export function ScheduleManagementModal({
                           )}
                         </div>
                       ))}
-                    </CardBody>
+                    </CardContent>
                   </Card>
 
                   <Card>
@@ -353,7 +355,7 @@ export function ScheduleManagementModal({
                       <CardTitle>Create Calendar</CardTitle>
                       <CardDescription>Add a new shift pattern for alternate crews, night work, or weekend work.</CardDescription>
                     </CardHeader>
-                    <CardBody className="space-y-3">
+                    <CardContent className="space-y-3">
                       <div>
                         <Label>New Calendar</Label>
                         <Input
@@ -403,10 +405,10 @@ export function ScheduleManagementModal({
                           ))}
                         </div>
                       </div>
-                      <Button variant="accent" size="sm" onClick={() => void handleCreateCalendar()} data-testid="calendar-create">
+                      <Button variant="default" size="sm" onClick={() => void handleCreateCalendar()} data-testid="calendar-create">
                         Add Calendar
                       </Button>
-                    </CardBody>
+                    </CardContent>
                   </Card>
                 </div>
               </TabsContent>
@@ -418,7 +420,7 @@ export function ScheduleManagementModal({
                       <CardTitle>Schedule Resources</CardTitle>
                       <CardDescription>Define crews, labor, equipment, and subcontractor loading rules.</CardDescription>
                     </CardHeader>
-                    <CardBody className="space-y-3">
+                    <CardContent className="space-y-3">
                       {resources.length === 0 ? (
                         <p className="text-xs text-fg/40">No schedule resources yet.</p>
                       ) : (
@@ -442,7 +444,7 @@ export function ScheduleManagementModal({
                           </div>
                         ))
                       )}
-                    </CardBody>
+                    </CardContent>
                   </Card>
 
                   <Card>
@@ -450,7 +452,7 @@ export function ScheduleManagementModal({
                       <CardTitle>Create Resource</CardTitle>
                       <CardDescription>Add a new crew, labor pool, equipment unit, or subcontract resource.</CardDescription>
                     </CardHeader>
-                    <CardBody className="space-y-3">
+                    <CardContent className="space-y-3">
                       <div>
                         <Label>New Resource</Label>
                         <Input
@@ -504,10 +506,10 @@ export function ScheduleManagementModal({
                           <Input type="number" step="0.01" value={resourceCostRate} onChange={(event) => setResourceCostRate(event.target.value)} />
                         </div>
                       </div>
-                      <Button variant="accent" size="sm" onClick={() => void handleCreateResource()} data-testid="resource-create">
+                      <Button variant="default" size="sm" onClick={() => void handleCreateResource()} data-testid="resource-create">
                         Add Resource
                       </Button>
-                    </CardBody>
+                    </CardContent>
                   </Card>
                 </div>
               </TabsContent>

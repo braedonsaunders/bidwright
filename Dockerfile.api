@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     && rm -rf /var/lib/apt/lists/*
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
+COPY vendor/appkit/ vendor/appkit/
 COPY packages/db/package.json packages/db/
 COPY packages/domain/package.json packages/domain/
 COPY packages/agent/package.json packages/agent/
@@ -84,7 +85,7 @@ RUN wget -q -O /tmp/libredwg.tar.gz "https://github.com/LibreDWG/libredwg/releas
 FROM node:22-bookworm-slim AS runner
 RUN corepack enable
 # bubblewrap is the per-tenant CLI sandbox primitive used by
-# BubblewrappedHost when BIDWRIGHT_MODE=server + BIDWRIGHT_MULTITENANT=true.
+# BubblewrappedHost whenever BIDWRIGHT_MODE=server.
 # The Debian package installs /usr/bin/bwrap setuid-root by default, which
 # is the recommended posture: lets unprivileged container processes create
 # user/mount/pid namespaces without granting CAP_SYS_ADMIN on the
@@ -123,8 +124,10 @@ COPY packages/vision/python/requirements.txt /tmp/vision-requirements.txt
 RUN python3 -m venv "${VIRTUAL_ENV}" \
   && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel \
   && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir -r /tmp/vision-requirements.txt
-# Install the agent CLIs the production app shells out to.
-RUN npm install -g @anthropic-ai/claude-code @openai/codex
+# Codex App Server is still delivered by the Codex binary. Claude runs through
+# the supported Agent SDK dependency bundled with the API instead of a global
+# interactive Claude Code install.
+RUN npm install -g @openai/codex
 RUN npm install -g playwright@1.58.2 \
   && playwright install --with-deps chromium \
   && npm uninstall -g playwright \

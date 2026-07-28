@@ -14,16 +14,18 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  Badge,
   Button,
-  Combobox,
-  FadeIn,
   Input,
   Label,
-  MultiSelect,
   Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+  Combobox,
+  FadeIn,
+  MultiSelect,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import type {
   PluginUISchema,
   PluginUISection,
@@ -1494,7 +1496,7 @@ function PluginTableRenderer({
         <Button
           type="button"
           variant="ghost"
-          size="xs"
+          size="sm"
           onClick={addRow}
           disabled={table.maxRows !== undefined && rows.length >= table.maxRows}
         >
@@ -2003,7 +2005,7 @@ export function PluginRuntime({
             {schema.cancelLabel ?? "Cancel"}
           </Button>
         )}
-        <Button variant="accent" size="sm" onClick={handleSubmit} disabled={submitting}>
+        <Button variant="default" size="sm" onClick={handleSubmit} disabled={submitting}>
           {submitting ? "Processing..." : schema.submitLabel ?? "Submit"}
         </Button>
       </div>
@@ -2078,7 +2080,7 @@ export function PluginOutputDisplay({
                   options={(worksheets ?? []).map((ws) => ({ value: ws.id, label: ws.name }))}
                 />
                 <Button
-                  variant="accent"
+                  variant="default"
                   size="sm"
                   disabled={!selectedWorksheet}
                   onClick={() => {

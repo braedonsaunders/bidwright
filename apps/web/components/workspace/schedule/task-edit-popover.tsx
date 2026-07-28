@@ -2,7 +2,19 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { Plus, Trash2, X } from "lucide-react";
-import { Button, Input, Label, Select, Tabs, TabsContent, TabsList, TabsTrigger, Textarea } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Select,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/legacy-controls";
 import type {
   CreateDependencyInput,
   DependencyType,
@@ -599,7 +611,7 @@ export function TaskEditPopover({
                     </div>
                     <Button
                       variant="secondary"
-                      size="xs"
+                      size="sm"
                       data-testid="task-add-resource"
                       onClick={() => setResourceAssignments((current) => [...current, { resourceId: "", units: "1", role: "" }])}
                     >
@@ -787,7 +799,7 @@ export function TaskEditPopover({
             </div>
 
             <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
-              <Button variant="danger" size="sm" onClick={() => void handleDelete()}>
+              <Button variant="destructive" size="sm" onClick={() => void handleDelete()}>
                 <Trash2 className="h-3.5 w-3.5" />
                 Delete
               </Button>
@@ -795,7 +807,7 @@ export function TaskEditPopover({
               <Button variant="ghost" size="sm" onClick={onClose}>
                 Cancel
               </Button>
-              <Button variant="accent" size="sm" onClick={() => void handleSave()} data-testid="task-save">
+              <Button variant="default" size="sm" onClick={() => void handleSave()} data-testid="task-save">
                 Save
               </Button>
             </div>

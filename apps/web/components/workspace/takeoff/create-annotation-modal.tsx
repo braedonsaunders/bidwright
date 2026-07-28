@@ -4,14 +4,16 @@ import { useState, useEffect } from "react";
 import {
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
   Input,
   Label,
+} from "@appkit/ui";
+import {
   ModalBackdrop,
   Select,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 
 /* ─── Constants ─── */
@@ -151,7 +153,7 @@ export function CreateAnnotationModal({
         <CardHeader>
           <CardTitle>New {selectedType?.label ?? "Takeoff"} Mark</CardTitle>
         </CardHeader>
-        <CardBody>
+        <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {/* Type selector */}
             {!lockType && (
@@ -299,12 +301,12 @@ export function CreateAnnotationModal({
               <Button type="button" variant="ghost" size="sm" onClick={onClose}>
                 Cancel
               </Button>
-              <Button type="submit" variant="accent" size="sm">
+              <Button type="submit" variant="default" size="sm">
                 Start Drawing
               </Button>
             </div>
           </form>
-        </CardBody>
+        </CardContent>
       </Card>
     </ModalBackdrop>
   );

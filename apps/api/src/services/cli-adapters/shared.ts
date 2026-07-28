@@ -5,7 +5,7 @@
  * without depending on each other.
  */
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve as resolvePath } from "node:path";
 
@@ -65,7 +65,7 @@ export function resolveCliCommand(
       continue;
     }
     try {
-      const resolved = execSync(`${whichCmd} ${candidate}`, { encoding: "utf-8" })
+      const resolved = execFileSync(whichCmd, [candidate], { encoding: "utf-8" })
         .trim()
         .split(/\r?\n/)[0];
       if (resolved) return resolved;
@@ -78,8 +78,7 @@ export function resolveCliCommand(
 
 export function getCliVersion(command: string): string | undefined {
   try {
-    const executable = command.includes(" ") ? `"${command}"` : command;
-    return execSync(`${executable} --version`, { encoding: "utf-8" }).trim();
+    return execFileSync(command, ["--version"], { encoding: "utf-8" }).trim();
   } catch {
     return undefined;
   }
@@ -147,6 +146,22 @@ export function dedupeModels<T extends { id: string }>(models: T[]): T[] {
     seen.add(model.id);
     return true;
   });
+}
+
+/**
+ * Replace runtime values with configuration-language references so generated
+ * project files never contain bearer tokens or provider credentials.
+ */
+export function environmentReferences(
+  environment: object,
+  syntax: "shell" | "opencode" = "shell",
+): Record<string, string> {
+  return Object.fromEntries(
+    Object.keys(environment).map((key) => [
+      key,
+      syntax === "opencode" ? `{env:${key}}` : `\${${key}}`,
+    ]),
+  );
 }
 
 export function homeDir(): string {

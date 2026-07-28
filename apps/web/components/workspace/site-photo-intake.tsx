@@ -3,7 +3,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { Camera, Check, Loader2, Search, Sparkles } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, Input, Textarea } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Textarea,
+} from "@appkit/ui";
 import {
   generatePhotoBom,
   getDocumentDownloadUrl,

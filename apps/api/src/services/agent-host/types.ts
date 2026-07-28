@@ -40,6 +40,8 @@ export interface SpawnProcessOpts {
   /** Names the launcher .bat written for Windows: `.bidwright-run.bat` or
    *  `.bidwright-resume.bat`. Ignored on non-Windows hosts. */
   batSuffix: "run" | "resume";
+  /** OS-level workspace mount policy. Server Q&A/inspection runs are read-only. */
+  workspaceAccess?: "read-only" | "read-write";
   /** Bidwright user that owns this spawn. Hosts that need per-user
    *  isolation (multi-tenant Docker → bubblewrap, cloud sandbox →
    *  per-tenant sandbox routing) read this; LocalProcessHost ignores it. */

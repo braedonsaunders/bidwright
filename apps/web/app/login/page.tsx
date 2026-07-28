@@ -9,7 +9,11 @@ import { AnimatePresence, motion } from "motion/react";
 import { ArrowRight, Eye, EyeOff, LockKeyhole, Mail } from "lucide-react";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
-import { Button, Input, Label } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
 import { isDemoMode } from "@/lib/demo-mode";
 
 const sweepLines = [
@@ -237,7 +241,7 @@ export default function LoginPage() {
 
               <Button
                 type="submit"
-                variant="accent"
+                variant="default"
                 className="h-12 w-full rounded-lg bg-[#101514] text-[15px] font-semibold text-white shadow-lg shadow-[#101514]/25 hover:bg-[#1d2a27]"
                 disabled={loading || !email.trim() || !password.trim()}
               >

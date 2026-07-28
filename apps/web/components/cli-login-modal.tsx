@@ -25,7 +25,12 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-import { Button, ModalBackdrop } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 import { apiRequest, resolveApiUrl } from "@/lib/api/client";
 
 export interface CliLoginModalProps {

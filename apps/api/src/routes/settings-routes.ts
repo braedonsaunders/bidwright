@@ -3,6 +3,10 @@ import { z } from "zod";
 
 import { invalidProviderKeys } from "@bidwright/db";
 
+import {
+  BIDWRIGHT_NAVIGATION_KEYS,
+  type TenantNavigationConfig,
+} from "@bidwright/domain";
 import type { CreateUserInput, PrismaApiStore, UserPatchInput } from "../prisma-store.js";
 import { testEmailConnection, type EmailConfig } from "../services/email-service.js";
 
@@ -23,6 +27,43 @@ const personaSchema = z.object({
   enabled: z.boolean().default(true),
   order: z.number().int().default(0),
 });
+
+const navigationKeySchema = z.enum(BIDWRIGHT_NAVIGATION_KEYS);
+const navigationConfigSchema = z.object({
+  version: z.literal(1),
+  items: z
+    .array(
+      z.object({
+        key: navigationKeySchema,
+        hidden: z.boolean().optional(),
+      }),
+    )
+    .max(BIDWRIGHT_NAVIGATION_KEYS.length),
+  knownItemKeys: z.array(navigationKeySchema).max(BIDWRIGHT_NAVIGATION_KEYS.length).optional(),
+});
+
+function normalizeNavigationConfig(config: TenantNavigationConfig): TenantNavigationConfig {
+  const seen = new Set<string>();
+  const required = new Set(["dashboard", "settings"]);
+  const items = config.items.flatMap((item) => {
+    if (seen.has(item.key)) return [];
+    seen.add(item.key);
+    return [
+      {
+        key: item.key,
+        ...(item.hidden && !required.has(item.key) ? { hidden: true as const } : {}),
+      },
+    ];
+  });
+  for (const key of BIDWRIGHT_NAVIGATION_KEYS) {
+    if (!seen.has(key)) items.push({ key });
+  }
+  return {
+    version: 1,
+    items,
+    knownItemKeys: [...BIDWRIGHT_NAVIGATION_KEYS],
+  };
+}
 
 export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/personas", async (request) => {
@@ -49,6 +90,35 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.get("/settings", async (request) => request.store!.getSettings());
+
+  app.get("/settings/navigation", async (request) => {
+    const settings = await request.store!.getSettings();
+    const parsed = navigationConfigSchema.safeParse(settings.general.navigation);
+    return { config: parsed.success ? normalizeNavigationConfig(parsed.data) : null };
+  });
+
+  app.patch("/settings/navigation", async (request, reply) => {
+    if (request.user?.role !== "admin" && !request.user?.isSuperAdmin) {
+      return reply.code(403).send({
+        error: "Administrator access is required to change organization navigation.",
+      });
+    }
+    const parsed = navigationConfigSchema.safeParse(
+      (request.body as { config?: unknown } | undefined)?.config,
+    );
+    if (!parsed.success) {
+      return reply.code(400).send({
+        error: "Invalid navigation configuration.",
+        details: parsed.error.flatten(),
+      });
+    }
+    const config = normalizeNavigationConfig(parsed.data);
+    const current = await request.store!.getSettings();
+    await request.store!.updateSettings({
+      general: { ...current.general, navigation: config },
+    });
+    return { config };
+  });
 
   app.patch("/settings", async (request, reply) => {
     const patch = request.body as Record<string, unknown>;

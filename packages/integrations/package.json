@@ -11,6 +11,7 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
+    "@appkit/crypto": "file:../../vendor/appkit/appkit-crypto-0.3.0.tgz",
     "zod": "^3.24.1"
   }
 }

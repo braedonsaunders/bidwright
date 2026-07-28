@@ -131,15 +131,19 @@ import {
   type PhotoTakeoffResult,
 } from "@/lib/api";
 import {
-  Badge,
   Button,
   Card,
-  EmptyState,
   Input,
   Label,
-  Select,
   Separator,
-} from "@/components/ui";
+  WorkspaceLauncher,
+  type WorkspaceLaunchItem,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+  Select,
+} from "@/components/legacy-controls";
 import * as Popover from "@radix-ui/react-popover";
 import dynamic from "next/dynamic";
 import { isPrimitiveClosed, samplePdfPrimitive } from "@bidwright/domain";
@@ -805,7 +809,7 @@ function SpreadsheetTransformMenu({
       <Popover.Trigger asChild>
         <Button
           variant={view === "pivot" ? "secondary" : "ghost"}
-          size="xs"
+          size="sm"
           disabled={disabled}
           className="h-7 shrink-0 gap-1.5 px-2 text-[11px]"
           title="Transform spreadsheet view"
@@ -899,7 +903,7 @@ function SpreadsheetDataMenu({
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="ghost" size="xs" disabled={disabled} className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Spreadsheet row actions">
+        <Button variant="ghost" size="sm" disabled={disabled} className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Spreadsheet row actions">
           <Table2 className="h-3.5 w-3.5" />
           <span>Rows</span>
           <ChevronDown className="h-3 w-3 text-fg/40" />
@@ -940,7 +944,7 @@ function SpreadsheetAiMenu({
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="ghost" size="xs" disabled={disabled} className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Spreadsheet AI">
+        <Button variant="ghost" size="sm" disabled={disabled} className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Spreadsheet AI">
           <Sparkles className="h-3.5 w-3.5" />
           <span>AI</span>
           <ChevronDown className="h-3 w-3 text-fg/40" />
@@ -979,7 +983,7 @@ function ModelViewMenu({
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant="ghost" size="xs" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model view">
+        <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model view">
           <Box className="h-3.5 w-3.5" />
           <span>View</span>
           <ChevronDown className="h-3 w-3 text-fg/40" />
@@ -1032,7 +1036,7 @@ function ModelDisplayMenu({
   return (
     <Popover.Root>
       <Popover.Trigger asChild>
-        <Button variant={mode !== "shaded" || !gridVisible || autoRotate ? "secondary" : "ghost"} size="xs" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model display">
+        <Button variant={mode !== "shaded" || !gridVisible || autoRotate ? "secondary" : "ghost"} size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model display">
           <SlidersHorizontal className="h-3.5 w-3.5" />
           <span>Display</span>
           <ChevronDown className="h-3 w-3 text-fg/40" />
@@ -7625,138 +7629,68 @@ export function TakeoffTab({
     setShowLanding(false);
   }
 
-  type IntakeOptionTone = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "photo";
-  const intakeToneClasses: Record<
-    IntakeOptionTone,
-    { accent: string; active: string; hover: string; icon: string; rail: string; wash: string; ghost: string }
-  > = {
-    spreadsheet: {
-      accent: "text-emerald-600",
-      active: "border-emerald-600/45 ring-2 ring-emerald-600/10",
-      hover: "hover:border-emerald-600/45",
-      icon: "border-emerald-600/25 bg-emerald-600/10 text-emerald-600",
-      rail: "bg-emerald-600",
-      wash: "bg-emerald-600/5",
-      ghost: "text-emerald-600/[0.06] group-hover/card:text-emerald-600/[0.10]",
-    },
-    pdf: {
-      accent: "text-sky-500",
-      active: "border-sky-500/45 ring-2 ring-sky-500/10",
-      hover: "hover:border-sky-500/45",
-      icon: "border-sky-500/25 bg-sky-500/10 text-sky-500",
-      rail: "bg-sky-500",
-      wash: "bg-sky-500/5",
-      ghost: "text-sky-500/[0.06] group-hover/card:text-sky-500/[0.10]",
-    },
-    dwg: {
-      accent: "text-amber-500",
-      active: "border-amber-500/45 ring-2 ring-amber-500/10",
-      hover: "hover:border-amber-500/45",
-      icon: "border-amber-500/25 bg-amber-500/10 text-amber-500",
-      rail: "bg-amber-500",
-      wash: "bg-amber-500/5",
-      ghost: "text-amber-500/[0.06] group-hover/card:text-amber-500/[0.10]",
-    },
-    bim: {
-      accent: "text-violet-500",
-      active: "border-violet-500/45 ring-2 ring-violet-500/10",
-      hover: "hover:border-violet-500/45",
-      icon: "border-violet-500/25 bg-violet-500/10 text-violet-500",
-      rail: "bg-violet-500",
-      wash: "bg-violet-500/5",
-      ghost: "text-violet-500/[0.06] group-hover/card:text-violet-500/[0.10]",
-    },
-    model: {
-      accent: "text-rose-500",
-      active: "border-rose-500/45 ring-2 ring-rose-500/10",
-      hover: "hover:border-rose-500/45",
-      icon: "border-rose-500/25 bg-rose-500/10 text-rose-500",
-      rail: "bg-rose-500",
-      wash: "bg-rose-500/5",
-      ghost: "text-rose-500/[0.06] group-hover/card:text-rose-500/[0.10]",
-    },
-    photo: {
-      accent: "text-cyan-500",
-      active: "border-cyan-500/45 ring-2 ring-cyan-500/10",
-      hover: "hover:border-cyan-500/45",
-      icon: "border-cyan-500/25 bg-cyan-500/10 text-cyan-500",
-      rail: "bg-cyan-500",
-      wash: "bg-cyan-500/5",
-      ghost: "text-cyan-500/[0.06] group-hover/card:text-cyan-500/[0.10]",
-    },
-  };
-
-  const intakeOptions = [
+  const intakeOptions: WorkspaceLaunchItem<IntakeOptionId>[] = [
     {
       id: "spreadsheet",
       title: "Spreadsheet / CSV",
-      detail: "Preview tabular quantity and cost sources.",
+      description: "Preview tabular quantity and cost sources.",
       metric: spreadsheetSources.length.toLocaleString(),
       metricLabel: "sources",
       icon: FileSpreadsheet,
-      tone: "spreadsheet",
-      disabled: false,
+      tone: "emerald",
+      ghostIcon: true,
     },
     {
       id: "pdf",
       title: "PDF",
-      detail: "Measure drawings, calibrate scale, and count symbols.",
+      description: "Measure drawings, calibrate scale, and count symbols.",
       metric: pdfDocuments.length.toLocaleString(),
       metricLabel: "drawings",
       icon: Files,
-      tone: "pdf",
-      disabled: false,
+      tone: "sky",
+      ghostIcon: true,
     },
     {
       id: "dwg",
       title: "2D CAD",
-      detail: "Open CAD sheets on the dedicated takeoff surface.",
+      description: "Open CAD sheets on the dedicated takeoff surface.",
       metric: dwgDocumentCount.toLocaleString(),
       metricLabel: "CAD files",
       icon: FileJson,
-      tone: "dwg",
-      disabled: false,
+      tone: "amber",
+      ghostIcon: true,
     },
     {
       id: "bim",
       title: "BIM",
-      detail: "Building models with element schema, properties, and quantities (IFC, Revit, Navisworks).",
+      description: "Building models with element schema, properties, and quantities (IFC, Revit, Navisworks).",
       metric: bimDocuments.length.toLocaleString(),
       metricLabel: "models",
       icon: Box,
-      tone: "bim",
-      disabled: false,
+      tone: "violet",
+      ghostIcon: true,
     },
     {
       id: "model",
       title: "3D Geometry",
-      detail: "Geometry-only models for visualization and metrics (STEP, glTF, OBJ, STL).",
+      description: "Geometry-only models for visualization and metrics (STEP, glTF, OBJ, STL).",
       metric: modelDocuments.length.toLocaleString(),
       metricLabel: "files",
       icon: Boxes,
-      tone: "model",
-      disabled: false,
+      tone: "rose",
+      ghostIcon: true,
     },
     {
       id: "photo",
       title: "Site Photos",
-      detail: "Drop photos from the field — AI scaffolds a Bill of Materials grouped by your category taxonomy.",
+      description: "Drop photos from the field — AI scaffolds a Bill of Materials grouped by your category taxonomy.",
       metric: photoSources.length.toLocaleString(),
       metricLabel: "photos",
       icon: Camera,
-      tone: "photo",
-      disabled: false,
+      tone: "cyan",
+      ghostIcon: true,
     },
-  ] satisfies Array<{
-    id: IntakeOptionId;
-    title: string;
-    detail: string;
-    metric: string;
-    metricLabel: string;
-    icon: typeof Ruler;
-    tone: IntakeOptionTone;
-    disabled: boolean;
-  }>;
+  ];
 
   const activeSourcePanel =
     activeIntakeOption === "pdf"
@@ -7818,56 +7752,19 @@ export function TakeoffTab({
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
                 transition={{ duration: 0.18, ease: "easeOut" }}
-                className="grid min-h-0 flex-1 grid-cols-2 auto-rows-fr gap-2.5 lg:grid-cols-3"
+                className="flex min-h-0 flex-1"
               >
-                {intakeOptions.map((option) => {
-                  const Icon = option.icon;
-                  const tone = intakeToneClasses[option.tone];
-                  return (
-                    <button
-                      key={option.id}
-                      type="button"
-                      disabled={option.disabled}
-                      onClick={() => setActiveIntakeOption(option.id)}
-                      className={cn(
-                        "group/card relative z-0 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-5 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
-                        tone.hover,
-                        "disabled:cursor-not-allowed disabled:opacity-50"
-                      )}
-                    >
-                      <span className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", tone.wash)} />
-                      <Icon
-                        aria-hidden
-                        strokeWidth={1.25}
-                        className={cn(
-                          "pointer-events-none absolute -bottom-10 -right-10 h-56 w-56 transition-all duration-300 group-hover/card:scale-[1.04] group-hover/card:rotate-[-2deg]",
-                          tone.ghost
-                        )}
-                      />
-                      <motion.span
-                        layoutId={`takeoff-intake-rail-${option.id}`}
-                        className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", tone.rail)}
-                        transition={{ type: "spring", stiffness: 500, damping: 35 }}
-                      />
-                      <span className="relative flex items-start justify-between gap-3">
-                        <span className="flex min-w-0 items-start gap-2.5">
-                          <span className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", tone.icon)}>
-                            <Icon className="h-[18px] w-[18px]" />
-                          </span>
-                          <span className="min-w-0 pt-0.5">
-                            <span className="block truncate text-sm font-semibold text-fg">{option.title}</span>
-                            <span className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{option.detail}</span>
-                          </span>
-                        </span>
-                        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
-                      </span>
-                      <span className="relative mt-auto pt-3">
-                        <span className={cn("block text-[10px] font-semibold uppercase", tone.accent)}>{option.metricLabel}</span>
-                        <span className="mt-1 block truncate text-3xl font-semibold leading-none tabular-nums text-fg">{option.metric}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+                <WorkspaceLauncher
+                  framed={false}
+                  density="comfortable"
+                  layout="fit"
+                  showBreakdowns={false}
+                  showSummaries={false}
+                  className="flex-1"
+                  gridClassName="grid-cols-2 gap-2.5 lg:grid-cols-3"
+                  items={intakeOptions}
+                  onSelect={(id) => setActiveIntakeOption(id)}
+                />
               </motion.div>
             ) : (
               <motion.div
@@ -7881,7 +7778,7 @@ export function TakeoffTab({
                 <div className="mb-3 flex items-center gap-2">
                   <Button
                     variant="ghost"
-                    size="xs"
+                    size="sm"
                     onClick={() => setActiveIntakeOption(null)}
                     title="Back to intake options"
                   >
@@ -7977,7 +7874,7 @@ export function TakeoffTab({
       <div className="flex min-w-0 items-center gap-1 overflow-hidden border-b border-line bg-panel px-1.5 py-1.5 shrink-0">
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           onClick={() => setShowLanding(true)}
           title="Back to takeoff intake"
           aria-label="Back to takeoff intake"
@@ -7994,7 +7891,7 @@ export function TakeoffTab({
             <div className="flex shrink-0 items-center gap-0.5">
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handlePrevPage}
                 disabled={page <= 1}
                 className="h-7 w-7 px-0"
@@ -8019,7 +7916,7 @@ export function TakeoffTab({
               </div>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleNextPage}
                 disabled={page >= totalPages}
                 className="h-7 w-7 px-0"
@@ -8036,7 +7933,7 @@ export function TakeoffTab({
             <div className="flex shrink-0 items-center gap-0.5">
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleZoomOut}
                 className="h-7 w-7 px-0"
                 aria-label="Zoom out"
@@ -8047,7 +7944,7 @@ export function TakeoffTab({
               <span className="w-10 text-center text-xs text-fg/60">{zoomPercent}%</span>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleZoomIn}
                 className="h-7 w-7 px-0"
                 aria-label="Zoom in"
@@ -8057,7 +7954,7 @@ export function TakeoffTab({
               </Button>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleFitToWidth}
                 title="Fit to width"
                 aria-label="Fit to width"
@@ -8067,7 +7964,7 @@ export function TakeoffTab({
               </Button>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleFitToPage}
                 title="Fit to page"
                 aria-label="Fit to page"
@@ -8171,7 +8068,7 @@ export function TakeoffTab({
             <div className="flex min-w-0 items-center gap-1 rounded-md border border-line bg-bg/35 p-0.5">
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleModelFitView}
                 title="Fit model"
                 aria-label="Fit model"
@@ -8181,7 +8078,7 @@ export function TakeoffTab({
               </Button>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleModelResetView}
                 title="Reset model view"
                 aria-label="Reset model view"
@@ -8200,7 +8097,7 @@ export function TakeoffTab({
               />
               <Popover.Root>
                 <Popover.Trigger asChild>
-                  <Button variant="ghost" size="xs" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model takeoff">
+                  <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model takeoff">
                     <Boxes className="h-3.5 w-3.5" />
                     <span>Takeoff</span>
                     <ChevronDown className="h-3 w-3 text-fg/40" />
@@ -8237,7 +8134,7 @@ export function TakeoffTab({
               {selectedModelIsEditable && (
                 <Button
                   variant="secondary"
-                  size="xs"
+                  size="sm"
                   onClick={handleOpenModelEditor}
                   title="Open compatible model in editor"
                   aria-label="Open compatible model in editor"
@@ -8266,7 +8163,7 @@ export function TakeoffTab({
             />
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={() => void undoTakeoffAction()}
               disabled={!canUndoTakeoff}
               title="Undo takeoff edit"
@@ -8277,7 +8174,7 @@ export function TakeoffTab({
             </Button>
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={() => void redoTakeoffAction()}
               disabled={!canRedoTakeoff}
               title="Redo takeoff edit"
@@ -8291,7 +8188,7 @@ export function TakeoffTab({
             {annotations.length > 0 && (
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={handleClearAll}
                 title="Clear all takeoff marks"
                 aria-label="Clear all takeoff marks"
@@ -8303,7 +8200,7 @@ export function TakeoffTab({
 
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={() => exportAnnotationsJson(annotations, calibration)}
               disabled={annotations.length === 0}
               title={
@@ -8320,7 +8217,7 @@ export function TakeoffTab({
             {onOpenRevisionDiff && !detached && (
               <Button
                 variant="secondary"
-                size="xs"
+                size="sm"
                 onClick={onOpenRevisionDiff}
                 title="Compare drawing revisions and re-takeoff"
                 aria-label="Compare drawing revisions and re-takeoff"
@@ -8336,7 +8233,7 @@ export function TakeoffTab({
         <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           onClick={handleFullscreen}
           title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
           aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -8351,7 +8248,7 @@ export function TakeoffTab({
         {!detached && (
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={handleDetach}
             title="Open in new window"
             aria-label="Open in new window"
@@ -8459,7 +8356,7 @@ export function TakeoffTab({
 
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={() => {
               setActiveTool("select");
               setAutoCountResults(null);
@@ -8489,7 +8386,7 @@ export function TakeoffTab({
 
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={() => {
               setActiveTool("select");
               setAskAiCropImage(null);
@@ -8664,7 +8561,7 @@ export function TakeoffTab({
             toolbarStart={
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={() => setShowLanding(true)}
                 title="Back to takeoff intake"
                 aria-label="Back to takeoff intake"
@@ -8678,7 +8575,7 @@ export function TakeoffTab({
                 <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
                 <Button
                   variant="ghost"
-                  size="xs"
+                  size="sm"
                   onClick={handleFullscreen}
                   title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
                   aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
@@ -8693,7 +8590,7 @@ export function TakeoffTab({
                 {!detached && (
                   <Button
                     variant="ghost"
-                    size="xs"
+                    size="sm"
                     onClick={handleDetach}
                     title="Open in new window"
                     aria-label="Open in new window"
@@ -9078,7 +8975,7 @@ export function TakeoffTab({
                     Recalibrate
                   </Button>
                   <Button
-                    variant="accent"
+                    variant="default"
                     size="sm"
                     onClick={() => {
                       setVerifyPoints(null);
@@ -9202,7 +9099,7 @@ export function TakeoffTab({
                   <div className="flex items-center justify-between mb-1.5">
                     <div className="text-[10px] uppercase tracking-wider text-fg/40">Detected from drawing</div>
                     <Button
-                      size="xs"
+                      size="sm"
                       variant="ghost"
                       onClick={handleDetectScale}
                       disabled={detectingScale}
@@ -9371,7 +9268,7 @@ export function TakeoffTab({
                     Cancel
                   </Button>
                   <Button
-                    variant="accent"
+                    variant="default"
                     size="sm"
                     onClick={handleCalibrationConfirm}
                     disabled={!livePerUnit}
@@ -10364,11 +10261,11 @@ function DrawingIntelligencePanel({
             ariaLabel="Drawing analysis preset"
             triggerClassName="h-7"
           />
-          <Button size="xs" variant="secondary" onClick={onAnalyze} disabled={running}>
+          <Button size="sm" variant="secondary" onClick={onAnalyze} disabled={running}>
             {running ? <Loader2 className="h-3 w-3 animate-spin" /> : <ScanSearch className="h-3 w-3" />}
             Analyze
           </Button>
-          <Button size="xs" variant="secondary" onClick={onTrace} disabled={running}>
+          <Button size="sm" variant="secondary" onClick={onTrace} disabled={running}>
             <GitBranch className="h-3 w-3" />
             Trace
           </Button>
@@ -10435,7 +10332,7 @@ function DrawingIntelligencePanel({
                         </div>
                       </div>
                       <Button
-                        size="xs"
+                        size="sm"
                         variant="ghost"
                         className="h-7 w-7 px-0"
                         onClick={() => onSaveSystem(system)}
@@ -10471,7 +10368,7 @@ function DrawingIntelligencePanel({
                       </div>
                     </div>
                     <Button
-                      size="xs"
+                      size="sm"
                       variant="ghost"
                       className="h-7 w-7 px-0"
                       onClick={() => onSaveSymbol(candidate)}

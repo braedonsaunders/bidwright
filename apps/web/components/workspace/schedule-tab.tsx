@@ -40,7 +40,14 @@ import {
   updateScheduleResource,
   updateScheduleTask,
 } from "@/lib/api";
-import { Badge, Button, EmptyState, ModalBackdrop } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 import {
   addDays,
   buildIndentTaskUpdates,
@@ -151,7 +158,7 @@ function ScheduleImportModal({
             <h3 className="text-sm font-semibold text-fg">Import Schedule</h3>
             <p className="mt-0.5 text-xs text-fg/45">Already-uploaded Microsoft Project and Primavera P6 files.</p>
           </div>
-          <Button variant="ghost" size="xs" onClick={onClose} aria-label="Close">
+          <Button variant="ghost" size="sm" onClick={onClose} aria-label="Close">
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -184,8 +191,8 @@ function ScheduleImportModal({
                       <p className="mt-0.5 truncate text-xs text-fg/40">{candidate.message}</p>
                     </div>
                     <Button
-                      variant={disabled ? "secondary" : "accent"}
-                      size="xs"
+                      variant={disabled ? "secondary" : "default"}
+                      size="sm"
                       disabled={disabled || importingId !== null}
                       onClick={() => onImport(candidate)}
                     >
@@ -807,7 +814,7 @@ export function ScheduleTab({
           <p className="mt-1 text-xs text-fg/30">
             Add tasks to build your project schedule.
           </p>
-          <Button variant="accent" size="sm" className="mt-4" onClick={handleAddTask}>
+          <Button variant="default" size="sm" className="mt-4" onClick={handleAddTask}>
             <Plus className="h-3.5 w-3.5 mr-1" />
             Add First Task
           </Button>

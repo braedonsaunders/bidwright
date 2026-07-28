@@ -25,7 +25,15 @@ import { useRouter } from "next/navigation";
 import * as RadixSelect from "@radix-ui/react-select";
 import type { Customer, EstimatorPersona, PackageIngestFile, ProjectListItem } from "@/lib/api";
 import { submitPackageIngest, getCustomers, createCustomer, listPersonas } from "@/lib/api";
-import { Badge, Button, Input, Label, Textarea } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 import { cn } from "@/lib/utils";
 
@@ -500,16 +508,16 @@ function IntakeGeometryField({ dragActive, filesLoaded }: { dragActive: boolean;
   return (
     <div aria-hidden className="pointer-events-none absolute inset-0 overflow-hidden">
       <motion.div
-        className="absolute inset-0 opacity-45 [background-image:linear-gradient(hsl(var(--fg)/0.045)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.04)_1px,transparent_1px),linear-gradient(hsl(var(--accent)/0.055)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--accent)/0.045)_1px,transparent_1px)] [background-size:24px_24px,24px_24px,120px_120px,120px_120px]"
+        className="absolute inset-0 opacity-45 [background-image:linear-gradient(rgb(var(--ch-fg)/0.045)_1px,transparent_1px),linear-gradient(90deg,rgb(var(--ch-fg)/0.04)_1px,transparent_1px),linear-gradient(rgb(var(--ch-primary)/0.055)_1px,transparent_1px),linear-gradient(90deg,rgb(var(--ch-primary)/0.045)_1px,transparent_1px)] [background-size:24px_24px,24px_24px,120px_120px,120px_120px]"
         animate={{ backgroundPosition: ["0px 0px, 0px 0px, 0px 0px, 0px 0px", "36px 24px, 36px 24px, 120px 0px, 120px 0px"] }}
         transition={{ duration: 28, repeat: Infinity, ease: "linear" }}
       />
-      <div className="absolute inset-x-8 top-1/2 h-px bg-[linear-gradient(90deg,transparent,hsl(var(--fg)/0.12),transparent)]" />
-      <div className="absolute inset-y-10 left-1/2 w-px bg-[linear-gradient(180deg,transparent,hsl(var(--fg)/0.1),transparent)]" />
+      <div className="absolute inset-x-8 top-1/2 h-px bg-[linear-gradient(90deg,transparent,rgb(var(--ch-fg)/0.12),transparent)]" />
+      <div className="absolute inset-y-10 left-1/2 w-px bg-[linear-gradient(180deg,transparent,rgb(var(--ch-fg)/0.1),transparent)]" />
       <motion.div
         className={cn(
-          "absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,transparent,hsl(var(--accent)/0.06),transparent)]",
-          filesLoaded && "bg-[linear-gradient(90deg,transparent,hsl(var(--success)/0.055),transparent)]"
+          "absolute inset-y-0 left-0 w-1/3 bg-[linear-gradient(90deg,transparent,rgb(var(--ch-primary)/0.06),transparent)]",
+          filesLoaded && "bg-[linear-gradient(90deg,transparent,rgb(var(--ch-success)/0.055),transparent)]"
         )}
         animate={{ x: dragActive ? ["-55%", "260%"] : ["-65%", "235%"], opacity: dragActive ? [0, 0.72, 0] : [0, 0.22, 0] }}
         transition={{ duration: dragActive ? 1.25 : 8.4, repeat: Infinity, ease: "easeInOut" }}
@@ -922,7 +930,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
           className={cn(
             "relative flex min-h-[390px] flex-col overflow-hidden rounded-lg border bg-panel/95 shadow-sm backdrop-blur-xl transition-colors lg:min-h-0",
             dragActive
-              ? "border-accent shadow-[0_0_0_1px_hsl(var(--accent)/0.3)]"
+              ? "border-accent shadow-[0_0_0_1px_rgb(var(--ch-primary)/0.3)]"
               : files.length > 0
                 ? "border-success/50"
                 : "border-line/70"
@@ -1123,10 +1131,10 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                     onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleQuickAdd())}
                     autoFocus
                   />
-                  <Button type="button" size="xs" variant="accent" onClick={handleQuickAdd} disabled={quickAddSaving || !quickAddName.trim()}>
+                  <Button type="button" size="sm" variant="default" onClick={handleQuickAdd} disabled={quickAddSaving || !quickAddName.trim()}>
                     {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   </Button>
-                  <Button type="button" size="xs" variant="secondary" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }}>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }}>
                     <X className="h-3 w-3" />
                   </Button>
                 </div>
@@ -1148,7 +1156,7 @@ export function ZipDropzone({ projects }: { projects: ProjectListItem[] }) {
                       triggerClassName="h-9 rounded-lg px-3 text-sm bg-bg/50"
                     />
                   </div>
-                  <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title={t("fields.addClient")}>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setQuickAddOpen(true)} title={t("fields.addClient")}>
                     <Plus className="h-3 w-3" />
                   </Button>
                 </div>

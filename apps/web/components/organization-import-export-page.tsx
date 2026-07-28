@@ -31,19 +31,21 @@ import {
 
 import { cn } from "@/lib/utils";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
   Input,
   Label,
   Progress,
-  Select,
   Separator,
+} from "@appkit/ui";
+import {
+  Badge,
+  Select,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { downloadCsv } from "@/lib/csv";
 import { exportAllDataManagement } from "@/lib/data-export-import";
 import {
@@ -973,7 +975,7 @@ function ExportView({
           <CardHeader className="shrink-0 border-b border-line px-4 py-3">
             <CardTitle>Options</CardTitle>
           </CardHeader>
-          <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto">
             <div>
               <Label>Format</Label>
               <Select
@@ -1002,11 +1004,11 @@ function ExportView({
             <ToggleRow icon={Wand2} label="AI derived data" checked={includeDerived} onChange={setIncludeDerived} />
             <ToggleRow icon={ShieldCheck} label="Anonymize pricing" checked={anonymizePricing} onChange={setAnonymizePricing} />
             <ToggleRow icon={Archive} label="Inactive records" checked={includeInactive} onChange={setIncludeInactive} />
-          </CardBody>
+          </CardContent>
         </Card>
 
         <div className="shrink-0 space-y-2">
-          <Button className="w-full" variant="accent" size="sm" onClick={onDownload} disabled={exporting || selectedExportSections.length === 0}>
+          <Button className="w-full" variant="default" size="sm" onClick={onDownload} disabled={exporting || selectedExportSections.length === 0}>
             {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />}
             Export {selectedExportSections.length} sections
           </Button>
@@ -1079,7 +1081,7 @@ function ImportView({
           <CardHeader className="shrink-0 border-b border-line px-4 py-3">
             <CardTitle>Source</CardTitle>
           </CardHeader>
-          <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto">
             {!source ? (
               <button
                 type="button"
@@ -1108,14 +1110,14 @@ function ImportView({
                 {fileError}
               </div>
             )}
-          </CardBody>
+          </CardContent>
         </Card>
 
         <Card className="flex min-h-0 flex-col overflow-hidden">
           <CardHeader className="shrink-0 border-b border-line px-4 py-3">
             <CardTitle>Target</CardTitle>
           </CardHeader>
-          <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+          <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto">
             <div>
               <Label>Import into</Label>
               <Select
@@ -1146,16 +1148,16 @@ function ImportView({
               />
             </div>
             <div className="grid grid-cols-2 gap-1.5">
-              <Button variant="ghost" size="xs" onClick={onDownloadTemplate}>
+              <Button variant="ghost" size="sm" onClick={onDownloadTemplate}>
                 <Download className="h-3 w-3" />
                 Template
               </Button>
-              <Button variant="ghost" size="xs" onClick={onDownloadMapping}>
+              <Button variant="ghost" size="sm" onClick={onDownloadMapping}>
                 <FileJson className="h-3 w-3" />
                 Mapping
               </Button>
             </div>
-          </CardBody>
+          </CardContent>
         </Card>
 
         <div className="shrink-0 space-y-2">
@@ -1180,7 +1182,7 @@ function ImportView({
           )}
           <Button
             className="w-full"
-            variant="accent"
+            variant="default"
             size="sm"
             onClick={onRunImport}
             disabled={!source || importing || validation.errors.length > 0}
@@ -1207,7 +1209,7 @@ function ImportView({
                   <span className="text-xs font-medium text-fg">Column mapping</span>
                   <Badge tone={qualityScore >= 80 ? "success" : qualityScore >= 55 ? "warning" : "danger"} className="text-[10px]">{qualityScore}%</Badge>
                 </div>
-                <Button variant="ghost" size="xs" onClick={onInferMappings}>
+                <Button variant="ghost" size="sm" onClick={onInferMappings}>
                   <Wand2 className="h-3 w-3" />
                   Re-infer
                 </Button>

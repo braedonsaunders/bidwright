@@ -34,21 +34,23 @@ import {
 import { cn } from "@/lib/utils";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  EmptyState,
-  FadeIn,
   Input,
   Label,
-  ModalBackdrop,
-  Select,
   Separator,
   Textarea,
-} from "@/components/ui";
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+  FadeIn,
+  ModalBackdrop,
+  Select,
+} from "@/components/legacy-controls";
 import { ConfirmModal } from "@/components/workspace/modals";
 import {
   CabinetDirectorySidebar,
@@ -725,11 +727,11 @@ function BooksTab({
 	              ariaLabel="Book page size"
 	              triggerClassName="h-7 w-20"
 	            />
-	            <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0}>
+	            <Button type="button" variant="ghost" size="sm" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0}>
 	              Prev
 	            </Button>
 	            <span className="tabular-nums">Page {page + 1} / {totalPages}</span>
-	            <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))} disabled={page >= totalPages - 1}>
+	            <Button type="button" variant="ghost" size="sm" onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))} disabled={page >= totalPages - 1}>
 	              Next
 	            </Button>
 	          </div>
@@ -827,7 +829,7 @@ function BookCard({
       role="button"
       tabIndex={0}
       className={cn(
-        "group flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border border-line bg-bg/40 text-left shadow-sm outline-none transition-all hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-[0_16px_42px_hsl(var(--fg)/0.10)] focus-visible:ring-2 focus-visible:ring-accent/35",
+        "group flex min-h-0 cursor-pointer flex-col overflow-hidden rounded-lg border border-line bg-bg/40 text-left shadow-sm outline-none transition-all hover:-translate-y-0.5 hover:border-accent/35 hover:shadow-[0_16px_42px_rgb(var(--ch-fg)/0.10)] focus-visible:ring-2 focus-visible:ring-accent/35",
         selected && "border-accent/60 ring-2 ring-accent/25"
       )}
       onClick={onSelect}
@@ -892,7 +894,7 @@ function BookCard({
             {onMove && (
               <Button
                 variant="secondary"
-                size="xs"
+                size="sm"
                 title="Move book"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -903,8 +905,8 @@ function BookCard({
               </Button>
             )}
             <Button
-              variant="danger"
-              size="xs"
+              variant="destructive"
+              size="sm"
               title="Delete book"
               onClick={(e) => {
                 e.stopPropagation();
@@ -1192,17 +1194,17 @@ function BookDetailPanel({
         {confirmRerun ? (
           <div className="flex items-center gap-1.5">
             <span className="text-[10px] text-fg/50">{datasets.length} datasets exist. Re-run?</span>
-            <Button size="xs" variant="accent" onClick={() => { setConfirmRerun(false); setShowGenerateDataset(true); }}>
+            <Button size="sm" variant="default" onClick={() => { setConfirmRerun(false); setShowGenerateDataset(true); }}>
               Yes
             </Button>
-            <Button size="xs" variant="ghost" onClick={() => setConfirmRerun(false)}>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmRerun(false)}>
               No
             </Button>
           </div>
         ) : (
           <Button
-            size="xs"
-            variant={datasets.length > 0 ? "secondary" : "accent"}
+            size="sm"
+            variant={datasets.length > 0 ? "secondary" : "default"}
             onClick={() => {
               if (datasets.length > 0) setConfirmRerun(true);
               else setShowGenerateDataset(true);
@@ -1212,7 +1214,7 @@ function BookDetailPanel({
             {datasets.length > 0 ? "Re-extract Datasets" : "Extract Datasets"}
           </Button>
         )}
-        <Button size="xs" variant="secondary" onClick={onClose}>
+        <Button size="sm" variant="secondary" onClick={onClose}>
           <X className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -1378,7 +1380,7 @@ function BookDetailPanel({
 	          <motion.div key="view" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex flex-col h-full">
             {/* PDF controls */}
             <div className="flex items-center justify-center gap-2 px-3 py-2 border-b border-line bg-panel2/30">
-              <Button size="xs" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
+              <Button size="sm" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
                 <ChevronLeft className="h-3 w-3" />
               </Button>
               <div className="flex items-center gap-1 min-w-[100px] justify-center">
@@ -1405,19 +1407,19 @@ function BookDetailPanel({
                 />
                 <span className="text-xs text-fg/40">/ {pageCount || "..."}</span>
               </div>
-              <Button size="xs" variant="secondary" disabled={pageCount === 0 || pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
+              <Button size="sm" variant="secondary" disabled={pageCount === 0 || pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
               <Separator className="h-4 mx-1" />
-              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
+              <Button size="sm" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
                 <ZoomOut className="h-3 w-3" />
               </Button>
               <span className="text-xs text-fg/60 min-w-[40px] text-center">{Math.round(zoom * 100)}%</span>
-              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
+              <Button size="sm" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
                 <ZoomIn className="h-3 w-3" />
               </Button>
               <Separator className="h-4 mx-1" />
-              <Button size="xs" variant="secondary" onClick={() => setPdfFullscreen(true)} title="Fullscreen reader">
+              <Button size="sm" variant="secondary" onClick={() => setPdfFullscreen(true)} title="Fullscreen reader">
                 <Maximize2 className="h-3 w-3" />
               </Button>
             </div>
@@ -1448,7 +1450,7 @@ function BookDetailPanel({
                   onChange={(e) => setChunkSearch(e.target.value)}
                 />
               </div>
-              <Button size="xs" variant="secondary" onClick={() => setShowAddChunk(true)}>
+              <Button size="sm" variant="secondary" onClick={() => setShowAddChunk(true)}>
                 <Plus className="h-3 w-3" />
                 Add
               </Button>
@@ -1656,7 +1658,7 @@ function BookDetailPanel({
             <BookOpen className="h-4 w-4 text-accent" />
             <span className="text-sm font-medium text-fg flex-1 truncate">{book.name}</span>
             <div className="flex items-center gap-2">
-              <Button size="xs" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
+              <Button size="sm" variant="secondary" disabled={pageNumber <= 1} onClick={() => setPageNumber((p) => Math.max(1, p - 1))}>
                 <ChevronLeft className="h-3 w-3" />
               </Button>
               <input
@@ -1681,19 +1683,19 @@ function BookDetailPanel({
                 }}
               />
               <span className="text-xs text-fg/40">/ {pageCount || "..."}</span>
-              <Button size="xs" variant="secondary" disabled={pageCount === 0 || pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
+              <Button size="sm" variant="secondary" disabled={pageCount === 0 || pageNumber >= pageCount} onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
               <Separator className="h-4 mx-1" />
-              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
+              <Button size="sm" variant="secondary" onClick={() => setZoom((z) => Math.max(0.25, z - 0.25))}>
                 <ZoomOut className="h-3 w-3" />
               </Button>
               <span className="text-xs text-fg/60 min-w-[40px] text-center">{Math.round(zoom * 100)}%</span>
-              <Button size="xs" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
+              <Button size="sm" variant="secondary" onClick={() => setZoom((z) => Math.min(3, z + 0.25))}>
                 <ZoomIn className="h-3 w-3" />
               </Button>
               <Separator className="h-4 mx-1" />
-              <Button size="xs" variant="secondary" onClick={() => setPdfFullscreen(false)}>
+              <Button size="sm" variant="secondary" onClick={() => setPdfFullscreen(false)}>
                 <X className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -2034,12 +2036,12 @@ function GenerateDatasetFromBookModal({
             </span>
             <div className="flex items-center gap-1.5">
               {pendingCount > 0 && (
-                <Button size="xs" variant="accent" onClick={handleApproveAllAndClose}>
+                <Button size="sm" variant="default" onClick={handleApproveAllAndClose}>
                   <Check className="h-3 w-3" />
                   Approve All & Close
                 </Button>
               )}
-              <Button size="xs" variant="danger" onClick={handleStop}>
+              <Button size="sm" variant="destructive" onClick={handleStop}>
                 Stop
               </Button>
             </div>
@@ -2145,13 +2147,13 @@ function DatasetReviewCard({
           )}
           {dataset.status === "pending" && (
             <>
-              <Button size="xs" variant="ghost" onClick={() => setExpanded(!expanded)} title="Preview">
+              <Button size="sm" variant="ghost" onClick={() => setExpanded(!expanded)} title="Preview">
                 {expanded ? <ChevronDown className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
               </Button>
-              <Button size="xs" variant="accent" onClick={onApprove} title="Keep this dataset">
+              <Button size="sm" variant="default" onClick={onApprove} title="Keep this dataset">
                 <Check className="h-3 w-3" />
               </Button>
-              <Button size="xs" variant="danger" onClick={onReject} title="Delete this dataset">
+              <Button size="sm" variant="destructive" onClick={onReject} title="Delete this dataset">
                 <Trash2 className="h-3 w-3" />
               </Button>
             </>
@@ -2291,10 +2293,10 @@ function AddChunkForm({
         onChange={(e) => setText(e.target.value)}
       />
       <div className="flex justify-end gap-2">
-        <Button size="xs" variant="ghost" onClick={onClose}>
+        <Button size="sm" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button size="xs" onClick={handleSubmit} disabled={saving || !text.trim()}>
+        <Button size="sm" onClick={handleSubmit} disabled={saving || !text.trim()}>
           {saving ? "Saving..." : "Add Chunk"}
         </Button>
       </div>
@@ -2985,7 +2987,7 @@ function DatasetListItem({
           {onMove && (
             <Button
               variant="secondary"
-              size="xs"
+              size="sm"
               onClick={(e) => {
                 e.stopPropagation();
                 onMove();
@@ -2995,8 +2997,8 @@ function DatasetListItem({
             </Button>
           )}
           <Button
-            variant="danger"
-            size="xs"
+            variant="destructive"
+            size="sm"
             onClick={(e) => {
               e.stopPropagation();
               onDelete();
@@ -3138,7 +3140,7 @@ function DatasetDetail({
   return (
     <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
       <div className="flex shrink-0 items-center gap-3">
-        <Button variant="ghost" size="xs" onClick={onBack}>
+        <Button variant="ghost" size="sm" onClick={onBack}>
           &larr; Back
         </Button>
         <div className="flex-1">
@@ -3315,7 +3317,7 @@ function DatasetDetail({
           <div className="flex items-center gap-1">
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               disabled={page === 0}
               onClick={() => setPage((p) => p - 1)}
             >
@@ -3327,7 +3329,7 @@ function DatasetDetail({
             </span>
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               disabled={(page + 1) * pageSize >= total}
               onClick={() => setPage((p) => p + 1)}
             >
@@ -3422,10 +3424,10 @@ function AddRowForm({
         ))}
       </div>
       <div className="flex justify-end gap-2">
-        <Button size="xs" variant="ghost" onClick={onClose}>
+        <Button size="sm" variant="ghost" onClick={onClose}>
           Cancel
         </Button>
-        <Button size="xs" onClick={handleSubmit}>
+        <Button size="sm" onClick={handleSubmit}>
           Add
         </Button>
       </div>
@@ -3546,7 +3548,7 @@ function CreateDatasetModal({
         <div className="space-y-2">
           <div className="flex items-center justify-between">
             <h3 className="text-xs font-semibold text-fg">Columns</h3>
-            <Button size="xs" variant="secondary" onClick={addColumn}>
+            <Button size="sm" variant="secondary" onClick={addColumn}>
               <Plus className="h-3 w-3" />
               Add Column
             </Button>

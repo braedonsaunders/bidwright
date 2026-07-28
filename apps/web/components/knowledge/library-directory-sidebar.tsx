@@ -2,7 +2,18 @@
 
 import { useMemo } from "react";
 import { FolderPlus, Folders, Inbox, Loader2, MoveRight, X } from "lucide-react";
-import { Button, Card, CardBody, CardHeader, CardTitle, Label, ModalBackdrop, Select } from "@/components/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Label,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+  Select,
+} from "@/components/legacy-controls";
 import { TreeView, type TreeNode } from "@/components/shared/tree-view";
 import type { KnowledgeLibraryCabinetRecord } from "@/lib/api";
 
@@ -115,7 +126,7 @@ export function CabinetDirectorySidebar({
           <p className="mt-1 text-xs text-fg/40">{emptyLabel}</p>
         </div>
         <Button
-          size="xs"
+          size="sm"
           variant="secondary"
           onClick={() => onCreateCabinet(selectedView.kind === "cabinet" ? selectedView.cabinetId : null)}
         >
@@ -124,7 +135,7 @@ export function CabinetDirectorySidebar({
         </Button>
       </CardHeader>
 
-      <CardBody className="flex min-h-0 flex-1 flex-col p-3">
+      <CardContent className="flex min-h-0 flex-1 flex-col p-3">
         <TreeView
           nodes={nodes}
           selectedId={
@@ -151,7 +162,7 @@ export function CabinetDirectorySidebar({
           onRename={onRenameCabinet}
           onDelete={onDeleteCabinet}
         />
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

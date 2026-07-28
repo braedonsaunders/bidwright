@@ -2,7 +2,9 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, Layers, Loader2, Ruler, Table2 } from "lucide-react";
-import { Badge } from "@/components/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { inspectFileIngest, type FileIngestManifestResponse } from "@/lib/api";
 
 type MarkupManifest = NonNullable<FileIngestManifestResponse["manifest"]["markups"]>;

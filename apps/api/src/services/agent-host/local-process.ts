@@ -7,7 +7,7 @@
  * `cli-runtime.ts` so behavior is unchanged for all existing callers.
  */
 
-import { spawn, type ChildProcess, execSync } from "node:child_process";
+import { spawn, type ChildProcess, execFileSync } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -38,7 +38,7 @@ export const localProcessHost: AgentRuntimeHost = {
     // a launcher .bat so we don't fight cmd.exe over argument quoting.
     let resolvedCmd = plan.cliCmd;
     try {
-      const candidates = execSync(`where ${plan.cliCmd}`, { encoding: "utf-8" })
+      const candidates = execFileSync("where.exe", [plan.cliCmd], { encoding: "utf-8" })
         .trim()
         .split(/\r?\n/);
       resolvedCmd =

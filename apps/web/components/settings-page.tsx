@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
@@ -17,6 +16,7 @@ import {
   Loader2,
   Mail,
   Plus,
+  RotateCcw,
   Star,
   Trash2,
   Upload,
@@ -25,28 +25,34 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
 import { DEFAULT_UOMS, normalizeUomCode, normalizeUomLibrary, type UnitOfMeasure } from "@bidwright/domain";
+import { UsersAdmin } from "@appkit/iam/react";
 import { cn } from "@/lib/utils";
 import { SUPPORTED_LOCALES, localeDisplayName, normalizeLocale } from "@/lib/i18n";
 import {
-  Badge,
   Button,
+  Badge,
   Card,
-  CardBody,
+  CardContent,
   CardDescription,
   CardHeader,
   CardTitle,
-  FadeIn,
+  Dialog,
+  Drawer,
   Input,
   Label,
-  Select,
-  Separator,
-  Textarea,
-  Toggle,
   MultiSelect,
+  NavigationConfigEditor,
   type MultiSelectOption,
-} from "@/components/ui";
+  SearchSelect,
+  Separator,
+  Switch,
+  Textarea,
+  SettingsShell,
+  buildDefaultNavigationConfig,
+  stampKnownNavigationItems,
+  type TenantNavigationConfig,
+} from "@appkit/ui";
 import {
   AgentRuntimeSettings,
   ColorField,
@@ -86,6 +92,7 @@ import {
 } from "@/components/settings-page-config";
 import {
   getSettings as apiGetSettings,
+  updateNavigationConfig as apiUpdateNavigationConfig,
   updateSettings as apiUpdateSettings,
   createUser as apiCreateUser,
   updateUser as apiUpdateUser,
@@ -141,6 +148,7 @@ import {
   type KnowledgeDocumentRecord,
   type AuthUser,
 } from "@/lib/api";
+import { BIDWRIGHT_NAVIGATION_REGISTRY } from "@/lib/navigation-config";
 import { useAuth } from "@/components/auth-provider";
 import { PluginsPage } from "@/components/plugins-page";
 import { IntegrationsPage } from "@/components/integrations/integrations-page";
@@ -159,6 +167,10 @@ import {
   type ImportSectionKey,
 } from "@/lib/data-export-import";
 import { setCachedUoms } from "@/components/shared/uom-select";
+import {
+  bidwrightPermissionGroups,
+  createBidwrightIamService,
+} from "@/lib/bidwright-iam-service";
 
 const AZURE_DI_MODEL_OPTIONS = [
   { value: "prebuilt-layout", label: "Layout" },
@@ -232,10 +244,20 @@ export function SettingsPage({
   const [dataSubTab, setDataSubTab] = useState<DataSubTab>(initialNavigation.dataSubTab);
   const [integrationsSubTab, setIntegrationsSubTab] = useState<IntegrationsSubTab>(initialNavigation.integrationsSubTab);
   const [settings, setSettings] = useState<AllSettings>(DEFAULT_SETTINGS);
+  const [navigationConfig, setNavigationConfig] =
+    useState<TenantNavigationConfig>(() =>
+      stampKnownNavigationItems(
+        buildDefaultNavigationConfig(BIDWRIGHT_NAVIGATION_REGISTRY),
+        BIDWRIGHT_NAVIGATION_REGISTRY,
+      ),
+    );
   const [brand, setBrand] = useState<BrandProfile>(DEFAULT_BRAND);
   const settingsLoaded = useRef(false);
   const brandLoaded = useRef(false);
   const settingsTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const navigationLoaded = useRef(false);
+  const navigationTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const navigationSaveRevision = useRef(0);
   const brandTimer = useRef<ReturnType<typeof setTimeout>>(undefined);
   const [emailTestStatus, setEmailTestStatus] = useState<{ loading: boolean; result?: { success: boolean; message: string } }>({ loading: false });
   const [userSaving, setUserSaving] = useState<string | null>(null);
@@ -279,7 +301,18 @@ export function SettingsPage({
   const [newPassword, setNewPassword] = useState("");
   const [passwordResetSaving, setPasswordResetSaving] = useState(false);
 
-  const { user: currentUser, organization: currentOrganization, setOrganizationLanguage } = useAuth();
+  const {
+    user: currentUser,
+    organization: currentOrganization,
+    isSuperAdmin,
+    setOrganizationLanguage,
+  } = useAuth();
+  const canManageNavigation =
+    !currentUser || currentUser.role === "admin" || isSuperAdmin;
+  const iamService = useMemo(
+    () => createBidwrightIamService(currentUser?.id),
+    [currentUser?.id],
+  );
 
   useEffect(() => {
     const next = resolveSettingsNavigation(tabParam, groupParam);
@@ -288,6 +321,12 @@ export function SettingsPage({
     setDataSubTab(next.dataSubTab);
     setIntegrationsSubTab(next.integrationsSubTab);
   }, [groupParam, tabParam]);
+
+  useEffect(() => {
+    if (!canManageNavigation && orgSubTab === "navigation") {
+      setOrgSubTab("general");
+    }
+  }, [canManageNavigation, orgSubTab]);
 
   // Data export handler
   const handleExportAll = useCallback(async () => {
@@ -425,6 +464,13 @@ export function SettingsPage({
           },
           termsAndConditions: (apiSettings as any).termsAndConditions ?? prev.termsAndConditions,
         }));
+        setNavigationConfig(
+          apiSettings.general.navigation ??
+            stampKnownNavigationItems(
+              buildDefaultNavigationConfig(BIDWRIGHT_NAVIGATION_REGISTRY),
+              BIDWRIGHT_NAVIGATION_REGISTRY,
+            ),
+        );
 
         // Load brand separately
         if (apiSettings.brand) {
@@ -432,7 +478,11 @@ export function SettingsPage({
           if (apiSettings.brand.websiteUrl) setBrandCaptureUrl(apiSettings.brand.websiteUrl);
         }
         // Mark loaded so auto-save skips the initial hydration
-        setTimeout(() => { settingsLoaded.current = true; brandLoaded.current = true; }, 0);
+        setTimeout(() => {
+          settingsLoaded.current = true;
+          brandLoaded.current = true;
+          navigationLoaded.current = true;
+        }, 0);
       })
       .catch(() => {
         try {
@@ -451,7 +501,11 @@ export function SettingsPage({
         } catch {
           // use defaults
         }
-        setTimeout(() => { settingsLoaded.current = true; brandLoaded.current = true; }, 0);
+        setTimeout(() => {
+          settingsLoaded.current = true;
+          brandLoaded.current = true;
+          navigationLoaded.current = true;
+        }, 0);
       });
   }, []);
 
@@ -731,6 +785,25 @@ export function SettingsPage({
   }, [save]);
 
   useEffect(() => {
+    if (!navigationLoaded.current) return;
+    const revision = ++navigationSaveRevision.current;
+    clearTimeout(navigationTimer.current);
+    navigationTimer.current = setTimeout(() => {
+      apiUpdateNavigationConfig(navigationConfig)
+        .then(({ config }) => {
+          if (revision !== navigationSaveRevision.current) return;
+          window.dispatchEvent(
+            new CustomEvent("bidwright:navigation-updated", { detail: config }),
+          );
+        })
+        .catch(() => {
+          // Keep the local edit visible so the next interaction can retry.
+        });
+    }, 500);
+    return () => clearTimeout(navigationTimer.current);
+  }, [navigationConfig]);
+
+  useEffect(() => {
     setCachedUoms(settings.defaults.uoms, currentOrganization?.id);
   }, [currentOrganization?.id, settings.defaults.uoms]);
 
@@ -895,50 +968,34 @@ export function SettingsPage({
   const autodeskReady = autodeskCredentialsConfigured;
 
   return (
-    <div className="flex h-full flex-col gap-5">
-      <div className="shrink-0">
-        <FadeIn>
-          <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
-              <p className="text-xs text-fg/50">{t("subtitle")}</p>
-            </div>
-          </div>
-        </FadeIn>
-
-        {/* Horizontal tab bar */}
-        <FadeIn delay={0.05}>
-          <div className="flex items-center gap-1 border-b border-line pb-px mt-5">
-            {GROUPS.map((group) => {
-              const Icon = group.icon;
-              return (
-                <button
-                  key={group.key}
-                  onClick={() => setActiveGroup(group.key)}
-                  className={cn(
-                    "flex items-center gap-2 rounded-t-lg px-4 py-2 text-xs transition-colors -mb-px border-b-2",
-                    activeGroup === group.key
-                      ? "border-accent text-accent font-medium"
-                      : "border-transparent text-fg/50 hover:text-fg/80 hover:border-line"
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {t(`groups.${group.key}`)}
-                </button>
-            );
-          })}
-        </div>
-      </FadeIn>
-      </div>
-
-      {/* Tab content */}
-      <FadeIn delay={0.1} className={cn("min-h-0 flex-1 space-y-5", activeGroup === "importExport" ? "overflow-hidden" : "overflow-y-auto")}>
+    <SettingsShell
+      title={t("title")}
+      description={t("subtitle")}
+      nav={[
+        {
+          label: t("title"),
+          items: GROUPS.map((group) => {
+            const Icon = group.icon;
+            return {
+              key: group.key,
+              label: t(`groups.${group.key}`),
+              icon: <Icon />,
+            };
+          }),
+        },
+      ]}
+      activeKey={activeGroup}
+      onSelect={(key) => setActiveGroup(key as SettingsGroup)}
+    >
+      <div className={cn("space-y-5", activeGroup === "importExport" && "min-h-0")}>
           {activeGroup === "organization" && (
             <div className="flex items-center gap-1 shrink-0">
-              {ORG_SUBTABS.map((tab) => {
+              {ORG_SUBTABS.filter(
+                (tab) => tab.id !== "navigation" || canManageNavigation,
+              ).map((tab) => {
                 const active = orgSubTab === tab.id;
                 return (
-                  <button key={tab.id} onClick={() => setOrgSubTab(tab.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{t(`orgTabs.${tab.id}`)}</button>
+                  <button key={tab.id} onClick={() => setOrgSubTab(tab.id)} className={cn("px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap", active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60")}>{tab.id === "navigation" ? tab.label : t(`orgTabs.${tab.id}`)}</button>
                 );
               })}
             </div>
@@ -951,52 +1008,86 @@ export function SettingsPage({
                     <CardTitle>{t("localizationTitle")}</CardTitle>
                     <CardDescription>{t("localizationDescription")}</CardDescription>
                   </CardHeader>
-                  <CardBody>
+                  <CardContent>
                     <div className="max-w-md">
                       <Label>{t("language")}</Label>
-                      <Select
+                      <SearchSelect
                         value={settings.general.language}
-                        onValueChange={(v) => updateGeneral({ language: normalizeLocale(v) })}
+                        onChange={(v) => updateGeneral({ language: normalizeLocale(v) })}
                         options={SUPPORTED_LOCALES.map((locale) => ({ value: locale.code, label: localeDisplayName(locale.code) }))}
                       />
                     </div>
-                  </CardBody>
+                  </CardContent>
                 </Card>
                 <Card>
                   <CardHeader>
                     <CardTitle>{t("regionalTitle")}</CardTitle>
                     <CardDescription>{t("regionalDescription")}</CardDescription>
                   </CardHeader>
-                  <CardBody>
+                  <CardContent>
                     <div className="grid gap-4 sm:grid-cols-3">
                       <div>
                         <Label>{t("timezone")}</Label>
-                        <Select
+                        <SearchSelect
                           value={settings.general.timezone}
-                          onValueChange={(v) => updateGeneral({ timezone: v })}
+                          onChange={(v) => updateGeneral({ timezone: v })}
                           options={TIMEZONES.map((tz) => ({ value: tz, label: tz.replace(/_/g, " ") }))}
                         />
                       </div>
                       <div>
                         <Label>{t("currency")}</Label>
-                        <Select
+                        <SearchSelect
                           value={settings.general.currency}
-                          onValueChange={(v) => updateGeneral({ currency: v })}
+                          onChange={(v) => updateGeneral({ currency: v })}
                           options={CURRENCIES.map((c) => ({ value: c, label: c }))}
                         />
                       </div>
                       <div>
                         <Label>{t("dateFormat")}</Label>
-                        <Select
+                        <SearchSelect
                           value={settings.general.dateFormat}
-                          onValueChange={(v) => updateGeneral({ dateFormat: v })}
+                          onChange={(v) => updateGeneral({ dateFormat: v })}
                           options={DATE_FORMATS.map((f) => ({ value: f, label: f }))}
                         />
                       </div>
                     </div>
-                  </CardBody>
+                  </CardContent>
                 </Card>
               </div>
+            </div>
+          )}
+
+          {activeGroup === "organization" &&
+            canManageNavigation &&
+            orgSubTab === "navigation" && (
+            <div className="space-y-3">
+              <NavigationConfigEditor
+                registry={BIDWRIGHT_NAVIGATION_REGISTRY}
+                value={navigationConfig}
+                onChange={setNavigationConfig}
+                labels={{
+                  title: "Main navigation",
+                  description:
+                    "Choose which destinations appear for this organization and arrange them in the order your team uses.",
+                }}
+              />
+              <p className="text-xs text-fg-muted">
+                Changes save automatically for everyone in this organization.
+              </p>
+              <Button
+                variant="outline"
+                onClick={() =>
+                  setNavigationConfig(
+                    stampKnownNavigationItems(
+                      buildDefaultNavigationConfig(BIDWRIGHT_NAVIGATION_REGISTRY),
+                      BIDWRIGHT_NAVIGATION_REGISTRY,
+                    ),
+                  )
+                }
+              >
+                <RotateCcw className="size-4" aria-hidden />
+                Reset navigation
+              </Button>
             </div>
           )}
 
@@ -1006,7 +1097,7 @@ export function SettingsPage({
                 <CardHeader>
                   <CardTitle>Brand Capture</CardTitle>
                 </CardHeader>
-                <CardBody className="space-y-4">
+                <CardContent className="space-y-4">
                   <p className="text-xs text-fg/50">
                     Enter your website URL and we'll automatically extract your brand identity using AI-powered analysis.
                   </p>
@@ -1018,7 +1109,7 @@ export function SettingsPage({
                       className="flex-1"
                     />
                     <Button
-                      variant="accent"
+                      variant="default"
                       size="sm"
                       onClick={handleCaptureBrand}
                       disabled={brandCapturing || !brandCaptureUrl.trim()}
@@ -1044,14 +1135,14 @@ export function SettingsPage({
                       Last captured: {new Date(brand.lastCapturedAt).toLocaleString()}
                     </p>
                   )}
-                </CardBody>
+                </CardContent>
               </Card>
 
               <Card>
                 <CardHeader>
                   <CardTitle>Brand Profile</CardTitle>
                 </CardHeader>
-                <CardBody className="space-y-4">
+                <CardContent className="space-y-4">
                   <div className="grid grid-cols-2 gap-4">
                     <div>
                       <Label>Company Name</Label>
@@ -1120,7 +1211,7 @@ export function SettingsPage({
                       </div>
                     ))}
                   </div>
-                </CardBody>
+                </CardContent>
               </Card>
             </div>
           )}
@@ -1140,7 +1231,7 @@ export function SettingsPage({
               <CardHeader>
                 <CardTitle>Email Settings</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-4">
+              <CardContent className="space-y-4">
                 {/* Auth method toggle */}
                 <div>
                   <Label>Authentication Method</Label>
@@ -1254,7 +1345,7 @@ export function SettingsPage({
                     </span>
                   )}
                 </div>
-              </CardBody>
+              </CardContent>
             </Card>
           )}
 
@@ -1263,7 +1354,7 @@ export function SettingsPage({
               <CardHeader>
                 <CardTitle>Default Values</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-4">
+              <CardContent className="space-y-4">
                 <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
                   <div>
                     <Label>Default Markup (%)</Label>
@@ -1276,9 +1367,9 @@ export function SettingsPage({
                   </div>
                   <div>
                     <Label>Default Breakout Style</Label>
-                    <Select
+                    <SearchSelect
                       value={settings.defaults.defaultBreakoutStyle}
-                      onValueChange={(v) => updateDefaults({ defaultBreakoutStyle: v })}
+                      onChange={(v) => updateDefaults({ defaultBreakoutStyle: v })}
                       options={[
                         { value: "grand_total", label: "Grand Total" },
                         { value: "category", label: "By Category" },
@@ -1290,9 +1381,9 @@ export function SettingsPage({
                   </div>
                   <div>
                     <Label>Default Quote Type</Label>
-                    <Select
+                    <SearchSelect
                       value={settings.defaults.defaultQuoteType}
-                      onValueChange={(v) => updateDefaults({ defaultQuoteType: v })}
+                      onChange={(v) => updateDefaults({ defaultQuoteType: v })}
                       options={[
                         { value: "Firm", label: "Firm" },
                         { value: "Budget", label: "Budget" },
@@ -1312,9 +1403,9 @@ export function SettingsPage({
                         Off by default. Only turn this on once you have a meaningful library of verified, accurate prior quotes for similar work. With too few comparables (or noisy ones) the agent will be steered toward the wrong totals. When disabled, the agent skips the benchmark pass and relies on documents, specs, line lists, and labor units instead.
                       </p>
                     </div>
-                    <Toggle
+                    <Switch
                       checked={settings.defaults.benchmarkingEnabled}
-                      onChange={(val) => updateDefaults({ benchmarkingEnabled: val })}
+                      onChange={(event) => updateDefaults({ benchmarkingEnabled: event.target.checked })}
                     />
                   </div>
                   {!settings.defaults.benchmarkingEnabled && (
@@ -1378,114 +1469,24 @@ export function SettingsPage({
                         When enabled, benchmark and calibration envelope outliers stop at review instead of auto-completing.
                       </p>
                     </div>
-                    <Toggle
+                    <Switch
                       checked={settings.defaults.requireHumanReviewForBenchmarkOutliers}
-                      onChange={(val) => updateDefaults({ requireHumanReviewForBenchmarkOutliers: val })}
+                      onChange={(event) => updateDefaults({ requireHumanReviewForBenchmarkOutliers: event.target.checked })}
                     />
                   </div>
                 </div>
-              </CardBody>
+              </CardContent>
             </Card>
           )}
 
           {activeGroup === "users" && (
-            <>
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <CardTitle>Users</CardTitle>
-                <Button variant="accent" size="xs" onClick={addUser}>
-                  <Users className="h-3 w-3" />
-                  Add User
-                </Button>
-              </CardHeader>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-line">
-                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Name</th>
-                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Email</th>
-                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-36">Role</th>
-                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-20">Active</th>
-                      <th className="px-5 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 w-28">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {settings.users.map((user) => {
-                      const isCurrentUser = user.id === currentUser?.id || (!!currentUser?.email && user.email === currentUser.email);
-                      return (
-                      <tr key={user.id} className={cn("border-b border-line last:border-0", isCurrentUser && "bg-accent/5")}>
-                        <td className="px-5 py-2.5">
-                          <div className="flex items-center gap-2">
-                            <Input className="h-7 text-xs" value={user.name} onChange={(e) => updateUserLocal(user.id, { name: e.target.value })} onBlur={() => saveUser(user)} placeholder="Full name" />
-                            {isCurrentUser && <Badge tone="info" className="text-[9px] shrink-0">You</Badge>}
-                          </div>
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <Input className="h-7 text-xs" value={user.email} onChange={(e) => updateUserLocal(user.id, { email: e.target.value })} onBlur={() => saveUser(user)} placeholder="email@company.com" />
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <Select
-                            className="h-7 text-xs"
-                            size="xs"
-                            value={user.role}
-                            onValueChange={(v) => { const role = v as UserRecord["role"]; updateUserLocal(user.id, { role }); saveUser({ ...user, role }); }}
-                            options={[
-                              { value: "Estimator", label: "Estimator" },
-                              { value: "Admin", label: "Admin" },
-                              { value: "Viewer", label: "Viewer" },
-                            ]}
-                          />
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <Toggle checked={user.active} onChange={(val) => { updateUserLocal(user.id, { active: val }); saveUser({ ...user, active: val }); }} />
-                        </td>
-                        <td className="px-5 py-2.5">
-                          <div className="flex items-center gap-1">
-                            <button onClick={() => { setPasswordResetUserId(user.id); setNewPassword(""); }} className="rounded p-1 text-fg/30 hover:bg-accent/10 hover:text-accent transition-colors" title="Reset password">
-                              <KeyRound className="h-3.5 w-3.5" />
-                            </button>
-                            <button onClick={() => removeUser(user.id)} className="rounded p-1 text-fg/30 hover:bg-danger/10 hover:text-danger transition-colors" title="Delete user">
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            </Card>
-
-            {/* Password Reset Modal */}
-            {passwordResetUserId && createPortal(
-              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={() => setPasswordResetUserId(null)}>
-                <div className="w-full max-w-sm rounded-lg border border-line bg-panel p-6 shadow-xl" onClick={(e) => e.stopPropagation()}>
-                  <h3 className="text-sm font-semibold text-fg mb-1">Reset Password</h3>
-                  <p className="text-xs text-fg/50 mb-4">
-                    Set a new password for {settings.users.find((u) => u.id === passwordResetUserId)?.name || "this user"}.
-                  </p>
-                  <Input
-                    type="password"
-                    className="h-8 text-xs mb-4"
-                    placeholder="New password"
-                    value={newPassword}
-                    onChange={(e) => setNewPassword(e.target.value)}
-                    autoFocus
-                  />
-                  <div className="flex justify-end gap-2">
-                    <Button variant="ghost" size="xs" onClick={() => setPasswordResetUserId(null)}>Cancel</Button>
-                    <Button variant="accent" size="xs" onClick={handlePasswordReset} disabled={!newPassword || passwordResetSaving}>
-                      {passwordResetSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <KeyRound className="h-3 w-3" />}
-                      {passwordResetSaving ? "Saving..." : "Reset Password"}
-                    </Button>
-                  </div>
-                </div>
-              </div>,
-              document.body,
-            )}
-            </>
-
+            <UsersAdmin
+              service={iamService}
+              permissionGroups={bidwrightPermissionGroups}
+              title="Users & access"
+              description="Manage organization members and the built-in Bidwright roles."
+              canManage
+            />
           )}
 
           {activeGroup === "integrations" && integrationsSubTab === "llm" && (() => {
@@ -1498,12 +1499,12 @@ export function SettingsPage({
                 <CardHeader>
                   <CardTitle>LLM Provider</CardTitle>
                 </CardHeader>
-                <CardBody className="space-y-4">
+                <CardContent className="space-y-4">
                   <div>
                     <Label>Provider</Label>
-                    <Select
+                    <SearchSelect
                       value={provider}
-                      onValueChange={(v) => {
+                      onChange={(v) => {
                         updateIntegrations({ llmProvider: v, llmModel: "" });
                         setKeyTestStatus({ loading: false });
                         setProviderModels([]);
@@ -1529,7 +1530,7 @@ export function SettingsPage({
                   <div className="flex items-center gap-3">
                     <Button
                       variant="default"
-                      size="xs"
+                      size="sm"
                       onClick={handleTestKey}
                       disabled={keyTestStatus.loading || (!currentKey && !isLmStudio)}
                     >
@@ -1552,7 +1553,7 @@ export function SettingsPage({
                       <Label className="mb-0">Model</Label>
                       <Button
                         variant="ghost"
-                        size="xs"
+                        size="sm"
                         onClick={() => handleFetchModels()}
                         disabled={modelsLoading || (!currentKey && !isLmStudio)}
                         className="text-[10px] h-5 px-1.5"
@@ -1568,7 +1569,7 @@ export function SettingsPage({
                       placeholder={!currentKey && !isLmStudio ? "Enter API key first..." : "Select a model..."}
                     />
                   </div>
-                </CardBody>
+                </CardContent>
               </Card>
             );
           })()}
@@ -1578,14 +1579,14 @@ export function SettingsPage({
               <CardHeader>
                 <CardTitle>Azure Document Intelligence</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-4">
+              <CardContent className="space-y-4">
                 <p className="text-xs text-fg/50">Primary extraction for PDFs, Office files, images, HTML, structured tables, and form key-value pairs.</p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
                     <Label>Document extraction</Label>
-                    <Select
+                    <SearchSelect
                       value={settings.integrations.documentExtractionProvider}
-                      onValueChange={(value) => updateIntegrations({ documentExtractionProvider: value as IntegrationSettings["documentExtractionProvider"] })}
+                      onChange={(value) => updateIntegrations({ documentExtractionProvider: value as IntegrationSettings["documentExtractionProvider"] })}
                       options={[
                         { value: "azure", label: "Azure first" },
                         { value: "auto", label: "Auto fallback" },
@@ -1595,9 +1596,9 @@ export function SettingsPage({
                   </div>
                   <div>
                     <Label>Azure model</Label>
-                    <Select
+                    <SearchSelect
                       value={settings.integrations.azureDiModel}
-                      onValueChange={(value) => updateIntegrations({ azureDiModel: value as IntegrationSettings["azureDiModel"] })}
+                      onChange={(value) => updateIntegrations({ azureDiModel: value as IntegrationSettings["azureDiModel"] })}
                       options={[...AZURE_DI_MODEL_OPTIONS]}
                     />
                   </div>
@@ -1605,7 +1606,7 @@ export function SettingsPage({
                 <div>
                   <Label>Analysis features</Label>
                   <MultiSelect
-                    selected={settings.integrations.azureDiFeatures ?? ["keyValuePairs"]}
+                    value={settings.integrations.azureDiFeatures ?? ["keyValuePairs"]}
                     onChange={(azureDiFeatures) => updateIntegrations({ azureDiFeatures: azureDiFeatures as IntegrationSettings["azureDiFeatures"] })}
                     options={AZURE_DI_FEATURE_OPTIONS}
                     placeholder="Select v4 features..."
@@ -1613,9 +1614,9 @@ export function SettingsPage({
                 </div>
                 <div>
                   <Label>Content format</Label>
-                  <Select
+                  <SearchSelect
                     value={settings.integrations.azureDiOutputFormat}
-                    onValueChange={(value) => updateIntegrations({ azureDiOutputFormat: value as IntegrationSettings["azureDiOutputFormat"] })}
+                    onChange={(value) => updateIntegrations({ azureDiOutputFormat: value as IntegrationSettings["azureDiOutputFormat"] })}
                     options={[
                       { value: "text", label: "Text" },
                       { value: "markdown", label: "Markdown" },
@@ -1655,7 +1656,7 @@ export function SettingsPage({
                     <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.azureDiKey)}</p>
                   )}
                 </div>
-              </CardBody>
+              </CardContent>
             </Card>
           )}
 
@@ -1664,12 +1665,12 @@ export function SettingsPage({
               <CardHeader>
                 <div className="flex items-center justify-between gap-4">
                   <CardTitle>Autodesk APS (Model Derivative)</CardTitle>
-                  <Badge tone={autodeskReady ? "success" : "default"}>
+                  <Badge variant={autodeskReady ? "success" : "secondary"}>
                     {autodeskReady ? "Ready" : "Missing"}
                   </Badge>
                 </div>
               </CardHeader>
-              <CardBody className="space-y-4">
+              <CardContent className="space-y-4">
                 <p className="text-xs text-fg/50">Extract elements, properties, and quantities from Revit (.rvt), AutoCAD (.dwg), and Navisworks (.nwd/.nwf/.nwc) files using the Autodesk Model Derivative API. Only Client ID and Client Secret are required.</p>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div>
@@ -1697,7 +1698,7 @@ export function SettingsPage({
                 <div className="rounded-md bg-panel2/50 p-3">
                   <p className="text-[11px] text-fg/50">Supported formats: .rvt (Revit), .dwg (AutoCAD), .nwd/.nwf/.nwc (Navisworks). Files are uploaded to APS for cloud translation, then metadata and properties are extracted for takeoff.</p>
                 </div>
-              </CardBody>
+              </CardContent>
             </Card>
           )}
 
@@ -1706,38 +1707,38 @@ export function SettingsPage({
               <CardHeader>
                 <CardTitle>Drawing Extraction</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-4">
+              <CardContent className="space-y-4">
                 <div className="flex items-center justify-between gap-4">
                   <div>
                     <p className="text-xs text-fg/50">Optional verbose drawing-evidence enrichment for drawing PDFs. Picks one provider; Azure structured extraction always runs in parallel.</p>
                   </div>
-                  <Toggle
+                  <Switch
                     checked={settings.integrations.drawingExtractionEnabled}
-                    onChange={(drawingExtractionEnabled) => updateIntegrations({
-                      drawingExtractionEnabled,
-                      landingAiDrawingExtractionEnabled: drawingExtractionEnabled && settings.integrations.drawingExtractionProvider === "landingAi",
+                    onChange={(event) => updateIntegrations({
+                      drawingExtractionEnabled: event.target.checked,
+                      landingAiDrawingExtractionEnabled: event.target.checked && settings.integrations.drawingExtractionProvider === "landingAi",
                     })}
                   />
                 </div>
                 <Separator />
                 <div>
                   <Label>Provider</Label>
-                  <select
-                    className="block w-full rounded-md border border-line bg-panel2 px-2 py-1.5 text-xs text-fg focus:outline-none focus:ring-1 focus:ring-accent"
+                  <SearchSelect
                     value={settings.integrations.drawingExtractionProvider}
-                    onChange={(e) => {
-                      const drawingExtractionProvider = e.target.value as IntegrationSettings["drawingExtractionProvider"];
+                    onChange={(value) => {
+                      const drawingExtractionProvider = value as IntegrationSettings["drawingExtractionProvider"];
                       updateIntegrations({
                         drawingExtractionProvider,
                         landingAiDrawingExtractionEnabled: settings.integrations.drawingExtractionEnabled && drawingExtractionProvider === "landingAi",
                       });
                     }}
-                  >
-                    <option value="none">None — disable drawing enrichment</option>
-                    <option value="landingAi">LandingAI ADE — proven on drawings, ~$0.027/page parse</option>
-                    <option value="geminiPro">Gemini 2.5 Pro — best quality, scales w/ doc complexity (~$0.04–0.13/pg)</option>
-                    <option value="geminiFlash">Gemini 2.5 Flash — production sweet spot (~$0.013–0.022/pg)</option>
-                  </select>
+                    options={[
+                      { value: "none", label: "None — disable drawing enrichment" },
+                      { value: "landingAi", label: "LandingAI ADE — proven on drawings, ~$0.027/page parse" },
+                      { value: "geminiPro", label: "Gemini 2.5 Pro — best quality, scales with document complexity" },
+                      { value: "geminiFlash", label: "Gemini 2.5 Flash — production sweet spot" },
+                    ]}
+                  />
                 </div>
 
                 {settings.integrations.drawingExtractionProvider === "landingAi" && (
@@ -1826,14 +1827,14 @@ export function SettingsPage({
                           When enabled, Gemini plans before responding (better quality on dense drawings, higher cost). Disable for cheaper, faster output on simple drawings.
                         </p>
                       </div>
-                      <Toggle
+                      <Switch
                         checked={settings.integrations.geminiThinkingEnabled}
-                        onChange={(geminiThinkingEnabled) => updateIntegrations({ geminiThinkingEnabled })}
+                        onChange={(event) => updateIntegrations({ geminiThinkingEnabled: event.target.checked })}
                       />
                     </div>
                   </>
                 )}
-              </CardBody>
+              </CardContent>
             </Card>
           )}
 
@@ -1846,11 +1847,11 @@ export function SettingsPage({
                 );
               })}
               <div className="flex-1" />
-              <Button variant="ghost" size="xs" onClick={handleExportAll} disabled={exporting || importing}>
+              <Button variant="ghost" size="sm" onClick={handleExportAll} disabled={exporting || importing}>
                 {exporting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
                 {exporting ? "Exporting..." : "Export All"}
               </Button>
-              <Button variant="ghost" size="xs" onClick={() => importFileRef.current?.click()} disabled={importing || exporting}>
+              <Button variant="ghost" size="sm" onClick={() => importFileRef.current?.click()} disabled={importing || exporting}>
                 {importing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Upload className="h-3 w-3" />}
                 {importing ? (importProgress ? `Importing (${importProgress.sectionsComplete}/${importProgress.totalSections})...` : "Importing...") : "Import"}
               </Button>
@@ -1882,7 +1883,7 @@ export function SettingsPage({
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Departments</CardTitle>
-                <Button variant="accent" size="xs" onClick={addDepartment}>
+                <Button variant="default" size="sm" onClick={addDepartment}>
                   <Plus className="h-3 w-3" />
                   Add Department
                 </Button>
@@ -1911,7 +1912,7 @@ export function SettingsPage({
                         {dept.description && <span className="text-xs text-fg/40 truncate">{dept.description}</span>}
                         <span className="flex-1" />
                         <span onClick={(e) => e.stopPropagation()}>
-                          <Toggle checked={dept.active} onChange={(val) => toggleDeptActive(dept, val)} />
+                          <Switch checked={dept.active} onChange={(event) => toggleDeptActive(dept, event.target.checked)} />
                         </span>
                       </div>
                       {isExpanded && (
@@ -1935,8 +1936,8 @@ export function SettingsPage({
                             {deptDeleteConfirm === dept.id ? (
                               <div className="flex items-center gap-2 ml-2">
                                 <span className="text-xs text-danger">Delete this department?</span>
-                                <Button variant="danger" size="xs" onClick={() => deleteDepartment(dept.id)}>Confirm</Button>
-                                <Button variant="secondary" size="xs" onClick={() => setDeptDeleteConfirm(null)}>Cancel</Button>
+                                <Button variant="destructive" size="sm" onClick={() => deleteDepartment(dept.id)}>Confirm</Button>
+                                <Button variant="secondary" size="sm" onClick={() => setDeptDeleteConfirm(null)}>Cancel</Button>
                               </div>
                             ) : (
                               <button
@@ -1963,7 +1964,7 @@ export function SettingsPage({
               <CardHeader>
                 <CardTitle>Terms & Conditions</CardTitle>
               </CardHeader>
-              <CardBody>
+              <CardContent>
                 <div className="space-y-4">
                   <div>
                     <Label>Organization Terms & Conditions</Label>
@@ -1987,7 +1988,7 @@ export function SettingsPage({
                     <span className="text-xs text-fg/30">Auto-saves when changed</span>
                   </div>
                 </div>
-              </CardBody>
+              </CardContent>
             </Card>
           )}
 
@@ -1996,7 +1997,7 @@ export function SettingsPage({
             <Card>
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle>Estimator Personas</CardTitle>
-                <Button variant="accent" size="xs" onClick={addPersona}>
+                <Button variant="default" size="sm" onClick={addPersona}>
                   <Plus className="h-3 w-3" />
                   Add Persona
                 </Button>
@@ -2032,7 +2033,7 @@ export function SettingsPage({
                         {edited.description && <span className="text-xs text-fg/40 truncate">{edited.description}</span>}
                         <span className="flex-1" />
                         <span onClick={(e) => e.stopPropagation()}>
-                          <Toggle checked={edited.enabled} onChange={(val) => togglePersonaEnabled(persona, val)} />
+                          <Switch checked={edited.enabled} onChange={(event) => togglePersonaEnabled(persona, event.target.checked)} />
                         </span>
                       </div>
                     </div>
@@ -2043,9 +2044,7 @@ export function SettingsPage({
           )}
 
           {/* ── Persona Edit Drawer ─────────────────────────────────── */}
-          {activeGroup === "organization" && orgSubTab === "personas" && typeof document !== "undefined" && createPortal(
-            <AnimatePresence>
-              {(() => {
+          {activeGroup === "organization" && orgSubTab === "personas" && (() => {
                 const persona = editingPersonaId ? personas.find((p) => p.id === editingPersonaId) : null;
                 if (!persona) return null;
                 const edited = getPersonaEdit(persona);
@@ -2055,26 +2054,12 @@ export function SettingsPage({
                 const supervisionGuidance = parsePersonaJsonField(productivityGuidance.supervision);
                 const packagingGuidance = parsePersonaJsonField(commercialGuidance.packaging);
                 return (
-                  <>
-                    <motion.div
-                      key="persona-drawer-backdrop"
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="fixed inset-0 z-40 bg-black/20"
-                      onClick={() => setEditingPersonaId(null)}
-                    />
-                    <motion.div
-                      key="persona-drawer"
-                      initial={{ x: "100%" }}
-                      animate={{ x: 0 }}
-                      exit={{ x: "100%" }}
-                      transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                      className="fixed inset-y-0 right-0 z-50 w-[640px] max-w-[100vw] bg-panel border-l border-line shadow-2xl flex flex-col"
-                    >
-                      {/* Header */}
-                      <div className="flex items-center justify-between gap-2 px-5 py-4 border-b border-line bg-panel2/40">
-                        <div className="flex items-center gap-2 min-w-0">
+                  <Drawer
+                    open
+                    onClose={() => setEditingPersonaId(null)}
+                    size="lg"
+                    title={
+                      <div className="flex items-center gap-2 min-w-0">
                           <span className="text-sm font-semibold truncate">{edited.name || "Untitled persona"}</span>
                           {edited.trade && (
                             <Badge className={cn("text-[10px] shrink-0", TRADE_COLORS[edited.trade] || "")}>
@@ -2082,13 +2067,15 @@ export function SettingsPage({
                             </Badge>
                           )}
                           {edited.isDefault && <Star className="h-3.5 w-3.5 text-yellow-400 fill-yellow-400 shrink-0" />}
-                        </div>
-                        <div className="flex items-center gap-1 shrink-0">
+                      </div>
+                    }
+                    headerActions={
+                      <div className="flex items-center gap-1 shrink-0">
                           {personaDeleteConfirm === persona.id ? (
                             <div className="flex items-center gap-2">
                               <span className="text-xs text-danger">Delete?</span>
-                              <Button variant="danger" size="xs" onClick={() => deletePersonaById(persona.id)}>Confirm</Button>
-                              <Button variant="secondary" size="xs" onClick={() => setPersonaDeleteConfirm(null)}>Cancel</Button>
+                              <Button variant="destructive" size="sm" onClick={() => deletePersonaById(persona.id)}>Confirm</Button>
+                              <Button variant="secondary" size="sm" onClick={() => setPersonaDeleteConfirm(null)}>Cancel</Button>
                             </div>
                           ) : (
                             <button
@@ -2099,18 +2086,20 @@ export function SettingsPage({
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           )}
-                          <button
-                            className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
-                            onClick={() => setEditingPersonaId(null)}
-                            title="Close"
-                          >
-                            <X className="h-4 w-4" />
-                          </button>
-                        </div>
                       </div>
-
-                      {/* Body */}
-                      <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+                    }
+                    footer={
+                      <>
+                        <Button variant="secondary" size="sm" onClick={() => setEditingPersonaId(null)}>
+                          Cancel
+                        </Button>
+                        <Button variant="default" size="sm" onClick={() => savePersona(persona)}>
+                          Save
+                        </Button>
+                      </>
+                    }
+                  >
+                    <div className="space-y-4">
                           <div className="grid grid-cols-2 gap-4">
                             <div>
                               <Label>Name</Label>
@@ -2118,9 +2107,9 @@ export function SettingsPage({
                             </div>
                             <div>
                               <Label>Trade</Label>
-                              <Select
+                              <SearchSelect
                                 value={edited.trade}
-                                onValueChange={(v) => updatePersonaEdit(persona.id, { trade: v })}
+                                onChange={(v) => updatePersonaEdit(persona.id, { trade: v })}
                                 options={TRADE_OPTIONS.map((t) => ({ value: t, label: t.charAt(0).toUpperCase() + t.slice(1) }))}
                               />
                             </div>
@@ -2151,7 +2140,7 @@ export function SettingsPage({
                                     label: b.name,
                                     description: `${b.category} · ${b.pageCount} pages · ${b.sourceFileName}`,
                                   }))}
-                                selected={edited.knowledgeBookIds || []}
+                                value={edited.knowledgeBookIds || []}
                                 onChange={(ids) => updatePersonaEdit(persona.id, { knowledgeBookIds: ids })}
                                 placeholder="Select knowledge books..."
                               />
@@ -2167,7 +2156,7 @@ export function SettingsPage({
                                     label: d.title,
                                     description: `${d.category} · ${d.pageCount} pages · ${(d.tags || []).join(", ")}`,
                                   }))}
-                                selected={edited.knowledgeDocumentIds || []}
+                                value={edited.knowledgeDocumentIds || []}
                                 onChange={(ids) => updatePersonaEdit(persona.id, { knowledgeDocumentIds: ids })}
                                 placeholder="Select knowledge pages..."
                               />
@@ -2215,9 +2204,9 @@ export function SettingsPage({
                                 <p className="text-xs font-medium text-fg/70 uppercase tracking-wide">Supervision</p>
                                 <div>
                                   <Label>Coverage Mode</Label>
-                                  <Select
+                                  <SearchSelect
                                     value={String(supervisionGuidance.coverageMode ?? "single_source")}
-                                    onValueChange={(v) => patchPersonaNestedJsonField(
+                                    onChange={(v) => patchPersonaNestedJsonField(
                                       persona.id,
                                       "productivityGuidance",
                                       (edited as any).productivityGuidance,
@@ -2266,9 +2255,9 @@ export function SettingsPage({
                                 <p className="text-xs font-medium text-fg/70 uppercase tracking-wide">Commercialization</p>
                                 <div>
                                   <Label>Weak Evidence Pricing Mode</Label>
-                                  <Select
+                                  <SearchSelect
                                     value={String(packagingGuidance.weakEvidencePricingMode ?? "allowance")}
-                                    onValueChange={(v) => patchPersonaNestedJsonField(
+                                    onChange={(v) => patchPersonaNestedJsonField(
                                       persona.id,
                                       "commercialGuidance",
                                       (edited as any).commercialGuidance,
@@ -2285,9 +2274,9 @@ export function SettingsPage({
                                 </div>
                                 <div>
                                   <Label>Shop Fabrication Pricing Mode</Label>
-                                  <Select
+                                  <SearchSelect
                                     value={String(packagingGuidance.shopFabricationPricingMode ?? "detailed")}
-                                    onValueChange={(v) => patchPersonaNestedJsonField(
+                                    onChange={(v) => patchPersonaNestedJsonField(
                                       persona.id,
                                       "commercialGuidance",
                                       (edited as any).commercialGuidance,
@@ -2359,27 +2348,13 @@ export function SettingsPage({
                           </label>
                           <div className="flex items-center gap-2">
                             <Label className="mb-0">Enabled</Label>
-                            <Toggle checked={edited.enabled} onChange={(val) => updatePersonaEdit(persona.id, { enabled: val })} />
+                            <Switch checked={edited.enabled} onChange={(event) => updatePersonaEdit(persona.id, { enabled: event.target.checked })} />
                           </div>
                         </div>
-                      </div>
-
-                      {/* Footer */}
-                      <div className="flex items-center justify-end gap-2 px-5 py-3 border-t border-line bg-panel2/40">
-                        <Button variant="secondary" size="sm" onClick={() => setEditingPersonaId(null)}>
-                          Cancel
-                        </Button>
-                        <Button variant="accent" size="sm" onClick={() => savePersona(persona)}>
-                          Save
-                        </Button>
-                      </div>
-                    </motion.div>
-                  </>
+                    </div>
+                  </Drawer>
                 );
               })()}
-            </AnimatePresence>,
-            document.body,
-          )}
 
           {/* ── Conditions Library (unified table + pill filters + drawer) ─── */}
           {activeGroup === "data" && dataSubTab === "conditions" && (
@@ -2406,16 +2381,18 @@ export function SettingsPage({
             <IntegrationsPage />
           )}
 
-        </FadeIn>
+        </div>
 
       {/* ── Import Confirmation Dialog ─── */}
-      {importConfirm && importOptions && typeof document !== "undefined" && createPortal(
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
-          <div className="bg-panel border border-line rounded-xl shadow-2xl w-[460px] max-h-[80vh] overflow-y-auto">
-            <div className="px-5 py-4 border-b border-line">
-              <h3 className="text-sm font-semibold">Import Data</h3>
-              <p className="text-xs text-fg/40 mt-1">{importConfirm.fileName}</p>
-            </div>
+      {importConfirm && importOptions && (
+        <Dialog
+          open
+          onClose={importing ? () => undefined : handleImportDismiss}
+          title="Import Data"
+          description={importConfirm.fileName}
+          size="md"
+        >
+          <div className="-mx-6 -my-5 max-h-[70vh] overflow-y-auto">
 
             {/* ── State: Importing (progress) ── */}
             {importing && (
@@ -2522,7 +2499,7 @@ export function SettingsPage({
                     )}
                   </div>
                   <div className="px-5 py-3 border-t border-line flex items-center justify-end">
-                    <Button variant="accent" size="sm" onClick={handleImportDismiss}>Done</Button>
+                    <Button variant="default" size="sm" onClick={handleImportDismiss}>Done</Button>
                   </div>
                 </>
               );
@@ -2598,15 +2575,15 @@ export function SettingsPage({
                         return (
                           <div key={key} className="flex items-center justify-between py-1.5 px-2 rounded-md hover:bg-bg/60">
                             <label className="flex items-center gap-2.5 cursor-pointer flex-1">
-                              <Toggle
+                              <Switch
                                 checked={importOptions.enabledSections[key]}
-                                onChange={(val) => setImportOptions((o) => o ? { ...o, enabledSections: { ...o.enabledSections, [key]: val } } : o)}
+                                onChange={(event) => setImportOptions((o) => o ? { ...o, enabledSections: { ...o.enabledSections, [key]: event.target.checked } } : o)}
                               />
                               <span className={cn("text-fg/60", !importOptions.enabledSections[key] && "text-fg/25")}>{label}</span>
                             </label>
                             <div className="flex items-center gap-1.5">
                               {itemCount > 0 && <span className={cn("text-fg/25 text-[10px]", !importOptions.enabledSections[key] && "opacity-40")}>{itemCount} items</span>}
-                              <Badge tone="default" className={cn(!importOptions.enabledSections[key] && "opacity-30")}>{count}</Badge>
+                              <Badge variant="secondary" className={cn(!importOptions.enabledSections[key] && "opacity-30")}>{count}</Badge>
                             </div>
                           </div>
                         );
@@ -2623,7 +2600,7 @@ export function SettingsPage({
                 <div className="px-5 py-3 border-t border-line flex items-center justify-end gap-2">
                   <Button variant="secondary" size="sm" onClick={handleImportDismiss}>Cancel</Button>
                   <Button
-                    variant={importOptions.mode === "overwrite" ? "danger" : "accent"}
+                    variant={importOptions.mode === "overwrite" ? "destructive" : "default"}
                     size="sm"
                     onClick={handleImportConfirm}
                     disabled={!IMPORT_SECTION_ORDER.some((k) => importOptions.enabledSections[k])}
@@ -2634,11 +2611,10 @@ export function SettingsPage({
               </>
             )}
           </div>
-        </div>,
-        document.body
+        </Dialog>
       )}
 
-    </div>
+    </SettingsShell>
   );
 }
 
@@ -2964,15 +2940,15 @@ function EntityCategorySettingsPanel({
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge tone="info" className="text-[10px]">{enabledCount} enabled</Badge>
-          {disabledCount > 0 ? <Badge tone="default" className="text-[10px]">{disabledCount} disabled</Badge> : null}
-          <Button variant="accent" size="xs" onClick={openCreateDrawer}>
+          <Badge variant="info" className="text-[10px]">{enabledCount} enabled</Badge>
+          {disabledCount > 0 ? <Badge variant="secondary" className="text-[10px]">{disabledCount} disabled</Badge> : null}
+          <Button variant="default" size="sm" onClick={openCreateDrawer}>
             <Plus className="h-3.5 w-3.5" />
             Add Category
           </Button>
         </div>
       </CardHeader>
-      <CardBody className="space-y-3">
+      <CardContent className="space-y-3">
         {error ? <div className="rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">{error}</div> : null}
         {loading ? (
           <div className="flex items-center gap-2 py-8 text-xs text-fg/45">
@@ -3024,13 +3000,13 @@ function EntityCategorySettingsPanel({
                   <div className="truncate text-fg/55">{category.analyticsBucket || "-"}</div>
                   <div className="font-mono text-[11px] text-fg/55">{category.defaultUom}</div>
                   <div onClick={(event) => event.stopPropagation()}>
-                    <Toggle checked={category.enabled} onChange={(checked) => toggleCategoryEnabled(category, checked)} />
+                    <Switch checked={category.enabled} onChange={(event) => toggleCategoryEnabled(category, event.target.checked)} />
                   </div>
                   <div className="flex items-center justify-end gap-1" onClick={(event) => event.stopPropagation()}>
-                    <Button variant="ghost" size="xs" className="h-7 px-2" disabled={index === 0 || saving} onClick={() => moveCategory(category, -1)} title="Move up">
+                    <Button variant="ghost" size="sm" className="h-7 px-2" disabled={index === 0 || saving} onClick={() => moveCategory(category, -1)} title="Move up">
                       <ChevronDown className="h-3.5 w-3.5 rotate-180" />
                     </Button>
-                    <Button variant="ghost" size="xs" className="h-7 px-2" disabled={index === categories.length - 1 || saving} onClick={() => moveCategory(category, 1)} title="Move down">
+                    <Button variant="ghost" size="sm" className="h-7 px-2" disabled={index === categories.length - 1 || saving} onClick={() => moveCategory(category, 1)} title="Move down">
                       <ChevronDown className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -3050,9 +3026,9 @@ function EntityCategorySettingsPanel({
             </div>
           </div>
           <div className="mt-3 grid gap-2 md:grid-cols-[minmax(160px,1fr)_minmax(160px,1fr)_minmax(160px,1fr)_auto]">
-            <Select
+            <SearchSelect
               value={mappingCatalogId}
-              onValueChange={setMappingCatalogId}
+              onChange={setMappingCatalogId}
               options={catalogs.map((catalog) => ({ value: catalog.id, label: catalog.name }))}
               placeholder="Library catalogue"
             />
@@ -3061,9 +3037,9 @@ function EntityCategorySettingsPanel({
               onChange={(event) => setMappingSourceCategory(event.target.value)}
               placeholder="Source category (or blank)"
             />
-            <Select
+            <SearchSelect
               value={mappingEntityCategoryId}
-              onValueChange={setMappingEntityCategoryId}
+              onChange={setMappingEntityCategoryId}
               options={categories.map((category) => ({ value: category.id, label: category.name }))}
               placeholder="Estimate category"
             />
@@ -3086,7 +3062,7 @@ function EntityCategorySettingsPanel({
                 <div className="text-fg/75">→ {mapping.entityCategory.name}</div>
                 <Button
                   variant="ghost"
-                  size="xs"
+                  size="sm"
                   disabled={saving}
                   onClick={() => void removeCatalogMapping(mapping.id)}
                   title="Remove mapping"
@@ -3097,40 +3073,43 @@ function EntityCategorySettingsPanel({
             ))}
           </div>
         </div>
-      </CardBody>
+      </CardContent>
 
-      {drawer && draft && typeof document !== "undefined" && createPortal(
-        <AnimatePresence>
-          <motion.div
-            key="entity-category-drawer-backdrop"
-            className="fixed inset-0 z-40 bg-black/25"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={() => setDrawer(null)}
-          />
-          <motion.aside
-            key="entity-category-drawer-panel"
-            className="fixed bottom-0 right-0 top-0 z-50 flex w-full max-w-[560px] flex-col border-l border-line bg-panel shadow-2xl"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 300 }}
-          >
-            <div className="flex items-center justify-between border-b border-line px-5 py-4">
-              <div className="min-w-0">
+      {drawer && draft && (
+        <Drawer
+          open
+          onClose={() => setDrawer(null)}
+          size="md"
+          title={
+            <div className="min-w-0">
                 <div className="flex items-center gap-2">
                   <span className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: draft.color || "#6b7280" }} />
                   <div className="truncate text-sm font-semibold text-fg">{drawer.mode === "edit" ? draft.name || "Edit Category" : "Create Category"}</div>
                 </div>
-                <div className="mt-1 truncate text-[11px] text-fg/45">{draft.entityType || "Organization estimate schema"}</div>
-              </div>
-              <button className="rounded p-1.5 text-fg/40 hover:bg-panel2 hover:text-fg" onClick={() => setDrawer(null)}>
-                <X className="h-4 w-4" />
-              </button>
             </div>
-
-            <div className="min-h-0 flex-1 space-y-5 overflow-auto p-5">
+          }
+          description={draft.entityType || "Organization estimate schema"}
+          footer={
+            <div className="flex w-full items-center justify-between gap-2">
+              <div>
+                {drawer.mode === "edit" && !draft.isBuiltIn ? (
+                  <Button variant={deleteConfirmId === drawer.category.id ? "destructive" : "ghost"} size="sm" onClick={() => deleteCategory(drawer.category)} disabled={saving}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {deleteConfirmId === drawer.category.id ? "Confirm Delete" : "Delete"}
+                  </Button>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2">
+                <Button variant="secondary" size="sm" onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button>
+                <Button variant="default" size="sm" onClick={saveCategory} disabled={saving || !draft.name.trim() || !draft.entityType.trim()}>
+                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save
+                </Button>
+              </div>
+            </div>
+          }
+        >
+            <div className="space-y-5">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label>Name</Label>
@@ -3157,9 +3136,9 @@ function EntityCategorySettingsPanel({
                 <div className="grid gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label>Item Source</Label>
-                    <Select
+                    <SearchSelect
                       value={draft.itemSource}
-                      onValueChange={(itemSource) => updateDraft({ itemSource: itemSource as EntityCategory["itemSource"] })}
+                      onChange={(itemSource) => updateDraft({ itemSource: itemSource as EntityCategory["itemSource"] })}
                       options={ENTITY_CATEGORY_ITEM_SOURCE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
                     />
                     <p className="text-[11px] text-fg/40">
@@ -3168,9 +3147,9 @@ function EntityCategorySettingsPanel({
                   </div>
                   <div className="space-y-1.5">
                     <Label>Analytics Bucket</Label>
-                    <Select
+                    <SearchSelect
                       value={draft.analyticsBucket ?? ""}
-                      onValueChange={(analyticsBucket) => updateDraft({ analyticsBucket: analyticsBucket || null })}
+                      onChange={(analyticsBucket) => updateDraft({ analyticsBucket: analyticsBucket || null })}
                       options={ENTITY_CATEGORY_ANALYTICS_BUCKET_OPTIONS}
                     />
                   </div>
@@ -3183,9 +3162,9 @@ function EntityCategorySettingsPanel({
                 <div className="grid gap-3 sm:grid-cols-[140px_minmax(0,1fr)]">
                   <div className="space-y-1.5">
                     <Label>Default UOM</Label>
-                    <Select
+                    <SearchSelect
                       value={draft.defaultUom}
-                      onValueChange={(defaultUom) => updateDraft({ defaultUom, validUoms: Array.from(new Set([defaultUom, ...(draft.validUoms ?? [])])) })}
+                      onChange={(defaultUom) => updateDraft({ defaultUom, validUoms: Array.from(new Set([defaultUom, ...(draft.validUoms ?? [])])) })}
                       options={uomOptions.map((option) => ({ value: option.value, label: option.value }))}
                     />
                   </div>
@@ -3193,7 +3172,7 @@ function EntityCategorySettingsPanel({
                     <Label>Valid UOMs</Label>
                     <MultiSelect
                       options={uomOptions}
-                      selected={draft.validUoms ?? []}
+                      value={draft.validUoms ?? []}
                       onChange={(validUoms) => updateDraft({ validUoms: Array.from(new Set([draft.defaultUom, ...validUoms])) })}
                       placeholder="Select valid units"
                     />
@@ -3209,11 +3188,11 @@ function EntityCategorySettingsPanel({
                     <p className="text-xs font-medium uppercase text-fg/60">Calculation</p>
                     <p className="mt-1 text-[11px] text-fg/40">{getCalculationTypeOption(draft.calculationType).description}</p>
                   </div>
-                  <Button variant="secondary" size="xs" onClick={applyCalculationPreset}>Apply Preset</Button>
+                  <Button variant="secondary" size="sm" onClick={applyCalculationPreset}>Apply Preset</Button>
                 </div>
-                <Select
+                <SearchSelect
                   value={draft.calculationType}
-                  onValueChange={(calculationType) => updateDraft({ calculationType: calculationType as CalculationType })}
+                  onChange={(calculationType) => updateDraft({ calculationType: calculationType as CalculationType })}
                   options={ENTITY_CATEGORY_CALCULATION_OPTIONS}
                 />
                 {draft.calculationType === "formula" ? (
@@ -3235,7 +3214,7 @@ function EntityCategorySettingsPanel({
                   {ENTITY_CATEGORY_EDITABLE_FIELDS.map((field) => (
                     <label key={field.key} className="flex items-center justify-between gap-3 rounded-lg border border-line bg-bg/35 px-3 py-2 text-xs text-fg/75">
                       <span>{field.label}</span>
-                      <Toggle checked={Boolean(draft.editableFields?.[field.key])} onChange={(checked) => updateEditableField(field.key, checked)} />
+                      <Switch checked={Boolean(draft.editableFields?.[field.key])} onChange={(event) => updateEditableField(field.key, event.target.checked)} />
                     </label>
                   ))}
                 </div>
@@ -3248,30 +3227,11 @@ function EntityCategorySettingsPanel({
                   <div className="text-xs font-medium text-fg">Enabled</div>
                   <div className="mt-0.5 text-[11px] text-fg/40">Disabled categories remain preserved but stop appearing as active estimate choices.</div>
                 </div>
-                <Toggle checked={draft.enabled} onChange={(enabled) => updateDraft({ enabled })} />
+                <Switch checked={draft.enabled} onChange={(event) => updateDraft({ enabled: event.target.checked })} />
               </div>
             </div>
 
-            <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-4">
-              <div>
-                {drawer.mode === "edit" && !draft.isBuiltIn ? (
-                  <Button variant={deleteConfirmId === drawer.category.id ? "danger" : "ghost"} size="sm" onClick={() => deleteCategory(drawer.category)} disabled={saving}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {deleteConfirmId === drawer.category.id ? "Confirm Delete" : "Delete"}
-                  </Button>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="secondary" size="sm" onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button>
-                <Button variant="accent" size="sm" onClick={saveCategory} disabled={saving || !draft.name.trim() || !draft.entityType.trim()}>
-                  {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                  Save
-                </Button>
-              </div>
-            </div>
-          </motion.aside>
-        </AnimatePresence>,
-        document.body,
+        </Drawer>
       )}
     </Card>
   );
@@ -3540,14 +3500,14 @@ function FactorLibraryManager() {
           <p className="mt-1 text-xs text-fg/45">Reusable labor, cost, and productivity factors available inside estimate workspaces.</p>
         </div>
         <div className="flex items-center gap-2">
-          <Badge tone="info" className="text-[10px]">{orgCount} editable</Badge>
-          <Button variant="accent" size="xs" onClick={() => setDrawer({ mode: "create" })}>
+          <Badge variant="info" className="text-[10px]">{orgCount} editable</Badge>
+          <Button variant="default" size="sm" onClick={() => setDrawer({ mode: "create" })}>
             <Plus className="h-3.5 w-3.5" />
             Add Factor
           </Button>
         </div>
       </CardHeader>
-      <CardBody className="space-y-3">
+      <CardContent className="space-y-3">
         <div className="flex items-center gap-3">
           <Input
             value={query}
@@ -3555,10 +3515,10 @@ function FactorLibraryManager() {
             placeholder="Search factor library"
             className="max-w-md text-xs"
           />
-          <Select
+          <SearchSelect
             className="w-32"
             value={String(pageSize)}
-            onValueChange={(v) => setPageSize(Number(v) || 25)}
+            onChange={(v) => setPageSize(Number(v) || 25)}
             options={FACTOR_LIBRARY_PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n} per page` }))}
           />
         </div>
@@ -3591,7 +3551,7 @@ function FactorLibraryManager() {
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="truncate text-left font-medium text-fg">{entry.name}</span>
-                      <Badge tone="default">Org</Badge>
+                      <Badge variant="secondary">Org</Badge>
                     </div>
                     <div className="mt-1 truncate font-mono text-[10px] text-fg/40">{entry.code || entry.id}</div>
                   </div>
@@ -3607,7 +3567,7 @@ function FactorLibraryManager() {
                   <div className="flex justify-end">
                     <Button
                       variant="ghost"
-                      size="xs"
+                      size="sm"
                       className="h-8 px-2"
                       onClick={(event) => {
                         event.stopPropagation();
@@ -3657,27 +3617,26 @@ function FactorLibraryManager() {
           )}
           </>
         )}
-      </CardBody>
+      </CardContent>
 
-      {drawer && draft && typeof document !== "undefined" && createPortal(
-        <AnimatePresence>
-          <motion.div key="factor-library-drawer-backdrop" className="fixed inset-0 z-40 bg-black/25" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={() => setDrawer(null)} />
-          <motion.aside
-            key="factor-library-drawer-panel"
-            className="fixed bottom-0 right-0 top-0 z-50 flex w-full max-w-[560px] flex-col border-l border-line bg-panel shadow-2xl"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 300 }}
-          >
-            <div className="flex items-center justify-between border-b border-line px-5 py-4">
-              <div>
-                <div className="text-sm font-semibold text-fg">{drawer.mode === "edit" ? "Edit Factor" : "Create Factor"}</div>
-                <div className="mt-1 text-[11px] text-fg/45">{draft.code || "Organization library"}</div>
-              </div>
-              <button className="rounded p-1.5 text-fg/40 hover:bg-panel2 hover:text-fg" onClick={() => setDrawer(null)}><X className="h-4 w-4" /></button>
-            </div>
-            <div className="min-h-0 flex-1 space-y-4 overflow-auto p-5">
+      {drawer && draft && (
+        <Drawer
+          open
+          onClose={() => setDrawer(null)}
+          size="md"
+          title={drawer.mode === "edit" ? "Edit Factor" : "Create Factor"}
+          description={draft.code || "Organization library"}
+          footer={
+            <>
+              <Button variant="secondary" size="sm" onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button>
+              <Button variant="default" size="sm" onClick={saveDrawer} disabled={saving}>
+                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                Save
+              </Button>
+            </>
+          }
+        >
+            <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-2">
                 <div className="space-y-1.5 sm:col-span-2">
                   <Label>Name</Label>
@@ -3697,7 +3656,7 @@ function FactorLibraryManager() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Impact</Label>
-                  <Select value={draft.impact} onValueChange={(impact) => setDraft({ ...draft, impact: impact as EstimateFactorImpact })} options={SETTINGS_FACTOR_IMPACT_OPTIONS} />
+                  <SearchSelect value={draft.impact} onChange={(impact) => setDraft({ ...draft, impact: impact as EstimateFactorImpact })} options={SETTINGS_FACTOR_IMPACT_OPTIONS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Percent</Label>
@@ -3705,23 +3664,23 @@ function FactorLibraryManager() {
                 </div>
                 <div className="space-y-1.5">
                   <Label>Scope</Label>
-                  <Select value={draft.scopeValue} onValueChange={(scopeValue) => setDraft({ ...draft, scopeValue })} options={SETTINGS_FACTOR_SCOPE_OPTIONS} />
+                  <SearchSelect value={draft.scopeValue} onChange={(scopeValue) => setDraft({ ...draft, scopeValue })} options={SETTINGS_FACTOR_SCOPE_OPTIONS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Apply As</Label>
-                  <Select value={draft.applicationScope} onValueChange={(applicationScope) => setDraft({ ...draft, applicationScope: applicationScope as EstimateFactorApplicationScope })} options={SETTINGS_FACTOR_APPLICATION_SCOPE_OPTIONS} />
+                  <SearchSelect value={draft.applicationScope} onChange={(applicationScope) => setDraft({ ...draft, applicationScope: applicationScope as EstimateFactorApplicationScope })} options={SETTINGS_FACTOR_APPLICATION_SCOPE_OPTIONS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Formula</Label>
-                  <Select value={draft.formulaType} onValueChange={(formulaType) => setDraft({ ...draft, formulaType: formulaType as EstimateFactorFormulaType })} options={SETTINGS_FACTOR_FORMULA_OPTIONS} />
+                  <SearchSelect value={draft.formulaType} onChange={(formulaType) => setDraft({ ...draft, formulaType: formulaType as EstimateFactorFormulaType })} options={SETTINGS_FACTOR_FORMULA_OPTIONS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Confidence</Label>
-                  <Select value={draft.confidence} onValueChange={(confidence) => setDraft({ ...draft, confidence: confidence as EstimateFactorConfidence })} options={SETTINGS_FACTOR_CONFIDENCE_OPTIONS} />
+                  <SearchSelect value={draft.confidence} onChange={(confidence) => setDraft({ ...draft, confidence: confidence as EstimateFactorConfidence })} options={SETTINGS_FACTOR_CONFIDENCE_OPTIONS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Source</Label>
-                  <Select value={draft.sourceType} onValueChange={(sourceType) => setDraft({ ...draft, sourceType: sourceType as EstimateFactorSourceType })} options={SETTINGS_FACTOR_SOURCE_OPTIONS} />
+                  <SearchSelect value={draft.sourceType} onChange={(sourceType) => setDraft({ ...draft, sourceType: sourceType as EstimateFactorSourceType })} options={SETTINGS_FACTOR_SOURCE_OPTIONS} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>Source ID</Label>
@@ -3751,16 +3710,7 @@ function FactorLibraryManager() {
                 </div>
               </div>
             </div>
-            <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
-              <Button variant="secondary" size="sm" onClick={() => setDrawer(null)} disabled={saving}>Cancel</Button>
-              <Button variant="accent" size="sm" onClick={saveDrawer} disabled={saving}>
-                {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
-                Save
-              </Button>
-            </div>
-          </motion.aside>
-        </AnimatePresence>,
-        document.body,
+        </Drawer>
       )}
     </Card>
   );
@@ -3823,9 +3773,9 @@ function UomSettingsPanel({ uoms, onChange }: { uoms: UnitOfMeasure[]; onChange:
             Organization-scoped UOMs used by assemblies, catalogs, rate tiers, and estimate rows.
           </p>
         </div>
-        <Badge tone="info" className="text-[10px]">{activeCount} active</Badge>
+        <Badge variant="info" className="text-[10px]">{activeCount} active</Badge>
       </CardHeader>
-      <CardBody className="space-y-4">
+      <CardContent className="space-y-4">
         <div className="grid grid-cols-[110px_minmax(0,1fr)_minmax(0,1.5fr)_auto] items-end gap-2 rounded-lg border border-line bg-panel2/35 p-3">
           <div>
             <Label>Code</Label>
@@ -3844,7 +3794,7 @@ function UomSettingsPanel({ uoms, onChange }: { uoms: UnitOfMeasure[]; onChange:
             <Label>Description</Label>
             <Input value={newDescription} onChange={(event) => setNewDescription(event.target.value)} placeholder="How this unit is used" className="text-xs" />
           </div>
-          <Button variant="accent" size="sm" onClick={addUnit} disabled={!normalizeUomCode(newCode)}>
+          <Button variant="default" size="sm" onClick={addUnit} disabled={!normalizeUomCode(newCode)}>
             <Plus className="h-3.5 w-3.5" />
             Add
           </Button>
@@ -3865,11 +3815,11 @@ function UomSettingsPanel({ uoms, onChange }: { uoms: UnitOfMeasure[]; onChange:
                 <Input value={unit.label} onChange={(event) => replace(unit.code, { label: event.target.value })} className="h-8 text-xs" />
                 <Input value={unit.description ?? ""} onChange={(event) => replace(unit.code, { description: event.target.value })} className="h-8 text-xs" />
                 <div className="flex items-center justify-start">
-                  <Toggle checked={unit.active} onChange={(active) => replace(unit.code, { active })} />
+                  <Switch checked={unit.active} onChange={(event) => replace(unit.code, { active: event.target.checked })} />
                 </div>
                 <Button
                   variant="ghost"
-                  size="xs"
+                  size="sm"
                   onClick={() => removeUnit(unit.code)}
                   title={defaultCodes.has(unit.code) ? "Disable built-in unit" : "Delete unit"}
                   className="px-2 text-fg/45 hover:text-danger"
@@ -3880,7 +3830,7 @@ function UomSettingsPanel({ uoms, onChange }: { uoms: UnitOfMeasure[]; onChange:
             ))}
           </div>
         </div>
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

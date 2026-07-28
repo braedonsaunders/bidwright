@@ -1,19 +1,21 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import { IBM_Plex_Mono, Sora } from "next/font/google";
-import { AuthProvider, ImpersonationBanner } from "@/components/auth-provider";
+import { AuthProvider } from "@/components/auth-provider";
+import { ApplicationFrame } from "@/components/app-shell";
 import { I18nProvider } from "@/components/i18n-provider";
 import { RequireAuth } from "@/components/require-auth";
+import "@appkit/dashboard/primitives.css";
 import "./globals.css";
 
 const sora = Sora({
   subsets: ["latin"],
-  variable: "--font-sans",
+  variable: "--font-bidwright-sans",
 });
 
 const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
-  variable: "--font-mono",
+  variable: "--font-bidwright-mono",
   weight: ["400", "500", "600"],
 });
 
@@ -40,8 +42,9 @@ export default function RootLayout({
       <body>
         <AuthProvider>
           <I18nProvider>
-            <ImpersonationBanner />
-            <RequireAuth>{children}</RequireAuth>
+            <RequireAuth>
+              <ApplicationFrame>{children}</ApplicationFrame>
+            </RequireAuth>
           </I18nProvider>
         </AuthProvider>
       </body>

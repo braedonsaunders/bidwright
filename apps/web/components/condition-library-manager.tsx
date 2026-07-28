@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ReactDOM from "react-dom";
-import { motion, AnimatePresence } from "motion/react";
-import { ChevronLeft, ChevronRight, Plus, Search, Trash2, X } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   getConditionLibrary,
@@ -18,11 +16,12 @@ import {
   Card,
   CardHeader,
   CardTitle,
-  EmptyState,
-  Input,
-  Select,
+  Drawer,
+  RecordList,
+  type RecordColumn,
+  SearchSelect,
   Textarea,
-} from "@/components/ui";
+} from "@appkit/ui";
 
 /* ─────────────────────── Types & constants ─────────────────────── */
 
@@ -33,6 +32,12 @@ type BadgeTone = "default" | "success" | "warning" | "danger" | "info";
 interface TypeMeta {
   label: string;
   tone: BadgeTone;
+}
+
+function badgeVariant(tone: BadgeTone): "secondary" | "success" | "warning" | "destructive" | "info" {
+  if (tone === "default") return "secondary";
+  if (tone === "danger") return "destructive";
+  return tone;
 }
 
 /**
@@ -213,6 +218,23 @@ export function ConditionLibraryManager() {
     }
   }
 
+  const columns = useMemo<RecordColumn<ConditionLibraryEntry>[]>(() => [
+    {
+      key: "type",
+      label: "Type",
+      width: 144,
+      render: (entry) => {
+        const meta = typeMeta(entry.type);
+        return <Badge variant={badgeVariant(meta.tone)}>{meta.label}</Badge>;
+      },
+    },
+    {
+      key: "value",
+      label: "Value",
+      render: (entry) => <div className="line-clamp-2 leading-relaxed text-fg/90">{entry.value}</div>,
+    },
+  ], []);
+
   /* ─── Render ─── */
 
   return (
@@ -225,7 +247,7 @@ export function ConditionLibraryManager() {
               Standard inclusions, exclusions, clarifications, and other clauses available to add to project quotes.
             </p>
           </div>
-          <Button variant="accent" size="sm" onClick={openCreate}>
+          <Button variant="default" size="sm" onClick={openCreate}>
             <Plus className="h-3.5 w-3.5" />
             New Condition
           </Button>
@@ -233,270 +255,150 @@ export function ConditionLibraryManager() {
       </CardHeader>
 
       <div className="px-5 pb-5">
-        {/* Search + page size */}
-        <div className="flex items-center gap-3 mb-3">
-          <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
-            <Input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search conditions..."
-              className="pl-9"
-            />
-          </div>
-          <Select
-            className="w-32"
-            value={String(pageSize)}
-            onValueChange={(v) => setPageSize(Number(v) || 25)}
-            options={PAGE_SIZE_OPTIONS.map((n) => ({ value: String(n), label: `${n} per page` }))}
-          />
-        </div>
-
-        {/* Type filter pills */}
-        <div className="flex flex-wrap items-center gap-1.5 mb-4">
-          <FilterPill
-            label="All"
-            count={entries.length}
-            active={activeFilter === "all"}
-            tone="default"
-            onClick={() => setActiveFilter("all")}
-          />
-          {pillTypes.map((key) => {
-            const meta = typeMeta(key);
-            return (
-              <FilterPill
-                key={key}
-                label={meta.label}
-                count={countsByType.get(key) ?? 0}
-                active={activeFilter === key}
-                tone={meta.tone}
-                onClick={() => setActiveFilter(key)}
-              />
-            );
-          })}
-        </div>
-
-        {/* Error banner */}
         {error && (
           <div className="mb-3 rounded-lg border border-danger/20 bg-danger/8 px-3 py-2 text-xs text-danger">
             {error}
           </div>
         )}
 
-        {/* Table */}
-        <div className="rounded-lg border border-line overflow-hidden">
-          <table className="w-full text-sm">
-            <thead className="bg-panel2/60">
-              <tr className="text-left text-[11px] uppercase tracking-wider text-fg/45">
-                <th className="px-4 py-2 w-36 font-medium">Type</th>
-                <th className="px-4 py-2 font-medium">Value</th>
-                <th className="px-4 py-2 w-10" />
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={3} className="px-4 py-10 text-center text-xs text-fg/40">
-                    Loading conditions...
-                  </td>
-                </tr>
-              )}
-              {!loading && pageRows.length === 0 && (
-                <tr>
-                  <td colSpan={3} className="px-4 py-10">
-                    <EmptyState>
-                      {search || activeFilter !== "all"
-                        ? "No conditions match your filters."
-                        : "No conditions yet. Click \"New Condition\" to add one."}
-                    </EmptyState>
-                  </td>
-                </tr>
-              )}
-              {!loading &&
-                pageRows.map((entry) => {
-                  const meta = typeMeta(entry.type);
+        {loading ? (
+          <div className="py-10 text-center text-xs text-fg/40">Loading conditions...</div>
+        ) : (
+          <RecordList
+            columns={columns}
+            rows={pageRows}
+            getRowId={(entry) => entry.id}
+            search={{ value: search, onChange: setSearch, placeholder: "Search conditions..." }}
+            filters={(
+              <div className="flex flex-wrap items-center gap-1.5">
+                <FilterPill
+                  label="All"
+                  count={entries.length}
+                  active={activeFilter === "all"}
+                  tone="default"
+                  onClick={() => setActiveFilter("all")}
+                />
+                {pillTypes.map((key) => {
+                  const meta = typeMeta(key);
                   return (
-                    <tr
-                      key={entry.id}
-                      onClick={() => openEdit(entry)}
-                      className="border-t border-line hover:bg-panel2/40 cursor-pointer transition-colors"
-                    >
-                      <td className="px-4 py-2.5 align-top">
-                        <Badge tone={meta.tone}>{meta.label}</Badge>
-                      </td>
-                      <td className="px-4 py-2.5 text-fg/90 leading-relaxed">
-                        <div className="line-clamp-2">{entry.value}</div>
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-fg/30">
-                        <ChevronRight className="inline h-3.5 w-3.5" />
-                      </td>
-                    </tr>
+                    <FilterPill
+                      key={key}
+                      label={meta.label}
+                      count={countsByType.get(key) ?? 0}
+                      active={activeFilter === key}
+                      tone={meta.tone}
+                      onClick={() => setActiveFilter(key)}
+                    />
                   );
                 })}
-            </tbody>
-          </table>
-        </div>
+              </div>
+            )}
+            toolbarActions={(
+              <SearchSelect
+                className="w-36"
+                value={String(pageSize)}
+                onChange={(value) => setPageSize(Number(value) || 25)}
+                options={PAGE_SIZE_OPTIONS.map((value) => ({
+                  value: String(value),
+                  label: `${value} per page`,
+                }))}
+                searchable={false}
+                ariaLabel="Conditions per page"
+              />
+            )}
+            pagination={{
+              page: safePageIndex + 1,
+              perPage: pageSize,
+              total: filtered.length,
+              onPageChange: (nextPage) => setPageIndex(nextPage - 1),
+            }}
+            empty={{
+              title: search || activeFilter !== "all" ? "No conditions match your filters" : "No conditions yet",
+              description: search || activeFilter !== "all"
+                ? "Try a broader search or another condition type."
+                : "Add a standard clause so it can be reused across project quotes.",
+              action: search || activeFilter !== "all" ? undefined : (
+                <Button size="sm" onClick={openCreate}>
+                  <Plus className="h-3.5 w-3.5" /> New condition
+                </Button>
+              ),
+            }}
+            onRowClick={openEdit}
+          />
+        )}
+      </div>
 
-        {/* Pagination footer */}
-        {!loading && filtered.length > 0 && (
-          <div className="flex items-center justify-between mt-3 text-xs text-fg/50">
-            <span>
-              Showing {safePageIndex * pageSize + 1}–
-              {Math.min((safePageIndex + 1) * pageSize, filtered.length)} of {filtered.length}
-              {filtered.length !== entries.length && ` (filtered from ${entries.length})`}
-            </span>
+      <Drawer
+        open={drawerMode !== null}
+        onClose={closeDrawer}
+        size="sm"
+        title={drawerMode === "create" ? "New Condition" : "Edit Condition"}
+        description={drawerMode === "create" ? "Add a reusable clause to the library." : "Update this reusable clause."}
+        footer={(
+          <div className="flex w-full items-center justify-between gap-2">
+            <div>
+              {drawerMode === "edit" && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleDelete}
+                  disabled={saving}
+                  className="text-danger hover:bg-danger/10"
+                >
+                  <Trash2 className="h-3.5 w-3.5" /> Delete
+                </Button>
+              )}
+            </div>
             <div className="flex items-center gap-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                disabled={safePageIndex === 0}
-                onClick={() => setPageIndex(Math.max(0, safePageIndex - 1))}
-              >
-                <ChevronLeft className="h-3.5 w-3.5" />
-                Prev
+              <Button variant="ghost" size="sm" onClick={closeDrawer} disabled={saving}>
+                Cancel
               </Button>
-              <span className="text-fg/40">
-                Page {safePageIndex + 1} / {totalPages}
-              </span>
               <Button
-                variant="ghost"
                 size="sm"
-                disabled={safePageIndex >= totalPages - 1}
-                onClick={() => setPageIndex(Math.min(totalPages - 1, safePageIndex + 1))}
+                onClick={handleSave}
+                disabled={saving || !form.value.trim() || !form.type.trim()}
               >
-                Next
-                <ChevronRight className="h-3.5 w-3.5" />
+                {saving ? "Saving..." : drawerMode === "create" ? "Create" : "Save"}
               </Button>
             </div>
           </div>
         )}
-      </div>
+      >
+        <div className="space-y-4">
+          <div>
+            <label className="text-[10px] font-medium uppercase tracking-wider text-fg/40">Type</label>
+            <SearchSelect
+              className="mt-1"
+              value={form.type}
+              onChange={(value) => setForm({ ...form, type: value })}
+              options={pillTypes.map((key) => ({ value: key, label: typeMeta(key).label }))}
+              sheetTitle="Condition type"
+              ariaLabel="Condition type"
+            />
+            <p className="mt-1.5 text-[10px] text-fg/40">
+              Determines how the condition is grouped on quotes and reports.
+            </p>
+          </div>
 
-      {/* ── Drawer (portalled) ── */}
-      {typeof document !== "undefined" &&
-        ReactDOM.createPortal(
-          <AnimatePresence>
-            {drawerMode && (
-              <>
-                <motion.div
-                  key="condition-drawer-backdrop"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.15 }}
-                  className="fixed inset-0 z-30 bg-black/30"
-                  onClick={closeDrawer}
-                />
-                <motion.div
-                  key="condition-drawer"
-                  initial={{ x: 480 }}
-                  animate={{ x: 0 }}
-                  exit={{ x: 480 }}
-                  transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                  className="fixed inset-y-0 right-0 z-40 w-[480px] bg-panel border-l border-line shadow-2xl flex flex-col"
-                >
-                  {/* Drawer header */}
-                  <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-line bg-panel2/40">
-                    <div>
-                      <p className="text-[10px] font-semibold text-fg/45 uppercase tracking-wider">
-                        {drawerMode === "create" ? "New Condition" : "Edit Condition"}
-                      </p>
-                      <h3 className="text-sm font-medium text-fg mt-0.5">
-                        {drawerMode === "create" ? "Add to library" : "Update entry"}
-                      </h3>
-                    </div>
-                    <button
-                      onClick={closeDrawer}
-                      className="rounded p-1 text-fg/40 hover:bg-panel2 hover:text-fg transition-colors"
-                      aria-label="Close"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-
-                  {/* Drawer body */}
-                  <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
-                    <div>
-                      <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">
-                        Type
-                      </label>
-                      <Select
-                        className="mt-1"
-                        value={form.type}
-                        onValueChange={(v) => setForm({ ...form, type: v })}
-                        options={pillTypes.map((key) => ({
-                          value: key,
-                          label: typeMeta(key).label,
-                        }))}
-                      />
-                      <p className="mt-1.5 text-[10px] text-fg/40">
-                        Determines how the condition is grouped on quotes and reports.
-                      </p>
-                    </div>
-
-                    <div>
-                      <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">
-                        Value
-                      </label>
-                      <Textarea
-                        className="mt-1 min-h-[140px]"
-                        value={form.value}
-                        onChange={(e) => setForm({ ...form, value: e.target.value })}
-                        placeholder="Enter the clause text..."
-                        autoFocus
-                        onKeyDown={(e) => {
-                          if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-                            e.preventDefault();
-                            handleSave();
-                          }
-                          if (e.key === "Escape") {
-                            e.preventDefault();
-                            closeDrawer();
-                          }
-                        }}
-                      />
-                      <p className="mt-1.5 text-[10px] text-fg/40">
-                        ⌘/Ctrl + Enter to save · Esc to cancel
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Drawer footer */}
-                  <div className="border-t border-line px-5 py-3 flex items-center justify-between gap-2 bg-panel2/40">
-                    <div>
-                      {drawerMode === "edit" && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={handleDelete}
-                          disabled={saving}
-                          className="text-danger hover:bg-danger/10"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </Button>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="sm" onClick={closeDrawer} disabled={saving}>
-                        Cancel
-                      </Button>
-                      <Button
-                        variant="accent"
-                        size="sm"
-                        onClick={handleSave}
-                        disabled={saving || !form.value.trim() || !form.type.trim()}
-                      >
-                        {saving ? "Saving..." : drawerMode === "create" ? "Create" : "Save"}
-                      </Button>
-                    </div>
-                  </div>
-                </motion.div>
-              </>
-            )}
-          </AnimatePresence>,
-          document.body,
-        )}
+          <div>
+            <label className="text-[10px] font-medium uppercase tracking-wider text-fg/40">Value</label>
+            <Textarea
+              className="mt-1 min-h-[140px]"
+              value={form.value}
+              onChange={(event) => setForm({ ...form, value: event.target.value })}
+              placeholder="Enter the clause text..."
+              autoFocus
+              onKeyDown={(event) => {
+                if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
+                  event.preventDefault();
+                  void handleSave();
+                }
+              }}
+            />
+            <p className="mt-1.5 text-[10px] text-fg/40">⌘/Ctrl + Enter to save · Esc to cancel</p>
+          </div>
+        </div>
+      </Drawer>
     </Card>
   );
 }

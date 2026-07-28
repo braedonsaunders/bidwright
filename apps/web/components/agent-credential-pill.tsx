@@ -43,6 +43,8 @@ function slotForRuntime(runtime: string): SlotInfo {
       return { provider: "anthropic", label: "Claude" };
     case "codex":
       return { provider: "openai", label: "Codex" };
+    case "openrouter":
+      return { provider: "openrouter", label: "OpenRouter" };
     case "gemini":
       return { provider: "google", label: "Gemini" };
     case "opencode":

@@ -23,7 +23,12 @@ import {
   Trash2,
   Upload,
 } from "lucide-react";
-import { Badge, Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import type { ScheduleBaseline } from "@/lib/api";
 import type { ScheduleInsights, ScheduleQuickFilter, ZoomLevel } from "@/lib/schedule-utils";
@@ -278,7 +283,7 @@ export function ScheduleToolbar({
 
         <Button
           variant="secondary"
-          size="xs"
+          size="sm"
           title="Add task"
           aria-label="Add task"
           onClick={onAddTask}
@@ -371,7 +376,7 @@ function ScheduleMenu({
       <Popover.Trigger asChild>
         <Button
           variant={active ? "secondary" : "ghost"}
-          size="xs"
+          size="sm"
           data-testid={testId}
           title={title ?? label}
           aria-label={title ?? label}

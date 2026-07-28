@@ -1,21 +1,16 @@
 "use client";
 
-import { Fragment, useEffect, useState, useMemo, useCallback, useRef } from "react";
+import { useEffect, useState, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { motion } from "motion/react";
 import * as Popover from "@radix-ui/react-popover";
 import {
   AlertCircle,
-  ArrowUpDown,
   Bot,
   Check,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  ChevronsLeft,
-  ChevronsRight,
   FileText,
   Folder,
   FolderOpen,
@@ -24,7 +19,6 @@ import {
   MoreHorizontal,
   PencilLine,
   Plus,
-  Search,
   X,
   Zap,
 } from "lucide-react";
@@ -50,10 +44,19 @@ import {
   Badge,
   Button,
   Card,
-  FadeIn,
+  Dialog,
   Input,
+  ListNavProvider,
+  ListPageLayout,
+  PageHeader,
+  RecordList,
+  SearchInput,
+  type RecordColumn,
+} from "@appkit/ui";
+import {
+  FadeIn,
   ModalBackdrop,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { getClientDisplayName } from "@/lib/client-display";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 
@@ -78,7 +81,8 @@ const DEFAULT_SORT_DIR: SortDir = "desc";
 type QuoteStatusValue = (typeof STATUS_OPTIONS)[number]["value"];
 
 function statusTone(status: string) {
-  return STATUS_OPTIONS.find((s) => s.value === status)?.tone ?? ("default" as const);
+  const tone = STATUS_OPTIONS.find((s) => s.value === status)?.tone ?? "default";
+  return tone === "danger" ? "destructive" : tone === "default" ? "secondary" : tone;
 }
 
 function statusLabelKey(status: string): QuoteStatusValue {
@@ -108,6 +112,23 @@ type QuotesQueryParams = {
   departmentIds: string[];
   sortKey: QuotesSortKey;
   sortDir: SortDir;
+};
+
+type QuoteRecordRow = {
+  id: string;
+  rowType: "project" | "quote";
+  project: ProjectListItem;
+  entry: ProjectQuoteEntry | null;
+  isChild: boolean;
+  quoteNumber: string;
+  quoteKind: "snap" | "full" | "project";
+  title: string;
+  client: string;
+  estimator: string;
+  status: string;
+  subtotal: number;
+  margin: number | null;
+  updated: string;
 };
 
 function useQuotesQuery() {
@@ -249,24 +270,6 @@ function FilterDropdown({
   );
 }
 
-/* ─── Skeleton ─── */
-
-function TableSkeleton({ rows, cols }: { rows: number; cols: number }) {
-  return (
-    <tbody>
-      {Array.from({ length: rows }).map((_, i) => (
-        <tr key={i} className="border-b border-line last:border-0">
-          {Array.from({ length: cols }).map((_, j) => (
-            <td key={j} className="px-4 py-2.5">
-              <div className="h-3 w-full max-w-[80%] animate-pulse rounded bg-fg/5" />
-            </td>
-          ))}
-        </tr>
-      ))}
-    </tbody>
-  );
-}
-
 /* ─── Row action menu ─── */
 
 function RowActionMenu({
@@ -310,19 +313,13 @@ export function QuotesList() {
   const router = useRouter();
   const { user: currentUser } = useAuth();
   const { params, update, rawSearchString } = useQuotesQuery();
-
-  // Local search input state (debounced before pushing to URL)
-  const [searchInput, setSearchInput] = useState(params.search);
-  useEffect(() => {
-    setSearchInput(params.search);
-  }, [params.search]);
-  useEffect(() => {
-    if (searchInput === params.search) return;
-    const timer = setTimeout(() => {
-      update({ search: searchInput }, { resetPage: true });
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [searchInput, params.search, update]);
+  const pathname = usePathname();
+  const listNav = useMemo(() => ({
+    pathname,
+    search: rawSearchString,
+    replace: (href: string) => router.replace(href, { scroll: false }),
+    push: (href: string) => router.push(href, { scroll: false }),
+  }), [pathname, rawSearchString, router]);
 
   // Estimator default: on first mount with no URL state, scope to own quotes
   const initialMountHandled = useRef(false);
@@ -442,7 +439,6 @@ export function QuotesList() {
   const departments = data?.departments ?? [];
   const pagination = data?.pagination;
   const total = pagination?.total ?? 0;
-  const totalPages = pagination?.totalPages ?? 1;
   const isInitialLoading = loading && !data;
   const isRevalidating = loading && !!data;
 
@@ -494,7 +490,6 @@ export function QuotesList() {
       departmentIds: [],
       search: "",
     }, { resetPage: true });
-    setSearchInput("");
   }
 
   function openManualQuoteModal(mode: "quote" | "snap" = "quote", parentProjectId: string | null = null) {
@@ -646,35 +641,240 @@ export function QuotesList() {
     }
   }
 
-  const headers: { key: QuotesSortKey; label: string; className?: string }[] = [
-    { key: "quoteNumber", label: t("table.quoteNumber"), className: "w-32" },
-    { key: "kind", label: t("table.kind"), className: "w-20" },
-    { key: "title", label: t("table.title") },
-    { key: "client", label: t("table.client"), className: "w-40" },
-    { key: "estimator", label: t("table.estimator"), className: "w-36" },
-    { key: "status", label: t("table.status"), className: "w-24" },
-    { key: "subtotal", label: t("table.subtotal"), className: "w-28 text-right" },
-    { key: "margin", label: t("table.margin"), className: "w-20 text-right" },
-    { key: "updated", label: t("table.updated"), className: "w-28" },
-  ];
-  const columnCount = headers.length + 1; // +1 for trailing actions cell
   const manualIsSnap = manualCreationMode === "snap";
+  const recordRows = useMemo<QuoteRecordRow[]>(() => {
+    const result: QuoteRecordRow[] = [];
+    for (const project of projects) {
+      const entries = project.quotes && project.quotes.length > 0
+        ? project.quotes
+        : project.quote
+          ? [{ quote: project.quote, latestRevision: project.latestRevision }]
+          : [];
+      const isContainer = project.isStandalone === false && entries.length > 0;
+      if (isContainer) {
+        const latestUpdate = entries
+          .map((entry) => entry.quote.updatedAt || project.updatedAt)
+          .sort()
+          .reverse()[0] || project.updatedAt;
+        result.push({
+          id: `p:${project.id}`,
+          rowType: "project",
+          project,
+          entry: null,
+          isChild: false,
+          quoteNumber: "",
+          quoteKind: "project",
+          title: project.name,
+          client: project.clientName || "—",
+          estimator: "",
+          status: "",
+          subtotal: entries.reduce((sum, entry) => sum + (entry.latestRevision?.subtotal ?? 0), 0),
+          margin: null,
+          updated: latestUpdate,
+        });
+        if (!expandedProjectIds.has(project.id)) continue;
+      }
+      for (const entry of entries) {
+        result.push({
+          id: `q:${entry.quote.id}`,
+          rowType: "quote",
+          project,
+          entry,
+          isChild: isContainer,
+          quoteNumber: entry.quote.quoteNumber,
+          quoteKind: getQuoteKind(project),
+          title: entry.quote.title || project.name,
+          client: getClientDisplayName(project, entry.quote),
+          estimator: getEstimatorLabelForQuote(entry.quote, unassignedLabel),
+          status: entry.quote.status,
+          subtotal: entry.latestRevision?.subtotal ?? 0,
+          margin: entry.latestRevision?.estimatedMargin ?? 0,
+          updated: entry.quote.updatedAt || project.updatedAt,
+        });
+      }
+    }
+    return result;
+  }, [expandedProjectIds, projects, unassignedLabel]);
 
-  const fromIndex = total === 0 ? 0 : (params.page - 1) * params.pageSize + 1;
-  const toIndex = Math.min(total, params.page * params.pageSize);
+  const columns: RecordColumn<QuoteRecordRow>[] = [
+    {
+      key: "quoteNumber",
+      label: t("table.quoteNumber"),
+      sortable: true,
+      width: "8rem",
+      render: (row) => row.rowType === "project" ? (
+        <button
+          type="button"
+          onClick={(event) => {
+            event.stopPropagation();
+            toggleExpand(row.project.id);
+          }}
+          className="inline-flex items-center gap-1.5 font-medium text-fg-muted hover:text-fg"
+        >
+          <ChevronRight
+            className={cn("size-4 transition-transform", expandedProjectIds.has(row.project.id) && "rotate-90")}
+          />
+          {expandedProjectIds.has(row.project.id)
+            ? <FolderOpen className="size-4 text-primary" />
+            : <Folder className="size-4 text-primary" />}
+        </button>
+      ) : (
+        <Link
+          href={`/projects/${row.project.id}`}
+          onClick={(event) => event.stopPropagation()}
+          className={cn(
+            "inline-flex whitespace-nowrap font-medium text-primary hover:underline",
+            row.isChild && "pl-7",
+          )}
+        >
+          {row.quoteNumber}
+        </Link>
+      ),
+    },
+    {
+      key: "kind",
+      label: t("table.kind"),
+      sortable: true,
+      width: "7rem",
+      render: (row) => row.rowType === "project" ? (
+        <Badge variant="secondary">{t("group.quotesCount", { count: row.project.quotes?.length ?? 0 })}</Badge>
+      ) : (
+        <Badge variant={row.quoteKind === "snap" ? "info" : "secondary"}>
+          {row.quoteKind === "snap" && <Zap className="size-3" />}
+          {row.quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
+        </Badge>
+      ),
+    },
+    {
+      key: "title",
+      label: t("table.title"),
+      sortable: true,
+      render: (row) => (
+        <Link
+          href={`/projects/${row.project.id}`}
+          onClick={(event) => event.stopPropagation()}
+          className={cn("font-medium hover:text-primary", row.rowType === "project" && "text-fg")}
+        >
+          {row.title}
+        </Link>
+      ),
+    },
+    {
+      key: "client",
+      label: t("table.client"),
+      sortable: true,
+      width: "10rem",
+      render: (row) => <span className="text-fg-muted">{row.client}</span>,
+    },
+    {
+      key: "estimator",
+      label: t("table.estimator"),
+      sortable: true,
+      width: "9rem",
+      render: (row) => <span className="text-fg-muted">{row.estimator || "—"}</span>,
+    },
+    {
+      key: "status",
+      label: t("table.status"),
+      sortable: true,
+      width: "7rem",
+      render: (row) => row.status ? (
+        <Badge variant={statusTone(row.status)}>
+          {t(`status.${statusLabelKey(row.status)}`)}
+        </Badge>
+      ) : <span className="text-fg-subtle">—</span>,
+    },
+    {
+      key: "subtotal",
+      label: t("table.subtotal"),
+      sortable: true,
+      kind: "amount",
+      width: "8rem",
+      render: (row) => <div className="text-right font-medium tabular-nums">{formatMoney(row.subtotal)}</div>,
+    },
+    {
+      key: "margin",
+      label: t("table.margin"),
+      sortable: true,
+      kind: "amount",
+      width: "6rem",
+      render: (row) => (
+        <div className="text-right tabular-nums">
+          {row.margin == null ? "—" : formatPercent(row.margin)}
+        </div>
+      ),
+    },
+    {
+      key: "updated",
+      label: t("table.updated"),
+      sortable: true,
+      width: "8rem",
+      render: (row) => <span className="whitespace-nowrap text-fg-muted">{formatDate(row.updated)}</span>,
+    },
+    {
+      key: "actions",
+      label: "",
+      kind: "actions",
+      width: "2rem",
+      render: (row) => {
+        if (row.rowType === "quote" && !row.isChild && row.entry) {
+          return (
+            <RowActionMenu
+              open={openRowMenu === row.id}
+              onOpenChange={(open) => setOpenRowMenu(open ? row.id : null)}
+            >
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  openPromoteModal(row.project, row.entry!);
+                }}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg-muted hover:bg-surface-hover hover:text-fg"
+              >
+                <FolderPlus className="size-4 text-primary" />
+                {t("actions.groupIntoProject")}
+              </button>
+            </RowActionMenu>
+          );
+        }
+        if (row.rowType === "project") {
+          return (
+            <RowActionMenu
+              open={openRowMenu === row.id}
+              onOpenChange={(open) => setOpenRowMenu(open ? row.id : null)}
+            >
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  setOpenRowMenu(null);
+                  openManualQuoteModal("quote", row.project.id);
+                }}
+                className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg-muted hover:bg-surface-hover hover:text-fg"
+              >
+                <Plus className="size-4 text-primary" />
+                {t("actions.addQuote")}
+              </button>
+            </RowActionMenu>
+          );
+        }
+        return null;
+      },
+    },
+  ];
 
   return (
-    <div className="flex h-full min-h-0 flex-col gap-5 overflow-hidden">
-      {/* Header */}
-      <FadeIn className="shrink-0">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
-            <p className="text-xs text-fg/50">{t("subtitle")}</p>
-          </div>
+    <ListNavProvider value={listNav}>
+    <ListPageLayout
+      className="flex min-h-full flex-col gap-5"
+      header={
+        <PageHeader
+          title={t("title")}
+          description={t("subtitle")}
+          actions={
           <Popover.Root open={newQuoteMenuOpen} onOpenChange={setNewQuoteMenuOpen}>
             <Popover.Trigger asChild>
-              <Button variant="accent" size="sm">
+              <Button variant="default" size="sm">
                 <Plus className="h-3.5 w-3.5" />
                 {t("newQuoteButton")}
                 <ChevronDown className={cn("h-3.5 w-3.5 transition-transform", newQuoteMenuOpen && "rotate-180")} />
@@ -722,29 +922,31 @@ export function QuotesList() {
               </Popover.Content>
             </Popover.Portal>
           </Popover.Root>
-        </div>
-      </FadeIn>
+          }
+        />
+      }
+    >
 
-      <ModalBackdrop open={manualModalOpen} onClose={closeManualQuoteModal} size="md">
-        <form onSubmit={handleManualQuoteSubmit} className="rounded-xl border border-line bg-panel shadow-2xl">
-          <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
-            <div>
-              <h2 className="text-sm font-semibold text-fg">{manualIsSnap ? t("manual.snapTitle") : t("manual.quoteTitle")}</h2>
-              <p className="mt-0.5 text-xs text-fg/50">
-                {manualIsSnap ? t("manual.snapDescription") : t("manual.quoteDescription")}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={closeManualQuoteModal}
-              className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
-              aria-label={t("manual.close")}
-              disabled={manualSaving}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="space-y-3 px-5 py-4">
+      <Dialog
+        open={manualModalOpen}
+        onClose={closeManualQuoteModal}
+        size="md"
+        title={manualIsSnap ? t("manual.snapTitle") : t("manual.quoteTitle")}
+        description={manualIsSnap ? t("manual.snapDescription") : t("manual.quoteDescription")}
+        closeLabel={t("manual.close")}
+        footer={
+          <>
+            <Button type="button" variant="ghost" size="sm" onClick={closeManualQuoteModal} disabled={manualSaving}>
+              {t("manual.cancel")}
+            </Button>
+            <Button type="submit" form="create-quote-form" variant="default" size="sm" disabled={manualSaving}>
+              {manualSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              {manualIsSnap ? t("manual.createSnap") : t("manual.createQuote")}
+            </Button>
+          </>
+        }
+      >
+        <form id="create-quote-form" onSubmit={handleManualQuoteSubmit} className="space-y-3">
             <label className="block space-y-1.5">
               <span className="text-xs font-medium text-fg/65">{manualIsSnap ? t("manual.snapTitleLabel") : t("manual.quoteTitleLabel")}</span>
               <Input
@@ -773,7 +975,7 @@ export function QuotesList() {
                       autoFocus
                       disabled={quickAddSaving}
                     />
-                    <Button type="button" size="sm" variant="accent" onClick={handleQuickAddCustomer} disabled={quickAddSaving || !quickAddName.trim()}>
+                    <Button type="button" size="sm" variant="default" onClick={handleQuickAddCustomer} disabled={quickAddSaving || !quickAddName.trim()}>
                       {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                     </Button>
                     <Button type="button" size="sm" variant="ghost" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }} disabled={quickAddSaving}>
@@ -860,18 +1062,8 @@ export function QuotesList() {
                 {manualError}
               </div>
             )}
-          </div>
-          <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
-            <Button type="button" variant="ghost" size="sm" onClick={closeManualQuoteModal} disabled={manualSaving}>
-              {t("manual.cancel")}
-            </Button>
-            <Button type="submit" variant="accent" size="sm" disabled={manualSaving}>
-              {manualSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              {manualIsSnap ? t("manual.createSnap") : t("manual.createQuote")}
-            </Button>
-          </div>
         </form>
-      </ModalBackdrop>
+      </Dialog>
 
       {/* Promote (group into project) modal */}
       <ModalBackdrop open={promoteFor != null} onClose={closePromoteModal} size="sm">
@@ -916,7 +1108,7 @@ export function QuotesList() {
               <Button type="button" variant="ghost" size="sm" onClick={closePromoteModal} disabled={promoteSaving}>
                 {t("manual.cancel")}
               </Button>
-              <Button type="submit" variant="accent" size="sm" disabled={promoteSaving}>
+              <Button type="submit" variant="default" size="sm" disabled={promoteSaving}>
                 {promoteSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <FolderPlus className="h-3.5 w-3.5" />}
                 {t("promote.submit")}
               </Button>
@@ -940,421 +1132,126 @@ export function QuotesList() {
         </div>
       </FadeIn>
 
-      {/* Filter bar */}
-      <FadeIn delay={0.1} className="shrink-0">
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="relative flex-1 min-w-[280px] max-w-lg">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-            <Input
-              className="h-8 pl-9 text-xs"
-              placeholder={t("filters.searchPlaceholder")}
-              value={searchInput}
-              onChange={(e) => setSearchInput(e.target.value)}
-            />
-            {searchInput && (
-              <button
-                onClick={() => setSearchInput("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg/30 hover:text-fg/60 transition-colors"
-                aria-label={t("filters.clear")}
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-
-          <FilterDropdown
-            label={t("filters.status")}
-            options={STATUS_OPTIONS.map((s) => ({ value: s.value, label: t(`status.${s.labelKey}`) }))}
-            selected={params.status}
-            onChange={(v) => update({ status: v }, { resetPage: true })}
-            clearLabel={t("filters.clear")}
-            renderOption={(opt) => (
-              <span className="flex items-center gap-2">
-                <Badge tone={statusTone(opt.value) as any} className="text-[9px]">{opt.label}</Badge>
-              </span>
-            )}
-          />
-
-          {clientOptions.length > 0 && (
-            <FilterDropdown
-              label={t("filters.client")}
-              options={clientOptions}
-              selected={params.clientNames}
-              onChange={(v) => update({ clientNames: v }, { resetPage: true })}
-              clearLabel={t("filters.clear")}
-            />
-          )}
-
-          <FilterDropdown
-            label={t("filters.estimator")}
-            options={userOptions}
-            selected={params.userIds}
-            onChange={(v) => update({ userIds: v }, { resetPage: true })}
-            clearLabel={t("filters.clear")}
-          />
-
-          {departmentOptions.length > 0 && (
-            <FilterDropdown
-              label={t("filters.department")}
-              options={departmentOptions}
-              selected={params.departmentIds}
-              onChange={(v) => update({ departmentIds: v }, { resetPage: true })}
-              clearLabel={t("filters.clear")}
-            />
-          )}
-
-          {(hasActiveFilters || params.search) && (
-            <button
-              onClick={clearAllFilters}
-              className="inline-flex items-center gap-1 rounded-lg px-2 h-8 text-xs text-fg/40 hover:text-fg/70 transition-colors"
-            >
-              <X className="h-3 w-3" /> {t("filters.clearAll")}
-            </button>
-          )}
-
-          <span className="ml-auto inline-flex items-center gap-2 text-[11px] text-fg/30 tabular-nums shrink-0">
-            {isRevalidating && <Loader2 className="h-3 w-3 animate-spin" />}
-            {!isInitialLoading && total > 0 && (
-              <span>{t("pagination.range", { from: fromIndex, to: toIndex, total })}</span>
-            )}
-            {!isInitialLoading && total === 0 && !isRevalidating && (
-              <span>{t("filters.resultCount", { count: 0 })}</span>
-            )}
-          </span>
-        </div>
-      </FadeIn>
-
-      {/* Table */}
-      <FadeIn delay={0.15} className="min-h-0 flex-1">
-        <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
-          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-auto">
-            <table className={cn("w-full text-sm", isRevalidating && "opacity-60 transition-opacity")}>
-              <thead className="sticky top-0 z-10 bg-panel">
-                <tr className="border-b border-line">
-                  {headers.map((h) => (
-                    <th
-                      key={h.key}
-                      className={cn(
-                        "px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 cursor-pointer select-none hover:text-fg/70 transition-colors",
-                        h.className
-                      )}
-                      onClick={() => handleSort(h.key)}
-                      aria-sort={params.sortKey === h.key ? (params.sortDir === "asc" ? "ascending" : "descending") : "none"}
-                    >
-                      <span className="inline-flex items-center gap-1">
-                        {h.label}
-                        <ArrowUpDown
-                          className={cn("h-3 w-3", params.sortKey === h.key ? "text-accent" : "text-fg/15")}
-                        />
-                      </span>
-                    </th>
-                  ))}
-                  <th className="w-8 px-2 py-2.5" aria-label="Actions" />
-                </tr>
-              </thead>
-              {isInitialLoading ? (
-                <TableSkeleton rows={Math.min(params.pageSize, 8)} cols={columnCount} />
-              ) : error ? (
-                <tbody>
-                  <tr>
-                    <td colSpan={columnCount} className="px-5 py-12 text-center text-sm">
-                      <div className="mx-auto flex max-w-md flex-col items-center gap-3 text-fg/60">
-                        <AlertCircle className="h-8 w-8 text-danger/70" />
-                        <div>
-                          <p className="font-medium text-fg/80">{t("loadErrorTitle")}</p>
-                          <p className="mt-1 text-xs text-fg/50">{error}</p>
-                        </div>
-                        <Button variant="ghost" size="sm" onClick={() => setReloadTick((n) => n + 1)}>
-                          {t("retry")}
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                </tbody>
-              ) : (
-                <tbody>
-                  {projects.length === 0 ? (
-                    <tr>
-                      <td colSpan={columnCount} className="px-5 py-12 text-center text-sm text-fg/40">
-                        <FileText className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                        {hasActiveFilters || params.search ? t("emptyFiltered") : t("empty")}
-                      </td>
-                    </tr>
-                  ) : (
-                    projects.map((project, i) => {
-                      const allEntries = project.quotes && project.quotes.length > 0
-                        ? project.quotes
-                        : project.quote
-                          ? [{ quote: project.quote, latestRevision: project.latestRevision }]
-                          : [];
-                      const isContainer = project.isStandalone === false && allEntries.length > 0;
-                      const childKind = getQuoteKind(project);
-
-                      // Standalone (or projects with a single quote when isStandalone unknown)
-                      // render as a flat row identical to the legacy view.
-                      if (!isContainer) {
-                        const entry = allEntries[0];
-                        if (!entry) return null;
-                        const rowKey = `q:${entry.quote.id}`;
-                        return (
-                          <motion.tr
-                            key={rowKey}
-                            initial={{ opacity: 0, y: 4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
-                            className="group border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
-                          >
-                            <td className="px-4 py-2.5 text-xs font-medium text-accent whitespace-nowrap">
-                              <Link href={`/projects/${project.id}`} className="hover:underline">
-                                {entry.quote.quoteNumber}
-                              </Link>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Badge tone={childKind === "snap" ? "info" : "default"} className="gap-1">
-                                {childKind === "snap" && <Zap className="h-3 w-3" />}
-                                {childKind === "snap" ? t("kind.snap") : t("kind.full")}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5 text-xs text-fg/80">
-                              <Link href={`/projects/${project.id}`} className="hover:underline">
-                                {entry.quote.title || project.name}
-                              </Link>
-                            </td>
-                            <td className="px-4 py-2.5 text-xs text-fg/60">
-                              {getClientDisplayName(project, entry.quote)}
-                            </td>
-                            <td className="px-4 py-2.5 text-xs text-fg/60">
-                              {getEstimatorLabelForQuote(entry.quote, unassignedLabel)}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Badge tone={statusTone(entry.quote.status) as any}>
-                                {t(`status.${statusLabelKey(entry.quote.status)}`)}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                              {formatMoney(entry.latestRevision?.subtotal ?? 0)}
-                            </td>
-                            <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
-                              {formatPercent(entry.latestRevision?.estimatedMargin ?? 0)}
-                            </td>
-                            <td className="px-4 py-2.5 text-xs text-fg/50">
-                              {formatDate(entry.quote.updatedAt || project.updatedAt)}
-                            </td>
-                            <td className="w-8 px-2 py-2.5 text-right">
-                              <RowActionMenu
-                                open={openRowMenu === rowKey}
-                                onOpenChange={(open) => setOpenRowMenu(open ? rowKey : null)}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => openPromoteModal(project, entry)}
-                                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
-                                >
-                                  <FolderPlus className="h-3.5 w-3.5 text-accent" />
-                                  {t("actions.groupIntoProject")}
-                                </button>
-                              </RowActionMenu>
-                            </td>
-                          </motion.tr>
-                        );
-                      }
-
-                      // Container row: parent + (when expanded) all its quotes.
-                      const expanded = expandedProjectIds.has(project.id);
-                      const aggregateSubtotal = allEntries.reduce(
-                        (sum, e) => sum + (e.latestRevision?.subtotal ?? 0),
-                        0,
-                      );
-                      const latestUpdate = allEntries
-                        .map((e) => e.quote.updatedAt || project.updatedAt)
-                        .sort()
-                        .reverse()[0] || project.updatedAt;
-                      return (
-                        <Fragment key={`p:${project.id}`}>
-                          <motion.tr
-                            initial={{ opacity: 0, y: 4 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            transition={{ duration: 0.2, delay: i * 0.02, ease: "easeOut" }}
-                            className="border-b border-line last:border-0 cursor-pointer bg-panel2/30 hover:bg-panel2/60 transition-colors"
-                            onClick={() => toggleExpand(project.id)}
-                          >
-                            <td className="px-4 py-2.5 text-xs font-medium text-fg/70 whitespace-nowrap">
-                              <span className="inline-flex items-center gap-1.5">
-                                <ChevronRight
-                                  className={cn("h-3.5 w-3.5 text-fg/50 transition-transform", expanded && "rotate-90")}
-                                />
-                                {expanded ? <FolderOpen className="h-3.5 w-3.5 text-accent" /> : <Folder className="h-3.5 w-3.5 text-accent" />}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Badge tone="default" className="text-[10px]">
-                                {t("group.quotesCount", { count: allEntries.length })}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5 text-xs font-medium text-fg/85" colSpan={2}>
-                              <Link
-                                href={`/projects/${project.id}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="hover:underline"
-                              >
-                                {project.name}
-                              </Link>
-                              {project.clientName ? (
-                                <span className="ml-2 text-fg/40">· {project.clientName}</span>
-                              ) : null}
-                            </td>
-                            <td className="px-4 py-2.5" colSpan={2}>
-                              {/* estimator + status: not aggregated for containers */}
-                            </td>
-                            <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                              {formatMoney(aggregateSubtotal)}
-                            </td>
-                            <td className="px-4 py-2.5" />
-                            <td className="px-4 py-2.5 text-xs text-fg/50">
-                              {formatDate(latestUpdate)}
-                            </td>
-                            <td className="w-8 px-2 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
-                              <RowActionMenu
-                                open={openRowMenu === `p:${project.id}`}
-                                onOpenChange={(open) => setOpenRowMenu(open ? `p:${project.id}` : null)}
-                              >
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setOpenRowMenu(null);
-                                    openManualQuoteModal("quote", project.id);
-                                  }}
-                                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
-                                >
-                                  <Plus className="h-3.5 w-3.5 text-accent" />
-                                  {t("actions.addQuote")}
-                                </button>
-                              </RowActionMenu>
-                            </td>
-                          </motion.tr>
-                          {expanded && allEntries.map((entry) => {
-                            const childKey = `q:${entry.quote.id}`;
-                            return (
-                              <motion.tr
-                                key={childKey}
-                                initial={{ opacity: 0 }}
-                                animate={{ opacity: 1 }}
-                                transition={{ duration: 0.15 }}
-                                className="border-b border-line last:border-0 hover:bg-panel2/40 transition-colors"
-                              >
-                                <td className="px-4 py-2.5 pl-10 text-xs font-medium text-accent whitespace-nowrap">
-                                  <Link href={`/projects/${project.id}`} className="hover:underline">
-                                    {entry.quote.quoteNumber}
-                                  </Link>
-                                </td>
-                                <td className="px-4 py-2.5">
-                                  <Badge tone={childKind === "snap" ? "info" : "default"} className="gap-1">
-                                    {childKind === "snap" && <Zap className="h-3 w-3" />}
-                                    {childKind === "snap" ? t("kind.snap") : t("kind.full")}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2.5 text-xs text-fg/80">
-                                  <Link href={`/projects/${project.id}`} className="hover:underline">
-                                    {entry.quote.title || project.name}
-                                  </Link>
-                                </td>
-                                <td className="px-4 py-2.5 text-xs text-fg/60">
-                                  {getClientDisplayName(project, entry.quote)}
-                                </td>
-                                <td className="px-4 py-2.5 text-xs text-fg/60">
-                                  {getEstimatorLabelForQuote(entry.quote, unassignedLabel)}
-                                </td>
-                                <td className="px-4 py-2.5">
-                                  <Badge tone={statusTone(entry.quote.status) as any}>
-                                    {t(`status.${statusLabelKey(entry.quote.status)}`)}
-                                  </Badge>
-                                </td>
-                                <td className="px-4 py-2.5 text-right text-xs font-medium text-fg/80 tabular-nums">
-                                  {formatMoney(entry.latestRevision?.subtotal ?? 0)}
-                                </td>
-                                <td className="px-4 py-2.5 text-right text-xs text-fg/60 tabular-nums">
-                                  {formatPercent(entry.latestRevision?.estimatedMargin ?? 0)}
-                                </td>
-                                <td className="px-4 py-2.5 text-xs text-fg/50">
-                                  {formatDate(entry.quote.updatedAt || project.updatedAt)}
-                                </td>
-                                <td className="w-8 px-2 py-2.5 text-right" />
-                              </motion.tr>
-                            );
-                          })}
-                        </Fragment>
-                      );
-                    })
-                  )}
-                </tbody>
-              )}
-            </table>
-          </div>
-
-          {/* Pagination footer */}
-          {!isInitialLoading && !error && total > 0 && (
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-2.5">
-              <div className="flex items-center gap-2 text-[11px] text-fg/50">
-                <label className="flex items-center gap-1.5">
-                  <span>{t("pagination.rowsPerPage")}</span>
-                  <select
-                    value={params.pageSize}
-                    onChange={(e) => update({ pageSize: parseInt(e.target.value, 10) }, { resetPage: true })}
-                    className="rounded-md border border-line bg-bg px-1.5 py-0.5 text-xs text-fg/80 focus:border-accent focus:outline-none"
-                  >
-                    {PAGE_SIZE_OPTIONS.map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
-                </label>
-                <span className="text-fg/30">·</span>
-                <span className="tabular-nums">{t("pagination.range", { from: fromIndex, to: toIndex, total })}</span>
-              </div>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  onClick={() => update({ page: 1 })}
-                  disabled={params.page <= 1}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
-                  aria-label={t("pagination.first")}
-                >
-                  <ChevronsLeft className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => update({ page: params.page - 1 })}
-                  disabled={params.page <= 1}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
-                  aria-label={t("pagination.previous")}
-                >
-                  <ChevronLeft className="h-3.5 w-3.5" />
-                </button>
-                <span className="px-2 text-[11px] tabular-nums text-fg/60">
-                  {t("pagination.pageOf", { page: params.page, totalPages })}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => update({ page: params.page + 1 })}
-                  disabled={params.page >= totalPages}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
-                  aria-label={t("pagination.next")}
-                >
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => update({ page: totalPages })}
-                  disabled={params.page >= totalPages}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-fg/50 hover:bg-panel2 hover:text-fg disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-fg/50"
-                  aria-label={t("pagination.last")}
-                >
-                  <ChevronsRight className="h-3.5 w-3.5" />
-                </button>
-              </div>
+      <FadeIn delay={0.1} className="min-h-0 flex-1">
+        {isInitialLoading ? (
+          <Card className="min-h-0 overflow-auto">
+            <div className="space-y-3 p-4" aria-label="Loading quotes">
+              {Array.from({ length: Math.min(params.pageSize, 8) }).map((_, index) => (
+                <div key={index} className="h-10 animate-pulse rounded-md bg-bg-subtle" />
+              ))}
             </div>
-          )}
-        </Card>
+          </Card>
+        ) : error ? (
+          <Card>
+            <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-5 py-12 text-center text-fg-muted">
+              <AlertCircle className="size-8 text-danger" />
+              <div>
+                <p className="font-medium text-fg">{t("loadErrorTitle")}</p>
+                <p className="mt-1 text-xs">{error}</p>
+              </div>
+              <Button variant="outline" size="sm" onClick={() => setReloadTick((value) => value + 1)}>
+                {t("retry")}
+              </Button>
+            </div>
+          </Card>
+        ) : (
+          <div className={cn(isRevalidating && "opacity-60 transition-opacity")}>
+            <RecordList
+                columns={columns}
+                rows={recordRows}
+                getRowId={(row) => row.id}
+                filters={
+                  <>
+                    <SearchInput
+                      placeholder={t("filters.searchPlaceholder")}
+                      searchLabel={t("filters.searchPlaceholder")}
+                      clearLabel={t("filters.clear")}
+                    />
+                    <FilterDropdown
+                      label={t("filters.status")}
+                      options={STATUS_OPTIONS.map((status) => ({
+                        value: status.value,
+                        label: t(`status.${status.labelKey}`),
+                      }))}
+                      selected={params.status}
+                      onChange={(values) => update({ status: values }, { resetPage: true })}
+                      clearLabel={t("filters.clear")}
+                      renderOption={(option) => (
+                        <Badge variant={statusTone(option.value)}>{option.label}</Badge>
+                      )}
+                    />
+                    {clientOptions.length > 0 ? (
+                      <FilterDropdown
+                        label={t("filters.client")}
+                        options={clientOptions}
+                        selected={params.clientNames}
+                        onChange={(values) => update({ clientNames: values }, { resetPage: true })}
+                        clearLabel={t("filters.clear")}
+                      />
+                    ) : null}
+                    <FilterDropdown
+                      label={t("filters.estimator")}
+                      options={userOptions}
+                      selected={params.userIds}
+                      onChange={(values) => update({ userIds: values }, { resetPage: true })}
+                      clearLabel={t("filters.clear")}
+                    />
+                    {departmentOptions.length > 0 ? (
+                      <FilterDropdown
+                        label={t("filters.department")}
+                        options={departmentOptions}
+                        selected={params.departmentIds}
+                        onChange={(values) => update({ departmentIds: values }, { resetPage: true })}
+                        clearLabel={t("filters.clear")}
+                      />
+                    ) : null}
+                    {(hasActiveFilters || params.search) ? (
+                      <Button variant="ghost" size="sm" onClick={clearAllFilters}>
+                        <X className="size-3" />
+                        {t("filters.clearAll")}
+                      </Button>
+                    ) : null}
+                  </>
+                }
+                toolbarActions={
+                  <>
+                    {isRevalidating ? <Loader2 className="size-4 animate-spin text-fg-muted" /> : null}
+                    <label className="flex items-center gap-1.5 whitespace-nowrap text-xs text-fg-muted">
+                      <span>{t("pagination.rowsPerPage")}</span>
+                      <select
+                        value={params.pageSize}
+                        onChange={(event) => update(
+                          { pageSize: Number.parseInt(event.target.value, 10) },
+                          { resetPage: true },
+                        )}
+                        className="h-8 rounded-md border border-border bg-surface px-2 text-xs text-fg"
+                      >
+                        {PAGE_SIZE_OPTIONS.map((size) => <option key={size} value={size}>{size}</option>)}
+                      </select>
+                    </label>
+                  </>
+                }
+                sort={{ key: params.sortKey, dir: params.sortDir }}
+                onSortChange={(key) => handleSort(key as QuotesSortKey)}
+                pagination={{
+                  page: params.page,
+                  perPage: params.pageSize,
+                  total,
+                  onPageChange: (page) => update({ page }),
+                }}
+                onRowClick={(row) => {
+                  if (row.rowType === "project") toggleExpand(row.project.id);
+                  else router.push(`/projects/${row.project.id}`);
+                }}
+                empty={{
+                  title: hasActiveFilters || params.search ? t("emptyFiltered") : t("empty"),
+                  icon: <FileText className="size-8" />,
+                }}
+            />
+          </div>
+        )}
       </FadeIn>
-    </div>
+    </ListPageLayout>
+    </ListNavProvider>
   );
 }

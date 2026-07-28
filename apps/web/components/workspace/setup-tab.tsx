@@ -63,21 +63,23 @@ import {
 } from "@/lib/api";
 import type { Customer, CustomerContact, Department } from "@/lib/api";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  Combobox,
-  EmptyState,
   Input,
   Label,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+  Combobox,
+  EmptyState,
   ModalBackdrop,
   Select,
-  Textarea,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { ImportRateSchedulesModal } from "@/components/workspace/import-rate-schedules-modal";
 import { cn } from "@/lib/utils";
@@ -681,7 +683,7 @@ function GeneralSubTab({
         <CardHeader className="shrink-0">
           <CardTitle>Quote Details</CardTitle>
         </CardHeader>
-        <CardBody className="flex flex-col gap-4">
+        <CardContent className="flex flex-col gap-4">
           {/* Title with quote number */}
           <div data-field="title">
             <Label>Quote Title</Label>
@@ -711,10 +713,10 @@ function GeneralSubTab({
                     onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleQuickAdd())}
                     autoFocus
                   />
-                  <Button type="button" size="xs" variant="accent" onClick={handleQuickAdd} disabled={quickAddSaving || !quickAddName.trim()}>
+                  <Button type="button" size="sm" variant="default" onClick={handleQuickAdd} disabled={quickAddSaving || !quickAddName.trim()}>
                     {quickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   </Button>
-                  <Button type="button" size="xs" variant="secondary" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }}>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => { setQuickAddOpen(false); setQuickAddName(""); }}>
                     <X className="h-3 w-3" />
                   </Button>
                 </div>
@@ -734,7 +736,7 @@ function GeneralSubTab({
                     placeholder="Select client..."
                     className="flex-1"
                   />
-                  <Button type="button" size="xs" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setQuickAddOpen(true)} title="Add new client">
                     <Plus className="h-3 w-3" />
                   </Button>
                 </div>
@@ -756,10 +758,10 @@ function GeneralSubTab({
                     onKeyDown={(e) => e.key === "Enter" && (e.preventDefault(), handleContactQuickAdd())}
                     autoFocus
                   />
-                  <Button type="button" size="xs" variant="accent" onClick={handleContactQuickAdd} disabled={contactQuickAddSaving || !contactQuickAddName.trim()}>
+                  <Button type="button" size="sm" variant="default" onClick={handleContactQuickAdd} disabled={contactQuickAddSaving || !contactQuickAddName.trim()}>
                     {contactQuickAddSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
                   </Button>
-                  <Button type="button" size="xs" variant="secondary" onClick={() => { setContactQuickAddOpen(false); setContactQuickAddName(""); }}>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => { setContactQuickAddOpen(false); setContactQuickAddName(""); }}>
                     <X className="h-3 w-3" />
                   </Button>
                 </div>
@@ -779,7 +781,7 @@ function GeneralSubTab({
                     disabled={!customerId}
                     className="flex-1"
                   />
-                  <Button type="button" size="xs" variant="secondary" onClick={() => setContactQuickAddOpen(true)} title="Add new contact" disabled={!customerId}>
+                  <Button type="button" size="sm" variant="secondary" onClick={() => setContactQuickAddOpen(true)} title="Add new contact" disabled={!customerId}>
                     <Plus className="h-3 w-3" />
                   </Button>
                 </div>
@@ -858,7 +860,7 @@ function GeneralSubTab({
               />
             </div>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </div>
   );
@@ -1113,7 +1115,7 @@ function ConditionsSubTab({
               <BookOpen className="h-3.5 w-3.5" />
               Library
             </Button>
-            <Button variant="accent" size="sm" onClick={openCreate}>
+            <Button variant="default" size="sm" onClick={openCreate}>
               <Plus className="h-3.5 w-3.5" />
               New Condition
             </Button>
@@ -1381,7 +1383,7 @@ function ConditionsSubTab({
                         Cancel
                       </Button>
                       <Button
-                        variant="accent"
+                        variant="default"
                         size="sm"
                         onClick={handleDrawerSave}
                         disabled={saving || !form.value.trim() || !form.type.trim()}
@@ -1414,7 +1416,7 @@ function ConditionsSubTab({
               Search and filter the library, then click items to add them to this quote.
             </p>
           </CardHeader>
-          <CardBody className="space-y-3 max-h-[60vh] overflow-y-auto">
+          <CardContent className="space-y-3 max-h-[60vh] overflow-y-auto">
             <div className="flex items-center gap-3">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-fg/30" />
@@ -1470,7 +1472,7 @@ function ConditionsSubTab({
                       <span className="flex-1 text-fg/80 truncate">{entry.value}</span>
                       <div className="flex items-center gap-1 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
                         <Button
-                          size="xs"
+                          size="sm"
                           variant="ghost"
                           onClick={() => addConditionFromLibrary(entry)}
                           disabled={loading}
@@ -1491,7 +1493,7 @@ function ConditionsSubTab({
                 })}
               </div>
             )}
-          </CardBody>
+          </CardContent>
         </Card>
       </ModalBackdrop>
     </div>
@@ -1562,7 +1564,7 @@ function NotesSubTab({
         <CardHeader className="shrink-0">
           <CardTitle>Notes</CardTitle>
         </CardHeader>
-        <CardBody className="flex-1 min-h-0 flex flex-col">
+        <CardContent className="flex-1 min-h-0 flex flex-col">
           <div onBlur={() => saveRevision()} onInput={() => markDirty("notes")} className="flex-1 flex flex-col min-h-[200px]">
             <RichTextEditor
               value={revDraft.notes}
@@ -1572,7 +1574,7 @@ function NotesSubTab({
               minHeight="100%"
             />
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </div>
   );
@@ -1679,7 +1681,7 @@ function RatesSubTab({
             Import from Library
           </Button>
         </CardHeader>
-        <CardBody className="space-y-4 flex-1 min-h-0 overflow-y-auto">
+        <CardContent className="space-y-4 flex-1 min-h-0 overflow-y-auto">
           <ImportRateSchedulesModal
             open={showImportPicker}
             onClose={() => setShowImportPicker(false)}
@@ -1877,7 +1879,7 @@ function RatesSubTab({
               })}
             </div>
           )}
-        </CardBody>
+        </CardContent>
       </Card>
 
     </div>
@@ -2088,7 +2090,7 @@ function EstimateSearchSubTab({
             </div>
           </div>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-4">
             {ESTIMATE_SEARCH_SOURCE_CONTROLS.map((control) => {
               const enabled = control.sourceTypes.every((sourceType) => !disabledSourceTypes.has(sourceType));
@@ -2165,7 +2167,7 @@ function EstimateSearchSubTab({
                 </div>
                 <Button
                   type="button"
-                  size="xs"
+                  size="sm"
                   variant="ghost"
                   disabled={busy || filteredCatalogIds.length === 0}
                   onClick={() => setCatalogsEnabled(filteredCatalogIds, true)}
@@ -2174,7 +2176,7 @@ function EstimateSearchSubTab({
                 </Button>
                 <Button
                   type="button"
-                  size="xs"
+                  size="sm"
                   variant="ghost"
                   disabled={busy || filteredCatalogIds.length === 0}
                   onClick={() => setCatalogsEnabled(filteredCatalogIds, false)}
@@ -2274,7 +2276,7 @@ function EstimateSearchSubTab({
                 </div>
                 <Button
                   type="button"
-                  size="xs"
+                  size="sm"
                   variant="ghost"
                   disabled={busy || filteredLibraryIds.length === 0}
                   onClick={() => setLaborLibrariesEnabled(filteredLibraryIds, true)}
@@ -2283,7 +2285,7 @@ function EstimateSearchSubTab({
                 </Button>
                 <Button
                   type="button"
-                  size="xs"
+                  size="sm"
                   variant="ghost"
                   disabled={busy || filteredLibraryIds.length === 0}
                   onClick={() => setLaborLibrariesEnabled(filteredLibraryIds, false)}
@@ -2362,7 +2364,7 @@ function EstimateSearchSubTab({
               )}
             </div>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </div>
   );
@@ -2446,7 +2448,7 @@ function OtherSubTab({
         <CardHeader>
           <CardTitle>Shipping & Logistics</CardTitle>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
             <div>
               <Label>Estimated Ship Date</Label>
@@ -2478,14 +2480,14 @@ function OtherSubTab({
               />
             </div>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>Schedule</CardTitle>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
             <div>
               <Label>Walkdown Date</Label>
@@ -2521,14 +2523,14 @@ function OtherSubTab({
               />
             </div>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>Follow-Up & Assignment</CardTitle>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           <div>
             <Label>Follow-Up Note</Label>
             <Textarea
@@ -2579,7 +2581,7 @@ function OtherSubTab({
               </RadixSelect.Root>
             </div>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </div>
   );

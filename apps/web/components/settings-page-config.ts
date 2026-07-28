@@ -3,17 +3,19 @@ import { DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
 
 import type { BrandProfile } from "@/lib/api";
 import type { SupportedLocale } from "@/lib/i18n";
+import type { TenantNavigationConfig } from "@appkit/ui";
 
 export const STORAGE_KEY = "bidwright-settings";
 
 export type SettingsGroup = "organization" | "data" | "importExport" | "integrations" | "users";
-export type OrgSubTab = "general" | "brand" | "departments" | "defaults" | "terms" | "personas";
+export type OrgSubTab = "general" | "brand" | "navigation" | "departments" | "defaults" | "terms" | "personas";
 export type DataSubTab = "categories" | "uoms" | "conditions" | "factors";
 export type IntegrationsSubTab = "agent" | "llm" | "azure" | "autodesk" | "drawing" | "email" | "plugins" | "integrations";
 
 export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
   { id: "general", label: "General" },
   { id: "brand", label: "Brand" },
+  { id: "navigation", label: "Navigation" },
   { id: "departments", label: "Departments" },
   { id: "defaults", label: "Defaults" },
   { id: "terms", label: "Terms & Conditions" },
@@ -42,6 +44,7 @@ export interface GeneralSettings {
   timezone: string;
   currency: string;
   dateFormat: string;
+  navigation?: TenantNavigationConfig;
 }
 
 export interface EmailSettings {

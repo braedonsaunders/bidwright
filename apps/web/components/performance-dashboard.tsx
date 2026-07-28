@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslations } from "next-intl";
-import { motion, AnimatePresence, LayoutGroup, animate, useMotionValue, useTransform } from "motion/react";
+import { motion, AnimatePresence, LayoutGroup } from "motion/react";
 import {
   Award,
   BarChart3,
@@ -18,20 +18,18 @@ import {
 } from "lucide-react";
 import type { ProjectListItem } from "@/lib/api";
 import {
+  AnimatedNumber,
   Badge,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
   EmptyState,
   Input,
-  Select,
+  SearchSelect,
   Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui";
+} from "@appkit/ui";
+import {
+  DashboardMetricCard,
+  DashboardPanel,
+} from "@appkit/dashboard/primitives";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -75,26 +73,6 @@ function statusToStage(status?: string): Stage {
     default:
       return "other";
   }
-}
-
-function AnimatedNumber({
-  value,
-  format = (v: number) => Math.round(v).toLocaleString(),
-  duration = 0.9,
-  className,
-}: {
-  value: number;
-  format?: (v: number) => string;
-  duration?: number;
-  className?: string;
-}) {
-  const mv = useMotionValue(0);
-  const display = useTransform(mv, (v) => format(v));
-  useEffect(() => {
-    const controls = animate(mv, value, { duration, ease: [0.25, 1, 0.5, 1] });
-    return controls.stop;
-  }, [mv, value, duration]);
-  return <motion.span className={className}>{display}</motion.span>;
 }
 
 function Sparkline({ values, color = "currentColor", height = 28 }: { values: number[]; color?: string; height?: number }) {
@@ -220,7 +198,7 @@ function Histogram({ values, className }: { values: number[]; className?: string
   }, [values]);
 
   const max = Math.max(1, ...bins.map((b) => b.count));
-  if (values.length === 0) return <EmptyState className={cn("flex h-full items-center justify-center", className)}>{t("emptyDistribution")}</EmptyState>;
+  if (values.length === 0) return <EmptyState className={cn("h-full", className)} title={t("emptyDistribution")} />;
 
   return (
     <div className={cn("flex h-28 items-end gap-2", className)}>
@@ -243,7 +221,7 @@ function Histogram({ values, className }: { values: number[]; className?: string
 function Leaderboard({ items, className }: { items: Array<{ key: string; label: string; primary: number; secondary: number; tone: "success" | "danger" | "default" }>; className?: string }) {
   const t = useTranslations("Performance");
   const max = Math.max(1, ...items.map((i) => Math.abs(i.primary)));
-  if (items.length === 0) return <EmptyState className={cn("flex h-full items-center justify-center", className)}>{t("emptyClientData")}</EmptyState>;
+  if (items.length === 0) return <EmptyState className={cn("h-full", className)} title={t("emptyClientData")} />;
   return (
     <ol className={cn("space-y-2", className)}>
       {items.map((item, i) => {
@@ -277,7 +255,7 @@ function Leaderboard({ items, className }: { items: Array<{ key: string; label: 
 function TimeSeries({ buckets, className }: { buckets: Array<{ key: string; label: string; count: number; value: number }>; className?: string }) {
   const t = useTranslations("Performance");
   const max = Math.max(1, ...buckets.map((b) => b.value));
-  if (buckets.length === 0) return <EmptyState className={cn("flex h-full items-center justify-center", className)}>{t("emptyTimeSeries")}</EmptyState>;
+  if (buckets.length === 0) return <EmptyState className={cn("h-full", className)} title={t("emptyTimeSeries")} />;
   return (
     <div className={cn("flex h-36 items-end gap-1 px-1", className)}>
       {buckets.map((b, i) => {
@@ -406,7 +384,7 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
 
   return (
     <LayoutGroup>
-      <Tabs value={activeTab} onValueChange={(value) => setActiveTab(value as PerformanceTab)} className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
+      <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
         <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.4 }} className="shrink-0 rounded-xl border border-line bg-panel px-4 py-3 shadow-sm">
           <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
             <div className="min-w-0">
@@ -422,9 +400,9 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <Badge tone="info" className="text-xs">{t("filteredQuoteCount", { filtered: filtered.length, total: projects.length })}</Badge>
+              <Badge variant="info" className="text-xs">{t("filteredQuoteCount", { filtered: filtered.length, total: projects.length })}</Badge>
               {kpis.decided > 0 && (
-                <Badge tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "warning" : "danger"} className="text-xs">
+                <Badge variant={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "warning" : "destructive"} className="text-xs">
                   {t("winRateBadge", { rate: formatPercent(kpis.winRate, 0) })}
                 </Badge>
               )}
@@ -432,17 +410,23 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
           </div>
 
           <div className="mt-3 flex min-w-0 flex-wrap items-center gap-2">
-            <TabsList className="h-9 shrink-0">
-              {tabItems.map((item) => {
+            <Tabs
+              className="shrink-0"
+              value={activeTab}
+              onValueChange={(value) => setActiveTab(value as PerformanceTab)}
+              tabs={tabItems.map((item) => {
                 const Icon = item.icon;
-                return (
-                  <TabsTrigger key={item.value} value={item.value} className="h-7 gap-1.5 px-3">
+                return {
+                  value: item.value,
+                  label: (
+                    <span className="flex items-center gap-1.5">
                     <Icon className="h-3.5 w-3.5" />
                     {item.label}
-                  </TabsTrigger>
-                );
+                    </span>
+                  ),
+                };
               })}
-            </TabsList>
+            />
 
             <div className="flex min-w-0 flex-1 items-center justify-end gap-1.5 overflow-x-auto scrollbar-none">
               <div className="flex shrink-0 items-center gap-1.5 text-fg/50">
@@ -453,11 +437,11 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
               <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label={t("filters.fromDate")} value={filters.dateFrom} onChange={(e) => setFilters((f) => ({ ...f, dateFrom: e.target.value }))} />
               <span className="shrink-0 text-[10px] uppercase tracking-wider text-fg/35">{t("filters.to")}</span>
               <Input type="date" className="h-7 w-32 shrink-0 text-[11px]" aria-label={t("filters.toDate")} value={filters.dateTo} onChange={(e) => setFilters((f) => ({ ...f, dateTo: e.target.value }))} />
-              <Select size="xs" className="w-28 shrink-0" ariaLabel={t("filters.stage")} value={filters.stage || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: t("filters.allStages") }, { value: "active", label: t("stages.active") }, { value: "won", label: t("stages.won") }, { value: "lost", label: t("stages.lost") }, { value: "other", label: t("stages.other") }]} />
-              <Select size="xs" className="w-32 shrink-0" ariaLabel={t("filters.status")} value={filters.status || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: t("filters.allStatuses") }, ...statuses.map((s) => ({ value: s, label: t(`status.${quoteStatusKey(s)}`) }))]} />
-              <Select size="xs" className="w-40 shrink-0" ariaLabel={t("filters.client")} value={filters.client || "__all__"} onValueChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: t("filters.allClients") }, ...clients.map((c) => ({ value: c, label: c }))]} />
+              <SearchSelect className="w-28 shrink-0" triggerClassName="h-7 rounded-md px-2 text-[11px]" ariaLabel={t("filters.stage")} searchable={false} value={filters.stage || "__all__"} onChange={(v) => setFilters((f) => ({ ...f, stage: v === "__all__" ? "" : (v as Stage) }))} options={[{ value: "__all__", label: t("filters.allStages") }, { value: "active", label: t("stages.active") }, { value: "won", label: t("stages.won") }, { value: "lost", label: t("stages.lost") }, { value: "other", label: t("stages.other") }]} />
+              <SearchSelect className="w-32 shrink-0" triggerClassName="h-7 rounded-md px-2 text-[11px]" ariaLabel={t("filters.status")} searchable={false} value={filters.status || "__all__"} onChange={(v) => setFilters((f) => ({ ...f, status: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: t("filters.allStatuses") }, ...statuses.map((s) => ({ value: s, label: t(`status.${quoteStatusKey(s)}`) }))]} />
+              <SearchSelect className="w-40 shrink-0" triggerClassName="h-7 rounded-md px-2 text-[11px]" ariaLabel={t("filters.client")} value={filters.client || "__all__"} onChange={(v) => setFilters((f) => ({ ...f, client: v === "__all__" ? "" : v }))} options={[{ value: "__all__", label: t("filters.allClients") }, ...clients.map((c) => ({ value: c, label: c }))]} />
               {hasFilters && (
-                <Button variant="ghost" size="xs" className="shrink-0" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
+                <Button variant="ghost" size="sm" className="shrink-0" onClick={() => setFilters({ dateFrom: "", dateTo: "", status: "", client: "", stage: "" })}>
                   {t("filters.clear")}
                 </Button>
               )}
@@ -481,174 +465,117 @@ export function PerformanceDashboard({ projects }: { projects: ProjectListItem[]
         </motion.div>
 
         <div className="grid shrink-0 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <KpiTile delay={0.05} icon={DollarSign} label={t("kpi.pipelineValue")} value={kpis.totalEstimatedValue} format={(v) => formatMoney(v, 0)} tone="accent" sparkValues={timeSeries.map((b) => b.value)} />
-          <KpiTile delay={0.1} icon={TrendingUp} label={t("kpi.estimatedProfit")} value={kpis.totalEstimatedProfit} format={(v) => formatMoney(v, 0)} tone={kpis.totalEstimatedProfit >= 0 ? "success" : "danger"} sparkValues={kpis.margins.map((m) => m * 100)} />
-          <KpiTile delay={0.15} icon={Percent} label={t("kpi.averageMargin")} value={kpis.avgMargin * 100} format={(v) => `${v.toFixed(1)}%`} tone={kpis.avgMargin >= 0 ? "success" : "danger"} sparkValues={kpis.margins.map((m) => m * 100)} />
-          <KpiTile delay={0.2} icon={kpis.winRate >= 0.5 ? Trophy : Award} label={t("kpi.winRate")} value={kpis.winRate * 100} format={(v) => `${v.toFixed(0)}%`} sub={t("kpi.decided", { won: kpis.won, decided: kpis.decided || 0 })} tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "accent" : "danger"} sparkValues={[kpis.won, Math.max(0, kpis.decided - kpis.won)]} />
+          <DashboardMetricCard icon={<DollarSign className="size-4" />} label={t("kpi.pipelineValue")} value={<AnimatedNumber value={kpis.totalEstimatedValue} format={(v) => formatMoney(v, 0)} />} tone="primary" trend={<Sparkline values={timeSeries.map((b) => b.value)} color="rgb(59,130,246)" height={22} />} />
+          <DashboardMetricCard icon={<TrendingUp className="size-4" />} label={t("kpi.estimatedProfit")} value={<AnimatedNumber value={kpis.totalEstimatedProfit} format={(v) => formatMoney(v, 0)} />} tone={kpis.totalEstimatedProfit >= 0 ? "success" : "danger"} trend={<Sparkline values={kpis.margins.map((m) => m * 100)} color={kpis.totalEstimatedProfit >= 0 ? "rgb(16,185,129)" : "rgb(239,68,68)"} height={22} />} />
+          <DashboardMetricCard icon={<Percent className="size-4" />} label={t("kpi.averageMargin")} value={<AnimatedNumber value={kpis.avgMargin * 100} format={(v) => `${v.toFixed(1)}%`} />} tone={kpis.avgMargin >= 0 ? "success" : "danger"} trend={<Sparkline values={kpis.margins.map((m) => m * 100)} color={kpis.avgMargin >= 0 ? "rgb(16,185,129)" : "rgb(239,68,68)"} height={22} />} />
+          <DashboardMetricCard icon={kpis.winRate >= 0.5 ? <Trophy className="size-4" /> : <Award className="size-4" />} label={t("kpi.winRate")} value={<AnimatedNumber value={kpis.winRate * 100} format={(v) => `${v.toFixed(0)}%`} />} detail={t("kpi.decided", { won: kpis.won, decided: kpis.decided || 0 })} tone={kpis.winRate >= 0.5 ? "success" : kpis.winRate >= 0.3 ? "primary" : "danger"} trend={<Sparkline values={[kpis.won, Math.max(0, kpis.decided - kpis.won)]} color={kpis.winRate >= 0.5 ? "rgb(16,185,129)" : kpis.winRate >= 0.3 ? "rgb(59,130,246)" : "rgb(239,68,68)"} height={22} />} />
         </div>
 
         <div className="min-h-0 flex-1 overflow-hidden">
-          <TabsContent value="overview" className="h-full min-h-0 data-[state=inactive]:hidden">
+          {activeTab === "overview" && (
             <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.45fr)_minmax(300px,0.9fr)]">
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle>{t("pipelineOverTime")}</CardTitle>
-                      <span className="text-[11px] text-fg/40">{t("last12Months")}</span>
-                    </div>
-                  </CardHeader>
-                  <CardBody className="min-h-0 flex-1 px-4 py-3"><TimeSeries buckets={timeSeries} className="h-full" /></CardBody>
-                </Card>
+                <DashboardPanel
+                  title={t("pipelineOverTime")}
+                  actions={<span className="text-[11px] text-fg/40">{t("last12Months")}</span>}
+                >
+                  <TimeSeries buckets={timeSeries} className="h-full" />
+                </DashboardPanel>
               </motion.div>
 
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3"><CardTitle>{t("statusMix")}</CardTitle></CardHeader>
-                  <CardBody className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-3">
-                    <Donut segments={stages.map((s) => ({ label: t(`stages.${s.key}`), value: s.count, color: s.color }))} size={156} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel={t("total")} centerValue={String(filtered.length)} />
-                    <div className="mt-3 grid w-full grid-cols-2 gap-2 text-[11px]">
-                      {stages.map((s) => (
-                        <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
-                          <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
-                          <span className="truncate text-fg/65">{t(`stages.${s.key}`)}</span>
-                          <span className="ml-auto font-mono text-fg/85">{s.count}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </CardBody>
-                </Card>
+                <DashboardPanel title={t("statusMix")} bodyClassName="flex flex-col items-center justify-center">
+                  <Donut segments={stages.map((s) => ({ label: t(`stages.${s.key}`), value: s.count, color: s.color }))} size={156} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel={t("total")} centerValue={String(filtered.length)} />
+                  <div className="mt-3 grid w-full grid-cols-2 gap-2 text-[11px]">
+                    {stages.map((s) => (
+                      <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
+                        <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                        <span className="truncate text-fg/65">{t(`stages.${s.key}`)}</span>
+                        <span className="ml-auto font-mono text-fg/85">{s.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardPanel>
               </motion.div>
             </div>
-          </TabsContent>
+          )}
 
-          <TabsContent value="pipeline" className="h-full min-h-0 data-[state=inactive]:hidden">
+          {activeTab === "pipeline" && (
             <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.85fr)]">
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle>{t("pipelineFunnel")}</CardTitle>
-                      <span className="text-[11px] text-fg/40">{t("quoteCount", { count: filtered.length })}</span>
-                    </div>
-                  </CardHeader>
-                  <CardBody className="min-h-0 flex-1 px-4 py-3">
-                    <Funnel stages={stages} />
-                    <div className="mt-4 grid grid-cols-3 gap-2 border-t border-line/50 pt-3">
-                      <FunnelStat icon={CheckCircle2} label={t("stages.won")} value={kpis.won} sub={kpis.decided > 0 ? formatPercent(kpis.won / kpis.decided, 0) : "—"} tone="success" />
-                      <FunnelStat icon={XCircle} label={t("stages.lost")} value={Math.max(0, kpis.decided - kpis.won)} sub={kpis.decided > 0 ? formatPercent((kpis.decided - kpis.won) / kpis.decided, 0) : "—"} tone="danger" />
-                      <FunnelStat icon={BarChart3} label={t("stages.active")} value={stages.find((s) => s.key === "active")?.count ?? 0} sub={formatMoney(stages.find((s) => s.key === "active")?.value ?? 0, 0)} tone="info" />
-                    </div>
-                  </CardBody>
-                </Card>
+                <DashboardPanel
+                  title={t("pipelineFunnel")}
+                  actions={<span className="text-[11px] text-fg/40">{t("quoteCount", { count: filtered.length })}</span>}
+                >
+                  <Funnel stages={stages} />
+                  <div className="mt-4 grid grid-cols-3 gap-2 border-t border-line/50 pt-3">
+                    <FunnelStat icon={CheckCircle2} label={t("stages.won")} value={kpis.won} sub={kpis.decided > 0 ? formatPercent(kpis.won / kpis.decided, 0) : "—"} tone="success" />
+                    <FunnelStat icon={XCircle} label={t("stages.lost")} value={Math.max(0, kpis.decided - kpis.won)} sub={kpis.decided > 0 ? formatPercent((kpis.decided - kpis.won) / kpis.decided, 0) : "—"} tone="danger" />
+                    <FunnelStat icon={BarChart3} label={t("stages.active")} value={stages.find((s) => s.key === "active")?.count ?? 0} sub={formatMoney(stages.find((s) => s.key === "active")?.value ?? 0, 0)} tone="info" />
+                  </div>
+                </DashboardPanel>
               </motion.div>
 
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3"><CardTitle>{t("statusMix")}</CardTitle></CardHeader>
-                  <CardBody className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-3">
-                    <Donut segments={stages.map((s) => ({ label: t(`stages.${s.key}`), value: s.count, color: s.color }))} size={168} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel={t("total")} centerValue={String(filtered.length)} />
-                    <div className="mt-4 grid w-full grid-cols-2 gap-2 text-[11px]">
-                      {stages.map((s) => (
-                        <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
-                          <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
-                          <span className="truncate text-fg/65">{t(`stages.${s.key}`)}</span>
-                          <span className="ml-auto font-mono text-fg/85">{s.count}</span>
-                        </div>
-                      ))}
-                    </div>
-                  </CardBody>
-                </Card>
+                <DashboardPanel title={t("statusMix")} bodyClassName="flex flex-col items-center justify-center">
+                  <Donut segments={stages.map((s) => ({ label: t(`stages.${s.key}`), value: s.count, color: s.color }))} size={168} total={stages.reduce((s, st) => s + st.count, 0)} centerLabel={t("total")} centerValue={String(filtered.length)} />
+                  <div className="mt-4 grid w-full grid-cols-2 gap-2 text-[11px]">
+                    {stages.map((s) => (
+                      <div key={s.key} className="flex items-center gap-2 rounded-md bg-panel2/30 px-2 py-1.5">
+                        <span className="h-2 w-2 rounded-full" style={{ background: s.color }} />
+                        <span className="truncate text-fg/65">{t(`stages.${s.key}`)}</span>
+                        <span className="ml-auto font-mono text-fg/85">{s.count}</span>
+                      </div>
+                    ))}
+                  </div>
+                </DashboardPanel>
               </motion.div>
             </div>
-          </TabsContent>
+          )}
 
-          <TabsContent value="margins" className="h-full min-h-0 data-[state=inactive]:hidden">
+          {activeTab === "margins" && (
             <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3"><CardTitle>{t("marginDistribution")}</CardTitle></CardHeader>
-                  <CardBody className="min-h-0 flex-1 px-4 py-3"><Histogram values={kpis.margins} className="h-full" /></CardBody>
-                </Card>
+                <DashboardPanel title={t("marginDistribution")}>
+                  <Histogram values={kpis.margins} className="h-full" />
+                </DashboardPanel>
               </motion.div>
 
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle>{t("pipelineOverTime")}</CardTitle>
-                      <span className="text-[11px] text-fg/40">{t("last12Months")}</span>
-                    </div>
-                  </CardHeader>
-                  <CardBody className="min-h-0 flex-1 px-4 py-3"><TimeSeries buckets={timeSeries} className="h-full" /></CardBody>
-                </Card>
+                <DashboardPanel
+                  title={t("pipelineOverTime")}
+                  actions={<span className="text-[11px] text-fg/40">{t("last12Months")}</span>}
+                >
+                  <TimeSeries buckets={timeSeries} className="h-full" />
+                </DashboardPanel>
               </motion.div>
             </div>
-          </TabsContent>
+          )}
 
-          <TabsContent value="clients" className="h-full min-h-0 data-[state=inactive]:hidden">
+          {activeTab === "clients" && (
             <div className="grid h-full min-h-0 gap-3 lg:grid-cols-[minmax(320px,0.95fr)_minmax(0,1.05fr)]">
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.05, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle>{t("topClientsByProfit")}</CardTitle>
-                      <span className="text-[11px] text-fg/40">{t("top8")}</span>
-                    </div>
-                  </CardHeader>
-                  <CardBody className="min-h-0 flex-1 px-4 py-3"><Leaderboard items={topClients} /></CardBody>
-                </Card>
+                <DashboardPanel
+                  title={t("topClientsByProfit")}
+                  actions={<span className="text-[11px] text-fg/40">{t("top8")}</span>}
+                >
+                  <Leaderboard items={topClients} />
+                </DashboardPanel>
               </motion.div>
 
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1, duration: 0.35 }} className="min-h-0">
-                <Card className="flex h-full min-h-0 flex-col overflow-hidden">
-                  <CardHeader className="shrink-0 px-4 py-3">
-                    <div className="flex items-center justify-between">
-                      <CardTitle>{t("pipelineOverTime")}</CardTitle>
-                      <span className="text-[11px] text-fg/40">{t("last12Months")}</span>
-                    </div>
-                  </CardHeader>
-                  <CardBody className="min-h-0 flex-1 px-4 py-3"><TimeSeries buckets={timeSeries} className="h-full" /></CardBody>
-                </Card>
+                <DashboardPanel
+                  title={t("pipelineOverTime")}
+                  actions={<span className="text-[11px] text-fg/40">{t("last12Months")}</span>}
+                >
+                  <TimeSeries buckets={timeSeries} className="h-full" />
+                </DashboardPanel>
               </motion.div>
             </div>
-          </TabsContent>
+          )}
         </div>
-      </Tabs>
+      </div>
     </LayoutGroup>
-  );
-}
-
-function KpiTile({
-  icon: Icon, label, value, format, tone = "accent", delay = 0, sub, sparkValues = [],
-}: {
-  icon: typeof DollarSign; label: string; value: number; format: (v: number) => string;
-  tone?: "accent" | "success" | "danger"; delay?: number; sub?: string; sparkValues?: number[];
-}) {
-  const toneClass = tone === "success" ? "bg-success/10 text-success border-success/20" : tone === "danger" ? "bg-danger/10 text-danger border-danger/20" : "bg-accent/10 text-accent border-accent/20";
-  const sparkColor = tone === "success" ? "rgb(16,185,129)" : tone === "danger" ? "rgb(239,68,68)" : "rgb(59,130,246)";
-  return (
-    <motion.div initial={{ opacity: 0, y: 10, scale: 0.97 }} animate={{ opacity: 1, y: 0, scale: 1 }} transition={{ delay, duration: 0.5, ease: [0.16, 1, 0.3, 1] }} whileHover={{ y: -2 }}>
-      <Card className="h-full overflow-hidden">
-        <CardBody className="py-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <p className="text-[11px] font-medium uppercase tracking-wider text-fg/45">{label}</p>
-              <p className="mt-1 text-xl font-semibold tabular-nums text-fg">
-                <AnimatedNumber value={value} format={format} duration={1.0} />
-              </p>
-              {sub && <p className="mt-1 text-[11px] text-fg/45">{sub}</p>}
-            </div>
-            <div className={cn("flex h-8 w-8 shrink-0 items-center justify-center rounded-lg border", toneClass)}>
-              <Icon className="h-4 w-4" />
-            </div>
-          </div>
-          <div className="mt-2 flex items-center justify-end" style={{ color: sparkColor }}>
-            <Sparkline values={sparkValues} color={sparkColor} height={22} />
-          </div>
-        </CardBody>
-      </Card>
-    </motion.div>
   );
 }
 

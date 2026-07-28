@@ -25,7 +25,9 @@ import {
   Trash2,
   Undo2,
 } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import {
   EMPTY_DOCUMENT_CONTENT,
@@ -117,7 +119,7 @@ export function KnowledgeDocumentEditor({
           return (
             <Button
               key={`${item.label}-${index}`}
-              size="xs"
+              size="sm"
               variant="ghost"
               title={item.label}
               onClick={item.action}
@@ -128,7 +130,7 @@ export function KnowledgeDocumentEditor({
           );
         })}
         <Button
-          size="xs"
+          size="sm"
           variant="ghost"
           title="Add table row"
           onClick={() => editor.chain().focus().addRowAfter().run()}
@@ -147,14 +149,14 @@ export function KnowledgeDocumentEditor({
           .knowledge-doc-editor ul, .knowledge-doc-editor ol { padding-left: 1.4rem; margin: 0.55rem 0; }
           .knowledge-doc-editor ul li { list-style: disc; margin: 0.2rem 0; }
           .knowledge-doc-editor ol li { list-style: decimal; margin: 0.2rem 0; }
-          .knowledge-doc-editor blockquote { border-left: 3px solid hsl(var(--accent)); padding-left: 0.9rem; margin: 0.75rem 0; opacity: 0.78; }
-          .knowledge-doc-editor code { border-radius: 4px; background: hsl(var(--panel-2) / 0.7); padding: 0.1rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
-          .knowledge-doc-editor pre { border-radius: 8px; background: hsl(var(--panel-2) / 0.7); padding: 0.8rem; overflow-x: auto; }
+          .knowledge-doc-editor blockquote { border-left: 3px solid rgb(var(--ch-primary)); padding-left: 0.9rem; margin: 0.75rem 0; opacity: 0.78; }
+          .knowledge-doc-editor code { border-radius: 4px; background: rgb(var(--ch-bg-subtle) / 0.7); padding: 0.1rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85em; }
+          .knowledge-doc-editor pre { border-radius: 8px; background: rgb(var(--ch-bg-subtle) / 0.7); padding: 0.8rem; overflow-x: auto; }
           .knowledge-doc-editor table { border-collapse: collapse; margin: 0.85rem 0; table-layout: fixed; width: 100%; overflow: hidden; }
-          .knowledge-doc-editor th, .knowledge-doc-editor td { border: 1px solid hsl(var(--line)); min-width: 80px; padding: 0.45rem 0.55rem; position: relative; vertical-align: top; }
-          .knowledge-doc-editor th { background: hsl(var(--panel-2) / 0.55); font-weight: 650; }
-          .knowledge-doc-editor .selectedCell:after { background: hsl(var(--accent) / 0.12); content: ""; inset: 0; pointer-events: none; position: absolute; z-index: 2; }
-          .knowledge-doc-editor .column-resize-handle { background: hsl(var(--accent)); bottom: -2px; pointer-events: none; position: absolute; right: -2px; top: 0; width: 3px; }
+          .knowledge-doc-editor th, .knowledge-doc-editor td { border: 1px solid rgb(var(--ch-border)); min-width: 80px; padding: 0.45rem 0.55rem; position: relative; vertical-align: top; }
+          .knowledge-doc-editor th { background: rgb(var(--ch-bg-subtle) / 0.55); font-weight: 650; }
+          .knowledge-doc-editor .selectedCell:after { background: rgb(var(--ch-primary) / 0.12); content: ""; inset: 0; pointer-events: none; position: absolute; z-index: 2; }
+          .knowledge-doc-editor .column-resize-handle { background: rgb(var(--ch-primary)); bottom: -2px; pointer-events: none; position: absolute; right: -2px; top: 0; width: 3px; }
           .knowledge-doc-editor p.is-editor-empty:first-child::before { content: attr(data-placeholder); float: left; height: 0; opacity: 0.4; pointer-events: none; }
         `}</style>
         <EditorContent editor={editor} />

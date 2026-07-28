@@ -14,12 +14,9 @@
  *   • Carriage-return and ANSI escape sequences are part of the auth UX
  *     and a plain stdio pipe mangles them.
  *
- * The login process runs **inside the user's per-user agent-home namespace**
- * so the OAuth credential it produces lands at the right path
- * (`<agentHomeDir>/.claude/.credentials.json` etc.) and is picked up on
- * subsequent CLI spawns for the same user. In desktop mode the namespace
- * resolves to null and the login writes to the host's `~/.claude` etc. as
- * before.
+ * Interactive browser login is intentionally desktop-only. Hosted/server
+ * deployments use organization-managed provider API keys and never expose a
+ * remote PTY that can mint reusable CLI OAuth credentials.
  *
  * Sessions live in an in-memory map keyed by an opaque `sessionId`. The
  * route layer creates a session, returns the id, and the browser opens a
@@ -34,7 +31,7 @@ import { spawn as ptySpawn, type IPty } from "node-pty";
 
 import type { AgentRuntime } from "./cli-runtime.js";
 import { stripBlankCredentialEnv } from "./agent-host/env-sanitize.js";
-import { getUserAgentHome, ensureUserAgentHome } from "./agent-home.js";
+import { getBidwrightMode, getUserAgentHome, ensureUserAgentHome } from "./agent-home.js";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -133,8 +130,8 @@ async function buildLoginEnv(
 }
 
 export class LoginNotSupportedError extends Error {
-  constructor(runtime: AgentRuntime) {
-    super(`No interactive login flow registered for runtime "${runtime}"`);
+  constructor(runtime: AgentRuntime, message?: string) {
+    super(message ?? `No interactive login flow registered for runtime "${runtime}"`);
   }
 }
 
@@ -154,6 +151,12 @@ export async function startLoginSession(opts: {
   userId: string;
   runtime: AgentRuntime;
 }): Promise<{ sessionId: string }> {
+  if (getBidwrightMode() !== "desktop") {
+    throw new LoginNotSupportedError(
+      opts.runtime,
+      "Interactive CLI login is available only in Bidwright desktop mode. Server deployments must use organization-managed provider API keys.",
+    );
+  }
   const cmd = getLoginCommand(opts.runtime);
   if (!cmd) throw new LoginNotSupportedError(opts.runtime);
 

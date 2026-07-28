@@ -118,6 +118,10 @@ import {
 } from "@bidwright/ingestion";
 import type { PrismaClient, Prisma } from "@bidwright/db";
 import { prisma as sharedPrisma, mergeIntegrations, dropInvalidProviderKeys } from "@bidwright/db";
+import {
+  sealSettingsSecrets,
+  unsealSettingsSecrets,
+} from "./services/settings-secret-crypto.js";
 import { decodeHtmlEntities } from "./text-utils.js";
 import {
   attachNativePdfMetadata,
@@ -2881,32 +2885,11 @@ export class PrismaApiStore {
     await this.ensureLineItemSearchInfrastructure();
     if (input.refresh) {
       await this.rebuildLineItemSearchIndex(projectId);
-    } else {
-      const indexStateRows = await this.db.$queryRawUnsafe<Array<{ has_any: boolean; has_project: boolean }>>(
-        `
-          SELECT
-            EXISTS (
-              SELECT 1
-              FROM "LineItemSearchDocument"
-              WHERE "organizationId" = $1::text
-                AND ("projectId" IS NULL OR "projectId" = $2::text)
-              LIMIT 1
-            ) AS has_any,
-            EXISTS (
-              SELECT 1
-              FROM "LineItemSearchDocument"
-              WHERE "organizationId" = $1::text
-                AND "projectId" = $2::text
-              LIMIT 1
-            ) AS has_project
-        `,
-        this.organizationId,
-        projectId,
-      );
-      if (!indexStateRows[0]?.has_any || !indexStateRows[0]?.has_project) {
-        await this.rebuildLineItemSearchIndex(projectId);
-      }
     }
+    // Search is deliberately read-only. Index slices are maintained by
+    // catalog/rate mutations and the explicit refresh endpoint. A cold index
+    // returns no candidates instead of turning an interactive read into a
+    // potentially organization-wide write.
 
     const q = input.q?.trim() ?? "";
     const ftsQuery = lineItemFullTextQuery(q);
@@ -16623,13 +16606,26 @@ export class PrismaApiStore {
       where: { organizationId: this.organizationId },
     });
     if (!settings) return structuredClone(DEFAULT_SETTINGS);
+    const secretScope = {
+      kind: "organization" as const,
+      id: this.organizationId,
+      tenantId: this.organizationId,
+    };
+    const storedEmail = unsealSettingsSecrets(
+      ((settings.email as Record<string, unknown> | null) ?? {}),
+      secretScope,
+    );
+    const storedIntegrations = unsealSettingsSecrets(
+      ((settings.integrations as Record<string, unknown> | null) ?? {}),
+      secretScope,
+    );
     const defaults = { ...DEFAULT_SETTINGS.defaults, ...((settings.defaults as any) ?? {}) };
     defaults.uoms = normalizeUomLibrary(defaults.uoms);
     return {
       general: { ...DEFAULT_SETTINGS.general, ...((settings.general as any) ?? {}) },
-      email: { ...DEFAULT_SETTINGS.email, ...((settings.email as any) ?? {}) },
+      email: { ...DEFAULT_SETTINGS.email, ...storedEmail },
       defaults,
-      integrations: { ...DEFAULT_SETTINGS.integrations, ...((settings.integrations as any) ?? {}) },
+      integrations: { ...DEFAULT_SETTINGS.integrations, ...storedIntegrations },
       brand: { ...DEFAULT_BRAND, ...((settings.brand as any) ?? {}) },
       termsAndConditions: settings.termsAndConditions ?? "",
     } as AppSettings;
@@ -16652,24 +16648,31 @@ export class PrismaApiStore {
       brand: patch.brand ? { ...existing.brand, ...patch.brand } : existing.brand,
       termsAndConditions: patch.termsAndConditions ?? existing.termsAndConditions ?? "",
     };
+    const secretScope = {
+      kind: "organization" as const,
+      id: this.organizationId,
+      tenantId: this.organizationId,
+    };
+    const storedEmail = sealSettingsSecrets(merged.email, secretScope);
+    const storedIntegrations = sealSettingsSecrets(merged.integrations, secretScope);
 
     await this.db.organizationSettings.upsert({
       where: { organizationId: this.organizationId },
       create: {
         organizationId: this.organizationId,
         general: merged.general as any,
-        email: merged.email as any,
+        email: storedEmail as any,
         defaults: merged.defaults as any,
-        integrations: merged.integrations as any,
+        integrations: storedIntegrations as any,
         brand: merged.brand as any,
         termsAndConditions: merged.termsAndConditions,
         updatedAt: new Date(),
       },
       update: {
         general: merged.general as any,
-        email: merged.email as any,
+        email: storedEmail as any,
         defaults: merged.defaults as any,
-        integrations: merged.integrations as any,
+        integrations: storedIntegrations as any,
         brand: merged.brand as any,
         termsAndConditions: merged.termsAndConditions,
         updatedAt: new Date(),
@@ -16697,8 +16700,12 @@ export class PrismaApiStore {
       throw new Error(`User ${userId} not found in this organization`);
     }
     const settings = await this.db.userSettings.findUnique({ where: { userId } });
+    const integrations = unsealSettingsSecrets(
+      ((settings?.integrations as Record<string, unknown> | null) ?? {}),
+      { kind: "user", id: userId, tenantId: this.organizationId },
+    );
     return {
-      integrations: ((settings?.integrations as Record<string, unknown> | null) ?? {}),
+      integrations,
       preferences: ((settings?.preferences as Record<string, unknown> | null) ?? {}),
       updatedAt: settings?.updatedAt ? settings.updatedAt.toISOString() : null,
     };
@@ -16720,7 +16727,11 @@ export class PrismaApiStore {
       throw new Error(`User ${userId} not found in this organization`);
     }
     const existing = await this.db.userSettings.findUnique({ where: { userId } });
-    const existingIntegrations = (existing?.integrations as Record<string, unknown> | null) ?? {};
+    const secretScope = { kind: "user" as const, id: userId, tenantId: this.organizationId };
+    const existingIntegrations = unsealSettingsSecrets(
+      (existing?.integrations as Record<string, unknown> | null) ?? {},
+      secretScope,
+    );
     const existingPreferences = (existing?.preferences as Record<string, unknown> | null) ?? {};
     const mergedIntegrations = patch.integrations
       ? { ...existingIntegrations, ...patch.integrations }
@@ -16728,24 +16739,25 @@ export class PrismaApiStore {
     const mergedPreferences = patch.preferences
       ? { ...existingPreferences, ...patch.preferences }
       : existingPreferences;
+    const storedIntegrations = sealSettingsSecrets(mergedIntegrations, secretScope);
 
     const saved = await this.db.userSettings.upsert({
       where: { userId },
       create: {
         userId,
-        integrations: mergedIntegrations as any,
+        integrations: storedIntegrations as any,
         preferences: mergedPreferences as any,
         updatedAt: new Date(),
       },
       update: {
-        integrations: mergedIntegrations as any,
+        integrations: storedIntegrations as any,
         preferences: mergedPreferences as any,
         updatedAt: new Date(),
       },
     });
 
     return {
-      integrations: (saved.integrations as Record<string, unknown> | null) ?? {},
+      integrations: mergedIntegrations,
       preferences: (saved.preferences as Record<string, unknown> | null) ?? {},
       updatedAt: saved.updatedAt.toISOString(),
     };
@@ -16769,8 +16781,12 @@ export class PrismaApiStore {
     if (!admin) {
       throw new Error(`SuperAdmin ${superAdminId} not found`);
     }
+    const integrations = unsealSettingsSecrets(
+      ((admin.integrations as Record<string, unknown> | null) ?? {}),
+      { kind: "super-admin", id: superAdminId },
+    );
     return {
-      integrations: ((admin.integrations as Record<string, unknown> | null) ?? {}),
+      integrations,
       preferences: ((admin.preferences as Record<string, unknown> | null) ?? {}),
       updatedAt: admin.updatedAt.toISOString(),
     };
@@ -16791,7 +16807,11 @@ export class PrismaApiStore {
     if (!existing) {
       throw new Error(`SuperAdmin ${superAdminId} not found`);
     }
-    const existingIntegrations = (existing.integrations as Record<string, unknown> | null) ?? {};
+    const secretScope = { kind: "super-admin" as const, id: superAdminId };
+    const existingIntegrations = unsealSettingsSecrets(
+      (existing.integrations as Record<string, unknown> | null) ?? {},
+      secretScope,
+    );
     const existingPreferences = (existing.preferences as Record<string, unknown> | null) ?? {};
     const mergedIntegrations = patch.integrations
       ? { ...existingIntegrations, ...patch.integrations }
@@ -16799,16 +16819,17 @@ export class PrismaApiStore {
     const mergedPreferences = patch.preferences
       ? { ...existingPreferences, ...patch.preferences }
       : existingPreferences;
+    const storedIntegrations = sealSettingsSecrets(mergedIntegrations, secretScope);
     const saved = await this.db.superAdmin.update({
       where: { id: superAdminId },
       data: {
-        integrations: mergedIntegrations as any,
+        integrations: storedIntegrations as any,
         preferences: mergedPreferences as any,
       },
       select: { integrations: true, preferences: true, updatedAt: true },
     });
     return {
-      integrations: (saved.integrations as Record<string, unknown> | null) ?? {},
+      integrations: mergedIntegrations,
       preferences: (saved.preferences as Record<string, unknown> | null) ?? {},
       updatedAt: saved.updatedAt.toISOString(),
     };

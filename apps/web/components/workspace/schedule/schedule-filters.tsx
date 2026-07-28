@@ -1,7 +1,13 @@
 "use client";
 
 import { X } from "lucide-react";
-import { Button, Input, Select } from "@/components/ui";
+import {
+  Button,
+  Input,
+} from "@appkit/ui";
+import {
+  Select,
+} from "@/components/legacy-controls";
 import type { ScheduleFilters } from "@/lib/schedule-utils";
 import { STATUS_LABELS, emptyFilters } from "@/lib/schedule-utils";
 import type { ProjectPhase, ScheduleTaskStatus } from "@/lib/api";
@@ -103,7 +109,7 @@ export function ScheduleFiltersBar({ filters, onChange, phases, assignees }: Sch
       </div>
 
       {hasFilters && (
-        <Button variant="ghost" size="xs" onClick={() => onChange(emptyFilters)}>
+        <Button variant="ghost" size="sm" onClick={() => onChange(emptyFilters)}>
           <X className="h-3 w-3 mr-1" />
           Clear
         </Button>

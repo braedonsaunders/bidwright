@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, ExternalLink, Loader2, RefreshCw, Send } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 
 export interface BidwrightModelSelectionNode {
@@ -774,7 +776,7 @@ export function BidwrightModelEditor({
           {onSendSelectionToEstimate && (
             <Button
               variant="secondary"
-              size="xs"
+              size="sm"
               title={estimateTargetWorksheetId ? "Create worksheet line item from selected model quantity" : "Create a worksheet before sending model quantities"}
               disabled={!canSendSelection || sendingSelection}
               onClick={async () => {
@@ -792,7 +794,7 @@ export function BidwrightModelEditor({
           )}
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             title="Reload"
             onClick={() => {
               setLoading(true);
@@ -804,7 +806,7 @@ export function BidwrightModelEditor({
           </Button>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             title="Open in new window"
             onClick={() => window.open(editorUrl, "_blank", "noopener,noreferrer")}
           >

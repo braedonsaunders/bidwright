@@ -1,9 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { createPortal } from "react-dom";
-import { AnimatePresence, motion } from "motion/react";
-import { ChevronLeft, ChevronRight, Layers, Loader2, Plus, Search, X } from "lucide-react";
+import { Layers, Loader2, Plus } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   type AssemblyRecord,
@@ -13,7 +11,20 @@ import {
   getAssembly,
   listAssemblies,
 } from "@/lib/api";
-import { Badge, Button, Card, CardHeader, CardTitle, EmptyState, Input, Label, Textarea } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Card,
+  CardHeader,
+  CardTitle,
+  Drawer,
+  EmptyState,
+  Input,
+  Label,
+  RecordList,
+  type RecordColumn,
+  Textarea,
+} from "@appkit/ui";
 import { UomSelect } from "@/components/shared/uom-select";
 import {
   AssemblyHeaderEditor,
@@ -63,11 +74,6 @@ function formatDate(value: string) {
     day: "numeric",
     year: "numeric",
   }).format(parsed);
-}
-
-function countLabel(count: number, singular: string) {
-  const plural = singular.endsWith("y") ? `${singular.slice(0, -1)}ies` : `${singular}s`;
-  return `${count.toLocaleString()} ${count === 1 ? singular : plural}`;
 }
 
 export function AssemblyManager({ embedded = false }: { embedded?: boolean } = {}) {
@@ -127,15 +133,6 @@ export function AssemblyManager({ embedded = false }: { embedded?: boolean } = {
     if (selectedId) void loadDetail(selectedId);
     else setDetail(null);
   }, [selectedId, loadDetail]);
-
-  useEffect(() => {
-    if (!drawerOpen) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeDrawer();
-    };
-    document.addEventListener("keydown", onKeyDown);
-    return () => document.removeEventListener("keydown", onKeyDown);
-  }, [closeDrawer, drawerOpen]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -238,6 +235,61 @@ export function AssemblyManager({ embedded = false }: { embedded?: boolean } = {
     void refreshList();
   }, [detail, loadDetail, refreshList]);
 
+  const columns = useMemo<RecordColumn<AssemblySummaryRecord>[]>(() => [
+    {
+      key: "name",
+      label: "Assembly",
+      width: "38%",
+      render: (assembly) => {
+        const description = displayAssemblyDescription(assembly.description);
+        return (
+          <div className="min-w-0">
+            <div className="truncate text-xs font-semibold text-fg">{displayAssemblyName(assembly.name)}</div>
+            <div className="mt-0.5 max-w-[52rem] truncate text-[11px] text-fg/45">
+              {description || "No description"}
+            </div>
+          </div>
+        );
+      },
+    },
+    {
+      key: "code",
+      label: "Code",
+      width: "14%",
+      render: (assembly) => (
+        <span className="block truncate font-mono text-xs text-fg/55" title={assembly.code || undefined}>
+          {assembly.code || "—"}
+        </span>
+      ),
+    },
+    {
+      key: "category",
+      label: "Category",
+      width: "16%",
+      render: (assembly) => assembly.category ? (
+        <Badge variant="secondary" className="max-w-full truncate text-[10px]" title={assembly.category}>
+          {assembly.category}
+        </Badge>
+      ) : <span className="text-xs text-fg/30">—</span>,
+    },
+    { key: "unit", label: "Unit", width: "7%", format: (value) => String(value || "EA") },
+    {
+      key: "componentCount",
+      label: "Comp",
+      kind: "amount",
+      width: "9%",
+      format: (value) => Number(value).toLocaleString(),
+    },
+    {
+      key: "parameterCount",
+      label: "Param",
+      kind: "amount",
+      width: "7%",
+      format: (value) => Number(value).toLocaleString(),
+    },
+    { key: "updatedAt", label: "Updated", width: "9%", format: (value) => formatDate(String(value)) },
+  ], []);
+
   return (
     <>
       <Card className={cn("flex min-h-0 flex-col overflow-hidden", embedded && "h-full")}>
@@ -266,239 +318,126 @@ export function AssemblyManager({ embedded = false }: { embedded?: boolean } = {
           </div>
         )}
 
-        <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-          <div className="relative min-w-0 flex-1">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
-            <Input
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search assemblies by name, code, category, or scope..."
-              className="h-8 pl-8 text-xs"
-            />
-          </div>
-          <Button onClick={openCreateDrawer} size="sm" variant="accent" className="shrink-0" title="Create assembly">
-            <Plus className="h-3.5 w-3.5" />
-            New
-          </Button>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-          <table className="w-full table-fixed text-sm">
-            <thead className="sticky top-0 z-10 bg-panel">
-              <tr className="border-b border-line">
-                <th className="w-[38%] px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Assembly</th>
-                <th className="w-[14%] px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Code</th>
-                <th className="w-[16%] px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Category</th>
-                <th className="w-[7%] px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Unit</th>
-                <th className="w-[9%] px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-wider text-fg/40">Comp</th>
-                <th className="w-[7%] px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-wider text-fg/40">Param</th>
-                <th className="w-[9%] px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Updated</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-12 text-center text-sm text-fg/40">
-                    <span className="inline-flex items-center gap-2">
-                      <Loader2 className="h-4 w-4 animate-spin" /> Loading assemblies...
-                    </span>
-                  </td>
-                </tr>
-              )}
-
-              {!loading && paginated.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="px-5 py-10">
-                    <EmptyState className="border-0 !py-8">
-                      <Layers className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                      <div className="text-sm">{search.trim() ? "No assemblies match this search" : "No assemblies yet"}</div>
-                    </EmptyState>
-                  </td>
-                </tr>
-              )}
-
-              {!loading && paginated.map((assembly, index) => {
-                const selected = selectedId === assembly.id;
-                const description = displayAssemblyDescription(assembly.description);
-                return (
-                  <motion.tr
-                    key={assembly.id}
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.16, delay: Math.min(index * 0.012, 0.18) }}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => openAssemblyDrawer(assembly.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        openAssemblyDrawer(assembly.id);
-                      }
-                    }}
-                    className={cn(
-                      "cursor-pointer border-b border-line last:border-0 outline-none transition-colors",
-                      selected ? "bg-accent/10" : "hover:bg-panel2/40 focus-visible:bg-panel2/60",
-                    )}
-                  >
-                    <td className="min-w-0 px-3 py-2.5">
-                      <div className="min-w-0">
-                        <div className="truncate text-xs font-semibold text-fg">{displayAssemblyName(assembly.name)}</div>
-                        <div className="mt-0.5 max-w-[52rem] truncate text-[11px] text-fg/45">
-                          {description || "No description"}
-                        </div>
-                      </div>
-                    </td>
-                    <td className="min-w-0 truncate px-3 py-2.5 text-xs font-mono text-fg/55" title={assembly.code || undefined}>{assembly.code || "-"}</td>
-                    <td className="min-w-0 px-3 py-2.5">
-                      {assembly.category ? <Badge tone="default" className="max-w-full truncate text-[10px]" title={assembly.category}>{assembly.category}</Badge> : <span className="text-xs text-fg/30">-</span>}
-                    </td>
-                    <td className="truncate px-3 py-2.5 text-xs font-medium text-fg/65">{assembly.unit || "EA"}</td>
-                    <td className="px-3 py-2.5 text-right text-xs tabular-nums text-fg/70">{assembly.componentCount.toLocaleString()}</td>
-                    <td className="px-3 py-2.5 text-right text-xs tabular-nums text-fg/70">{assembly.parameterCount.toLocaleString()}</td>
-                    <td className="truncate px-3 py-2.5 text-xs text-fg/45">{formatDate(assembly.updatedAt)}</td>
-                  </motion.tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line px-3 py-2 text-xs text-fg/45">
-          <div>
-            {countLabel(filtered.length, "assembly")}
-            {filtered.length !== list.length && <span> filtered from {list.length.toLocaleString()}</span>}
-          </div>
-          <div className="flex items-center gap-2">
-            <span>Page {page + 1} of {totalPages}</span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setPage((current) => Math.max(0, current - 1))}
-                disabled={page === 0}
-                className="rounded p-1 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg disabled:pointer-events-none disabled:opacity-30"
-                title="Previous page"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
-                disabled={page >= totalPages - 1}
-                className="rounded p-1 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg disabled:pointer-events-none disabled:opacity-30"
-                title="Next page"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 py-3">
+          {loading ? (
+            <div className="flex items-center justify-center py-12 text-sm text-fg/40">
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading assemblies...
             </div>
-          </div>
+          ) : (
+            <RecordList
+              columns={columns}
+              rows={paginated}
+              getRowId={(assembly) => assembly.id}
+              search={{
+                value: search,
+                onChange: setSearch,
+                placeholder: "Search assemblies by name, code, category, or scope...",
+              }}
+              toolbarActions={(
+                <Button onClick={openCreateDrawer} size="sm" title="Create assembly">
+                  <Plus className="h-3.5 w-3.5" /> New
+                </Button>
+              )}
+              pagination={{
+                page: page + 1,
+                perPage: PAGE_SIZE,
+                total: filtered.length,
+                onPageChange: (nextPage) => setPage(nextPage - 1),
+              }}
+              empty={{
+                icon: <Layers className="h-8 w-8" />,
+                title: search.trim() ? "No assemblies match this search" : "No assemblies yet",
+                description: search.trim()
+                  ? "Try a broader name, code, category, or scope."
+                  : "Create an assembly to start building reusable estimating recipes.",
+                action: !search.trim() ? (
+                  <Button size="sm" onClick={openCreateDrawer}>
+                    <Plus className="h-3.5 w-3.5" /> New assembly
+                  </Button>
+                ) : undefined,
+              }}
+              onRowClick={(assembly) => openAssemblyDrawer(assembly.id)}
+            />
+          )}
         </div>
+        {!loading && filtered.length !== list.length && (
+          <div className="shrink-0 border-t border-line px-3 py-2 text-xs text-fg/45">
+            {filtered.length.toLocaleString()} filtered from {list.length.toLocaleString()}
+          </div>
+        )}
       </Card>
 
-      {typeof document !== "undefined" && createPortal(
-        <AnimatePresence>
-          {drawerOpen && (
-            <>
-              <motion.div
-                key="assembly-drawer-backdrop"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-40 bg-black/20"
-                onClick={closeDrawer}
+      <Drawer
+        open={drawerOpen}
+        onClose={closeDrawer}
+        size="2xl"
+        title={creating ? "Create Assembly" : displayAssemblyName(detail?.name ?? "Assembly")}
+        description={
+          creating
+            ? "Define the assembly shell, then add priced components."
+            : "Edit the assembly definition, parameters, and component costing."
+        }
+        bodyClassName={creating ? "p-0" : "p-4"}
+      >
+        {creating ? (
+          <CreateAssemblyDrawer
+            form={createForm}
+            saving={createSaving}
+            onChange={(patch) => setCreateForm((current) => ({ ...current, ...patch }))}
+            onCancel={closeDrawer}
+            onSubmit={() => void handleCreate()}
+          />
+        ) : (
+          <>
+            {detailLoading && (
+              <div className="flex items-center justify-center py-20 text-sm text-fg/45">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading assembly...
+              </div>
+            )}
+
+            {!detailLoading && selectedId && !detail && (
+              <EmptyState
+                title="Assembly could not be loaded"
+                description="Close this drawer and try opening the assembly again."
               />
-              <motion.aside
-                key="assembly-drawer"
-                initial={{ x: "100%" }}
-                animate={{ x: 0 }}
-                exit={{ x: "100%" }}
-                transition={{ type: "spring", damping: 30, stiffness: 300 }}
-                className="fixed inset-y-0 right-0 z-50 flex w-[min(1120px,calc(100vw-24px))] flex-col border-l border-line bg-panel shadow-2xl"
-              >
-                <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel2/35 px-5 py-4">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <Layers className="h-4 w-4 text-accent" />
-                      <h2 className="truncate text-sm font-semibold text-fg">
-                        {creating ? "Create Assembly" : displayAssemblyName(detail?.name ?? "Assembly")}
-                      </h2>
-                    </div>
-                    <p className="mt-0.5 truncate text-[11px] text-fg/45">
-                      {creating ? "Define the assembly shell, then add priced components." : "Edit the assembly definition, parameters, and component costing."}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={closeDrawer}
-                    className="rounded p-1.5 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg"
-                    title="Close"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
+            )}
+
+            {!detailLoading && detail && (
+              <div className="flex min-h-0 flex-col gap-4">
+                <div className="grid grid-cols-3 gap-2">
+                  <MetricPill label="Components" value={detail.components.length.toLocaleString()} />
+                  <MetricPill label="Parameters" value={detail.parameters.length.toLocaleString()} />
+                  <MetricPill label="Updated" value={formatDate(detail.updatedAt)} />
                 </div>
-
-                {creating ? (
-                  <CreateAssemblyDrawer
-                    form={createForm}
-                    saving={createSaving}
-                    onChange={(patch) => setCreateForm((current) => ({ ...current, ...patch }))}
-                    onCancel={closeDrawer}
-                    onSubmit={() => void handleCreate()}
-                  />
-                ) : (
-                  <div className="min-h-0 flex-1 overflow-y-auto p-4">
-                    {detailLoading && (
-                      <div className="flex items-center justify-center py-20 text-sm text-fg/45">
-                        <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Loading assembly...
-                      </div>
-                    )}
-
-                    {!detailLoading && selectedId && !detail && (
-                      <EmptyState className="!py-14">
-                        <div className="text-sm">Assembly could not be loaded.</div>
-                      </EmptyState>
-                    )}
-
-                    {!detailLoading && detail && (
-                      <div className="flex min-h-0 flex-col gap-4">
-                        <div className="grid grid-cols-3 gap-2">
-                          <MetricPill label="Components" value={detail.components.length.toLocaleString()} />
-                          <MetricPill label="Parameters" value={detail.parameters.length.toLocaleString()} />
-                          <MetricPill label="Updated" value={formatDate(detail.updatedAt)} />
-                        </div>
-                        <AssemblyHeaderEditor
-                          assembly={detail}
-                          onChange={refreshDetailAndList}
-                          onDelete={() => handleDelete(detail.id)}
-                          onError={setError}
-                        />
-                        <ParametersEditor
-                          assemblyId={detail.id}
-                          parameters={detail.parameters}
-                          onChange={refreshDetailAndList}
-                          onError={setError}
-                        />
-	                        <ComponentsEditor
-	                          assemblyId={detail.id}
-	                          components={detail.components}
-	                          parameters={detail.parameters}
-	                          catalogItems={catalogItems}
-	                          rateItems={rateItems}
-	                          laborUnits={laborUnits}
-	                          effectiveCosts={effectiveCosts}
-	                          otherAssemblyOptions={otherAssemblyOptions}
-	                          onChange={refreshDetailAndList}
-	                          onError={setError}
-                        />
-                      </div>
-                    )}
-                  </div>
-                )}
-              </motion.aside>
-            </>
-          )}
-        </AnimatePresence>,
-        document.body,
-      )}
+                <AssemblyHeaderEditor
+                  assembly={detail}
+                  onChange={refreshDetailAndList}
+                  onDelete={() => handleDelete(detail.id)}
+                  onError={setError}
+                />
+                <ParametersEditor
+                  assemblyId={detail.id}
+                  parameters={detail.parameters}
+                  onChange={refreshDetailAndList}
+                  onError={setError}
+                />
+                <ComponentsEditor
+                  assemblyId={detail.id}
+                  components={detail.components}
+                  parameters={detail.parameters}
+                  catalogItems={catalogItems}
+                  rateItems={rateItems}
+                  laborUnits={laborUnits}
+                  effectiveCosts={effectiveCosts}
+                  otherAssemblyOptions={otherAssemblyOptions}
+                  onChange={refreshDetailAndList}
+                  onError={setError}
+                />
+              </div>
+            )}
+          </>
+        )}
+      </Drawer>
     </>
   );
 }
@@ -580,7 +519,7 @@ function CreateAssemblyDrawer({
           <Button variant="ghost" onClick={onCancel} disabled={saving}>
             Cancel
           </Button>
-          <Button variant="accent" onClick={onSubmit} disabled={saving || !form.name.trim()}>
+          <Button variant="default" onClick={onSubmit} disabled={saving || !form.name.trim()}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
             Create
           </Button>

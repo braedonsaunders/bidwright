@@ -18,7 +18,12 @@ import {
 } from "lucide-react";
 import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
-import { EmptyState, Input } from "@/components/ui";
+import {
+  Input,
+} from "@appkit/ui";
+import {
+  EmptyState,
+} from "@/components/legacy-controls";
 import * as React from "react";
 
 /* ─── Types ─── */

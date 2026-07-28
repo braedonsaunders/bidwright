@@ -2,7 +2,19 @@
 
 import { useState } from "react";
 import { AlertCircle, Loader2, Sparkles, X } from "lucide-react";
-import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, ModalBackdrop, Textarea } from "@/components/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+  Textarea,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 import { generateManifestFromOpenAPI, installIntegration } from "@/lib/api/integrations";
 
 export function CustomManifestModal(props: {
@@ -53,7 +65,7 @@ export function CustomManifestModal(props: {
             <X className="h-4 w-4" />
           </button>
         </CardHeader>
-        <CardBody className="min-h-0 flex-1 space-y-3 overflow-y-auto">
+        <CardContent className="min-h-0 flex-1 space-y-3 overflow-y-auto">
           <p className="text-sm text-fg/65">
             Paste a manifest JSON document below. It will be validated against the integration manifest schema
             before installation. See the docs for the schema reference.
@@ -95,7 +107,7 @@ export function CustomManifestModal(props: {
               Install
             </Button>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </ModalBackdrop>
   );

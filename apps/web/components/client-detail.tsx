@@ -52,7 +52,16 @@ import {
 } from "@/lib/api";
 import { formatCompactMoney, formatDate, formatMoney, formatPercent } from "@/lib/format";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
-import { Badge, Button, Card, EmptyState, Input, Label } from "@/components/ui";
+import {
+  Button,
+  Card,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+} from "@/components/legacy-controls";
 
 type EditableCustomerFields = Pick<
   Customer,
@@ -388,7 +397,7 @@ function ProfilePanel({
           <p className="mt-0.5 text-xs text-fg/45">Customer master data</p>
         </div>
         {customer && (
-          <Button variant="ghost" size="xs" onClick={onEdit}>
+          <Button variant="ghost" size="sm" onClick={onEdit}>
             <PencilLine className="h-3 w-3" />
             Edit
           </Button>
@@ -652,7 +661,7 @@ function ClientRatebooksPanel({ customer }: { customer: CustomerWithContacts }) 
                   </div>
                   <Button
                     type="button"
-                    size="xs"
+                    size="sm"
                     variant="ghost"
                     onClick={() => removeRatebook(assignment.id)}
                     disabled={saving}
@@ -782,7 +791,7 @@ export function ClientDetail({
               Edit Profile
             </Button>
           )}
-          <Button variant="accent" size="sm" asChild>
+          <Button variant="default" size="sm" asChild>
             <Link href="/quotes">
               <Plus className="h-3.5 w-3.5" />
               New Quote
@@ -956,7 +965,7 @@ export function ClientDetail({
                   <Button type="button" variant="ghost" size="sm" onClick={() => setEditOpen(false)} disabled={editSaving}>
                     Cancel
                   </Button>
-                  <Button type="submit" variant="accent" size="sm" disabled={editSaving}>
+                  <Button type="submit" variant="default" size="sm" disabled={editSaving}>
                     {editSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                     Save Profile
                   </Button>

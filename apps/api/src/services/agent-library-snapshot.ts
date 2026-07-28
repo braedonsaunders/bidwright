@@ -44,16 +44,26 @@ interface WriteAgentLibrarySnapshotOptions {
 
 const SNAPSHOT_ROOT = "library-snapshots";
 const DATASET_ROW_PAGE_SIZE = 1000;
-const MAX_DATASET_ROWS_PER_FILE = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_DATASET_ROWS", 100000);
-const MAX_LABOR_UNITS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_LABOR_UNITS", 200000);
-const MAX_CATALOG_ITEMS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_CATALOG_ITEMS", 200000);
-const MAX_COST_ROWS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_COST_ROWS", 200000);
+// Snapshots are a grep-friendly cache, not the authoritative library API.
+// Keep startup bounded and let the MCP query tools serve the full corpus.
+// Full library records remain available through the MCP tools. Keep the
+// filesystem snapshot intentionally small so an agent turn never has to copy
+// the organization's entire knowledge corpus before it can start.
+const MAX_DATASET_ROWS_PER_FILE = envNonNegativeInt("AGENT_LIBRARY_SNAPSHOT_MAX_DATASET_ROWS", 0);
+const MAX_LABOR_UNITS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_LABOR_UNITS", 1000);
+const MAX_CATALOG_ITEMS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_CATALOG_ITEMS", 1000);
+const MAX_COST_ROWS = envPositiveInt("AGENT_LIBRARY_SNAPSHOT_MAX_COST_ROWS", 1000);
 const MAX_INDEX_FILE_ROWS = envPositiveInt("AGENT_LIBRARY_INDEX_MAX_FILE_ROWS", 40);
 const MAX_INDEX_WARNING_ROWS = envPositiveInt("AGENT_LIBRARY_INDEX_MAX_WARNINGS", 12);
 
 function envPositiveInt(key: string, fallback: number) {
   const parsed = Number(process.env[key]);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
+}
+
+function envNonNegativeInt(key: string, fallback: number) {
+  const parsed = Number(process.env[key]);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
 }
 
 function safeFileName(value: unknown, fallback = "library") {
@@ -443,14 +453,24 @@ export async function writeAgentLibrarySnapshot({
     }
   }
 
-  await safeCall(
-    "line item search index rebuild",
-    warnings,
-    () => store.rebuildLineItemSearchIndex ? store.rebuildLineItemSearchIndex(projectId) : Promise.resolve({ indexed: 0 }),
-    { indexed: 0 },
-  ).then((result) => {
-    counts.lineItemSearchDocuments = result.indexed;
-  });
+  // Rebuilding the organization search index can touch hundreds of thousands
+  // of rows and used to block every intake before the agent even spawned.
+  // Index maintenance belongs to catalog/rate mutations; this opt-in remains
+  // available for repair jobs without putting it on the request path.
+  if (process.env.AGENT_LIBRARY_REBUILD_SEARCH_INDEX === "true") {
+    await safeCall(
+      "line item search index rebuild",
+      warnings,
+      () => store.rebuildLineItemSearchIndex
+        ? store.rebuildLineItemSearchIndex(projectId)
+        : Promise.resolve({ indexed: 0 }),
+      { indexed: 0 },
+    ).then((result) => {
+      counts.lineItemSearchDocuments = result.indexed;
+    });
+  } else {
+    counts.lineItemSearchDocuments = 0;
+  }
 
   const [
     rawBooks,

@@ -1,7 +1,12 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { Badge, Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import type {
   ProjectPhase,
@@ -352,7 +357,7 @@ export function BoardView({
                           {task.status !== "in_progress" ? (
                             <Button
                               variant="ghost"
-                              size="xs"
+                              size="sm"
                               className="h-6 px-2 text-[10px]"
                               onClick={(event) => handleQuickStatus(event, task, "in_progress")}
                             >
@@ -362,7 +367,7 @@ export function BoardView({
                           {task.status !== "complete" ? (
                             <Button
                               variant="ghost"
-                              size="xs"
+                              size="sm"
                               className="h-6 px-2 text-[10px]"
                               onClick={(event) => handleQuickStatus(event, task, "complete")}
                             >
@@ -371,7 +376,7 @@ export function BoardView({
                           ) : (
                             <Button
                               variant="ghost"
-                              size="xs"
+                              size="sm"
                               className="h-6 px-2 text-[10px]"
                               onClick={(event) => handleQuickStatus(event, task, "in_progress")}
                             >
@@ -381,7 +386,7 @@ export function BoardView({
                           {task.status !== "on_hold" ? (
                             <Button
                               variant="ghost"
-                              size="xs"
+                              size="sm"
                               className="ml-auto h-6 px-2 text-[10px]"
                               onClick={(event) => handleQuickStatus(event, task, "on_hold")}
                             >

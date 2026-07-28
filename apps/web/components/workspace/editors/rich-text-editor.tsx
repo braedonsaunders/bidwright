@@ -19,7 +19,9 @@ import {
   Save,
   X,
 } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 
 interface RichTextEditorProps {
@@ -138,7 +140,7 @@ export function RichTextEditor({
           {onSave && (
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={() => onSave(editor.getHTML())}
             >
               <Save className="w-4 h-4 mr-1" />
@@ -146,7 +148,7 @@ export function RichTextEditor({
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="xs" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose}>
               <X className="w-4 h-4" />
             </Button>
           )}
@@ -169,7 +171,7 @@ export function RichTextEditor({
             <Button
               key={item.label}
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={item.action}
               className={cn(
                 item.active && "bg-accent/15 text-accent"

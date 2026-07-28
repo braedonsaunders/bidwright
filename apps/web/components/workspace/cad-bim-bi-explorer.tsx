@@ -21,12 +21,14 @@ import {
 } from "lucide-react";
 import {
   Button,
-  EmptyState,
   Input,
-  Select,
   Separator,
+} from "@appkit/ui";
+import {
+  EmptyState,
+  Select,
   Badge,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import {
   createModelTakeoffLink,
   createWorksheetItem,
@@ -1075,7 +1077,7 @@ export function CadBimBiExplorer({
               triggerClassName="w-44"
               ariaLabel="Estimate quantity basis"
             />
-            <Button variant="secondary" size="xs" onClick={tab === "pivot" ? exportPivot : exportRows}>
+            <Button variant="secondary" size="sm" onClick={tab === "pivot" ? exportPivot : exportRows}>
               <Download className="h-3.5 w-3.5" />
               CSV
             </Button>
@@ -1198,7 +1200,7 @@ function DataTable({
               <td className="border-b border-line/60 px-3 py-2 align-top">
                 <Button
                   variant={row.linked ? "ghost" : "secondary"}
-                  size="xs"
+                  size="sm"
                   disabled={row.linked || creatingRowId === row.id}
                   onClick={() => void onCreateLine(row)}
                   title={row.linked ? "This object is already linked to the estimate" : `Create line using ${quantityLabel(lineItemQuantityKey)}`}

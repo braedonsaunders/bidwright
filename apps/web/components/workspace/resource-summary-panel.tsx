@@ -1,7 +1,16 @@
 "use client";
 
 import { Boxes, ChevronRight, Factory, Hammer, Package, Truck } from "lucide-react";
-import { Badge, Card, CardBody, CardHeader, CardTitle, EmptyState } from "@/components/ui";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+} from "@/components/legacy-controls";
 import { formatMoney } from "@/lib/format";
 import { cn } from "@/lib/utils";
 
@@ -157,7 +166,7 @@ export function ResourceSummaryPanel({
         <Badge tone="info">{loading ? "Loading" : resourceCountLabel}</Badge>
       </CardHeader>
 
-      <CardBody className="space-y-4">
+      <CardContent className="space-y-4">
         <div className="grid grid-cols-2 gap-3">
           <div className="rounded-lg border border-line bg-bg/35 p-3">
             <div className="text-[11px] font-medium uppercase tracking-wide text-fg/45">Total Resource Cost</div>
@@ -250,7 +259,7 @@ export function ResourceSummaryPanel({
             })}
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

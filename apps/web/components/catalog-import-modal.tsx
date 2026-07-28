@@ -11,7 +11,15 @@ import {
   analyzeCatalogImport,
   commitCatalogImport,
 } from "@/lib/api";
-import { Button, CompactSelect, Input, Label, ModalBackdrop } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  CompactSelect,
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 
 const FIELD_OPTIONS: Array<{ value: CatalogItemTargetField; label: string }> = [
   { value: "name", label: "Item name" },

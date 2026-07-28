@@ -1,6 +1,7 @@
 import { apiRequest } from "./client";
 import type { UnitOfMeasure } from "@bidwright/domain";
 import type { SupportedLocale } from "@/lib/i18n";
+import type { TenantNavigationConfig } from "@appkit/ui";
 
 export interface BrandProfile {
   companyName: string;
@@ -18,7 +19,15 @@ export interface BrandProfile {
 }
 
 export interface AppSettingsRecord {
-  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string; language: SupportedLocale };
+  general: {
+    orgName: string;
+    address: string;
+    phone: string;
+    website: string;
+    logoUrl: string;
+    language: SupportedLocale;
+    navigation?: TenantNavigationConfig;
+  };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string; authMethod?: "smtp" | "oauth2"; oauth2TenantId?: string; oauth2ClientId?: string; oauth2ClientSecret?: string };
   defaults: {
     defaultMarkup: number;
@@ -112,6 +121,18 @@ export async function updateSettings(patch: Partial<AppSettingsRecord>) {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(patch),
+  });
+}
+
+export async function getNavigationConfig() {
+  return apiRequest<{ config: TenantNavigationConfig | null }>("/settings/navigation");
+}
+
+export async function updateNavigationConfig(config: TenantNavigationConfig) {
+  return apiRequest<{ config: TenantNavigationConfig }>("/settings/navigation", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
   });
 }
 

@@ -1,0 +1,16 @@
+{
+  "name": "Runtime transport cutover",
+  "projectName": "Runtime Cutover Verification",
+  "clientName": "Bidwright Runtime QA",
+  "location": "Toronto, ON",
+  "scope": "Create one reviewable budget worksheet from the supplied scope document and complete the intake workflow.",
+  "expectedDocumentNames": ["scope.md"],
+  "expectedKeywords": ["stainless steel", "brackets", "85.00"],
+  "expectedEstimateKeywords": ["bracket"],
+  "thresholds": {
+    "minToolCalls": 4,
+    "minWorksheetItems": 2,
+    "minSourceNoteCoverage": 0.5,
+    "maxToolFailures": 2
+  }
+}

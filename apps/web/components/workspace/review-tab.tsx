@@ -19,7 +19,15 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { Badge, Button, Input, Select, Textarea } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+  Select,
+} from "@/components/legacy-controls";
 import {
   connectReviewStream,
   dismissRecommendation,
@@ -616,7 +624,7 @@ function CoverageSubTab({
                   </td>
                   {editable ? (
                     <td className="px-3 py-2 text-right">
-                      <Button type="button" size="xs" variant="ghost" onClick={() => onChange(removeAtIndex(items, index))} disabled={busy}>
+                      <Button type="button" size="sm" variant="ghost" onClick={() => onChange(removeAtIndex(items, index))} disabled={busy}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </td>
@@ -826,7 +834,7 @@ function GapsRisksSubTab({
                   <CommitTextarea value={selectedFinding.resolutionNote || ""} onCommit={(value) => patchSelected({ resolutionNote: value })} disabled={busy} className="min-h-[72px] text-xs" />
                 </div>
                 <div className="flex justify-end">
-                  <Button type="button" size="sm" variant="danger" onClick={() => onChange(removeAtIndex(findings, selectedIndex))} disabled={busy || selectedIndex < 0}>
+                  <Button type="button" size="sm" variant="destructive" onClick={() => onChange(removeAtIndex(findings, selectedIndex))} disabled={busy || selectedIndex < 0}>
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
                   </Button>
@@ -1002,7 +1010,7 @@ function CompetitivenessSubTab({
                         </td>
                         {editable ? (
                           <td className="px-3 py-2 text-right">
-                            <Button type="button" size="xs" variant="ghost" onClick={() => onChange({ ...data, overestimates: removeAtIndex(overestimates, index) })} disabled={busy}>
+                            <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...data, overestimates: removeAtIndex(overestimates, index) })} disabled={busy}>
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </td>
@@ -1121,7 +1129,7 @@ function CompetitivenessSubTab({
                         </td>
                         {editable ? (
                           <td className="px-3 py-2 text-right">
-                            <Button type="button" size="xs" variant="ghost" onClick={() => onChange({ ...data, underestimates: removeAtIndex(underestimates, index) })} disabled={busy}>
+                            <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...data, underestimates: removeAtIndex(underestimates, index) })} disabled={busy}>
                               <Trash2 className="h-3.5 w-3.5" />
                             </Button>
                           </td>
@@ -1302,7 +1310,7 @@ function ProductivitySubTab({
                 </td>
                 {editable ? (
                   <td className="px-3 py-2 text-right">
-                    <Button type="button" size="xs" variant="ghost" onClick={() => onChange({ ...data, benchmarking: { description: benchmarking.description, streams: removeAtIndex(streams, index) } })} disabled={busy}>
+                    <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...data, benchmarking: { description: benchmarking.description, streams: removeAtIndex(streams, index) } })} disabled={busy}>
                       <Trash2 className="h-3.5 w-3.5" />
                     </Button>
                   </td>
@@ -1573,7 +1581,7 @@ function RecommendationsSubTab({
                 <div className="flex justify-between gap-2">
                   <div className="flex items-center gap-2">
                     {(selectedRecommendation.status || "open") === "open" && (selectedRecommendation.resolution?.actions || []).length > 0 ? (
-                      <Button type="button" size="sm" variant="accent" onClick={() => handleResolve(selectedRecommendation.id)} disabled={busy || isPending}>
+                      <Button type="button" size="sm" variant="default" onClick={() => handleResolve(selectedRecommendation.id)} disabled={busy || isPending}>
                         {resolvingId === selectedRecommendation.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Zap className="h-3 w-3" />}
                         Apply Resolution
                       </Button>
@@ -1584,7 +1592,7 @@ function RecommendationsSubTab({
                       </Button>
                     ) : null}
                   </div>
-                  <Button type="button" size="sm" variant="danger" onClick={() => onChange(removeAtIndex(recommendations, selectedIndex))} disabled={busy || isPending || selectedIndex < 0}>
+                  <Button type="button" size="sm" variant="destructive" onClick={() => onChange(removeAtIndex(recommendations, selectedIndex))} disabled={busy || isPending || selectedIndex < 0}>
                     <Trash2 className="h-3.5 w-3.5" />
                     Delete
                   </Button>
@@ -2008,7 +2016,7 @@ export function ReviewTab({
           {review && !isRunning ? (
             <Button
               size="sm"
-              variant={review.reviewState === "resolved" && !review.isOutdated ? "secondary" : "accent"}
+              variant={review.reviewState === "resolved" && !review.isOutdated ? "secondary" : "default"}
               onClick={() => saveReviewPatch(review.reviewState === "resolved" && !review.isOutdated ? { reviewState: "open", refreshQuoteSnapshot: false } : { reviewState: "resolved", refreshQuoteSnapshot: true })}
               disabled={isPending || (review.isOutdated && !canMarkCurrent)}
               title={review.isOutdated && !canMarkCurrent ? "Re-run the review for the current revision instead." : undefined}
@@ -2024,7 +2032,7 @@ export function ReviewTab({
               Stop Review
             </Button>
           ) : (
-            <Button size="sm" variant="accent" onClick={handleStartReview} disabled={isStarting}>
+            <Button size="sm" variant="default" onClick={handleStartReview} disabled={isStarting}>
               {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <Play className="h-3 w-3" />}
               {review ? "Re-run Review" : "Start Review"}
             </Button>

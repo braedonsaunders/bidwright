@@ -47,10 +47,12 @@ import {
 } from "@/lib/api";
 import { formatMoney, formatPercent } from "@/lib/format";
 import {
-  Badge,
   Button,
   Input,
-} from "@/components/ui";
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import * as RadixSelect from "@radix-ui/react-select";
@@ -1057,7 +1059,7 @@ function IconToggleButton({
   disabled?: boolean;
 }) {
   return (
-    <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={onClick} disabled={disabled} title={active ? "Hide" : "Show"}>
+    <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={onClick} disabled={disabled} title={active ? "Hide" : "Show"}>
       {active ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5 text-fg/45" />}
     </Button>
   );
@@ -1784,7 +1786,7 @@ function CostMixHeaderCell({
 }) {
   const active = costMixModeMeta(mode).focusColumn === column;
   return (
-    <th className={cn(className, active && "bg-orange-500/10 text-fg shadow-[inset_0_-2px_0_hsl(var(--accent))]")}>
+    <th className={cn(className, active && "bg-orange-500/10 text-fg shadow-[inset_0_-2px_0_rgb(var(--ch-primary))]")}>
       <span className="inline-flex items-center justify-end gap-1">
         {children}
         {active ? <ArrowDown className="h-3 w-3" /> : null}
@@ -1816,8 +1818,8 @@ function CostBreakdownPanel({ entries, totalCost }: { entries: CostBreakdownEntr
               <Button
                 key={option.id}
                 type="button"
-                variant={mode === option.id ? "accent" : "ghost"}
-                size="xs"
+                variant={mode === option.id ? "default" : "ghost"}
+                size="sm"
                 className={cn("h-7 px-2 text-[11px]", mode === option.id && "shadow-[inset_0_-2px_0_currentColor]")}
                 onClick={() => setMode(option.id)}
               >
@@ -1863,7 +1865,7 @@ function CostBreakdownPanel({ entries, totalCost }: { entries: CostBreakdownEntr
               <table className="w-full min-w-[1160px] text-xs">
                 <thead className="sticky top-0 z-10 bg-panel2/95">
                   <tr className="border-b border-line text-left text-[10px] font-medium uppercase tracking-[0.14em] text-fg/35">
-                    <th className="sticky left-0 z-20 min-w-[220px] bg-panel px-3 py-2 shadow-[1px_0_0_hsl(var(--line))]">Bucket</th>
+                    <th className="sticky left-0 z-20 min-w-[220px] bg-panel px-3 py-2 shadow-[1px_0_0_rgb(var(--ch-border))]">Bucket</th>
                     <th className="w-[88px] px-3 py-2 text-right">Lines</th>
                     <CostMixHeaderCell mode={mode} column="cost" className="w-[140px] px-3 py-2 text-right">Cost</CostMixHeaderCell>
                     <th className="w-[140px] px-3 py-2 text-right">Sell</th>
@@ -1878,7 +1880,7 @@ function CostBreakdownPanel({ entries, totalCost }: { entries: CostBreakdownEntr
                 <tbody>
                   {sortedRows.map((row, index) => (
                     <tr key={row.id} className="group border-b border-line/60 last:border-b-0 hover:bg-panel2/20">
-                      <td className="sticky left-0 z-10 bg-panel px-3 py-2 shadow-[1px_0_0_hsl(var(--line))]">
+                      <td className="sticky left-0 z-10 bg-panel px-3 py-2 shadow-[1px_0_0_rgb(var(--ch-border))]">
                         <div className="flex min-w-0 items-center gap-2">
                           <Badge tone={activeMode.tone} className="shrink-0 font-mono">#{index + 1}</Badge>
                           <div className="truncate font-medium text-fg/85" title={row.label}>{row.label}</div>
@@ -2076,7 +2078,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
           </div>
           <Badge tone="info" className="h-6">{formatNumber(filteredPositions.length, 0)} / {formatNumber(positions.length, 0)} positions</Badge>
           {selectedSlice ? (
-            <Button type="button" variant="ghost" size="xs" onClick={() => setSelectedSlice(null)} className="h-7 px-2" title="Clear selection">
+            <Button type="button" variant="ghost" size="sm" onClick={() => setSelectedSlice(null)} className="h-7 px-2" title="Clear selection">
               <X className="h-3.5 w-3.5" />
               Clear
             </Button>
@@ -2173,7 +2175,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
                   <thead className="sticky top-0 z-10 bg-panel2/80">
                     {columnDimension === "none" ? (
                       <tr className="border-b border-line text-left text-[10px] font-medium uppercase tracking-[0.14em] text-fg/35">
-                        <th className="sticky left-0 z-20 min-w-[240px] bg-panel px-3 py-2 shadow-[1px_0_0_hsl(var(--line))]">{RESOURCE_PIVOT_DIMENSIONS.find((option) => option.id === rowDimension)?.label}</th>
+                        <th className="sticky left-0 z-20 min-w-[240px] bg-panel px-3 py-2 shadow-[1px_0_0_rgb(var(--ch-border))]">{RESOURCE_PIVOT_DIMENSIONS.find((option) => option.id === rowDimension)?.label}</th>
                         {activeMetrics.map((activeMetric) => (
                           <th key={activeMetric} className="w-[132px] px-3 py-2 text-right">{resourceMetricMeta(activeMetric).shortLabel}</th>
                         ))}
@@ -2182,7 +2184,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
                     ) : activeMetrics.length > 1 ? (
                       <>
                         <tr className="border-b border-line text-left text-[10px] font-medium uppercase tracking-[0.14em] text-fg/35">
-                          <th rowSpan={2} className="sticky left-0 z-20 min-w-[240px] bg-panel px-3 py-2 align-bottom shadow-[1px_0_0_hsl(var(--line))]">{RESOURCE_PIVOT_DIMENSIONS.find((option) => option.id === rowDimension)?.label}</th>
+                          <th rowSpan={2} className="sticky left-0 z-20 min-w-[240px] bg-panel px-3 py-2 align-bottom shadow-[1px_0_0_rgb(var(--ch-border))]">{RESOURCE_PIVOT_DIMENSIONS.find((option) => option.id === rowDimension)?.label}</th>
                           {pivot.columns.map((column) => (
                             <th key={column.key} colSpan={activeMetrics.length} className="min-w-[132px] border-l border-line px-3 py-2 text-center">
                               <div className="truncate text-fg/50" title={column.label}>{column.label}</div>
@@ -2202,7 +2204,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
                       </>
                     ) : (
                       <tr className="border-b border-line text-left text-[10px] font-medium uppercase tracking-[0.14em] text-fg/35">
-                        <th className="sticky left-0 z-20 min-w-[240px] bg-panel px-3 py-2 shadow-[1px_0_0_hsl(var(--line))]">{RESOURCE_PIVOT_DIMENSIONS.find((option) => option.id === rowDimension)?.label}</th>
+                        <th className="sticky left-0 z-20 min-w-[240px] bg-panel px-3 py-2 shadow-[1px_0_0_rgb(var(--ch-border))]">{RESOURCE_PIVOT_DIMENSIONS.find((option) => option.id === rowDimension)?.label}</th>
                         {pivot.columns.map((column) => (
                           <th key={column.key} className="min-w-[132px] border-l border-line px-3 py-2 text-right">
                             <div className="truncate text-fg/50" title={column.label}>{column.label}</div>
@@ -2225,7 +2227,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
                         >
                           <td
                             className={cn(
-                              "sticky left-0 z-10 cursor-pointer px-3 py-2 shadow-[1px_0_0_hsl(var(--line))]",
+                              "sticky left-0 z-10 cursor-pointer px-3 py-2 shadow-[1px_0_0_rgb(var(--ch-border))]",
                               selected ? "bg-orange-950/40" : "bg-panel",
                             )}
                             onClick={() => setSelectedSlice({ rowKey: row.key, columnKey: null })}
@@ -2298,7 +2300,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
                     })}
                     {columnDimension === "none" ? (
                       <tr className="border-t border-line bg-panel2/35 font-semibold">
-                        <td className="sticky left-0 z-10 bg-panel px-3 py-2 text-fg shadow-[1px_0_0_hsl(var(--line))]">Total</td>
+                        <td className="sticky left-0 z-10 bg-panel px-3 py-2 text-fg shadow-[1px_0_0_rgb(var(--ch-border))]">Total</td>
                         {activeMetrics.map((activeMetric) => (
                           <td key={activeMetric} className="px-3 py-2 text-right font-mono text-[11px] text-fg">
                             {formatResourceMetric(activeMetric, resourceMetricValue(pivot.grandTotal, activeMetric))}
@@ -2308,7 +2310,7 @@ function ResourceBreakdownPanel({ resources }: { resources: ResourceSummaryRow[]
                       </tr>
                     ) : (
                       <tr className="border-t border-line bg-panel2/35 font-semibold">
-                        <td className="sticky left-0 z-10 bg-panel px-3 py-2 text-fg shadow-[1px_0_0_hsl(var(--line))]">Total</td>
+                        <td className="sticky left-0 z-10 bg-panel px-3 py-2 text-fg shadow-[1px_0_0_rgb(var(--ch-border))]">Total</td>
                         {pivot.columns.map((column) => (
                           activeMetrics.map((activeMetric) => (
                             <td key={`${column.key}:${activeMetric}`} className="border-l border-line px-3 py-2 text-right font-mono text-[11px] text-fg">
@@ -2515,10 +2517,10 @@ function SummaryBreakdownPanel({
               return (
                 <th key={column.key} className="min-w-[140px] border-l border-line px-3 py-2.5">
                   <div className="flex items-center gap-1">
-                    <Button type="button" variant="ghost" size="xs" className="h-6 w-6 px-0" onClick={() => onMoveColumn(column.key, "up")} disabled={busy || index === 0}>
+                    <Button type="button" variant="ghost" size="sm" className="h-6 w-6 px-0" onClick={() => onMoveColumn(column.key, "up")} disabled={busy || index === 0}>
                       <ArrowUp className="h-3 w-3" />
                     </Button>
-                    <Button type="button" variant="ghost" size="xs" className="h-6 w-6 px-0" onClick={() => onMoveColumn(column.key, "down")} disabled={busy || index === visibleColumns.length - 1}>
+                    <Button type="button" variant="ghost" size="sm" className="h-6 w-6 px-0" onClick={() => onMoveColumn(column.key, "down")} disabled={busy || index === visibleColumns.length - 1}>
                       <ArrowDown className="h-3 w-3" />
                     </Button>
                     <IconToggleButton active={column.visible} onClick={() => onUpdateColumn(column.key, { visible: !column.visible })} disabled={busy} />
@@ -2541,10 +2543,10 @@ function SummaryBreakdownPanel({
               <tr key={row.key} className={cn("border-b border-line/60", !row.visible && "opacity-45")}>
                 <td className="sticky left-0 z-10 bg-inherit px-3 py-2">
                   <div className="flex items-center gap-1">
-                    <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "up")} disabled={busy || index === 0}>
+                    <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "up")} disabled={busy || index === 0}>
                       <ArrowUp className="h-3.5 w-3.5" />
                     </Button>
-                    <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "down")} disabled={busy || index === rows.length - 1}>
+                    <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "down")} disabled={busy || index === rows.length - 1}>
                       <ArrowDown className="h-3.5 w-3.5" />
                     </Button>
                     <CommitInput value={row.label} onCommit={(value) => onUpdateRow(row.key, { label: value })} disabled={busy} className="h-8 min-w-0 flex-1 text-xs" />
@@ -2693,10 +2695,10 @@ function SummarySourceRow({
     <tr className={cn("border-b border-line/60", !row.visible && "opacity-45")}>
       <td className="px-3 py-2">
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "up")} disabled={busy || index === 0}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "up")} disabled={busy || index === 0}>
             <ArrowUp className="h-3.5 w-3.5" />
           </Button>
-          <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "down")} disabled={busy || index === rowCount - 1}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onMoveRow(row.key, "down")} disabled={busy || index === rowCount - 1}>
             <ArrowDown className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -2748,10 +2750,10 @@ function AdjustmentTableRow({
     <tr className={cn("border-b border-line/60", (adjustment.show === "No" || adjustment.active === false) && "opacity-50")}>
       <td className="px-3 py-2">
         <div className="flex items-center gap-1">
-          <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMove(adjustment.id, "up")} disabled={busy || !canMoveUp}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onMove(adjustment.id, "up")} disabled={busy || !canMoveUp}>
             <ArrowUp className="h-3.5 w-3.5" />
           </Button>
-          <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onMove(adjustment.id, "down")} disabled={busy || !canMoveDown}>
+          <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onMove(adjustment.id, "down")} disabled={busy || !canMoveDown}>
             <ArrowDown className="h-3.5 w-3.5" />
           </Button>
         </div>
@@ -2883,7 +2885,7 @@ function AdjustmentTableRow({
           <Button
             type="button"
             variant="ghost"
-            size="xs"
+            size="sm"
             className={cn("h-7 w-7 px-0", adjustment.active === false && "text-fg/40")}
             onClick={() => onPatch(adjustment.id, { active: adjustment.active === false })}
             disabled={busy}
@@ -2895,7 +2897,7 @@ function AdjustmentTableRow({
         </div>
       </td>
       <td className="px-3 py-2 text-right">
-        <Button type="button" variant="ghost" size="xs" className="h-7 w-7 px-0" onClick={() => onDelete(adjustment.id)} disabled={busy}>
+        <Button type="button" variant="ghost" size="sm" className="h-7 w-7 px-0" onClick={() => onDelete(adjustment.id)} disabled={busy}>
           <Trash2 className="h-3.5 w-3.5 text-danger" />
         </Button>
       </td>

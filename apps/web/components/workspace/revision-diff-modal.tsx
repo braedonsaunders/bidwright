@@ -12,8 +12,16 @@ import {
   createRevisionDiff,
   listModelAssets,
 } from "@/lib/api";
-import { Button, Label, ModalBackdrop } from "@/components/ui";
-import { CompactSelect } from "@/components/ui";
+import {
+  Button,
+  Label,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+} from "@/components/legacy-controls";
+import {
+  CompactSelect,
+} from "@/components/legacy-controls";
 
 interface Props {
   open: boolean;

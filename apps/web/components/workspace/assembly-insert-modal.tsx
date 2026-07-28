@@ -20,7 +20,18 @@ import {
   previewAssemblyExpansion,
   resyncAssemblyInstance,
 } from "@/lib/api";
-import { Button, Input, Label, ModalBackdrop, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/legacy-controls";
 import { summarizeAssemblyTemplate } from "@/lib/assembly-template-preview";
 import {
   AssemblyHeaderEditor,

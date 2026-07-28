@@ -14,16 +14,18 @@ import {
   Trash2,
 } from "lucide-react";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
-  CompactSelect,
-  EmptyState,
   Input,
   Textarea,
-} from "@/components/ui";
+} from "@appkit/ui";
+import {
+  Badge,
+  CompactSelect,
+  EmptyState,
+} from "@/components/legacy-controls";
 import { ConfirmModal } from "@/components/workspace/modals";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 import {
@@ -365,7 +367,7 @@ export function PagesTab({
             {error && <p className="mt-2 text-xs text-danger">{error}</p>}
           </CardHeader>
 
-          <CardBody className="min-h-0 flex-1 overflow-hidden p-0">
+          <CardContent className="min-h-0 flex-1 overflow-hidden p-0">
             {selectedDocument ? (
               <KnowledgeDocumentDetail
                 document={selectedDocument}
@@ -386,7 +388,7 @@ export function PagesTab({
                 onSelect={(document) => setSelectedDocumentId(document.id)}
               />
             )}
-          </CardBody>
+          </CardContent>
         </Card>
       </div>
 
@@ -491,7 +493,7 @@ function PageDocumentList({
                 </div>
                 <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                   <Button
-                    size="xs"
+                    size="sm"
                     variant="ghost"
                     title="Move"
                     onClick={(event) => {
@@ -503,7 +505,7 @@ function PageDocumentList({
                     <MoveRight className="h-3.5 w-3.5" />
                   </Button>
                   <Button
-                    size="xs"
+                    size="sm"
                     variant="ghost"
                     title="Delete"
                     onClick={(event) => {
@@ -663,7 +665,7 @@ function KnowledgeDocumentDetail({
     <div className="flex h-full min-h-0 flex-col">
       <div className="border-b border-line px-3 py-2">
         <div className="flex items-center gap-2">
-          <Button size="xs" variant="ghost" title="Back to notes" onClick={onBack} className="h-7 w-7 px-0">
+          <Button size="sm" variant="ghost" title="Back to notes" onClick={onBack} className="h-7 w-7 px-0">
             <ArrowLeft className="h-3.5 w-3.5" />
           </Button>
           <Input

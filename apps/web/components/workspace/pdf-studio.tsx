@@ -23,7 +23,15 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { Button, Input, Label, Select, Toggle } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Select,
+  Toggle,
+} from "@/components/legacy-controls";
 import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl, getPdfPreferences, savePdfPreferences } from "@/lib/api";
 import { loadPdfJs, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "@/lib/pdfjs-loader";
 import { cn } from "@/lib/utils";
@@ -1047,7 +1055,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                   <div className="border-t border-line p-3 space-y-2">
                     <div className="flex gap-2">
                       <Button
-                        variant="accent"
+                        variant="default"
                         size="sm"
                         className="flex-1"
                         onClick={handleDownload}
