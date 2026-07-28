@@ -217,6 +217,9 @@ services:
       EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-http://ollama:11434/v1}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      # Application crypto material lets the worker decrypt the tenant-owned
+      # credential selected for each queued job. This is not a provider key.
+      INTEGRATIONS_ENCRYPTION_KEY: "${INTEGRATIONS_ENCRYPTION_KEY}"
       # Provider credentials are tenant-owned encrypted settings, never
       # deployment environment variables.
     volumes:
