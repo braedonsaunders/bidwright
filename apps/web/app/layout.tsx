@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { IBM_Plex_Mono } from "next/font/google";
 import { AuthProvider } from "@/components/auth-provider";
 import { ApplicationFrame } from "@/components/app-shell";
+import { SplashScreen } from "@/components/brand-splash";
 import { I18nProvider } from "@/components/i18n-provider";
 import { RequireAuth } from "@/components/require-auth";
 import "@appkit/dashboard/primitives.css";
@@ -35,6 +36,7 @@ export default function RootLayout({
       suppressHydrationWarning
     >
       <body>
+        <SplashScreen />
         <AuthProvider>
           <I18nProvider>
             <RequireAuth>

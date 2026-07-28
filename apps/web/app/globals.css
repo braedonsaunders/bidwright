@@ -76,6 +76,83 @@ body {
   }
 }
 
+/* Brand splash animation (components/brand-logo.tsx). Ink strokes carry a
+   normalized pathLength of 1 so one dasharray rule draws any shape; --bd
+   staggers the build order (ground → clipboard → buildings → contents →
+   wordmark). Resting styles are the fully drawn logo; the intro starts
+   hidden via fill-mode: backwards and only runs under .bw-anim. */
+:root {
+  --bw-ink: #16232b;
+  --bw-sage: #94a084;
+  --bw-bid: #50604a;
+}
+
+.dark {
+  --bw-ink: #e6e9ec;
+  --bw-bid: #9db386;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light) {
+    --bw-ink: #e6e9ec;
+    --bw-bid: #9db386;
+  }
+}
+
+@keyframes bw-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+}
+
+@keyframes bw-fade {
+  from {
+    opacity: 0;
+  }
+}
+
+@keyframes bw-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+@keyframes bw-pop {
+  from {
+    opacity: 0;
+    transform: scale(0.4);
+  }
+}
+
+.bw-anim .bw-s {
+  stroke-dasharray: 1;
+  animation: bw-draw 0.6s cubic-bezier(0.4, 0, 0.2, 1) var(--bd, 0s) backwards;
+}
+
+.bw-anim .bw-f {
+  animation: bw-fade 0.5s ease-out var(--bd, 0s) backwards;
+}
+
+.bw-anim .bw-p {
+  animation: bw-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1) var(--bd, 0s) backwards;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.bw-anim .bw-w {
+  animation: bw-rise 0.6s ease-out var(--bd, 0s) backwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bw-anim .bw-s,
+  .bw-anim .bw-f,
+  .bw-anim .bw-p,
+  .bw-anim .bw-w {
+    animation: none;
+  }
+}
+
 
 a {
   color: inherit;
