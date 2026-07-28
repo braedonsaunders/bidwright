@@ -782,7 +782,10 @@ function dedupeCliModels(models: CliModelOption[]) {
 async function fetchAnthropicCliModels(apiKey?: string): Promise<CliModelOption[]> {
   if (!apiKey) return [];
   try {
-    const response = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+    // Anthropic currently permits up to 1,000 models in one page. Request
+    // the complete tenant-visible catalog so newly released models do not
+    // disappear behind the first page of results.
+    const response = await fetch("https://api.anthropic.com/v1/models?limit=1000", {
       headers: {
         "x-api-key": apiKey,
         "anthropic-version": "2023-06-01",

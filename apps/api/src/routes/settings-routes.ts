@@ -177,7 +177,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
     try {
       let models: { id: string; name: string }[] = [];
       if (provider === "anthropic") {
-        const res = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+        const res = await fetch("https://api.anthropic.com/v1/models?limit=1000", {
           headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
         });
         if (!res.ok) return reply.code(400).send({ message: "Failed to fetch models" });

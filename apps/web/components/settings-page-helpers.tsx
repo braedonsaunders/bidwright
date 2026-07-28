@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Loader2, Plus, Search, X } from "lucide-react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronDown, Eye, EyeOff, KeyRound, Loader2, Plus, Search, X } from "lucide-react";
 
 import {
   Button,
@@ -16,6 +16,11 @@ import {
   Select,
 } from "@/components/legacy-controls";
 import { detectCli, listCliModels, type CliRuntimeStatus } from "@/lib/api";
+import {
+  testProviderKey,
+  updateSettings,
+  type AppSettingsRecord,
+} from "@/lib/api/settings";
 import { cn } from "@/lib/utils";
 
 type AgentRuntime = string;
@@ -37,6 +42,52 @@ type DetectCliResult = {
   deploymentMode: "desktop" | "server";
   interactiveLoginAvailable: boolean;
   configured: { runtime: string | null; model: string | null };
+};
+
+type RuntimeProviderConfig = {
+  provider: "anthropic" | "openai" | "openrouter" | "gemini";
+  label: string;
+  apiField: "anthropicKey" | "openaiKey" | "openrouterKey" | "geminiKey";
+  uiField: "anthropicApiKey" | "openaiApiKey" | "openrouterApiKey" | "geminiApiKey";
+  placeholder: string;
+};
+
+const RUNTIME_PROVIDER_CONFIG: Record<string, RuntimeProviderConfig> = {
+  "claude-code": {
+    provider: "anthropic",
+    label: "Anthropic API key",
+    apiField: "anthropicKey",
+    uiField: "anthropicApiKey",
+    placeholder: "sk-ant-…",
+  },
+  codex: {
+    provider: "openai",
+    label: "OpenAI API key",
+    apiField: "openaiKey",
+    uiField: "openaiApiKey",
+    placeholder: "sk-…",
+  },
+  openrouter: {
+    provider: "openrouter",
+    label: "OpenRouter API key",
+    apiField: "openrouterKey",
+    uiField: "openrouterApiKey",
+    placeholder: "sk-or-…",
+  },
+  opencode: {
+    provider: "anthropic",
+    label: "Anthropic API key",
+    apiField: "anthropicKey",
+    uiField: "anthropicApiKey",
+    placeholder: "sk-ant-…",
+  },
+  gemini: {
+    provider: "gemini",
+    label: "Google / Gemini API key",
+    apiField: "geminiKey",
+    uiField: "geminiApiKey",
+    placeholder: "AIza…",
+  },
 };
 
 const REASONING_EFFORT_OPTIONS: Array<{
@@ -89,14 +140,12 @@ function getRuntimeStatus(runtime: AgentRuntime | null, status: DetectCliResult 
 }
 
 function isCompatibleModel(runtime: AgentRuntime | null, model: string | null | undefined, status: DetectCliResult | null) {
-  if (!runtime || !model) return true;
-  const r = getRuntimeStatus(runtime, status);
-  if (!r) return true;
-  // If the server returned a model list, treat membership as the compat signal.
-  // Otherwise (no list yet), accept anything — the server will normalize on use.
-  if (r.models && r.models.length > 0) {
-    return r.models.some((m) => m.id === model);
-  }
+  // Provider model catalogs change faster than the application. Preserve an
+  // explicitly configured model even if a stale or unauthenticated catalog
+  // response does not contain it yet.
+  void runtime;
+  void model;
+  void status;
   return true;
 }
 
@@ -144,7 +193,9 @@ export function SearchableModelSelect({
     [models, search],
   );
 
-  const selected = models.find((m) => m.id === value);
+  const selected = models.find((m) => m.id === value) ?? (value ? { id: value, name: value } : undefined);
+  const customModel = search.trim();
+  const canUseCustomModel = !!customModel && !models.some((model) => model.id === customModel);
 
   return (
     <div ref={ref} className="relative">
@@ -178,28 +229,40 @@ export function SearchableModelSelect({
               <div className="flex items-center justify-center gap-2 px-3 py-4 text-xs text-fg/40">
                 <Loader2 className="h-3 w-3 animate-spin" /> Fetching models...
               </div>
-            ) : filtered.length === 0 ? (
+            ) : filtered.length === 0 && !canUseCustomModel ? (
               <div className="px-3 py-4 text-center text-xs text-fg/40">
-                {models.length === 0 ? "Enter an API key and test connection to load models" : "No models match your search"}
+                {models.length === 0 ? "Add the provider key below to load its model catalog" : "No models match your search"}
               </div>
             ) : (
-              filtered.map((m) => (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => { onChange(m.id); setOpen(false); setSearch(""); }}
-                  className={cn(
-                    "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-accent/10",
-                    m.id === value && "bg-accent/5 text-accent",
-                  )}
-                >
-                  {m.id === value && <Check className="h-3 w-3 shrink-0 text-accent" />}
-                  <div className={m.id === value ? "" : "pl-5"}>
-                    <div className="font-medium">{m.name}</div>
-                    {m.name !== m.id && <div className="text-[10px] text-fg/30">{m.id}</div>}
-                  </div>
-                </button>
-              ))
+              <>
+                {filtered.map((m) => (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => { onChange(m.id); setOpen(false); setSearch(""); }}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-3 py-2 text-left text-xs transition-colors hover:bg-accent/10",
+                      m.id === value && "bg-accent/5 text-accent",
+                    )}
+                  >
+                    {m.id === value && <Check className="h-3 w-3 shrink-0 text-accent" />}
+                    <div className={m.id === value ? "" : "pl-5"}>
+                      <div className="font-medium">{m.name}</div>
+                      {m.name !== m.id && <div className="text-[10px] text-fg/30">{m.id}</div>}
+                    </div>
+                  </button>
+                ))}
+                {canUseCustomModel && (
+                  <button
+                    type="button"
+                    onClick={() => { onChange(customModel); setOpen(false); setSearch(""); }}
+                    className="flex w-full items-center gap-2 border-t border-line px-3 py-2 text-left text-xs text-accent transition-colors hover:bg-accent/10"
+                  >
+                    <Plus className="h-3 w-3 shrink-0" />
+                    Use exact model ID “{customModel}”
+                  </button>
+                )}
+              </>
             )}
           </div>
         </div>
@@ -276,23 +339,32 @@ export function AgentRuntimeSettings({
   const [liveModels, setLiveModels] = useState<Record<string, CliModelOption[]>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [debouncedCliPath, setDebouncedCliPath] = useState("");
+  const [providerKeyDraft, setProviderKeyDraft] = useState("");
+  const [showProviderKey, setShowProviderKey] = useState(false);
+  const [savingProviderKey, setSavingProviderKey] = useState(false);
+  const [providerKeyMessage, setProviderKeyMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const isServerMode = cliStatus?.deploymentMode === "server";
 
-  useEffect(() => {
+  const refreshDetection = useCallback(async () => {
     setDetecting(true);
-    detectCli()
-      .then((result) => {
-        const nextStatus = result as DetectCliResult;
-        setCliStatus(nextStatus);
-        const initialModels: Record<string, CliModelOption[]> = {};
-        for (const [runtimeId, runtime] of Object.entries(nextStatus.runtimes || {})) {
-          initialModels[runtimeId] = runtime.models || [];
-        }
-        setLiveModels(initialModels);
-      })
-      .catch(() => setCliStatus(null))
-      .finally(() => setDetecting(false));
+    try {
+      const nextStatus = await detectCli() as DetectCliResult;
+      setCliStatus(nextStatus);
+      const initialModels: Record<string, CliModelOption[]> = {};
+      for (const [runtimeId, runtime] of Object.entries(nextStatus.runtimes || {})) {
+        initialModels[runtimeId] = runtime.models || [];
+      }
+      setLiveModels(initialModels);
+    } catch {
+      setCliStatus(null);
+    } finally {
+      setDetecting(false);
+    }
   }, []);
+
+  useEffect(() => {
+    void refreshDetection();
+  }, [refreshDetection]);
 
   const registeredRuntimes = listRegisteredRuntimes(cliStatus);
   const currentRuntime = isAgentRuntime(settings.integrations.agentRuntime, cliStatus)
@@ -306,6 +378,77 @@ export function AgentRuntimeSettings({
   const currentModel = isCompatibleModel(effectiveRuntime, rawCurrentModel, cliStatus) ? rawCurrentModel : "";
   const reasoningEffort = normalizeAgentReasoningEffort(settings.integrations.agentReasoningEffort);
   const selectedCliPath = getRuntimeCliPath(effectiveRuntime, settings.integrations, cliStatus);
+  const providerConfig = effectiveRuntime ? RUNTIME_PROVIDER_CONFIG[effectiveRuntime] : undefined;
+
+  useEffect(() => {
+    setProviderKeyDraft("");
+    setShowProviderKey(false);
+    setProviderKeyMessage(null);
+  }, [providerConfig?.provider]);
+
+  const saveProviderKey = useCallback(async () => {
+    if (!providerConfig) return;
+    const apiKey = providerKeyDraft.trim();
+    if (!apiKey) {
+      setProviderKeyMessage({ ok: false, text: `Enter the ${providerConfig.label} first.` });
+      return;
+    }
+    setSavingProviderKey(true);
+    setProviderKeyMessage(null);
+    try {
+      await testProviderKey(providerConfig.provider, apiKey);
+      await updateSettings({
+        integrations: {
+          [providerConfig.apiField]: apiKey,
+        } as unknown as AppSettingsRecord["integrations"],
+      });
+      onUpdate({ [providerConfig.uiField]: apiKey });
+      setProviderKeyDraft("");
+      setProviderKeyMessage({
+        ok: true,
+        text: `${providerConfig.label} verified and saved for the organization.`,
+      });
+      await refreshDetection();
+      if (effectiveRuntime) {
+        const result = await listCliModels(effectiveRuntime);
+        setLiveModels((prev) => ({ ...prev, [effectiveRuntime]: result.models || [] }));
+      }
+    } catch (error) {
+      setProviderKeyMessage({
+        ok: false,
+        text: error instanceof Error ? error.message : `Could not verify the ${providerConfig.label}.`,
+      });
+    } finally {
+      setSavingProviderKey(false);
+    }
+  }, [effectiveRuntime, onUpdate, providerConfig, providerKeyDraft, refreshDetection]);
+
+  const clearProviderKey = useCallback(async () => {
+    if (!providerConfig) return;
+    setSavingProviderKey(true);
+    setProviderKeyMessage(null);
+    try {
+      await updateSettings({
+        integrations: {
+          [providerConfig.apiField]: "",
+        } as unknown as AppSettingsRecord["integrations"],
+      });
+      onUpdate({ [providerConfig.uiField]: "" });
+      setProviderKeyDraft("");
+      setProviderKeyMessage({
+        ok: true,
+        text: `${providerConfig.label} cleared for the organization.`,
+      });
+      await refreshDetection();
+    } catch (error) {
+      setProviderKeyMessage({
+        ok: false,
+        text: error instanceof Error ? error.message : `Could not clear the ${providerConfig.label}.`,
+      });
+    } finally {
+      setSavingProviderKey(false);
+    }
+  }, [onUpdate, providerConfig, refreshDetection]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -453,6 +596,87 @@ export function AgentRuntimeSettings({
             ]}
           />
         </div>
+
+        {providerConfig && (
+          <div className="rounded-lg border border-line bg-panel2/30 p-4 space-y-3">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2">
+                  <KeyRound className="h-4 w-4 text-accent" />
+                  <Label>{providerConfig.label}</Label>
+                </div>
+                <p className="mt-1 text-[11px] text-fg/45">
+                  Organization-managed credential for {effectiveRuntimeStatus?.displayName ?? effectiveRuntime}.
+                  It is encrypted at rest and used by server agent runs.
+                </p>
+              </div>
+              <span className={cn(
+                "shrink-0 rounded px-2 py-1 text-[10px]",
+                effectiveRuntimeStatus?.auth?.authenticated
+                  ? "bg-success/10 text-success"
+                  : "bg-warning/10 text-warning",
+              )}>
+                {effectiveRuntimeStatus?.auth?.authenticated ? "Credential ready" : "Required"}
+              </span>
+            </div>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative flex-1">
+                <Input
+                  type={showProviderKey ? "text" : "password"}
+                  value={providerKeyDraft}
+                  onChange={(event) => setProviderKeyDraft(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void saveProviderKey();
+                    }
+                  }}
+                  placeholder={
+                    effectiveRuntimeStatus?.auth?.authenticated
+                      ? "Credential configured — enter a replacement"
+                      : providerConfig.placeholder
+                  }
+                  autoComplete="new-password"
+                  className="pr-10"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowProviderKey((value) => !value)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-fg/40 hover:text-fg"
+                  aria-label={showProviderKey ? "Hide API key" : "Show API key"}
+                >
+                  {showProviderKey ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                </button>
+              </div>
+              <Button
+                type="button"
+                onClick={() => void saveProviderKey()}
+                disabled={savingProviderKey || !providerKeyDraft.trim()}
+              >
+                {savingProviderKey && <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />}
+                Verify & save
+              </Button>
+              {effectiveRuntimeStatus?.auth?.authenticated && (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => void clearProviderKey()}
+                  disabled={savingProviderKey}
+                >
+                  Clear
+                </Button>
+              )}
+            </div>
+            {providerKeyMessage && (
+              <p className={cn(
+                "text-xs",
+                providerKeyMessage.ok ? "text-success" : "text-danger",
+              )}>
+                {providerKeyMessage.text}
+              </p>
+            )}
+          </div>
+        )}
 
         <div>
           <Label>Model</Label>
