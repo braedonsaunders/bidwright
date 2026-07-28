@@ -398,6 +398,11 @@ export function checkCliAuth(
 ): CliAuthStatus {
   const adapter = tryGetAdapter(runtime);
   if (!adapter) return { authenticated: false, method: "none" };
+  if (getBidwrightMode() === "server") {
+    return apiKey
+      ? { authenticated: true, method: "api_key" }
+      : { authenticated: false, method: "none" };
+  }
   return adapter.checkAuth({
     apiKeys: legacyApiKeysFor(runtime, apiKey),
     agentHomeDir: getUserAgentHome(userId ?? null),
