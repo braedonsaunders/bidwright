@@ -2,35 +2,27 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import test from "node:test";
 
-import { validateStoredSettingsCredentials } from "./services/settings-key-validation.js";
-import { sealSettingsSecrets } from "./services/settings-secret-crypto.js";
+import {
+  createIntegrationsEncryptionKeyProbe,
+  validateIntegrationsEncryptionKey,
+} from "./services/settings-key-validation.js";
 
-test("startup validation rejects a key that cannot decrypt stored credentials", async () => {
-  const originalKey = process.env.INTEGRATIONS_ENCRYPTION_KEY;
-  const organizationId = "org-key-check";
+test("startup validation rejects malformed keys before any credential is read", () => {
+  assert.throws(
+    () => validateIntegrationsEncryptionKey("not-a-32-byte-base64-key"),
+    /must decode to exactly 32 bytes/,
+  );
+});
+
+test("startup validation uses an application probe without scanning tenant records", () => {
   const matchingKey = randomBytes(32).toString("base64");
+  const probe = createIntegrationsEncryptionKeyProbe(matchingKey);
 
-  try {
-    process.env.INTEGRATIONS_ENCRYPTION_KEY = matchingKey;
-    const integrations = sealSettingsSecrets(
-      { openaiKey: "sk-test-key-check" },
-      { kind: "organization", id: organizationId, tenantId: organizationId },
-    );
-    const records = {
-      organizations: [{ organizationId, email: {}, integrations }],
-      users: [],
-      superAdmins: [],
-    };
-
-    assert.doesNotThrow(() => validateStoredSettingsCredentials(records));
-
-    process.env.INTEGRATIONS_ENCRYPTION_KEY = randomBytes(32).toString("base64");
-    assert.throws(
-      () => validateStoredSettingsCredentials(records),
-      /does not match stored settings credentials/,
-    );
-  } finally {
-    if (originalKey === undefined) delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
-    else process.env.INTEGRATIONS_ENCRYPTION_KEY = originalKey;
-  }
+  assert.deepEqual(validateIntegrationsEncryptionKey(matchingKey, probe), {
+    probeVerified: true,
+  });
+  assert.throws(
+    () => validateIntegrationsEncryptionKey(randomBytes(32).toString("base64"), probe),
+    /does not match INTEGRATIONS_ENCRYPTION_KEY_PROBE/,
+  );
 });
