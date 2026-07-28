@@ -16601,6 +16601,19 @@ export class PrismaApiStore {
 
   // ── Settings ───────────────────────────────────────────────────────────
 
+  async getOrganizationDefaults(): Promise<AppSettings["defaults"]> {
+    const settings = await this.db.organizationSettings.findFirst({
+      where: { organizationId: this.organizationId },
+      select: { defaults: true },
+    });
+    const defaults = {
+      ...DEFAULT_SETTINGS.defaults,
+      ...((settings?.defaults as Partial<AppSettings["defaults"]> | null) ?? {}),
+    };
+    defaults.uoms = normalizeUomLibrary(defaults.uoms);
+    return defaults;
+  }
+
   async getSettings() {
     const settings = await this.db.organizationSettings.findFirst({
       where: { organizationId: this.organizationId },

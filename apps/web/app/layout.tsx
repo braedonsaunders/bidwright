@@ -1,17 +1,12 @@
 import type { Metadata } from "next";
 import type { ReactNode } from "react";
-import { IBM_Plex_Mono, Sora } from "next/font/google";
+import { IBM_Plex_Mono } from "next/font/google";
 import { AuthProvider } from "@/components/auth-provider";
 import { ApplicationFrame } from "@/components/app-shell";
 import { I18nProvider } from "@/components/i18n-provider";
 import { RequireAuth } from "@/components/require-auth";
 import "@appkit/dashboard/primitives.css";
 import "./globals.css";
-
-const sora = Sora({
-  subsets: ["latin"],
-  variable: "--font-bidwright-sans",
-});
 
 const plexMono = IBM_Plex_Mono({
   subsets: ["latin"],
@@ -36,7 +31,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${sora.variable} ${plexMono.variable}`}
+      className={plexMono.variable}
       suppressHydrationWarning
     >
       <body>
