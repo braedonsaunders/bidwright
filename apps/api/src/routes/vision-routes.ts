@@ -3,7 +3,7 @@ import { resolveApiPath } from "../paths.js";
 import { access, readFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { prisma } from "@bidwright/db";
-import { emitSessionEvent, interruptAndResumeSession } from "../services/cli-runtime.js";
+import { emitSessionEvent } from "../services/cli-runtime.js";
 import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
 
 /** Helper: resolve a document's absolute PDF path from its storagePath. */
@@ -145,11 +145,6 @@ function isDrawingPdfDocument(doc: any) {
   if (isIgnoredDocArtifact(doc)) return false;
   if (!isPdfDocument(doc)) return false;
   return normalizedDocText(doc?.documentType) === "drawing";
-}
-
-function endpointBase(value: unknown) {
-  const text = String(value ?? "").trim() || "https://api.va.landing.ai";
-  return text.replace(/\/+$/, "");
 }
 
 function asRecord(value: unknown): Record<string, any> {
@@ -825,12 +820,9 @@ async function safeJson(response: Response) {
  * field includes the active provider id and config fingerprint, so changing
  * provider or model invalidates the cache.
  *
- * For LandingAI we additionally support an async lifecycle (start job, return
- * immediately, poll in background) via `landingAiAsyncBound(settings)`.
  */
 import {
   resolveActiveProvider,
-  landingAiAsyncBound,
   type DrawingProviderId,
   type IntegrationSettingsSnapshot,
   type ParseProviderInput,
@@ -917,38 +909,6 @@ async function persistDrawingEvidence(projectId: string, documentId: string, cur
   });
 }
 
-async function recordEvidenceNotification(projectId: string, notification: Record<string, any>) {
-  const strategy = await prisma.estimateStrategy.findFirst({
-    where: { projectId },
-    orderBy: { updatedAt: "desc" },
-  }).catch(() => null);
-  if (!strategy) return;
-  const summary = asRecord(strategy.summary);
-  const engine = asRecord(summary.drawingEvidenceEngine);
-  const notifications = Array.isArray(engine.asyncEvidenceNotifications)
-    ? engine.asyncEvidenceNotifications.map(asRecord)
-    : [];
-  await prisma.estimateStrategy.update({
-    where: { id: strategy.id },
-    data: {
-      summary: sanitizeJsonForPostgres({
-        ...summary,
-        drawingEvidenceEngine: {
-          ...engine,
-          asyncEvidenceNotifications: [
-            {
-              ...notification,
-              id: notification.id ?? `drawing-evidence-${Date.now()}`,
-              createdAt: notification.createdAt ?? new Date().toISOString(),
-            },
-            ...notifications,
-          ].slice(0, 80),
-        },
-      }) as any,
-    },
-  }).catch(() => null);
-}
-
 async function appendEvidenceAgentEvent(projectId: string, event: { type: string; data: Record<string, any> }) {
   const timestamp = new Date().toISOString();
   const persistedEvent = { ...event, timestamp };
@@ -970,145 +930,6 @@ async function appendEvidenceAgentEvent(projectId: string, event: { type: string
       } as any,
     },
   }).catch(() => null);
-}
-
-const drawingEvidenceBackgroundTasks = new Map<string, Promise<void>>();
-
-function bgTaskKey(projectId: string, documentId: string, cacheKey: string) {
-  return `${projectId}:${documentId}:${cacheKey}`;
-}
-
-/** Background completion for LandingAI's async-job lifecycle. */
-async function completeLandingAiInBackground(args: {
-  projectId: string;
-  documentId: string;
-  fileName: string;
-  jobId: string;
-  sourceHash: string;
-  cacheKey: string;
-  includeExtraction: boolean;
-  atlasInclusion: { allowed: boolean; reason: string } | null;
-  currentStructuredData: unknown;
-  settings: IntegrationSettingsSnapshot;
-}) {
-  try {
-    await appendEvidenceAgentEvent(args.projectId, {
-      type: "progress",
-      data: {
-        phase: "Drawing Evidence",
-        detail: `LandingAI enrichment started for ${args.fileName}; continuing with Azure/local evidence while it runs.`,
-        source: "drawing-evidence-background",
-        provider: "landingAi",
-        documentId: args.documentId,
-      },
-    });
-    const handle = landingAiAsyncBound(args.settings);
-    const result = await handle.resumeJob({
-      jobId: args.jobId,
-      sourceHash: args.sourceHash,
-      fileName: args.fileName,
-      includeExtraction: args.includeExtraction,
-      onProgress: (event) => appendEvidenceAgentEvent(args.projectId, {
-        type: "progress",
-        data: {
-          phase: event.phase,
-          detail: event.detail,
-          source: "drawing-evidence-background",
-          provider: "landingAi",
-          documentId: args.documentId,
-        },
-      }),
-    });
-
-    await persistDrawingEvidence(args.projectId, args.documentId, args.currentStructuredData, {
-      schemaVersion: 2,
-      provider: "landingAi",
-      status: "completed",
-      cacheKey: args.cacheKey,
-      sourceHash: args.sourceHash,
-      cachedAt: new Date().toISOString(),
-      completedAt: new Date().toISOString(),
-      job: result.job ?? null,
-      parse: result.parse,
-      extract: result.extract,
-      meta: result.meta,
-      atlasInclusion: args.atlasInclusion,
-    });
-    await recordEvidenceNotification(args.projectId, {
-      type: "drawing_evidence_ready",
-      provider: "landingAi",
-      status: "ready",
-      documentId: args.documentId,
-      fileName: args.fileName,
-      chunkCount: result.parse.chunks.length,
-      splitCount: Array.isArray(result.parse.splits) ? result.parse.splits.length : 0,
-      message: `LandingAI drawing evidence is ready for ${args.fileName}. Rebuild/search the Drawing Evidence Engine atlas to use it.`,
-    });
-    await appendEvidenceAgentEvent(args.projectId, {
-      type: "message",
-      data: {
-        role: "system",
-        content: `LandingAI drawing evidence is ready for ${args.fileName}. Continue the estimate with Azure/local evidence if you are mid-task, and on your next evidence pass call buildDrawingAtlas/searchDrawingRegions to use the new regions.`,
-        source: "drawing-evidence-background",
-        provider: "landingAi",
-        documentId: args.documentId,
-      },
-    });
-    await interruptAndResumeSession(
-      args.projectId,
-      [
-        "BACKGROUND DRAWING EVIDENCE UPDATE:",
-        `LandingAI drawing evidence has completed for ${args.fileName} (${args.documentId}).`,
-        "Immediately check the current state with getWorkspace and getEstimateStrategy.",
-        "Then call buildDrawingAtlas with force=true, searchDrawingRegions for the relevant current scope/questions, and inspectDrawingRegion for any high-risk drawing quantities that the new regions clarify.",
-        "Continue the existing estimating task from the current saved state. Do not recreate worksheets, packages, rows, or claims that already exist; only revise or add evidence where this new source changes the estimate.",
-      ].join("\n"),
-      `Drawing evidence ready for ${args.fileName}`,
-    ).catch(() => null);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await persistDrawingEvidence(args.projectId, args.documentId, args.currentStructuredData, {
-      schemaVersion: 2,
-      provider: "landingAi",
-      status: "failed",
-      cacheKey: args.cacheKey,
-      sourceHash: args.sourceHash,
-      cachedAt: new Date().toISOString(),
-      failedAt: new Date().toISOString(),
-      error: message,
-      job: { jobId: args.jobId, status: "failed" },
-      parse: { markdown: "", chunks: [] },
-      extract: null,
-      atlasInclusion: args.atlasInclusion,
-    }).catch(() => null);
-    await recordEvidenceNotification(args.projectId, {
-      type: "drawing_evidence_failed",
-      provider: "landingAi",
-      status: "failed",
-      documentId: args.documentId,
-      fileName: args.fileName,
-      message: `LandingAI drawing evidence failed for ${args.fileName}: ${message}`,
-    });
-    await appendEvidenceAgentEvent(args.projectId, {
-      type: "progress",
-      data: {
-        phase: "Drawing Evidence",
-        detail: `LandingAI enrichment failed for ${args.fileName}: ${message}`,
-        source: "drawing-evidence-background",
-        provider: "landingAi",
-        documentId: args.documentId,
-      },
-    });
-  }
-}
-
-function ensureLandingAiBackgroundTask(args: Parameters<typeof completeLandingAiInBackground>[0]) {
-  const key = bgTaskKey(args.projectId, args.documentId, args.cacheKey);
-  if (drawingEvidenceBackgroundTasks.has(key)) return;
-  const task = completeLandingAiInBackground(args).finally(() => {
-    drawingEvidenceBackgroundTasks.delete(key);
-  });
-  drawingEvidenceBackgroundTasks.set(key, task);
 }
 
 /**
@@ -1245,10 +1066,9 @@ export async function visionRoutes(app: FastifyInstance) {
 
   // ── POST /api/vision/drawing-extraction-summary ──────────────────────
   // Optional Drawing Evidence Engine enrichment for drawing PDFs.
-  // Dispatches to the configured provider (LandingAI ADE / Gemini Pro / Gemini Flash).
+  // Dispatches to the tenant-configured Gemini image model.
   // Credentials come from Settings > Integrations and are never returned in this response.
   // Body: { projectId, documentId, includeExtraction?, pollTimeoutMs?, force?, allowNonDrawing?, atlasInclusionReason? }
-  // Legacy alias: POST /api/vision/landingai-drawing-summary continues to work.
   const drawingExtractionHandler = async (request: any, reply: any) => {
     const body = request.body as Record<string, unknown>;
     const projectId = body.projectId as string;
@@ -1273,10 +1093,9 @@ export async function visionRoutes(app: FastifyInstance) {
     const integrations = (settings.integrations ?? {}) as IntegrationSettingsSnapshot;
     const { id: providerId, enabled, provider } = resolveActiveProvider(integrations);
     const includeExtraction = body.includeExtraction !== false;
-    const asyncMode = body.async === true || body.background === true || body.mode === "async";
     const pollTimeoutMs = Math.max(10_000, Math.min(180_000, Number(body.pollTimeoutMs) || 120_000));
     const sourceHash = String(resolved.doc.checksum ?? "") || `${resolved.doc.fileName}:${resolved.doc.pageCount ?? ""}`;
-    const cacheOnly = isTruthySetting(process.env.LANDINGAI_CACHE_ONLY) || isTruthySetting(process.env.DRAWING_EVIDENCE_CACHE_ONLY);
+    const cacheOnly = isTruthySetting(process.env.DRAWING_EVIDENCE_CACHE_ONLY);
 
     if (!provider) {
       return { success: true, skipped: true, reason: "no_provider_configured", documentId, fileName: resolved.doc.fileName };
@@ -1288,23 +1107,6 @@ export async function visionRoutes(app: FastifyInstance) {
     const sourceCacheMatch = cacheOnly && cacheMatchesSource(cached, sourceHash);
 
     if ((cacheOnly || body.force !== true) && cached && (exactCacheMatch || sourceCacheMatch)) {
-      const cachedStatus = String(cached.status ?? "completed").toLowerCase();
-      // Resume LandingAI background polling if a queued/running cache entry was discovered.
-      if (!cacheOnly && asyncMode && providerId === "landingAi" && provider.isConfigured(integrations)
-          && ["queued", "running"].includes(cachedStatus) && cached.job?.jobId) {
-        ensureLandingAiBackgroundTask({
-          projectId,
-          documentId,
-          fileName: resolved.doc.fileName,
-          jobId: String(cached.job.jobId),
-          sourceHash,
-          cacheKey,
-          includeExtraction,
-          atlasInclusion: cached.atlasInclusion ?? null,
-          currentStructuredData: resolved.doc.structuredData,
-          settings: integrations,
-        });
-      }
       return {
         ...evidenceCacheResponse(cached, documentId, resolved.doc.fileName),
         cacheOnly,
@@ -1344,119 +1146,8 @@ export async function visionRoutes(app: FastifyInstance) {
       },
     });
 
-    // LandingAI's async lifecycle: start the job, persist a "running" cache record,
-    // optionally return immediately and continue polling in the background.
-    if (providerId === "landingAi") {
-      try {
-        const handle = landingAiAsyncBound(integrations);
-        const started = await handle.startJob({
-          pdfBytes,
-          fileName,
-          sourceHash,
-          includeExtraction,
-          pollTimeoutMs,
-          onProgress,
-        });
-        const runningCache: CachedDrawingEvidence = {
-          schemaVersion: 2,
-          provider: "landingAi",
-          status: "running",
-          cacheKey,
-          sourceHash,
-          queuedAt: new Date().toISOString(),
-          job: started.running.job,
-          parse: { markdown: "", chunks: [] },
-          extract: null,
-          meta: started.running.meta,
-          atlasInclusion,
-        };
-        await persistDrawingEvidence(projectId, documentId, resolved.doc.structuredData, runningCache).catch((error) => {
-          request.log.warn({ err: error, documentId }, "Drawing evidence running cache persist failed");
-        });
-
-        if (asyncMode) {
-          ensureLandingAiBackgroundTask({
-            projectId,
-            documentId,
-            fileName,
-            jobId: started.jobId,
-            sourceHash,
-            cacheKey,
-            includeExtraction,
-            atlasInclusion,
-            currentStructuredData: resolved.doc.structuredData,
-            settings: integrations,
-          });
-          return {
-            success: true,
-            skipped: false,
-            cached: false,
-            provider: "landingAi" as const,
-            status: "running",
-            pending: true,
-            documentId,
-            fileName,
-            atlasInclusion,
-            job: runningCache.job,
-            parse: runningCache.parse,
-            extract: null,
-            meta: runningCache.meta,
-            next: "LandingAI enrichment is running asynchronously. Continue with Azure/local evidence; call buildDrawingAtlas/searchDrawingRegions again later to pick up completed regions.",
-          };
-        }
-
-        const result = await handle.resumeJob({
-          jobId: started.jobId,
-          sourceHash,
-          fileName,
-          includeExtraction,
-          timeoutMs: pollTimeoutMs,
-          onProgress,
-        });
-        const completedCache: CachedDrawingEvidence = {
-          schemaVersion: 2,
-          provider: "landingAi",
-          status: result.status,
-          cacheKey,
-          sourceHash,
-          cachedAt: new Date().toISOString(),
-          completedAt: new Date().toISOString(),
-          job: result.job,
-          parse: result.parse,
-          extract: result.extract,
-          meta: result.meta,
-          atlasInclusion,
-        };
-        await persistDrawingEvidence(projectId, documentId, resolved.doc.structuredData, completedCache).catch((error) => {
-          request.log.warn({ err: error, documentId }, "Drawing evidence cache persist failed");
-        });
-        return {
-          success: true,
-          skipped: false,
-          cached: false,
-          provider: result.provider,
-          status: result.status,
-          pending: false,
-          documentId,
-          fileName,
-          atlasInclusion,
-          job: result.job,
-          parse: result.parse,
-          extract: result.extract,
-          meta: result.meta,
-        };
-      } catch (error) {
-        request.log.warn({ err: error, documentId }, "LandingAI drawing extraction failed");
-        return reply.code(502).send({
-          success: false,
-          provider: "landingAi",
-          message: "LandingAI drawing extraction failed",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    // Synchronous providers (Gemini Pro / Gemini Flash).
+    // Gemini runs synchronously inside this API request. MCP callers may queue
+    // the request without blocking the agent turn.
     try {
       await onProgress({ phase: "Drawing Evidence", detail: `Starting ${providerId} extraction for ${fileName}` });
       const result = await provider.parse({
@@ -1523,8 +1214,6 @@ export async function visionRoutes(app: FastifyInstance) {
   };
 
   app.post("/api/vision/drawing-extraction-summary", drawingExtractionHandler);
-  // Legacy alias — keep working for any callers already wired to the LandingAI-named route.
-  app.post("/api/vision/landingai-drawing-summary", drawingExtractionHandler);
 
   // ── POST /api/vision/render-page ───────────────────────────────────────
   // Renders a full PDF page (or a region of it) to a PNG image.

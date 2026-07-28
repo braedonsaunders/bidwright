@@ -1834,21 +1834,13 @@ export interface AppSettings {
     azureDiQueryFields?: string;
     azureDiOutputFormat?: "text" | "markdown";
     /** Active drawing-extraction provider for drawing PDFs. `none` disables enrichment. */
-    drawingExtractionProvider?: "landingAi" | "geminiPro" | "geminiFlash" | "none";
+    drawingExtractionProvider?: "gemini" | "none";
     /** Master enable for the configured provider. Defaults true when a provider is chosen. */
     drawingExtractionEnabled?: boolean;
-    /** @deprecated Use drawingExtractionProvider/drawingExtractionEnabled. */
-    landingAiDrawingExtractionEnabled?: boolean;
-    landingAiApiKey?: string;
-    landingAiEndpoint?: string;
-    landingAiParseModel?: string;
-    landingAiExtractModel?: string;
     /** Google API key for Gemini drawing extraction. */
     geminiApiKey?: string;
-    /** Model id used when drawingExtractionProvider === "geminiPro". */
-    geminiProModel?: string;
-    /** Model id used when drawingExtractionProvider === "geminiFlash". */
-    geminiFlashModel?: string;
+    /** Image-capable Gemini model used for drawing extraction. */
+    drawingExtractionModel?: string;
     /** When false, disables Gemini's "thinking" mode (faster + cheaper, lower quality on dense drawings). */
     geminiThinkingEnabled?: boolean;
     autodeskClientId?: string;

@@ -455,18 +455,14 @@ export function SettingsPage({
               : prev.integrations.azureDiFeatures,
             azureDiQueryFields: (apiSettings.integrations as any).azureDiQueryFields ?? prev.integrations.azureDiQueryFields,
             azureDiOutputFormat: (apiSettings.integrations as any).azureDiOutputFormat || prev.integrations.azureDiOutputFormat,
-            drawingExtractionProvider: ((apiSettings.integrations as any).drawingExtractionProvider as IntegrationSettings["drawingExtractionProvider"])
-              || (((apiSettings.integrations as any).landingAiDrawingExtractionEnabled === true) ? "landingAi" : prev.integrations.drawingExtractionProvider),
+            drawingExtractionProvider: (apiSettings.integrations as any).drawingExtractionProvider === "gemini"
+              ? "gemini"
+              : "none",
             drawingExtractionEnabled: typeof (apiSettings.integrations as any).drawingExtractionEnabled === "boolean"
               ? Boolean((apiSettings.integrations as any).drawingExtractionEnabled)
-              : Boolean((apiSettings.integrations as any).landingAiDrawingExtractionEnabled ?? prev.integrations.drawingExtractionEnabled),
-            landingAiDrawingExtractionEnabled: Boolean((apiSettings.integrations as any).landingAiDrawingExtractionEnabled ?? prev.integrations.landingAiDrawingExtractionEnabled),
-            landingAiApiKey: (apiSettings.integrations as any).landingAiApiKey || prev.integrations.landingAiApiKey,
-            landingAiEndpoint: (apiSettings.integrations as any).landingAiEndpoint || prev.integrations.landingAiEndpoint,
-            landingAiParseModel: (apiSettings.integrations as any).landingAiParseModel || prev.integrations.landingAiParseModel,
-            landingAiExtractModel: (apiSettings.integrations as any).landingAiExtractModel || prev.integrations.landingAiExtractModel,
-            geminiProModel: (apiSettings.integrations as any).geminiProModel || prev.integrations.geminiProModel,
-            geminiFlashModel: (apiSettings.integrations as any).geminiFlashModel || prev.integrations.geminiFlashModel,
+              : false,
+            drawingExtractionModel: (apiSettings.integrations as any).drawingExtractionModel
+              || prev.integrations.drawingExtractionModel,
             geminiThinkingEnabled: typeof (apiSettings.integrations as any).geminiThinkingEnabled === "boolean"
               ? Boolean((apiSettings.integrations as any).geminiThinkingEnabled)
               : prev.integrations.geminiThinkingEnabled,
@@ -766,13 +762,8 @@ export function SettingsPage({
         azureDiOutputFormat: settings.integrations.azureDiOutputFormat,
         drawingExtractionProvider: settings.integrations.drawingExtractionProvider,
         drawingExtractionEnabled: settings.integrations.drawingExtractionEnabled,
-        landingAiDrawingExtractionEnabled: settings.integrations.landingAiDrawingExtractionEnabled,
-        landingAiApiKey: settings.integrations.landingAiApiKey,
-        landingAiEndpoint: settings.integrations.landingAiEndpoint,
-        landingAiParseModel: settings.integrations.landingAiParseModel,
-        landingAiExtractModel: settings.integrations.landingAiExtractModel,
-        geminiProModel: settings.integrations.geminiProModel,
-        geminiFlashModel: settings.integrations.geminiFlashModel,
+        geminiApiKey: settings.integrations.geminiApiKey,
+        drawingExtractionModel: settings.integrations.drawingExtractionModel,
         geminiThinkingEnabled: settings.integrations.geminiThinkingEnabled,
         autodeskClientId: settings.integrations.autodeskClientId,
         autodeskClientSecret: settings.integrations.autodeskClientSecret,
@@ -1801,7 +1792,6 @@ export function SettingsPage({
                     checked={settings.integrations.drawingExtractionEnabled}
                     onChange={(event) => updateIntegrations({
                       drawingExtractionEnabled: event.target.checked,
-                      landingAiDrawingExtractionEnabled: event.target.checked && settings.integrations.drawingExtractionProvider === "landingAi",
                     })}
                   />
                 </div>
@@ -1812,82 +1802,28 @@ export function SettingsPage({
                     value={settings.integrations.drawingExtractionProvider}
                     onChange={(value) => {
                       const drawingExtractionProvider = value as IntegrationSettings["drawingExtractionProvider"];
-                      updateIntegrations({
-                        drawingExtractionProvider,
-                        landingAiDrawingExtractionEnabled: settings.integrations.drawingExtractionEnabled && drawingExtractionProvider === "landingAi",
-                      });
+                      updateIntegrations({ drawingExtractionProvider });
                     }}
                     options={[
                       { value: "none", label: "None — disable drawing enrichment" },
-                      { value: "landingAi", label: "LandingAI ADE — proven on drawings, ~$0.027/page parse" },
-                      { value: "geminiPro", label: "Gemini 2.5 Pro — best quality, scales with document complexity" },
-                      { value: "geminiFlash", label: "Gemini 2.5 Flash — production sweet spot" },
+                      { value: "gemini", label: "Google Gemini — configurable image model" },
                     ]}
                   />
                 </div>
 
-                {settings.integrations.drawingExtractionProvider === "landingAi" && (
-                  <>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <Label>LandingAI endpoint</Label>
-                        <Input
-                          type="text"
-                          value={settings.integrations.landingAiEndpoint}
-                          onChange={(e) => updateIntegrations({ landingAiEndpoint: e.target.value })}
-                          placeholder="https://api.va.landing.ai"
-                        />
-                      </div>
-                      <div>
-                        <Label>LandingAI API key</Label>
-                        <Input
-                          type="password"
-                          value={settings.integrations.landingAiApiKey}
-                          onChange={(e) => updateIntegrations({ landingAiApiKey: e.target.value })}
-                          placeholder="Enter LandingAI key..."
-                          name="organization-landing-ai-api-key"
-                          {...NON_LOGIN_SECRET_INPUT_PROPS}
-                        />
-                        {settings.integrations.landingAiApiKey && (
-                          <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.landingAiApiKey)}</p>
-                        )}
-                      </div>
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                      <div>
-                        <Label>Parse model</Label>
-                        <Input
-                          type="text"
-                          value={settings.integrations.landingAiParseModel}
-                          onChange={(e) => updateIntegrations({ landingAiParseModel: e.target.value })}
-                          placeholder="dpt-2-latest"
-                        />
-                      </div>
-                      <div>
-                        <Label>Extract model</Label>
-                        <Input
-                          type="text"
-                          value={settings.integrations.landingAiExtractModel}
-                          onChange={(e) => updateIntegrations({ landingAiExtractModel: e.target.value })}
-                          placeholder="extract-latest"
-                        />
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {(settings.integrations.drawingExtractionProvider === "geminiPro" || settings.integrations.drawingExtractionProvider === "geminiFlash") && (
+                {settings.integrations.drawingExtractionProvider === "gemini" && (
                   <>
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <Label>Gemini API key</Label>
                         <Input
-                          type="password"
+                          type="text"
                           value={settings.integrations.geminiApiKey}
                           onChange={(e) => updateIntegrations({ geminiApiKey: e.target.value })}
                           placeholder="AIza..."
                           name="organization-gemini-drawing-api-key"
                           {...NON_LOGIN_SECRET_INPUT_PROPS}
+                          style={{ WebkitTextSecurity: "disc" } as CSSProperties}
                         />
                         {settings.integrations.geminiApiKey && (
                           <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.geminiApiKey)}</p>
@@ -1897,15 +1833,9 @@ export function SettingsPage({
                         <Label>Model id</Label>
                         <Input
                           type="text"
-                          value={settings.integrations.drawingExtractionProvider === "geminiPro"
-                            ? settings.integrations.geminiProModel
-                            : settings.integrations.geminiFlashModel}
-                          onChange={(e) => updateIntegrations(
-                            settings.integrations.drawingExtractionProvider === "geminiPro"
-                              ? { geminiProModel: e.target.value }
-                              : { geminiFlashModel: e.target.value }
-                          )}
-                          placeholder={settings.integrations.drawingExtractionProvider === "geminiPro" ? "gemini-2.5-pro" : "gemini-2.5-flash"}
+                          value={settings.integrations.drawingExtractionModel}
+                          onChange={(e) => updateIntegrations({ drawingExtractionModel: e.target.value })}
+                          placeholder="gemini-2.5-pro"
                         />
                       </div>
                     </div>

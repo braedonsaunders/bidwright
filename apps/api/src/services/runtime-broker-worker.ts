@@ -73,6 +73,20 @@ interface RpcMessage {
   error?: { code?: number; message?: string };
 }
 
+const FORWARDED_CODEX_NOTIFICATIONS = new Set([
+  "turn/started",
+  "turn/completed",
+  "item/started",
+  "item/completed",
+  "mcpServer/startupStatus/updated",
+  "warning",
+]);
+
+export function shouldForwardCodexNotification(message: RpcMessage): boolean {
+  return typeof message.method === "string"
+    && FORWARDED_CODEX_NOTIFICATIONS.has(message.method);
+}
+
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
   const child = spawn(request.codexCommand, ["app-server", ...request.appServerArgs], {
     cwd: request.projectDir,
@@ -130,7 +144,7 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
     }
 
     if (message.method) {
-      emit(message);
+      if (shouldForwardCodexNotification(message)) emit(message);
       if (message.method === "turn/completed" && turnCompletion) {
         const status = String(message.params?.turn?.status || "completed");
         turnCompletion.resolve(status);

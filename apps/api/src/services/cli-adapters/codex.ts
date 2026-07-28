@@ -383,6 +383,38 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
     // The authoritative full message arrives in item/completed. Suppressing
     // deltas avoids persisting duplicate assistant messages in the legacy SSE
     // event stream while still keeping transport activity alive.
+  } else if (msg.method === "mcpServer/startupStatus/updated") {
+    const status = String(msg.params?.status ?? msg.params?.startupStatus ?? "starting");
+    const server = String(msg.params?.server ?? msg.params?.name ?? "tools");
+    if (status === "failed") {
+      events.push({
+        type: "error",
+        data: {
+          message: msg.params?.error?.message || `${server} tool server failed to start`,
+        },
+      });
+    } else {
+      events.push({
+        type: "progress",
+        data: {
+          phase: "Tools",
+          detail: `${server} ${status}`,
+        },
+      });
+    }
+  } else if (msg.method === "warning") {
+    const message = String(msg.params?.message ?? msg.params?.text ?? "").trim();
+    if (message) {
+      events.push({
+        type: "progress",
+        data: { phase: "Runtime warning", detail: message },
+      });
+    }
+  } else if (typeof msg.method === "string") {
+    // App Server emits high-volume protocol telemetry (token usage, rate
+    // limits, thread state, reasoning deltas, remote-control state, etc.).
+    // It is transport metadata, not conversation content.
+    return events;
   } else if (msg.type === "thread.started") {
     events.push({ type: "status", data: { status: "running", sessionId: msg.thread_id } });
   } else if (msg.type === "turn.started") {
@@ -480,13 +512,8 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
       data: { toolUseId, duration_ms, content: msg.output || msg.result },
     });
   } else {
-    if (msg.type === "item.started" || msg.type === "item.completed") {
-      return events;
-    }
-    events.push({
-      type: "message",
-      data: { role: "system", content: JSON.stringify(msg) },
-    });
+    // Unknown runtime envelopes must never be rendered as chat messages.
+    return events;
   }
 
   return events;

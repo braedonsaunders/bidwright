@@ -15,5 +15,5 @@ export { smartChunkDocument } from './smart-chunker.js';
 export { enrichChunksWithContext } from './contextual-enrichment.js';
 export { createFileHandlerRegistry, parseFile } from './file-handlers.js';
 
-// Drawing extraction providers (LandingAI, Gemini Pro, Gemini Flash).
+// Drawing extraction providers.
 export * from './drawing-providers/index.js';

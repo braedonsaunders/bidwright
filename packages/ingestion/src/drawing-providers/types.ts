@@ -1,12 +1,11 @@
 /**
  * Drawing extraction provider abstraction.
  *
- * Two implementations exist (LandingAI ADE, Gemini 2.5 Pro/Flash). Both produce a
- * `ProviderResult` with the same shape so the downstream cache, atlas builder,
- * and agent tooling are provider-agnostic.
+ * Providers produce a common `ProviderResult` so the downstream cache, atlas
+ * builder, and agent tooling remain provider-agnostic.
  */
 
-export type DrawingProviderId = "landingAi" | "geminiPro" | "geminiFlash" | "none";
+export type DrawingProviderId = "gemini" | "none";
 
 export type DrawingProviderStatus = "queued" | "running" | "completed" | "failed";
 
@@ -30,7 +29,7 @@ export interface ProviderChunk {
   page?: number;
   markdown: string;
   grounding?: ProviderGrounding[];
-  /** Optional verbose visual narrative (Landing.ai style). */
+  /** Optional verbose visual narrative. */
   caption?: string;
   [key: string]: unknown;
 }
@@ -101,16 +100,10 @@ export interface IntegrationSettingsSnapshot {
   drawingExtractionProvider?: DrawingProviderId | string;
   drawingExtractionEnabled?: boolean;
 
-  // LandingAI configuration.
-  landingAiApiKey?: string;
-  landingAiEndpoint?: string;
-  landingAiParseModel?: string;
-  landingAiExtractModel?: string;
-
   // Gemini configuration.
   geminiApiKey?: string;
-  geminiProModel?: string;
-  geminiFlashModel?: string;
+  geminiKey?: string;
+  drawingExtractionModel?: string;
   geminiThinkingEnabled?: boolean;
 
   // Allow forward-compatibility / unknown fields.
@@ -138,7 +131,7 @@ export interface ProviderProgressEvent {
   jobId?: string;
 }
 
-/** Async-job providers (currently LandingAI) implement this to support background polling. */
+/** Async-job providers may implement this to support background polling. */
 export interface ProviderAsyncCapabilities {
   startJob(input: ParseProviderInput): Promise<{ jobId: string; cacheKey: string; running: ProviderResult }>;
   resumeJob(args: { jobId: string; sourceHash: string; fileName: string; includeExtraction?: boolean; onProgress?: ParseProviderInput["onProgress"] }): Promise<ProviderResult>;
@@ -156,7 +149,7 @@ export interface DrawingProvider {
   configSnapshot(settings: IntegrationSettingsSnapshot): Record<string, unknown>;
   /** Synchronous parse + (optional) extract. */
   parse(input: ParseProviderInput, settings: IntegrationSettingsSnapshot): Promise<ProviderResult>;
-  /** If present, provider supports async/queued operation (used by LandingAI). */
+  /** If present, provider supports async/queued operation. */
   async?: ProviderAsyncCapabilities;
 }
 

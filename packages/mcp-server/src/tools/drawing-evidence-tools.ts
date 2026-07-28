@@ -311,7 +311,7 @@ function isEvidenceSourceDocument(doc: any) {
 }
 
 /**
- * Reads the cached drawing-evidence record produced by any provider (LandingAI or Gemini).
+ * Reads the cached drawing-evidence record produced by the configured provider.
  * The schemaVersion=2 record lives at structuredData.drawingEvidence.
  */
 function drawingEvidenceFromDocument(doc: JsonRecord) {
@@ -601,7 +601,7 @@ function flattenObjectLines(value: unknown, prefix = "", limit = 80): string[] {
   return [`${prefix}: ${String(value)}`];
 }
 
-/** Provider-agnostic helpers — used for LandingAI ADE chunks and Gemini-emitted chunks alike. */
+/** Provider-agnostic helpers for cached drawing-extraction chunks. */
 
 function providerChunkText(chunk: JsonRecord) {
   return compactText(chunk.markdown ?? chunk.text ?? chunk.content ?? "", 2_500);
@@ -658,10 +658,7 @@ function providerRegions(args: {
   const providerId = String(args.evidenceSummary?.provider ?? "");
   const parseSource = providerId ? `${providerId.toLowerCase()}_parse` : "drawing_evidence_parse";
   const extractSource = providerId ? `${providerId.toLowerCase()}_extract` : "drawing_evidence_extract";
-  const labelPrefix = providerId === "landingAi" ? "LandingAI"
-    : providerId === "geminiPro" ? "Gemini Pro"
-    : providerId === "geminiFlash" ? "Gemini Flash"
-    : "Drawing evidence";
+  const labelPrefix = providerId === "gemini" ? "Gemini" : "Drawing evidence";
 
   const parse = asRecord(args.evidenceSummary?.parse);
   const chunks = asArray(parse.chunks).map(asRecord).filter((chunk) => providerChunkPage(chunk) === args.pageNumber);
@@ -1050,18 +1047,12 @@ async function getWorkspace() {
 async function getSettingsFingerprint() {
   const settings = await apiGet<JsonRecord>("/settings").catch(() => null);
   const integrations = asRecord(settings?.integrations);
-  const provider = String(integrations.drawingExtractionProvider ?? (integrations.landingAiDrawingExtractionEnabled === true ? "landingAi" : "none"));
-  const landingAiKey = String(integrations.landingAiApiKey ?? "");
-  const geminiKey = String(integrations.geminiApiKey ?? "");
+  const provider = integrations.drawingExtractionProvider === "gemini" ? "gemini" : "none";
+  const geminiKey = String(integrations.geminiApiKey ?? integrations.geminiKey ?? "");
   return {
     drawingExtractionProvider: provider,
-    drawingExtractionEnabled: integrations.drawingExtractionEnabled === true || integrations.landingAiDrawingExtractionEnabled === true,
-    landingAiEndpoint: integrations.landingAiEndpoint || "",
-    landingAiParseModel: integrations.landingAiParseModel || "",
-    landingAiExtractModel: integrations.landingAiExtractModel || "",
-    landingAiKeyHash: landingAiKey ? hashText(landingAiKey, 10) : "",
-    geminiProModel: integrations.geminiProModel || "",
-    geminiFlashModel: integrations.geminiFlashModel || "",
+    drawingExtractionEnabled: integrations.drawingExtractionEnabled === true,
+    drawingExtractionModel: integrations.drawingExtractionModel || "",
     geminiThinkingEnabled: integrations.geminiThinkingEnabled !== false,
     geminiKeyHash: geminiKey ? hashText(geminiKey, 10) : "",
   };
@@ -1271,7 +1262,7 @@ async function buildAtlas(options: { force?: boolean; renderDpis?: number[]; max
       documentId: entry.documentId,
       status: entry.status ?? "active",
       sourceRole: entry.sourceRole ?? null,
-      drawingEvidenceEnabled: entry.drawingEvidenceEnabled !== false && entry.landingAiEnabled !== false,
+      drawingEvidenceEnabled: entry.drawingEvidenceEnabled !== false,
     })),
   });
   if (!options.force && currentEngine.atlas?.fingerprint === fingerprint && currentEngine.atlas?.version === ENGINE_VERSION) {
@@ -1333,7 +1324,7 @@ async function buildAtlas(options: { force?: boolean; renderDpis?: number[]; max
     const nativePagesByNumber = new Map(nativePages.map((page) => [Number(page.pageNumber), page]));
     const atlasRequest = atlasRequestByDocumentId.get(String(doc.id ?? ""));
     const shouldQueueDrawingEvidence = !atlasRequest
-      || (atlasRequest.drawingEvidenceEnabled !== false && atlasRequest.landingAiEnabled !== false);
+      || atlasRequest.drawingEvidenceEnabled !== false;
     const cachedEvidenceSummary = drawingEvidenceFromDocument(doc);
     const queuedEvidenceSummary = shouldQueueDrawingEvidence && (!cachedEvidenceSummary || cachedEvidenceSummary.pending)
       ? queueDrawingEvidenceSummary({
@@ -2302,7 +2293,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     "addSourceToDrawingAtlas",
     [
       "Request that a source document be included in the Drawing Evidence Engine atlas during live estimating.",
-      "Use this when the agent decides a PDF belongs in visual/source-native evidence even if it was not pre-classified as a drawing. The request is persisted with a rationale, can optionally promote the documentType to drawing, and starts the configured drawing-extraction provider (LandingAI / Gemini) asynchronously when enabled. By default it returns quickly; batch related source additions, then call buildDrawingAtlas once or let searchDrawingRegions perform one lazy rebuild.",
+      "Use this when the agent decides a PDF belongs in visual/source-native evidence even if it was not pre-classified as a drawing. The request is persisted with a rationale, can optionally promote the documentType to drawing, and queues the configured Gemini drawing extraction when enabled. By default it returns quickly; batch related source additions, then call buildDrawingAtlas once or let searchDrawingRegions perform one lazy rebuild.",
       "For DWG/DXF, this routes through the existing CAD adapter. For BIM/3D model files, use the model asset adapter/tools; buildDrawingAtlas indexes model assets separately.",
     ].join(" "),
     {
@@ -2310,7 +2301,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
       reason: z.string().min(12).describe("Estimator rationale for why this source belongs in the drawing evidence atlas."),
       sourceRole: z.enum(["drawing", "plan", "layout", "detail", "schedule", "bom", "parts_list", "lift_plan", "spec_drawing", "cad", "other"]).default("other"),
       promoteToDrawing: z.boolean().default(false).describe("If true, also persist documentType='drawing'. Leave false for one-off atlas inclusion without changing the document classification."),
-      runDrawingExtraction: z.boolean().default(true).describe("For PDFs, start optional drawing-extraction provider (LandingAI / Gemini Pro / Gemini Flash) enrichment in the background if enabled in settings."),
+      runDrawingExtraction: z.boolean().default(true).describe("For PDFs, queue optional Gemini drawing extraction if enabled in settings."),
       forceDrawingExtraction: z.boolean().default(false).describe("For PDFs, ignore any existing drawing-extraction cache for this document."),
       rebuildAtlas: z.boolean().default(false).describe("Rebuild the Drawing Evidence Engine atlas immediately after recording the request. Prefer false during live estimating; batch source additions, then call buildDrawingAtlas once or let searchDrawingRegions rebuild lazily."),
       maxPagesPerDocument: z.coerce.number().int().positive().optional().describe("Optional safety cap for the immediate atlas rebuild."),
@@ -2417,12 +2408,12 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     [
       "Promote a project PDF to drawing evidence during the live estimating process.",
       "Use this when a PDF was uploaded/classified as reference/spec/vendor but the agent determines from workspace context, extracted text, a rendered preview, or the estimating task that it should be treated as a construction drawing, plan, layout, detail, schedule, BOM, parts list, lift plan, or other drawing-derived evidence.",
-      "This persists documentType='drawing', optionally starts the configured drawing-extraction provider (LandingAI / Gemini) for that one PDF in the background, and rebuilds the atlas so searchDrawingRegions can retrieve the Azure/local/PDF-native evidence immediately.",
+      "This persists documentType='drawing', optionally queues Gemini drawing extraction for that one PDF, and rebuilds the atlas so searchDrawingRegions can retrieve the Azure/local/PDF-native evidence immediately.",
     ].join(" "),
     {
       documentId: z.string().describe("Source document id for the PDF to promote."),
       reason: z.string().min(12).describe("Estimator rationale for changing the classification. This becomes part of the audit trace."),
-      runDrawingExtraction: z.boolean().default(true).describe("Start optional drawing-extraction provider (LandingAI / Gemini) enrichment for this document in the background if enabled in settings."),
+      runDrawingExtraction: z.boolean().default(true).describe("Queue optional Gemini drawing extraction for this document if enabled in settings."),
       forceDrawingExtraction: z.boolean().default(false).describe("Ignore any existing drawing-extraction cache for this document."),
       rebuildAtlas: z.boolean().default(true).describe("Rebuild the Drawing Evidence Engine atlas immediately after promotion."),
       maxPagesPerDocument: z.coerce.number().int().positive().optional().describe("Optional safety cap for the immediate atlas rebuild."),
@@ -2508,7 +2499,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     "buildDrawingAtlas",
     [
       "Precompute the Drawing Evidence Engine atlas for this project once per package.",
-      "It renders every PDF already classified/promoted/requested as drawing evidence at multiple resolutions, starts the configured drawing-extraction provider (LandingAI / Gemini) enrichment in the background, indexes completed provider regions when ready, indexes CAD/DWG/DXF via the native takeoff adapter, indexes BIM/3D models via the model asset adapter, builds a sheet/source registry, and creates semantic regions for title blocks, schedules/BOMs, notes, plans, details, legends, native layers, entities, model quantities, and source-native evidence.",
+      "It renders every PDF already classified/promoted/requested as drawing evidence at multiple resolutions, queues configured Gemini drawing extraction, indexes completed provider regions when ready, indexes CAD/DWG/DXF via the native takeoff adapter, indexes BIM/3D models via the model asset adapter, builds a sheet/source registry, and creates semantic regions for title blocks, schedules/BOMs, notes, plans, details, legends, native layers, entities, model quantities, and source-native evidence.",
       "Call this before searching or inspecting drawing evidence. Reuse the atlas unless documents changed. If a relevant PDF is missing because it was classified as reference/spec/vendor, call addSourceToDrawingAtlas with a rationale, then search again.",
     ].join(" "),
     {

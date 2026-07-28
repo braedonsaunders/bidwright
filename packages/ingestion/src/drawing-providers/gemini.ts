@@ -1,12 +1,8 @@
 /**
  * Gemini drawing-extraction provider.
  *
- * One implementation serves both Gemini 2.5 Pro and Gemini 2.5 Flash — the
- * concrete model id is selected per provider variant (`geminiPro` vs `geminiFlash`).
+ * The concrete image-capable model id is tenant-configurable.
  * Uses the REST `generateContent` endpoint with PDF input via inline_data.
- *
- * Returns the same `ProviderResult` shape as LandingAI: parse.markdown,
- * parse.chunks (with grounding), and extract.extraction (drawing fields).
  */
 
 import type {
@@ -19,8 +15,7 @@ import type {
 } from "./types.js";
 import { hashFingerprint, encodeBase64 } from "./util.js";
 
-const DEFAULT_PRO_MODEL = "gemini-2.5-pro";
-const DEFAULT_FLASH_MODEL = "gemini-2.5-flash";
+const DEFAULT_MODEL = "gemini-2.5-pro";
 
 interface GeminiCfg {
   apiKey: string;
@@ -28,16 +23,14 @@ interface GeminiCfg {
   thinkingEnabled: boolean;
 }
 
-function readSettings(settings: IntegrationSettingsSnapshot, variant: "geminiPro" | "geminiFlash"): GeminiCfg {
-  const apiKey = String(settings.geminiApiKey ?? "").trim();
-  const model = variant === "geminiPro"
-    ? (String(settings.geminiProModel ?? "").trim() || DEFAULT_PRO_MODEL)
-    : (String(settings.geminiFlashModel ?? "").trim() || DEFAULT_FLASH_MODEL);
+function readSettings(settings: IntegrationSettingsSnapshot): GeminiCfg {
+  const apiKey = String(settings.geminiApiKey ?? settings.geminiKey ?? "").trim();
+  const model = String(settings.drawingExtractionModel ?? "").trim() || DEFAULT_MODEL;
   const thinkingEnabled = settings.geminiThinkingEnabled !== false;
   return { apiKey, model, thinkingEnabled };
 }
 
-const VERBOSE_PROMPT = `You are a construction/engineering drawing parser modeled after Landing.ai's Agentic Document Extraction. Output ONE JSON object with the exact keys below. Be VERBOSE on figures — describe every visible element.
+export const DRAWING_EXTRACTION_PROMPT = `You are a construction/engineering drawing parser. Output ONE JSON object with the exact keys below. Be VERBOSE on figures — describe every visible element.
 
 {
   "markdown": "<full markdown of the drawing's content. Render text/labels/dimensions verbatim. For each figure (drawing view, schematic, photo), write a verbose paragraph describing: the view name, what is depicted, every callout/label/annotation, every dimension and what it measures, every component visible, spatial relationships between components, and any symbols. Use heading levels per page. Preserve title-block and schedule tables as markdown tables.>",
@@ -70,7 +63,7 @@ const VERBOSE_PROMPT = `You are a construction/engineering drawing parser modele
 
 CRITICAL:
 - bbox values are floats 0-1, NOT pixels. Divide pixel coords by page width/height before emitting.
-- For figure chunks: the description must mention every visible component, dimension, and label — match Landing.ai's verbose narrative quality (>= ~400 chars per non-trivial figure).
+- For figure chunks: the description must mention every visible component, dimension, and label (>= ~400 chars per non-trivial figure).
 - For attestation chunks: describe the stamp/signature/approval block contents verbatim plus visual details (color, layout, what's signed/unsigned).
 - Never hallucinate values. If a label is unclear, mark with "(illegible)" or omit. Do NOT add prefixes/suffixes that aren't in the original (do not add "0 " before drawing numbers, do not add unrelated words to titles).
 - Output ONLY valid JSON, no markdown fences.`;
@@ -109,7 +102,7 @@ async function callGemini(args: {
     contents: [{
       parts: [
         { inline_data: { mime_type: "application/pdf", data: args.pdfBase64 } },
-        { text: VERBOSE_PROMPT },
+        { text: DRAWING_EXTRACTION_PROMPT },
       ],
     }],
     generationConfig,
@@ -209,34 +202,28 @@ function tryParseJson(text: string): { ok: true; value: ParsedGeminiOutput } | {
 }
 
 class GeminiProvider implements DrawingProvider {
-  readonly id: DrawingProviderId;
-  private readonly variant: "geminiPro" | "geminiFlash";
-
-  constructor(variant: "geminiPro" | "geminiFlash") {
-    this.variant = variant;
-    this.id = variant;
-  }
+  readonly id = "gemini" as const;
 
   isConfigured(settings: IntegrationSettingsSnapshot): boolean {
-    return !!String(settings.geminiApiKey ?? "").trim();
+    return !!String(settings.geminiApiKey ?? settings.geminiKey ?? "").trim();
   }
 
   configFingerprint(settings: IntegrationSettingsSnapshot): string {
-    const cfg = readSettings(settings, this.variant);
-    return hashFingerprint([this.variant, cfg.model, cfg.thinkingEnabled ? "think" : "nothink"]);
+    const cfg = readSettings(settings);
+    return hashFingerprint([this.id, cfg.model, cfg.thinkingEnabled ? "think" : "nothink"]);
   }
 
   modelLabel(settings: IntegrationSettingsSnapshot): string {
-    return readSettings(settings, this.variant).model;
+    return readSettings(settings).model;
   }
 
   configSnapshot(settings: IntegrationSettingsSnapshot): Record<string, unknown> {
-    const cfg = readSettings(settings, this.variant);
+    const cfg = readSettings(settings);
     return { model: cfg.model, thinkingEnabled: cfg.thinkingEnabled };
   }
 
   async parse(input: ParseProviderInput, settings: IntegrationSettingsSnapshot): Promise<ProviderResult> {
-    const cfg = readSettings(settings, this.variant);
+    const cfg = readSettings(settings);
     const cacheKey = `${input.sourceHash}:${this.configFingerprint(settings)}`;
     const meta = {
       provider: this.id,
@@ -307,10 +294,6 @@ class GeminiProvider implements DrawingProvider {
   }
 }
 
-export function createGeminiProProvider(): DrawingProvider {
-  return new GeminiProvider("geminiPro");
-}
-
-export function createGeminiFlashProvider(): DrawingProvider {
-  return new GeminiProvider("geminiFlash");
+export function createGeminiProvider(): DrawingProvider {
+  return new GeminiProvider();
 }

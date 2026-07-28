@@ -97,18 +97,11 @@ export interface IntegrationSettings {
   azureDiQueryFields: string;
   azureDiOutputFormat: "text" | "markdown";
   /** Active drawing-extraction provider for drawing PDFs. `none` disables enrichment. */
-  drawingExtractionProvider: "landingAi" | "geminiPro" | "geminiFlash" | "none";
+  drawingExtractionProvider: "gemini" | "none";
   /** Master enable for the configured provider. */
   drawingExtractionEnabled: boolean;
-  /** @deprecated kept for backward compatibility — use drawingExtractionProvider/drawingExtractionEnabled. */
-  landingAiDrawingExtractionEnabled: boolean;
-  landingAiApiKey: string;
-  landingAiEndpoint: string;
-  landingAiParseModel: string;
-  landingAiExtractModel: string;
-  /** Gemini drawing extraction model ids. (geminiApiKey is already declared above.) */
-  geminiProModel: string;
-  geminiFlashModel: string;
+  /** Image-capable Gemini model id. (geminiApiKey is already declared above.) */
+  drawingExtractionModel: string;
   /** When false, disables Gemini "thinking" mode (faster + cheaper). */
   geminiThinkingEnabled: boolean;
   autodeskClientId: string;
@@ -204,13 +197,7 @@ export const DEFAULT_SETTINGS: AllSettings = {
     azureDiOutputFormat: "text",
     drawingExtractionProvider: "none",
     drawingExtractionEnabled: false,
-    landingAiDrawingExtractionEnabled: false,
-    landingAiApiKey: "",
-    landingAiEndpoint: "https://api.va.landing.ai",
-    landingAiParseModel: "dpt-2-latest",
-    landingAiExtractModel: "extract-latest",
-    geminiProModel: "gemini-2.5-pro",
-    geminiFlashModel: "gemini-2.5-flash",
+    drawingExtractionModel: "gemini-2.5-pro",
     geminiThinkingEnabled: true,
     autodeskClientId: "",
     autodeskClientSecret: "",

@@ -5,7 +5,7 @@ const HKDF_INFO = "bidwright:settings:secret:v1";
 const KEY_BYTES = 32;
 const SECRET_FIELD_NAMES = new Set([
   "accessToken", "apiKey", "anthropicKey", "autodeskClientSecret", "azureDiKey",
-  "clientSecret", "geminiApiKey", "geminiKey", "landingAiApiKey",
+  "clientSecret", "geminiApiKey", "geminiKey",
   "oauth2ClientSecret", "openaiKey", "openrouterKey", "password",
   "refreshToken", "smtpPassword",
 ]);

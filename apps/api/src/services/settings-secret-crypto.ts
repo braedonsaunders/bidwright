@@ -13,7 +13,6 @@ const SECRET_FIELD_NAMES = new Set([
   "clientSecret",
   "geminiApiKey",
   "geminiKey",
-  "landingAiApiKey",
   "oauth2ClientSecret",
   "openaiKey",
   "openrouterKey",
