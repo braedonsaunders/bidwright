@@ -22,6 +22,12 @@ import { codexAdapter } from "./codex.js";
 import { createRuntimeBrokerPlan } from "../runtime-broker.js";
 
 const DEFAULT_MODEL = "~openai/gpt-latest";
+const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
+const MODEL_METADATA_TIMEOUT_MS = 5_000;
+
+interface OpenRouterModelMetadata {
+  contextWindow: number;
+}
 
 const OPENROUTER_ALIAS_MODELS: CliModelOption[] = [
   {
@@ -74,8 +80,8 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
   ];
 }
 
-function buildOpenRouterProviderArgs(): string[] {
-  return [
+function buildOpenRouterProviderArgs(metadata?: OpenRouterModelMetadata): string[] {
+  const args = [
     "-c",
     'model_provider="openrouter"',
     "-c",
@@ -87,6 +93,46 @@ function buildOpenRouterProviderArgs(): string[] {
     "-c",
     'model_providers.openrouter.wire_api="responses"',
   ];
+  if (metadata) {
+    args.push(
+      "-c",
+      `model_context_window=${metadata.contextWindow}`,
+      "-c",
+      `model_auto_compact_token_limit=${Math.floor(metadata.contextWindow * 0.8)}`,
+    );
+  }
+  return args;
+}
+
+async function fetchOpenRouterModelMetadata(
+  apiKey: string,
+  model: string,
+): Promise<OpenRouterModelMetadata | undefined> {
+  // OpenRouter aliases are intentionally dynamic, so Codex's own fallback
+  // metadata remains the safer choice for those. Exact provider/model slugs
+  // can be resolved against OpenRouter's current model catalog.
+  if (model.startsWith("~")) return undefined;
+
+  try {
+    const response = await fetch(OPENROUTER_MODELS_URL, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal: AbortSignal.timeout(MODEL_METADATA_TIMEOUT_MS),
+    });
+    if (!response.ok) return undefined;
+    const data = await response.json() as {
+      data?: Array<{
+        id?: string;
+        context_length?: number;
+        top_provider?: { context_length?: number };
+      }>;
+    };
+    const selected = data.data?.find((candidate) => candidate.id === model);
+    const contextWindow = selected?.top_provider?.context_length ?? selected?.context_length;
+    if (!Number.isSafeInteger(contextWindow) || Number(contextWindow) <= 0) return undefined;
+    return { contextWindow: Number(contextWindow) };
+  } catch {
+    return undefined;
+  }
 }
 
 function codexCommand(customPath?: string): string {
@@ -102,20 +148,23 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
   if (!apiKey) {
     throw new Error("The OpenRouter runtime requires an OpenRouter API key.");
   }
+  const model = ctx.model || DEFAULT_MODEL;
+  const modelMetadata = await fetchOpenRouterModelMetadata(apiKey, model);
 
   return createRuntimeBrokerPlan(
     {
       transport: "codex-app-server",
       projectDir: ctx.projectDir,
       prompt: ctx.prompt,
-      model: ctx.model || DEFAULT_MODEL,
+      model,
       reasoningEffort: ctx.reasoningEffort,
       resumeSessionId,
       codexCommand: codexCommand(ctx.customCliPath),
       appServerArgs: [
-        ...buildOpenRouterProviderArgs(),
+        ...buildOpenRouterProviderArgs(modelMetadata),
         ...buildMcpConfigArgs(ctx),
       ],
+      suppressUnknownModelMetadataWarning: Boolean(modelMetadata),
     },
     { OPENROUTER_API_KEY: apiKey },
   );

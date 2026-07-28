@@ -65,6 +65,8 @@ rl.on("line", (line) => {
     send({ id: msg.id, result: { turn: { id: "turn_test", status: "inProgress", items: [] } } });
     send({ method: "thread/tokenUsage/updated", params: { tokenUsage: { total: { totalTokens: 123 } } } });
     send({ method: "account/rateLimits/updated", params: { rateLimits: { limitId: "codex" } } });
+    send({ method: "warning", params: { message: "Model metadata for \`gpt-test\` not found. Defaulting to fallback metadata; this can degrade performance and cause issues." } });
+    send({ method: "warning", params: { message: "A different runtime warning" } });
     send({ method: "turn/started", params: { turn: { id: "turn_test", status: "inProgress" } } });
     send({ method: "item/completed", params: { item: { id: "item_test", type: "agentMessage", text: "done" } } });
     send({ method: "turn/completed", params: { turn: { id: "turn_test", status: "completed" } } });
@@ -82,6 +84,7 @@ rl.on("line", (line) => {
       reasoningEffort: "medium",
       codexCommand: fakeCodex,
       appServerArgs: [],
+      suppressUnknownModelMetadataWarning: true,
     }),
     { mode: 0o600 },
   );
@@ -106,6 +109,22 @@ rl.on("line", (line) => {
         || message.method === "account/rateLimits/updated",
     ),
     false,
+  );
+  assert.equal(
+    result.messages.some(
+      (message) =>
+        message.method === "warning"
+        && message.params?.message?.startsWith("Model metadata for `gpt-test` not found."),
+    ),
+    false,
+  );
+  assert.equal(
+    result.messages.some(
+      (message) =>
+        message.method === "warning"
+        && message.params?.message === "A different runtime warning",
+    ),
+    true,
   );
   assert.equal(
     result.messages.some(

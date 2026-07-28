@@ -2346,7 +2346,9 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const [cliPendingQuestion, setCliPendingQuestion] = useState<PendingQuestionPrompt | null>(null);
   const [personas, setPersonas] = useState<EstimatorPersona[]>([]);
   const [selectedPersonaId, setSelectedPersonaId] = useState<string | null>(null);
-  const [chatMode, setChatMode] = useState<AgentChatMode>("qa");
+  const [chatMode, setChatMode] = useState<AgentChatMode>(
+    autoStartIntake ? "build_estimate" : "qa",
+  );
   const [sseConnected, setSseConnected] = useState(false);
   const [intakeScope, setIntakeScope] = useState("");
   const [thinkingBlocks, setThinkingBlocks] = useState<Array<{ id: string; content: string }>>([]);
@@ -2685,6 +2687,14 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       setInput(prefill ?? "");
     }
   }, [open, prefill]);
+
+  // A package intake is always a full estimate-building workflow. Select that
+  // mode as soon as the intake intent reaches the panel instead of waiting for
+  // settings and document ingestion to finish before handleStartIntake runs.
+  // Normal quote-panel opens still default to read-only Q&A.
+  useEffect(() => {
+    if (autoStartIntake) setChatMode("build_estimate");
+  }, [autoStartIntake]);
 
   // Auto-scroll only when user hasn't manually scrolled up
   useEffect(() => {

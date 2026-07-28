@@ -82,9 +82,23 @@ const FORWARDED_CODEX_NOTIFICATIONS = new Set([
   "warning",
 ]);
 
-export function shouldForwardCodexNotification(message: RpcMessage): boolean {
+function isUnknownModelMetadataWarning(
+  message: RpcMessage,
+  request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>,
+): boolean {
+  return message.method === "warning"
+    && request.suppressUnknownModelMetadataWarning === true
+    && typeof message.params?.message === "string"
+    && message.params.message.startsWith(`Model metadata for \`${request.model}\` not found.`);
+}
+
+export function shouldForwardCodexNotification(
+  message: RpcMessage,
+  request?: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>,
+): boolean {
   return typeof message.method === "string"
-    && FORWARDED_CODEX_NOTIFICATIONS.has(message.method);
+    && FORWARDED_CODEX_NOTIFICATIONS.has(message.method)
+    && (!request || !isUnknownModelMetadataWarning(message, request));
 }
 
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
@@ -144,7 +158,7 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
     }
 
     if (message.method) {
-      if (shouldForwardCodexNotification(message)) emit(message);
+      if (shouldForwardCodexNotification(message, request)) emit(message);
       if (message.method === "turn/completed" && turnCompletion) {
         const status = String(message.params?.turn?.status || "completed");
         turnCompletion.resolve(status);

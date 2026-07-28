@@ -81,3 +81,49 @@ test("OpenRouter runtime accepts only OpenRouter-style model ids and API-key aut
     { authenticated: true, method: "api_key" },
   );
 });
+
+test("OpenRouter supplies exact model context metadata to Codex App Server", async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), "bidwright-openrouter-metadata-"));
+  const fakeCodex = join(projectDir, "codex");
+  await writeFile(fakeCodex, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: [{
+      id: "moonshotai/kimi-k3",
+      context_length: 1_048_576,
+      top_provider: { context_length: 1_048_576 },
+    }],
+  }));
+
+  try {
+    const plan = await openRouterAdapter.buildSpawnPlan({
+      projectDir,
+      prompt: "verify Kimi metadata",
+      model: "moonshotai/kimi-k3",
+      reasoningEffort: "high",
+      customCliPath: fakeCodex,
+      apiKeys: { openrouter: "sk-or-test-secret" },
+      mcpRunner: "node",
+      mcpArgs: ["/app/mcp-server.js"],
+      mcpEnv: {
+        BIDWRIGHT_API_URL: "http://localhost:4001",
+        BIDWRIGHT_AUTH_TOKEN: "test-mcp-token",
+        BIDWRIGHT_PROJECT_ID: "project-test",
+        BIDWRIGHT_REVISION_ID: "revision-test",
+        BIDWRIGHT_QUOTE_ID: "quote-test",
+        BIDWRIGHT_AGENT_MODE: "build_estimate",
+      },
+      isWin: false,
+      mcpConfigPath: join(projectDir, ".bidwright-mcp-config.json"),
+      agentHomeDir: null,
+    });
+    const requestPath = plan.args[plan.promptHandling.index];
+    const request = JSON.parse(await readFile(requestPath, "utf8"));
+    assert.equal(request.suppressUnknownModelMetadataWarning, true);
+    assert.equal(request.appServerArgs.includes("model_context_window=1048576"), true);
+    assert.equal(request.appServerArgs.includes("model_auto_compact_token_limit=838860"), true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(projectDir, { recursive: true, force: true });
+  }
+});

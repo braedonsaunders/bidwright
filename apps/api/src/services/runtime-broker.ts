@@ -17,6 +17,7 @@ export type RuntimeBrokerRequest =
       resumeSessionId?: string;
       codexCommand: string;
       appServerArgs: string[];
+      suppressUnknownModelMetadataWarning?: boolean;
     }
   | {
       transport: "claude-agent-sdk";
