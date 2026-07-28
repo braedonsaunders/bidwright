@@ -92,8 +92,8 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
   app.get("/settings", async (request) => request.store!.getSettings());
 
   app.get("/settings/navigation", async (request) => {
-    const settings = await request.store!.getSettings();
-    const parsed = navigationConfigSchema.safeParse(settings.general.navigation);
+    const general = await request.store!.getOrganizationGeneral();
+    const parsed = navigationConfigSchema.safeParse(general.navigation);
     return { config: parsed.success ? normalizeNavigationConfig(parsed.data) : null };
   });
 
@@ -113,10 +113,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     const config = normalizeNavigationConfig(parsed.data);
-    const current = await request.store!.getSettings();
-    await request.store!.updateSettings({
-      general: { ...current.general, navigation: config },
-    });
+    await request.store!.updateOrganizationGeneral({ navigation: config });
     return { config };
   });
 

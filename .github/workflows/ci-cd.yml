@@ -79,8 +79,11 @@ jobs:
       - name: Build web
         run: pnpm --filter @bidwright/web build
 
-      - name: Run schedule unit tests
-        run: pnpm exec tsx --test apps/web/lib/schedule-utils.test.ts
+      - name: Run focused unit tests
+        run: >
+          pnpm exec tsx --test
+          apps/api/src/middleware/auth-route-policy.test.ts
+          apps/web/lib/schedule-utils.test.ts
 
       - name: Validate production compose
         run: docker compose -f docker-compose.prod.yml config > /dev/null
@@ -219,8 +222,10 @@ jobs:
         env:
           PGPASSWORD: ${{ secrets.DOKPLOY_PG_PASSWORD }}
           REFRESH_TOKEN: ${{ secrets.DOKPLOY_REFRESH_TOKEN }}
+          INTEGRATIONS_ENCRYPTION_KEY: ${{ secrets.BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
+          : "${INTEGRATIONS_ENCRYPTION_KEY:?BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY is not configured}"
           SHORT_SHA="${GITHUB_SHA:0:7}"
           NEW_TAG="sha-${SHORT_SHA}"
           echo "Pinning ${TAG_ENV_KEY}=${NEW_TAG} on Dokploy compose '${COMPOSE_NAME}'…"
@@ -228,12 +233,31 @@ jobs:
           # Update the compose's stored env (postgres is the source of truth;
           # Dokploy writes it to disk on each deploy). Bare-quotes the
           # constants to keep psql/regex sane.
-          psql -h dokploy-postgres -U dokploy -d dokploy -v ON_ERROR_STOP=1 <<SQL
+          psql -h dokploy-postgres -U dokploy -d dokploy \
+            -v ON_ERROR_STOP=1 \
+            -v encryption_key="${INTEGRATIONS_ENCRYPTION_KEY}" <<SQL
+          UPDATE compose
+          SET env =
+            CASE
+              WHEN env ~ '(^|\n)INTEGRATIONS_ENCRYPTION_KEY='
+                THEN regexp_replace(
+                  env,
+                  '(^|\n)INTEGRATIONS_ENCRYPTION_KEY=[^\n]*',
+                  E'\\\\1INTEGRATIONS_ENCRYPTION_KEY=' || :'encryption_key'
+                )
+              ELSE rtrim(env, E'\n') || E'\nINTEGRATIONS_ENCRYPTION_KEY=' || :'encryption_key'
+            END
+          WHERE name = '${COMPOSE_NAME}';
           UPDATE compose
           SET env = regexp_replace(env, '${TAG_ENV_KEY}=[^\n]*', '${TAG_ENV_KEY}=${NEW_TAG}')
           WHERE name = '${COMPOSE_NAME}';
           SELECT
-            (regexp_match(env, '${TAG_ENV_KEY}=([^\n]+)'))[1] AS confirmed_tag
+            (regexp_match(env, '${TAG_ENV_KEY}=([^\n]+)'))[1] AS confirmed_tag,
+            CASE
+              WHEN env ~ '(^|\n)INTEGRATIONS_ENCRYPTION_KEY=[^\n]+'
+                THEN 'configured'
+              ELSE 'missing'
+            END AS encryption_key
           FROM compose WHERE name = '${COMPOSE_NAME}';
           SQL
 

@@ -16601,6 +16601,39 @@ export class PrismaApiStore {
 
   // ── Settings ───────────────────────────────────────────────────────────
 
+  async getOrganizationGeneral(): Promise<AppSettings["general"]> {
+    const settings = await this.db.organizationSettings.findFirst({
+      where: { organizationId: this.organizationId },
+      select: { general: true },
+    });
+    return {
+      ...DEFAULT_SETTINGS.general,
+      ...((settings?.general as Partial<AppSettings["general"]> | null) ?? {}),
+    };
+  }
+
+  async updateOrganizationGeneral(
+    patch: Partial<AppSettings["general"]>,
+  ): Promise<AppSettings["general"]> {
+    const general = {
+      ...(await this.getOrganizationGeneral()),
+      ...patch,
+    };
+    await this.db.organizationSettings.upsert({
+      where: { organizationId: this.organizationId },
+      create: {
+        organizationId: this.organizationId,
+        general: toPrismaJson(general),
+        updatedAt: new Date(),
+      },
+      update: {
+        general: toPrismaJson(general),
+        updatedAt: new Date(),
+      },
+    });
+    return general;
+  }
+
   async getOrganizationDefaults(): Promise<AppSettings["defaults"]> {
     const settings = await this.db.organizationSettings.findFirst({
       where: { organizationId: this.organizationId },
