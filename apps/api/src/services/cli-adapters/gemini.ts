@@ -31,7 +31,12 @@ import type {
   SpawnCtx,
   SpawnPlan,
 } from "./types.js";
-import { getCliVersion, homeDir, resolveCliCommand } from "./shared.js";
+import {
+  environmentReferences,
+  getCliVersion,
+  homeDir,
+  resolveCliCommand,
+} from "./shared.js";
 
 const ADAPTER_ID = "gemini";
 
@@ -78,7 +83,7 @@ async function writeGeminiSettings(ctx: PrepareWorkspaceCtx): Promise<void> {
       bidwright: {
         command: ctx.mcpRunner,
         args: ctx.mcpArgs,
-        env: ctx.mcpEnv,
+        env: environmentReferences(ctx.mcpEnv),
       },
     },
     // Future-proof — Gemini honors a tools allowlist similar to Claude Code.
@@ -90,7 +95,7 @@ async function writeGeminiSettings(ctx: PrepareWorkspaceCtx): Promise<void> {
   await writeFile(
     join(settingsDir, "settings.json"),
     JSON.stringify(settings, null, 2),
-    "utf-8",
+    { encoding: "utf-8", mode: 0o600 },
   );
 }
 
@@ -179,14 +184,7 @@ export const geminiAdapter: CliAdapter = {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {
-      // Server mode: only the per-user namespace counts. Gemini reads its
-      // OAuth from ~/.gemini/credentials.json by default; we redirect that
-      // via HOME=<agentHomeDir> at spawn so the OAuth lands here.
-      const candidates = [
-        join(agentHomeDir, ".gemini", "credentials.json"),
-        join(agentHomeDir, ".gemini", "auth.json"),
-      ];
-      if (candidates.some(existsSync)) return { authenticated: true, method: "oauth" };
+      // Server mode is API-key-only; cached interactive OAuth is desktop-only.
       return { authenticated: false, method: "none" };
     }
     const home = homeDir();
@@ -216,11 +214,9 @@ export const geminiAdapter: CliAdapter = {
   async prepareWorkspace(ctx) {
     await writeGeminiSettings(ctx);
     if (ctx.agentHomeDir) {
-      // Server mode: redirect Gemini at the per-user namespace via HOME so
-      // its ~/.gemini/credentials.json lands under <agentHomeDir>/.gemini/
-      // and never collides with another container user.
-      await mkdir(join(ctx.agentHomeDir, ".gemini"), { recursive: true });
-      return { extraEnv: { HOME: ctx.agentHomeDir } };
+      const runtimeHome = join(ctx.agentHomeDir, "runtime", "gemini-home");
+      await mkdir(join(runtimeHome, ".gemini"), { recursive: true });
+      return { extraEnv: { HOME: runtimeHome } };
     }
     return {};
   },

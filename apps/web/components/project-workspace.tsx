@@ -155,20 +155,22 @@ import type {
 } from "@/components/workspace/editors/bidwright-model-editor";
 import { SearchablePicker } from "@/components/shared/searchable-picker";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  EmptyState,
   Input,
   Label,
-  Select,
   Separator,
   Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+  Select,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import { validateEstimateWorkspace, type EstimateValidationWorkspaceLike } from "@bidwright/domain";
 import type { QualityFinding } from "@/components/workspace/quality-panel";
@@ -829,7 +831,7 @@ function RevisionSwitcher({
                   {revisions.length} saved revision{revisions.length === 1 ? "" : "s"}
                 </div>
               </div>
-              <Button size="xs" variant="secondary" onClick={() => runAction(onCreate)} disabled={isPending}>
+              <Button size="sm" variant="secondary" onClick={() => runAction(onCreate)} disabled={isPending}>
                 <Plus className="h-3 w-3" /> New
               </Button>
             </div>
@@ -879,11 +881,11 @@ function RevisionSwitcher({
               })}
             </div>
             <div className="grid grid-cols-2 gap-1 border-t border-line p-2">
-              <Button size="xs" variant="ghost" onClick={() => runAction(onCompare)} disabled={isPending}>
+              <Button size="sm" variant="ghost" onClick={() => runAction(onCompare)} disabled={isPending}>
                 <GitCompare className="h-3 w-3" /> Compare
               </Button>
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 onClick={() => runAction(onMakeRevisionZero)}
                 disabled={isPending || currentRevision.revisionNumber === 0}
@@ -892,8 +894,8 @@ function RevisionSwitcher({
                 <RotateCcw className="h-3 w-3" /> Make Rev 0
               </Button>
               <Button
-                size="xs"
-                variant="danger"
+                size="sm"
+                variant="destructive"
                 className="col-span-2"
                 onClick={() => runAction(onDeleteCurrent)}
                 disabled={isPending || currentRevision.revisionNumber === 0}
@@ -2096,7 +2098,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
 
           <Button
             size="sm"
-            variant={agentRunState.active && !chatOpen ? "secondary" : "accent"}
+            variant={agentRunState.active && !chatOpen ? "secondary" : "default"}
             onClick={() => openAgentChat()}
             className={cn(
               "relative",
@@ -2704,7 +2706,7 @@ function SnapPdfPreviewModal({
                   {printing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Printer className="h-3 w-3" />}
                   Print
                 </Button>
-                <Button size="sm" variant="accent" onClick={downloadPdf} disabled={downloading || printing}>
+                <Button size="sm" variant="default" onClick={downloadPdf} disabled={downloading || printing}>
                   {downloading ? <Loader2 className="h-3 w-3 animate-spin" /> : <Download className="h-3 w-3" />}
                   Download
                 </Button>
@@ -3342,7 +3344,7 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
                 <div className="flex items-center gap-2 text-sm font-semibold text-fg"><Library className="h-4 w-4 text-accent" /> Factor Library</div>
                 <div className="mt-1 text-[11px] text-fg/55">Book-backed productivity factors and organization standards.</div>
               </div>
-              <Button size="xs" variant="secondary" onClick={() => setFlyout({ mode: "create" })} disabled={isPending}><Plus className="h-3 w-3" /> Custom</Button>
+              <Button size="sm" variant="secondary" onClick={() => setFlyout({ mode: "create" })} disabled={isPending}><Plus className="h-3 w-3" /> Custom</Button>
             </div>
             <div className="relative mt-3">
               <SearchCheck className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/35" />
@@ -3366,7 +3368,7 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
                       </Badge>
                     </div>
                   </div>
-                  <Button size="xs" onClick={() => setFlyout({ mode: "preset", entry })} disabled={isPending}><Plus className="h-3 w-3" /> Add</Button>
+                  <Button size="sm" onClick={() => setFlyout({ mode: "preset", entry })} disabled={isPending}><Plus className="h-3 w-3" /> Add</Button>
                 </div>
                 <p className="mt-2 line-clamp-3 text-xs leading-5 text-fg/60">{entry.description}</p>
                 <div className="mt-2 truncate text-[10px] text-fg/40">{factorEvidenceLabel(entry)}</div>
@@ -3482,10 +3484,10 @@ function FactorRow({
         <div className="mt-0.5 text-fg/40">{totals?.targetCount ?? 0} targets</div>
       </div>
       <div className="flex justify-end gap-1">
-        <Button size="xs" variant="ghost" className="h-8 px-2" onClick={onEdit} disabled={disabled}>
+        <Button size="sm" variant="ghost" className="h-8 px-2" onClick={onEdit} disabled={disabled}>
           <Settings2 className="h-3.5 w-3.5" />
         </Button>
-        <Button size="xs" variant="ghost" className="h-8 px-2" onClick={onDelete} disabled={disabled}>
+        <Button size="sm" variant="ghost" className="h-8 px-2" onClick={onDelete} disabled={disabled}>
           <Trash2 className="h-3.5 w-3.5 text-danger" />
         </Button>
       </div>
@@ -3587,7 +3589,7 @@ function FactorFlyout({
             <div className="text-sm font-semibold text-fg">{title}</div>
             <div className="mt-1 text-[11px] text-fg/45">{draft.code || sourceTypeLabel(draft.sourceType)}</div>
           </div>
-          <Button size="xs" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <Button size="sm" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-auto p-5">
@@ -4158,10 +4160,10 @@ function PhasesTab({ workspace, onApply, onError }: { workspace: ProjectWorkspac
               <Badge tone="info">{topLevelCount} top level</Badge>
             </div>
           </div>
-          <Button size="xs" onClick={() => addPhase(null)} disabled={isPending}><Plus className="h-3.5 w-3.5" /> Add phase</Button>
+          <Button size="sm" onClick={() => addPhase(null)} disabled={isPending}><Plus className="h-3.5 w-3.5" /> Add phase</Button>
         </div>
       </CardHeader>
-      <CardBody className="min-h-0 flex-1 overflow-hidden p-0">
+      <CardContent className="min-h-0 flex-1 overflow-hidden p-0">
         {phases.length === 0 ? (
           <div className="flex h-full items-center justify-center p-8">
             <EmptyState>No phases defined</EmptyState>
@@ -4214,7 +4216,7 @@ function PhasesTab({ workspace, onApply, onError }: { workspace: ProjectWorkspac
             </table>
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </Card>
     {detailPhase ? (
       <PhaseDetailFlyout
@@ -4326,13 +4328,13 @@ function PhaseRow({
       </td>
       <td className="border-b border-line px-2 py-1 align-middle">
         <div className="flex justify-end gap-0.5">
-          <Button size="xs" variant="ghost" className="h-6 w-6 px-0" onClick={() => onAddChild(phase.id)} disabled={isPending} title="Add child phase" aria-label="Add child phase">
+          <Button size="sm" variant="ghost" className="h-6 w-6 px-0" onClick={() => onAddChild(phase.id)} disabled={isPending} title="Add child phase" aria-label="Add child phase">
             <Plus className="h-3.5 w-3.5" />
           </Button>
-          <Button size="xs" variant="ghost" className="h-6 w-6 px-0" onClick={() => onOpenDetail(phase.id)} disabled={isPending} title="Edit phase" aria-label="Edit phase">
+          <Button size="sm" variant="ghost" className="h-6 w-6 px-0" onClick={() => onOpenDetail(phase.id)} disabled={isPending} title="Edit phase" aria-label="Edit phase">
             <Settings2 className="h-3.5 w-3.5" />
           </Button>
-          <Button size="xs" variant="ghost" className="h-6 w-6 px-0" onClick={() => onDelete(phase.id)} disabled={isPending} title="Delete phase" aria-label="Delete phase">
+          <Button size="sm" variant="ghost" className="h-6 w-6 px-0" onClick={() => onDelete(phase.id)} disabled={isPending} title="Delete phase" aria-label="Delete phase">
             <Trash2 className="h-3.5 w-3.5 text-danger" />
           </Button>
         </div>
@@ -4421,7 +4423,7 @@ function PhaseDetailFlyout({
             </div>
             <div className="mt-1 truncate text-[11px] text-fg/45">{phase.path}</div>
           </div>
-          <Button size="xs" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <Button size="sm" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
         </div>
 
         <div className="min-h-0 flex-1 space-y-5 overflow-auto p-5">
@@ -4486,7 +4488,7 @@ function PhaseDetailFlyout({
         <div className="flex items-center justify-between border-t border-line px-5 py-4">
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => onAddChild(phase.id)} disabled={isPending}><Plus className="h-4 w-4" /> Child</Button>
-            <Button variant="danger" onClick={() => onDelete(phase.id)} disabled={isPending}><Trash2 className="h-4 w-4" /> Delete</Button>
+            <Button variant="destructive" onClick={() => onDelete(phase.id)} disabled={isPending}><Trash2 className="h-4 w-4" /> Delete</Button>
           </div>
           <div className="flex gap-2">
             <Button variant="secondary" onClick={onClose} disabled={isPending}>Cancel</Button>

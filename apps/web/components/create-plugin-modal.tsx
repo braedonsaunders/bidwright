@@ -18,21 +18,23 @@ import {
 import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  FadeIn,
   Input,
   Label,
-  ModalBackdrop,
-  Select,
   Separator,
   Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+  FadeIn,
+  ModalBackdrop,
+  Select,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { createPlugin, updatePlugin as apiUpdatePlugin } from "@/lib/api";
 import type { EntityCategory } from "@/lib/api";
 import type {
@@ -507,7 +509,7 @@ export function CreatePluginModal({
               {isEdit ? "Modify plugin settings, tools, and configuration" : "Build a new estimation tool, search integration, or content generator"}
             </p>
           </div>
-          <Button variant="ghost" size="xs" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <Button variant="ghost" size="sm" onClick={onClose}><X className="h-4 w-4" /></Button>
         </CardHeader>
 
         {/* AI Generate bar */}
@@ -524,8 +526,8 @@ export function CreatePluginModal({
                 disabled={generating}
               />
               <Button
-                variant="accent"
-                size="xs"
+                variant="default"
+                size="sm"
                 onClick={handleGenerate}
                 disabled={generating || !aiPrompt.trim()}
               >
@@ -553,7 +555,7 @@ export function CreatePluginModal({
           ))}
         </div>
 
-        <CardBody className="overflow-y-auto flex-1 space-y-4">
+        <CardContent className="overflow-y-auto flex-1 space-y-4">
           {error && (
             <div className="rounded-lg bg-danger/10 border border-danger/20 px-3 py-2 text-xs text-danger">
               {error}
@@ -634,7 +636,7 @@ export function CreatePluginModal({
                   <div key={i} className="rounded-lg border border-line p-3 space-y-2">
                     <div className="flex items-center justify-between">
                       <span className="text-xs font-medium text-fg/70">Field {i + 1}</span>
-                      <Button variant="ghost" size="xs" onClick={() => setConfigFields((f) => f.filter((_, j) => j !== i))}>
+                      <Button variant="ghost" size="sm" onClick={() => setConfigFields((f) => f.filter((_, j) => j !== i))}>
                         <Minus className="h-3 w-3" />
                       </Button>
                     </div>
@@ -724,7 +726,7 @@ export function CreatePluginModal({
                           {tool.outputType && <Badge tone="info" className="text-[9px]">{tool.outputType}</Badge>}
                         </div>
                         <div className="flex items-center gap-2">
-                          <Button variant="ghost" size="xs" onClick={(e) => {
+                          <Button variant="ghost" size="sm" onClick={(e) => {
                             e.stopPropagation();
                             setTools((t) => t.filter((_, j) => j !== ti));
                           }}>
@@ -807,7 +809,7 @@ export function CreatePluginModal({
                           <div>
                             <div className="flex items-center justify-between mb-2">
                               <Label className="mb-0">LLM Parameters</Label>
-                              <Button variant="ghost" size="xs" onClick={() => {
+                              <Button variant="ghost" size="sm" onClick={() => {
                                 const next = [...tools];
                                 next[ti] = { ...next[ti], parameters: [...next[ti].parameters, { name: "", type: "string", description: "", required: false }] };
                                 setTools(next);
@@ -861,7 +863,7 @@ export function CreatePluginModal({
                           <div>
                             <div className="flex items-center justify-between mb-2">
                               <Label className="mb-0">UI Sections</Label>
-                              <Button variant="ghost" size="xs" onClick={() => {
+                              <Button variant="ghost" size="sm" onClick={() => {
                                 const next = [...tools];
                                 next[ti] = { ...next[ti], uiSections: [...next[ti].uiSections, makeSectionDraft()] };
                                 setTools(next);
@@ -931,7 +933,7 @@ export function CreatePluginModal({
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
                                             <span className="text-[10px] text-fg/40 font-medium">Fields ({section.fields.length})</span>
-                                            <Button variant="ghost" size="xs" onClick={() => {
+                                            <Button variant="ghost" size="sm" onClick={() => {
                                               const next = [...tools]; next[ti].uiSections[si].fields = [...section.fields, makeFieldDraft()]; setTools(next);
                                             }}>
                                               <Plus className="h-2.5 w-2.5" /> Field
@@ -1087,7 +1089,7 @@ export function CreatePluginModal({
                                         <div>
                                           <div className="flex items-center justify-between mb-1">
                                             <span className="text-[10px] text-fg/40 font-medium">Table Columns ({section.tableColumns.length})</span>
-                                            <Button variant="ghost" size="xs" onClick={() => {
+                                            <Button variant="ghost" size="sm" onClick={() => {
                                               const next = [...tools]; next[ti].uiSections[si].tableColumns = [...section.tableColumns, makeColumnDraft()]; setTools(next);
                                             }}>
                                               <Plus className="h-2.5 w-2.5" /> Column
@@ -1216,7 +1218,7 @@ export function CreatePluginModal({
               </div>
             </FadeIn>
           )}
-        </CardBody>
+        </CardContent>
 
         {/* Footer */}
         <div className="flex items-center justify-between border-t border-line px-5 py-3 shrink-0">
@@ -1233,11 +1235,11 @@ export function CreatePluginModal({
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
             {step === "review" ? (
-              <Button variant="accent" size="sm" onClick={handleSave} disabled={saving || !name.trim()}>
+              <Button variant="default" size="sm" onClick={handleSave} disabled={saving || !name.trim()}>
                 {saving ? (isEdit ? "Saving..." : "Creating...") : (isEdit ? "Save Changes" : "Create Plugin")}
               </Button>
             ) : (
-              <Button variant="accent" size="sm" onClick={() => {
+              <Button variant="default" size="sm" onClick={() => {
                 const idx = steps.findIndex((s) => s.id === step);
                 if (idx < steps.length - 1) setStep(steps[idx + 1].id);
               }}>

@@ -23,7 +23,14 @@ import {
   type WorkspaceWorksheet,
 } from "@/lib/api";
 import type { BidwrightModelSelectionMessage } from "@/components/workspace/editors/bidwright-model-editor";
-import { Button, Input, Label, Select } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Select,
+} from "@/components/legacy-controls";
 import type { Pickup } from "@/components/workspace/takeoff/annotation-canvas";
 import { cn } from "@/lib/utils";
 
@@ -1398,7 +1405,7 @@ function SuggestSection({
                   </p>
                 </div>
                 <Button
-                  size="xs"
+                  size="sm"
                   onClick={() => void handleApply(s)}
                   disabled={applyingId !== null}
                   className="shrink-0"

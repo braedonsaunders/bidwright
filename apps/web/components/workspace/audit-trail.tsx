@@ -24,7 +24,15 @@ import {
 } from "lucide-react";
 import type { Activity, ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { getActivities, revertActivity } from "@/lib/api";
-import { Badge, Button, Combobox, EmptyState, Input } from "@/components/ui";
+import {
+  Button,
+  Input,
+} from "@appkit/ui";
+import {
+  Badge,
+  Combobox,
+  EmptyState,
+} from "@/components/legacy-controls";
 
 // ── Activity type display config ────────────────────────────────────────
 
@@ -316,7 +324,7 @@ function RevertConfirm({ open, onClose, onConfirm, isPending }: { open: boolean;
         </p>
         <div className="mt-4 flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={isPending}>Cancel</Button>
-          <Button variant="danger" size="sm" onClick={onConfirm} disabled={isPending}>
+          <Button variant="destructive" size="sm" onClick={onConfirm} disabled={isPending}>
             {isPending ? "Reverting..." : "Revert"}
           </Button>
         </div>
@@ -496,15 +504,15 @@ export function AuditTrailTab({
           />
         )}
         {hasFilters && (
-          <Button variant="ghost" size="xs" onClick={clearFilters}>
+          <Button variant="ghost" size="sm" onClick={clearFilters}>
             <X className="h-3 w-3" /> Clear
           </Button>
         )}
         <div className="flex-1" />
-        <Button variant="ghost" size="xs" onClick={() => setSortDir((d) => d === "desc" ? "asc" : "desc")} title={sortDir === "desc" ? "Newest first" : "Oldest first"}>
+        <Button variant="ghost" size="sm" onClick={() => setSortDir((d) => d === "desc" ? "asc" : "desc")} title={sortDir === "desc" ? "Newest first" : "Oldest first"}>
           {sortDir === "desc" ? "\u2193" : "\u2191"} {sortDir === "desc" ? "Newest" : "Oldest"}
         </Button>
-        <Button variant="ghost" size="xs" onClick={() => { setLoading(true); fetchActivities(); }}>
+        <Button variant="ghost" size="sm" onClick={() => { setLoading(true); fetchActivities(); }}>
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
         </Button>
       </div>
@@ -599,7 +607,7 @@ export function AuditTrailTab({
                         {activity.revertible && (
                           <Button
                             variant="ghost"
-                            size="xs"
+                            size="sm"
                             className="opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={(e) => { e.stopPropagation(); handleRevertClick(activity.id); }}
                             disabled={reverting === activity.id}
@@ -648,13 +656,13 @@ export function AuditTrailTab({
           </span>
           {totalPages > 1 && (
             <div className="flex items-center gap-1">
-              <Button variant="ghost" size="xs" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
+              <Button variant="ghost" size="sm" disabled={page === 0} onClick={() => setPage((p) => p - 1)}>
                 <ChevronLeft className="h-3 w-3" />
               </Button>
               <span className="px-1.5 text-[11px] text-fg/50">
                 {page + 1} / {totalPages}
               </span>
-              <Button variant="ghost" size="xs" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
+              <Button variant="ghost" size="sm" disabled={page >= totalPages - 1} onClick={() => setPage((p) => p + 1)}>
                 <ChevronRight className="h-3 w-3" />
               </Button>
             </div>

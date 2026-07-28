@@ -1770,8 +1770,36 @@ export interface BrandProfile {
   lastCapturedAt: string | null;
 }
 
+export const BIDWRIGHT_NAVIGATION_KEYS = [
+  "dashboard",
+  "projects",
+  "intake",
+  "quotes",
+  "clients",
+  "library",
+  "performance",
+  "settings",
+  "profile",
+] as const;
+
+export type BidwrightNavigationKey = (typeof BIDWRIGHT_NAVIGATION_KEYS)[number];
+
+export interface TenantNavigationConfig {
+  version: 1;
+  items: Array<{ key: BidwrightNavigationKey; hidden?: boolean }>;
+  knownItemKeys?: BidwrightNavigationKey[];
+}
+
 export interface AppSettings {
-  general: { orgName: string; address: string; phone: string; website: string; logoUrl: string; language: string };
+  general: {
+    orgName: string;
+    address: string;
+    phone: string;
+    website: string;
+    logoUrl: string;
+    language: string;
+    navigation?: TenantNavigationConfig;
+  };
   email: { host: string; port: number; username: string; password: string; fromAddress: string; fromName: string; authMethod?: "smtp" | "oauth2"; oauth2TenantId?: string; oauth2ClientId?: string; oauth2ClientSecret?: string };
   defaults: {
     defaultMarkup: number;

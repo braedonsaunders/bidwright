@@ -18,7 +18,13 @@ import {
   Square,
   Undo2,
 } from "lucide-react";
-import { Button, EmptyState, Select } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  EmptyState,
+  Select,
+} from "@/components/legacy-controls";
 import { saveFileNodeContent, uploadFile, type ProjectWorkspaceData } from "@/lib/api";
 import { cadEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
 import { cn } from "@/lib/utils";
@@ -229,7 +235,7 @@ export function CadTakeoffSurface({
               <Button
                 key={item.id}
                 variant={activeCommand === item.id ? "secondary" : "ghost"}
-                size="xs"
+                size="sm"
                 onClick={() => handleCommand(item.command, item.id)}
                 title={item.label}
                 aria-label={item.label}
@@ -240,22 +246,22 @@ export function CadTakeoffSurface({
             );
           })}
           <div className="mx-1 h-6 w-px shrink-0 bg-line" />
-          <Button variant="ghost" size="xs" onClick={() => editorRef.current?.sendCommand("undo")} title="Undo" aria-label="Undo" className="h-7 w-7 shrink-0 px-0">
+          <Button variant="ghost" size="sm" onClick={() => editorRef.current?.sendCommand("undo")} title="Undo" aria-label="Undo" className="h-7 w-7 shrink-0 px-0">
             <Undo2 className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => editorRef.current?.sendCommand("redo")} title="Redo" aria-label="Redo" className="h-7 w-7 shrink-0 px-0">
+          <Button variant="ghost" size="sm" onClick={() => editorRef.current?.sendCommand("redo")} title="Redo" aria-label="Redo" className="h-7 w-7 shrink-0 px-0">
             <Redo2 className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => editorRef.current?.fit()} title="Fit drawing" aria-label="Fit drawing" className="h-7 w-7 shrink-0 px-0">
+          <Button variant="ghost" size="sm" onClick={() => editorRef.current?.fit()} title="Fit drawing" aria-label="Fit drawing" className="h-7 w-7 shrink-0 px-0">
             <Maximize2 className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => editorRef.current?.save()} title="Save DXF" aria-label="Save DXF" className="h-7 w-7 shrink-0 px-0" disabled={saving}>
+          <Button variant="ghost" size="sm" onClick={() => editorRef.current?.save()} title="Save DXF" aria-label="Save DXF" className="h-7 w-7 shrink-0 px-0" disabled={saving}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
           </Button>
-          <Button variant="ghost" size="xs" onClick={onOpenDrawingIntelligence} title="Open entities" aria-label="Open entities" className="h-7 w-7 shrink-0 px-0">
+          <Button variant="ghost" size="sm" onClick={onOpenDrawingIntelligence} title="Open entities" aria-label="Open entities" className="h-7 w-7 shrink-0 px-0">
             <GitBranch className="h-3.5 w-3.5" />
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => editorRef.current?.sendCommand("-layer")} title="Layers" aria-label="Layers" className="h-7 w-7 shrink-0 px-0">
+          <Button variant="ghost" size="sm" onClick={() => editorRef.current?.sendCommand("-layer")} title="Layers" aria-label="Layers" className="h-7 w-7 shrink-0 px-0">
             <Layers className="h-3.5 w-3.5" />
           </Button>
         </div>

@@ -18,19 +18,21 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  Badge,
   Button,
   Card,
   CardHeader,
-  CardBody,
+  CardContent,
   CardTitle,
-  FadeIn,
   Input,
   Label,
+} from "@appkit/ui";
+import {
+  Badge,
+  FadeIn,
   Combobox,
   ModalBackdrop,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { PluginRuntime } from "@/components/plugin-runtime";
 import { CreatePluginModal } from "@/components/create-plugin-modal";
 import type {
@@ -140,11 +142,11 @@ function PluginConfigModal({
           <Settings className="h-4 w-4 text-fg/40 shrink-0" />
           <CardTitle className="text-sm">Configure {plugin.name}</CardTitle>
         </div>
-        <Button variant="ghost" size="xs" onClick={onCancel} disabled={saving}>
+        <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
           <X className="h-4 w-4" />
         </Button>
       </CardHeader>
-      <CardBody className="space-y-4">
+      <CardContent className="space-y-4">
         {schema.length === 0 ? (
           <div className="py-8 text-center">
             <Puzzle className="mx-auto h-6 w-6 text-fg/15 mb-2" />
@@ -173,12 +175,12 @@ function PluginConfigModal({
             <Button variant="ghost" size="sm" onClick={onCancel} disabled={saving}>
               Cancel
             </Button>
-            <Button variant="accent" size="sm" onClick={handleSave} disabled={saving}>
+            <Button variant="default" size="sm" onClick={handleSave} disabled={saving}>
               {saving ? "Saving..." : "Save Configuration"}
             </Button>
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }
@@ -476,7 +478,7 @@ export function PluginsPage({
             <Button size="sm" variant="ghost" onClick={() => importFileRef.current?.click()} disabled={importing} title="Import plugins">
               <Upload className="h-3 w-3" /> {importing ? "Importing..." : "Import"}
             </Button>
-            <Button size="sm" variant="accent" onClick={() => setShowCreateModal(true)}>
+            <Button size="sm" variant="default" onClick={() => setShowCreateModal(true)}>
               <Plus className="h-3 w-3" /> Create Plugin
             </Button>
           </div>
@@ -569,7 +571,7 @@ export function PluginsPage({
                     />
                   </div>
                 </CardHeader>
-                <CardBody className="pt-0 pb-3 px-4 flex-1 flex flex-col">
+                <CardContent className="pt-0 pb-3 px-4 flex-1 flex flex-col">
                   <div className="flex items-center justify-between flex-none">
                     <div className="flex items-center gap-3 text-[10px] text-fg/40">
                       <span className="flex items-center gap-1">
@@ -617,7 +619,7 @@ export function PluginsPage({
                       <p className="text-[9px] text-fg/30 pl-3">+{toolCount - 3} more</p>
                     )}
                   </div>
-                </CardBody>
+                </CardContent>
               </Card>
             </FadeIn>
           );
@@ -627,12 +629,12 @@ export function PluginsPage({
       {filtered.length === 0 && (
         <FadeIn delay={0.1}>
           <Card>
-            <CardBody className="py-12 text-center">
+            <CardContent className="py-12 text-center">
               <Puzzle className="mx-auto h-8 w-8 text-fg/20 mb-3" />
               <p className="text-sm text-fg/50">
                 {searchQuery ? "No plugins match your search" : "No plugins found in this category"}
               </p>
-            </CardBody>
+            </CardContent>
           </Card>
         </FadeIn>
       )}
@@ -668,7 +670,7 @@ export function PluginsPage({
                     {detailPlugin.configSchema && detailPlugin.configSchema.length > 0 && (
                       <Button
                         variant="ghost"
-                        size="xs"
+                        size="sm"
                         onClick={() => {
                           setConfiguringPlugin(detailPlugin);
                         }}
@@ -678,7 +680,7 @@ export function PluginsPage({
                     )}
                     <Button
                       variant="ghost"
-                      size="xs"
+                      size="sm"
                       onClick={() => {
                         setDetailPlugin(null);
                         setEditingPlugin(detailPlugin);
@@ -686,7 +688,7 @@ export function PluginsPage({
                     >
                       <Pencil className="h-3 w-3" /> Edit
                     </Button>
-                    <Button variant="ghost" size="xs" onClick={() => { setDetailPlugin(null); setDetailActiveTool(""); }}>
+                    <Button variant="ghost" size="sm" onClick={() => { setDetailPlugin(null); setDetailActiveTool(""); }}>
                       <X className="h-4 w-4" />
                     </Button>
                   </div>
@@ -712,7 +714,7 @@ export function PluginsPage({
                   </div>
                 )}
               </CardHeader>
-              <CardBody>
+              <CardContent>
                 {activeTool && (
                   <div className="space-y-4">
                     {/* Tool header */}
@@ -765,8 +767,8 @@ export function PluginsPage({
                           <p className="text-[10px] text-fg/40 font-medium uppercase tracking-wide">UI Preview</p>
                           {projectId && revisionId && (
                             <Button
-                              variant="accent"
-                              size="xs"
+                              variant="default"
+                              size="sm"
                               onClick={() => {
                                 setDetailPlugin(null);
                                 setExecutionModal({ plugin: detailPlugin, tool: activeTool });
@@ -795,7 +797,7 @@ export function PluginsPage({
                     )}
                   </div>
                 )}
-              </CardBody>
+              </CardContent>
             </Card>
           );
         })()}
@@ -821,11 +823,11 @@ export function PluginsPage({
                   <span className="text-[10px] text-fg/30">{executionModal.plugin.name}</span>
                 </div>
               </div>
-              <Button variant="ghost" size="xs" onClick={() => setExecutionModal(null)}>
+              <Button variant="ghost" size="sm" onClick={() => setExecutionModal(null)}>
                 <X className="h-4 w-4" />
               </Button>
             </CardHeader>
-            <CardBody>
+            <CardContent>
               {executionModal.tool.ui ? (
                 <PluginRuntime
                   schema={executionModal.tool.ui}
@@ -843,7 +845,7 @@ export function PluginsPage({
                   <p className="mt-1">It can be invoked by the AI agent via the tool system.</p>
                 </div>
               )}
-            </CardBody>
+            </CardContent>
           </Card>
         )}
       </ModalBackdrop>

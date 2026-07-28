@@ -1,10 +1,26 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import {
+  AdminHub,
+  Badge,
+  type AdminHubGroup,
+  type LinkRender,
+} from "@appkit/ui";
+import { Building2, Library, Users } from "lucide-react";
 import { adminListOrganizations, type AdminOrg } from "@/lib/api";
-import { Card, CardBody } from "@/components/ui";
-import { Building2, Users, FolderOpen } from "lucide-react";
+
+const nextLink: LinkRender = ({ href, children, className, title, ariaCurrent }) => (
+  <Link
+    href={href}
+    className={className}
+    title={title}
+    aria-current={ariaCurrent}
+  >
+    {children}
+  </Link>
+);
 
 export default function AdminOverviewPage() {
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
@@ -13,111 +29,49 @@ export default function AdminOverviewPage() {
   useEffect(() => {
     adminListOrganizations()
       .then(setOrgs)
-      .catch((err) => { console.error("Failed to fetch orgs:", err); })
+      .catch((error) => console.error("Failed to fetch organizations:", error))
       .finally(() => setLoading(false));
   }, []);
 
-  const totalUsers = orgs.reduce((s, o) => s + o.userCount, 0);
-  const totalProjects = orgs.reduce((s, o) => s + o.projectCount, 0);
+  const groups = useMemo<AdminHubGroup[]>(() => {
+    const totalUsers = orgs.reduce((sum, org) => sum + org.userCount, 0);
+    const count = (value: number) => (
+      <Badge variant="secondary">{loading ? "…" : value.toLocaleString()}</Badge>
+    );
 
-  return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold text-fg mb-6">Overview</h2>
+    return [
+      {
+        label: "Platform",
+        description: "Tenant-level operations across the Bidwright deployment.",
+        accent: "teal",
+        cards: [
+          {
+            href: "/admin/organizations",
+            title: "Organizations",
+            description: "Provision tenants, configure limits, and enter an organization.",
+            icon: <Building2 />,
+            badge: count(orgs.length),
+            linkLabel: "Manage organizations",
+          },
+          {
+            href: "/admin/users",
+            title: "People",
+            description: "Review users across every organization and manage account state.",
+            icon: <Users />,
+            badge: count(totalUsers),
+            linkLabel: "Manage people",
+          },
+          {
+            href: "/admin/catalogs",
+            title: "Shared library",
+            description: "Curate catalog templates and copy resources between tenants.",
+            icon: <Library />,
+            linkLabel: "Manage library",
+          },
+        ],
+      },
+    ];
+  }, [loading, orgs]);
 
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-4 mb-8">
-        <Link href="/admin/organizations">
-          <Card>
-            <CardBody>
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-accent/10">
-                  <Building2 className="h-5 w-5 text-accent" />
-                </div>
-                <div>
-                  <div className="text-2xl font-bold text-fg">{loading ? "..." : orgs.length}</div>
-                  <div className="text-xs text-fg/40">Organizations</div>
-                </div>
-              </div>
-            </CardBody>
-          </Card>
-        </Link>
-        <Card>
-          <CardBody>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-blue-500/10">
-                <Users className="h-5 w-5 text-blue-500" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-fg">{loading ? "..." : totalUsers}</div>
-                <div className="text-xs text-fg/40">Total Users</div>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-        <Card>
-          <CardBody>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-emerald-500/10">
-                <FolderOpen className="h-5 w-5 text-emerald-500" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-fg">{loading ? "..." : totalProjects}</div>
-                <div className="text-xs text-fg/40">Total Projects</div>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-        <Card>
-          <CardBody>
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-amber-500/10">
-                <Building2 className="h-5 w-5 text-amber-500" />
-              </div>
-              <div>
-                <div className="text-2xl font-bold text-fg">{loading ? "..." : orgs.filter((o) => o.limits.maxUsers > 0 || o.limits.maxProjects > 0).length}</div>
-                <div className="text-xs text-fg/40">With Limits</div>
-              </div>
-            </div>
-          </CardBody>
-        </Card>
-      </div>
-
-      {/* Recent orgs */}
-      <h3 className="text-sm font-semibold text-fg mb-3">Recent Organizations</h3>
-      {loading ? (
-        <div className="text-xs text-fg/40">Loading...</div>
-      ) : orgs.length === 0 ? (
-        <Card>
-          <CardBody>
-            <div className="py-6 text-center text-sm text-fg/40">
-              No organizations yet.{" "}
-              <Link href="/admin/organizations" className="text-accent hover:underline">
-                Create one
-              </Link>
-            </div>
-          </CardBody>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {orgs.slice(0, 5).map((org) => (
-            <Card key={org.id}>
-              <CardBody>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="text-sm font-medium text-fg">{org.name}</div>
-                    <div className="text-xs text-fg/40">
-                      {org.slug} &middot; {org.userCount} users &middot; {org.projectCount} projects
-                    </div>
-                  </div>
-                  <Link href="/admin/organizations" className="text-xs text-accent hover:underline">
-                    Manage
-                  </Link>
-                </div>
-              </CardBody>
-            </Card>
-          ))}
-        </div>
-      )}
-    </div>
-  );
+  return <AdminHub groups={groups} linkRender={nextLink} />;
 }

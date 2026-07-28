@@ -2,11 +2,9 @@
 
 import { useEffect, useState } from "react";
 
-import { AppShell } from "@/components/app-shell";
 import { LibraryPage } from "@/components/library-page";
 import {
   getCatalogs,
-  getProjects,
   listAssemblies,
   listDatasets,
   listPersonas,
@@ -23,12 +21,10 @@ import {
   type KnowledgeDocumentRecord,
   type KnowledgeLibraryCabinetRecord,
   type LaborUnitLibraryRecord,
-  type ProjectListItem,
   type RateSchedule,
 } from "@/lib/api";
 
 export default function LibraryRoute() {
-  const [projects, setProjects] = useState<ProjectListItem[]>([]);
   const [catalogs, setCatalogs] = useState<CatalogSummary[]>([]);
   const [rateSchedules, setRateSchedules] = useState<RateSchedule[]>([]);
   const [assemblies, setAssemblies] = useState<AssemblySummaryRecord[]>([]);
@@ -41,7 +37,6 @@ export default function LibraryRoute() {
 
   useEffect(() => {
     Promise.allSettled([
-      getProjects(),
       getCatalogs(),
       listRateSchedules(),
       listAssemblies(),
@@ -51,8 +46,7 @@ export default function LibraryRoute() {
       listDatasets(),
       listLaborUnitLibraries(),
       listPersonas(),
-    ]).then(([projectsR, catalogsR, ratesR, assembliesR, booksR, documentsR, cabinetsR, datasetsR, laborUnitsR, playbooksR]) => {
-      if (projectsR.status === "fulfilled") setProjects(projectsR.value);
+    ]).then(([catalogsR, ratesR, assembliesR, booksR, documentsR, cabinetsR, datasetsR, laborUnitsR, playbooksR]) => {
       if (catalogsR.status === "fulfilled") setCatalogs(catalogsR.value);
       if (ratesR.status === "fulfilled") setRateSchedules(ratesR.value);
       if (assembliesR.status === "fulfilled") setAssemblies(assembliesR.value);
@@ -66,18 +60,16 @@ export default function LibraryRoute() {
   }, []);
 
   return (
-    <AppShell projects={projects}>
-      <LibraryPage
-        catalogs={catalogs}
-        rateSchedules={rateSchedules}
-        assemblies={assemblies}
-        knowledgeBooks={knowledgeBooks}
-        knowledgeDocuments={knowledgeDocuments}
-        knowledgeCabinets={knowledgeCabinets}
-        datasets={datasets}
-        laborUnitLibraries={laborUnitLibraries}
-        playbooks={playbooks}
-      />
-    </AppShell>
+    <LibraryPage
+      catalogs={catalogs}
+      rateSchedules={rateSchedules}
+      assemblies={assemblies}
+      knowledgeBooks={knowledgeBooks}
+      knowledgeDocuments={knowledgeDocuments}
+      knowledgeCabinets={knowledgeCabinets}
+      datasets={datasets}
+      laborUnitLibraries={laborUnitLibraries}
+      playbooks={playbooks}
+    />
   );
 }

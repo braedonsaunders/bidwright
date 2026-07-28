@@ -1,32 +1,36 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  adminDeleteUser,
   adminListOrganizations,
   adminListOrgUsers,
-  adminUpdateUser,
-  adminDeleteUser,
   adminMoveUser,
+  adminUpdateUser,
   type AdminOrg,
   type AuthUser,
 } from "@/lib/api";
 import {
-  Button,
-  Card,
-  CardBody,
   Badge,
+  Button,
+  Drawer,
   Input,
-  ModalBackdrop,
-  CardHeader,
-  CardTitle,
   Label,
-  Select,
-} from "@/components/ui";
-import { ArrowRight, Edit3, Save, Search, Trash2, X } from "lucide-react";
+  PageHeader,
+  RecordList,
+  type RecordColumn,
+  SearchSelect,
+} from "@appkit/ui";
+import { Loader2, Save, Trash2, Users } from "lucide-react";
 
 interface UserWithOrg extends AuthUser {
   orgName: string;
   orgSlug: string;
+}
+
+function formatDate(value: string | null) {
+  if (!value) return "Never";
+  return new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" }).format(new Date(value));
 }
 
 export default function AllUsersPage() {
@@ -34,264 +38,287 @@ export default function AllUsersPage() {
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [filterOrg, setFilterOrg] = useState<string>("all");
-  const [editingUser, setEditingUser] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState("");
-  const [moveUser, setMoveUser] = useState<UserWithOrg | null>(null);
+  const [filterOrg, setFilterOrg] = useState("all");
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const selectedUser = users.find((user) => user.id === selectedId) ?? null;
 
   const fetchAll = useCallback(async () => {
+    setLoading(true);
     try {
-      const orgsData = await adminListOrganizations();
-      setOrgs(orgsData);
-      const allUsers: UserWithOrg[] = [];
-      for (const org of orgsData) {
+      const organizations = await adminListOrganizations();
+      setOrgs(organizations);
+      const grouped = await Promise.all(organizations.map(async (org) => {
         const orgUsers = await adminListOrgUsers(org.id);
-        for (const u of orgUsers) {
-          allUsers.push({ ...u, orgName: org.name, orgSlug: org.slug });
-        }
-      }
-      setUsers(allUsers);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
-  }, []);
-
-  useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  const filteredUsers = users.filter((u) => {
-    const matchSearch = !search.trim() ||
-      u.name.toLowerCase().includes(search.toLowerCase()) ||
-      u.email.toLowerCase().includes(search.toLowerCase());
-    const matchOrg = filterOrg === "all" || u.organizationId === filterOrg;
-    return matchSearch && matchOrg;
-  });
-
-  const handleRoleChange = useCallback(async (userId: string) => {
-    try {
-      await adminUpdateUser(userId, { role: editRole });
-      setEditingUser(null);
-      setUsers((prev) =>
-        prev.map((u) => (u.id === userId ? { ...u, role: editRole as AuthUser["role"] } : u))
-      );
-    } catch { /* ignore */ }
-  }, [editRole]);
-
-  const handleToggleActive = useCallback(async (user: UserWithOrg) => {
-    try {
-      await adminUpdateUser(user.id, { active: !user.active });
-      setUsers((prev) =>
-        prev.map((u) => (u.id === user.id ? { ...u, active: !u.active } : u))
-      );
-    } catch { /* ignore */ }
-  }, []);
-
-  const handleDeleteUser = useCallback(async (user: UserWithOrg) => {
-    if (!confirm(`Delete ${user.name} (${user.email}) from ${user.orgName}? This is permanent.`)) return;
-    try {
-      await adminDeleteUser(user.id);
-      setUsers((prev) => prev.filter((u) => u.id !== user.id));
-    } catch { /* ignore */ }
-  }, []);
-
-  const handleMoveUser = useCallback(async (userId: string, targetOrgId: string) => {
-    try {
-      await adminMoveUser(userId, targetOrgId);
-      setMoveUser(null);
-      fetchAll();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to move user");
+        return orgUsers.map((user) => ({ ...user, orgName: org.name, orgSlug: org.slug }));
+      }));
+      setUsers(grouped.flat());
+    } finally {
+      setLoading(false);
     }
+  }, []);
+
+  useEffect(() => {
+    void fetchAll();
   }, [fetchAll]);
 
-  return (
-    <div className="p-6">
-      <h2 className="text-xl font-bold text-fg mb-4">All Users</h2>
+  const filteredUsers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return users.filter((user) => {
+      if (filterOrg !== "all" && user.organizationId !== filterOrg) return false;
+      if (!query) return true;
+      return [user.name, user.email, user.orgName, user.orgSlug, user.role]
+        .some((value) => value.toLowerCase().includes(query));
+    });
+  }, [filterOrg, search, users]);
 
-      {/* Filters */}
-      <div className="flex items-center gap-3 mb-4">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-          <Input
-            className="h-8 pl-8 text-xs"
-            placeholder="Search by name or email..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-          />
+  const columns = useMemo<RecordColumn<UserWithOrg>[]>(() => [
+    {
+      key: "name",
+      label: "User",
+      width: "28%",
+      render: (user) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium text-fg">{user.name}</div>
+          <div className="truncate text-xs text-fg-muted">{user.email}</div>
         </div>
-        <Select
-          size="sm"
-          className="w-56"
-          value={filterOrg}
-          onValueChange={setFilterOrg}
-          options={[
-            { value: "all", label: "All Organizations" },
-            ...orgs.map((org) => ({ value: org.id, label: org.name })),
-          ]}
+      ),
+    },
+    {
+      key: "orgName",
+      label: "Organization",
+      width: "24%",
+      render: (user) => (
+        <div className="min-w-0">
+          <div className="truncate text-fg">{user.orgName}</div>
+          <div className="truncate text-xs text-fg-muted">{user.orgSlug}</div>
+        </div>
+      ),
+    },
+    {
+      key: "role",
+      label: "Role",
+      render: (user) => <Badge variant={user.role === "admin" ? "info" : "outline"}>{user.role}</Badge>,
+    },
+    {
+      key: "active",
+      label: "Status",
+      render: (user) => <Badge variant={user.active ? "success" : "destructive"}>{user.active ? "Active" : "Inactive"}</Badge>,
+    },
+    {
+      key: "lastLoginAt",
+      label: "Last login",
+      format: (value) => formatDate(value ? String(value) : null),
+    },
+  ], []);
+
+  return (
+    <>
+      <div className="space-y-5">
+        <PageHeader
+          title="People"
+          description="Review every user across the deployment and manage account access."
         />
-        <span className="text-xs text-fg/40">{filteredUsers.length} users</span>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16 text-sm text-fg-muted">
+            <Loader2 className="mr-2 size-4 animate-spin" /> Loading people…
+          </div>
+        ) : (
+          <RecordList
+            columns={columns}
+            rows={filteredUsers}
+            getRowId={(user) => user.id}
+            search={{ value: search, onChange: setSearch, placeholder: "Search people, email, organization, or role…" }}
+            filters={(
+              <SearchSelect
+                className="w-56"
+                value={filterOrg}
+                onChange={setFilterOrg}
+                searchable
+                options={[
+                  { value: "all", label: "All organizations" },
+                  ...orgs.map((org) => ({ value: org.id, label: org.name })),
+                ]}
+                ariaLabel="Filter by organization"
+              />
+            )}
+            empty={{
+              icon: <Users />,
+              title: search || filterOrg !== "all" ? "No people match these filters" : "No people found",
+              description: search || filterOrg !== "all"
+                ? "Try a broader search or select all organizations."
+                : "Users appear here after they are added to an organization.",
+            }}
+            onRowClick={(user) => setSelectedId(user.id)}
+          />
+        )}
       </div>
 
-      {loading ? (
-        <div className="text-xs text-fg/40">Loading...</div>
-      ) : users.length === 0 ? (
-        <Card>
-          <CardBody>
-            <div className="py-8 text-center text-sm text-fg/40">No users found.</div>
-          </CardBody>
-        </Card>
-      ) : (
-        <Card>
-          <CardBody className="p-0">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="text-fg/30 border-b border-line">
-                  <th className="text-left px-4 py-2.5 font-medium">Name</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Email</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Organization</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Role</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Status</th>
-                  <th className="text-left px-4 py-2.5 font-medium">Last Login</th>
-                  <th className="text-right px-4 py-2.5 font-medium">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredUsers.map((u) => (
-                  <tr key={u.id} className="border-b border-line/50 hover:bg-panel2/30">
-                    <td className="px-4 py-2 text-fg font-medium">{u.name}</td>
-                    <td className="px-4 py-2 text-fg/60">{u.email}</td>
-                    <td className="px-4 py-2">
-                      <span className="text-fg/60">{u.orgName}</span>
-                      <span className="text-fg/20 ml-1">({u.orgSlug})</span>
-                    </td>
-                    <td className="px-4 py-2">
-                      {editingUser === u.id ? (
-                        <div className="flex items-center gap-1">
-                          <Select
-                            size="xs"
-                            className="w-28"
-                            value={editRole}
-                            onValueChange={setEditRole}
-                            options={[
-                              { value: "admin", label: "admin" },
-                              { value: "estimator", label: "estimator" },
-                              { value: "viewer", label: "viewer" },
-                            ]}
-                          />
-                          <button onClick={() => handleRoleChange(u.id)} className="text-accent hover:text-accent/80">
-                            <Save className="h-3 w-3" />
-                          </button>
-                          <button onClick={() => setEditingUser(null)} className="text-fg/30 hover:text-fg/60">
-                            <X className="h-3 w-3" />
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={() => { setEditingUser(u.id); setEditRole(u.role); }}
-                          className="group flex items-center gap-1"
-                        >
-                          <Badge tone={u.role === "admin" ? "info" : "default"} className="text-[10px]">
-                            {u.role}
-                          </Badge>
-                          <Edit3 className="h-2.5 w-2.5 text-fg/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </button>
-                      )}
-                    </td>
-                    <td className="px-4 py-2">
-                      <button onClick={() => handleToggleActive(u)}>
-                        <Badge tone={u.active ? "success" : "danger"} className="text-[10px] cursor-pointer hover:opacity-80">
-                          {u.active ? "Active" : "Inactive"}
-                        </Badge>
-                      </button>
-                    </td>
-                    <td className="px-4 py-2 text-fg/40">
-                      {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"}
-                    </td>
-                    <td className="px-4 py-2 text-right">
-                      <div className="flex items-center justify-end gap-1">
-                        <Button variant="ghost" size="xs" onClick={() => setMoveUser(u)} title="Move to another org">
-                          <ArrowRight className="h-3 w-3" />
-                        </Button>
-                        <Button variant="danger" size="xs" onClick={() => handleDeleteUser(u)}>
-                          <Trash2 className="h-3 w-3" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </CardBody>
-        </Card>
-      )}
-
-      {moveUser && (
-        <MoveUserModal
-          user={moveUser}
-          orgs={orgs}
-          onMove={handleMoveUser}
-          onClose={() => setMoveUser(null)}
-        />
-      )}
-    </div>
+      <UserDetailDrawer
+        user={selectedUser}
+        organizations={orgs}
+        onClose={() => setSelectedId(null)}
+        onSaved={async () => {
+          setSelectedId(null);
+          await fetchAll();
+        }}
+      />
+    </>
   );
 }
 
-// ── Move User Modal ───────────────────────────────────────────────────
-
-function MoveUserModal({
+function UserDetailDrawer({
   user,
-  orgs,
-  onMove,
+  organizations,
   onClose,
+  onSaved,
 }: {
-  user: UserWithOrg;
-  orgs: AdminOrg[];
-  onMove: (userId: string, targetOrgId: string) => Promise<void>;
+  user: UserWithOrg | null;
+  organizations: AdminOrg[];
   onClose: () => void;
+  onSaved: () => Promise<void>;
 }) {
-  const [targetOrgId, setTargetOrgId] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("estimator");
+  const [active, setActive] = useState(true);
+  const [organizationId, setOrganizationId] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const availableOrgs = orgs.filter((o) => o.id !== user.organizationId);
+  useEffect(() => {
+    if (!user) return;
+    setName(user.name);
+    setEmail(user.email);
+    setRole(user.role);
+    setActive(user.active);
+    setOrganizationId(user.organizationId ?? "");
+    setError(null);
+  }, [user]);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!targetOrgId) return;
-    setLoading(true);
-    await onMove(user.id, targetOrgId);
-    setLoading(false);
+  async function save() {
+    if (!user) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await adminUpdateUser(user.id, { name, email, role, active });
+      if (organizationId !== user.organizationId) {
+        await adminMoveUser(user.id, organizationId);
+      }
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to update user");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!user || !confirm(`Delete ${user.name} (${user.email}) from ${user.orgName}? This is permanent.`)) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await adminDeleteUser(user.id);
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to delete user");
+    } finally {
+      setSaving(false);
+    }
   }
 
   return (
-    <ModalBackdrop open={true} onClose={onClose} size="sm">
-      <CardHeader>
-        <CardTitle>Move User</CardTitle>
-      </CardHeader>
-      <CardBody>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div className="text-sm text-fg/60">
-            Move <strong className="text-fg">{user.name}</strong> ({user.email})
-            from <strong className="text-fg">{user.orgName}</strong> to:
-          </div>
-          <div>
-            <Label>Target Organization</Label>
-            <Select
-              value={targetOrgId}
-              onValueChange={setTargetOrgId}
-              placeholder="Select organization..."
-              options={availableOrgs.map((org) => ({
-                value: org.id,
-                label: `${org.name} (${org.slug})`,
-              }))}
-            />
-          </div>
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-            <Button variant="accent" type="submit" disabled={loading || !targetOrgId}>
-              {loading ? "Moving..." : "Move User"}
+    <Drawer
+      open={Boolean(user)}
+      onClose={onClose}
+      size="md"
+      title={user?.name ?? "User"}
+      description={user ? `${user.email} · ${user.orgName}` : undefined}
+      footer={(
+        <div className="flex w-full items-center justify-between gap-2">
+          <Button variant="destructive" size="sm" onClick={() => void remove()} disabled={saving}>
+            <Trash2 className="size-3.5" /> Delete
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>Cancel</Button>
+            <Button size="sm" onClick={() => void save()} disabled={saving || !name.trim() || !email.trim() || !organizationId}>
+              <Save className="size-3.5" /> {saving ? "Saving…" : "Save user"}
             </Button>
           </div>
-        </form>
-      </CardBody>
-    </ModalBackdrop>
+        </div>
+      )}
+    >
+      <div className="space-y-5">
+        {error && <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger">{error}</div>}
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="platform-user-name">Name</Label>
+            <Input id="platform-user-name" value={name} onChange={(event) => setName(event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="platform-user-email">Email</Label>
+            <Input id="platform-user-email" type="email" value={email} onChange={(event) => setEmail(event.target.value)} />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label>Home organization</Label>
+          <SearchSelect
+            value={organizationId}
+            onChange={setOrganizationId}
+            searchable
+            sheetTitle="Home organization"
+            options={organizations.map((org) => ({ value: org.id, label: `${org.name} · ${org.slug}` }))}
+          />
+          {user && organizationId !== user.organizationId && (
+            <p className="text-xs text-warning">Saving will move this user out of {user.orgName}.</p>
+          )}
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label>Role</Label>
+            <SearchSelect
+              value={role}
+              onChange={setRole}
+              searchable={false}
+              options={[
+                { value: "admin", label: "Admin" },
+                { value: "estimator", label: "Estimator" },
+                { value: "viewer", label: "Viewer" },
+              ]}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Account status</Label>
+            <SearchSelect
+              value={active ? "active" : "inactive"}
+              onChange={(value) => setActive(value === "active")}
+              searchable={false}
+              options={[
+                { value: "active", label: "Active" },
+                { value: "inactive", label: "Inactive" },
+              ]}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Metric label="Created" value={formatDate(user?.createdAt ?? null)} />
+          <Metric label="Last login" value={formatDate(user?.lastLoginAt ?? null)} />
+        </div>
+      </div>
+    </Drawer>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-border bg-bg-subtle px-4 py-3">
+      <div className="text-xs font-medium uppercase tracking-wide text-fg-subtle">{label}</div>
+      <div className="mt-1 font-medium text-fg">{value}</div>
+    </div>
   );
 }

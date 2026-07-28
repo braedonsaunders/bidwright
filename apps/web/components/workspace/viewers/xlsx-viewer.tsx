@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Loader2, AlertTriangle, FileSpreadsheet, Pencil } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 
@@ -130,7 +132,7 @@ export function XlsxViewer({ url, fileName, onEdit }: XlsxViewerProps) {
         <span className="text-sm font-medium text-text-primary truncate">{fileName}</span>
         <div className="ml-auto flex items-center gap-1">
           {onEdit && (
-            <Button variant="ghost" size="xs" onClick={onEdit}>
+            <Button variant="ghost" size="sm" onClick={onEdit}>
               <Pencil className="w-3.5 h-3.5 mr-1" />
               Edit
             </Button>

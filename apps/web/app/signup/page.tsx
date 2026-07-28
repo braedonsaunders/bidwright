@@ -5,7 +5,15 @@ import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightLogo } from "@/components/brand-logo";
-import { Button, Input, Label, Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@appkit/ui";
 
 export default function SignupPage() {
   const t = useTranslations("Auth.signup");
@@ -62,7 +70,7 @@ export default function SignupPage() {
           <CardHeader>
             <CardTitle>{t("title")}</CardTitle>
           </CardHeader>
-          <CardBody>
+          <CardContent>
             <form onSubmit={handleSubmit} className="space-y-4">
               {error && (
                 <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
@@ -148,7 +156,7 @@ export default function SignupPage() {
 
               <Button
                 type="submit"
-                variant="accent"
+                variant="default"
                 className="w-full"
                 disabled={loading || !orgName.trim() || !email.trim() || !password.trim()}
               >
@@ -161,7 +169,7 @@ export default function SignupPage() {
                 {t("signInLink")}
               </Link>
             </div>
-          </CardBody>
+          </CardContent>
         </Card>
       </div>
     </div>

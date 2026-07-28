@@ -2,9 +2,9 @@
 #
 # Differs from docker-compose.prod-registry.yml in three ways:
 #   1. Caddy front-end with auto-TLS via Let's Encrypt (zero-config HTTPS).
-#   2. Multi-tenant on by default (BIDWRIGHT_MULTITENANT=true) — every CLI
-#      session runs in a per-user bwrap sandbox, project workspaces snapshot
-#      to Cloudflare R2 between sessions so users follow the api pool.
+#   2. Server mode always uses the AppKit process sandbox. The legacy
+#      BIDWRIGHT_MULTITENANT flag enables the outbound allowlist proxy, and
+#      project workspaces snapshot to Cloudflare R2 between sessions.
 #   3. No host port exposure for api/web — only Caddy speaks to the public
 #      internet on :80 / :443. Internal services talk on the compose network.
 #
@@ -111,11 +111,9 @@ services:
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
     restart: unless-stopped
-    # Required by bubblewrap for per-tenant pivot_root + mount inside CLI
-    # session namespaces. bwrap drops all caps before exec'ing the child
-    # CLI, so the sandboxed agent never inherits these.
-    cap_add:
-      - SYS_ADMIN
+    # Setuid bubblewrap avoids granting CAP_SYS_ADMIN to the API container.
+    # Relaxed syscall profiles permit namespace/mount setup; the sandbox drops
+    # all capabilities before exec'ing the agent child.
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
@@ -152,8 +150,8 @@ services:
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
       INTEGRATIONS_ENCRYPTION_KEY: "${INTEGRATIONS_ENCRYPTION_KEY}"
-      # Anthropic / OpenAI org-wide fallback keys; per-user OAuth or BYOK
-      # via /profile/credentials wins when set.
+      # Organization-managed credentials are the server default. Personal
+      # BYOK remains optional; interactive browser OAuth is desktop-only.
       OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
       ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"

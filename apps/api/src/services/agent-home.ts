@@ -6,9 +6,9 @@
  *                operator's own `~/.claude`, `~/.codex`, etc. on the host.
  *                There is no isolation problem because there is one user.
  *   • server   — multi-tenant Docker (self-host or hosted SaaS). Multiple
- *                authenticated users share one container. Each user must
- *                have their own `.claude`, `.codex`, etc. so that user A's
- *                Anthropic OAuth token never leaks into user B's CLI spawn.
+ *                authenticated users share one container. Each user gets a
+ *                private runtime-state home; organization-managed provider
+ *                API keys are the default server credential.
  *
  * In server mode this resolver returns `<AGENT_HOME_ROOT>/users/<userId>`
  * (default `/data/agent-home/users/<userId>`). The CLI adapters bind that
@@ -25,13 +25,16 @@ import { join } from "node:path";
 export type BidwrightMode = "desktop" | "server";
 
 /**
- * Read the deployment mode. Defaults to "desktop" when unset so a developer
- * running `pnpm dev` against a single account doesn't have to set anything.
- * Production Docker images set `BIDWRIGHT_MODE=server` explicitly.
+ * Read the deployment mode. Development defaults to desktop; production
+ * defaults to server so a missing flag fails toward process isolation.
+ * The desktop shell and production Docker images both set the mode explicitly.
  */
 export function getBidwrightMode(): BidwrightMode {
   const raw = (process.env.BIDWRIGHT_MODE || "").trim().toLowerCase();
-  return raw === "server" ? "server" : "desktop";
+  if (raw === "server" || raw === "desktop") return raw;
+  // A production service must fail toward isolation if an operator forgets
+  // the deployment flag. The desktop shell sets `desktop` explicitly.
+  return process.env.NODE_ENV === "production" ? "server" : "desktop";
 }
 
 /**

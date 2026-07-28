@@ -101,17 +101,19 @@ import {
 } from "@/lib/entity-category-calculation";
 import type { RateSchedule } from "@/lib/api";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  EmptyState,
   Input,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
   ModalBackdrop,
   Select,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import {
@@ -3789,7 +3791,7 @@ export function EstimateGrid({
         onPointerDown={(event) => startColumnResize(column, event)}
         onClick={(event) => event.stopPropagation()}
       >
-        <span className="absolute inset-y-1 left-1/2 w-px -translate-x-1/2 rounded-full bg-accent/55 shadow-[0_0_0_1px_hsl(var(--panel))]" />
+        <span className="absolute inset-y-1 left-1/2 w-px -translate-x-1/2 rounded-full bg-accent/55 shadow-[0_0_0_1px_rgb(var(--ch-surface))]" />
       </button>
     );
   }
@@ -6332,7 +6334,7 @@ export function EstimateGrid({
 	                    )}
 		                    style={groupCategory ? {
 		                      borderColor: colorWithAlpha(groupCategoryColor, 0.22),
-		                      background: `linear-gradient(0deg, ${colorWithAlpha(groupCategoryColor, 0.16)}, ${colorWithAlpha(groupCategoryColor, 0.16)}), hsl(var(--panel))`,
+		                      background: `linear-gradient(0deg, ${colorWithAlpha(groupCategoryColor, 0.16)}, ${colorWithAlpha(groupCategoryColor, 0.16)}), rgb(var(--ch-surface))`,
 		                      color: groupCategoryColor,
 		                    } : undefined}
 		                  >
@@ -6396,7 +6398,7 @@ export function EstimateGrid({
 			                                style={isLeaf ? {
 			                                  borderColor: colorWithAlpha(groupCategoryColor, 0.24),
 			                                  backgroundColor: colorWithAlpha(groupCategoryColor, 0.08),
-			                                  color: "hsl(var(--fg))",
+			                                  color: "rgb(var(--ch-fg))",
 			                                } : {
 			                                  color: colorWithAlpha(groupCategoryColor, 0.82),
 			                                }}
@@ -6527,7 +6529,7 @@ export function EstimateGrid({
 		                    </span>
 		                    <span
 		                      className={cn("min-w-0 truncate", isLeaf ? "font-bold" : "font-medium")}
-		                      style={{ color: isLeaf ? "hsl(var(--fg))" : colorWithAlpha(treeColor, 0.84) }}
+		                      style={{ color: isLeaf ? "rgb(var(--ch-fg))" : colorWithAlpha(treeColor, 0.84) }}
 		                    >
 		                      {node.label}
 		                    </span>
@@ -6570,7 +6572,7 @@ export function EstimateGrid({
 		                    className="sticky top-0 z-20 flex items-center justify-between border-b border-t bg-panel px-2 py-0.5 text-[9px] font-semibold uppercase tracking-normal shadow-[0_1px_0_rgba(0,0,0,0.04)]"
 		                    style={{
 		                      borderColor: colorWithAlpha(treeColor, 0.22),
-		                      background: `linear-gradient(0deg, ${colorWithAlpha(treeColor, 0.16)}, ${colorWithAlpha(treeColor, 0.16)}), hsl(var(--panel))`,
+		                      background: `linear-gradient(0deg, ${colorWithAlpha(treeColor, 0.16)}, ${colorWithAlpha(treeColor, 0.16)}), rgb(var(--ch-surface))`,
 		                      color: treeColor,
 		                    }}
 		                  >
@@ -7376,7 +7378,7 @@ export function EstimateGrid({
             </span>
             <div className="ml-auto flex items-center gap-1">
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 onClick={() => setFolderForm({ parentId: activeFolderId ?? null, name: "" })}
                 title="New folder"
@@ -7384,7 +7386,7 @@ export function EstimateGrid({
                 <FolderPlus className="h-3 w-3" />
               </Button>
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 onClick={() => {
                   setNewWsFolderId(activeFolderId ?? null);
@@ -7425,7 +7427,7 @@ export function EstimateGrid({
           </RadixSelect.Root>
           <div className="ml-auto flex items-center gap-1 rounded-lg border border-line bg-bg/55 p-0.5 shadow-sm">
             <Button
-              size="xs"
+              size="sm"
               className="rounded-md"
               onClick={() => addNewItem()}
               disabled={isPending || (workspace.worksheets ?? []).length === 0 || activeTab === "all"}
@@ -7440,7 +7442,7 @@ export function EstimateGrid({
               <Plus className="h-3 w-3" /> Add
             </Button>
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               className="rounded-md"
               onClick={() => setShowAddItemsPicker(true)}
@@ -7459,7 +7461,7 @@ export function EstimateGrid({
             <div className="mx-0.5 h-4 w-px bg-line" />
 
             <Button
-              size="xs"
+              size="sm"
               variant={selectionMode ? "secondary" : "ghost"}
               className="rounded-md"
               onClick={toggleSelectionMode}
@@ -7476,7 +7478,7 @@ export function EstimateGrid({
 
             <div className="relative" data-column-picker>
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 className="rounded-md"
                 onClick={() => setShowColumnPicker(!showColumnPicker)}
@@ -7509,7 +7511,7 @@ export function EstimateGrid({
             </div>
 
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               className="rounded-md"
               onClick={exportTableAsCsv}
@@ -7521,7 +7523,7 @@ export function EstimateGrid({
             <div className="mx-0.5 h-4 w-px bg-line" />
 
             <Button
-              size="xs"
+              size="sm"
               variant="ghost"
               className="rounded-md"
               onClick={() => setShowShortcuts(true)}
@@ -7546,7 +7548,7 @@ export function EstimateGrid({
 
             <div className="ml-auto flex items-center gap-1.5">
               <Button
-                size="xs"
+                size="sm"
                 variant="secondary"
                 onClick={toggleSelectAll}
                 disabled={visibleSelectableRowIds.length === 0}
@@ -7569,11 +7571,11 @@ export function EstimateGrid({
 
           <div className="flex flex-wrap items-center gap-2 px-3 py-2 text-xs">
             <div className="flex items-center gap-1 rounded-md border border-line bg-bg/45 p-1">
-              <Button size="xs" variant="ghost" onClick={handleBulkDuplicate} disabled={!hasBulkSelection || isPending}>
+              <Button size="sm" variant="ghost" onClick={handleBulkDuplicate} disabled={!hasBulkSelection || isPending}>
                 <Copy className="h-3 w-3" /> Duplicate
               </Button>
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 onClick={() => setShowSaveAsAssembly(true)}
                 disabled={!hasBulkSelection || isPending}
@@ -7581,7 +7583,7 @@ export function EstimateGrid({
               >
                 <Layers className="h-3 w-3" /> Assembly
               </Button>
-              <Button size="xs" variant="danger" onClick={handleBulkDelete} disabled={!hasBulkSelection || isPending}>
+              <Button size="sm" variant="destructive" onClick={handleBulkDelete} disabled={!hasBulkSelection || isPending}>
                 <Trash2 className="h-3 w-3" /> Delete
               </Button>
             </div>
@@ -7641,7 +7643,7 @@ export function EstimateGrid({
                 }}
               />
               <Button
-                size="xs"
+                size="sm"
                 variant="ghost"
                 onClick={handleBulkAssignClassification}
                 disabled={!hasBulkSelection || !bulkClassificationValue.trim() || isPending}
@@ -8357,7 +8359,7 @@ export function EstimateGrid({
               </Button>
               <Button
                 size="sm"
-                variant="danger"
+                variant="destructive"
                 onClick={() => handleDeleteWorksheet(deleteWsTarget.wsId)}
                 disabled={isPending}
               >
@@ -8403,7 +8405,7 @@ export function EstimateGrid({
               </Button>
               <Button
                 size="sm"
-                variant="danger"
+                variant="destructive"
                 onClick={() => handleDeleteFolder(deleteFolderTarget.folderId)}
                 disabled={isPending}
               >
@@ -8454,7 +8456,7 @@ export function EstimateGrid({
               </Button>
               <Button
                 size="sm"
-                variant="accent"
+                variant="default"
                 onClick={handleCreateFolder}
                 disabled={!folderForm.name.trim() || isPending}
               >
@@ -8498,7 +8500,7 @@ export function EstimateGrid({
               <Button size="sm" variant="ghost" onClick={() => setRenameTarget(null)}>
                 Cancel
               </Button>
-              <Button size="sm" variant="accent" onClick={handleRenameTarget} disabled={!renameName.trim() || isPending}>
+              <Button size="sm" variant="default" onClick={handleRenameTarget} disabled={!renameName.trim() || isPending}>
                 Rename
               </Button>
             </div>
@@ -8550,7 +8552,7 @@ export function EstimateGrid({
                 <Button size="sm" variant="ghost" onClick={() => setMoveTarget(null)}>
                   Cancel
                 </Button>
-                <Button size="sm" variant="accent" onClick={handleMoveTarget} disabled={isPending}>
+                <Button size="sm" variant="default" onClick={handleMoveTarget} disabled={isPending}>
                   Move
                 </Button>
               </div>
@@ -8608,7 +8610,7 @@ export function EstimateGrid({
               </Button>
               <Button
                 size="sm"
-                variant="accent"
+                variant="default"
                 onClick={handleCreateWorksheet}
                 disabled={!newWsName.trim() || isPending}
               >
@@ -8865,7 +8867,7 @@ export function EstimateGrid({
                       Search every indexed source, select many rows, or open assemblies and plugin tools from here.
                     </p>
                   </div>
-                  <Button size="xs" variant="ghost" onClick={() => setShowAddItemsPicker(false)} title="Close">
+                  <Button size="sm" variant="ghost" onClick={() => setShowAddItemsPicker(false)} title="Close">
                     <X className="h-3.5 w-3.5" />
                   </Button>
                 </div>
@@ -9361,7 +9363,7 @@ function LineFactorDrawer({
             <div className="text-sm font-semibold text-fg">Line Factors</div>
             <div className="mt-1 truncate text-[11px] text-fg/45">{item.entityName || item.description || item.id}</div>
           </div>
-          <Button size="xs" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
+          <Button size="sm" variant="ghost" className="h-8 w-8 px-0" onClick={onClose}><X className="h-4 w-4" /></Button>
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-auto p-4">
@@ -9382,8 +9384,8 @@ function LineFactorDrawer({
                       <div className="grid grid-cols-[minmax(0,1fr)_76px_auto_auto] gap-2">
                         <Input className="h-7 text-xs" value={editingName} onChange={(event) => setEditingName(event.target.value)} />
                         <Input className="h-7 text-right font-mono text-xs" value={editingPercent} onChange={(event) => setEditingPercent(event.target.value)} />
-                        <Button size="xs" className="h-7 px-2" onClick={() => saveEdit(factor)} disabled={isPending}>Save</Button>
-                        <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => setEditingFactorId(null)} disabled={isPending}>Cancel</Button>
+                        <Button size="sm" className="h-7 px-2" onClick={() => saveEdit(factor)} disabled={isPending}>Save</Button>
+                        <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditingFactorId(null)} disabled={isPending}>Cancel</Button>
                       </div>
                       {factor.formulaType !== "fixed_multiplier" ? (
                         <FactorParameterEditor
@@ -9401,8 +9403,8 @@ function LineFactorDrawer({
                         <div className="mt-0.5 text-[10px] text-fg/45">{lineFactorFormulaLabel(factor.formulaType)} / {lineFactorPercent(total?.value ?? factor.value)}%</div>
                       </div>
                       <div className={cn("font-mono text-[11px]", (total?.valueDelta ?? 0) >= 0 ? "text-warning" : "text-success")}>{formatWorksheetMoney(total?.valueDelta ?? 0)}</div>
-                      <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => startEdit(factor)} disabled={isPending}>Edit</Button>
-                      <Button size="xs" variant="ghost" className="h-7 px-2" onClick={() => mutate(() => deleteEstimateFactor(workspace.project.id, factor.id))} disabled={isPending}>
+                      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => startEdit(factor)} disabled={isPending}>Edit</Button>
+                      <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => mutate(() => deleteEstimateFactor(workspace.project.id, factor.id))} disabled={isPending}>
                         <Trash2 className="h-3.5 w-3.5 text-danger" />
                       </Button>
                     </>
@@ -9416,7 +9418,7 @@ function LineFactorDrawer({
             <div className="border-b border-line px-3 py-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="text-xs font-semibold text-fg">Add from library</div>
-                <Button size="xs" variant="secondary" onClick={() => setCustomOpen((open) => !open)}><Plus className="h-3 w-3" /> Custom</Button>
+                <Button size="sm" variant="secondary" onClick={() => setCustomOpen((open) => !open)}><Plus className="h-3 w-3" /> Custom</Button>
               </div>
               <Input className="mt-2 h-8 text-xs" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search line-capable factors" />
             </div>
@@ -9425,7 +9427,7 @@ function LineFactorDrawer({
                 <Input className="text-xs" value={customName} onChange={(event) => setCustomName(event.target.value)} />
                 <div className="grid grid-cols-[1fr_auto] gap-2">
                   <Input className="text-right font-mono text-xs" value={customPercent} onChange={(event) => setCustomPercent(event.target.value)} />
-                  <Button size="xs" onClick={addCustomFactor} disabled={isPending}>Add</Button>
+                  <Button size="sm" onClick={addCustomFactor} disabled={isPending}>Add</Button>
                 </div>
               </div>
             ) : null}

@@ -4,14 +4,8 @@
  * Selects an `AgentRuntimeHost` based on environment:
  *
  *   • `BIDWRIGHT_MODE=desktop`                — LocalProcessHost
- *   • `BIDWRIGHT_MODE=server`,
- *     `BIDWRIGHT_MULTITENANT` unset/false     — LocalProcessHost
- *   • `BIDWRIGHT_MODE=server`,
- *     `BIDWRIGHT_MULTITENANT=true`            — BubblewrappedHost
- *                                                (Linux only; CLI sessions
- *                                                run inside per-tenant
- *                                                bwrap user/mount/pid
- *                                                namespaces)
+ *   • `BIDWRIGHT_MODE=server`                 — BubblewrappedHost
+ *                                                (Linux only; fail closed)
  *
  * Future cloud-sandbox tier plugs in a third host (gVisor / Firecracker /
  * managed) the same way without touching adapters or the spawn pipeline.
@@ -20,31 +14,49 @@
 import { bubblewrappedHost } from "./bubblewrapped.js";
 import { localProcessHost } from "./local-process.js";
 import type { AgentRuntimeHost } from "./types.js";
+import { verifyProcessSandbox } from "@appkit/process-sandbox";
+import { getBidwrightMode } from "../agent-home.js";
 
 export type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
 
 let cached: AgentRuntimeHost | null = null;
 
-function isMultitenantServer(): boolean {
-  if ((process.env.BIDWRIGHT_MODE || "").toLowerCase() !== "server") return false;
-  const flag = (process.env.BIDWRIGHT_MULTITENANT || "").toLowerCase();
-  return flag === "true" || flag === "1" || flag === "yes";
+function isServerMode(): boolean {
+  return getBidwrightMode() === "server";
+}
+
+/**
+ * Prove the configured server sandbox can create namespaces and mounts before
+ * the API accepts traffic. Desktop mode intentionally uses the local host.
+ */
+export async function assertAgentRuntimeHostReady(): Promise<void> {
+  if (!isServerMode()) return;
+  if (process.platform !== "linux") {
+    throw new Error(
+      `[agent-host] Server-mode agent execution requires Linux; received ${process.platform}.`,
+    );
+  }
+  const result = await verifyProcessSandbox({
+    bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
+  });
+  console.log(`[agent-host] AppKit process sandbox verified at ${result.bubblewrapPath}`);
 }
 
 export function getAgentRuntimeHost(): AgentRuntimeHost {
   if (cached) return cached;
-  if (isMultitenantServer() && process.platform !== "win32") {
+  if (isServerMode()) {
+    if (process.platform !== "linux") {
+      throw new Error(
+        `[agent-host] Server-mode agent execution requires the AppKit Linux process sandbox; received ${process.platform}. ` +
+          "Use desktop mode for a single-user local process or deploy the API on Linux.",
+      );
+    }
     cached = bubblewrappedHost;
     console.log(
-      "[agent-host] selected: bubblewrapped (multi-tenant) — CLI sessions run in per-tenant namespaces",
+      "[agent-host] selected: @appkit/process-sandbox — server CLI sessions run in per-tenant bubblewrap namespaces",
     );
   } else {
     cached = localProcessHost;
-    if (isMultitenantServer()) {
-      console.warn(
-        "[agent-host] BIDWRIGHT_MULTITENANT=true but platform is win32; falling back to LocalProcessHost. Multi-tenant Windows is not supported.",
-      );
-    }
   }
   return cached;
 }

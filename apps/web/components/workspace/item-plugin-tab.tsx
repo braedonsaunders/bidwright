@@ -4,7 +4,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { AlertCircle, Loader2, Puzzle, Wrench } from "lucide-react";
 
 import { PluginRuntime } from "@/components/plugin-runtime";
-import { Badge } from "@/components/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import type {
   PluginExecutionRecord,
   PluginOutput,

@@ -1,10 +1,4 @@
-/**
- * Claude Code adapter.
- *
- * Behavior is byte-for-byte identical to the original cli-runtime.ts logic
- * for Claude Code: same flags, same permission allowlist, same .claude/
- * settings.json, same model-list scraping, same JSONL parser.
- */
+/** Claude Agent SDK adapter with the legacy runtime id retained for compatibility. */
 
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -24,14 +18,15 @@ import type {
   SpawnPlan,
 } from "./types.js";
 import {
-  BIDWRIGHT_PERMISSIONS,
   dedupeModels,
   getCliShimTarget,
   getCliVersion,
   homeDir,
   normalizeCliModelDescription,
+  environmentReferences,
   resolveCliCommand,
 } from "./shared.js";
+import { createRuntimeBrokerPlan } from "../runtime-broker.js";
 
 const ADAPTER_ID = "claude-code";
 
@@ -81,18 +76,19 @@ function buildSettingsJson(
   mcpRunner: string,
   mcpArgs: string[],
   mcpEnv: Record<string, string>,
+  permissions: string[],
 ): string {
   return JSON.stringify(
     {
       permissions: {
         defaultMode: "acceptEdits",
-        allow: [...BIDWRIGHT_PERMISSIONS],
+        allow: [...permissions],
       },
       mcpServers: {
         bidwright: {
           command: mcpRunner,
           args: mcpArgs,
-          env: mcpEnv,
+          env: environmentReferences(mcpEnv),
         },
       },
     },
@@ -115,8 +111,12 @@ async function writeClaudeSettings(ctx: PrepareWorkspaceCtx, freshen: boolean) {
     ctx.mcpRunner,
     ctx.mcpArgs,
     ctx.mcpEnv as unknown as Record<string, string>,
+    ctx.permissions,
   );
-  await writeFile(join(claudeSettingsDir, "settings.json"), json, "utf-8");
+  await writeFile(join(claudeSettingsDir, "settings.json"), json, {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 function extractBundleModel(
@@ -252,7 +252,9 @@ function pushToolResultEvent(
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   const events: SSEEventData[] = [];
 
-  if (msg.type === "assistant") {
+  if (msg.type === "broker.error") {
+    events.push({ type: "error", data: { message: msg.message || "Runtime broker failed" } });
+  } else if (msg.type === "assistant") {
     const content = msg.content || msg.message?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -311,8 +313,8 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
 
 export const claudeCodeAdapter: CliAdapter = {
   id: ADAPTER_ID,
-  displayName: "Claude Code",
-  installHint: "Not installed — run: npm i -g @anthropic-ai/claude-code",
+  displayName: "Claude Agent",
+  installHint: "Claude Agent SDK is bundled with Bidwright",
   pathSettingKey: "claudeCodePath",
   defaultModel: "sonnet",
   primaryInstructionFile: "CLAUDE.md",
@@ -323,9 +325,11 @@ export const claudeCodeAdapter: CliAdapter = {
   },
 
   detect(customPath) {
-    const path = resolveCliCommand(["claude"], customPath);
-    if (!path) return { available: false, path: "" };
-    return { available: true, path, version: getCliVersion(path) } satisfies CliDetectResult;
+    return {
+      available: true,
+      path: customPath || "@anthropic-ai/claude-agent-sdk",
+      version: "0.3.220",
+    } satisfies CliDetectResult;
   },
 
   checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
@@ -333,12 +337,8 @@ export const claudeCodeAdapter: CliAdapter = {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {
-      // Server mode: scope auth detection to this user's namespace only.
-      // We deliberately do NOT fall back to the host `~/.claude` — that
-      // would leak whoever last logged into the container into every user's
-      // status pill.
-      const credPath = join(agentHomeDir, ".claude", ".credentials.json");
-      if (existsSync(credPath)) return { authenticated: true, method: "oauth" };
+      // Server mode is API-key-only. Legacy OAuth caches may still exist on
+      // disk after an upgrade but are neither trusted nor mounted.
       return { authenticated: false, method: "none" };
     }
     // Desktop mode: the operator's own host credentials win.
@@ -379,88 +379,60 @@ export const claudeCodeAdapter: CliAdapter = {
     // might still depend on.
     await writeClaudeSettings(ctx, !ctx.isResume);
     if (ctx.agentHomeDir) {
-      // Server mode: redirect Claude Code at the per-user namespace so its
-      // OAuth credentials, settings, and statsig cache live under
-      // <agentHomeDir>/.claude instead of leaking into a container-wide ~/.claude.
-      const userClaudeDir = join(ctx.agentHomeDir, ".claude");
-      await mkdir(userClaudeDir, { recursive: true });
-      return { extraEnv: { CLAUDE_CONFIG_DIR: userClaudeDir } };
+      // Clean server runtime state is separate from any legacy OAuth cache.
+      const userClaudeDir = join(ctx.agentHomeDir, "runtime", "claude");
+      const userHomeDir = join(ctx.agentHomeDir, "runtime", "claude-home");
+      await Promise.all([
+        mkdir(userClaudeDir, { recursive: true }),
+        mkdir(userHomeDir, { recursive: true }),
+      ]);
+      return {
+        extraEnv: {
+          CLAUDE_CONFIG_DIR: userClaudeDir,
+          HOME: userHomeDir,
+        },
+      };
     }
     return {};
   },
 
   async buildSpawnPlan(ctx: SpawnCtx): Promise<SpawnPlan> {
-    const cliCmd = resolveCliCommand(["claude"], ctx.customCliPath);
-    if (!cliCmd) throw new Error("Claude Code CLI not found");
-
-    // The prompt is passed inline as the value of -p; the runtime layer
-    // substitutes it onto the Windows .bat via the promptHandling hint.
-    const safePrompt = ctx.isWin ? ctx.prompt.replace(/\r?\n/g, " ") : ctx.prompt;
-
-    const args: string[] = [
-      "-p",
-      safePrompt,
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--max-turns",
-      "200",
-      "--mcp-config",
-      ctx.mcpConfigPath,
-    ];
-    args.push(...getPermissionArgs());
-    if (ctx.model) args.push("--model", ctx.model);
-    const effort = mapEffort(ctx.reasoningEffort);
-    if (effort) args.push("--effort", effort);
-
     const extraEnv: Record<string, string> = {};
     if (ctx.apiKeys.anthropic) extraEnv.ANTHROPIC_API_KEY = ctx.apiKeys.anthropic;
 
-    const promptIndex = args.indexOf("-p") + 1;
-    return {
-      cliCmd,
-      args,
+    return createRuntimeBrokerPlan(
+      {
+        transport: "claude-agent-sdk",
+        projectDir: ctx.projectDir,
+        prompt: ctx.prompt,
+        model: ctx.model || "sonnet",
+        reasoningEffort: ctx.reasoningEffort,
+        mcpRunner: ctx.mcpRunner,
+        mcpArgs: ctx.mcpArgs,
+        claudeExecutable: ctx.customCliPath,
+      },
       extraEnv,
-      promptHandling: { kind: "flag", flag: "-p", index: promptIndex },
-    };
+    );
   },
 
   async buildResumePlan(ctx: ResumeCtx): Promise<SpawnPlan> {
-    const cliCmd = resolveCliCommand(["claude"], ctx.customCliPath);
-    if (!cliCmd) throw new Error("Claude Code CLI not found");
-
-    const safePrompt = ctx.isWin ? ctx.prompt.replace(/\r?\n/g, " ") : ctx.prompt;
-
-    const args: string[] = [
-      "--resume",
-      ctx.sessionId,
-      "--output-format",
-      "stream-json",
-      "--verbose",
-      "--max-turns",
-      "200",
-      "--mcp-config",
-      ctx.mcpConfigPath,
-    ];
-    args.push(...getPermissionArgs());
-    if (safePrompt) args.push("-p", safePrompt);
-    if (ctx.model) args.push("--model", ctx.model);
-    const effort = mapEffort(ctx.reasoningEffort);
-    if (effort) args.push("--effort", effort);
-
     const extraEnv: Record<string, string> = {};
     if (ctx.apiKeys.anthropic) extraEnv.ANTHROPIC_API_KEY = ctx.apiKeys.anthropic;
 
-    const flagIdx = args.indexOf("-p");
-    return {
-      cliCmd,
-      args,
+    return createRuntimeBrokerPlan(
+      {
+        transport: "claude-agent-sdk",
+        projectDir: ctx.projectDir,
+        prompt: ctx.prompt,
+        model: ctx.model || "sonnet",
+        reasoningEffort: ctx.reasoningEffort,
+        resumeSessionId: ctx.sessionId,
+        mcpRunner: ctx.mcpRunner,
+        mcpArgs: ctx.mcpArgs,
+        claudeExecutable: ctx.customCliPath,
+      },
       extraEnv,
-      promptHandling:
-        flagIdx >= 0
-          ? { kind: "flag", flag: "-p", index: flagIdx + 1 }
-          : { kind: "positional", index: args.length - 1 },
-    };
+    );
   },
 
   defaultResumePrompt() {

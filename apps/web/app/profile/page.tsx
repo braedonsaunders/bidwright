@@ -1,13 +1,19 @@
 "use client";
 
 import { useState } from "react";
-import Link from "next/link";
-import { KeyRound } from "lucide-react";
 import { useTranslations } from "next-intl";
 import { useAuth } from "@/components/auth-provider";
 import { updateProfile } from "@/lib/api";
-import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Badge } from "@/components/ui";
-import { AppShell } from "@/components/app-shell";
+import {
+  Alert,
+  AlertDescription,
+  Badge,
+  Button,
+  Input,
+  Label,
+  SettingsRow,
+  SettingsSection,
+} from "@appkit/ui";
 
 export default function ProfilePage() {
   const t = useTranslations("Profile");
@@ -61,83 +67,36 @@ export default function ProfilePage() {
   }
 
   return (
-    <AppShell>
-      <div className="mx-auto max-w-xl space-y-6">
-        <h1 className="text-xl font-bold text-fg">{t("title")}</h1>
-
+    <div className="space-y-6">
         {message && (
-          <div className={`rounded-lg border px-4 py-2 text-sm ${
-            message.type === "success"
-              ? "border-green-500/30 bg-green-500/10 text-green-600"
-              : "border-danger/30 bg-danger/10 text-danger"
-          }`}>
-            {message.text}
-          </div>
+          <Alert variant={message.type === "success" ? "success" : "destructive"}>
+            <AlertDescription>{message.text}</AlertDescription>
+          </Alert>
         )}
 
-        {/* Account info */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("account.title")}</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <div className="space-y-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-fg/50">{t("account.email")}</span>
-                <span className="text-fg font-medium">{user?.email}</span>
-              </div>
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-fg/50">{t("account.role")}</span>
-                <Badge tone={user?.role === "admin" ? "info" : "default"}>{user?.role}</Badge>
-              </div>
-              {organization && (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-fg/50">{t("account.organization")}</span>
-                  <span className="text-fg font-medium">{organization.name}</span>
-                </div>
-              )}
-              {isSuperAdmin && (
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-fg/50">{t("account.access")}</span>
-                  <Badge tone="warning">{t("account.superAdmin")}</Badge>
-                </div>
-              )}
-            </div>
-          </CardBody>
-        </Card>
+        <SettingsSection title={t("account.title")} description="Your membership and organization context.">
+          <SettingsRow title={t("account.email")} control={<span className="text-sm font-medium text-fg">{user?.email}</span>} />
+          <SettingsRow
+            title={t("account.role")}
+            control={<Badge variant={user?.role === "admin" ? "info" : "secondary"}>{user?.role}</Badge>}
+          />
+          {organization ? (
+            <SettingsRow
+              title={t("account.organization")}
+              control={<span className="text-sm font-medium text-fg">{organization.name}</span>}
+            />
+          ) : null}
+          {isSuperAdmin ? (
+            <SettingsRow
+              title={t("account.access")}
+              control={<Badge variant="warning">{t("account.superAdmin")}</Badge>}
+            />
+          ) : null}
+        </SettingsSection>
 
-        {/* My credentials — per-user CLI auth + API key overrides. Sits on
-            the profile page because it's per-user state, not org-wide. */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between gap-3">
-              <CardTitle>My credentials</CardTitle>
-              <Badge tone="info">Per-user</Badge>
-            </div>
-          </CardHeader>
-          <CardBody>
-            <div className="flex items-center justify-between gap-3">
-              <p className="text-sm text-fg/70">
-                Sign in to a CLI runtime with your own subscription, or paste a personal API key.
-                These values override the organization defaults whenever set.
-              </p>
-              <Link href="/profile/credentials">
-                <Button variant="secondary" size="sm">
-                  <KeyRound className="h-3.5 w-3.5" />
-                  Manage
-                </Button>
-              </Link>
-            </div>
-          </CardBody>
-        </Card>
-
-        {/* Edit name */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("displayName.title")}</CardTitle>
-          </CardHeader>
-          <CardBody>
-            <form onSubmit={handleSaveName} className="flex items-end gap-3">
+        <SettingsSection title={t("displayName.title")} description="Choose the name shown to other members.">
+          <SettingsRow title={t("displayName.name")} stacked>
+            <form onSubmit={handleSaveName} className="flex flex-col gap-3 sm:flex-row sm:items-end">
               <div className="flex-1">
                 <Label htmlFor="name">{t("displayName.name")}</Label>
                 <Input
@@ -147,19 +106,15 @@ export default function ProfilePage() {
                   placeholder={t("displayName.placeholder")}
                 />
               </div>
-              <Button type="submit" variant="accent" disabled={saving || name === user?.name}>
+              <Button type="submit" variant="default" disabled={saving || name === user?.name}>
                 {saving ? t("actions.saving") : t("actions.save")}
               </Button>
             </form>
-          </CardBody>
-        </Card>
+          </SettingsRow>
+        </SettingsSection>
 
-        {/* Change password */}
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("password.title")}</CardTitle>
-          </CardHeader>
-          <CardBody>
+        <SettingsSection title={t("password.title")} description="Update the password used for direct Bidwright sign-in.">
+          <SettingsRow title={t("password.title")} stacked>
             <form onSubmit={handleChangePassword} className="space-y-3">
               <div>
                 <Label htmlFor="currentPassword">{t("password.current")}</Label>
@@ -172,7 +127,7 @@ export default function ProfilePage() {
                   autoComplete="current-password"
                 />
               </div>
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div>
                   <Label htmlFor="newPassword">{t("password.new")}</Label>
                   <Input
@@ -198,15 +153,14 @@ export default function ProfilePage() {
               </div>
               <Button
                 type="submit"
-                variant="accent"
+                variant="default"
                 disabled={saving || !currentPassword || !newPassword}
               >
                 {saving ? t("actions.changing") : t("actions.changePassword")}
               </Button>
             </form>
-          </CardBody>
-        </Card>
-      </div>
-    </AppShell>
+          </SettingsRow>
+        </SettingsSection>
+    </div>
   );
 }

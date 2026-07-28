@@ -3,7 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { Download, Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, ModalBackdrop } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 import { importRateSchedule, listRateSchedules, type RateSchedule, type WorkspacePatchResponse } from "@/lib/api";
 
 interface ImportRateSchedulesModalProps {
@@ -289,7 +294,7 @@ export function ImportRateSchedulesModal({
             </Button>
             <Button
               type="button"
-              variant="accent"
+              variant="default"
               size="sm"
               onClick={handleImport}
               disabled={selected.size === 0 || importing}

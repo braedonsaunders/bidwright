@@ -6,7 +6,11 @@ import { AnimatePresence, motion } from "motion/react";
 import { useAuth } from "@/components/auth-provider";
 import { BidwrightMark } from "@/components/brand-logo";
 import { initSetup, seedSampleData } from "@/lib/api";
-import { Button, Input, Label } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
 import {
   ArrowLeft,
   ArrowRight,
@@ -441,7 +445,7 @@ export default function SetupPage() {
                         </div>
 
                         <Button
-                          variant="accent"
+                          variant="default"
                           size="lg"
                           className="h-12 w-full rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]"
                           onClick={() => setStep("admin")}
@@ -526,7 +530,7 @@ export default function SetupPage() {
                             Back
                           </Button>
                           <Button
-                            variant="accent"
+                            variant="default"
                             className="h-11 flex-1 rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]"
                             disabled={!adminName.trim() || !adminEmail.trim() || !adminPassword.trim()}
                             onClick={handleCreateAdmin}
@@ -586,7 +590,7 @@ export default function SetupPage() {
                             Back
                           </Button>
                           <Button
-                            variant="accent"
+                            variant="default"
                             className="h-11 flex-1 rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]"
                             disabled={loading}
                             onClick={handleCreateOrg}
@@ -646,7 +650,7 @@ export default function SetupPage() {
                               Skip
                             </Button>
                             <Button
-                              variant="accent"
+                              variant="default"
                               className="h-11 flex-1 rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]"
                               disabled={seeding}
                               onClick={handleSeed}
@@ -665,7 +669,7 @@ export default function SetupPage() {
                             </Button>
                           </div>
                         ) : (
-                          <Button variant="accent" className="h-11 w-full rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]" onClick={handleFinish}>
+                          <Button variant="default" className="h-11 w-full rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]" onClick={handleFinish}>
                             Continue to dashboard
                             <ArrowRight className="h-4 w-4" />
                           </Button>
@@ -691,7 +695,7 @@ export default function SetupPage() {
                             <Button variant="ghost" className="h-11 rounded-lg text-[#4f5a53] hover:bg-[#e8e1d2]" onClick={restartPreview}>
                               Replay walkthrough
                             </Button>
-                            <Button variant="accent" className="h-11 rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]" onClick={() => router.push("/")}>
+                            <Button variant="default" className="h-11 rounded-lg bg-[#101514] text-white hover:bg-[#1c2925]" onClick={() => router.push("/")}>
                               Open app
                               <ArrowRight className="h-4 w-4" />
                             </Button>

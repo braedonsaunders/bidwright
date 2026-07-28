@@ -4,14 +4,16 @@ import { useState, useMemo } from "react";
 import {
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
   Input,
   Label,
+} from "@appkit/ui";
+import {
   ModalBackdrop,
   Select,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import type { WorkspaceWorksheet, WorkspaceWorksheetItem } from "@/lib/api";
 
 /* ─── Props ─── */
@@ -101,7 +103,7 @@ export function LinkToLineItemModal({
             Connect this takeoff mark&rsquo;s measurement to a worksheet line item
           </p>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           {/* Worksheet selector */}
           {worksheets.length > 1 && (
             <div>
@@ -197,7 +199,7 @@ export function LinkToLineItemModal({
               Link
             </Button>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </ModalBackdrop>
   );

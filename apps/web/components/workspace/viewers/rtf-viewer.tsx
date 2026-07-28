@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 import { Loader2, AlertTriangle, FileText } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 
 interface RtfViewerProps {

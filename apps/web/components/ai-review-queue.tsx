@@ -3,7 +3,17 @@
 import { CheckCircle2, CircleAlert, Sparkles, XCircle } from "lucide-react";
 import type { AiRun, Citation } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
-import { Badge, Card, CardBody, CardHeader, CardTitle, EmptyState, Progress } from "@/components/ui";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Progress,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+} from "@/components/legacy-controls";
 
 const stateMap = {
   complete: { tone: "success" as const, icon: CheckCircle2, label: "Complete" },
@@ -38,7 +48,7 @@ export function AIReviewQueue({
           )}
         </div>
       </CardHeader>
-      <CardBody className="space-y-2">
+      <CardContent className="space-y-2">
         {visibleItems.length === 0 ? (
           <EmptyState>No AI runs</EmptyState>
         ) : (
@@ -76,7 +86,7 @@ export function AIReviewQueue({
             );
           })
         )}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

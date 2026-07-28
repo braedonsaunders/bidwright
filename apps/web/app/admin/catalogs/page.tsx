@@ -17,26 +17,33 @@ import {
   Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
+  Drawer,
+  EmptyState,
   Input,
   Label,
-  ModalBackdrop,
-  Select,
+  PageHeader,
+  RecordList,
+  type RecordColumn,
+  SearchSelect,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  Tabs,
   Textarea,
-} from "@/components/ui";
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import {
-  ArrowRight,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
-  ChevronUp,
   ChevronsLeft,
   ChevronsRight,
   Copy,
-  Edit3,
   Library,
   Loader2,
   Plus,
@@ -83,33 +90,33 @@ function catalogKindLabel(kind: string) {
 function ItemTable({ items }: { items: CatalogItem[] }) {
   return (
     <div className="overflow-hidden rounded-lg border border-line">
-      <table className="w-full table-fixed text-xs">
-        <thead className="border-b border-line bg-panel2/50 text-fg/40">
-          <tr>
-            <th className="w-28 px-3 py-2 text-left font-medium">Code</th>
-            <th className="px-3 py-2 text-left font-medium">Name</th>
-            <th className="w-20 px-3 py-2 text-left font-medium">Unit</th>
-            <th className="w-24 px-3 py-2 text-right font-medium">Cost</th>
-            <th className="w-24 px-3 py-2 text-right font-medium">Price</th>
-            <th className="w-36 px-3 py-2 text-left font-medium">Category</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table>
+        <TableHeader>
+          <TableRow noAnimate>
+            <TableHead className="w-28">Code</TableHead>
+            <TableHead>Name</TableHead>
+            <TableHead className="w-20">Unit</TableHead>
+            <TableHead className="w-24 text-right">Cost</TableHead>
+            <TableHead className="w-24 text-right">Price</TableHead>
+            <TableHead className="w-36">Category</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {items.map((item) => {
             const category = typeof item.metadata?.category === "string" ? item.metadata.category : "";
             return (
-              <tr key={item.id} className="border-b border-line/50 last:border-b-0 hover:bg-panel2/30">
-                <td className="truncate px-3 py-2 font-mono text-[11px] text-fg/50">{item.code || "-"}</td>
-                <td className="truncate px-3 py-2 text-fg/80">{item.name}</td>
-                <td className="truncate px-3 py-2 text-fg/55">{item.unit || "-"}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-fg/70">{formatNumber(item.unitCost)}</td>
-                <td className="px-3 py-2 text-right tabular-nums text-fg/70">{formatNumber(item.unitPrice)}</td>
-                <td className="truncate px-3 py-2 text-fg/50">{category || "-"}</td>
-              </tr>
+              <TableRow key={item.id}>
+                <TableCell className="truncate font-mono text-[11px] text-fg-muted">{item.code || "—"}</TableCell>
+                <TableCell className="truncate text-fg">{item.name}</TableCell>
+                <TableCell className="truncate text-fg-muted">{item.unit || "—"}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatNumber(item.unitCost)}</TableCell>
+                <TableCell className="text-right tabular-nums">{formatNumber(item.unitPrice)}</TableCell>
+                <TableCell className="truncate text-fg-muted">{category || "—"}</TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -133,19 +140,19 @@ function PaginationControls({
         Showing {start.toLocaleString()}-{end.toLocaleString()} of {total.toLocaleString()}
       </span>
       <div className="flex items-center gap-1">
-        <Button variant="ghost" size="xs" disabled={page === 0} onClick={() => onPageChange(0)}>
+        <Button variant="ghost" size="sm" disabled={page === 0} onClick={() => onPageChange(0)}>
           <ChevronsLeft className="h-3 w-3" />
         </Button>
-        <Button variant="ghost" size="xs" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
+        <Button variant="ghost" size="sm" disabled={page === 0} onClick={() => onPageChange(page - 1)}>
           <ChevronLeft className="h-3 w-3" />
         </Button>
         <span className="px-2 text-fg/60">
           Page {page + 1} of {totalPages}
         </span>
-        <Button variant="ghost" size="xs" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>
+        <Button variant="ghost" size="sm" disabled={page >= totalPages - 1} onClick={() => onPageChange(page + 1)}>
           <ChevronRight className="h-3 w-3" />
         </Button>
-        <Button variant="ghost" size="xs" disabled={page >= totalPages - 1} onClick={() => onPageChange(totalPages - 1)}>
+        <Button variant="ghost" size="sm" disabled={page >= totalPages - 1} onClick={() => onPageChange(totalPages - 1)}>
           <ChevronsRight className="h-3 w-3" />
         </Button>
       </div>
@@ -157,6 +164,7 @@ export default function AdminCatalogsPage() {
   const [adminTab, setAdminTab] = useState<AdminTab>("templates");
   const [templates, setTemplates] = useState<CatalogSummary[]>([]);
   const [loading, setLoading] = useState(true);
+  const [templateSearch, setTemplateSearch] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [itemCache, setItemCache] = useState<Record<string, CatalogTemplateDetails>>({});
   const [itemPage, setItemPage] = useState(0);
@@ -165,11 +173,6 @@ export default function AdminCatalogsPage() {
   const [itemsLoading, setItemsLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<CatalogSummary | null>(null);
-
-  const templateCountLabel = useMemo(
-    () => `${templates.length} template${templates.length === 1 ? "" : "s"} available`,
-    [templates.length],
-  );
 
   const fetchTemplates = useCallback(async () => {
     try {
@@ -199,25 +202,13 @@ export default function AdminCatalogsPage() {
     }
   }, []);
 
-  const toggleExpand = useCallback(async (id: string) => {
-    if (expandedId === id) {
-      setExpandedId(null);
-      return;
-    }
-    setExpandedId(id);
-    setItemPage(0);
-    setFilter("");
-    setFilterInput("");
-    await loadItems(id, 0);
-  }, [expandedId, loadItems]);
-
   const handleFilter = useCallback((id: string) => {
     setFilter(filterInput);
     loadItems(id, 0, filterInput);
   }, [filterInput, loadItems]);
 
   const handleDelete = useCallback(async (id: string, name: string) => {
-    if (!confirm(`Delete catalog template "${name}"? This cannot be undone.`)) return;
+    if (!confirm(`Delete catalog template "${name}"? This cannot be undone.`)) return false;
     await adminDeleteCatalogTemplate(id);
     setTemplates((prev) => prev.filter((template) => template.id !== id));
     setItemCache((prev) => {
@@ -226,6 +217,7 @@ export default function AdminCatalogsPage() {
       return next;
     });
     if (expandedId === id) setExpandedId(null);
+    return true;
   }, [expandedId]);
 
   const handleSaved = useCallback(async () => {
@@ -237,173 +229,120 @@ export default function AdminCatalogsPage() {
     setEditingTemplate(null);
   }, [expandedId, fetchTemplates, filter, itemPage, loadItems]);
 
-  return (
-    <div className="flex h-full flex-col overflow-hidden p-6">
-      <div className="mb-4 flex items-center justify-between">
-        <div>
-          <h2 className="text-xl font-bold text-fg">Library</h2>
-          <p className="mt-1 text-xs text-fg/40">
-            System catalog templates and cross-organization library management.
-          </p>
+  const columns = useMemo<RecordColumn<CatalogSummary>[]>(() => [
+    {
+      key: "name",
+      label: "Template",
+      width: "34%",
+      render: (template) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium text-fg">{template.name}</div>
+          <div className="truncate text-xs text-fg-muted">{template.description || "No description"}</div>
         </div>
-        {adminTab === "templates" && (
-          <Button variant="accent" size="sm" onClick={() => setShowCreate(true)}>
-            <Plus className="mr-1.5 h-4 w-4" />
-            New Template
-          </Button>
-        )}
-      </div>
+      ),
+    },
+    {
+      key: "kind",
+      label: "Kind",
+      render: (template) => <Badge variant="info">{catalogKindLabel(template.kind)}</Badge>,
+    },
+    {
+      key: "itemCount",
+      label: "Items",
+      kind: "amount",
+      format: (value) => Number(value ?? 0).toLocaleString(),
+    },
+    { key: "source", label: "Source" },
+    {
+      key: "updatedAt",
+      label: "Updated",
+      format: (value) => new Date(String(value)).toLocaleDateString(),
+    },
+    {
+      key: "items",
+      label: "",
+      kind: "actions",
+      render: (template) => (
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={(event) => {
+            event.stopPropagation();
+            setExpandedId(template.id);
+            setItemPage(0);
+            setFilter("");
+            setFilterInput("");
+            void loadItems(template.id, 0);
+          }}
+        >
+          Browse items
+        </Button>
+      ),
+    },
+  ], [loadItems]);
 
-      <div className="mb-4 flex items-center gap-1 shrink-0">
-        {ADMIN_TABS.map((t) => {
-          const active = adminTab === t.id;
-          return (
-            <button
-              key={t.id}
-              onClick={() => setAdminTab(t.id)}
-              className={cn(
-                "px-2.5 py-1 text-[11px] font-medium rounded-md transition-colors whitespace-nowrap",
-                active ? "bg-panel2 text-fg" : "text-fg/40 hover:text-fg/60",
-              )}
-            >
-              {t.label}
-            </button>
-          );
-        })}
-      </div>
+  const browsedTemplate = templates.find((template) => template.id === expandedId) ?? null;
+  const browsedDetails = expandedId ? itemCache[expandedId] : undefined;
+  const visibleTemplates = useMemo(() => {
+    const query = templateSearch.trim().toLowerCase();
+    if (!query) return templates;
+    return templates.filter((template) => [
+      template.name,
+      template.description,
+      template.kind,
+      template.source,
+      template.sourceDescription,
+    ].some((value) => value?.toLowerCase().includes(query)));
+  }, [templateSearch, templates]);
 
-      <div className="flex-1 min-h-0 overflow-auto">
+  return (
+    <>
+      <div className="space-y-5">
+        <PageHeader
+          title="Shared library"
+          description="System catalog templates and controlled cross-organization library transfers."
+          actions={adminTab === "templates" ? (
+            <Button size="sm" onClick={() => setShowCreate(true)}>
+              <Plus className="size-4" /> New template
+            </Button>
+          ) : undefined}
+        />
+
+        <Tabs
+          value={adminTab}
+          onValueChange={(value) => setAdminTab(value as AdminTab)}
+          tabs={ADMIN_TABS.map((tab) => ({ value: tab.id, label: tab.label }))}
+        />
+
         {adminTab === "templates" && (
           loading ? (
-            <div className="text-xs text-fg/40">Loading...</div>
-          ) : templates.length === 0 ? (
-            <Card>
-              <CardBody>
-                <div className="py-8 text-center text-sm text-fg/40">
-                  No catalog templates yet. Create one to make it available for organization libraries.
-                </div>
-              </CardBody>
-            </Card>
-          ) : (
-            <div className="space-y-2">
-              {templates.map((template) => {
-                const isExpanded = expandedId === template.id;
-                const details = itemCache[template.id];
-                const itemCount = template.itemCount ?? details?.total ?? 0;
-
-                return (
-                  <Card key={template.id}>
-                    <CardBody>
-                      <div className="flex items-center justify-between gap-4">
-                        <div className="flex min-w-0 items-center gap-3">
-                          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-panel2">
-                            <Library className="h-4 w-4 text-fg/40" />
-                          </div>
-                          <div className="min-w-0">
-                            <div className="truncate text-sm font-medium text-fg">{template.name}</div>
-                            <div className="truncate text-xs text-fg/40">
-                              {template.description || "No description"}
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="flex shrink-0 items-center gap-3 text-xs text-fg/40">
-                          <Badge tone="info" className="text-[10px]">
-                            {catalogKindLabel(template.kind)}
-                          </Badge>
-                          <span>{itemCount.toLocaleString()} items</span>
-                          <span>{template.source}</span>
-                          <div className="flex items-center gap-1.5">
-                            <Button variant="ghost" size="xs" onClick={() => toggleExpand(template.id)}>
-                              {isExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
-                              Items
-                            </Button>
-                            <Button variant="ghost" size="xs" onClick={() => setEditingTemplate(template)}>
-                              <Edit3 className="h-3 w-3" />
-                            </Button>
-                            <Button variant="danger" size="xs" onClick={() => handleDelete(template.id, template.name)}>
-                              <Trash2 className="h-3 w-3" />
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-
-                      {isExpanded && (
-                        <div className="mt-3 border-t border-line pt-3">
-                          <div className="mb-3 grid gap-2 text-xs text-fg/45 md:grid-cols-3">
-                            <div>
-                              <span className="block text-[10px] font-medium text-fg/30">SCOPE</span>
-                              {template.scope}
-                            </div>
-                            <div>
-                              <span className="block text-[10px] font-medium text-fg/30">SOURCE</span>
-                              {template.sourceDescription || template.source || "-"}
-                            </div>
-                            <div>
-                              <span className="block text-[10px] font-medium text-fg/30">UPDATED</span>
-                              {new Date(template.updatedAt).toLocaleDateString()}
-                            </div>
-                          </div>
-
-                          <div className="mb-3 flex items-center gap-2">
-                            <div className="relative max-w-sm flex-1">
-                              <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
-                              <Input
-                                value={filterInput}
-                                onChange={(event) => setFilterInput(event.target.value)}
-                                onKeyDown={(event) => event.key === "Enter" && handleFilter(template.id)}
-                                placeholder="Search items..."
-                                className="h-8 pl-8 text-xs"
-                              />
-                            </div>
-                            <Button variant="ghost" size="xs" onClick={() => handleFilter(template.id)}>
-                              Search
-                            </Button>
-                            {filter && (
-                              <Button
-                                variant="ghost"
-                                size="xs"
-                                onClick={() => {
-                                  setFilter("");
-                                  setFilterInput("");
-                                  loadItems(template.id, 0);
-                                }}
-                              >
-                                Clear
-                              </Button>
-                            )}
-                          </div>
-
-                          {!details || itemsLoading ? (
-                            <div className="text-xs text-fg/40">Loading items...</div>
-                          ) : details.items.length === 0 ? (
-                            <div className="rounded-lg border border-dashed border-line py-8 text-center text-sm text-fg/40">
-                              No items{filter ? " matching this search" : " have been imported for this template yet"}.
-                            </div>
-                          ) : (
-                            <>
-                              <ItemTable items={details.items} />
-                              <PaginationControls
-                                page={itemPage}
-                                total={details.total}
-                                onPageChange={(page) => loadItems(template.id, page, filter || undefined)}
-                              />
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </CardBody>
-                  </Card>
-                );
-              })}
-              <p className="text-xs text-fg/30">{templateCountLabel}.</p>
+            <div className="flex items-center justify-center py-16 text-sm text-fg-muted">
+              <Loader2 className="mr-2 size-4 animate-spin" /> Loading templates…
             </div>
+          ) : (
+            <RecordList
+              columns={columns}
+              rows={visibleTemplates}
+              getRowId={(template) => template.id}
+              search={{
+                value: templateSearch,
+                onChange: setTemplateSearch,
+                placeholder: "Search templates by name, kind, or source…",
+              }}
+              empty={{
+                icon: <Library />,
+                title: templateSearch ? "No templates match this search" : "No catalog templates yet",
+                description: templateSearch
+                  ? "Try a broader template name, kind, or source."
+                  : "Create a template to make a shared catalog available to organization libraries.",
+                action: templateSearch ? undefined : <Button size="sm" onClick={() => setShowCreate(true)}><Plus className="size-4" /> New template</Button>,
+              }}
+              onRowClick={setEditingTemplate}
+            />
           )
         )}
 
-        {adminTab === "import" && (
-          <CrossOrgImportPanel />
-        )}
+        {adminTab === "import" && <CrossOrgImportPanel />}
       </div>
 
       {showCreate && (
@@ -419,9 +358,72 @@ export default function AdminCatalogsPage() {
           template={editingTemplate}
           onClose={() => setEditingTemplate(null)}
           onSaved={handleSaved}
+          onDelete={async () => {
+            const deleted = await handleDelete(editingTemplate.id, editingTemplate.name);
+            if (deleted) setEditingTemplate(null);
+          }}
         />
       )}
-    </div>
+
+      <Drawer
+        open={Boolean(browsedTemplate)}
+        onClose={() => setExpandedId(null)}
+        size="xl"
+        title={browsedTemplate?.name ?? "Catalog items"}
+        description={browsedTemplate ? `${catalogKindLabel(browsedTemplate.kind)} · ${browsedDetails?.total ?? browsedTemplate.itemCount ?? 0} items` : undefined}
+      >
+        {browsedTemplate && (
+          <div className="space-y-4">
+            <div className="grid gap-3 text-sm sm:grid-cols-3">
+              <div><span className="block text-xs font-medium uppercase text-fg-subtle">Scope</span>{browsedTemplate.scope}</div>
+              <div><span className="block text-xs font-medium uppercase text-fg-subtle">Source</span>{browsedTemplate.sourceDescription || browsedTemplate.source || "—"}</div>
+              <div><span className="block text-xs font-medium uppercase text-fg-subtle">Updated</span>{new Date(browsedTemplate.updatedAt).toLocaleDateString()}</div>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <div className="relative max-w-sm flex-1">
+                <Search className="absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-fg-subtle" />
+                <Input
+                  value={filterInput}
+                  onChange={(event) => setFilterInput(event.target.value)}
+                  onKeyDown={(event) => event.key === "Enter" && handleFilter(browsedTemplate.id)}
+                  placeholder="Search items…"
+                  className="pl-8"
+                />
+              </div>
+              <Button variant="outline" size="sm" onClick={() => handleFilter(browsedTemplate.id)}>Search</Button>
+              {filter && (
+                <Button variant="ghost" size="sm" onClick={() => {
+                  setFilter("");
+                  setFilterInput("");
+                  void loadItems(browsedTemplate.id, 0);
+                }}>Clear</Button>
+              )}
+            </div>
+
+            {!browsedDetails || itemsLoading ? (
+              <div className="flex items-center justify-center py-12 text-sm text-fg-muted">
+                <Loader2 className="mr-2 size-4 animate-spin" /> Loading items…
+              </div>
+            ) : browsedDetails.items.length === 0 ? (
+              <EmptyState
+                title={filter ? "No items match this search" : "No items in this template"}
+                description={filter ? "Try a broader item name or code." : "Import catalog items before using this template."}
+              />
+            ) : (
+              <>
+                <ItemTable items={browsedDetails.items} />
+                <PaginationControls
+                  page={itemPage}
+                  total={browsedDetails.total}
+                  onPageChange={(page) => loadItems(browsedTemplate.id, page, filter || undefined)}
+                />
+              </>
+            )}
+          </div>
+        )}
+      </Drawer>
+    </>
   );
 }
 
@@ -485,7 +487,7 @@ function CrossOrgImportPanel() {
         <CardHeader>
           <CardTitle>Copy Library Data Between Organizations</CardTitle>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           <p className="text-xs text-fg/50">
             Select a source organization to copy library data from and a target organization to copy into.
             This will add new records without modifying or deleting existing data in the target.
@@ -494,10 +496,13 @@ function CrossOrgImportPanel() {
           <div className="grid gap-4 lg:grid-cols-2">
             <div>
               <Label>Source Organization (copy from)</Label>
-              <Select
+              <SearchSelect
                 value={sourceOrgId}
-                onValueChange={setSourceOrgId}
-                options={[{ value: "", label: "Select source organization..." }, ...orgOptions]}
+                onChange={setSourceOrgId}
+                options={orgOptions}
+                clearable
+                placeholder="Select source organization…"
+                searchable
               />
               {sourceOrg && (
                 <p className="mt-1 text-[11px] text-fg/35">
@@ -507,10 +512,13 @@ function CrossOrgImportPanel() {
             </div>
             <div>
               <Label>Target Organization (copy into)</Label>
-              <Select
+              <SearchSelect
                 value={targetOrgId}
-                onValueChange={setTargetOrgId}
-                options={[{ value: "", label: "Select target organization..." }, ...orgOptions]}
+                onChange={setTargetOrgId}
+                options={orgOptions}
+                clearable
+                placeholder="Select target organization…"
+                searchable
               />
               {targetOrg && (
                 <p className="mt-1 text-[11px] text-fg/35">
@@ -578,7 +586,7 @@ function CrossOrgImportPanel() {
 
           <div className="flex items-center justify-end gap-3">
             <Button
-              variant="accent"
+              variant="default"
               size="sm"
               disabled={!sourceOrgId || !targetOrgId || selectedSections.length === 0 || copying || sourceOrgId === targetOrgId}
               onClick={handleCopy}
@@ -594,7 +602,7 @@ function CrossOrgImportPanel() {
           {sourceOrgId && targetOrgId && sourceOrgId === targetOrgId && (
             <p className="text-xs text-danger">Source and target must be different organizations.</p>
           )}
-        </CardBody>
+        </CardContent>
       </Card>
     </div>
   );
@@ -605,11 +613,13 @@ function CatalogTemplateModal({
   template,
   onClose,
   onSaved,
+  onDelete,
 }: {
   mode: "create" | "edit";
   template?: CatalogSummary;
   onClose: () => void;
   onSaved: () => void;
+  onDelete?: () => Promise<void>;
 }) {
   const [name, setName] = useState(template?.name ?? "");
   const [kind, setKind] = useState(template?.kind ?? "materials");
@@ -619,8 +629,7 @@ function CatalogTemplateModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(event: React.FormEvent) {
-    event.preventDefault();
+  async function handleSubmit() {
     setError(null);
     setSaving(true);
     try {
@@ -649,80 +658,89 @@ function CatalogTemplateModal({
   }
 
   return (
-    <ModalBackdrop open={true} onClose={onClose} size="lg">
-      <Card>
-        <CardHeader>
-          <CardTitle>{mode === "create" ? "New Catalog Template" : "Edit Catalog Template"}</CardTitle>
-        </CardHeader>
-        <CardBody>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            {error && (
-              <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
-                {error}
-              </div>
-            )}
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <Label htmlFor="catalog-template-name">Name</Label>
-                <Input
-                  id="catalog-template-name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                  required
-                  autoFocus
-                />
-              </div>
-              <div>
-                <Label htmlFor="catalog-template-kind">Kind</Label>
-                <Select
-                  id="catalog-template-kind"
-                  value={kind}
-                  onValueChange={setKind}
-                  options={KIND_OPTIONS}
-                />
-              </div>
-            </div>
-
-            <div>
-              <Label htmlFor="catalog-template-description">Description</Label>
-              <Textarea
-                id="catalog-template-description"
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-                rows={3}
-              />
-            </div>
-
-            <div className="grid gap-3 md:grid-cols-2">
-              <div>
-                <Label htmlFor="catalog-template-source">Source</Label>
-                <Input
-                  id="catalog-template-source"
-                  value={source}
-                  onChange={(event) => setSource(event.target.value)}
-                  disabled={mode === "edit"}
-                />
-              </div>
-              <div>
-                <Label htmlFor="catalog-template-source-description">Source Description</Label>
-                <Input
-                  id="catalog-template-source-description"
-                  value={sourceDescription}
-                  onChange={(event) => setSourceDescription(event.target.value)}
-                />
-              </div>
-            </div>
-
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-              <Button variant="accent" type="submit" disabled={saving || !name.trim()}>
-                {saving ? "Saving..." : "Save"}
+    <Drawer
+      open
+      onClose={onClose}
+      size="md"
+      title={mode === "create" ? "New catalog template" : "Edit catalog template"}
+      description={mode === "create" ? "Create a shared catalog definition." : "Update the template metadata used across organizations."}
+      footer={(
+        <div className="flex w-full items-center justify-between gap-2">
+          <div>
+            {mode === "edit" && onDelete && (
+              <Button variant="destructive" size="sm" onClick={() => void onDelete()} disabled={saving}>
+                <Trash2 className="size-3.5" /> Delete
               </Button>
-            </div>
-          </form>
-        </CardBody>
-      </Card>
-    </ModalBackdrop>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button size="sm" onClick={() => void handleSubmit()} disabled={saving || !name.trim()}>
+              {saving ? "Saving…" : "Save template"}
+            </Button>
+          </div>
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        {error && (
+          <div className="rounded-lg border border-danger/30 bg-danger-subtle px-4 py-2 text-sm text-danger">
+            {error}
+          </div>
+        )}
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="catalog-template-name">Name</Label>
+            <Input
+              id="catalog-template-name"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+              autoFocus
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="catalog-template-kind">Kind</Label>
+            <SearchSelect
+              id="catalog-template-kind"
+              value={kind}
+              onChange={setKind}
+              options={KIND_OPTIONS}
+              searchable={false}
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <Label htmlFor="catalog-template-description">Description</Label>
+          <Textarea
+            id="catalog-template-description"
+            value={description}
+            onChange={(event) => setDescription(event.target.value)}
+            rows={3}
+          />
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="catalog-template-source">Source</Label>
+            <Input
+              id="catalog-template-source"
+              value={source}
+              onChange={(event) => setSource(event.target.value)}
+              disabled={mode === "edit"}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="catalog-template-source-description">Source description</Label>
+            <Input
+              id="catalog-template-source-description"
+              value={sourceDescription}
+              onChange={(event) => setSourceDescription(event.target.value)}
+            />
+          </div>
+        </div>
+      </div>
+    </Drawer>
   );
 }

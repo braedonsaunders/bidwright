@@ -13,11 +13,12 @@
  */
 
 import { startEgressProxy, type RunningEgressProxy } from "./egress-proxy.js";
+import { getBidwrightMode } from "./agent-home.js";
 
 let runningProxy: RunningEgressProxy | null = null;
 
 function isMultitenantServer(): boolean {
-  if ((process.env.BIDWRIGHT_MODE || "").toLowerCase() !== "server") return false;
+  if (getBidwrightMode() !== "server") return false;
   const flag = (process.env.BIDWRIGHT_MULTITENANT || "").toLowerCase();
   return flag === "true" || flag === "1" || flag === "yes";
 }

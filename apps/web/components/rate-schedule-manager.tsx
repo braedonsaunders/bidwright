@@ -1,17 +1,14 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import ReactDOM from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Calculator,
   Check,
-  ChevronLeft,
   ChevronRight,
   DollarSign,
   Edit3,
   Plus,
-  Search,
   SlidersHorizontal,
   Trash2,
   X,
@@ -41,15 +38,21 @@ import {
   Card,
   CardHeader,
   CardTitle,
-  FadeIn,
+  Drawer,
   Input,
-  Select,
-} from "@/components/ui";
+  RecordList,
+  SearchSelect,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  type RecordColumn,
+} from "@appkit/ui";
 import { useUomOptions } from "@/components/shared/uom-select";
 
 /* ─── Constants ─── */
-
-type BadgeTone = "default" | "success" | "warning" | "danger" | "info";
 
 function cleanCategoryValue(value: string | null | undefined) {
   return (value ?? "").trim();
@@ -104,7 +107,7 @@ function canonicalCategoryOptionValue(value: string, options: Array<{ value: str
 function categoryBadgeProps(
   category: string,
   categories: EntityCategory[],
-): { style?: React.CSSProperties; tone?: BadgeTone } {
+): { style?: React.CSSProperties; variant?: "secondary" } {
   const ec = findConfiguredCategoryByValue(category, categories);
   if (ec?.color) {
     return {
@@ -115,7 +118,7 @@ function categoryBadgeProps(
       },
     };
   }
-  return { tone: "default" };
+  return { variant: "secondary" };
 }
 
 function formatCount(value: number) {
@@ -1133,11 +1136,101 @@ export function RateScheduleManager({
   const fmt = (n: number | undefined) =>
     n != null ? `$${n.toFixed(2)}` : "—";
 
+  const scheduleColumns = useMemo<RecordColumn<RateSchedule>[]>(() => [
+    {
+      key: "name",
+      label: "Ratebook",
+      width: "30%",
+      render: (schedule) => {
+        const metadataSummary = compactMetadataSummary(schedule);
+        return (
+          <div className="min-w-0">
+            <div className="truncate text-xs font-semibold text-fg">{schedule.name}</div>
+            <div className="mt-0.5 truncate text-[11px] text-fg/45">
+              {schedule.description || metadataSummary || "No description"}
+            </div>
+            {schedule.description && metadataSummary ? (
+              <div className="mt-0.5 truncate text-[10px] text-fg/35">{metadataSummary}</div>
+            ) : null}
+          </div>
+        );
+      },
+    },
+    {
+      key: "category",
+      label: "Category",
+      width: "13%",
+      render: (schedule) => (
+        <Badge {...categoryBadgeProps(schedule.category, entityCategories)} className="max-w-full truncate text-[10px]">
+          {categoryLabel(schedule.category, entityCategories) || "-"}
+        </Badge>
+      ),
+    },
+    {
+      key: "scope",
+      label: "Scope",
+      width: "9%",
+      render: (schedule) => <span className="capitalize">{schedule.scope}</span>,
+    },
+    {
+      key: "effectiveDate",
+      label: "Effective",
+      width: "16%",
+      render: (schedule) => (
+        <span className="text-xs text-fg/45">
+          {formatScheduleDateRange(schedule.effectiveDate, schedule.expiryDate)}
+        </span>
+      ),
+    },
+    {
+      key: "items",
+      label: "Items",
+      kind: "amount",
+      width: "7%",
+      format: (_value, schedule) => formatCount(schedule.items?.length ?? 0),
+    },
+    {
+      key: "tiers",
+      label: "Tiers",
+      kind: "amount",
+      width: "7%",
+      format: (_value, schedule) => formatCount(schedule.tiers?.length ?? 0),
+    },
+    {
+      key: "defaultMarkup",
+      label: "Markup",
+      kind: "amount",
+      width: "10%",
+      format: (_value, schedule) => `${(schedule.defaultMarkup ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%`,
+    },
+    {
+      key: "actions",
+      label: "Auto",
+      kind: "actions",
+      width: "8%",
+      render: (schedule) => (
+        <div className="flex items-center justify-end gap-1.5">
+          {schedule.autoCalculate ? <Badge variant="info" className="text-[10px]">On</Badge> : <span className="text-xs text-fg/30">-</span>}
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void handleDelete(schedule.id);
+            }}
+            className="rounded p-1 text-fg/30 transition-colors hover:bg-danger/10 hover:text-danger"
+            title="Delete Ratebook"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      ),
+    },
+  ], [entityCategories, handleDelete]);
+
   return (
     <div className={cn(embedded ? "flex h-full min-h-0 flex-col gap-3" : "space-y-5")}>
       {/* Header */}
       {!embedded && (
-      <FadeIn>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
@@ -1146,221 +1239,102 @@ export function RateScheduleManager({
                                                Manage resource cost and sell overrides. Import these into projects.
               </p>
             </div>
-            <Button variant="accent" size="xs" onClick={startCreate}>
+            <Button variant="default" size="sm" onClick={startCreate}>
               <Plus className="h-3.5 w-3.5" />
               New Ratebook
             </Button>
           </CardHeader>
         </Card>
-      </FadeIn>
       )}
 
-      <Card className={cn("flex min-h-0 flex-col overflow-hidden", embedded && "h-full flex-1")}>
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-3 py-2">
-          <div className="relative min-w-[220px] flex-1 md:max-w-sm">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
-            <Input
-              className="h-8 pl-8 text-xs"
-              placeholder="Search Ratebooks by name or description..."
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
-          <div className="flex min-w-0 flex-wrap items-center gap-1">
-            {[{ value: "", label: "All" }, ...categoryOptions].map((c) => {
-              const active = c.value === "" ? !categoryFilter : categoryFilter === c.value;
-              return (
-                <button
-                  key={c.value || "__all__"}
-                  type="button"
-                  onClick={() => setCategoryFilter(c.value === categoryFilter ? "" : c.value)}
-                  className={cn(
-                    "rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors",
-                    active ? "bg-accent/10 text-accent" : "text-fg/40 hover:bg-panel2/60 hover:text-fg/60",
-                  )}
-                >
-                  {c.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+      <RecordList
+        columns={scheduleColumns}
+        rows={loading ? [] : visibleSchedules}
+        getRowId={(schedule) => schedule.id}
+        className={cn(embedded && "flex h-full min-h-0 flex-1 flex-col")}
+        tableClassName="table-fixed"
+        tableContainerClassName={cn(
+          embedded && "min-h-0 flex-1 overflow-auto rounded-none border-0 bg-transparent shadow-none",
+        )}
+        search={{
+          value: search,
+          onChange: setSearch,
+          placeholder: "Search Ratebooks by name or description...",
+        }}
+        filters={(
+          <SearchSelect
+            value={categoryFilter}
+            onChange={setCategoryFilter}
+            options={categoryOptions}
+            clearable
+            emptyLabel="All categories"
+            placeholder="All categories"
+            ariaLabel="Filter Ratebooks by category"
+            className="w-52"
+          />
+        )}
+        toolbarActions={(
+          <>
             <span className="text-[10px] text-fg/35">
               {formatCount(filtered.length)} ratebook{filtered.length === 1 ? "" : "s"}
             </span>
-            <Button type="button" variant="accent" size="sm" onClick={startCreate}>
+            <Button type="button" size="sm" onClick={startCreate}>
               <Plus className="h-3.5 w-3.5" />
               New
             </Button>
-          </div>
-        </div>
+          </>
+        )}
+        pagination={{
+          page: page + 1,
+          perPage: pageSize,
+          total: filtered.length,
+          onPageChange: (nextPage) => setPage(nextPage - 1),
+        }}
+        empty={{
+          title: loading ? "Loading Ratebooks..." : "No Ratebooks match this view.",
+          description: loading ? "Fetching the latest Ratebook records." : "Try another search or category filter.",
+        }}
+        onRowClick={(schedule) => void loadDetail(schedule.id)}
+      />
 
-        <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-          <table className="w-full table-fixed text-sm">
-            <colgroup>
-              <col className="w-[30%]" />
-              <col className="w-[13%]" />
-              <col className="w-[9%]" />
-              <col className="w-[16%]" />
-              <col className="w-[7%]" />
-              <col className="w-[7%]" />
-              <col className="w-[10%]" />
-              <col className="w-[6%]" />
-            </colgroup>
-            <thead className="sticky top-0 z-10 bg-panel">
-              <tr className="border-b border-line">
-                <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Ratebook</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Category</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Scope</th>
-                <th className="px-3 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40">Effective</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-wider text-fg/40">Items</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-wider text-fg/40">Tiers</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-wider text-fg/40">Markup</th>
-                <th className="px-3 py-2.5 text-right text-[11px] font-medium uppercase tracking-wider text-fg/40">Auto</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center text-sm text-fg/40">
-                    Loading Ratebooks...
-                  </td>
-                </tr>
-              )}
-
-              {!loading && filtered.length === 0 && (
-                <tr>
-                  <td colSpan={8} className="px-5 py-12 text-center text-sm text-fg/40">
-                    No Ratebooks match this view.
-                  </td>
-                </tr>
-              )}
-
-              {!loading && visibleSchedules.map((schedule, index) => {
-                const selected = selectedId === schedule.id;
-                const metadataSummary = compactMetadataSummary(schedule);
-                return (
-                  <motion.tr
-                    key={schedule.id}
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.16, delay: Math.min(index * 0.012, 0.18) }}
-                    role="button"
-                    tabIndex={0}
-                    onClick={() => loadDetail(schedule.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        loadDetail(schedule.id);
-                      }
-                    }}
-                    className={cn(
-                      "group cursor-pointer border-b border-line last:border-0 outline-none transition-colors",
-                      selected ? "bg-accent/10" : "hover:bg-panel2/40 focus-visible:bg-panel2/60",
-                    )}
-                  >
-                    <td className="min-w-0 px-3 py-2.5">
-                      <div className="truncate text-xs font-semibold text-fg">{schedule.name}</div>
-                      <div className="mt-0.5 truncate text-[11px] text-fg/45">
-                        {schedule.description || metadataSummary || "No description"}
-                      </div>
-                      {schedule.description && metadataSummary && (
-                        <div className="mt-0.5 truncate text-[10px] text-fg/35">{metadataSummary}</div>
-                      )}
-                    </td>
-                    <td className="min-w-0 px-3 py-2.5">
-                      <Badge {...categoryBadgeProps(schedule.category, entityCategories)} className="max-w-full truncate text-[10px]">
-                        {categoryLabel(schedule.category, entityCategories) || "-"}
-                      </Badge>
-                    </td>
-                    <td className="px-3 py-2.5 text-xs text-fg/55">
-                      <span className="capitalize">{schedule.scope}</span>
-                    </td>
-                    <td className="truncate px-3 py-2.5 text-xs text-fg/45">
-                      {formatScheduleDateRange(schedule.effectiveDate, schedule.expiryDate)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-xs tabular-nums text-fg/70">
-                      {formatCount(schedule.items?.length ?? 0)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-xs tabular-nums text-fg/70">
-                      {formatCount(schedule.tiers?.length ?? 0)}
-                    </td>
-                    <td className="px-3 py-2.5 text-right text-xs tabular-nums text-fg/70">
-                      {(schedule.defaultMarkup ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}%
-                    </td>
-                    <td className="px-3 py-2.5 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {schedule.autoCalculate ? (
-                          <Badge tone="info" className="text-[10px]">On</Badge>
-                        ) : (
-                          <span className="text-xs text-fg/30">-</span>
-                        )}
-                        <button
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            handleDelete(schedule.id);
-                          }}
-                          className="rounded p-1 text-fg/30 opacity-0 transition-all hover:bg-danger/10 hover:text-danger group-hover:opacity-100 focus:opacity-100"
-                          title="Delete Ratebook"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </button>
-                      </div>
-                    </td>
-                  </motion.tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-
-        <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-panel2/20 px-3 py-2 text-xs text-fg/45">
-          <span className="tabular-nums">
-            {filtered.length === 0 ? 0 : page * pageSize + 1}-{Math.min((page + 1) * pageSize, filtered.length)} of {formatCount(filtered.length)} Ratebooks
-          </span>
-          <div className="flex items-center gap-2">
-            <span>Page {page + 1} of {totalPages}</span>
-            <div className="flex items-center gap-1">
-              <button
-                type="button"
-                onClick={() => setPage((current) => Math.max(0, current - 1))}
-                disabled={page <= 0}
-                className="rounded p-1 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg disabled:pointer-events-none disabled:opacity-30"
-                title="Previous page"
-              >
-                <ChevronLeft className="h-4 w-4" />
-              </button>
-              <button
-                type="button"
-                onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))}
-                disabled={page >= totalPages - 1}
-                className="rounded p-1 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg disabled:pointer-events-none disabled:opacity-30"
-                title="Next page"
-              >
-                <ChevronRight className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* ── Edit / Create Drawer (portalled to body to escape FadeIn transform) ── */}
-      {typeof document !== "undefined" && ReactDOM.createPortal(
-      <AnimatePresence>
-        {(isCreating || (selectedId && detail)) && (
-          <motion.div
-            key="rate-schedule-drawer"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="fixed inset-y-0 right-0 z-40 flex w-[min(1120px,calc(100vw-24px))] flex-col border-l border-line bg-panel shadow-2xl"
+      <Drawer
+        open={Boolean(isCreating || (selectedId && detail))}
+        onClose={() => {
+          if (isCreating) {
+            setIsCreating(false);
+            setEditingHeader(false);
+          } else {
+            setSelectedId(null);
+            setDetail(null);
+          }
+        }}
+        size="2xl"
+        title={editingHeader ? (isCreating ? "New Ratebook" : "Edit Ratebook") : detail?.name ?? "Ratebook"}
+        description={
+          editingHeader
+            ? "Configure the Ratebook identity, category, effective dates, and source metadata."
+            : detail
+              ? [detail.description, compactMetadataSummary(detail)].filter(Boolean).join(" · ") || "Resource pricing and cost rules."
+              : "Resource pricing and cost rules."
+        }
+        headerActions={!editingHeader && detail ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => {
+              setHeaderForm(headerFormFromSchedule(detail, entityCategories, organizationCurrency));
+              setEditingHeader(true);
+            }}
           >
-            {/* Drawer header */}
-            <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-line bg-panel2/40">
+            <Edit3 className="h-3.5 w-3.5" />
+            Edit
+          </Button>
+        ) : undefined}
+        bodyClassName="p-0"
+      >
               {editingHeader ? (
-                <div className="flex-1 space-y-3">
+                <div className="space-y-3 p-5">
                   {isCreating && (
                     <p className="text-[11px] font-semibold text-fg/55 uppercase tracking-wider">New Ratebook</p>
                   )}
@@ -1382,10 +1356,10 @@ export function RateScheduleManager({
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Category</label>
-                      <Select
+                      <SearchSelect
                         className="mt-1"
                         value={headerForm.category}
-                        onValueChange={(v) => setHeaderForm({ ...headerForm, category: v })}
+                        onChange={(v) => setHeaderForm({ ...headerForm, category: v })}
                         disabled={categoryOptions.length === 0}
                         placeholder="Select category"
                         options={
@@ -1453,10 +1427,10 @@ export function RateScheduleManager({
                     </div>
                     <div>
                       <label className="text-[10px] font-medium text-fg/40 uppercase tracking-wider">Currency</label>
-                      <Select
+                      <SearchSelect
                         className="mt-1"
                         value={normalizeCurrency(headerForm.currency, organizationCurrency)}
-                        onValueChange={(currency) => setHeaderForm({ ...headerForm, currency })}
+                        onChange={(currency) => setHeaderForm({ ...headerForm, currency })}
                         options={currencyOptions}
                         triggerClassName="text-xs uppercase"
                       />
@@ -1468,7 +1442,7 @@ export function RateScheduleManager({
                   </div>
                   <div className="flex gap-2 justify-end pt-1">
                     <Button
-                      size="xs"
+                      size="sm"
                       variant="ghost"
                       onClick={() => {
                         if (isCreating) {
@@ -1483,7 +1457,7 @@ export function RateScheduleManager({
                       Cancel
                     </Button>
                     <Button
-                      size="xs"
+                      size="sm"
                       onClick={isCreating ? handleCreate : handleUpdateHeader}
                       disabled={!headerForm.name.trim() || !headerCategoryIsValid || !headerDateRangeIsValid || creatingSaving}
                     >
@@ -1491,33 +1465,7 @@ export function RateScheduleManager({
                     </Button>
                   </div>
                 </div>
-              ) : (
-                <>
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <h2 className="text-sm font-semibold text-fg truncate">{detail!.name}</h2>
-                      <Badge {...categoryBadgeProps(detail!.category, entityCategories)} className="text-[10px]">{categoryLabel(detail!.category, entityCategories)}</Badge>
-                    </div>
-                    {detail!.description && <p className="text-xs text-fg/40 mt-0.5">{detail!.description}</p>}
-                    <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-fg/35">
-                      <span>Markup: {detail!.defaultMarkup}%</span>
-                      {(detail!.effectiveDate || detail!.expiryDate) && (
-                        <span>Effective: {formatScheduleDateRange(detail!.effectiveDate, detail!.expiryDate)}</span>
-                      )}
-                      {compactMetadataSummary(detail!) && <span>{compactMetadataSummary(detail!)}</span>}
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setHeaderForm(headerFormFromSchedule(detail!, entityCategories, organizationCurrency)); setEditingHeader(true); }} title="Edit">
-                      <Edit3 className="h-3.5 w-3.5" />
-                    </button>
-                    <button className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors" onClick={() => { setSelectedId(null); setDetail(null); }} title="Close">
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
+              ) : null}
 
             {!isCreating && detail && !editingHeader && (
               <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel px-5 py-2">
@@ -1553,7 +1501,7 @@ export function RateScheduleManager({
             )}
 
             {/* Drawer body */}
-            <div className="flex-1 overflow-y-auto p-5 space-y-5">
+            <div className="space-y-5 p-5">
               {isCreating ? (
                 <div className="flex items-center justify-center py-12 text-center text-xs text-fg/40">
                   Save the schedule to start adding tiers and items.
@@ -1574,7 +1522,7 @@ export function RateScheduleManager({
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
                         <Button
-                          size="xs"
+                          size="sm"
                           variant={componentTemplatesOpen ? "secondary" : "ghost"}
                           onClick={() => setComponentTemplatesOpen((open) => !open)}
                         >
@@ -1582,7 +1530,7 @@ export function RateScheduleManager({
                           Templates
                         </Button>
                         <Button
-                          size="xs"
+                          size="sm"
                           variant={componentEditorOpen ? "secondary" : "ghost"}
                           onClick={() => setComponentEditorOpen((open) => !open)}
                         >
@@ -1596,19 +1544,18 @@ export function RateScheduleManager({
                         No Ratebook component rules yet.
                       </div>
                     ) : (
-                      <div className="overflow-x-auto rounded-lg border border-line">
-                        <table className="w-full min-w-[900px] text-xs">
-                          <thead className="bg-bg/45">
-                            <tr className="border-b border-line">
-                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Rule</th>
-                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Side</th>
-                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Basis</th>
-                              <th className="px-3 py-2 text-right text-[10px] font-medium uppercase tracking-wider text-fg/40">Amount</th>
-                              <th className="px-3 py-2 text-left text-[10px] font-medium uppercase tracking-wider text-fg/40">Applies</th>
-                              <th className="w-16" />
-                            </tr>
-                          </thead>
-                          <tbody>
+                      <Table className="min-w-[900px] text-xs">
+                          <TableHeader className="bg-bg/45">
+                            <TableRow noAnimate className="border-b border-line">
+                              <TableHead className="h-auto px-3 py-2 text-[10px]">Rule</TableHead>
+                              <TableHead className="h-auto px-3 py-2 text-[10px]">Side</TableHead>
+                              <TableHead className="h-auto px-3 py-2 text-[10px]">Basis</TableHead>
+                              <TableHead className="h-auto px-3 py-2 text-right text-[10px]">Amount</TableHead>
+                              <TableHead className="h-auto px-3 py-2 text-[10px]">Applies</TableHead>
+                              <TableHead className="h-auto w-16" />
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
                             {ratebookComponents.map((component) => {
                               const tier = component.appliesToTierId
                                 ? detail.tiers.find((candidate) => candidate.id === component.appliesToTierId)
@@ -1619,20 +1566,20 @@ export function RateScheduleManager({
                                 component.entityTypes.length > 0 ? `Types: ${component.entityTypes.join(", ")}` : "",
                               ].filter(Boolean).join(" · ");
                               return (
-                                <tr key={component.id} className="border-b border-line/60 last:border-b-0">
-                                  <td className="px-3 py-2">
+                                <TableRow key={component.id} className="border-b border-line/60 last:border-b-0">
+                                  <TableCell className="px-3 py-2">
                                     <div className="font-medium text-fg">{component.label}</div>
                                     <div className="font-mono text-[10px] text-fg/35">{component.code} · {componentOptionLabel(componentKindOptions, component.kind)}</div>
-                                  </td>
-                                  <td className="px-3 py-2">
-                                    <Badge tone={component.target === "cost" ? "warning" : component.target === "price" ? "success" : "info"} className="text-[10px]">
+                                  </TableCell>
+                                  <TableCell className="px-3 py-2">
+                                    <Badge variant={component.target === "cost" ? "warning" : component.target === "price" ? "success" : "info"} className="text-[10px]">
                                       {component.target === "price" ? "Sell" : component.target === "both" ? "Both" : "Cost"}
                                     </Badge>
-                                  </td>
-                                  <td className="px-3 py-2 text-fg/55">{componentOptionLabel(componentBasisOptions, component.basis)}</td>
-                                  <td className="px-3 py-2 text-right font-mono tabular-nums text-fg/75">{formatComponentAmount(component)}</td>
-                                  <td className="px-3 py-2 text-fg/50">{applies}</td>
-                                  <td className="px-2 py-2 text-right">
+                                  </TableCell>
+                                  <TableCell className="px-3 py-2 text-fg/55">{componentOptionLabel(componentBasisOptions, component.basis)}</TableCell>
+                                  <TableCell className="px-3 py-2 text-right font-mono tabular-nums text-fg/75">{formatComponentAmount(component)}</TableCell>
+                                  <TableCell className="px-3 py-2 text-fg/50">{applies}</TableCell>
+                                  <TableCell className="px-2 py-2 text-right">
                                     <div className="flex items-center justify-end gap-1">
                                       <button
                                         type="button"
@@ -1651,13 +1598,12 @@ export function RateScheduleManager({
                                         <Trash2 className="h-3.5 w-3.5" />
                                       </button>
                                     </div>
-                                  </td>
-                                </tr>
+                                  </TableCell>
+                                </TableRow>
                               );
                             })}
-                          </tbody>
-                        </table>
-                      </div>
+                          </TableBody>
+                      </Table>
                     )}
                   </div>
 
@@ -1676,7 +1622,7 @@ export function RateScheduleManager({
                           >
                             <div className="flex items-center justify-between gap-2">
                               <span className="truncate text-xs font-semibold text-fg">{template.label}</span>
-                              <Badge tone={template.target === "cost" ? "warning" : template.target === "price" ? "success" : "info"} className="shrink-0 text-[10px]">
+                              <Badge variant={template.target === "cost" ? "warning" : template.target === "price" ? "success" : "info"} className="shrink-0 text-[10px]">
                                 {template.target === "price" ? "Sell" : template.target === "both" ? "Both" : "Cost"}
                               </Badge>
                             </div>
@@ -1696,7 +1642,7 @@ export function RateScheduleManager({
                       <div className="mb-3 flex items-center justify-between gap-3">
                         <div className="text-[11px] font-medium uppercase tracking-wider text-fg/40">Rule Editor</div>
                         {componentDraft.id ? (
-                          <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
+                          <Button size="sm" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
                             <X className="h-3 w-3" />
                             Clear
                           </Button>
@@ -1733,31 +1679,28 @@ export function RateScheduleManager({
                           </div>
                           <div>
                             <label className="text-[10px] font-medium uppercase text-fg/40">Kind</label>
-                            <Select
+                            <SearchSelect
                               className="mt-1"
-                              size="xs"
                               value={componentDraft.kind}
-                              onValueChange={(kind) => setComponentDraft((current) => ({ ...current, kind }))}
+                              onChange={(kind) => setComponentDraft((current) => ({ ...current, kind }))}
                               options={componentKindOptions}
                             />
                           </div>
                           <div>
                             <label className="text-[10px] font-medium uppercase text-fg/40">Side</label>
-                            <Select
+                            <SearchSelect
                               className="mt-1"
-                              size="xs"
                               value={componentDraft.target}
-                              onValueChange={(target) => setComponentDraft((current) => ({ ...current, target: target as ComponentTarget }))}
+                              onChange={(target) => setComponentDraft((current) => ({ ...current, target: target as ComponentTarget }))}
                               options={componentTargetOptions}
                             />
                           </div>
                           <div>
                             <label className="text-[10px] font-medium uppercase text-fg/40">Basis</label>
-                            <Select
+                            <SearchSelect
                               className="mt-1"
-                              size="xs"
                               value={componentDraft.basis}
-                              onValueChange={(basis) => {
+                              onChange={(basis) => {
                                 const nextBasis = basis as ComponentBasis;
                                 setComponentDraft((current) => {
                                   const wasPercent = isPercentComponentBasis(current.basis);
@@ -1792,11 +1735,10 @@ export function RateScheduleManager({
                         <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1">
                           <div>
                             <label className="text-[10px] font-medium uppercase text-fg/40">Tier Scope</label>
-                            <Select
+                            <SearchSelect
                               className="mt-1"
-                              size="xs"
                               value={componentDraft.appliesToTierId ?? "__all__"}
-                              onValueChange={(tierId) => {
+                              onChange={(tierId) => {
                                 const tier = detail.tiers.find((candidate) => candidate.id === tierId);
                                 setComponentDraft((current) => ({
                                   ...current,
@@ -1832,10 +1774,10 @@ export function RateScheduleManager({
                             />
                           </div>
                           <div className="flex items-end justify-end gap-2 pt-1">
-                            <Button size="xs" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
+                            <Button size="sm" variant="ghost" onClick={() => setComponentDraft(emptyComponentDraft())}>
                               Reset
                             </Button>
-                            <Button size="xs" onClick={handleAddComponent} disabled={!componentDraft.label.trim()}>
+                            <Button size="sm" onClick={handleAddComponent} disabled={!componentDraft.label.trim()}>
                               <Plus className="h-3 w-3" />
                               {componentDraft.id ? "Save Rule" : "Add Rule"}
                             </Button>
@@ -1853,9 +1795,9 @@ export function RateScheduleManager({
                       <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Tiers</h3>
                       <div className="flex gap-1.5">
                         {detail.autoCalculate && detail.tiers.length > 0 && (
-                          <Button size="xs" variant="ghost" onClick={handleAutoCalculate}><Calculator className="h-3 w-3" /> Auto-Calc</Button>
+                          <Button size="sm" variant="ghost" onClick={handleAutoCalculate}><Calculator className="h-3 w-3" /> Auto-Calc</Button>
                         )}
-                        <Button size="xs" variant="ghost" onClick={() => setShowAddTier(true)}><Plus className="h-3 w-3" /> Add</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setShowAddTier(true)}><Plus className="h-3 w-3" /> Add</Button>
                       </div>
                     </div>
                     {showAddTier && (
@@ -1870,26 +1812,25 @@ export function RateScheduleManager({
                         </div>
                         <div className="w-28">
                           <label className="text-[10px] font-medium text-fg/40 uppercase">UoM</label>
-                          <Select
-                            size="sm"
+                          <SearchSelect
                             value={newTierUom}
-                            onValueChange={setNewTierUom}
+                            onChange={setNewTierUom}
                             options={tierUomOptions}
                             triggerClassName="mt-1"
                           />
                         </div>
-                        <Button size="xs" onClick={handleAddTier} disabled={!newTierName.trim()}>Add</Button>
-                        <Button size="xs" variant="ghost" onClick={() => { setShowAddTier(false); setNewTierName(""); setNewTierUom("__none__"); }}><X className="h-3 w-3" /></Button>
+                        <Button size="sm" onClick={handleAddTier} disabled={!newTierName.trim()}>Add</Button>
+                        <Button size="sm" variant="ghost" onClick={() => { setShowAddTier(false); setNewTierName(""); setNewTierUom("__none__"); }}><X className="h-3 w-3" /></Button>
                       </div>
                     )}
                     {detail.tiers.length === 0 ? (
                       <div className="py-2 space-y-2.5">
                         <p className="text-xs text-fg/40">No tiers yet. Start from a preset, or use <span className="text-fg/60">Add</span> for custom tiers.</p>
                         <div className="flex flex-wrap gap-2">
-                          <Button size="xs" onClick={() => handleApplyTierPreset("labour")}>
+                          <Button size="sm" onClick={() => handleApplyTierPreset("labour")}>
                             <Plus className="h-3 w-3" /> Labour · Reg / OT / DT
                           </Button>
-                          <Button size="xs" onClick={() => handleApplyTierPreset("duration")}>
+                          <Button size="sm" onClick={() => handleApplyTierPreset("duration")}>
                             <Plus className="h-3 w-3" /> Equipment · Day / Week / Month
                           </Button>
                         </div>
@@ -1906,10 +1847,9 @@ export function RateScheduleManager({
                               <Input className="h-6 w-24 text-xs" value={editTierForm.name} onChange={(e) => setEditTierForm({ ...editTierForm, name: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleSaveTierEdit(); if (e.key === "Escape") setEditingTierId(null); }} autoFocus />
                               <Input className="h-6 w-14 text-xs text-right" type="number" step="0.1" value={editTierForm.multiplier} onChange={(e) => setEditTierForm({ ...editTierForm, multiplier: e.target.value })} onKeyDown={(e) => { if (e.key === "Enter") handleSaveTierEdit(); if (e.key === "Escape") setEditingTierId(null); }} />
                               <span className="text-[10px] text-fg/40">×</span>
-                              <Select
-                                size="xs"
+                              <SearchSelect
                                 value={editTierForm.uom}
-                                onValueChange={(v) => setEditTierForm({ ...editTierForm, uom: v })}
+                                onChange={(v) => setEditTierForm({ ...editTierForm, uom: v })}
                                 options={tierUomOptions}
                                 triggerClassName="w-20"
                               />
@@ -1938,54 +1878,56 @@ export function RateScheduleManager({
                     <div className="flex items-center justify-between mb-3">
                       <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Items & Rates</h3>
                       {!showAddItem && (
-                        <Button size="xs" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
+                        <Button size="sm" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
                       )}
                     </div>
 
                   {detail.items.length === 0 && !showAddItem ? (
                     <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
                   ) : (
-                    <div className="-mx-5 px-5 overflow-x-auto">
-                      <table className="w-full text-xs">
-                        <thead>
-                          <tr className="border-b border-line">
-                            <th className="text-left py-2 pr-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-14">Code</th>
-                            <th className="text-left py-2 pr-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</th>
-                            <th className="text-left py-2 pr-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-10">Unit</th>
+                    <Table
+                      className="w-full min-w-max text-xs"
+                      containerClassName="-mx-5 w-[calc(100%+2.5rem)] rounded-none border-x-0 shadow-none"
+                    >
+                        <TableHeader>
+                          <TableRow noAnimate className="border-b border-line">
+                            <TableHead className="h-auto w-14 py-2 pr-2 text-[10px]">Code</TableHead>
+                            <TableHead className="h-auto py-2 pr-2 text-[10px]">Name</TableHead>
+                            <TableHead className="h-auto w-10 py-2 pr-1 text-[10px]">Unit</TableHead>
                             {detail.tiers
                               .sort((a, b) => a.sortOrder - b.sortOrder)
                               .map((tier) => (
-                                <th key={tier.id} className="text-right py-2 px-1 text-[10px] font-medium text-fg/40 uppercase tracking-wider w-32" colSpan={2}>
+                                <TableHead key={tier.id} className="h-auto w-32 px-1 py-2 text-right text-[10px]" colSpan={2}>
                                   {tier.name}
-                                </th>
+                                </TableHead>
                               ))}
-                              <th className="w-8" />
-                            </tr>
+                              <TableHead className="h-auto w-8" />
+                            </TableRow>
                             {detail.tiers.length > 0 ? (
-                              <tr className="border-b border-line/60">
-                                <th />
-                                <th />
-                                <th />
+                              <TableRow noAnimate className="border-b border-line/60">
+                                <TableHead className="h-auto" />
+                                <TableHead className="h-auto" />
+                                <TableHead className="h-auto" />
                                 {detail.tiers
                                   .sort((a, b) => a.sortOrder - b.sortOrder)
                                   .flatMap((tier) => [
-                                    <th key={`${tier.id}:cost`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Cost</th>,
-                                    <th key={`${tier.id}:sell`} className="text-right py-1 px-1 text-[9px] font-medium text-fg/35 uppercase tracking-wider">Sell</th>,
+                                    <TableHead key={`${tier.id}:cost`} className="h-auto px-1 py-1 text-right text-[9px]">Cost</TableHead>,
+                                    <TableHead key={`${tier.id}:sell`} className="h-auto px-1 py-1 text-right text-[9px]">Sell</TableHead>,
                                   ])}
-                                <th />
-                              </tr>
+                                <TableHead className="h-auto" />
+                              </TableRow>
                             ) : null}
-                          </thead>
-                          <tbody>
+                          </TableHeader>
+                          <TableBody>
                             {detail.items.sort((a, b) => a.sortOrder - b.sortOrder).map((item) => (
-                              <tr key={item.id} className="border-b border-line/50 hover:bg-panel2/20 group">
-                                <td className="py-1.5 pr-2 text-fg/60 font-mono text-[11px]">{item.code || "—"}</td>
-                                <td className="py-1.5 pr-2 text-fg font-medium text-[11px] truncate max-w-[160px]">{item.name}</td>
-                                <td className="py-1.5 pr-1 text-fg/50 text-[11px]">{item.unit}</td>
+                              <TableRow key={item.id} className="group border-b border-line/50 hover:bg-panel2/20">
+                                <TableCell className="py-1.5 pr-2 font-mono text-[11px] text-fg/60">{item.code || "—"}</TableCell>
+                                <TableCell className="max-w-[160px] truncate py-1.5 pr-2 text-[11px] font-medium text-fg">{item.name}</TableCell>
+                                <TableCell className="py-1.5 pr-1 text-[11px] text-fg/50">{item.unit}</TableCell>
                                 {detail.tiers
                                   .sort((a, b) => a.sortOrder - b.sortOrder)
                                   .flatMap((tier) => [
-                                    <td key={`${tier.id}:cost`} className="py-1 px-0.5">
+                                    <TableCell key={`${tier.id}:cost`} className="px-0.5 py-1">
                                       <div className="flex flex-col items-end">
                                         <span
                                           className="block w-16 rounded px-0.5 py-0.5 text-right text-[11px] text-fg/65"
@@ -1994,8 +1936,8 @@ export function RateScheduleManager({
                                           {fmt(loadedCostForTierUnit(item, tier, ratebookComponents) ?? undefined)}
                                         </span>
                                       </div>
-                                    </td>,
-                                    <td key={`${tier.id}:sell`} className="py-1 px-0.5">
+                                    </TableCell>,
+                                    <TableCell key={`${tier.id}:sell`} className="px-0.5 py-1">
                                       <div className="flex flex-col items-end">
                                         {editingCell?.itemId === item.id && editingCell?.tierId === tier.id ? (
                                           <input
@@ -2020,21 +1962,20 @@ export function RateScheduleManager({
                                           </button>
                                         )}
                                       </div>
-                                    </td>,
+                                    </TableCell>,
                                   ])}
-                                <td className="py-2 text-right">
+                                <TableCell className="py-2 text-right">
                                   <button
                                     onClick={() => handleDeleteItem(item.id)}
                                     className="p-1 rounded opacity-0 group-hover:opacity-100 hover:bg-danger/10 text-fg/30 hover:text-danger transition-all"
                                   >
                                     <Trash2 className="h-3 w-3" />
                                   </button>
-                                </td>
-                              </tr>
+                                </TableCell>
+                              </TableRow>
                             ))}
-                          </tbody>
-                        </table>
-                      </div>
+                          </TableBody>
+                    </Table>
                     )}
                     <AnimatePresence>
                       {showAddItem && (
@@ -2049,16 +1990,16 @@ export function RateScheduleManager({
                                   placeholder="Search resources..."
                                   className="h-8"
                                 />
-                                <Select
+                                <SearchSelect
                                   value={newItemForm.resourceId ?? ""}
-                                  onValueChange={handleResourceSelect}
+                                  onChange={handleResourceSelect}
                                   options={filteredResources.slice(0, 100).map((resource) => ({
                                     value: resource.id,
                                     label: [resource.code, resource.name].filter(Boolean).join(" · ") || resource.id,
                                   }))}
                                   placeholder="Select resource"
-                                  size="xs"
                                   disabled={resources.length === 0}
+                                  searchable
                                 />
                               </div>
                               {resources.length === 0 ? (
@@ -2072,8 +2013,8 @@ export function RateScheduleManager({
                                 </p>
                               )}
                             </div>
-                            <Button size="xs" onClick={handleAddItem} disabled={!newItemForm.catalogItemId}>Add</Button>
-                            <Button size="xs" variant="ghost" onClick={() => { setShowAddItem(false); setResourceQuery(""); setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
+                            <Button size="sm" onClick={handleAddItem} disabled={!newItemForm.catalogItemId}>Add</Button>
+                            <Button size="sm" variant="ghost" onClick={() => { setShowAddItem(false); setResourceQuery(""); setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
                           </div>
                         </motion.div>
                       )}
@@ -2082,10 +2023,7 @@ export function RateScheduleManager({
                 </>
               )}
             </div>
-          </motion.div>
-        )}
-      </AnimatePresence>,
-      document.body)}
+      </Drawer>
     </div>
   );
 }

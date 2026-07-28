@@ -23,11 +23,15 @@ import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "..
 import { generateInstructionFiles, generateQaInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { stripBlankCredentialEnv } from "../services/agent-host/env-sanitize.js";
+import { getAgentRuntimeHost } from "../services/agent-host/index.js";
+import { resolveCliCommand } from "../services/cli-adapters/shared.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
+import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { prisma } from "@bidwright/db";
 import { getAgentToolDisplayName } from "@bidwright/domain";
 import { getSessionCookieToken } from "../services/session-cookie.js";
+import { ensureUserAgentHome, getBidwrightMode } from "../services/agent-home.js";
 
 const CLI_RUN_KINDS = ["cli-intake", "cli-qa", "cli-assist"] as const;
 
@@ -709,6 +713,45 @@ function mapClaudeEffort(effort: ReturnType<typeof normalizeCliReasoningEffort>)
   }
 }
 
+async function collectOneShotOutput(
+  child: import("node:child_process").ChildProcess,
+  timeoutMs: number,
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    let settled = false;
+    const finish = (handler: () => void) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      handler();
+    };
+    const timer = setTimeout(() => {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // Process already exited.
+      }
+      finish(() => reject(new Error("AI request timed out after 60 seconds.")));
+    }, timeoutMs);
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.once("error", (error) => finish(() => reject(error)));
+    child.once("close", (code) => {
+      finish(() => {
+        if (code === 0) resolve(stdout.trim());
+        else reject(new Error(stderr.trim() || stdout.trim() || `Claude exited with code ${code ?? "unknown"}.`));
+      });
+    });
+  });
+}
+
 function mapCodexEffort(effort: ReturnType<typeof normalizeCliReasoningEffort>): "low" | "medium" | "high" | "xhigh" | "max" | null {
   switch (effort) {
     case "low":
@@ -780,6 +823,41 @@ async function fetchOpenAiCliModels(apiKey?: string): Promise<CliModelOption[]> 
   }
 }
 
+const OPENROUTER_ALIAS_MODELS: CliModelOption[] = [
+  { id: "~openai/gpt-latest", name: "OpenAI GPT Latest", description: "OpenRouter's current GPT agent alias" },
+  { id: "~openai/gpt-mini-latest", name: "OpenAI GPT Mini Latest", description: "Lower-cost OpenRouter GPT agent alias" },
+  { id: "~anthropic/claude-sonnet-latest", name: "Claude Sonnet Latest", description: "OpenRouter's current Claude Sonnet alias" },
+  { id: "~anthropic/claude-opus-latest", name: "Claude Opus Latest", description: "OpenRouter's current Claude Opus alias" },
+  { id: "~google/gemini-pro-latest", name: "Gemini Pro Latest", description: "OpenRouter's current Gemini Pro alias" },
+  { id: "~moonshotai/kimi-latest", name: "Kimi Latest", description: "OpenRouter's current Kimi agent alias" },
+];
+
+async function fetchOpenRouterCliModels(apiKey?: string): Promise<CliModelOption[]> {
+  try {
+    const response = await fetch("https://openrouter.ai/api/v1/models", {
+      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : undefined,
+    });
+    if (!response.ok) return [];
+    const data = await response.json() as {
+      data?: Array<{
+        id: string;
+        name?: string;
+        description?: string;
+        supported_parameters?: string[];
+      }>;
+    };
+    return (data.data || [])
+      .filter((model) => model.supported_parameters?.includes("tools"))
+      .map((model) => ({
+        id: model.id,
+        name: model.name || model.id,
+        description: model.description || "Tool-capable model available through OpenRouter",
+      }));
+  } catch {
+    return [];
+  }
+}
+
 async function buildCliModelOptions(runtime: AgentRuntime, apiKey?: string): Promise<CliModelOption[]> {
   if (runtime === "claude-code") {
     const aliasModels: CliModelOption[] = [
@@ -803,6 +881,12 @@ async function buildCliModelOptions(runtime: AgentRuntime, apiKey?: string): Pro
     ];
     return dedupeCliModels([...defaultModels, ...(await fetchOpenAiCliModels(apiKey))]);
   }
+  if (runtime === "openrouter") {
+    return dedupeCliModels([
+      ...OPENROUTER_ALIAS_MODELS,
+      ...(await fetchOpenRouterCliModels(apiKey)),
+    ]);
+  }
   // For non-Claude/Codex adapters, fall back to whatever static list the
   // adapter supplies (opencode, gemini both ship a baseline).
   const adapter = tryGetAdapter(runtime);
@@ -810,6 +894,7 @@ async function buildCliModelOptions(runtime: AgentRuntime, apiKey?: string): Pro
   const apiKeys: Record<string, string | undefined> = {};
   if (runtime === "gemini") apiKeys.google = apiKey;
   else if (runtime === "opencode") apiKeys.anthropic = apiKey;
+  else if (runtime === "openrouter") apiKeys.openrouter = apiKey;
   return adapter.listModels({ apiKeys: apiKeys as any });
 }
 
@@ -818,6 +903,9 @@ function resolveCliPathOverride(
   integrations: Record<string, unknown>,
   requestedPath?: unknown,
 ): string | undefined {
+  // Server runtimes execute only the CLI binaries baked into the trusted
+  // image. Arbitrary configured paths remain a desktop development feature.
+  if (getBidwrightMode() === "server") return undefined;
   if (typeof requestedPath === "string" && requestedPath.trim()) return requestedPath.trim();
   const adapter = tryGetAdapter(runtime);
   if (!adapter) return undefined;
@@ -830,11 +918,28 @@ function resolveRuntimeApiKey(runtime: AgentRuntime, integrations: Record<string
   const adapter = tryGetAdapter(runtime);
   if (!adapter) return undefined;
   // Prefer the most-relevant integration key per runtime, fall back to env.
-  if (runtime === "claude-code" || runtime === "opencode") {
+  if (runtime === "claude-code") {
     return (integrations.anthropicKey as string) || process.env.ANTHROPIC_API_KEY || undefined;
+  }
+  if (runtime === "opencode") {
+    return (
+      (integrations.anthropicKey as string) ||
+      process.env.ANTHROPIC_API_KEY ||
+      (integrations.openrouterKey as string) ||
+      process.env.OPENROUTER_API_KEY ||
+      (integrations.openaiKey as string) ||
+      process.env.OPENAI_API_KEY ||
+      (integrations.geminiKey as string) ||
+      process.env.GOOGLE_API_KEY ||
+      process.env.GEMINI_API_KEY ||
+      undefined
+    );
   }
   if (runtime === "codex") {
     return (integrations.openaiKey as string) || process.env.OPENAI_API_KEY || undefined;
+  }
+  if (runtime === "openrouter") {
+    return (integrations.openrouterKey as string) || process.env.OPENROUTER_API_KEY || undefined;
   }
   if (runtime === "gemini") {
     return (
@@ -1166,6 +1271,8 @@ export function registerCliRoutes(app: FastifyInstance) {
       claude: runtimes["claude-code"] || { available: false, path: "", auth: { authenticated: false, method: "none" } },
       codex: runtimes["codex"] || { available: false, path: "", auth: { authenticated: false, method: "none" } },
       runtimes,
+      deploymentMode: getBidwrightMode(),
+      interactiveLoginAvailable: getBidwrightMode() === "desktop",
       configured: {
         runtime: configuredRuntime,
         model: configuredModel,
@@ -1178,7 +1285,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const runtime = (request.query as any)?.runtime;
     const requestedPath = (request.query as any)?.path;
     if (!isCliRuntime(runtime)) {
-      return reply.code(400).send({ error: "runtime must be 'claude-code' or 'codex'" });
+      return reply.code(400).send({ error: "runtime must be a registered agent runtime" });
     }
 
     const store = request.store!;
@@ -1796,10 +1903,23 @@ ${message}`;
     const integrations = await request.store!.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
     const askModel = normalizeCliModel("claude-code", integrations.agentModel);
     const askEffort = mapClaudeEffort(normalizeCliReasoningEffort(integrations.agentReasoningEffort));
+    const anthropicApiKey = resolveRuntimeApiKey("claude-code", integrations);
+    if (getBidwrightMode() === "server" && !anthropicApiKey) {
+      return reply.code(409).send({
+        error: "Claude requires an organization-managed or personal Anthropic API key in server mode.",
+      });
+    }
 
     try {
-      const { execSync } = await import("node:child_process");
-      const cliCmd = "claude";
+      const cliCmd = resolveCliCommand(
+        ["claude"],
+        typeof integrations.claudeCodePath === "string"
+          ? integrations.claudeCodePath
+          : undefined,
+      );
+      if (!cliCmd) {
+        return reply.code(404).send({ error: "Claude Code CLI is not installed." });
+      }
       const args = [
         "--print",
         fullPrompt,
@@ -1807,22 +1927,46 @@ ${message}`;
       ];
       if (askEffort) args.push("--effort", askEffort);
 
-      // Build env — pass API key if configured (user override wins over org default)
-      const env: Record<string, string> = stripBlankCredentialEnv({ ...process.env as any });
-      if (integrations.anthropicKey) env.ANTHROPIC_API_KEY = integrations.anthropicKey;
+      const projectDir = resolveProjectDir(projectId);
+      const agentHomeDir = await ensureUserAgentHome(request.user?.id);
+      const claudeRuntimeDir = agentHomeDir
+        ? join(agentHomeDir, "runtime", "claude")
+        : undefined;
+      const claudeHomeDir = agentHomeDir
+        ? join(agentHomeDir, "runtime", "claude-home")
+        : undefined;
+      if (claudeRuntimeDir && claudeHomeDir) {
+        await Promise.all([
+          mkdir(claudeRuntimeDir, { recursive: true }),
+          mkdir(claudeHomeDir, { recursive: true }),
+        ]);
+      }
+      const child = await getAgentRuntimeHost().spawnProcess({
+        plan: {
+          cliCmd,
+          args,
+          extraEnv: {},
+          promptHandling: { kind: "flag", flag: "--print", index: 1 },
+        },
+        projectDir,
+        cliEnv: stripBlankCredentialEnv({
+          ...(anthropicApiKey
+            ? { ANTHROPIC_API_KEY: anthropicApiKey }
+            : {}),
+          ...(claudeRuntimeDir
+            ? { CLAUDE_CONFIG_DIR: claudeRuntimeDir }
+            : {}),
+          ...(claudeHomeDir
+            ? { HOME: claudeHomeDir }
+            : {}),
+        }),
+        isWin: process.platform === "win32",
+        batSuffix: "run",
+        userId: request.user?.id ?? null,
+        workspaceAccess: "read-only",
+      });
 
-      const result = execSync(
-        `${cliCmd} ${args.map(a => `"${a.replace(/"/g, '\\"')}"`).join(" ")}`,
-        {
-          cwd: resolveProjectDir(projectId),
-          env: env as NodeJS.ProcessEnv,
-          timeout: 60_000,
-          encoding: "utf-8",
-          shell: true as any,
-        }
-      );
-
-      return { response: result.trim() };
+      return { response: await collectOneShotOutput(child, 60_000) };
     } catch (err: any) {
       const output = err.stdout?.toString() || err.stderr?.toString() || err.message;
       return reply.code(500).send({ error: output || "AI request failed" });

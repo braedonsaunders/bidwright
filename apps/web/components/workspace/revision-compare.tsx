@@ -20,14 +20,16 @@ import type {
 } from "@/lib/api";
 import {
   Button,
-  Badge,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
+} from "@appkit/ui";
+import {
+  Badge,
   EmptyState,
   Select,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
@@ -150,7 +152,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
               <CardHeader>
                 <CardTitle>Financials</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-2">
+              <CardContent className="space-y-2">
                 {financialRows.map((row) => (
                   <div key={row.label} className="flex items-center justify-between text-sm">
                     <span className="text-fg/50">{row.label}</span>
@@ -159,7 +161,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
                     </span>
                   </div>
                 ))}
-              </CardBody>
+              </CardContent>
             </Card>
 
             {/* Phases */}
@@ -167,7 +169,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
               <CardHeader>
                 <CardTitle>Phases ({phases.length})</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-1">
+              <CardContent className="space-y-1">
                 {phases.length === 0 ? (
                   <EmptyState>No phases</EmptyState>
                 ) : (
@@ -178,7 +180,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
                     </div>
                   ))
                 )}
-              </CardBody>
+              </CardContent>
             </Card>
 
             {/* Line Items summary */}
@@ -186,7 +188,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
               <CardHeader>
                 <CardTitle>Line Items ({allItems.length})</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-1 max-h-60 overflow-y-auto">
+              <CardContent className="space-y-1 max-h-60 overflow-y-auto">
                 {allItems.length === 0 ? (
                   <EmptyState>No line items</EmptyState>
                 ) : (
@@ -205,7 +207,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
                     +{allItems.length - 20} more items
                   </p>
                 )}
-              </CardBody>
+              </CardContent>
             </Card>
 
             {/* Adjustments */}
@@ -213,7 +215,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
               <CardHeader>
                 <CardTitle>Adjustments ({adjustments.length})</CardTitle>
               </CardHeader>
-              <CardBody className="space-y-1">
+              <CardContent className="space-y-1">
                 {adjustments.length === 0 ? (
                   <EmptyState>No adjustments</EmptyState>
                 ) : (
@@ -230,7 +232,7 @@ export function RevisionCompare({ workspace, open, onClose }: RevisionComparePro
                     </div>
                   ))
                 )}
-              </CardBody>
+              </CardContent>
             </Card>
           </div>
 

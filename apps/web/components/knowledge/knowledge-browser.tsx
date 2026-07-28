@@ -9,16 +9,18 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
+} from "@appkit/ui";
+import {
+  Badge,
   EmptyState,
   ModalBackdrop,
   Select,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { TreeView, type TreeNode } from "@/components/shared/tree-view";
 import type { CatalogImportAnalysis, CatalogSummary, KnowledgeBookRecord, FileNode } from "@/lib/api";
 import { analyzeKnowledgeBookForImport, getCatalogs } from "@/lib/api";
@@ -380,7 +382,7 @@ export function KnowledgeBrowser({
             <CardTitle>Knowledge Library</CardTitle>
             <Button
               variant="secondary"
-              size="xs"
+              size="sm"
               onClick={() => handleCreateFolder(null)}
             >
               <FolderPlus className="h-3.5 w-3.5" />
@@ -424,7 +426,7 @@ export function KnowledgeBrowser({
             </CardTitle>
           </CardHeader>
 
-          <CardBody className="flex-1 overflow-y-auto">
+          <CardContent className="flex-1 overflow-y-auto">
             {!selectedBook ? (
               <EmptyState>
                 Click a knowledge book in the tree to view its details.
@@ -515,7 +517,7 @@ export function KnowledgeBrowser({
                 <div className="flex gap-2 pt-2 flex-wrap">
                   <Button
                     variant="secondary"
-                    size="xs"
+                    size="sm"
                     onClick={() => {
                       setMovingBookId(selectedBook.id);
                       setMoveTargetFolderId(null);
@@ -527,7 +529,7 @@ export function KnowledgeBrowser({
                   {isImportableSourceFile(selectedBook.sourceFileName) && (
                     <Button
                       variant="secondary"
-                      size="xs"
+                      size="sm"
                       onClick={async () => {
                         setImportBookId(selectedBook.id);
                         setImportSourceLabel(selectedBook.sourceFileName ?? "");
@@ -556,7 +558,7 @@ export function KnowledgeBrowser({
                 </div>
               </div>
             )}
-          </CardBody>
+          </CardContent>
         </Card>
       </div>
 
@@ -570,7 +572,7 @@ export function KnowledgeBrowser({
           <CardHeader>
             <CardTitle>Move Book to Folder</CardTitle>
           </CardHeader>
-          <CardBody className="space-y-4">
+          <CardContent className="space-y-4">
             <Select
               value={moveTargetFolderId ?? "__root__"}
               onValueChange={(v) =>
@@ -593,7 +595,7 @@ export function KnowledgeBrowser({
                 Cancel
               </Button>
               <Button
-                variant="accent"
+                variant="default"
                 size="sm"
                 onClick={() => {
                   if (movingBookId) {
@@ -604,7 +606,7 @@ export function KnowledgeBrowser({
                 Move
               </Button>
             </div>
-          </CardBody>
+          </CardContent>
         </Card>
       </ModalBackdrop>
 

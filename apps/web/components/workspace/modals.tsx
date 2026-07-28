@@ -5,17 +5,19 @@ import {
   Button,
   Card,
   CardHeader,
-  CardBody,
+  CardContent,
   CardTitle,
   Input,
   Label,
+  Textarea,
+  Separator,
+} from "@appkit/ui";
+import {
   ModalBackdrop as AnimatedModalBackdrop,
   Select,
-  Textarea,
   Badge,
-  Separator,
   Toggle,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import type { Activity } from "@/lib/api";
 
@@ -85,14 +87,14 @@ export function ConfirmModal({
         <CardTitle>{title}</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <p className="text-sm text-fg/70 mb-5">{message}</p>
         <div className="flex items-center justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose} disabled={isPending}>
             Cancel
           </Button>
           <Button
-            variant={confirmVariant === "danger" ? "danger" : "default"}
+            variant={confirmVariant === "danger" ? "destructive" : "default"}
             size="sm"
             onClick={onConfirm}
             disabled={isPending}
@@ -100,7 +102,7 @@ export function ConfirmModal({
             {isPending ? "Working..." : confirmLabel}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -132,7 +134,7 @@ export function CreateWorksheetModal({
         <CardTitle>Create Worksheet</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <Label htmlFor="ws-name">Worksheet Name</Label>
         <Input
           id="ws-name"
@@ -152,7 +154,7 @@ export function CreateWorksheetModal({
             {isPending ? "Creating..." : "Create"}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -186,7 +188,7 @@ export function RenameWorksheetModal({
         <CardTitle>Rename Worksheet</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <Label htmlFor="ws-rename">Worksheet Name</Label>
         <Input
           id="ws-rename"
@@ -205,7 +207,7 @@ export function RenameWorksheetModal({
             {isPending ? "Saving..." : "Rename"}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -246,7 +248,7 @@ export function SendQuoteModal({
         <CardTitle>Send Quote</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <div className="space-y-4">
           <div>
             <Label htmlFor="sq-contacts">Recipients</Label>
@@ -274,7 +276,7 @@ export function SendQuoteModal({
             Cancel
           </Button>
           <Button
-            variant="accent"
+            variant="default"
             size="sm"
             onClick={() => onConfirm(contacts, message)}
             disabled={contacts.length === 0 || isPending}
@@ -282,7 +284,7 @@ export function SendQuoteModal({
             {isPending ? "Sending..." : "Send"}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -337,7 +339,7 @@ export function CreateJobModal({
         <CardTitle>Create Job</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <div className="grid grid-cols-2 gap-4">
           <div className="col-span-2">
             <Label htmlFor="cj-name">Job Name</Label>
@@ -376,7 +378,7 @@ export function CreateJobModal({
             {isPending ? "Creating..." : "Create Job"}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -494,7 +496,7 @@ export function ImportBOMModal({
         <CardTitle>Import Line Items</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <div className="space-y-4">
           <div>
             <Label htmlFor="bom-file">File (CSV / XLSX)</Label>
@@ -595,7 +597,7 @@ export function ImportBOMModal({
             {isPending ? "Importing..." : "Import"}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -627,7 +629,7 @@ export function AIModal({
         <CardTitle>{title}</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         <p className="text-sm text-fg/70 mb-4">{message}</p>
 
         {result !== null && (
@@ -641,12 +643,12 @@ export function AIModal({
             Cancel
           </Button>
           {result === null && (
-            <Button variant="accent" size="sm" onClick={onConfirm} disabled={isPending}>
+            <Button variant="default" size="sm" onClick={onConfirm} disabled={isPending}>
               {isPending ? "Generating..." : "Generate"}
             </Button>
           )}
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -690,7 +692,7 @@ export function AIPhasesModal({
         <CardTitle>AI Phase Generation</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         {result === null ? (
           <div className="space-y-4">
             <p className="text-sm text-fg/70">
@@ -715,7 +717,7 @@ export function AIPhasesModal({
                 Cancel
               </Button>
               <Button
-                variant="accent"
+                variant="default"
                 size="sm"
                 onClick={() => onGenerate(selectedDocId || undefined)}
                 disabled={isPending}
@@ -750,13 +752,13 @@ export function AIPhasesModal({
               <Button variant="ghost" size="sm" onClick={onClose}>
                 Cancel
               </Button>
-              <Button variant="accent" size="sm" onClick={onAccept} disabled={isPending}>
+              <Button variant="default" size="sm" onClick={onAccept} disabled={isPending}>
                 {isPending ? "Applying..." : "Accept Phases"}
               </Button>
             </div>
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -793,7 +795,7 @@ export function AIEquipmentModal({
         <CardTitle>AI Equipment Extraction</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         {result === null ? (
           <div className="space-y-4">
             <p className="text-sm text-fg/70">
@@ -803,7 +805,7 @@ export function AIEquipmentModal({
               <Button variant="ghost" size="sm" onClick={onClose} disabled={isPending}>
                 Cancel
               </Button>
-              <Button variant="accent" size="sm" onClick={onGenerate} disabled={isPending}>
+              <Button variant="default" size="sm" onClick={onGenerate} disabled={isPending}>
                 {isPending ? "Analyzing..." : "Extract Equipment"}
               </Button>
             </div>
@@ -838,13 +840,13 @@ export function AIEquipmentModal({
               <Button variant="ghost" size="sm" onClick={onClose}>
                 Cancel
               </Button>
-              <Button variant="accent" size="sm" onClick={onAccept} disabled={isPending}>
+              <Button variant="default" size="sm" onClick={onAccept} disabled={isPending}>
                 {isPending ? "Adding..." : "Accept Equipment"}
               </Button>
             </div>
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -868,7 +870,7 @@ export function ActivityModal({
         <CardTitle>Activity Log</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody className="max-h-96 overflow-y-auto">
+      <CardContent className="max-h-96 overflow-y-auto">
         {activities.length === 0 ? (
           <p className="py-6 text-center text-sm text-fg/40">No activity recorded.</p>
         ) : (
@@ -901,7 +903,7 @@ export function ActivityModal({
             Close
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }
@@ -977,7 +979,7 @@ export function PDFModal({
         <CardTitle>PDF Preview &amp; Download</CardTitle>
         <ModalClose onClose={onClose} />
       </CardHeader>
-      <CardBody>
+      <CardContent>
         {previewUrl && (
           <iframe
             src={previewUrl}
@@ -1052,11 +1054,11 @@ export function PDFModal({
           <Button variant="ghost" size="sm" onClick={onClose} disabled={isPending}>
             Cancel
           </Button>
-          <Button variant="accent" size="sm" onClick={() => onDownload(options)} disabled={isPending}>
+          <Button variant="default" size="sm" onClick={() => onDownload(options)} disabled={isPending}>
             {isPending ? "Generating..." : "Download PDF"}
           </Button>
         </div>
-      </CardBody>
+      </CardContent>
     </ModalBackdrop>
   );
 }

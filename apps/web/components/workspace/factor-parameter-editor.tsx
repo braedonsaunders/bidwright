@@ -1,7 +1,14 @@
 "use client";
 
 import type { EstimateFactorFormulaType } from "@/lib/api";
-import { Badge, Input, Label, Select } from "@/components/ui";
+import {
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Badge,
+  Select,
+} from "@/components/legacy-controls";
 
 export function factorParameterNumber(parameters: Record<string, unknown>, key: string, fallback = 0) {
   const value = parameters[key];

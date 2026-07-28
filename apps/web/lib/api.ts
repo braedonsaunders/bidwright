@@ -5325,6 +5325,8 @@ export async function detectCli() {
     codex: CliRuntimeStatus;
     /** All registered CLI adapters keyed by id (claude-code, codex, opencode, gemini, …). */
     runtimes: Record<string, CliRuntimeStatus>;
+    deploymentMode: "desktop" | "server";
+    interactiveLoginAvailable: boolean;
     configured: {
       runtime: string | null;
       model: string | null;
@@ -5349,6 +5351,7 @@ export async function startCliSession(input: {
   scope?: string;
   prompt?: string;
   personaId?: string;
+  mode?: "build_estimate";
 }) {
   return apiRequest<{ sessionId: string; projectId: string; runtime: string; status: string }>(
     "/api/cli/start",

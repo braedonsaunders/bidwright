@@ -5,7 +5,9 @@ import { useSearchParams } from "next/navigation";
 import { AlertCircle, Loader2, PanelRightClose, Ruler } from "lucide-react";
 import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { getProjectWorkspace, type WorkspaceResponse } from "@/lib/api";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 
 function TakeoffViewerInner() {
   const searchParams = useSearchParams();
@@ -88,7 +90,7 @@ function TakeoffViewerInner() {
         <Button
           className="ml-auto"
           variant="secondary"
-          size="xs"
+          size="sm"
           onClick={handleMergeBack}
           title="Close this detached takeoff window and merge back to the main workspace"
         >

@@ -15,6 +15,10 @@
     "test:e2e:ui": "playwright test --ui"
   },
   "dependencies": {
+    "@appkit/dashboard": "file:../../vendor/appkit/appkit-dashboard-1.0.2.tgz",
+    "@appkit/iam": "file:../../vendor/appkit/appkit-iam-1.0.0.tgz",
+    "@appkit/tokens": "file:../../vendor/appkit/appkit-tokens-0.1.1.tgz",
+    "@appkit/ui": "file:../../vendor/appkit/appkit-ui-0.1.8.tgz",
     "@bidwright/domain": "workspace:*",
     "@excalidraw/excalidraw": "^0.18.0",
     "@next/env": "^16.2.1",
@@ -66,13 +70,13 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "^4.3.2",
     "@playwright/test": "^1.59.1",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49",
-    "tailwindcss": "^3.4.16",
+    "postcss": "^8.5.8",
+    "tailwindcss": "^4.3.2",
     "typescript": "^5.7.2"
   }
 }

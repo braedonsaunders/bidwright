@@ -32,11 +32,11 @@ import {
 import {
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
   Label,
-} from "@/components/ui";
+} from "@appkit/ui";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { FileBrowser, type FileBrowserProps } from "@/components/workspace/file-browser";
 import { ScheduleTab } from "@/components/workspace/schedule-tab";
@@ -724,7 +724,7 @@ function LeadLetterTab({
           <Save className="h-3.5 w-3.5" /> Save
         </Button>
       </CardHeader>
-      <CardBody className="flex-1 min-h-0 flex flex-col">
+      <CardContent className="flex-1 min-h-0 flex flex-col">
         <div className="flex-1 flex flex-col min-h-[200px]">
           <RichTextEditor
             value={value}
@@ -734,7 +734,7 @@ function LeadLetterTab({
             minHeight="100%"
           />
         </div>
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }
@@ -777,7 +777,7 @@ function ScratchpadTab({
           <Save className="h-3.5 w-3.5" /> Save
         </Button>
       </CardHeader>
-      <CardBody className="flex-1 min-h-0 flex flex-col">
+      <CardContent className="flex-1 min-h-0 flex flex-col">
         <div className="flex-1 flex flex-col min-h-[200px]">
           <RichTextEditor
             value={value}
@@ -787,7 +787,7 @@ function ScratchpadTab({
             minHeight="100%"
           />
         </div>
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

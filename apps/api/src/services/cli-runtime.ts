@@ -33,9 +33,18 @@ import {
   listAdapters,
   tryGetAdapter,
 } from "./cli-adapters/registry.js";
-import { ensureUserAgentHome, getUserAgentHome } from "./agent-home.js";
+import {
+  ensureUserAgentHome,
+  getBidwrightMode,
+  getUserAgentHome,
+} from "./agent-home.js";
 import { getAgentRuntimeHost } from "./agent-host/index.js";
-import { BIDWRIGHT_PERMISSIONS, BIDWRIGHT_QA_PERMISSIONS } from "./cli-adapters/shared.js";
+import { removeLegacyRuntimeCredentials } from "./runtime-config-security.js";
+import {
+  BIDWRIGHT_PERMISSIONS,
+  BIDWRIGHT_QA_PERMISSIONS,
+  environmentReferences,
+} from "./cli-adapters/shared.js";
 import {
   getWorkspaceStorage,
   restoreWorkspaceIfPresent,
@@ -299,6 +308,32 @@ function buildApiKeys(opts: {
   };
 }
 
+function assertServerManagedCredential(runtime: AgentRuntime, apiKeys: ApiKeys): void {
+  if (getBidwrightMode() !== "server") return;
+  const available =
+    runtime === "claude-code"
+      ? Boolean(apiKeys.anthropic)
+      : runtime === "codex"
+        ? Boolean(apiKeys.openai)
+        : runtime === "openrouter"
+          ? Boolean(apiKeys.openrouter)
+        : runtime === "gemini"
+          ? Boolean(apiKeys.google)
+          : runtime === "opencode"
+            ? Boolean(
+                apiKeys.anthropic ||
+                apiKeys.openai ||
+                apiKeys.google ||
+                apiKeys.openrouter,
+              )
+            : false;
+  if (!available) {
+    throw new Error(
+      `${runtime} requires an organization-managed or personal provider API key in server mode. Interactive OAuth is desktop-only.`,
+    );
+  }
+}
+
 async function writeMcpConfigFile(
   projectDir: string,
   mcpRunner: string,
@@ -311,11 +346,14 @@ async function writeMcpConfigFile(
       bidwright: {
         command: mcpRunner,
         args: mcpArgs,
-        env: mcpEnv,
+        env: environmentReferences(mcpEnv),
       },
     },
   };
-  await writeFile(mcpConfigPath, JSON.stringify(mcpConfigObj, null, 2), "utf-8");
+  await writeFile(mcpConfigPath, JSON.stringify(mcpConfigObj, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
   return mcpConfigPath;
 }
 
@@ -328,6 +366,7 @@ function legacyApiKeysFor(runtime: AgentRuntime, apiKey?: string): ApiKeys {
   if (!apiKey) return {};
   if (runtime === "claude-code" || runtime === "opencode") return { anthropic: apiKey };
   if (runtime === "codex") return { openai: apiKey };
+  if (runtime === "openrouter") return { openrouter: apiKey };
   if (runtime === "gemini") return { google: apiKey };
   return { anthropic: apiKey };
 }
@@ -437,6 +476,7 @@ async function spawnChild(
   isWin: boolean,
   batSuffix: "run" | "resume",
   userId?: string | null,
+  workspaceAccess: "read-only" | "read-write" = "read-write",
 ): Promise<ChildProcess> {
   return getAgentRuntimeHost().spawnProcess({
     plan,
@@ -445,6 +485,7 @@ async function spawnChild(
     isWin,
     batSuffix,
     userId,
+    workspaceAccess,
   });
 }
 
@@ -577,6 +618,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   const { mcpRunner, mcpArgs, isWin } = resolveMcpRunner();
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
+  assertServerManagedCredential(opts.runtime, apiKeys);
   const agentHomeDir = await ensureUserAgentHome(opts.userId);
 
   // If we're in stateless multi-host mode (R2 / MinIO / S3 backed), pull
@@ -612,6 +654,8 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
       // session at all. The next snapshot on session-exit will overwrite.
     }
   }
+
+  await removeLegacyRuntimeCredentials(opts.projectDir);
 
   // Always materialize the bidwright MCP config file. Adapters that need it
   // (Claude --mcp-config) reference it; others ignore it.
@@ -654,7 +698,15 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     ...plan.extraEnv,
   };
 
-  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "run", opts.userId);
+  const child = await spawnChild(
+    plan,
+    opts.projectDir,
+    cliEnv,
+    isWin,
+    "run",
+    opts.userId,
+    opts.agentMode === "qa" ? "read-only" : "read-write",
+  );
 
   const events = new EventEmitter();
   const session: CliSession = {
@@ -848,6 +900,7 @@ async function spawnResumedSession(
   const { mcpRunner, mcpArgs, isWin } = resolveMcpRunner();
   const mcpEnv = buildMcpEnv(opts);
   const apiKeys = buildApiKeys(opts);
+  assertServerManagedCredential(opts.runtime, apiKeys);
   const agentHomeDir = await ensureUserAgentHome(opts.userId);
 
   // Resume flow: same workspace-restore semantics as spawnSession. If the
@@ -877,6 +930,8 @@ async function spawnResumedSession(
       );
     }
   }
+
+  await removeLegacyRuntimeCredentials(opts.projectDir);
 
   const mcpConfigPath = await writeMcpConfigFile(
     opts.projectDir,
@@ -918,7 +973,15 @@ async function spawnResumedSession(
     ...plan.extraEnv,
   };
 
-  const child = await spawnChild(plan, opts.projectDir, cliEnv, isWin, "resume", opts.userId);
+  const child = await spawnChild(
+    plan,
+    opts.projectDir,
+    cliEnv,
+    isWin,
+    "resume",
+    opts.userId,
+    opts.agentMode === "qa" ? "read-only" : "read-write",
+  );
 
   const events = new EventEmitter();
   const session: CliSession = {

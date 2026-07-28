@@ -5,7 +5,16 @@ import { Layers, Plus, Trash2, X } from "lucide-react";
 import * as RadixSelect from "@radix-ui/react-select";
 import { ChevronDown, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { Button, CardBody, CardHeader, CardTitle, Input, ModalBackdrop } from "@/components/ui";
+import {
+  Button,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 import {
   createProjectFederation,
   deleteProjectFederation,
@@ -307,7 +316,7 @@ export function BimFederationSwitcher({
         </RadixSelect.Root>
         <Button
           variant="ghost"
-          size="xs"
+          size="sm"
           onClick={() => setCreateOpen(true)}
           title="Create federation"
         >
@@ -316,7 +325,7 @@ export function BimFederationSwitcher({
         {selectedFederation && (
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={handleDelete}
             title="Delete federation"
             className="text-fg/60 hover:text-rose-500"
@@ -337,7 +346,7 @@ export function BimFederationSwitcher({
           <div className="mb-1.5 flex items-center justify-between gap-2">
             <p className="text-[10px] font-semibold uppercase tracking-wider text-fg/45">Members</p>
             {candidatesToAdd.length > 0 && (
-              <Button variant="ghost" size="xs" onClick={() => setAddOpen(true)}>
+              <Button variant="ghost" size="sm" onClick={() => setAddOpen(true)}>
                 <Plus className="h-3 w-3" />
                 Add model
               </Button>
@@ -367,7 +376,7 @@ export function BimFederationSwitcher({
                     />
                     <Button
                       variant="ghost"
-                      size="xs"
+                      size="sm"
                       onClick={() => handleRemoveMember(member.modelId)}
                       title="Remove from federation"
                       className="!h-6 !w-6 !p-0 text-fg/60 hover:text-rose-500"
@@ -391,7 +400,7 @@ export function BimFederationSwitcher({
             (architectural + structural + MEP, etc).
           </p>
         </CardHeader>
-        <CardBody>
+        <CardContent>
           <div className="space-y-3">
             <label className="block">
               <span className="mb-1 block text-xs font-medium text-fg/70">Name</span>
@@ -423,7 +432,7 @@ export function BimFederationSwitcher({
               {createBusy ? "Creating…" : "Create"}
             </Button>
           </div>
-        </CardBody>
+        </CardContent>
       </ModalBackdrop>
 
       {/* Add member modal */}
@@ -435,7 +444,7 @@ export function BimFederationSwitcher({
             adding, or update it later inline.
           </p>
         </CardHeader>
-        <CardBody>
+        <CardContent>
           <div className="max-h-72 overflow-y-auto">
             {candidatesToAdd.length === 0 ? (
               <p className="py-4 text-center text-xs text-fg/40">
@@ -461,7 +470,7 @@ export function BimFederationSwitcher({
               Done
             </Button>
           </div>
-        </CardBody>
+        </CardContent>
       </ModalBackdrop>
 
       {loading && federations.length === 0 && (
@@ -581,7 +590,7 @@ function AddMemberRow({
       <DisciplineSelect value={discipline} onChange={setDiscipline} />
       <Button
         variant="secondary"
-        size="xs"
+        size="sm"
         disabled={busy}
         onClick={async () => {
           setBusy(true);
