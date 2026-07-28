@@ -29,6 +29,7 @@ jobs:
         with:
           filters: |
             code:
+              - '**'
               - '!README.md'
               - '!docs/**'
               - '!.github/codeflow-card.svg'
