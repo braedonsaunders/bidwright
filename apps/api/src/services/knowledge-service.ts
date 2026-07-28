@@ -1,5 +1,5 @@
 import type { PrismaApiStore } from "../prisma-store.js";
-import { createLLMAdapter } from "@bidwright/agent";
+import { createLLMAdapter, type TenantAiConfig } from "@bidwright/agent";
 import {
   DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
   createPdfParser,
@@ -31,7 +31,7 @@ function getVectorStore(organizationId: string): PgVectorStore {
   return store;
 }
 
-/** Resolve embedding configuration from environment variables. */
+/** Resolve server-owned local embedding infrastructure (not tenant LLM credentials). */
 // Cache Ollama detection to avoid repeated HTTP calls
 let _ollamaDetected: boolean | null = null;
 let _ollamaDetectedAt = 0;
@@ -68,11 +68,6 @@ function getEmbeddingConfig(): { provider: "openai" | "local"; apiKey?: string; 
       model: process.env.EMBEDDING_MODEL || "snowflake-arctic-embed",
       dimensions: parseInt(process.env.EMBEDDING_DIMENSIONS || "1024", 10),
     };
-  }
-
-  // OpenAI provider (needs API key)
-  if (process.env.OPENAI_API_KEY) {
-    return { provider: "openai", apiKey: process.env.OPENAI_API_KEY };
   }
 
   // Auto-detect: check cached Ollama status (sync check only — async detection runs on startup)
@@ -418,23 +413,12 @@ async function extractText(
  * Call an LLM with a system prompt and user prompt.
  * Uses the @bidwright/agent adapter, falling back to a no-op if no API key.
  */
-async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
-  const provider = process.env.LLM_PROVIDER ?? (process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai");
-  const model = process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
-
-  if (!apiKey) {
-    return "[No API key configured — LLM analysis unavailable]";
-  }
-
-  const adapter = createLLMAdapter({
-    provider: provider as "anthropic" | "openai",
-    apiKey,
-    model,
-  });
+async function callLLM(systemPrompt: string, userPrompt: string, config: TenantAiConfig | null): Promise<string> {
+  if (!config) return "[No tenant AI provider configured — LLM analysis unavailable]";
+  const adapter = createLLMAdapter(config);
 
   const response = await adapter.chat({
-    model,
+    model: config.model,
     systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
     maxTokens: 4096,
@@ -1132,6 +1116,7 @@ export class KnowledgeService {
     analysisType: string,
     focusArea?: string,
     store?: PrismaApiStore,
+    aiConfig: TenantAiConfig | null = null,
   ): Promise<{ analysis: string; extractedData?: Record<string, unknown> }> {
     // Try to get the document from source documents first
     const docs = await store!.listDocuments(projectId);
@@ -1175,7 +1160,7 @@ export class KnowledgeService {
     const systemPrompt = `You are a construction estimating expert analyzing project documents for BidWright. Provide detailed, actionable analysis.${focusArea ? ` Focus particularly on: ${focusArea}` : ""}`;
     const userPrompt = `Document: "${docName}"\n\nAnalysis type: ${analysisType}\n\n${analysisPrompts[analysisType] ?? `Perform a ${analysisType} analysis.`}\n\nDocument content:\n${truncatedContent}`;
 
-    const analysis = await callLLM(systemPrompt, userPrompt);
+    const analysis = await callLLM(systemPrompt, userPrompt, aiConfig);
 
     return { analysis };
   }

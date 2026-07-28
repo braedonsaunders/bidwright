@@ -129,7 +129,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
         error:
           "That doesn't look like a valid API key: " +
           keyProblems.map((p) => `${p.field} (${p.hint})`).join("; ") +
-          ". Leave the field empty to use OAuth sign-in instead.",
+          ". Leave the field empty to keep that organization provider unconfigured.",
       });
     }
     return request.store!.updateSettings(patch as Parameters<PrismaApiStore["updateSettings"]>[0]);

@@ -1497,9 +1497,13 @@ export function SettingsPage({
             return (
               <Card>
                 <CardHeader>
-                  <CardTitle>LLM Provider</CardTitle>
+                  <CardTitle>Organization AI Provider</CardTitle>
                 </CardHeader>
                 <CardContent className="space-y-4">
+                  <p className="text-sm text-fg-muted">
+                    Configure the provider and encrypted tenant credential used by managed agents and AI features.
+                    This is the organization default; it is not read from the server environment.
+                  </p>
                   <div>
                     <Label>Provider</Label>
                     <SearchSelect

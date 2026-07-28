@@ -13,6 +13,7 @@ import { resolveApiPath } from "../paths.js";
 import { readFile } from "node:fs/promises";
 import * as XLSX from "xlsx";
 import { analyzeImport } from "../services/catalog-import-service.js";
+import { getRequestAiConfig } from "../services/request-ai-config.js";
 
 /**
  * Knowledge API routes — Fastify plugin.
@@ -224,6 +225,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
         body.analysisType,
         body.focusArea,
         request.store!,
+        await getRequestAiConfig(request),
       );
 
       return result;
@@ -689,13 +691,11 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       }
       const absPath = resolveApiPath(book.storagePath);
       const buffer = await readFile(absPath);
-      const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
-      const provider = process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai";
-      const model = process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+      const aiConfig = await getRequestAiConfig(request);
       const analysis = await analyzeImport({
         buffer,
         filename: book.sourceFileName || "upload",
-        aiConfig: apiKey ? { provider, apiKey, model } : undefined,
+        aiConfig: aiConfig ?? undefined,
       });
       return analysis;
     } catch (err) {

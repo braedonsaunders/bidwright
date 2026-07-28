@@ -6,6 +6,7 @@ import {
   type ColumnMapping,
   type SpreadsheetTable,
 } from "../services/catalog-import-service.js";
+import { getRequestAiConfig } from "../services/request-ai-config.js";
 
 export async function catalogRoutes(app: FastifyInstance) {
   // ── Catalog Library (browse + adopt) ────────────────────────────────
@@ -59,15 +60,13 @@ export async function catalogRoutes(app: FastifyInstance) {
       if (!buffer || buffer.length === 0) {
         return reply.code(400).send({ error: "No file provided" });
       }
-      const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
-      const provider = process.env.ANTHROPIC_API_KEY ? "anthropic" : process.env.OPENAI_API_KEY ? "openai" : "anthropic";
-      const model = process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
+      const aiConfig = await getRequestAiConfig(request);
 
       const analysis = await analyzeImport({
         buffer,
         filename,
         mimeType,
-        aiConfig: apiKey ? { provider, apiKey, model } : undefined,
+        aiConfig: aiConfig ?? undefined,
       });
       return analysis;
     } catch (err: any) {

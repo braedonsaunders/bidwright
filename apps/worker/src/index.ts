@@ -20,9 +20,6 @@ async function main(): Promise<void> {
   const runtime = createBidwrightWorkerRuntime(
     {},
     {
-      llmProvider: process.env.LLM_PROVIDER ?? 'anthropic',
-      llmApiKey: process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY,
-      llmModel: process.env.LLM_MODEL,
       redisConnection,
     },
   );

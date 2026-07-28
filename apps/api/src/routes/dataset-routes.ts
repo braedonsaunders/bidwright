@@ -1,5 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { datasetService } from "../services/dataset-service.js";
+import { getRequestAiConfig } from "../services/request-ai-config.js";
 
 /**
  * Dataset generation API routes — Fastify plugin.
@@ -47,7 +48,7 @@ export async function datasetRoutes(app: FastifyInstance) {
         projectId: body.projectId,
         sampleOnly: body.sampleOnly,
         sampleRows: body.sampleRows,
-      }, request.store!);
+      }, request.store!, await getRequestAiConfig(request));
 
       reply.code(201);
       return result;
@@ -78,7 +79,12 @@ export async function datasetRoutes(app: FastifyInstance) {
         return reply.code(400).send({ message: "bookId is required" });
       }
 
-      const result = await datasetService.suggestSchema(body.bookId, body.purpose, request.store!);
+      const result = await datasetService.suggestSchema(
+        body.bookId,
+        body.purpose,
+        request.store!,
+        await getRequestAiConfig(request),
+      );
       return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

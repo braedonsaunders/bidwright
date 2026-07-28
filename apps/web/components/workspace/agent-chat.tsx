@@ -2294,7 +2294,7 @@ function AgentSetupDropdown({
                 />
               ) : (
                 <div className="rounded-lg border border-warning/25 bg-warning/5 px-3 py-2 text-xs text-warning">
-                  No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → API Keys.
+                  No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → Integrations → AI Providers.
                 </div>
               )}
             </div>
@@ -2776,7 +2776,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         return;
       }
 
-      throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → API Keys.");
+      throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → Integrations → AI Providers.");
     } catch (e) {
       const errorMsg: ChatMessage = {
         id: `msg-${Date.now()}-err`,
@@ -2851,7 +2851,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         connectToSseStream(projectId);
         return true;
       } else {
-        throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → API Keys.");
+        throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → Integrations → AI Providers.");
       }
     } catch (err) {
       if (isExpectedIngestionStartError(err)) {

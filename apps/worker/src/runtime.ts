@@ -5,13 +5,11 @@ import { createId } from '@bidwright/ingestion';
 
 import { InMemoryWorkflowOrchestrator, type WorkerContext } from './orchestrator.js';
 import { runIntegrationSyncWorker, listAllSyncResources } from './integrations-sync-runner.js';
+import { loadTenantAiConfig } from './tenant-ai-config.js';
 
 // ── Types ───────────────────────────────────────────────────────────────
 
 export interface WorkerRuntimeConfig {
-  llmProvider?: string;
-  llmApiKey?: string;
-  llmModel?: string;
   redisConnection?: any;
 }
 
@@ -27,21 +25,15 @@ export interface BidwrightWorkerRuntime {
 
 async function executeLLM(
   prompt: PromptEnvelope,
-  config: WorkerRuntimeConfig,
+  context: WorkerContext,
 ): Promise<string | undefined> {
-  if (!config.llmApiKey) return undefined;
-
   try {
     const { createLLMAdapter } = await import('@bidwright/agent');
-    const model = config.llmModel ?? 'claude-sonnet-4-20250514';
-    const adapter = createLLMAdapter({
-      provider: (config.llmProvider ?? 'anthropic') as any,
-      apiKey: config.llmApiKey,
-      model,
-    });
+    const config = await loadTenantAiConfig(context.organizationId, context.userId);
+    const adapter = createLLMAdapter(config);
 
     const response = await adapter.chat({
-      model,
+      model: config.model,
       systemPrompt: prompt.system,
       messages: [{ role: 'user' as const, content: prompt.user }],
       maxTokens: 4096,
@@ -52,7 +44,11 @@ async function executeLLM(
     if (!first) return undefined;
     if (typeof first === 'string') return first;
     return (first as any).text ?? String(first);
-  } catch {
+  } catch (error) {
+    if (error instanceof Error && (
+      error.message.includes("organizationId") ||
+      error.message.includes("No tenant AI provider")
+    )) throw error;
     return undefined;
   }
 }
@@ -88,7 +84,7 @@ export function createBidwrightWorkerRuntime(
         limit: 6,
         sourceKind: context.sourceKind,
       });
-      const response = await executeLLM(prompt, config);
+      const response = await executeLLM(prompt, context);
       return {
         id: createId('summary'),
         prompt,
@@ -104,7 +100,7 @@ export function createBidwrightWorkerRuntime(
     prompt: buildPhaseDraftPrompt({ projectName: 'Bidwright project', documentCount: 0, knownKinds: [] }),
     async run(_input, context) {
       const prompt = buildPhaseDraftPrompt(buildContextSummary(context), context.summary);
-      const response = await executeLLM(prompt, config);
+      const response = await executeLLM(prompt, context);
       return { prompt, ...(response !== undefined ? { response } : {}), mode: 'review-first' };
     },
   });
@@ -115,7 +111,7 @@ export function createBidwrightWorkerRuntime(
     prompt: buildWorksheetDraftPrompt({ projectName: 'Bidwright project', documentCount: 0, knownKinds: [] }),
     async run(_input, context) {
       const prompt = buildWorksheetDraftPrompt(buildContextSummary(context), context.summary);
-      const response = await executeLLM(prompt, config);
+      const response = await executeLLM(prompt, context);
       return { prompt, ...(response !== undefined ? { response } : {}), mode: 'review-first' };
     },
   });
@@ -126,7 +122,7 @@ export function createBidwrightWorkerRuntime(
     prompt: buildEquipmentDraftPrompt({ projectName: 'Bidwright project', documentCount: 0, knownKinds: [] }),
     async run(_input, context) {
       const prompt = buildEquipmentDraftPrompt(buildContextSummary(context), context.summary);
-      const response = await executeLLM(prompt, config);
+      const response = await executeLLM(prompt, context);
       return { prompt, ...(response !== undefined ? { response } : {}), mode: 'review-first' };
     },
   });
@@ -137,7 +133,7 @@ export function createBidwrightWorkerRuntime(
     prompt: buildQuoteQaPrompt({ projectName: 'Bidwright project', documentCount: 0, knownKinds: [] }),
     async run(_input, context) {
       const prompt = buildQuoteQaPrompt(buildContextSummary(context), context.summary);
-      const response = await executeLLM(prompt, config);
+      const response = await executeLLM(prompt, context);
       return { prompt, ...(response !== undefined ? { response } : {}), mode: 'review-first' };
     },
   });

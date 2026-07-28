@@ -1,5 +1,5 @@
 import type { PrismaApiStore } from "../prisma-store.js";
-import { createLLMAdapter } from "@bidwright/agent";
+import { createLLMAdapter, type TenantAiConfig } from "@bidwright/agent";
 import type { Dataset, DatasetColumn, DatasetRow } from "@bidwright/domain";
 
 // ── LLM helper ────────────────────────────────────────────────────────
@@ -7,23 +7,12 @@ import type { Dataset, DatasetColumn, DatasetRow } from "@bidwright/domain";
 /**
  * Call an LLM with a system prompt and user prompt.
  */
-async function callLLM(systemPrompt: string, userPrompt: string): Promise<string> {
-  const apiKey = process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
-  const provider = process.env.LLM_PROVIDER ?? (process.env.ANTHROPIC_API_KEY ? "anthropic" : "openai");
-  const model = process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
-
-  if (!apiKey) {
-    return "[]";
-  }
-
-  const adapter = createLLMAdapter({
-    provider: provider as "anthropic" | "openai",
-    apiKey,
-    model,
-  });
+async function callLLM(systemPrompt: string, userPrompt: string, config: TenantAiConfig | null): Promise<string> {
+  if (!config) return "[]";
+  const adapter = createLLMAdapter(config);
 
   const response = await adapter.chat({
-    model,
+    model: config.model,
     systemPrompt,
     messages: [{ role: "user", content: userPrompt }],
     maxTokens: 4096,
@@ -137,7 +126,7 @@ export class DatasetService {
     projectId?: string;
     sampleOnly?: boolean;
     sampleRows?: number;
-  }, store: PrismaApiStore): Promise<{
+  }, store: PrismaApiStore, aiConfig: TenantAiConfig | null): Promise<{
     datasetId: string;
     rowCount: number;
     sampleRows?: Array<Record<string, unknown>>;
@@ -197,7 +186,7 @@ Text chunks:
 ${chunkTexts}`;
 
       try {
-        const response = await callLLM(systemPrompt, userPrompt);
+        const response = await callLLM(systemPrompt, userPrompt, aiConfig);
         // Extract JSON array from the response
         const jsonMatch = response.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
@@ -262,6 +251,7 @@ ${chunkTexts}`;
     bookId: string,
     purpose?: string,
     store?: PrismaApiStore,
+    aiConfig: TenantAiConfig | null = null,
   ): Promise<{
     suggestedName: string;
     suggestedCategory: string;
@@ -292,7 +282,7 @@ Return JSON in this exact format:
   "rationale": "why this schema was chosen"
 }`;
 
-    const response = await callLLM(systemPrompt, userPrompt);
+    const response = await callLLM(systemPrompt, userPrompt, aiConfig);
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     if (!jsonMatch) {
       return {

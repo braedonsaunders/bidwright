@@ -23,7 +23,7 @@ export const ORG_SUBTABS: { id: OrgSubTab; label: string }[] = [
 
 export const INTEGRATIONS_SUBTABS: { id: IntegrationsSubTab; label: string }[] = [
   { id: "agent", label: "Agent Runtime" },
-  { id: "llm", label: "LLM" },
+  { id: "llm", label: "AI Providers" },
   { id: "azure", label: "Azure" },
   { id: "autodesk", label: "Autodesk" },
   { id: "drawing", label: "Drawing Extraction" },
