@@ -513,7 +513,7 @@ export function AgentRuntimeSettings({
       <CardContent className="space-y-4">
         <p className="text-sm text-fg-muted">
           {isServerMode
-            ? "Choose the centrally managed runtime used for estimating and project questions. Provider credentials are managed under AI Providers; users do not install or sign in to local tools."
+            ? "Choose the centrally managed runtime used for estimating and project questions. Enter and verify the organization provider credential directly below; users do not install or sign in to local tools."
             : "Choose the local runtime used for estimating and project questions on this desktop."}
         </p>
         <div className="rounded-lg border border-line p-4 space-y-3">
@@ -606,8 +606,8 @@ export function AgentRuntimeSettings({
                   <Label>{providerConfig.label}</Label>
                 </div>
                 <p className="mt-1 text-[11px] text-fg/45">
-                  Organization-managed credential for {effectiveRuntimeStatus?.displayName ?? effectiveRuntime}.
-                  It is encrypted at rest and used by server agent runs.
+                  Primary organization credential for {effectiveRuntimeStatus?.displayName ?? effectiveRuntime}.
+                  It is encrypted at rest and used by managed agent runs.
                 </p>
               </div>
               <span className={cn(
@@ -762,21 +762,15 @@ export function AgentRuntimeSettings({
         </div>
 
         <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
-          <p className="font-medium text-fg/50">Authentication</p>
+          <p className="font-medium text-fg/50">{isServerMode ? "Managed authentication" : "Authentication"}</p>
           {isServerMode ? (
             <>
               <p>
-                Organization provider keys configured in{' '}
-                <a href="/settings?group=integrations&tab=llm" className="underline-offset-4 hover:underline text-fg/60">
-                  AI Providers
-                </a>{' '}
-                are the default for every managed agent run.
-                They are encrypted at rest and never exposed to estimators.
+                The organization credential above is used for every managed agent run.
+                It is encrypted at rest and never exposed to estimators.
               </p>
               <p>
-                Advanced users can add an optional personal override on the{' '}
-                <a href="/profile/credentials" className="underline-offset-4 hover:underline text-fg/60">My credentials</a>{' '}
-                page. No local installation or browser sign-in is required.
+                No local CLI installation, copied OAuth session, or browser sign-in is required.
               </p>
             </>
           ) : (
