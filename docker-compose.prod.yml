@@ -123,8 +123,6 @@ services:
       EMBEDDING_BASE_URL: "http://ollama:11434/v1"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
     volumes:
       - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
@@ -178,8 +176,6 @@ services:
       EMBEDDING_BASE_URL: "http://ollama:11434/v1"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
     volumes:
       - ${BIDWRIGHT_DATA_PATH:-./data/bidwright-api}:/data
 

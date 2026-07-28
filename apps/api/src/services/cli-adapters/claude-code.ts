@@ -333,7 +333,7 @@ export const claudeCodeAdapter: CliAdapter = {
   },
 
   checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
-    if (apiKeys.anthropic || process.env.ANTHROPIC_API_KEY) {
+    if (apiKeys.anthropic) {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {

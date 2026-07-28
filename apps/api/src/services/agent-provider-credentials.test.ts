@@ -9,8 +9,10 @@ import {
 const environment = {
   ANTHROPIC_API_KEY: "env-anthropic",
   OPENAI_API_KEY: "env-openai",
+  CODEX_API_KEY: "env-codex",
   OPENROUTER_API_KEY: "env-openrouter",
   GEMINI_API_KEY: "env-gemini",
+  GOOGLE_GENAI_API_KEY: "env-google-genai",
 };
 
 test("server agent credentials ignore host environment provider keys", () => {

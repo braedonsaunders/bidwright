@@ -512,7 +512,7 @@ export const codexAdapter: CliAdapter = {
   },
 
   checkAuth({ apiKeys, agentHomeDir }): CliAuthStatus {
-    if (apiKeys.openai || process.env.OPENAI_API_KEY || process.env.CODEX_API_KEY) {
+    if (apiKeys.openai) {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {

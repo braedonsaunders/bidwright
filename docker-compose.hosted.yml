@@ -153,8 +153,6 @@ services:
       INTEGRATIONS_ENCRYPTION_KEY_PROBE: "${INTEGRATIONS_ENCRYPTION_KEY_PROBE:-}"
       # Organization-managed credentials are the server default. Personal
       # BYOK remains optional; interactive browser OAuth is desktop-only.
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       OPENAI_MODEL: "${OPENAI_MODEL:-gpt-5}"
     volumes:
       - apidata:/data
@@ -204,8 +202,6 @@ services:
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
       INTEGRATIONS_ENCRYPTION_KEY: "${INTEGRATIONS_ENCRYPTION_KEY}"
       INTEGRATIONS_ENCRYPTION_KEY_PROBE: "${INTEGRATIONS_ENCRYPTION_KEY_PROBE:-}"
-      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
-      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
       # Worker also needs workspace storage so background jobs that
       # spawn CLI sessions snapshot too.
       WORKSPACE_STORAGE_PROVIDER: "s3"

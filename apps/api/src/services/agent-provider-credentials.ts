@@ -40,12 +40,16 @@ export function resolveAgentProviderKeys(
       (allowEnvironmentFallback ? configuredString(environment.ANTHROPIC_API_KEY) : undefined),
     openaiApiKey:
       configuredString(integrations.openaiKey) ||
-      (allowEnvironmentFallback ? configuredString(environment.OPENAI_API_KEY) : undefined),
+      (allowEnvironmentFallback
+        ? configuredString(environment.OPENAI_API_KEY) ||
+          configuredString(environment.CODEX_API_KEY)
+        : undefined),
     googleApiKey:
       configuredString(integrations.geminiKey) ||
       (allowEnvironmentFallback
         ? configuredString(environment.GOOGLE_API_KEY) ||
-          configuredString(environment.GEMINI_API_KEY)
+          configuredString(environment.GEMINI_API_KEY) ||
+          configuredString(environment.GOOGLE_GENAI_API_KEY)
         : undefined),
     openrouterApiKey:
       configuredString(integrations.openrouterKey) ||
