@@ -86,10 +86,10 @@ FROM node:22-bookworm-slim AS runner
 RUN corepack enable
 # bubblewrap is the per-tenant CLI sandbox primitive used by
 # BubblewrappedHost whenever BIDWRIGHT_MODE=server.
-# The Debian package installs /usr/bin/bwrap setuid-root by default, which
-# is the recommended posture: lets unprivileged container processes create
-# user/mount/pid namespaces without granting CAP_SYS_ADMIN on the
-# container itself. We re-assert the setuid bit defensively in case a
+# The Debian package installs /usr/bin/bwrap setuid-root by default. Production
+# runs the API as an unprivileged UID and gives the container only the
+# capabilities bubblewrap needs in its bounding set; AppKit drops them before
+# the agent command starts. Re-assert the setuid bit defensively in case a
 # future Debian build changes the default.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
