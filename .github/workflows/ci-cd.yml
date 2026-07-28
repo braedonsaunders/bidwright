@@ -247,7 +247,10 @@ jobs:
             printf '%s' "${INTEGRATIONS_ENCRYPTION_KEY_PROBE}" | tr -d '\r\n '
           )"
           export INTEGRATIONS_ENCRYPTION_KEY INTEGRATIONS_ENCRYPTION_KEY_PROBE
-          node scripts/deploy/verify-integrations-key-probe.mjs
+          # The self-hosted Dokploy runner still exposes an old system Node.
+          # Keep this pre-deploy probe CommonJS-compatible and implement HKDF
+          # using long-supported crypto primitives.
+          node scripts/deploy/verify-integrations-key-probe.cjs
           SHORT_SHA="${GITHUB_SHA:0:7}"
           NEW_TAG="sha-${SHORT_SHA}"
           echo "Pinning ${TAG_ENV_KEY}=${NEW_TAG} on Dokploy compose '${COMPOSE_NAME}'…"
