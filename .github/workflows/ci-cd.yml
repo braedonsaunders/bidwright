@@ -103,6 +103,34 @@ jobs:
       - name: Validate launcher compose
         run: docker compose -f scripts/launcher/docker-compose.yml config > /dev/null
 
+      - name: Diagnose current production API image
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/braedonsaunders/bidwright-api:sha-76cf58d"
+          docker pull "${IMAGE}"
+          docker run --detach --name bidwright-production-api-smoke \
+            --security-opt seccomp=unconfined \
+            --security-opt apparmor=unconfined \
+            --publish 127.0.0.1:3001:3001 \
+            --env API_PORT=3001 \
+            --env BIDWRIGHT_MODE=server \
+            --env BIDWRIGHT_MULTITENANT=false \
+            --env DATA_DIR=/tmp/bidwright-api \
+            "${IMAGE}"
+          trap 'docker logs bidwright-production-api-smoke; docker rm -f bidwright-production-api-smoke >/dev/null 2>&1 || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:3001/health; then
+              exit 0
+            fi
+            if [ "$(docker inspect -f '{{.State.Running}}' bidwright-production-api-smoke)" != "true" ]; then
+              echo "Production API image exited before becoming healthy."
+              exit 1
+            fi
+            sleep 2
+          done
+          echo "Production API image did not become healthy within 60 seconds."
+          exit 1
+
   publish:
     needs:
       - verify
