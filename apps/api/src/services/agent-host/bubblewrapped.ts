@@ -39,6 +39,7 @@ import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
 import { stripBlankCredentialEnv } from "./env-sanitize.js";
 import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
+import { prepareLauncherWritablePaths } from "./writable-path-ownership.js";
 
 const SAFE_HOST_ENV = [
   "LANG",
@@ -127,6 +128,17 @@ export const bubblewrappedHost: AgentRuntimeHost = {
     // don't unshare-net.
     const proxy = getRunningEgressProxy();
     const proxyEnv = proxy ? proxy.toEnv() : {};
+    const launcherIdentity = getProcessSandboxLauncherIdentity();
+    const writablePaths = [
+      ...(opts.workspaceAccess === "read-only" ? [] : [projectDir]),
+      ...agentRuntimePaths,
+    ];
+
+    // The API owns newly generated instruction and broker files as root, but
+    // AppKit intentionally invokes bubblewrap as an unprivileged identity.
+    // Normalize only these tenant-scoped writable binds immediately before
+    // spawn so 0600 broker requests remain private and readable by the child.
+    await prepareLauncherWritablePaths(writablePaths, launcherIdentity);
 
     console.log(
       `[cli:spawn:bwrap] cmd=${plan.cliCmd} cwd=${projectDir} userId=${userId ?? "none"} argCount=${plan.args.length}`,
@@ -136,10 +148,7 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       command: plan.cliCmd,
       args: plan.args,
       cwd: projectDir,
-      writablePaths: [
-        ...(opts.workspaceAccess === "read-only" ? [] : [projectDir]),
-        ...agentRuntimePaths,
-      ],
+      writablePaths,
       readOnlyPaths: [
         "/usr",
         "/etc",
@@ -149,7 +158,7 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       ],
       maskedPaths: ["/data", "/home", "/root", "/var"],
       bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
-      launcherIdentity: getProcessSandboxLauncherIdentity(),
+      launcherIdentity,
       environment: stripBlankCredentialEnv({
         ...safeHostEnvironment(),
         ...cliEnv,
