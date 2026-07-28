@@ -137,6 +137,7 @@ jobs:
           docker run --detach --name bidwright-production-api-smoke \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
+            --user 1000:1000 \
             --publish 127.0.0.1:3001:3001 \
             --env API_PORT=3001 \
             --env BIDWRIGHT_MODE=server \
