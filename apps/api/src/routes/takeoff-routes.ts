@@ -13,6 +13,7 @@ import {
   updateSymbolTemplate,
 } from "../services/symbol-template-service.js";
 import { suggestLineItemsForPickup } from "../services/auto-takeoff-service.js";
+import { getRequestAiConfig } from "../services/request-ai-config.js";
 import { generatePhotoTakeoff } from "../services/photo-takeoff-service.js";
 import { resolveApiPath } from "../paths.js";
 
@@ -336,7 +337,11 @@ export async function takeoffRoutes(app: FastifyInstance) {
         pickupId: string;
       };
       try {
-        const result = await suggestLineItemsForPickup(projectId, pickupId);
+        const result = await suggestLineItemsForPickup(
+          projectId,
+          pickupId,
+          await getRequestAiConfig(request),
+        );
         return result;
       } catch (err) {
         return reply.code(500).send({
@@ -551,14 +556,10 @@ export async function takeoffRoutes(app: FastifyInstance) {
       const integrations = await request.store!.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
       const directProviders = new Set(["anthropic", "openai", "openrouter", "gemini", "lmstudio"]);
       const llmKeyByProvider: Record<string, string> = {
-        anthropic: (integrations.anthropicKey as string | undefined) ?? process.env.ANTHROPIC_API_KEY ?? "",
-        openai: (integrations.openaiKey as string | undefined) ?? process.env.OPENAI_API_KEY ?? "",
-        openrouter: (integrations.openrouterKey as string | undefined) ?? process.env.OPENROUTER_API_KEY ?? "",
-        gemini:
-          (integrations.geminiKey as string | undefined) ??
-          process.env.GEMINI_API_KEY ??
-          process.env.GOOGLE_GENAI_API_KEY ??
-          "",
+        anthropic: (integrations.anthropicKey as string | undefined) ?? "",
+        openai: (integrations.openaiKey as string | undefined) ?? "",
+        openrouter: (integrations.openrouterKey as string | undefined) ?? "",
+        gemini: (integrations.geminiKey as string | undefined) ?? "",
         lmstudio: "lm-studio",
       };
 

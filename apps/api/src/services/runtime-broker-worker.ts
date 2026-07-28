@@ -161,7 +161,9 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
     ]);
     child.stdin.write(`${JSON.stringify({ method: "initialized", params: {} })}\n`);
 
-    const apiKey = process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY;
+    // CODEX_API_KEY is injected into this short-lived broker by the
+    // tenant-aware spawn plan; never fall back to the API container env.
+    const apiKey = process.env.CODEX_API_KEY;
     if (apiKey) {
       const account = await Promise.race([
         requestRpc("account/read", { refreshToken: false }),

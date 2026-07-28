@@ -9,3 +9,9 @@ export {
   type IntegrationsBlob,
   type OauthCredential,
 } from "./credentials";
+export {
+  readIntegrationsEncryptionKey,
+  sealSettingsSecrets,
+  unsealSettingsSecrets,
+  type SettingsSecretScope,
+} from "./settings-secret-crypto";

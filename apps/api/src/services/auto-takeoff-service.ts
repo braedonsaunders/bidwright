@@ -16,7 +16,7 @@
 // throwing) so the UI degrades gracefully.
 
 import { prisma } from "@bidwright/db";
-import { createLLMAdapter } from "@bidwright/agent";
+import { createLLMAdapter, type TenantAiConfig } from "@bidwright/agent";
 
 export type SuggestionKind = "catalog" | "rateScheduleItem";
 
@@ -99,6 +99,7 @@ function describeAnnotationType(t: string): string {
 export async function suggestLineItemsForPickup(
   projectId: string,
   pickupId: string,
+  aiConfig: TenantAiConfig | null,
 ): Promise<SuggestLineItemsResult> {
   const warnings: string[] = [];
 
@@ -198,26 +199,15 @@ export async function suggestLineItemsForPickup(
     };
   }
 
-  const apiKey =
-    process.env.ANTHROPIC_API_KEY ?? process.env.OPENAI_API_KEY ?? "";
-  if (!apiKey) {
+  if (!aiConfig) {
     return {
       pickupId,
       suggestions: [],
       warnings: [
-        "No LLM API key configured — cannot generate AI suggestions.",
+        "No tenant AI provider configured — cannot generate AI suggestions.",
       ],
     };
   }
-  const provider = process.env.ANTHROPIC_API_KEY
-    ? "anthropic"
-    : process.env.OPENAI_API_KEY
-      ? "openai"
-      : "anthropic";
-  const model =
-    process.env.LLM_MODEL ??
-    (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
-
   const measurement = summariseMeasurement(annotation.measurement);
   const annotationDescription = [
     `Label: "${annotation.label || "(unlabelled)"}"`,
@@ -256,13 +246,9 @@ export async function suggestLineItemsForPickup(
 
   let suggestions: LineItemSuggestion[] = [];
   try {
-    const adapter = createLLMAdapter({
-      provider: provider as any,
-      apiKey,
-      model,
-    });
+    const adapter = createLLMAdapter(aiConfig);
     const response = await adapter.chat({
-      model,
+      model: aiConfig.model,
       systemPrompt,
       messages: [{ role: "user", content: userPrompt }],
       maxTokens: 1024,

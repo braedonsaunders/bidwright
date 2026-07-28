@@ -5624,15 +5624,13 @@ export function buildServer() {
     // User-overlaid integrations: a user's personal API key wins over the
     // org default, so plugin generation bills against the right account.
     const integrations = await request.store!.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
-    const apiKey = integrations.anthropicKey ?? process.env.ANTHROPIC_API_KEY ?? integrations.openaiKey ?? process.env.OPENAI_API_KEY ?? "";
-    const provider = integrations.llmProvider ?? process.env.LLM_PROVIDER ?? (apiKey ? "anthropic" : "openai");
-    const model = integrations.llmModel ?? process.env.LLM_MODEL ?? (provider === "anthropic" ? "claude-sonnet-4-20250514" : "gpt-4o");
-
-    if (!apiKey) return reply.code(400).send({ message: "No LLM API key configured. Set one in Settings > Integrations." });
+    const { resolveTenantAiConfig } = await import("@bidwright/agent");
+    const aiConfig = resolveTenantAiConfig(integrations);
+    if (!aiConfig) return reply.code(400).send({ message: "No AI provider configured. Set one in Settings → Integrations → AI Providers." });
 
     try {
       const { createLLMAdapter } = await import("@bidwright/agent");
-      const adapter = createLLMAdapter({ provider: provider as any, apiKey, model });
+      const adapter = createLLMAdapter(aiConfig);
 
       const categoryList = categories?.length ? categories.join(", ") : "Labour, Equipment, Material, Travel, General";
 
@@ -5654,7 +5652,7 @@ For computed fields, use formulas like "quantity * hoursPerUnit" referencing oth
 Return ONLY valid JSON — the complete plugin object. No markdown, no explanation.`;
 
       const response = await adapter.chat({
-        model,
+        model: aiConfig.model,
         systemPrompt,
         messages: [{ role: "user", content: `Generate a plugin for: ${prompt.trim()}` }],
         maxTokens: 8192,

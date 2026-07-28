@@ -493,14 +493,10 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
             : undefined) || undefined,
         userId: request.user?.id ?? null,
         organizationId: request.user?.organizationId ?? null,
-        anthropicApiKey: integrations.anthropicKey || process.env.ANTHROPIC_API_KEY || undefined,
-        openaiApiKey: integrations.openaiKey || process.env.OPENAI_API_KEY || undefined,
-        googleApiKey:
-          integrations.geminiKey ||
-          process.env.GOOGLE_API_KEY ||
-          process.env.GEMINI_API_KEY ||
-          undefined,
-        openrouterApiKey: integrations.openrouterKey || process.env.OPENROUTER_API_KEY || undefined,
+        anthropicApiKey: integrations.anthropicKey || undefined,
+        openaiApiKey: integrations.openaiKey || undefined,
+        googleApiKey: integrations.geminiKey || undefined,
+        openrouterApiKey: integrations.openrouterKey || undefined,
         reasoningEffort,
       });
 
