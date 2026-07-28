@@ -5,6 +5,7 @@ import { createApiStore, type PrismaApiStore } from "../prisma-store.js";
 import { validateSession } from "../services/auth-service.js";
 import { getSessionCookieToken } from "../services/session-cookie.js";
 import { demoDisabledPayload, ensureDemoIdentity, isApiDemoMode, isDemoDisabledRequest } from "../demo-mode.js";
+import { isPublicRoute, requiresOrganizationContext } from "./auth-route-policy.js";
 
 // ---------------------------------------------------------------------------
 // Type augmentation — every request gets user + org-scoped store
@@ -23,42 +24,6 @@ declare module "fastify" {
     } | null;
     store: PrismaApiStore | null;
   }
-}
-
-// ---------------------------------------------------------------------------
-// Public route prefixes (no auth required)
-// ---------------------------------------------------------------------------
-
-const PUBLIC_PREFIXES = ["/api/auth/", "/auth/", "/health", "/api/webhooks/"];
-
-// Setup routes that must work without authentication
-const PUBLIC_EXACT_ROUTES = [
-  "/api/setup/status",
-  "/api/setup/init",
-  "/api/setup/seed-essentials",
-];
-
-const SUPER_ADMIN_NO_ORG_ROUTES = [
-  "/api/auth/me",
-  "/api/auth/logout",
-  "/api/auth/profile",
-  "/api/auth/organizations",
-  "/api/auth/switch-org",
-];
-
-function isPublicRoute(url: string): boolean {
-  // Strip query string for matching
-  const path = url.split("?")[0];
-  if (PUBLIC_EXACT_ROUTES.includes(path)) return true;
-  return PUBLIC_PREFIXES.some((prefix) => path.startsWith(prefix));
-}
-
-function requiresOrganizationContext(url: string): boolean {
-  const path = url.split("?")[0];
-  if (isPublicRoute(path)) return false;
-  if (path.startsWith("/api/admin/")) return false;
-  if (SUPER_ADMIN_NO_ORG_ROUTES.includes(path)) return false;
-  return true;
 }
 
 // ---------------------------------------------------------------------------
