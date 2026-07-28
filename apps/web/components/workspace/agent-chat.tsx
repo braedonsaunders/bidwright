@@ -2294,7 +2294,7 @@ function AgentSetupDropdown({
                 />
               ) : (
                 <div className="rounded-lg border border-warning/25 bg-warning/5 px-3 py-2 text-xs text-warning">
-                  Configure an agent runtime in settings.
+                  No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → API Keys.
                 </div>
               )}
             </div>
@@ -2315,7 +2315,7 @@ function AgentSetupDropdown({
 
           {!cliRuntime && (
             <div className="border-t border-warning/20 bg-warning/[0.035] px-3 py-2 text-xs text-warning">
-              Agent runtime is required before a run can start.
+              A managed agent runtime and organization provider key are required before a run can start.
             </div>
           )}
         </div>
@@ -2776,7 +2776,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         return;
       }
 
-      throw new Error("Bidwright Agent now uses the CLI runtime only. Configure and authenticate Claude Code or Codex in Agent Runtime settings before chatting.");
+      throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → API Keys.");
     } catch (e) {
       const errorMsg: ChatMessage = {
         id: `msg-${Date.now()}-err`,
@@ -2851,7 +2851,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         connectToSseStream(projectId);
         return true;
       } else {
-        throw new Error("Estimator runs now use the CLI runtime only. Configure and authenticate Claude Code or Codex in Agent Runtime settings before starting a run.");
+        throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → API Keys.");
       }
     } catch (err) {
       if (isExpectedIngestionStartError(err)) {
@@ -3523,7 +3523,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               <div>
                 <div className="text-sm font-semibold">Bidwright Agent</div>
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10px] text-fg/35">
-                  <span>{cliRuntime ? `${cliRuntimeMap?.[cliRuntime]?.displayName || cliRuntime} \u00B7 ${effectiveCliModel}` : "CLI runtime required"}</span>
+                  <span>{cliRuntime ? `${cliRuntimeMap?.[cliRuntime]?.displayName || cliRuntime} \u00B7 ${effectiveCliModel}` : "Managed runtime required"}</span>
                   <span className="rounded-full bg-accent/10 px-1.5 py-0.5 font-medium text-accent">
                     {chatMode === "qa" ? "Project Q&A" : chatMode === "assist_edit" ? "Assist edit" : "Build estimate"}
                   </span>

@@ -24,6 +24,10 @@ import { generateInstructionFiles, generateQaInstructionFiles, symlinkKnowledgeB
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { stripBlankCredentialEnv } from "../services/agent-host/env-sanitize.js";
 import { getAgentRuntimeHost } from "../services/agent-host/index.js";
+import {
+  resolveAgentProviderKeys,
+  resolveRuntimeProviderKey,
+} from "../services/agent-provider-credentials.js";
 import { resolveCliCommand } from "../services/cli-adapters/shared.js";
 import { resolveProjectDir, resolveProjectDocumentsDir, resolveKnowledgeDir, apiDataRoot } from "../paths.js";
 import { mkdir } from "node:fs/promises";
@@ -917,39 +921,7 @@ function resolveCliPathOverride(
 function resolveRuntimeApiKey(runtime: AgentRuntime, integrations: Record<string, unknown>): string | undefined {
   const adapter = tryGetAdapter(runtime);
   if (!adapter) return undefined;
-  // Prefer the most-relevant integration key per runtime, fall back to env.
-  if (runtime === "claude-code") {
-    return (integrations.anthropicKey as string) || process.env.ANTHROPIC_API_KEY || undefined;
-  }
-  if (runtime === "opencode") {
-    return (
-      (integrations.anthropicKey as string) ||
-      process.env.ANTHROPIC_API_KEY ||
-      (integrations.openrouterKey as string) ||
-      process.env.OPENROUTER_API_KEY ||
-      (integrations.openaiKey as string) ||
-      process.env.OPENAI_API_KEY ||
-      (integrations.geminiKey as string) ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GEMINI_API_KEY ||
-      undefined
-    );
-  }
-  if (runtime === "codex") {
-    return (integrations.openaiKey as string) || process.env.OPENAI_API_KEY || undefined;
-  }
-  if (runtime === "openrouter") {
-    return (integrations.openrouterKey as string) || process.env.OPENROUTER_API_KEY || undefined;
-  }
-  if (runtime === "gemini") {
-    return (
-      (integrations.geminiKey as string) ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GEMINI_API_KEY ||
-      undefined
-    );
-  }
-  return undefined;
+  return resolveRuntimeProviderKey(runtime, resolveAgentProviderKeys(integrations));
 }
 
 interface SpawnApiKeyBundle {
@@ -961,19 +933,7 @@ interface SpawnApiKeyBundle {
 
 /** Build the full set of API keys to forward into spawnSession/resumeSession. */
 function buildSpawnApiKeys(integrations: Record<string, unknown>): SpawnApiKeyBundle {
-  return {
-    anthropicApiKey:
-      (integrations.anthropicKey as string) || process.env.ANTHROPIC_API_KEY || undefined,
-    openaiApiKey:
-      (integrations.openaiKey as string) || process.env.OPENAI_API_KEY || undefined,
-    googleApiKey:
-      (integrations.geminiKey as string) ||
-      process.env.GOOGLE_API_KEY ||
-      process.env.GEMINI_API_KEY ||
-      undefined,
-    openrouterApiKey:
-      (integrations.openrouterKey as string) || process.env.OPENROUTER_API_KEY || undefined,
-  };
+  return resolveAgentProviderKeys(integrations);
 }
 
 async function listRuntimeModels(
@@ -981,6 +941,9 @@ async function listRuntimeModels(
   integrations: Record<string, unknown>,
   requestedPath?: unknown,
 ) {
+  if (getBidwrightMode() === "server") {
+    return buildCliModelOptions(runtime, resolveRuntimeApiKey(runtime, integrations));
+  }
   const cliPath = resolveCliPathOverride(runtime, integrations, requestedPath);
   const nativeModels = await listCliModels(
     runtime,

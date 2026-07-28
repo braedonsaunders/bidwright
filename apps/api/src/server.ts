@@ -108,6 +108,7 @@ import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, generateSnapPdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
+import { validateIntegrationsEncryptionKey } from "./services/settings-key-validation.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { DEMO_DISABLED_MESSAGE, isApiDemoMode } from "./demo-mode.js";
 import { parseImportFile } from "./services/catalog-import-service.js";
@@ -1986,7 +1987,10 @@ export function buildServer() {
   app.get("/health", async () => ({
     status: "ok",
     service: "bidwright-api",
-    dataRoot: resolveApiPath()
+    dataRoot: resolveApiPath(),
+    integrationsKeyProbe: validateIntegrationsEncryptionKey().probeVerified
+      ? "verified"
+      : "not-configured",
   }));
 
   app.get("/api/demo/status", async () => ({

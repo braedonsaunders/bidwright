@@ -347,6 +347,8 @@ function BidwrightShell({ children }: { children: ReactNode }) {
       groups={groups}
       pathname={pathname}
       navigationMode={navigation.mode}
+      topNavigationItemClassName="font-normal"
+      topNavigationInactiveItemClassName="text-fg-subtle hover:text-fg-muted"
       linkRender={nextLink}
       brand={<BrandHomeLink />}
       headerMiddle={

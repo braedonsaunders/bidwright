@@ -26,7 +26,14 @@ export function validateIntegrationsEncryptionKey(
   probe = process.env.INTEGRATIONS_ENCRYPTION_KEY_PROBE,
 ): { probeVerified: boolean } {
   const masterKey = readIntegrationsEncryptionKey(encodedKey);
-  if (!probe) return { probeVerified: false };
+  if (!probe) {
+    if ((process.env.BIDWRIGHT_MODE || "").trim().toLowerCase() === "server") {
+      throw new Error(
+        "INTEGRATIONS_ENCRYPTION_KEY_PROBE is required in Bidwright server mode.",
+      );
+    }
+    return { probeVerified: false };
+  }
 
   const plaintext = createContextualSealer(masterKey, {
     hkdfInfo: PROBE_HKDF_INFO,
