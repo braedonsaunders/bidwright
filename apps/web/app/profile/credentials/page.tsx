@@ -80,6 +80,7 @@ export default function MyCredentialsPage() {
   const [loginModal, setLoginModal] = useState<{ runtime: string; label: string } | null>(null);
   const [pendingKeys, setPendingKeys] = useState<Record<string, string>>({});
   const [interactiveLoginAvailable, setInteractiveLoginAvailable] = useState(false);
+  const [deploymentMode, setDeploymentMode] = useState<"desktop" | "server">("desktop");
 
   const refresh = useCallback(async () => {
     try {
@@ -98,6 +99,7 @@ export default function MyCredentialsPage() {
       list.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setRuntimes(list);
       setInteractiveLoginAvailable(detect.interactiveLoginAvailable);
+      setDeploymentMode(detect.deploymentMode);
       setUserSettings(mySettings);
       setLoadError(null);
     } catch (err) {
@@ -200,20 +202,30 @@ export default function MyCredentialsPage() {
                   <CardTitle>{runtime.displayName}</CardTitle>
                   <div className="flex items-center gap-2">
                     {!runtime.available ? (
-                      <Badge variant="warning">Not installed</Badge>
+                      <Badge variant="warning">
+                        {deploymentMode === "server" ? "Unavailable" : "Not installed"}
+                      </Badge>
                     ) : runtime.authenticated ? (
                       <Badge variant="success">
-                        Auth: {runtime.authMethod === "api_key" ? "API key" : runtime.authMethod}
+                        {deploymentMode === "server"
+                          ? "Provider ready"
+                          : `Auth: ${runtime.authMethod === "api_key" ? "API key" : runtime.authMethod}`}
                       </Badge>
                     ) : (
-                      <Badge variant="warning">Not signed in</Badge>
+                      <Badge variant="warning">
+                        {deploymentMode === "server" ? "Provider key required" : "Not signed in"}
+                      </Badge>
                     )}
                   </div>
                 </div>
               </CardHeader>
               <CardContent className="space-y-4">
                 {!runtime.available ? (
-                  <p className="text-xs text-fg/60">{runtime.installHint}</p>
+                  <p className="text-xs text-fg/60">
+                    {deploymentMode === "server"
+                      ? "This runtime is not included in the current managed deployment."
+                      : runtime.installHint}
+                  </p>
                 ) : null}
 
                 {interactiveLoginAvailable && runtime.id !== "openrouter" ? (
@@ -243,7 +255,7 @@ export default function MyCredentialsPage() {
                 ) : (
                   <Alert>
                     <AlertDescription>
-                      Browser-based CLI sign-in is disabled in server mode. This runtime uses the organization-managed provider key unless you set a personal API key below.
+                      This managed runtime uses the organization provider key by default. A personal key below is an optional override for your own runs.
                     </AlertDescription>
                   </Alert>
                 )}

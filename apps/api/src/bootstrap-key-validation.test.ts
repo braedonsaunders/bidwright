@@ -26,3 +26,17 @@ test("startup validation uses an application probe without scanning tenant recor
     /does not match INTEGRATIONS_ENCRYPTION_KEY_PROBE/,
   );
 });
+
+test("server mode refuses to start without an application key probe", () => {
+  const originalMode = process.env.BIDWRIGHT_MODE;
+  process.env.BIDWRIGHT_MODE = "server";
+  try {
+    assert.throws(
+      () => validateIntegrationsEncryptionKey(randomBytes(32).toString("base64"), ""),
+      /PROBE is required in Bidwright server mode/,
+    );
+  } finally {
+    if (originalMode === undefined) delete process.env.BIDWRIGHT_MODE;
+    else process.env.BIDWRIGHT_MODE = originalMode;
+  }
+});

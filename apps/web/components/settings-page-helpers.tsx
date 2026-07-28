@@ -34,6 +34,8 @@ type DetectCliResult = {
   claude: CliRuntimeStatus;
   codex: CliRuntimeStatus;
   runtimes: Record<string, CliRuntimeStatus>;
+  deploymentMode: "desktop" | "server";
+  interactiveLoginAvailable: boolean;
   configured: { runtime: string | null; model: string | null };
 };
 
@@ -274,6 +276,7 @@ export function AgentRuntimeSettings({
   const [liveModels, setLiveModels] = useState<Record<string, CliModelOption[]>>({});
   const [modelsLoading, setModelsLoading] = useState(false);
   const [debouncedCliPath, setDebouncedCliPath] = useState("");
+  const isServerMode = cliStatus?.deploymentMode === "server";
 
   useEffect(() => {
     setDetecting(true);
@@ -365,12 +368,21 @@ export function AgentRuntimeSettings({
         <CardTitle>Agent Runtime</CardTitle>
       </CardHeader>
       <CardContent className="space-y-4">
+        <p className="text-sm text-fg-muted">
+          {isServerMode
+            ? "Choose the centrally managed runtime used for estimating and project questions. Provider credentials are managed under API Keys; users do not install or sign in to local tools."
+            : "Choose the local runtime used for estimating and project questions on this desktop."}
+        </p>
         <div className="rounded-lg border border-line p-4 space-y-3">
-          <h4 className="text-xs font-semibold text-fg/60 uppercase tracking-wider">Detected CLIs</h4>
+          <h4 className="text-xs font-semibold text-fg/60 uppercase tracking-wider">
+            {isServerMode ? "Managed runtimes" : "Detected CLIs"}
+          </h4>
           {detecting ? (
-            <div className="text-xs text-fg/40">Detecting installed CLIs...</div>
+            <div className="text-xs text-fg/40">
+              {isServerMode ? "Checking managed runtimes..." : "Detecting installed CLIs..."}
+            </div>
           ) : registeredRuntimes.length === 0 ? (
-            <div className="text-xs text-fg/40">No CLI runtimes registered.</div>
+            <div className="text-xs text-fg/40">No agent runtimes are registered.</div>
           ) : (
             <div className="space-y-2">
               {registeredRuntimes.map((runtime) => (
@@ -390,13 +402,23 @@ export function AgentRuntimeSettings({
                   <div className="flex items-center gap-2">
                     {runtime.available ? (
                       <>
-                        <span className="text-[10px] text-fg/40">{runtime.path}</span>
+                        {!isServerMode && (
+                          <span className="text-[10px] text-fg/40">{runtime.path}</span>
+                        )}
                         <span className={`text-[10px] px-1.5 py-0.5 rounded ${runtime.auth?.authenticated ? "bg-success/10 text-success" : "bg-warning/10 text-warning"}`}>
-                          {runtime.auth?.authenticated ? `Auth: ${runtime.auth.method}` : "Not authenticated"}
+                          {runtime.auth?.authenticated
+                            ? isServerMode
+                              ? "Provider ready"
+                              : `Auth: ${runtime.auth.method}`
+                            : isServerMode
+                              ? "Provider key required"
+                              : "Not authenticated"}
                         </span>
                       </>
                     ) : (
-                      <span className="text-[10px] text-fg/30">{runtime.installHint}</span>
+                      <span className="text-[10px] text-fg/30">
+                        {isServerMode ? "Unavailable in this deployment" : runtime.installHint}
+                      </span>
                     )}
                   </div>
                 </div>
@@ -419,10 +441,13 @@ export function AgentRuntimeSettings({
               });
             }}
             options={[
-              { value: "__auto__", label: "Auto-detect (best available)" },
+              {
+                value: "__auto__",
+                label: isServerMode ? "Automatic (best available)" : "Auto-detect (best available)",
+              },
               ...registeredRuntimes.map((runtime) => ({
                 value: runtime.id,
-                label: `${runtime.displayName}${runtime.experimental ? " (Beta)" : ""}${!runtime.available ? " (not installed)" : ""}`,
+                label: `${runtime.displayName}${runtime.experimental ? " (Beta)" : ""}${!runtime.available ? (isServerMode ? " (unavailable)" : " (not installed)") : ""}`,
                 disabled: !runtime.available,
               })),
             ]}
@@ -445,7 +470,9 @@ export function AgentRuntimeSettings({
             );
           })()}
           <p className="text-[10px] text-fg/30 mt-1.5">
-            Models are polled directly from the selected CLI on load and refreshed while this page is open.
+            {isServerMode
+              ? "Models are loaded from the selected managed runtime and provider."
+              : "Models are polled directly from the selected CLI on load and refreshed while this page is open."}
             {modelsLoading && effectiveRuntime ? ` Refreshing ${effectiveRuntime}...` : ""}
           </p>
         </div>
@@ -463,22 +490,24 @@ export function AgentRuntimeSettings({
           <p className="text-[10px] text-fg/30 mt-1.5">`Extra High` maps to `xhigh` for Codex and the strongest supported non-max level for Claude when a model does not support `xhigh`.</p>
         </div>
 
-        <div>
-          <Label>CLI Path Override (optional)</Label>
-          <Input
-            type="text"
-            placeholder={effectiveRuntimeStatus?.path || "/usr/local/bin/<cli>"}
-            value={effectiveRuntimeStatus
-              ? (settings.integrations[effectiveRuntimeStatus.pathSettingKey] || "")
-              : ""}
-            onChange={(e) => {
-              if (!effectiveRuntimeStatus) return;
-              onUpdate({ [effectiveRuntimeStatus.pathSettingKey]: e.target.value || null });
-            }}
-            disabled={!effectiveRuntimeStatus}
-          />
-          <p className="text-[10px] text-fg/30 mt-1.5">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
-        </div>
+        {!isServerMode && (
+          <div>
+            <Label>CLI Path Override (optional)</Label>
+            <Input
+              type="text"
+              placeholder={effectiveRuntimeStatus?.path || "/usr/local/bin/<cli>"}
+              value={effectiveRuntimeStatus
+                ? (settings.integrations[effectiveRuntimeStatus.pathSettingKey] || "")
+                : ""}
+              onChange={(e) => {
+                if (!effectiveRuntimeStatus) return;
+                onUpdate({ [effectiveRuntimeStatus.pathSettingKey]: e.target.value || null });
+              }}
+              disabled={!effectiveRuntimeStatus}
+            />
+            <p className="text-[10px] text-fg/30 mt-1.5">Leave blank to use auto-detected path. Override if the CLI is installed in a custom location.</p>
+          </div>
+        )}
 
         <div>
           <Label>Max Agent Iterations</Label>
@@ -510,13 +539,28 @@ export function AgentRuntimeSettings({
 
         <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
           <p className="font-medium text-fg/50">Authentication</p>
-          <p>
-            Each estimator can sign in to a CLI runtime with their own subscription, or paste a personal API key, on the{' '}
-            <a href="/profile/credentials" className="underline-offset-4 hover:underline text-fg/60">My credentials</a>{' '}
-            page. Personal credentials override the org defaults below whenever set; this keeps each user&apos;s OAuth
-            token isolated in their own namespace on this server.
-          </p>
-          <p>API keys configured in the API Keys tab are passed to the CLI as the org-wide fallback.</p>
+          {isServerMode ? (
+            <>
+              <p>
+                Organization provider keys configured in the API Keys tab are the default for every managed agent run.
+                They are encrypted at rest and never exposed to estimators.
+              </p>
+              <p>
+                Advanced users can add an optional personal override on the{' '}
+                <a href="/profile/credentials" className="underline-offset-4 hover:underline text-fg/60">My credentials</a>{' '}
+                page. No local installation or browser sign-in is required.
+              </p>
+            </>
+          ) : (
+            <>
+              <p>
+                Each estimator can sign in to a local runtime or paste a personal API key on the{' '}
+                <a href="/profile/credentials" className="underline-offset-4 hover:underline text-fg/60">My credentials</a>{' '}
+                page.
+              </p>
+              <p>API keys configured in the API Keys tab are used as the organization fallback.</p>
+            </>
+          )}
         </div>
       </CardContent>
     </Card>
