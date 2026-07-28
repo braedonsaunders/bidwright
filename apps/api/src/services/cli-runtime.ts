@@ -241,17 +241,17 @@ async function persistSessionState(
   );
 }
 
-function getMcpServerPath(): string {
+export function getMcpServerPath(): string {
   // Resolve from this file's location (apps/api/src/services/ -> 4 levels up to repo root)
   const thisUrl = new URL(".", import.meta.url);
   const thisDir = process.platform === "win32" ? fileURLToPath(thisUrl) : thisUrl.pathname;
   const repoRoot = join(thisDir, "../../../..");
 
   const paths = [
-    join(repoRoot, "packages/mcp-server/src/index.ts"),
-    join(process.cwd(), "packages/mcp-server/src/index.ts"),
     join(repoRoot, "packages/mcp-server/dist/index.js"),
     join(process.cwd(), "packages/mcp-server/dist/index.js"),
+    join(repoRoot, "packages/mcp-server/src/index.ts"),
+    join(process.cwd(), "packages/mcp-server/src/index.ts"),
   ];
   for (const p of paths) {
     if (existsSync(p)) return p;
@@ -265,10 +265,10 @@ interface McpRunnerInfo {
   isWin: boolean;
 }
 
-function resolveMcpRunner(): McpRunnerInfo {
+export function resolveMcpRunner(): McpRunnerInfo {
   const isWin = process.platform === "win32";
   const npxCmd = isWin ? "npx.cmd" : "npx";
-  const nodeCmd = isWin ? "node.exe" : "node";
+  const nodeCmd = process.execPath;
   const mcpServerPath = getMcpServerPath();
   const mcpRunner =
     existsSync(mcpServerPath) && mcpServerPath.endsWith(".ts") ? npxCmd : nodeCmd;
