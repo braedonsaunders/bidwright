@@ -15,7 +15,10 @@ prepare_root() {
   mkdir -p "${root}"
   if [ ! -f "${marker}" ]; then
     echo "Preparing ${root} for Bidwright runtime ${runtime_uid}:${runtime_gid}..."
-    find "${root}" -xdev -exec chown "${runtime_uid}:${runtime_gid}" {} +
+    # CLI runtimes leave short-lived and sometimes dangling helper symlinks
+    # under their state homes. Own the links themselves instead of
+    # dereferencing them so a normal stale Codex helper cannot abort deploy.
+    find "${root}" -xdev -exec chown -h "${runtime_uid}:${runtime_gid}" {} +
     : > "${marker}"
   fi
   chown "${runtime_uid}:${runtime_gid}" "${root}" "${marker}"

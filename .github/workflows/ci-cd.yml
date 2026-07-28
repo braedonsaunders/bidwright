@@ -99,7 +99,9 @@ jobs:
           set -euo pipefail
           TEST_ROOT="$(mktemp -d)"
           trap 'rm -rf "${TEST_ROOT}"' EXIT
-          mkdir -p "${TEST_ROOT}/agent/users/example"
+          mkdir -p "${TEST_ROOT}/agent/users/example" "${TEST_ROOT}/agent/codex/tmp/arg0/example"
+          ln -s "${TEST_ROOT}/missing-codex-helper" \
+            "${TEST_ROOT}/agent/codex/tmp/arg0/example/codex-linux-sandbox"
           BIDWRIGHT_RUNTIME_UID="$(id -u)" \
           BIDWRIGHT_RUNTIME_GID="$(id -g)" \
           AGENT_HOME_ROOT="${TEST_ROOT}/agent" \
