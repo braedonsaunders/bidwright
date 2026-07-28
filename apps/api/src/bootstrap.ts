@@ -4,7 +4,9 @@ import { chmod, mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { prisma } from "@bidwright/db";
 import { resolveApiPath } from "./paths.js";
+import { validateStoredSettingsCredentials } from "./services/settings-key-validation.js";
 
 /**
  * One-time-per-process startup tasks.
@@ -77,6 +79,36 @@ export async function ensureIntegrationsEncryptionKey(): Promise<{
   try { await chmod(filePath, 0o600); } catch { /* ignore */ }
   process.env.INTEGRATIONS_ENCRYPTION_KEY = key;
   return { source: "generated", filePath };
+}
+
+export async function assertIntegrationsEncryptionKeyMatchesStoredCredentials(
+  db: typeof prisma = prisma,
+): Promise<{ checkedRecords: number }> {
+  const [organizations, users, superAdmins] = await Promise.all([
+    db.organizationSettings.findMany({
+      select: { organizationId: true, email: true, integrations: true },
+    }),
+    db.userSettings.findMany({
+      select: {
+        userId: true,
+        integrations: true,
+        user: { select: { organizationId: true } },
+      },
+    }),
+    db.superAdmin.findMany({
+      select: { id: true, integrations: true },
+    }),
+  ]);
+
+  return validateStoredSettingsCredentials({
+    organizations,
+    users: users.map((settings) => ({
+      userId: settings.userId,
+      organizationId: settings.user.organizationId,
+      integrations: settings.integrations,
+    })),
+    superAdmins,
+  });
 }
 
 // ── Prisma migrations ─────────────────────────────────────────────────────
@@ -421,4 +453,11 @@ export async function runStartupBootstrap(): Promise<void> {
     console.log(`[bootstrap] Loaded integrations encryption key from ${key.filePath}.`);
   }
   // (env-supplied keys are silent — operators set them deliberately.)
+
+  if (process.env.DATABASE_URL) {
+    const validation = await assertIntegrationsEncryptionKeyMatchesStoredCredentials();
+    console.log(
+      `[bootstrap] Verified integrations encryption key against ${validation.checkedRecords} settings record(s).`,
+    );
+  }
 }
