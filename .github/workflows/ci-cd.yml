@@ -108,6 +108,32 @@ jobs:
           set -euo pipefail
           IMAGE="ghcr.io/braedonsaunders/bidwright-api:sha-76cf58d"
           docker pull "${IMAGE}"
+          mapfile -t KEY_MATERIAL < <(node <<'NODE'
+          const crypto = require("node:crypto");
+          const key = crypto.randomBytes(32);
+          const derived = Buffer.from(crypto.hkdfSync(
+            "sha256",
+            key,
+            Buffer.from("bidwright-integrations-key-probe:v1"),
+            Buffer.from("bidwright:settings:key-probe:v1"),
+            32,
+          ));
+          const nonce = crypto.randomBytes(12);
+          const cipher = crypto.createCipheriv("aes-256-gcm", derived, nonce);
+          cipher.setAAD(Buffer.from("bidwright:integrations-encryption-key:probe:v1"));
+          const ciphertext = Buffer.concat([
+            cipher.update("bidwright-integrations-key-probe:v1"),
+            cipher.final(),
+          ]);
+          console.log(key.toString("base64"));
+          console.log(Buffer.concat([
+            Buffer.from([1]),
+            nonce,
+            cipher.getAuthTag(),
+            ciphertext,
+          ]).toString("base64"));
+          NODE
+          )
           docker run --detach --name bidwright-production-api-smoke \
             --security-opt seccomp=unconfined \
             --security-opt apparmor=unconfined \
@@ -116,6 +142,8 @@ jobs:
             --env BIDWRIGHT_MODE=server \
             --env BIDWRIGHT_MULTITENANT=false \
             --env DATA_DIR=/tmp/bidwright-api \
+            --env "INTEGRATIONS_ENCRYPTION_KEY=${KEY_MATERIAL[0]}" \
+            --env "INTEGRATIONS_ENCRYPTION_KEY_PROBE=${KEY_MATERIAL[1]}" \
             "${IMAGE}"
           trap 'docker logs bidwright-production-api-smoke; docker rm -f bidwright-production-api-smoke >/dev/null 2>&1 || true' EXIT
           for attempt in $(seq 1 30); do
