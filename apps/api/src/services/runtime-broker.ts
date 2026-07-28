@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 
@@ -39,7 +40,14 @@ function brokerWorkerInvocation(): { command: string; args: string[] } {
   if (!existsSync(sourceWorker)) {
     throw new Error("Agent runtime broker worker is missing from the API installation.");
   }
-  return { command: process.execPath, args: ["--import", "tsx", sourceWorker] };
+
+  // The production container currently starts the API from its TypeScript
+  // source tree. The broker child runs with the project workspace as cwd, so
+  // a bare `--import tsx` is resolved from /data/projects/... and fails even
+  // though tsx is installed under /app. Resolve the loader from this module
+  // before crossing the sandbox/process boundary and pass its absolute path.
+  const tsxLoader = createRequire(import.meta.url).resolve("tsx");
+  return { command: process.execPath, args: ["--import", tsxLoader, sourceWorker] };
 }
 
 export async function createRuntimeBrokerPlan(

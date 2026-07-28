@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+
+import { createRuntimeBrokerPlan } from "./runtime-broker.js";
 
 async function runWorker(requestPath: string, env: NodeJS.ProcessEnv = {}) {
   const workerPath = fileURLToPath(new URL("./runtime-broker-worker.ts", import.meta.url));
@@ -103,4 +105,27 @@ rl.on("line", (line) => {
     true,
   );
   await assert.rejects(() => readFile(requestPath), /ENOENT/);
+});
+
+test("source-mode broker plan resolves the tsx loader before changing to the project cwd", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "bidwright-runtime-plan-"));
+  const plan = await createRuntimeBrokerPlan(
+    {
+      transport: "codex-app-server",
+      projectDir: dir,
+      prompt: "verify loader resolution",
+      model: "gpt-test",
+      reasoningEffort: "medium",
+      codexCommand: process.execPath,
+      appServerArgs: [],
+    },
+    { OPENROUTER_API_KEY: "test-key" },
+  );
+
+  if (plan.args[0] === "--import") {
+    assert.notEqual(plan.args[1], "tsx");
+    assert.equal(isAbsolute(plan.args[1] || ""), true);
+  } else {
+    assert.equal(isAbsolute(plan.args[0] || ""), true);
+  }
 });
