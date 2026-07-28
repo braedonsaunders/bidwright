@@ -74,6 +74,22 @@ services:
     networks:
       - default
 
+  runtime-storage:
+    image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
+    restart: "no"
+    user: "0:0"
+    environment:
+      DATA_DIR: "${DATA_DIR:-/data}"
+      AGENT_HOME_ROOT: "${AGENT_HOME_ROOT:-/data/agent-home}"
+      BIDWRIGHT_RUNTIME_UID: "${BIDWRIGHT_RUNTIME_UID:-1000}"
+      BIDWRIGHT_RUNTIME_GID: "${BIDWRIGHT_RUNTIME_GID:-1000}"
+    command: ["sh", "/app/scripts/deploy/prepare-runtime-storage.sh"]
+    volumes:
+      - bidwright-data:/data
+      - bidwright-agent-home:/data/agent-home
+    networks:
+      - default
+
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
     restart: unless-stopped
@@ -81,9 +97,14 @@ services:
       resources:
         limits:
           memory: 2g
-    # Setuid bubblewrap avoids granting CAP_SYS_ADMIN to the API container.
-    # Relaxed syscall profiles permit namespace/mount setup; the sandbox drops
-    # all capabilities before exec'ing the agent child.
+    user: "${BIDWRIGHT_RUNTIME_UID:-1000}:${BIDWRIGHT_RUNTIME_GID:-1000}"
+    # The API process is unprivileged. These capabilities remain in the
+    # container bounding set so Debian's setuid bubblewrap helper can create
+    # the sandbox namespaces; the AppKit policy drops all of them before exec.
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
+      - SYS_PTRACE
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
@@ -102,6 +123,8 @@ services:
       - traefik.http.services.bidwright-api.loadbalancer.server.port=3001
     depends_on:
       db-migrate:
+        condition: service_completed_successfully
+      runtime-storage:
         condition: service_completed_successfully
     environment:
       # Real cluster URL (with creds) is set in the Dokploy env; this default
@@ -201,8 +224,11 @@ services:
       resources:
         limits:
           memory: 1g
+    user: "${BIDWRIGHT_RUNTIME_UID:-1000}:${BIDWRIGHT_RUNTIME_GID:-1000}"
     depends_on:
       db-migrate:
+        condition: service_completed_successfully
+      runtime-storage:
         condition: service_completed_successfully
     environment:
       # Real cluster URL (with creds) is set in the Dokploy env; this default

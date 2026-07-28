@@ -89,7 +89,29 @@ jobs:
           apps/web/lib/schedule-utils.test.ts
 
       - name: Validate production compose
-        run: docker compose -f docker-compose.prod.yml config > /dev/null
+        run: |
+          docker compose -f docker-compose.prod.yml config > /dev/null
+          docker compose -f docker-compose.hosted.yml config > /dev/null
+
+      - name: Verify runtime storage migration
+        run: |
+          set -euo pipefail
+          TEST_ROOT="$(mktemp -d)"
+          trap 'rm -rf "${TEST_ROOT}"' EXIT
+          mkdir -p "${TEST_ROOT}/data/projects/example" "${TEST_ROOT}/agent/users/example"
+          touch "${TEST_ROOT}/data/projects/example/file"
+          BIDWRIGHT_RUNTIME_UID="$(id -u)" \
+          BIDWRIGHT_RUNTIME_GID="$(id -g)" \
+          DATA_DIR="${TEST_ROOT}/data" \
+          AGENT_HOME_ROOT="${TEST_ROOT}/agent" \
+            sh scripts/deploy/prepare-runtime-storage.sh
+          test -f "${TEST_ROOT}/data/.bidwright-runtime-owner-$(id -u)-$(id -g)"
+          test -f "${TEST_ROOT}/agent/.bidwright-runtime-owner-$(id -u)-$(id -g)"
+          BIDWRIGHT_RUNTIME_UID="$(id -u)" \
+          BIDWRIGHT_RUNTIME_GID="$(id -g)" \
+          DATA_DIR="${TEST_ROOT}/data" \
+          AGENT_HOME_ROOT="${TEST_ROOT}/agent" \
+            sh scripts/deploy/prepare-runtime-storage.sh
 
       - name: Validate production registry compose
         run: |
