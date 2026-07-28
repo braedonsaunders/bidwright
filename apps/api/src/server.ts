@@ -1564,8 +1564,10 @@ export async function buildWorkspaceResponse(store: PrismaApiStore, projectId: s
 
   const rateSchedules = await store.listRevisionRateSchedules(projectId);
   const entityCategories = await store.listEntityCategories();
-  const settings = await store.getSettings();
-  const orgDefaults = (settings?.defaults ?? {}) as Record<string, unknown>;
+  // Workspace reads must not depend on decrypting unrelated email or AI
+  // credentials. A missing/rotated integration key should fail credential
+  // operations closed without making otherwise valid quotes unavailable.
+  const orgDefaults = await store.getOrganizationDefaults();
   const meta = {
     benchmarkingEnabled: orgDefaults.benchmarkingEnabled === true,
   };
