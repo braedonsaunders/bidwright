@@ -5,8 +5,18 @@ import {
   AlertCircle, CheckCircle2, ClipboardCopy, Loader2, Play, Save, Trash2, Webhook, X,
 } from "lucide-react";
 import {
-  Badge, Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Toggle,
-} from "@/components/ui";
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Badge,
+  Toggle,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import {
   beginIntegrationOAuth, deleteIntegrationCredential, getIntegration,
@@ -264,7 +274,7 @@ function ConfigureTab(props: {
       {fields.length > 0 ? (
         <Card>
           <CardHeader><CardTitle className="text-sm">Connection</CardTitle></CardHeader>
-          <CardBody>
+          <CardContent>
             <ManifestFormFields
               fields={fields}
               values={values}
@@ -279,7 +289,7 @@ function ConfigureTab(props: {
                 setValues((s) => ({ ...s, [k]: "" }));
               }}
             />
-          </CardBody>
+          </CardContent>
         </Card>
       ) : null}
 
@@ -287,7 +297,7 @@ function ConfigureTab(props: {
       {isOAuth ? (
         <Card>
           <CardHeader><CardTitle className="text-sm">OAuth client</CardTitle></CardHeader>
-          <CardBody className="space-y-3">
+          <CardContent className="space-y-3">
             <div className="text-xs text-fg/60">
               You must register an OAuth app with the provider, then paste the client id / secret here.
               The redirect URL below must be allowlisted in the provider's app config.
@@ -312,7 +322,7 @@ function ConfigureTab(props: {
                 Connect
               </Button>
             </div>
-          </CardBody>
+          </CardContent>
         </Card>
       ) : null}
 
@@ -324,7 +334,7 @@ function ConfigureTab(props: {
               <Webhook className="h-4 w-4" /> Inbound webhook
             </CardTitle>
           </CardHeader>
-          <CardBody className="space-y-2">
+          <CardContent className="space-y-2">
             <div className="text-xs text-fg/60">
               Configure the third-party tool to POST to this URL. Bidwright verifies the signature
               using the secret you saved above.
@@ -336,14 +346,14 @@ function ConfigureTab(props: {
                 <span>{t.description} · verify: {t.verify}</span>
               </div>
             ))}
-          </CardBody>
+          </CardContent>
         </Card>
       ) : null}
 
       {/* Exposure */}
       <Card>
         <CardHeader><CardTitle className="text-sm">Exposure</CardTitle></CardHeader>
-        <CardBody className="space-y-3">
+        <CardContent className="space-y-3">
           <ToggleRow
             label="Available to AI agent"
             help="Surface this integration's actions in the agent tool registry."
@@ -362,7 +372,7 @@ function ConfigureTab(props: {
             checked={enabled}
             onChange={setEnabled}
           />
-        </CardBody>
+        </CardContent>
       </Card>
 
       {/* Save / test */}
@@ -386,7 +396,7 @@ function ConfigureTab(props: {
       {detail.credentials.length > 0 ? (
         <Card>
           <CardHeader><CardTitle className="text-sm">Saved credentials</CardTitle></CardHeader>
-          <CardBody>
+          <CardContent>
             <ul className="divide-y divide-line">
               {detail.credentials.map((c) => (
                 <li key={c.kind} className="flex items-center justify-between py-2 text-sm">
@@ -395,7 +405,7 @@ function ConfigureTab(props: {
                     <div className="text-fg/55 text-[11px]">Encrypted · org-bound · {c.masked}</div>
                   </div>
                   <Button
-                    size="xs"
+                    size="sm"
                     variant="ghost"
                     onClick={async () => {
                       if (!confirm(`Remove ${c.kind}?`)) return;
@@ -408,7 +418,7 @@ function ConfigureTab(props: {
                 </li>
               ))}
             </ul>
-          </CardBody>
+          </CardContent>
         </Card>
       ) : null}
     </div>
@@ -538,7 +548,7 @@ function ActionForm(props: { integrationId: string; action: ManifestActionDescri
         <CardTitle className="text-sm">{action.name}</CardTitle>
         <p className="text-xs text-fg/60 mt-1">{action.description}</p>
       </CardHeader>
-      <CardBody className="space-y-3">
+      <CardContent className="space-y-3">
         {fields.length > 0 ? (
           <ManifestFormFields fields={fields} values={input} onChange={(k, v) => setInput((s) => ({ ...s, [k]: v }))} />
         ) : (
@@ -558,7 +568,7 @@ function ActionForm(props: { integrationId: string; action: ManifestActionDescri
             {JSON.stringify(result, null, 2)}
           </pre>
         ) : null}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

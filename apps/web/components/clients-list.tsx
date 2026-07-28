@@ -4,18 +4,13 @@ import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { motion } from "motion/react";
 import {
-  ArrowUpDown,
   Building2,
   Loader2,
   Mail,
   MapPin,
   Phone,
   Plus,
-  Search,
-  Users,
-  X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
@@ -30,7 +25,18 @@ import {
   type ProjectListItem,
 } from "@/lib/api";
 import { formatCompactMoney, formatDate, formatPercent } from "@/lib/format";
-import { Badge, Button, Card, FadeIn, Input, Label, ModalBackdrop } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Dialog,
+  Input,
+  Label,
+  ListPageLayout,
+  PageHeader,
+  RecordList,
+  type RecordColumn,
+} from "@appkit/ui";
+import { FadeIn } from "@/components/legacy-controls";
 
 type SortKey = "name" | "quotes" | "activeValue" | "wonValue" | "winRate" | "margin" | "updated";
 type SortDir = "asc" | "desc";
@@ -91,43 +97,6 @@ function MiniPipeline({ row }: { row: ClientPortfolioRow }) {
         />
       ))}
     </div>
-  );
-}
-
-function SortHeader({
-  label,
-  sortKey,
-  activeKey,
-  sortDir,
-  className,
-  onSort,
-}: {
-  label: string;
-  sortKey: SortKey;
-  activeKey: SortKey;
-  sortDir: SortDir;
-  className?: string;
-  onSort: (key: SortKey) => void;
-}) {
-  return (
-    <th
-      className={cn(
-        "px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 cursor-pointer select-none hover:text-fg/70 transition-colors",
-        className,
-      )}
-      onClick={() => onSort(sortKey)}
-    >
-      <span className="inline-flex items-center gap-1">
-        {label}
-        <ArrowUpDown
-          className={cn(
-            "h-3 w-3",
-            activeKey === sortKey ? "text-accent" : "text-fg/15",
-            activeKey === sortKey && sortDir === "desc" && "rotate-180",
-          )}
-        />
-      </span>
-    </th>
   );
 }
 
@@ -248,181 +217,174 @@ export function ClientsList({
     { key: "prospects", label: t("filters.prospects"), count: rows.filter((row) => row.metrics.quoteCount === 0).length },
     { key: "inactive", label: t("filters.inactive"), count: rows.filter((row) => !row.active).length },
   ];
-
-  return (
-    <div className="flex h-full min-h-0 flex-col gap-4 overflow-hidden">
-      <FadeIn className="shrink-0">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <Users className="h-4 w-4 text-accent" />
-              <h1 className="text-lg font-semibold text-fg">{t("title")}</h1>
-            </div>
-            <p className="mt-0.5 text-xs text-fg/50">{t("subtitle")}</p>
-          </div>
-          <Button variant="accent" size="sm" onClick={() => setCreateOpen(true)}>
-            <Plus className="h-3.5 w-3.5" />
-            {t("newClient")}
-          </Button>
-        </div>
-      </FadeIn>
-
-      <FadeIn delay={0.05} className="shrink-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="relative min-w-[280px] flex-1 max-w-xl">
-            <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-            <Input
-              className="h-8 pl-9 text-xs"
-              placeholder={t("searchPlaceholder")}
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            {search && (
-              <button
-                type="button"
-                onClick={() => setSearch("")}
-                className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-0.5 text-fg/30 transition-colors hover:text-fg/60"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            )}
-          </div>
-          <div className="flex flex-wrap gap-1 rounded-lg border border-line bg-panel p-1">
-            {filters.map((filter) => (
-              <button
-                key={filter.key}
-                type="button"
-                onClick={() => setQuickFilter(filter.key)}
-                className={cn(
-                  "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium transition-colors",
-                  quickFilter === filter.key
-                    ? "bg-accent text-accent-fg"
-                    : "text-fg/55 hover:bg-panel2 hover:text-fg/80",
-                )}
-              >
-                {filter.label}
-                <span className={cn("tabular-nums", quickFilter === filter.key ? "text-accent-fg/75" : "text-fg/35")}>
-                  {filter.count}
-                </span>
-              </button>
-            ))}
-          </div>
-          <span className="ml-auto text-[11px] text-fg/30 tabular-nums">
-            {filtered.length === rows.length
-              ? t("resultCount", { count: filtered.length })
-              : t("filteredResultCount", { filtered: filtered.length, total: rows.length })}
+  const columns = useMemo<RecordColumn<ClientPortfolioRow>[]>(() => [
+    {
+      key: "name",
+      label: t("table.client"),
+      sortable: true,
+      width: "24%",
+      render: (row) => (
+        <Link href={clientHref(row)} className="group flex min-w-[14rem] items-center gap-3">
+          <ClientAvatar name={row.name} active={row.active} />
+          <span className="min-w-0">
+            <span className="flex min-w-0 items-center gap-1.5">
+              <span className="block truncate font-semibold text-fg group-hover:text-primary">{row.name}</span>
+              {!row.active && <Badge variant="secondary" className="shrink-0 text-[9px]">{t("inactive")}</Badge>}
+            </span>
+            <span className="mt-0.5 flex items-center gap-1.5 text-xs text-fg-muted">
+              <MapPin className="size-3" />
+              <span className="truncate">{row.location || t("noLocation")}</span>
+            </span>
+          </span>
+        </Link>
+      ),
+    },
+    {
+      key: "contact",
+      label: t("table.contact"),
+      width: "20%",
+      render: (row) => (
+        <div className="flex min-w-[12rem] flex-col gap-1 text-xs text-fg-muted">
+          <span className="flex items-center gap-1.5 truncate">
+            <Mail className="size-3 text-fg-subtle" />
+            <span className="truncate">{row.email || t("noEmail")}</span>
+          </span>
+          <span className="flex items-center gap-1.5 truncate">
+            <Phone className="size-3 text-fg-subtle" />
+            <span className="truncate">{row.phone || t("noPhone")}</span>
           </span>
         </div>
-      </FadeIn>
+      ),
+    },
+    {
+      key: "quotes",
+      label: t("table.quotes"),
+      sortable: true,
+      align: "right",
+      render: (row) => (
+        <div className="flex min-w-24 flex-col items-end gap-1 tabular-nums">
+          <span>{row.metrics.quoteCount}</span>
+          <MiniPipeline row={row} />
+        </div>
+      ),
+    },
+    {
+      key: "activeValue",
+      label: t("table.active"),
+      sortable: true,
+      kind: "amount",
+      render: (row) => <div className="text-right font-medium tabular-nums">{formatCompactMoney(row.metrics.activeValue)}</div>,
+    },
+    {
+      key: "wonValue",
+      label: t("table.awarded"),
+      sortable: true,
+      kind: "amount",
+      render: (row) => <div className="text-right font-medium tabular-nums">{formatCompactMoney(row.metrics.wonValue)}</div>,
+    },
+    {
+      key: "winRate",
+      label: t("table.win"),
+      sortable: true,
+      kind: "amount",
+      render: (row) => (
+        <div className="text-right tabular-nums">
+          {row.metrics.wonCount + row.metrics.lostCount > 0 ? formatPercent(row.metrics.winRate) : "—"}
+        </div>
+      ),
+    },
+    {
+      key: "margin",
+      label: t("table.margin"),
+      sortable: true,
+      kind: "amount",
+      render: (row) => (
+        <div className="text-right tabular-nums">
+          {row.metrics.quoteCount > 0 ? formatPercent(row.metrics.avgMargin) : "—"}
+        </div>
+      ),
+    },
+    {
+      key: "updated",
+      label: t("table.updated"),
+      sortable: true,
+      render: (row) => <span className="whitespace-nowrap text-fg-muted">{formatDate(row.metrics.lastActivityAt)}</span>,
+    },
+  ], [t]);
+
+  return (
+    <ListPageLayout
+      className="flex min-h-full flex-col gap-4"
+      header={
+        <PageHeader
+          title={t("title")}
+          description={t("subtitle")}
+          actions={
+            <Button variant="default" size="sm" onClick={() => setCreateOpen(true)}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("newClient")}
+            </Button>
+          }
+        />
+      }
+    >
 
       <FadeIn delay={0.1} className="min-h-0 flex-1">
-        <Card className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg">
-          <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-            <table className="w-full table-fixed text-sm">
-              <thead className="sticky top-0 z-10 bg-panel">
-                <tr className="border-b border-line">
-                  <SortHeader label={t("table.client")} sortKey="name" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-[55%] sm:w-[34%] lg:w-[24%]" />
-                  <th className="hidden w-[20%] px-4 py-2.5 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40 lg:table-cell">{t("table.contact")}</th>
-                  <SortHeader label={t("table.quotes")} sortKey="quotes" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-[17%] px-2 text-right sm:w-[9%] sm:px-4" />
-                  <SortHeader label={t("table.active")} sortKey="activeValue" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="w-[28%] px-2 text-right sm:w-[11%] sm:px-4" />
-                  <SortHeader label={t("table.awarded")} sortKey="wonValue" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="hidden w-[11%] text-right xl:table-cell" />
-                  <SortHeader label={t("table.win")} sortKey="winRate" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="hidden w-[7%] text-right 2xl:table-cell" />
-                  <SortHeader label={t("table.margin")} sortKey="margin" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="hidden w-[8%] text-right lg:table-cell" />
-                  <SortHeader label={t("table.updated")} sortKey="updated" activeKey={sortKey} sortDir={sortDir} onSort={handleSort} className="hidden w-[10%] md:table-cell" />
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.length === 0 && (
-                  <tr>
-                    <td colSpan={8} className="px-5 py-12 text-center text-sm text-fg/40">
-                      <Building2 className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                      {t("noMatches")}
-                    </td>
-                  </tr>
-                )}
-                {filtered.map((row, index) => (
-                  <motion.tr
-                    key={row.id}
-                    initial={{ opacity: 0, y: 4 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ duration: 0.18, delay: index * 0.015, ease: "easeOut" }}
-                    onClick={() => router.push(clientHref(row))}
-                    className="cursor-pointer border-b border-line transition-colors last:border-0 hover:bg-panel2/40"
-                  >
-                    <td className="min-w-0 px-4 py-2.5">
-                      <Link href={clientHref(row)} className="group flex min-w-0 items-center gap-3">
-                        <ClientAvatar name={row.name} active={row.active} />
-                        <span className="min-w-0">
-                          <span className="flex min-w-0 items-center gap-1.5">
-                            <span className="block truncate text-xs font-semibold text-fg group-hover:text-accent">{row.name}</span>
-                            {!row.active && <Badge className="hidden shrink-0 text-[9px] sm:inline-flex">{t("inactive")}</Badge>}
-                          </span>
-                          <span className="mt-0.5 flex items-center gap-1.5 text-[11px] text-fg/40">
-                            <MapPin className="h-3 w-3" />
-                            <span className="truncate">{row.location || t("noLocation")}</span>
-                          </span>
-                        </span>
-                      </Link>
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-xs text-fg/55 lg:table-cell">
-                      <div className="flex min-w-0 flex-col gap-1">
-                        <span className="flex items-center gap-1.5 truncate">
-                          <Mail className="h-3 w-3 text-fg/25" />
-                          <span className="truncate">{row.email || t("noEmail")}</span>
-                        </span>
-                        <span className="flex items-center gap-1.5 truncate">
-                          <Phone className="h-3 w-3 text-fg/25" />
-                          <span className="truncate">{row.phone || t("noPhone")}</span>
-                        </span>
-                      </div>
-                    </td>
-                    <td className="px-2 py-2.5 text-right text-xs tabular-nums text-fg/70 sm:px-4">
-                      <div className="inline-flex flex-col items-end gap-1">
-                        <span>{row.metrics.quoteCount}</span>
-                        <MiniPipeline row={row} />
-                      </div>
-                    </td>
-                    <td className="px-2 py-2.5 text-right text-xs font-medium tabular-nums text-fg/80 sm:px-4">
-                      {formatCompactMoney(row.metrics.activeValue)}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-right text-xs font-medium tabular-nums text-fg/80 xl:table-cell">
-                      {formatCompactMoney(row.metrics.wonValue)}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-right text-xs tabular-nums text-fg/60 2xl:table-cell">
-                      {row.metrics.wonCount + row.metrics.lostCount > 0 ? formatPercent(row.metrics.winRate) : "-"}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-right text-xs tabular-nums text-fg/60 lg:table-cell">
-                      {row.metrics.quoteCount > 0 ? formatPercent(row.metrics.avgMargin) : "-"}
-                    </td>
-                    <td className="hidden px-4 py-2.5 text-xs text-fg/50 md:table-cell">
-                      {formatDate(row.metrics.lastActivityAt)}
-                    </td>
-                  </motion.tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
+        <RecordList
+          columns={columns}
+          rows={filtered}
+          getRowId={(row) => row.id}
+          search={{ value: search, onChange: setSearch, placeholder: t("searchPlaceholder") }}
+          filters={
+            <div className="flex flex-wrap gap-1">
+              {filters.map((filter) => (
+                <Button
+                  key={filter.key}
+                  type="button"
+                  size="sm"
+                  variant={quickFilter === filter.key ? "secondary" : "ghost"}
+                  onClick={() => setQuickFilter(filter.key)}
+                >
+                  {filter.label}
+                  <span className="tabular-nums text-fg-muted">{filter.count}</span>
+                </Button>
+              ))}
+            </div>
+          }
+          toolbarActions={
+            <span className="whitespace-nowrap text-xs tabular-nums text-fg-muted">
+              {filtered.length === rows.length
+                ? t("resultCount", { count: filtered.length })
+                : t("filteredResultCount", { filtered: filtered.length, total: rows.length })}
+            </span>
+          }
+          sort={{ key: sortKey, dir: sortDir }}
+          onSortChange={(key) => handleSort(key as SortKey)}
+          onRowClick={(row) => router.push(clientHref(row))}
+          empty={{ title: t("noMatches"), icon: <Building2 className="size-8" /> }}
+        />
       </FadeIn>
 
-      <ModalBackdrop open={createOpen} onClose={() => !createSaving && setCreateOpen(false)} size="lg">
-        <form onSubmit={handleCreateSubmit} className="rounded-lg border border-line bg-panel shadow-2xl">
-          <div className="flex items-start justify-between gap-4 border-b border-line px-5 py-4">
-            <div>
-              <h2 className="text-sm font-semibold text-fg">{t("modal.title")}</h2>
-              <p className="mt-0.5 text-xs text-fg/50">{t("modal.description")}</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setCreateOpen(false)}
-              disabled={createSaving}
-              className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
-              aria-label={t("modal.close")}
-            >
-              <X className="h-4 w-4" />
-            </button>
-          </div>
-          <div className="grid gap-3 px-5 py-4 sm:grid-cols-2">
+      <Dialog
+        open={createOpen}
+        onClose={() => !createSaving && setCreateOpen(false)}
+        size="lg"
+        title={t("modal.title")}
+        description={t("modal.description")}
+        closeLabel={t("modal.close")}
+        footer={
+          <>
+            <Button type="button" variant="ghost" size="sm" onClick={() => setCreateOpen(false)} disabled={createSaving}>
+              {t("modal.cancel")}
+            </Button>
+            <Button type="submit" form="create-client-form" variant="default" size="sm" disabled={createSaving}>
+              {createSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
+              {t("modal.create")}
+            </Button>
+          </>
+        }
+      >
+        <form id="create-client-form" onSubmit={handleCreateSubmit} className="grid gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <Label>{t("modal.name")}</Label>
               <Input
@@ -462,18 +424,8 @@ export function ClientsList({
                 {createError}
               </div>
             )}
-          </div>
-          <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
-            <Button type="button" variant="ghost" size="sm" onClick={() => setCreateOpen(false)} disabled={createSaving}>
-              {t("modal.cancel")}
-            </Button>
-            <Button type="submit" variant="accent" size="sm" disabled={createSaving}>
-              {createSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              {t("modal.create")}
-            </Button>
-          </div>
         </form>
-      </ModalBackdrop>
-    </div>
+      </Dialog>
+    </ListPageLayout>
   );
 }

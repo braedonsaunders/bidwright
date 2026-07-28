@@ -32,7 +32,12 @@ import type {
   SpawnCtx,
   SpawnPlan,
 } from "./types.js";
-import { getCliVersion, homeDir, resolveCliCommand } from "./shared.js";
+import {
+  environmentReferences,
+  getCliVersion,
+  homeDir,
+  resolveCliCommand,
+} from "./shared.js";
 
 const ADAPTER_ID = "opencode";
 
@@ -73,6 +78,21 @@ const STATIC_MODELS: CliModelOption[] = [
     name: "Gemini 2.5 Pro (via Google)",
     description: "Google's frontier model",
   },
+  {
+    id: "openrouter/~openai/gpt-latest",
+    name: "GPT Latest (via OpenRouter)",
+    description: "OpenRouter's current GPT agent alias",
+  },
+  {
+    id: "openrouter/~anthropic/claude-sonnet-latest",
+    name: "Claude Sonnet Latest (via OpenRouter)",
+    description: "OpenRouter's current Claude Sonnet agent alias",
+  },
+  {
+    id: "openrouter/~google/gemini-pro-latest",
+    name: "Gemini Pro Latest (via OpenRouter)",
+    description: "OpenRouter's current Gemini Pro agent alias",
+  },
 ];
 
 function isOpencodeModelId(model: string): boolean {
@@ -84,21 +104,21 @@ function isOpencodeModelId(model: string): boolean {
 
 async function writeOpencodeConfig(ctx: PrepareWorkspaceCtx): Promise<void> {
   const configPath = join(ctx.projectDir, "opencode.json");
-  // Only write if missing — let users hand-customize without overwriting on resume.
-  if (existsSync(configPath)) return;
-
   const config = {
     $schema: "https://opencode.ai/config.json",
     mcp: {
       bidwright: {
         type: "local",
         command: [ctx.mcpRunner, ...ctx.mcpArgs],
-        environment: ctx.mcpEnv,
+        environment: environmentReferences(ctx.mcpEnv, "opencode"),
       },
     },
   };
 
-  await writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+  await writeFile(configPath, JSON.stringify(config, null, 2), {
+    encoding: "utf-8",
+    mode: 0o600,
+  });
 }
 
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
@@ -219,11 +239,7 @@ export const opencodeAdapter: CliAdapter = {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {
-      // Server mode: OpenCode follows XDG Base Directory; we redirect it via
-      // XDG_DATA_HOME=<agentHomeDir>/data, so OAuth lands at
-      // <agentHomeDir>/data/opencode/auth.json.
-      const userOpencodeAuth = join(agentHomeDir, "data", "opencode", "auth.json");
-      if (existsSync(userOpencodeAuth)) return { authenticated: true, method: "oauth" };
+      // Server mode is API-key-only; cached interactive OAuth is desktop-only.
       return { authenticated: false, method: "none" };
     }
     // OpenCode persists OAuth tokens under the OS data dir.
@@ -258,14 +274,17 @@ export const opencodeAdapter: CliAdapter = {
       // and config under <agentHomeDir>/data/opencode and <agentHomeDir>/config/opencode
       // instead of the host-wide ~/.local/share/opencode that's shared across
       // every container user.
-      const userDataHome = join(ctx.agentHomeDir, "data");
-      const userConfigHome = join(ctx.agentHomeDir, "config");
+      const userDataHome = join(ctx.agentHomeDir, "runtime", "opencode", "data");
+      const userConfigHome = join(ctx.agentHomeDir, "runtime", "opencode", "config");
+      const userHomeDir = join(ctx.agentHomeDir, "runtime", "opencode", "home");
       await mkdir(join(userDataHome, "opencode"), { recursive: true });
       await mkdir(join(userConfigHome, "opencode"), { recursive: true });
+      await mkdir(userHomeDir, { recursive: true });
       return {
         extraEnv: {
           XDG_DATA_HOME: userDataHome,
           XDG_CONFIG_HOME: userConfigHome,
+          HOME: userHomeDir,
         },
       };
     }

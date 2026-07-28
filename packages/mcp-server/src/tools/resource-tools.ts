@@ -955,7 +955,6 @@ export function registerResourceTools(server: McpServer) {
       if (!preferred) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ recommendation: null, candidates: [], warning: "No candidates found." }, null, 2) }],
-          isError: true,
         };
       }
 

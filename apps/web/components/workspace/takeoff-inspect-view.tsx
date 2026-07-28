@@ -3,7 +3,9 @@
 import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, ScanSearch, Settings2, Sigma, Trash2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
-import { Input } from "@/components/ui";
+import {
+  Input,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import type { Pickup } from "@/components/workspace/takeoff/annotation-canvas";
 import type {

@@ -228,7 +228,7 @@ export async function applyPendingMigrations(): Promise<{ applied: boolean; reas
     // schema is partial (rc14 bug — marked the baseline applied without
     // ever running it). db push is idempotent: no-op on a clean DB,
     // heals partial-schema DBs by creating the missing tables.
-    if (process.env.BIDWRIGHT_MODE === "desktop") {
+    if ((process.env.BIDWRIGHT_MODE || "").trim().toLowerCase() === "desktop") {
       await reconcileDesktopSchema();
     }
     return { applied: true };

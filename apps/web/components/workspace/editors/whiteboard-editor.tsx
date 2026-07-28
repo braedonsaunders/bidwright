@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Save, X, Loader2 } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import "@excalidraw/excalidraw/index.css";
 
 interface WhiteboardEditorProps {
@@ -57,13 +59,13 @@ export function WhiteboardEditor({
         <span className="text-sm font-medium text-fg truncate">{fileName}</span>
         <div className="flex items-center gap-1">
           {onSave && (
-            <Button variant="ghost" size="xs" onClick={handleSave}>
+            <Button variant="ghost" size="sm" onClick={handleSave}>
               <Save className="w-4 h-4 mr-1" />
               Save
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="xs" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose}>
               <X className="w-4 h-4" />
             </Button>
           )}

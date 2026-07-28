@@ -1,7 +1,9 @@
 "use client";
 
 import type { ProjectWorkspaceData } from "@/lib/api";
-import { Badge } from "@/components/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 
 /* ─── Helpers ─── */

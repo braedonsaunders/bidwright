@@ -2,7 +2,9 @@
 
 import { useState } from "react";
 import { Save, X } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 
 interface MarkdownEditorProps {
   fileName: string;
@@ -93,7 +95,7 @@ export function MarkdownEditor({
           {onSave && (
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={() => onSave(content)}
             >
               <Save className="w-4 h-4 mr-1" />
@@ -101,7 +103,7 @@ export function MarkdownEditor({
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="xs" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose}>
               <X className="w-4 h-4" />
             </Button>
           )}

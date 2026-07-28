@@ -1,12 +1,9 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import { AnimatePresence, motion } from "motion/react";
 import {
-  ArrowRight,
   BookOpen,
   Boxes,
   ChevronDown,
@@ -23,7 +20,6 @@ import {
   Search,
   Table2,
   Trash2,
-  X,
 } from "lucide-react";
 
 import { AssemblyManager } from "@/components/assembly-manager";
@@ -32,7 +28,26 @@ import { ItemsManager } from "@/components/items-manager";
 import { KnowledgePage } from "@/components/knowledge-page";
 import { CostIntelligencePanel } from "@/components/cost-intelligence-panel";
 import { RateScheduleManager } from "@/components/rate-schedule-manager";
-import { Badge, Button, CompactSelect, Input, Toggle } from "@/components/ui";
+import {
+  Badge,
+  Button,
+  Drawer,
+  Input,
+  SearchSelect,
+  Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  Textarea,
+  WorkspaceLauncher,
+  type WorkspaceLaunchBreakdown,
+  type WorkspaceLaunchItem,
+  type WorkspaceLaunchSegment,
+  type WorkspaceLaunchTone,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import {
   getCostIntelligenceSummary,
@@ -255,90 +270,30 @@ function SurfaceButton({
 
 type LibraryTone = "resources" | "rates" | "assemblies" | "labor" | "cost" | "playbooks" | "books" | "datasets";
 
-const launchToneClasses: Record<
-  LibraryTone,
-  { accent: string; icon: string; hover: string; rail: string; wash: string }
-> = {
-  resources: {
-    accent: "text-indigo-500",
-    icon: "border-indigo-500/25 bg-indigo-500/10 text-indigo-500",
-    hover: "hover:border-indigo-500/45",
-    rail: "bg-indigo-500",
-    wash: "bg-indigo-500/5",
-  },
-  rates: {
-    accent: "text-sky-500",
-    icon: "border-sky-500/25 bg-sky-500/10 text-sky-500",
-    hover: "hover:border-sky-500/45",
-    rail: "bg-sky-500",
-    wash: "bg-sky-500/5",
-  },
-  assemblies: {
-    accent: "text-amber-500",
-    icon: "border-amber-500/25 bg-amber-500/10 text-amber-500",
-    hover: "hover:border-amber-500/45",
-    rail: "bg-amber-500",
-    wash: "bg-amber-500/5",
-  },
-  labor: {
-    accent: "text-teal-600",
-    icon: "border-teal-600/25 bg-teal-600/10 text-teal-600",
-    hover: "hover:border-teal-600/45",
-    rail: "bg-teal-600",
-    wash: "bg-teal-600/5",
-  },
-  cost: {
-    accent: "text-emerald-600",
-    icon: "border-emerald-600/25 bg-emerald-600/10 text-emerald-600",
-    hover: "hover:border-emerald-600/45",
-    rail: "bg-emerald-600",
-    wash: "bg-emerald-600/5",
-  },
-  playbooks: {
-    accent: "text-violet-500",
-    icon: "border-violet-500/25 bg-violet-500/10 text-violet-500",
-    hover: "hover:border-violet-500/45",
-    rail: "bg-violet-500",
-    wash: "bg-violet-500/5",
-  },
-  books: {
-    accent: "text-rose-500",
-    icon: "border-rose-500/25 bg-rose-500/10 text-rose-500",
-    hover: "hover:border-rose-500/45",
-    rail: "bg-rose-500",
-    wash: "bg-rose-500/5",
-  },
-  datasets: {
-    accent: "text-lime-600",
-    icon: "border-lime-600/25 bg-lime-600/10 text-lime-600",
-    hover: "hover:border-lime-600/45",
-    rail: "bg-lime-600",
-    wash: "bg-lime-600/5",
-  },
+const libraryLaunchTones: Record<LibraryTone, WorkspaceLaunchTone> = {
+  resources: "indigo",
+  rates: "sky",
+  assemblies: "amber",
+  labor: "teal",
+  cost: "emerald",
+  playbooks: "violet",
+  books: "rose",
+  datasets: "lime",
 };
 
-const compositionPalettes: Record<LibraryTone, string[]> = {
-  resources: ["bg-indigo-500", "bg-cyan-500", "bg-blue-600", "bg-slate-500", "bg-violet-500"],
-  rates: ["bg-sky-500", "bg-blue-600", "bg-cyan-500", "bg-slate-500", "bg-indigo-500"],
-  assemblies: ["bg-amber-500", "bg-orange-600", "bg-yellow-500", "bg-stone-500", "bg-red-500"],
-  labor: ["bg-teal-600", "bg-emerald-500", "bg-cyan-600", "bg-lime-600", "bg-slate-500"],
-  cost: ["bg-emerald-600", "bg-green-500", "bg-teal-500", "bg-lime-600", "bg-slate-500"],
-  playbooks: ["bg-violet-500", "bg-purple-600", "bg-fuchsia-500", "bg-indigo-500", "bg-slate-500"],
-  books: ["bg-rose-500", "bg-pink-500", "bg-red-500", "bg-orange-500", "bg-slate-500"],
-  datasets: ["bg-lime-600", "bg-green-500", "bg-emerald-500", "bg-cyan-600", "bg-slate-500"],
+const compositionPalettes: Record<LibraryTone, WorkspaceLaunchTone[]> = {
+  resources: ["indigo", "cyan", "sky", "violet"],
+  rates: ["sky", "indigo", "cyan", "teal"],
+  assemblies: ["amber", "rose", "lime", "teal"],
+  labor: ["teal", "emerald", "cyan", "lime"],
+  cost: ["emerald", "teal", "lime", "sky"],
+  playbooks: ["violet", "indigo", "rose", "sky"],
+  books: ["rose", "amber", "violet", "indigo"],
+  datasets: ["lime", "emerald", "teal", "cyan"],
 };
 
-type CompositionSegment = {
-  label: string;
-  value: number;
-  color: string;
-  muted?: boolean;
-};
-
-type CompositionBreakdown = {
-  label: string;
-  segments: CompositionSegment[];
-};
+type CompositionSegment = WorkspaceLaunchSegment;
+type CompositionBreakdown = WorkspaceLaunchBreakdown;
 
 type CompositionLabels = {
   unassigned: string;
@@ -419,7 +374,7 @@ function groupedEntriesToSegments(
     .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label));
 
   if (positive.length === 0) {
-    return [{ label: labels.noData, value: 1, color: "bg-panel2", muted: true }];
+    return [{ label: labels.noData, value: 0, muted: true }];
   }
 
   const visible = positive.slice(0, maxSegments);
@@ -427,114 +382,8 @@ function groupedEntriesToSegments(
   const merged = hidden > 0 ? [...visible, { label: labels.other, value: hidden }] : visible;
   return merged.map((entry, index) => ({
     ...entry,
-    color: palette[index % palette.length],
+    tone: palette[index % palette.length],
   }));
-}
-
-function segmentPercent(segment: CompositionSegment, total: number) {
-  if (segment.muted || total <= 0) return 0;
-  return Math.round((segment.value / total) * 100);
-}
-
-function compositionTotal(segments: CompositionSegment[]) {
-  return segments.reduce((sum, segment) => sum + (segment.muted ? 0 : segment.value), 0);
-}
-
-function CompositionMeter({ breakdown }: { breakdown: CompositionBreakdown }) {
-  const total = compositionTotal(breakdown.segments);
-  return (
-    <div>
-      <div className="mb-1.5 flex items-center justify-between gap-3 text-[11px]">
-        <span className="truncate font-medium text-fg/45">{breakdown.label}</span>
-        <span className="shrink-0 tabular-nums text-fg/35">{compactCount(total)}</span>
-      </div>
-      <div className="flex h-4 rounded-full bg-panel2">
-        {breakdown.segments.map((segment) => {
-          const width = segment.muted ? 100 : total > 0 ? (segment.value / total) * 100 : 0;
-          const label = segment.muted ? segment.label : `${segment.label} · ${segmentPercent(segment, total)}%`;
-          return (
-            <div
-              key={segment.label}
-              className={cn("group/segment relative h-full first:rounded-l-full last:rounded-r-full", segment.color)}
-              style={{ width: `${width}%` }}
-              aria-label={segment.muted ? segment.label : `${segment.label}: ${compactCount(segment.value)} (${segmentPercent(segment, total)}%)`}
-            >
-              <span className="pointer-events-none absolute left-1/2 top-full z-50 mt-1.5 max-w-[160px] -translate-x-1/2 rounded border border-line bg-panel px-2 py-1 text-[10px] font-medium text-fg opacity-0 shadow-lg transition-opacity group-hover/segment:opacity-100">
-                {label}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function SurfaceLaunchCard({
-  body,
-  breakdown,
-  icon: Icon,
-  metric,
-  metricLabel,
-  onClick,
-  title,
-  tone,
-}: {
-  body: string;
-  breakdown: CompositionBreakdown;
-  icon: typeof Gauge;
-  metric: string;
-  metricLabel: string;
-  onClick: () => void;
-  title: string;
-  tone: LibraryTone;
-}) {
-  const t = useTranslations("Library");
-  const classes = launchToneClasses[tone];
-  const groups = breakdown.segments.filter((segment) => !segment.muted).length;
-
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "group/card relative z-0 flex h-full min-h-0 min-w-0 flex-col overflow-visible rounded-lg border border-line bg-panel p-3 text-left shadow-sm transition-all duration-200 hover:z-20 hover:-translate-y-0.5 hover:shadow-[0_18px_48px_hsl(var(--fg)/0.10)] focus-visible:z-20 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35",
-        classes.hover,
-      )}
-    >
-      <div className={cn("pointer-events-none absolute inset-0 rounded-lg opacity-0 transition-opacity duration-200 group-hover/card:opacity-100", classes.wash)} />
-      <div className={cn("absolute inset-x-0 top-0 h-1 rounded-t-lg", classes.rail)} />
-
-      <div className="relative flex items-start justify-between gap-3">
-        <div className="flex min-w-0 items-start gap-2.5">
-          <div className={cn("flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border shadow-[inset_0_1px_0_hsl(var(--fg)/0.08)]", classes.icon)}>
-            <Icon className="h-[18px] w-[18px]" />
-          </div>
-          <div className="min-w-0 pt-0.5">
-            <div className="min-w-0">
-              <div className="truncate text-sm font-semibold text-fg">{title}</div>
-              <Badge tone={groups > 0 ? "default" : "warning"} className="mt-1 shrink-0 whitespace-nowrap">
-                {groups > 0 ? t("overview.groupCount", { count: groups }) : t("overview.noData")}
-              </Badge>
-            </div>
-            <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-fg/50">{body}</div>
-          </div>
-        </div>
-        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-fg/25 transition-all group-hover/card:translate-x-0.5 group-hover/card:text-fg/60" />
-      </div>
-
-      <div className="relative mt-3">
-        <div className={cn("text-[10px] font-semibold uppercase tracking-wider", classes.accent)}>{metricLabel}</div>
-        <div className="mt-1 flex min-w-0 items-end justify-between gap-3">
-          <span className="truncate text-3xl font-semibold leading-none tracking-normal tabular-nums text-fg">{metric}</span>
-        </div>
-      </div>
-
-      <div className="relative mt-3">
-        <CompositionMeter breakdown={breakdown} />
-      </div>
-    </button>
-  );
 }
 
 function LibraryOverview({
@@ -683,117 +532,105 @@ function LibraryOverview({
     ),
   };
 
-  const launchCards = [
+  const launchCards: WorkspaceLaunchItem[] = [
     {
-      surface: "resources" as LibrarySurface,
+      id: "resources",
       title: t("overview.cards.resources.title"),
-      body: t("overview.cards.resources.body"),
+      description: t("overview.cards.resources.body"),
       breakdown: resourceBreakdown,
       metric: compactCount(itemCount),
       metricLabel: t("overview.cards.resources.metricLabel"),
       icon: Boxes,
-      tone: "resources" as LibraryTone,
+      tone: libraryLaunchTones.resources,
     },
     {
-      surface: "rates" as LibrarySurface,
+      id: "rates",
       title: t("overview.cards.rates.title"),
-      body: t("overview.cards.rates.body"),
+      description: t("overview.cards.rates.body"),
       breakdown: rateBreakdown,
       metric: compactCount(rateItemCount),
       metricLabel: t("overview.cards.rates.metricLabel"),
       icon: FileSpreadsheet,
-      tone: "rates" as LibraryTone,
+      tone: libraryLaunchTones.rates,
     },
     {
-      surface: "assemblies" as LibrarySurface,
+      id: "assemblies",
       title: t("overview.cards.assemblies.title"),
-      body: t("overview.cards.assemblies.body"),
+      description: t("overview.cards.assemblies.body"),
       breakdown: assemblyBreakdown,
       metric: compactCount(assemblies.length),
       metricLabel: t("overview.cards.assemblies.metricLabel"),
       icon: Layers,
-      tone: "assemblies" as LibraryTone,
+      tone: libraryLaunchTones.assemblies,
     },
     {
-      surface: "labor_units" as LibrarySurface,
+      id: "labor_units",
       title: t("overview.cards.laborUnits.title"),
-      body: t("overview.cards.laborUnits.body"),
+      description: t("overview.cards.laborUnits.body"),
       breakdown: laborUnitBreakdown,
       metric: compactCount(laborUnitCount),
       metricLabel: t("overview.cards.laborUnits.metricLabel"),
       icon: Gauge,
-      tone: "labor" as LibraryTone,
+      tone: libraryLaunchTones.labor,
     },
     {
-      surface: "cost" as LibrarySurface,
+      id: "cost",
       title: t("overview.cards.cost.title"),
-      body: t("overview.cards.cost.body"),
+      description: t("overview.cards.cost.body"),
       breakdown: costBreakdown,
       metric: compactCount(effectiveCostCount),
       metricLabel: t("overview.cards.cost.metricLabel"),
       icon: Database,
-      tone: "cost" as LibraryTone,
+      tone: libraryLaunchTones.cost,
     },
     {
-      surface: "playbooks" as LibrarySurface,
+      id: "playbooks",
       title: t("overview.cards.playbooks.title"),
-      body: t("overview.cards.playbooks.body"),
+      description: t("overview.cards.playbooks.body"),
       breakdown: playbookBreakdown,
       metric: compactCount(activePlaybookCount),
       metricLabel: t("overview.cards.playbooks.metricLabel"),
       icon: BookOpen,
-      tone: "playbooks" as LibraryTone,
+      tone: libraryLaunchTones.playbooks,
     },
     {
-      surface: "knowledge" as LibrarySurface,
+      id: "knowledge-books",
       title: t("overview.cards.books.title"),
-      body: t("overview.cards.books.body"),
+      description: t("overview.cards.books.body"),
       breakdown: booksAndNotesBreakdown,
       metric: compactCount(knowledgeReferenceCount),
       metricLabel: t("overview.cards.books.metricLabel"),
       icon: BookOpen,
-      tone: "books" as LibraryTone,
+      tone: libraryLaunchTones.books,
     },
     {
-      surface: "knowledge" as LibrarySurface,
+      id: "knowledge-datasets",
       title: t("overview.cards.datasets.title"),
-      body: t("overview.cards.datasets.body"),
+      description: t("overview.cards.datasets.body"),
       breakdown: datasetBreakdown,
       metric: compactCount(datasets.length),
       metricLabel: t("overview.cards.datasets.metricLabel"),
       icon: Table2,
-      tone: "datasets" as LibraryTone,
+      tone: libraryLaunchTones.datasets,
     },
-  ];
+  ].map((card) => {
+    const groups = card.breakdown?.segments.filter((segment) => !segment.muted).length ?? 0;
+    return {
+      ...card,
+      summary: groups > 0 ? t("overview.groupCount", { count: groups }) : t("overview.noData"),
+      summaryVariant: groups > 0 ? "secondary" as const : "warning" as const,
+    };
+  });
 
   return (
-    <section className="flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-3 py-2">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold text-fg">{t("overview.title")}</div>
-          <div className="mt-0.5 truncate text-[11px] text-fg/45">{t("overview.subtitle")}</div>
-        </div>
-        <Badge tone="info" className="lg:hidden">{launchCards.length}</Badge>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-hidden p-3">
-        <div className="grid h-full min-h-0 auto-rows-[252px] gap-3 overflow-y-auto overflow-x-hidden pb-4 pr-1 md:grid-cols-2 lg:grid-cols-4">
-          {launchCards.map((card) => (
-            <SurfaceLaunchCard
-              key={`${card.surface}-${card.title}`}
-              body={card.body}
-              breakdown={card.breakdown}
-              icon={card.icon}
-              metric={card.metric}
-              metricLabel={card.metricLabel}
-              onClick={() => onSurfaceChange(card.surface)}
-              title={card.title}
-              tone={card.tone}
-            />
-          ))}
-        </div>
-      </div>
-    </section>
+    <WorkspaceLauncher
+      title={t("overview.title")}
+      description={t("overview.subtitle")}
+      itemCountLabel={launchCards.length}
+      items={launchCards}
+      onSelect={(id) => onSurfaceChange(id.startsWith("knowledge-") ? "knowledge" : id as LibrarySurface)}
+      formatCount={compactCount}
+    />
   );
 }
 
@@ -905,7 +742,12 @@ type LaborUnitVisibleTreeRow =
 
 const laborUnitRootTreeKey = "__labor_unit_tree_root__";
 
-const laborUnitGroupAccent = ["#0b7a75", "#a15c00", "#2563eb", "#64748b"];
+const laborUnitGroupAccent = [
+  "border-l-primary",
+  "border-l-warning",
+  "border-l-info",
+  "border-l-border-strong",
+];
 
 function childKeyForLaborUnitGroup(group: LaborUnitTreeGroupRecord) {
   return group.id;
@@ -938,8 +780,8 @@ function LaborUnitGroupRow({
   ][depth] ?? "bg-bg/55 hover:bg-panel2/25";
 
   return (
-    <tr className={cn("border-b border-line/55 transition-colors", rowTone)} style={{ borderLeft: `3px solid ${accent}` }}>
-      <td colSpan={7} className="p-0">
+    <TableRow className={cn("border-l-[3px] border-b border-line/55 transition-colors", accent, rowTone)}>
+      <TableCell colSpan={7} className="p-0">
         <button
           type="button"
           aria-expanded={expanded}
@@ -947,7 +789,7 @@ function LaborUnitGroupRow({
           className="flex min-h-9 w-full min-w-0 items-center gap-2 px-2 py-1.5 text-left outline-none transition-colors focus-visible:bg-panel2/60 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/30"
         >
           <span className="shrink-0" style={{ width: depth * 18 }} />
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-line/70 bg-panel/65 text-fg/45 shadow-[inset_0_1px_0_hsl(var(--fg)/0.05)]">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-line/70 bg-panel/65 text-fg/45 shadow-[inset_0_1px_0_rgb(var(--ch-fg)/0.05)]">
             {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </span>
           <span className="min-w-0 flex-1">
@@ -967,8 +809,8 @@ function LaborUnitGroupRow({
             {group.level === "subclass" ? t("labor.items") : t("labor.sections")}
           </span>
         </button>
-      </td>
-    </tr>
+      </TableCell>
+    </TableRow>
   );
 }
 
@@ -1369,278 +1211,226 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
     })),
   ], [catalogs, t, totalCatalogRows]);
 
-  const drawer = (
-    <AnimatePresence>
-      {unitDrawerMode && (
-        <>
-          <motion.div
-            key="labor-unit-drawer-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 bg-black/20"
-            onClick={closeUnitDrawer}
-          />
-          <motion.aside
-            key="labor-unit-drawer"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="fixed inset-y-0 right-0 z-50 flex w-[min(760px,calc(100vw-24px))] flex-col border-l border-line bg-panel shadow-2xl"
-          >
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel2/35 px-5 py-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Gauge className="h-4 w-4 text-accent" />
-                  <h2 className="truncate text-sm font-semibold text-fg">
-                    {unitDrawerMode === "create" ? t("labor.unitDrawer.createTitle") : activeUnit?.name ?? t("labor.unitDrawer.fallbackTitle")}
-                  </h2>
-                </div>
-                <p className="mt-0.5 truncate text-[11px] text-fg/45">
-                  {t("labor.unitDrawer.subtitle")}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={closeUnitDrawer}
-                className="rounded p-1.5 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg"
-                title={t("common.close")}
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <div className="min-h-0 flex-1 overflow-y-auto p-5">
-              {drawerError && (
-                <div className="mb-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">{drawerError}</div>
+  const drawers = (
+    <>
+      <Drawer
+        open={unitDrawerMode !== null}
+        onClose={closeUnitDrawer}
+        size="lg"
+        title={(
+          <span className="flex min-w-0 items-center gap-2">
+            <Gauge className="h-4 w-4 shrink-0 text-accent" />
+            <span className="truncate">
+              {unitDrawerMode === "create" ? t("labor.unitDrawer.createTitle") : activeUnit?.name ?? t("labor.unitDrawer.fallbackTitle")}
+            </span>
+          </span>
+        )}
+        description={t("labor.unitDrawer.subtitle")}
+        footer={(
+          <div className="flex w-full items-center justify-between gap-3">
+            <div>
+              {unitDrawerMode === "edit" && (
+                <Button type="button" variant="destructive" size="sm" onClick={() => void deleteActiveUnit()} disabled={saving}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t("common.delete")}
+                </Button>
               )}
-
-              <div className="grid gap-4">
-                  <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.catalog")}
-                      <CompactSelect
-                        value={unitForm.catalogId}
-                        onValueChange={(value) => updateUnitForm("catalogId", value)}
-                        options={catalogs.map((catalog) => ({ value: catalog.id, label: catalog.name }))}
-                        placeholder={t("labor.fields.chooseCatalog")}
-                        disabled={unitDrawerMode === "edit"}
-                      />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.name")}
-                      <Input value={unitForm.name} onChange={(event) => updateUnitForm("name", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.code")}
-                      <Input value={unitForm.code} onChange={(event) => updateUnitForm("code", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.discipline")}
-                      <Input value={unitForm.discipline} onChange={(event) => updateUnitForm("discipline", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.outputUom")}
-                      <Input value={unitForm.outputUom} onChange={(event) => updateUnitForm("outputUom", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                  </div>
-
-                  <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                    {t("labor.fields.description")}
-                    <textarea
-                      value={unitForm.description}
-                      onChange={(event) => updateUnitForm("description", event.target.value)}
-                      className="min-h-20 rounded-md border border-line bg-bg/45 px-3 py-2 text-xs text-fg outline-none transition-colors focus:border-accent/45"
-                    />
-                  </label>
-
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.category")}
-                      <Input value={unitForm.category} onChange={(event) => updateUnitForm("category", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.class")}
-                      <Input value={unitForm.className} onChange={(event) => updateUnitForm("className", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.subclass")}
-                      <Input value={unitForm.subClassName} onChange={(event) => updateUnitForm("subClassName", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.normalHours")}
-                      <Input value={unitForm.hoursNormal} onChange={(event) => updateUnitForm("hoursNormal", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                  </div>
-
-                  <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                    {t("labor.fields.tags")}
-                    <Input value={unitForm.tags} onChange={(event) => updateUnitForm("tags", event.target.value)} className="h-8 text-xs" placeholder={t("labor.fields.tagsPlaceholder")} />
-                  </label>
-                </div>
             </div>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={closeUnitDrawer} disabled={saving}>{t("common.cancel")}</Button>
+              <Button type="button" size="sm" onClick={() => void saveUnit()} disabled={saving || !unitForm.catalogId}>
+                {saving ? t("common.saving") : t("labor.unitDrawer.save")}
+              </Button>
+            </div>
+          </div>
+        )}
+      >
+        {drawerError && (
+          <div className="mb-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">{drawerError}</div>
+        )}
 
-            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-panel2/25 px-5 py-3">
-              <div>
-                {unitDrawerMode === "edit" && (
-                  <Button type="button" variant="danger" size="sm" onClick={() => void deleteActiveUnit()} disabled={saving}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {t("common.delete")}
-                  </Button>
-                )}
-              </div>
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={closeUnitDrawer} disabled={saving}>{t("common.cancel")}</Button>
-                <Button type="button" size="sm" onClick={() => void saveUnit()} disabled={saving || !unitForm.catalogId}>
-                  {saving ? t("common.saving") : t("labor.unitDrawer.save")}
+        <div className="grid gap-4">
+          <div className="grid gap-3 md:grid-cols-[180px_minmax(0,1fr)]">
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.catalog")}
+              <SearchSelect
+                value={unitForm.catalogId}
+                onChange={(value) => updateUnitForm("catalogId", value)}
+                options={catalogs.map((catalog) => ({ value: catalog.id, label: catalog.name }))}
+                placeholder={t("labor.fields.chooseCatalog")}
+                disabled={unitDrawerMode === "edit"}
+                searchable
+              />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.name")}
+              <Input value={unitForm.name} onChange={(event) => updateUnitForm("name", event.target.value)} className="h-8 text-xs" />
+            </label>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.code")}
+              <Input value={unitForm.code} onChange={(event) => updateUnitForm("code", event.target.value)} className="h-8 text-xs" />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.discipline")}
+              <Input value={unitForm.discipline} onChange={(event) => updateUnitForm("discipline", event.target.value)} className="h-8 text-xs" />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.outputUom")}
+              <Input value={unitForm.outputUom} onChange={(event) => updateUnitForm("outputUom", event.target.value)} className="h-8 text-xs" />
+            </label>
+          </div>
+
+          <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+            {t("labor.fields.description")}
+            <Textarea
+              value={unitForm.description}
+              onChange={(event) => updateUnitForm("description", event.target.value)}
+              className="min-h-20 text-xs"
+            />
+          </label>
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.category")}
+              <Input value={unitForm.category} onChange={(event) => updateUnitForm("category", event.target.value)} className="h-8 text-xs" />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.class")}
+              <Input value={unitForm.className} onChange={(event) => updateUnitForm("className", event.target.value)} className="h-8 text-xs" />
+            </label>
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.subclass")}
+              <Input value={unitForm.subClassName} onChange={(event) => updateUnitForm("subClassName", event.target.value)} className="h-8 text-xs" />
+            </label>
+          </div>
+
+          <div className="grid gap-3 md:grid-cols-2">
+            <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+              {t("labor.fields.normalHours")}
+              <Input value={unitForm.hoursNormal} onChange={(event) => updateUnitForm("hoursNormal", event.target.value)} className="h-8 text-xs" />
+            </label>
+          </div>
+
+          <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+            {t("labor.fields.tags")}
+            <Input value={unitForm.tags} onChange={(event) => updateUnitForm("tags", event.target.value)} className="h-8 text-xs" placeholder={t("labor.fields.tagsPlaceholder")} />
+          </label>
+        </div>
+      </Drawer>
+
+      <Drawer
+        open={catalogDrawerOpen}
+        onClose={closeCatalogDrawer}
+        size="xl"
+        title={(
+          <span className="flex min-w-0 items-center gap-2">
+            <Library className="h-4 w-4 shrink-0 text-accent" />
+            <span className="truncate">{t("labor.catalogDrawer.title")}</span>
+          </span>
+        )}
+        description={t("labor.catalogDrawer.subtitle")}
+        bodyClassName="min-h-0 overflow-hidden p-0"
+        footer={(
+          <div className="flex w-full items-center justify-between gap-3">
+            <div>
+              {editingCatalogId && (
+                <Button type="button" variant="destructive" size="sm" onClick={() => void deleteEditingCatalog()} disabled={saving}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                  {t("common.delete")}
                 </Button>
-              </div>
+              )}
             </div>
-          </motion.aside>
-        </>
-      )}
-
-      {catalogDrawerOpen && (
-        <>
-          <motion.div
-            key="labor-unit-catalog-drawer-backdrop"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-40 bg-black/20"
-            onClick={closeCatalogDrawer}
-          />
-          <motion.aside
-            key="labor-unit-catalog-drawer"
-            initial={{ x: "100%" }}
-            animate={{ x: 0 }}
-            exit={{ x: "100%" }}
-            transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className="fixed inset-y-0 right-0 z-50 flex w-[min(960px,calc(100vw-24px))] flex-col border-l border-line bg-panel shadow-2xl"
-          >
-            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel2/35 px-5 py-4">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <Library className="h-4 w-4 text-accent" />
-                  <h2 className="truncate text-sm font-semibold text-fg">{t("labor.catalogDrawer.title")}</h2>
-                </div>
-                <p className="mt-0.5 truncate text-[11px] text-fg/45">{t("labor.catalogDrawer.subtitle")}</p>
-              </div>
-              <button
-                type="button"
-                onClick={closeCatalogDrawer}
-                className="rounded p-1.5 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg"
-                title={t("common.close")}
-              >
-                <X className="h-4 w-4" />
-              </button>
+            <div className="flex items-center gap-2">
+              <Button type="button" variant="ghost" size="sm" onClick={closeCatalogDrawer} disabled={saving}>{t("common.close")}</Button>
+              <Button type="button" size="sm" onClick={() => void saveCatalog()} disabled={saving}>
+                {saving ? t("common.saving") : editingCatalogId ? t("labor.catalogDrawer.save") : t("labor.catalogDrawer.create")}
+              </Button>
             </div>
-
-            <div className="grid min-h-0 flex-1 gap-0 overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
-              <div className="min-h-0 overflow-y-auto border-r border-line p-3">
-                <Button type="button" size="sm" className="mb-3 w-full" onClick={startNewCatalog}>
-                  <Plus className="h-3.5 w-3.5" />
-                  {t("labor.catalogDrawer.newCatalog")}
-                </Button>
-                <div className="space-y-2">
-                  {catalogs.map((catalog) => {
-                    const active = catalog.id === editingCatalogId;
-                    return (
-                      <button
-                        key={catalog.id}
-                        type="button"
-                        onClick={() => selectCatalogForEdit(catalog)}
-                        className={cn(
-                          "w-full rounded-lg border px-3 py-2 text-left transition-colors",
-                          active ? "border-accent/45 bg-accent/8" : "border-line bg-bg/35 hover:border-fg/20 hover:bg-panel2/40",
-                        )}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className="min-w-0">
-                            <div className="truncate text-xs font-semibold text-fg">{catalog.name}</div>
-                            <div className="mt-0.5 truncate text-[10px] text-fg/40">{catalog.provider || t("labor.fallbacks.internal")} / {catalog.discipline || t("labor.fallbacks.general")}</div>
-                          </div>
-                          <Badge tone={catalog.organizationId ? "success" : "info"}>{catalog.organizationId ? t("labor.catalogDrawer.org") : t("labor.catalogDrawer.firstParty")}</Badge>
-                        </div>
-                        <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-fg/45">
-                          <span>{t("labor.unitsCount", { count: compactCount(catalog.unitCount ?? 0) })}</span>
-                          <span>{catalog.source || t("labor.fallbacks.manual")}</span>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="min-h-0 overflow-y-auto p-5">
-                {drawerError && (
-                  <div className="mb-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">{drawerError}</div>
-                )}
-
-                <div className="grid gap-4">
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        {t("labor.fields.name")}
-                        <Input value={catalogForm.name} onChange={(event) => updateCatalogForm("name", event.target.value)} className="h-8 text-xs" />
-                      </label>
-                      <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        {t("labor.fields.provider")}
-                        <Input value={catalogForm.provider} onChange={(event) => updateCatalogForm("provider", event.target.value)} className="h-8 text-xs" />
-                      </label>
+          </div>
+        )}
+      >
+        <div className="grid h-full min-h-0 gap-0 overflow-hidden lg:grid-cols-[320px_minmax(0,1fr)]">
+          <div className="min-h-0 overflow-y-auto border-r border-line p-3">
+            <Button type="button" size="sm" className="mb-3 w-full" onClick={startNewCatalog}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("labor.catalogDrawer.newCatalog")}
+            </Button>
+            <div className="space-y-2">
+              {catalogs.map((catalog) => {
+                const active = catalog.id === editingCatalogId;
+                return (
+                  <button
+                    key={catalog.id}
+                    type="button"
+                    onClick={() => selectCatalogForEdit(catalog)}
+                    className={cn(
+                      "w-full rounded-lg border px-3 py-2 text-left transition-colors",
+                      active ? "border-accent/45 bg-accent/8" : "border-line bg-bg/35 hover:border-fg/20 hover:bg-panel2/40",
+                    )}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-semibold text-fg">{catalog.name}</div>
+                        <div className="mt-0.5 truncate text-[10px] text-fg/40">{catalog.provider || t("labor.fallbacks.internal")} / {catalog.discipline || t("labor.fallbacks.general")}</div>
+                      </div>
+                      <Badge variant={catalog.organizationId ? "success" : "info"}>{catalog.organizationId ? t("labor.catalogDrawer.org") : t("labor.catalogDrawer.firstParty")}</Badge>
                     </div>
-                    <div className="grid gap-3 md:grid-cols-2">
-                      <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        {t("labor.fields.discipline")}
-                        <Input value={catalogForm.discipline} onChange={(event) => updateCatalogForm("discipline", event.target.value)} className="h-8 text-xs" />
-                      </label>
-                      <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                        {t("labor.fields.tags")}
-                        <Input value={catalogForm.tags} onChange={(event) => updateCatalogForm("tags", event.target.value)} className="h-8 text-xs" placeholder={t("labor.fields.tagsPlaceholder")} />
-                      </label>
+                    <div className="mt-2 flex items-center justify-between gap-2 text-[11px] text-fg/45">
+                      <span>{t("labor.unitsCount", { count: compactCount(catalog.unitCount ?? 0) })}</span>
+                      <span>{catalog.source || t("labor.fallbacks.manual")}</span>
                     </div>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.description")}
-                      <textarea
-                        value={catalogForm.description}
-                        onChange={(event) => updateCatalogForm("description", event.target.value)}
-                        className="min-h-24 rounded-md border border-line bg-bg/45 px-3 py-2 text-xs text-fg outline-none transition-colors focus:border-accent/45"
-                      />
-                    </label>
-                    <label className="grid gap-1 text-[11px] font-medium text-fg/55">
-                      {t("labor.fields.sourceNote")}
-                      <Input value={catalogForm.sourceDescription} onChange={(event) => updateCatalogForm("sourceDescription", event.target.value)} className="h-8 text-xs" />
-                    </label>
-                </div>
-              </div>
+                  </button>
+                );
+              })}
             </div>
+          </div>
 
-            <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-panel2/25 px-5 py-3">
-              <div>
-                {editingCatalogId && (
-                  <Button type="button" variant="danger" size="sm" onClick={() => void deleteEditingCatalog()} disabled={saving}>
-                    <Trash2 className="h-3.5 w-3.5" />
-                    {t("common.delete")}
-                  </Button>
-                )}
+          <div className="min-h-0 overflow-y-auto p-5">
+            {drawerError && (
+              <div className="mb-4 rounded-md border border-danger/30 bg-danger/8 px-3 py-2 text-xs text-danger">{drawerError}</div>
+            )}
+
+            <div className="grid gap-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  {t("labor.fields.name")}
+                  <Input value={catalogForm.name} onChange={(event) => updateCatalogForm("name", event.target.value)} className="h-8 text-xs" />
+                </label>
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  {t("labor.fields.provider")}
+                  <Input value={catalogForm.provider} onChange={(event) => updateCatalogForm("provider", event.target.value)} className="h-8 text-xs" />
+                </label>
               </div>
-              <div className="flex items-center gap-2">
-                <Button type="button" variant="ghost" size="sm" onClick={closeCatalogDrawer} disabled={saving}>{t("common.close")}</Button>
-                <Button type="button" size="sm" onClick={() => void saveCatalog()} disabled={saving}>
-                  {saving ? t("common.saving") : editingCatalogId ? t("labor.catalogDrawer.save") : t("labor.catalogDrawer.create")}
-                </Button>
+              <div className="grid gap-3 md:grid-cols-2">
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  {t("labor.fields.discipline")}
+                  <Input value={catalogForm.discipline} onChange={(event) => updateCatalogForm("discipline", event.target.value)} className="h-8 text-xs" />
+                </label>
+                <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                  {t("labor.fields.tags")}
+                  <Input value={catalogForm.tags} onChange={(event) => updateCatalogForm("tags", event.target.value)} className="h-8 text-xs" placeholder={t("labor.fields.tagsPlaceholder")} />
+                </label>
               </div>
+              <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                {t("labor.fields.description")}
+                <Textarea
+                  value={catalogForm.description}
+                  onChange={(event) => updateCatalogForm("description", event.target.value)}
+                  className="min-h-24 text-xs"
+                />
+              </label>
+              <label className="grid gap-1 text-[11px] font-medium text-fg/55">
+                {t("labor.fields.sourceNote")}
+                <Input value={catalogForm.sourceDescription} onChange={(event) => updateCatalogForm("sourceDescription", event.target.value)} className="h-8 text-xs" />
+              </label>
             </div>
-          </motion.aside>
-        </>
-      )}
-    </AnimatePresence>
+          </div>
+        </div>
+      </Drawer>
+    </>
   );
 
   return (
@@ -1674,11 +1464,12 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
 
         <div className="mt-2 flex min-w-0 flex-wrap items-center gap-2">
           <div className="min-w-[240px] flex-1 md:max-w-[360px]">
-            <CompactSelect
+            <SearchSelect
               value={selectedCatalogId}
-              onValueChange={setSelectedCatalogId}
+              onChange={setSelectedCatalogId}
               options={catalogOptions}
               ariaLabel={t("labor.catalogAria")}
+              searchable
             />
           </div>
           <div className="relative min-w-[220px] flex-1">
@@ -1692,7 +1483,7 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
           </div>
           <div className="flex shrink-0 items-center gap-2 rounded-lg border border-line bg-bg/35 px-2 py-1.5">
             <Table2 className={cn("h-3.5 w-3.5", groupedView ? "text-fg/30" : "text-fg/70")} />
-            <Toggle checked={groupedView} onChange={(checked) => setViewMode(checked ? "grouped" : "rows")} />
+            <Switch checked={groupedView} onChange={(event) => setViewMode(event.target.checked ? "grouped" : "rows")} />
             <ListTree className={cn("h-3.5 w-3.5", groupedView ? "text-accent" : "text-fg/30")} />
             <span className="hidden text-[11px] font-medium text-fg/45 sm:inline">
               {groupedView ? t("labor.view.groups") : t("labor.view.rows")}
@@ -1721,7 +1512,10 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-        <table className="w-full table-fixed text-left text-xs">
+        <Table
+          className="w-full table-fixed text-left text-xs"
+          containerClassName="min-h-full rounded-none border-0 bg-transparent shadow-none"
+        >
           <colgroup>
             <col className="w-[8%]" />
             <col className="w-[31%]" />
@@ -1731,18 +1525,18 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
             <col className="w-[8%]" />
             <col className="w-[4%]" />
           </colgroup>
-          <thead className="sticky top-0 z-10 bg-panel text-[10px] uppercase tracking-wide text-fg/35">
-            <tr className="border-b border-line">
-              <th className="px-2 py-2 font-medium">{t("labor.table.code")}</th>
-              <th className="px-2 py-2 font-medium">{t("labor.table.laborUnit")}</th>
-              <th className="px-2 py-2 font-medium">{t("labor.table.catalog")}</th>
-              <th className="px-2 py-2 font-medium">{t("labor.table.category")}</th>
-              <th className="px-2 py-2 font-medium">{t("labor.table.class")}</th>
-              <th className="px-2 py-2 text-right font-medium">{t("labor.table.normal")}</th>
-              <th className="px-2 py-2 font-medium">{t("labor.table.uom")}</th>
-            </tr>
-          </thead>
-          <tbody>
+          <TableHeader className="bg-panel text-[10px] uppercase tracking-wide text-fg/35">
+            <TableRow noAnimate className="border-b border-line hover:bg-transparent">
+              <TableHead className="h-auto px-2 py-2 font-medium">{t("labor.table.code")}</TableHead>
+              <TableHead className="h-auto px-2 py-2 font-medium">{t("labor.table.laborUnit")}</TableHead>
+              <TableHead className="h-auto px-2 py-2 font-medium">{t("labor.table.catalog")}</TableHead>
+              <TableHead className="h-auto px-2 py-2 font-medium">{t("labor.table.category")}</TableHead>
+              <TableHead className="h-auto px-2 py-2 font-medium">{t("labor.table.class")}</TableHead>
+              <TableHead className="h-auto px-2 py-2 text-right font-medium">{t("labor.table.normal")}</TableHead>
+              <TableHead className="h-auto px-2 py-2 font-medium">{t("labor.table.uom")}</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
             {groupedView
               ? pagedTreeRows.map((row) => {
                   if (row.kind === "group") {
@@ -1758,20 +1552,20 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                   }
                   if (row.kind === "loading" || row.kind === "empty") {
                     return (
-                      <tr key={row.id} className="border-b border-line/55 bg-bg/35">
-                        <td colSpan={7} className="px-2 py-2 text-[11px] text-fg/38">
+                      <TableRow key={row.id} className="border-b border-line/55 bg-bg/35">
+                        <TableCell colSpan={7} className="px-2 py-2 text-[11px] text-fg/38">
                           <div className="flex items-center gap-2" style={{ paddingLeft: row.depth * 18 }}>
                             <span className="h-px w-5 bg-line" />
                             {row.kind === "loading" ? t("labor.branchLoading") : t("labor.branchEmpty")}
                           </div>
-                        </td>
-                      </tr>
+                        </TableCell>
+                      </TableRow>
                     );
                   }
                   const unit = row.unit;
                   const catalog = catalogById.get(unit.libraryId);
                   return (
-                    <tr
+                    <TableRow
                       key={unit.id}
                       tabIndex={0}
                       onClick={() => openEditUnit(unit)}
@@ -1780,8 +1574,8 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                       }}
                       className="cursor-pointer border-b border-line/55 bg-bg/40 outline-none transition-colors hover:bg-panel2/35 focus:bg-panel2/45"
                     >
-                      <td className="px-2 py-2 font-mono text-[11px] text-fg/55"><div className="truncate">{unit.code || "-"}</div></td>
-                      <td className="px-2 py-2">
+                      <TableCell className="px-2 py-2 font-mono text-[11px] text-fg/55"><div className="truncate">{unit.code || "-"}</div></TableCell>
+                      <TableCell className="px-2 py-2">
                         <div className="flex min-w-0 items-start gap-2" style={{ paddingLeft: row.depth * 18 }}>
                           <span className="mt-1.5 h-px w-5 shrink-0 bg-line" />
                           <div className="min-w-0">
@@ -1789,23 +1583,23 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                             {unit.description && <div className="mt-0.5 truncate text-[11px] text-fg/40">{unit.description}</div>}
                           </div>
                         </div>
-                      </td>
-                      <td className="px-2 py-2 text-fg/55">
+                      </TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55">
                         <div className="truncate">{catalog?.name ?? t("labor.fallbacks.unknown")}</div>
-                      </td>
-                      <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.category || "-"}</div></td>
-                      <td className="px-2 py-2 text-fg/55">
+                      </TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55"><div className="truncate">{unit.category || "-"}</div></TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55">
                         <div className="truncate">{[unit.className, unit.subClassName].filter(Boolean).join(" / ") || "-"}</div>
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-fg/70">{formatNumber(unit.hoursNormal)}</td>
-                      <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.outputUom || "EA"}</div></td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="px-2 py-2 text-right font-mono text-fg/70">{formatNumber(unit.hoursNormal)}</TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55"><div className="truncate">{unit.outputUom || "EA"}</div></TableCell>
+                    </TableRow>
                   );
                 })
               : units.map((unit) => {
                   const catalog = catalogById.get(unit.libraryId);
                   return (
-                    <tr
+                    <TableRow
                       key={unit.id}
                       tabIndex={0}
                       onClick={() => openEditUnit(unit)}
@@ -1814,39 +1608,39 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
                       }}
                       className="cursor-pointer border-b border-line/55 outline-none hover:bg-panel2/35 focus:bg-panel2/45"
                     >
-                      <td className="px-2 py-2 font-mono text-[11px] text-fg/55"><div className="truncate">{unit.code || "-"}</div></td>
-                      <td className="px-2 py-2">
+                      <TableCell className="px-2 py-2 font-mono text-[11px] text-fg/55"><div className="truncate">{unit.code || "-"}</div></TableCell>
+                      <TableCell className="px-2 py-2">
                         <div className="truncate font-medium text-fg">{unit.name}</div>
                         {unit.description && <div className="mt-0.5 truncate text-[11px] text-fg/40">{unit.description}</div>}
-                      </td>
-                      <td className="px-2 py-2 text-fg/55">
+                      </TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55">
                         <div className="truncate">{catalog?.name ?? t("labor.fallbacks.unknown")}</div>
-                      </td>
-                      <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.category || "-"}</div></td>
-                      <td className="px-2 py-2 text-fg/55">
+                      </TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55"><div className="truncate">{unit.category || "-"}</div></TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55">
                         <div className="truncate">{[unit.className, unit.subClassName].filter(Boolean).join(" / ") || "-"}</div>
-                      </td>
-                      <td className="px-2 py-2 text-right font-mono text-fg/70">{formatNumber(unit.hoursNormal)}</td>
-                      <td className="px-2 py-2 text-fg/55"><div className="truncate">{unit.outputUom || "EA"}</div></td>
-                    </tr>
+                      </TableCell>
+                      <TableCell className="px-2 py-2 text-right font-mono text-fg/70">{formatNumber(unit.hoursNormal)}</TableCell>
+                      <TableCell className="px-2 py-2 text-fg/55"><div className="truncate">{unit.outputUom || "EA"}</div></TableCell>
+                    </TableRow>
                   );
                 })}
             {!loading && (!groupedView ? units.length === 0 : visibleTreeRows.length === 0 && !rootTreePayload?.loading) && (
-              <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-sm text-fg/40">
+              <TableRow>
+                <TableCell colSpan={7} className="px-3 py-10 text-center text-sm text-fg/40">
                   {t("labor.empty")}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
             {(loading || (groupedView && rootTreePayload?.loading)) && (
-              <tr>
-                <td colSpan={7} className="px-3 py-10 text-center text-sm text-fg/40">
+              <TableRow>
+                <TableCell colSpan={7} className="px-3 py-10 text-center text-sm text-fg/40">
                   {t("labor.loading")}
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             )}
-          </tbody>
-        </table>
+          </TableBody>
+        </Table>
       </div>
 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t border-line bg-panel2/20 px-3 py-2 text-[11px] text-fg/45">
@@ -1858,9 +1652,9 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
         <div className="flex items-center gap-2">
           <span>{t("labor.footer.firstParty", { count: compactCount(firstPartyCatalogs) })}</span>
           {groupedView && <span>{t("labor.footer.topLevelGroups", { count: compactCount(rootTreePayload?.nodes.length ?? 0) })}</span>}
-          <CompactSelect
+          <SearchSelect
             value={String(pageSize)}
-            onValueChange={(value) => setPageSize(Number(value))}
+            onChange={(value) => setPageSize(Number(value))}
             options={[
               { value: "50", label: groupedView ? t("labor.pageSize.visible", { count: 50 }) : t("labor.pageSize.rows", { count: 50 }) },
               { value: "100", label: groupedView ? t("labor.pageSize.visible", { count: 100 }) : t("labor.pageSize.rows", { count: 100 }) },
@@ -1869,17 +1663,17 @@ function LaborUnitsWorkspace({ initialLibraries }: { initialLibraries: LaborUnit
             ariaLabel={t("labor.pageSize.aria")}
             triggerClassName="h-7 w-[104px]"
           />
-          <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0 || loading}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setPage((current) => Math.max(0, current - 1))} disabled={page <= 0 || loading}>
             {t("common.prev")}
           </Button>
           <span className="tabular-nums">{t("labor.footer.page", { page: compactCount(page + 1), total: compactCount(totalPages) })}</span>
-          <Button type="button" variant="ghost" size="xs" onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))} disabled={page >= totalPages - 1 || loading}>
+          <Button type="button" variant="ghost" size="sm" onClick={() => setPage((current) => Math.min(totalPages - 1, current + 1))} disabled={page >= totalPages - 1 || loading}>
             {t("common.next")}
           </Button>
         </div>
       </div>
 
-      {typeof document !== "undefined" && createPortal(drawer, document.body)}
+      {drawers}
     </div>
   );
 }

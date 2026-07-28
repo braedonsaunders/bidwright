@@ -1,7 +1,12 @@
 "use client";
 
 import type { ProjectWorkspaceData } from "@/lib/api";
-import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+} from "@appkit/ui";
 import {
   getExtendedWorksheetUnitBreakdown,
   getWorksheetUnitKind,
@@ -91,7 +96,7 @@ export function HoursTab({ workspace }: HoursTabProps) {
       <CardHeader>
         <CardTitle>Labour Hours Summary</CardTitle>
       </CardHeader>
-      <CardBody className="p-0">
+      <CardContent className="p-0">
         {rows.length === 0 ? (
           <div className="px-5 py-8 text-center text-sm text-fg/40">
             No labour hours recorded.
@@ -155,7 +160,7 @@ export function HoursTab({ workspace }: HoursTabProps) {
             </table>
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

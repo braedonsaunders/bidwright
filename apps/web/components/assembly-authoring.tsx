@@ -27,7 +27,15 @@ import {
   updateAssemblyComponent,
   updateAssemblyParameter,
 } from "@/lib/api";
-import { Badge, Button, CompactSelect, Input, Label } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Badge,
+  CompactSelect,
+} from "@/components/legacy-controls";
 import { SearchablePicker, type SearchablePickerOption } from "@/components/shared/searchable-picker";
 import { UomSelect } from "@/components/shared/uom-select";
 import { appendFormulaVariable, extractFormulaVariables } from "@/lib/assembly-template-preview";

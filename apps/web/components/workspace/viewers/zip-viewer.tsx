@@ -13,7 +13,9 @@ import {
   Eye,
   Archive,
 } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import { inspectFileIngest, type FileIngestManifestResponse } from "@/lib/api";
 

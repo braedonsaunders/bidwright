@@ -1,16 +1,16 @@
 /**
  * Codex CLI adapter.
  *
- * Mirrors the original cli-runtime.ts logic for Codex byte-for-byte:
- * `prepareCodexHome` copies user's auth.json/cap_sid + appends bidwright
- * MCP server to config.toml, model listing goes through `codex app-server`
- * JSON-RPC, and stderr suppresses the well-known noisy patterns plus HTML
- * stack-trace spans.
+ * Keeps Codex auth and session state in the user's central CODEX_HOME. The
+ * Bidwright MCP server is injected with per-invocation config overrides so
+ * OAuth credentials never need to be copied into a project workspace.
+ * Model listing goes through `codex app-server` JSON-RPC, and stderr
+ * suppresses the well-known noisy patterns plus HTML stack-trace spans.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createInterface } from "node:readline";
 import { join } from "node:path";
@@ -28,6 +28,8 @@ import type {
   SpawnPlan,
 } from "./types.js";
 import { getCliVersion, homeDir, resolveCliCommand } from "./shared.js";
+import { getBidwrightMode } from "../agent-home.js";
+import { createRuntimeBrokerPlan } from "../runtime-broker.js";
 
 const ADAPTER_ID = "codex";
 
@@ -82,50 +84,56 @@ function isCodexModelId(model: string): boolean {
 }
 
 async function prepareCodexHome(
-  projectDir: string,
-  mcpRunner: string,
-  mcpArgs: string[],
-  mcpEnv: Record<string, string>,
   agentHomeDir: string | null | undefined,
 ): Promise<string> {
-  const codexHome = join(projectDir, ".codex");
-  await mkdir(codexHome, { recursive: true });
-
-  // Source: in server mode, this user's per-user namespace; in desktop mode,
-  // the operator's host ~/.codex (or the explicit CODEX_HOME override).
-  const sourceCodexHome = agentHomeDir
-    ? join(agentHomeDir, ".codex")
+  // Server mode gets a tenant-scoped home. Desktop mode deliberately reuses
+  // the operator's normal CODEX_HOME so interactive browser login remains a
+  // local-only capability and existing desktop sessions continue to work.
+  const codexHome = agentHomeDir
+    ? join(agentHomeDir, "runtime", "codex")
     : process.env.CODEX_HOME || join(homeDir(), ".codex");
-
-  for (const fileName of ["auth.json", "cap_sid"]) {
-    const sourcePath = join(sourceCodexHome, fileName);
-    if (existsSync(sourcePath)) {
-      await copyFile(sourcePath, join(codexHome, fileName));
-    }
-  }
-
-  const sourceConfigPath = join(sourceCodexHome, "config.toml");
-  const baseConfig = existsSync(sourceConfigPath)
-    ? (await readFile(sourceConfigPath, "utf-8")).trim()
-    : "";
-
-  const envSection = Object.entries(mcpEnv)
-    .map(([key, value]) => `${key} = ${JSON.stringify(value)}`)
-    .join("\n");
-  const bidwrightConfig = [
-    "[mcp_servers.bidwright]",
-    `command = ${JSON.stringify(mcpRunner)}`,
-    `args = ${JSON.stringify(mcpArgs)}`,
-    "",
-    "[mcp_servers.bidwright.env]",
-    envSection,
-    "",
-  ].join("\n");
-
-  const configContent = [baseConfig, bidwrightConfig].filter(Boolean).join("\n\n");
-  await writeFile(join(codexHome, "config.toml"), configContent, "utf-8");
-
+  await mkdir(codexHome, { recursive: true });
   return codexHome;
+}
+
+/**
+ * Remove credentials left by Bidwright's pre-central-home implementation.
+ * Restored workspace snapshots can still contain these files, so cleanup runs
+ * on every prepare and is deliberately limited to the known generated paths.
+ */
+async function removeLegacyProjectCredentials(projectDir: string): Promise<void> {
+  const projectCodexHome = join(projectDir, ".codex");
+  await Promise.all(
+    ["auth.json", "cap_sid"].map((fileName) =>
+      unlink(join(projectCodexHome, fileName)).catch(() => {}),
+    ),
+  );
+
+  const configPath = join(projectCodexHome, "config.toml");
+  const config = await readFile(configPath, "utf8").catch(() => "");
+  if (
+    config.includes("[mcp_servers.bidwright]") &&
+    config.includes("BIDWRIGHT_AUTH_TOKEN")
+  ) {
+    await unlink(configPath).catch(() => {});
+  }
+}
+
+/**
+ * Build ephemeral Codex config overrides for the project-scoped Bidwright MCP
+ * server. Secret values stay in the child environment; only the allowlisted
+ * variable names appear in argv.
+ */
+function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
+  const envNames = Object.keys(ctx.mcpEnv);
+  return [
+    "-c",
+    `mcp_servers.bidwright.command=${JSON.stringify(ctx.mcpRunner)}`,
+    "-c",
+    `mcp_servers.bidwright.args=${JSON.stringify(ctx.mcpArgs)}`,
+    "-c",
+    `mcp_servers.bidwright.env_vars=${JSON.stringify(envNames)}`,
+  ];
 }
 
 async function spawnAppServerProcess(
@@ -292,7 +300,90 @@ async function listModels(opts: { customPath?: string }): Promise<CliModelOption
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   const events: SSEEventData[] = [];
 
-  if (msg.type === "thread.started") {
+  if (msg.type === "broker.error") {
+    events.push({ type: "error", data: { message: msg.message || "Runtime broker failed" } });
+  } else if (msg.method === "turn/started") {
+    events.push({ type: "progress", data: { phase: "Running", detail: "Turn started" } });
+  } else if (msg.method === "turn/completed") {
+    const status = msg.params?.turn?.status;
+    if (status === "failed") {
+      events.push({
+        type: "error",
+        data: { message: msg.params?.turn?.error?.message || "Codex turn failed" },
+      });
+    }
+    events.push({
+      type: "progress",
+      data: { phase: "Turn complete", detail: `Codex turn ${status || "completed"}` },
+    });
+  } else if (msg.method === "item/started" || msg.method === "item/completed") {
+    const item = msg.params?.item || {};
+    const completed = msg.method === "item/completed";
+    if (item.type === "commandExecution") {
+      if (!completed) {
+        if (item.id) state.toolStartTimes.set(item.id, Date.now());
+        events.push({
+          type: "tool_call",
+          data: {
+            toolId: "command_execution",
+            toolUseId: item.id,
+            input: { command: item.command || "", cwd: item.cwd },
+          },
+        });
+      } else {
+        const startedAt = item.id ? state.toolStartTimes.get(item.id) : undefined;
+        if (item.id) state.toolStartTimes.delete(item.id);
+        events.push({
+          type: "tool_result",
+          data: {
+            toolUseId: item.id,
+            success: (item.exitCode ?? 0) === 0 && item.status !== "failed",
+            duration_ms: item.durationMs ?? (startedAt ? Date.now() - startedAt : 0),
+            content: item.aggregatedOutput || "",
+            exitCode: item.exitCode,
+          },
+        });
+      }
+    } else if (item.type === "mcpToolCall" || item.type === "dynamicToolCall") {
+      if (!completed) {
+        if (item.id) state.toolStartTimes.set(item.id, Date.now());
+        events.push({
+          type: "tool_call",
+          data: {
+            toolId: item.tool || item.name || item.type,
+            toolUseId: item.id,
+            input: item.arguments || item.input,
+          },
+        });
+      } else {
+        const startedAt = item.id ? state.toolStartTimes.get(item.id) : undefined;
+        if (item.id) state.toolStartTimes.delete(item.id);
+        events.push({
+          type: "tool_result",
+          data: {
+            toolUseId: item.id,
+            success: item.status !== "failed",
+            duration_ms: startedAt ? Date.now() - startedAt : 0,
+            content: item.result || item.output || item.error?.message || "",
+          },
+        });
+      }
+    } else if (item.type === "agentMessage" && completed) {
+      events.push({
+        type: "message",
+        data: { role: "assistant", content: item.text || "" },
+      });
+    } else if (item.type === "reasoning" && !completed) {
+      const content = Array.isArray(item.summary)
+        ? item.summary.map((part: any) => part?.text || String(part)).join("\n")
+        : item.text || item.summary || "Thinking...";
+      events.push({ type: "thinking", data: { content } });
+    }
+  } else if (msg.method === "item/agentMessage/delta") {
+    // The authoritative full message arrives in item/completed. Suppressing
+    // deltas avoids persisting duplicate assistant messages in the legacy SSE
+    // event stream while still keeping transport activity alive.
+  } else if (msg.type === "thread.started") {
     events.push({ type: "status", data: { status: "running", sessionId: msg.thread_id } });
   } else if (msg.type === "turn.started") {
     events.push({ type: "progress", data: { phase: "Running", detail: "Turn started" } });
@@ -403,7 +494,7 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
 
 export const codexAdapter: CliAdapter = {
   id: ADAPTER_ID,
-  displayName: "Codex CLI",
+  displayName: "Codex",
   installHint: "Not installed — see openai.com/codex",
   pathSettingKey: "codexPath",
   defaultModel: "gpt-5.4",
@@ -425,10 +516,8 @@ export const codexAdapter: CliAdapter = {
       return { authenticated: true, method: "api_key" };
     }
     if (agentHomeDir) {
-      // Server mode: only consider this user's own ~/.codex/auth.json under
-      // the namespace; never leak the host's auth into another user's status.
-      const userCodexAuth = join(agentHomeDir, ".codex", "auth.json");
-      if (existsSync(userCodexAuth)) return { authenticated: true, method: "oauth" };
+      // Server mode is API-key-only. Legacy OAuth caches may still exist on
+      // disk after an upgrade but are neither trusted nor mounted.
       return { authenticated: false, method: "none" };
     }
     const codexAuth = join(homeDir(), ".codex", "auth.json");
@@ -447,66 +536,66 @@ export const codexAdapter: CliAdapter = {
   },
 
   async listModels(opts) {
+    // App Server is the target execution transport, but until the broker owns
+    // its lifecycle it must not be spawned outside the server sandbox merely
+    // for model discovery. The route falls back to provider/static models.
+    if (getBidwrightMode() === "server") return [];
     return listModels({ customPath: opts.customPath });
   },
 
   async prepareWorkspace(ctx: PrepareWorkspaceCtx) {
-    const codexHome = await prepareCodexHome(
-      ctx.projectDir,
-      ctx.mcpRunner,
-      ctx.mcpArgs,
-      ctx.mcpEnv as unknown as Record<string, string>,
-      ctx.agentHomeDir ?? null,
-    );
-    return { extraEnv: { CODEX_HOME: codexHome } };
+    await removeLegacyProjectCredentials(ctx.projectDir);
+    const codexHome = await prepareCodexHome(ctx.agentHomeDir ?? null);
+    const extraEnv: Record<string, string> = { CODEX_HOME: codexHome };
+    if (ctx.agentHomeDir) {
+      const userHomeDir = join(ctx.agentHomeDir, "runtime", "codex-home");
+      await mkdir(userHomeDir, { recursive: true });
+      extraEnv.HOME = userHomeDir;
+    }
+    return { extraEnv };
   },
 
   async buildSpawnPlan(ctx: SpawnCtx): Promise<SpawnPlan> {
     const cliCmd = resolveCliCommand(["codex"], ctx.customCliPath, getWindowsBinaryExtras());
     if (!cliCmd) throw new Error("Codex CLI not found");
 
-    const args: string[] = [
-      "exec",
-      "--dangerously-bypass-approvals-and-sandbox",
-      "--model",
-      ctx.model || "gpt-5.4",
-    ];
-    const effort = mapEffort(ctx.reasoningEffort);
-    if (effort) args.push("-c", `model_reasoning_effort=${effort}`);
-    args.push("--json", ctx.prompt);
-
     const extraEnv: Record<string, string> = {};
     if (ctx.apiKeys.openai) extraEnv.CODEX_API_KEY = ctx.apiKeys.openai;
 
-    return {
-      cliCmd,
-      args,
+    return createRuntimeBrokerPlan(
+      {
+        transport: "codex-app-server",
+        projectDir: ctx.projectDir,
+        prompt: ctx.prompt,
+        model: ctx.model || "gpt-5.4",
+        reasoningEffort: ctx.reasoningEffort,
+        codexCommand: cliCmd,
+        appServerArgs: buildMcpConfigArgs(ctx),
+      },
       extraEnv,
-      promptHandling: { kind: "positional-stdin", index: args.length - 1 },
-    };
+    );
   },
 
   async buildResumePlan(ctx: ResumeCtx): Promise<SpawnPlan> {
     const cliCmd = resolveCliCommand(["codex"], ctx.customCliPath, getWindowsBinaryExtras());
     if (!cliCmd) throw new Error("Codex CLI not found");
 
-    const args: string[] = ["exec", "resume", "--dangerously-bypass-approvals-and-sandbox"];
-    if (ctx.model) args.push("--model", ctx.model);
-    const effort = mapEffort(ctx.reasoningEffort);
-    if (effort) args.push("-c", `model_reasoning_effort=${effort}`);
-    args.push("--json");
-    args.push(ctx.sessionId);
-    args.push(ctx.prompt);
-
     const extraEnv: Record<string, string> = {};
     if (ctx.apiKeys.openai) extraEnv.CODEX_API_KEY = ctx.apiKeys.openai;
 
-    return {
-      cliCmd,
-      args,
+    return createRuntimeBrokerPlan(
+      {
+        transport: "codex-app-server",
+        projectDir: ctx.projectDir,
+        prompt: ctx.prompt,
+        model: ctx.model || "gpt-5.4",
+        reasoningEffort: ctx.reasoningEffort,
+        resumeSessionId: ctx.sessionId,
+        codexCommand: cliCmd,
+        appServerArgs: buildMcpConfigArgs(ctx),
+      },
       extraEnv,
-      promptHandling: { kind: "positional-stdin", index: args.length - 1 },
-    };
+    );
   },
 
   defaultResumePrompt() {
@@ -518,6 +607,9 @@ export const codexAdapter: CliAdapter = {
   extractSessionId(parsed) {
     if (parsed?.type === "thread.started" && parsed?.thread_id) {
       return String(parsed.thread_id);
+    }
+    if (parsed?.method === "thread/started" && parsed?.params?.thread?.id) {
+      return String(parsed.params.thread.id);
     }
     return null;
   },

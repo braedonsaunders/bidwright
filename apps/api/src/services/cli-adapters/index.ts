@@ -7,10 +7,12 @@ import { claudeCodeAdapter } from "./claude-code.js";
 import { codexAdapter } from "./codex.js";
 import { geminiAdapter } from "./gemini.js";
 import { opencodeAdapter } from "./opencode.js";
+import { openRouterAdapter } from "./openrouter.js";
 import { registerAdapter } from "./registry.js";
 
 registerAdapter(claudeCodeAdapter);
 registerAdapter(codexAdapter);
+registerAdapter(openRouterAdapter);
 registerAdapter(opencodeAdapter);
 registerAdapter(geminiAdapter);
 

@@ -13,10 +13,12 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
-  Badge,
   Button,
   Input,
-} from "@/components/ui";
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { PluginRuntime } from "@/components/plugin-runtime";
 import type {
   PluginRecord,
@@ -200,7 +202,7 @@ export function PluginToolsPanel({
           {selectedTool && (
             <Button
               variant="ghost"
-              size="xs"
+              size="sm"
               onClick={() => { setSelectedTool(null); setExecutionOutput(null); }}
               aria-label="Back to all plugin tools"
             >
@@ -208,7 +210,7 @@ export function PluginToolsPanel({
               All Tools
             </Button>
           )}
-          <Button variant="ghost" size="xs" onClick={onClose}>
+          <Button variant="ghost" size="sm" onClick={onClose}>
             <X className="h-4 w-4" />
           </Button>
         </div>

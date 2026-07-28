@@ -12,7 +12,12 @@ import {
   CheckCircle2,
   Circle,
 } from "lucide-react";
-import { Button, Select } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  Select,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
@@ -156,13 +161,13 @@ export function ChecklistEditor({ fileName, initialData, onSave, onClose }: Chec
         </div>
         <div className="flex items-center gap-1">
           {onSave && (
-            <Button variant="ghost" size="xs" onClick={handleSave}>
+            <Button variant="ghost" size="sm" onClick={handleSave}>
               <Save className="w-4 h-4 mr-1" />
               Save
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="xs" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose}>
               <X className="w-4 h-4" />
             </Button>
           )}
@@ -196,7 +201,7 @@ export function ChecklistEditor({ fileName, initialData, onSave, onClose }: Chec
               </span>
               <Button
                 variant="ghost"
-                size="xs"
+                size="sm"
                 onClick={() => addItem(section.id)}
                 title="Add item"
               >
@@ -205,7 +210,7 @@ export function ChecklistEditor({ fileName, initialData, onSave, onClose }: Chec
               {sections.length > 1 && (
                 <Button
                   variant="ghost"
-                  size="xs"
+                  size="sm"
                   onClick={() => removeSection(section.id)}
                   title="Remove section"
                   className="text-fg/30 hover:text-danger"

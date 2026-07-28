@@ -129,18 +129,20 @@ import {
 } from "@/lib/api";
 import type { SourceDocumentStructuredData } from "@/lib/api";
 import {
-  Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  EmptyState,
   Input,
   Label,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
   ModalBackdrop,
   Select,
-} from "@/components/ui";
+} from "@/components/legacy-controls";
 import { BidwrightMark } from "@/components/brand-logo";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
@@ -813,7 +815,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={() => setPageNumber((p) => Math.max(1, p - 1))}
             disabled={pageNumber <= 1}
           >
@@ -824,7 +826,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
           </span>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={() => setPageNumber((p) => Math.min(pageCount, p + 1))}
             disabled={pageNumber >= pageCount}
           >
@@ -834,7 +836,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={handleZoomOut}
             title="Zoom out"
           >
@@ -845,7 +847,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
           </span>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={handleZoomIn}
             title="Zoom in"
           >
@@ -853,7 +855,7 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
           </Button>
           <Button
             variant="ghost"
-            size="xs"
+            size="sm"
             onClick={handleFitToWidth}
             className={cn(
               "ml-1",
@@ -917,13 +919,13 @@ function EmptyPreviewState() {
     <div className="relative flex flex-1 items-center justify-center overflow-hidden bg-panel/90 px-6">
       <motion.div
         aria-hidden
-        className="absolute inset-0 opacity-[0.35] dark:opacity-20 [background-image:linear-gradient(hsl(var(--fg)/0.12)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.08)_1px,transparent_1px)] [background-size:32px_32px]"
+        className="absolute inset-0 opacity-[0.35] dark:opacity-20 [background-image:linear-gradient(rgb(var(--ch-fg)/0.12)_1px,transparent_1px),linear-gradient(90deg,rgb(var(--ch-fg)/0.08)_1px,transparent_1px)] [background-size:32px_32px]"
         animate={{ backgroundPosition: ["0px 0px", "60px 60px"] }}
         transition={{ duration: 24, repeat: Infinity, ease: "linear" }}
       />
       <motion.div
         aria-hidden
-        className="absolute inset-x-0 top-[18%] h-px bg-[linear-gradient(90deg,transparent,hsl(var(--accent)),hsl(169_62%_44%),transparent)]"
+        className="absolute inset-x-0 top-[18%] h-px bg-[linear-gradient(90deg,transparent,rgb(var(--ch-primary)),hsl(169_62%_44%),transparent)]"
         animate={{ top: ["22%", "72%", "22%"], opacity: [0.05, 0.18, 0.05] }}
         transition={{ duration: 8.5, repeat: Infinity, ease: "easeInOut" }}
       />
@@ -1623,18 +1625,18 @@ function MoveFileModal({
             Choose a destination for <span className="font-medium text-fg/70">{item?.name}</span>.
           </p>
         </CardHeader>
-        <CardBody className="space-y-4">
+        <CardContent className="space-y-4">
           <div className="space-y-1.5">
             <Label>Destination</Label>
             <Select value={targetId} onValueChange={onTargetChange} options={options} />
           </div>
           <div className="flex justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button variant="accent" size="sm" onClick={onConfirm} disabled={isSameLocation}>
+            <Button variant="default" size="sm" onClick={onConfirm} disabled={isSameLocation}>
               Move
             </Button>
           </div>
-        </CardBody>
+        </CardContent>
       </Card>
     </ModalBackdrop>
   );
@@ -1661,10 +1663,10 @@ function DeleteFileModal({
             {childCount > 0 ? ` and ${childCount} nested item${childCount === 1 ? "" : "s"}` : ""}.
           </p>
         </CardHeader>
-        <CardBody className="flex justify-end gap-2">
+        <CardContent className="flex justify-end gap-2">
           <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-          <Button variant="danger" size="sm" onClick={onConfirm}>Delete</Button>
-        </CardBody>
+          <Button variant="destructive" size="sm" onClick={onConfirm}>Delete</Button>
+        </CardContent>
       </Card>
     </ModalBackdrop>
   );
@@ -2543,17 +2545,17 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
           <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType ?? ""] ?? "default"}>Auto-organized</Badge>
         )}
       </div>
-      <CardBody className="flex-1">
+      <CardContent className="flex-1">
         <div className="space-y-4">
           <div><p className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Contents</p><p className="mt-1 text-sm text-fg/70">{selectedItem.children.length} item{selectedItem.children.length !== 1 ? "s" : ""}</p></div>
           {(selectedItem.fileNode || selectedItem.sourceDocument) && (
             <div className="flex gap-2 pt-2">
-              <Button variant="secondary" size="xs" onClick={() => { const mutableId = getMutableItemId(selectedItem); if (mutableId) setRenamingId(mutableId); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /> Rename</Button>
-              <Button variant="danger" size="xs" onClick={() => setDeletingItem(selectedItem)}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
+              <Button variant="secondary" size="sm" onClick={() => { const mutableId = getMutableItemId(selectedItem); if (mutableId) setRenamingId(mutableId); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /> Rename</Button>
+              <Button variant="destructive" size="sm" onClick={() => setDeletingItem(selectedItem)}><Trash2 className="h-3.5 w-3.5" /> Delete</Button>
             </div>
           )}
         </div>
-      </CardBody>
+      </CardContent>
     </div>
   ) : (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -2567,7 +2569,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               <div className="flex min-h-0 flex-1 flex-col">
                 {selectedItem.fileNode && (getFileExtension(selectedItem.name) === "html" || getFileExtension(selectedItem.name) === "htm" || getFileExtension(selectedItem.name) === "md" || getFileExtension(selectedItem.name) === "markdown" || selectedItem.name.toLowerCase().endsWith(".checklist.json")) && (
                   <div className="flex items-center justify-end border-b border-line px-3 py-1.5 shrink-0">
-                    <Button variant="ghost" size="xs" onClick={() => handleEditFile(selectedItem)}>
+                    <Button variant="ghost" size="sm" onClick={() => handleEditFile(selectedItem)}>
                       <Pencil className="w-3.5 h-3.5 mr-1" />
                       Edit
                     </Button>
@@ -2692,7 +2694,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             <div className="flex items-center gap-1.5">
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
-                  <Button variant="secondary" size="xs">
+                  <Button variant="secondary" size="sm">
                     <FilePlus className="h-3.5 w-3.5" />
                     New
                     <ChevronDown className="h-3 w-3 ml-0.5" />
@@ -3013,19 +3015,19 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <Button variant="ghost" size="xs" onClick={() => setIsFullscreen(true)} title="Fullscreen">
+                  <Button variant="ghost" size="sm" onClick={() => setIsFullscreen(true)} title="Fullscreen">
                     <Maximize2 className="h-3.5 w-3.5" />
                   </Button>
-                  <Button variant="ghost" size="xs" onClick={handlePopOut} title="Open in new window">
+                  <Button variant="ghost" size="sm" onClick={handlePopOut} title="Open in new window">
                     <MonitorUp className="h-3.5 w-3.5" />
                   </Button>
                   {downloadUrl && (
-                    <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
+                    <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-3.5 w-3.5" /> Download</Button></a>
                   )}
                   {(selectedItem.fileNode || selectedItem.sourceDocument) && (
                     <>
-                      <Button variant="secondary" size="xs" onClick={() => { const mutableId = getMutableItemId(selectedItem); if (mutableId) setRenamingId(mutableId); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /></Button>
-                      <Button variant="danger" size="xs" onClick={() => setDeletingItem(selectedItem)}><Trash2 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="secondary" size="sm" onClick={() => { const mutableId = getMutableItemId(selectedItem); if (mutableId) setRenamingId(mutableId); setRenameValue(selectedItem.name); }}><Edit3 className="h-3.5 w-3.5" /></Button>
+                      <Button variant="destructive" size="sm" onClick={() => setDeletingItem(selectedItem)}><Trash2 className="h-3.5 w-3.5" /></Button>
                     </>
                   )}
                 </div>
@@ -3064,9 +3066,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             </div>
             <div className="flex items-center gap-1.5">
               {downloadUrl && (
-                <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
+                <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-3.5 w-3.5" /> Download</Button></a>
               )}
-              <Button variant="secondary" size="xs" onClick={() => setIsFullscreen(false)}>
+              <Button variant="secondary" size="sm" onClick={() => setIsFullscreen(false)}>
                 <Minimize2 className="h-3.5 w-3.5" />
                 Exit
               </Button>
@@ -3084,7 +3086,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
           <div className="flex items-center justify-between px-4 py-2.5 border-b border-line shrink-0">
             <span className="text-sm font-semibold truncate">{selectedItem?.name ?? editorFileName}</span>
             {downloadUrl && (
-              <a href={downloadUrl} download><Button variant="secondary" size="xs"><Download className="h-3.5 w-3.5" /> Download</Button></a>
+              <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-3.5 w-3.5" /> Download</Button></a>
             )}
           </div>
           <div className="flex-1 overflow-hidden flex flex-col">

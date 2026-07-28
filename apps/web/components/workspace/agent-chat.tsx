@@ -6,7 +6,14 @@ import { AnimatePresence, motion } from "motion/react";
 import { Renderer, createLibrary } from "@openuidev/react-lang";
 import { openuiLibrary } from "@openuidev/react-ui/genui-lib";
 import { AlertTriangle, ArrowDown, BookOpen, Bot, CheckCircle2, ChevronDown, ChevronRight, ClipboardList, ExternalLink, Eye, FileCheck2, FileText, FileSpreadsheet, FileImage, FolderSearch, Gauge, Layers3, Loader2, Navigation, PanelBottom, PanelLeft, PanelRight, RefreshCw, Search, Send, Sparkles, Square, Table2, X, XCircle, Wrench } from "lucide-react";
-import { Badge, Button, Textarea } from "@/components/ui";
+import {
+  Button,
+  Tabs,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { getAgentToolDisplayName, isAgentToolMutating, normalizeAgentToolId } from "@bidwright/domain";
 import {
   getSettings,
@@ -49,6 +56,18 @@ interface ChatMessage {
 }
 
 type AgentChatMode = "qa" | "assist_edit" | "build_estimate";
+
+const AGENT_CHAT_MODE_OPTIONS: Array<{ value: AgentChatMode; label: string }> = [
+  { value: "qa", label: "Question & answer" },
+  { value: "assist_edit", label: "Assist/edit" },
+  { value: "build_estimate", label: "Build estimate" },
+];
+
+const AGENT_CHAT_MODE_DESCRIPTIONS: Record<AgentChatMode, string> = {
+  qa: "Read-only project help",
+  assist_edit: "Make only the changes you request",
+  build_estimate: "Run the full estimating workflow",
+};
 
 interface AgentChatProps {
   projectId: string;
@@ -174,7 +193,7 @@ type CliRuntimeMap = Record<string, {
   models: CliModelOption[];
 }>;
 
-const KNOWN_RUNTIMES: readonly string[] = ["claude-code", "codex", "opencode", "gemini"];
+const KNOWN_RUNTIMES: readonly string[] = ["claude-code", "codex", "openrouter", "opencode", "gemini"];
 
 function isCliRuntime(value: unknown, runtimeMap?: CliRuntimeMap | null): value is CliRuntime {
   if (typeof value !== "string" || !value) return false;
@@ -191,6 +210,7 @@ function defaultCliModel(runtime: CliRuntime, runtimeMap?: CliRuntimeMap | null)
     return def.id;
   }
   if (runtime === "codex") return "gpt-5.4";
+  if (runtime === "openrouter") return "~openai/gpt-latest";
   if (runtime === "gemini") return "gemini-2.5-pro";
   if (runtime === "opencode") return "anthropic/claude-sonnet-4-5";
   return "sonnet";
@@ -1681,7 +1701,7 @@ function IngestionGate({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel p-4 shadow-inner">
-      <div className="pointer-events-none absolute inset-0 opacity-60 [background-image:linear-gradient(to_right,hsl(var(--accent)/0.08)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--fg)/0.045)_1px,transparent_1px)] [background-size:34px_34px]" />
+      <div className="pointer-events-none absolute inset-0 opacity-60 [background-image:linear-gradient(to_right,rgb(var(--ch-primary)/0.08)_1px,transparent_1px),linear-gradient(to_bottom,rgb(var(--ch-fg)/0.045)_1px,transparent_1px)] [background-size:34px_34px]" />
       <motion.div
         aria-hidden
         className="pointer-events-none absolute inset-x-0 top-0 h-16 bg-gradient-to-b from-accent/10 to-transparent"
@@ -1705,7 +1725,7 @@ function IngestionGate({
       </div>
 
       <div className="relative z-10 grid min-h-0 flex-1 grid-rows-[1fr_auto] gap-4 py-4">
-        <div className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-lg border border-line bg-bg/35 shadow-[inset_0_1px_0_hsl(var(--fg)/0.04)]">
+        <div className="relative flex min-h-0 items-center justify-center overflow-hidden rounded-lg border border-line bg-bg/35 shadow-[inset_0_1px_0_rgb(var(--ch-fg)/0.04)]">
           <div className="absolute inset-x-5 top-5 flex items-center justify-between text-[10px] font-semibold uppercase text-fg/35">
             <span>{activeStage}</span>
             <span>{complete}/{total} ready</span>
@@ -1740,13 +1760,13 @@ function IngestionGate({
               transition={{ duration: 2.1, repeat: Infinity, ease: "easeInOut" }}
             />
             <motion.div
-              className="absolute left-5 right-5 top-10 h-1 rounded-full bg-accent/70 shadow-[0_0_24px_hsl(var(--accent)/0.35)]"
+              className="absolute left-5 right-5 top-10 h-1 rounded-full bg-accent/70 shadow-[0_0_24px_rgb(var(--ch-primary)/0.35)]"
               animate={{ y: [0, 80, 0] }}
               transition={{ duration: 2.4, repeat: Infinity, ease: "easeInOut" }}
             />
             <div
               className="flex h-28 w-28 items-center justify-center rounded-full p-2"
-              style={{ background: `conic-gradient(hsl(var(--accent)) ${jobProgress * 3.6}deg, rgba(148, 163, 184, 0.18) 0deg)` }}
+              style={{ background: `conic-gradient(rgb(var(--ch-primary)) ${jobProgress * 3.6}deg, rgba(148, 163, 184, 0.18) 0deg)` }}
             >
               <div className="flex h-full w-full flex-col items-center justify-center rounded-full bg-panel text-center">
                 <div className="text-3xl font-semibold tabular-nums text-fg">{jobProgress}%</div>
@@ -2819,6 +2839,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           model: cliModel,
           scope: intakeScope.trim() || undefined,
           personaId: selectedPersonaId || undefined,
+          mode: "build_estimate",
         });
         setIntakeSessionId(result.sessionId);
         setIntakeStatus({
@@ -3601,13 +3622,32 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
             </div>
           </div>
 
+          <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-line px-4 py-2">
+            <div className="min-w-0 flex-1">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-fg/40">Agent mode</div>
+              <div className="truncate text-[11px] text-fg/45">{AGENT_CHAT_MODE_DESCRIPTIONS[chatMode]}</div>
+            </div>
+            <fieldset
+              disabled={isLoading || isRunStarting || isIntakeRunning}
+              className="m-0 min-w-0 border-0 p-0 disabled:cursor-not-allowed disabled:opacity-60 max-sm:w-full"
+            >
+              <legend className="sr-only">Agent mode</legend>
+              <Tabs
+                value={chatMode}
+                onValueChange={(value) => setChatMode(value as AgentChatMode)}
+                tabs={AGENT_CHAT_MODE_OPTIONS}
+                className="max-sm:flex max-sm:w-full [&>button]:whitespace-nowrap [&>button]:px-2.5 [&>button]:py-1 [&>button]:text-xs max-sm:[&>button]:flex-1"
+              />
+            </fieldset>
+          </div>
+
           {/* Session error */}
           {sessionError && (
             <div className="mx-4 mt-3 flex items-center gap-2 rounded-lg border border-danger/30 bg-danger/5 px-3 py-2">
               <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-danger" />
               <span className="flex-1 text-xs text-danger">{sessionError}</span>
               <Button
-                size="xs"
+                size="sm"
                 variant="secondary"
                 onClick={() => { void retryIntakeSession(); }}
               >
@@ -3899,18 +3939,6 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           {/* Input */}
           {!showBlockingAgentPanel && <div className="border-t border-line p-3">
             <div className="flex items-center gap-2">
-              <select
-                value={chatMode}
-                onChange={(event) => setChatMode(event.target.value as AgentChatMode)}
-                disabled={isLoading || isIntakeRunning}
-                className="h-9 rounded-lg border border-line bg-bg/50 px-2 text-xs text-fg outline-none focus:border-accent/50"
-                aria-label="Agent mode"
-                title="Project Q&A is read-only. Assist edit changes only what you request. Build estimate runs the full workflow."
-              >
-                <option value="qa">Project Q&A</option>
-                <option value="assist_edit">Assist edit</option>
-                <option value="build_estimate">Build estimate</option>
-              </select>
               <input
                 ref={inputRef}
                 value={input}

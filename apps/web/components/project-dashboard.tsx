@@ -19,11 +19,20 @@ import {
   Upload,
   Zap,
 } from "lucide-react";
-import { animate, motion, useMotionValue, useTransform } from "motion/react";
+import { motion } from "motion/react";
 import type { ProjectListItem } from "@/lib/api";
 import { formatCompactMoney, formatDateTime, formatPercent } from "@/lib/format";
 import { useAuth } from "@/components/auth-provider";
-import { Badge, Button, EmptyState } from "@/components/ui";
+import {
+  AnimatedNumber,
+  Badge,
+  Button,
+  EmptyState,
+} from "@appkit/ui";
+import {
+  DashboardMetricCard,
+  DashboardPanel,
+} from "@appkit/dashboard/primitives";
 import { cn } from "@/lib/utils";
 
 type Stage = "active" | "won" | "lost" | "other";
@@ -71,26 +80,6 @@ function daysSince(iso: string): number {
 
 function formatInteger(v: number) {
   return Math.round(v).toLocaleString();
-}
-
-function AnimatedNumber({
-  value,
-  format = formatInteger,
-  duration = 0.85,
-  className,
-}: {
-  value: number;
-  format?: (v: number) => string;
-  duration?: number;
-  className?: string;
-}) {
-  const mv = useMotionValue(0);
-  const display = useTransform(mv, (v) => format(v));
-  useEffect(() => {
-    const controls = animate(mv, value, { duration, ease: [0.25, 1, 0.5, 1] });
-    return controls.stop;
-  }, [mv, value, duration]);
-  return <motion.span className={className}>{display}</motion.span>;
 }
 
 export function ProjectDashboard({
@@ -191,40 +180,32 @@ export function ProjectDashboard({
       </motion.header>
 
       <div className="grid shrink-0 gap-2 sm:grid-cols-2 xl:grid-cols-4">
-        <MetricCell
-          delay={0.03}
-          icon={CircleDollarSign}
+        <DashboardMetricCard
+          icon={<CircleDollarSign className="size-4" />}
           label={t("activeValue")}
-          value={stats.stageValue.active}
-          format={formatCompactMoney}
-          sub={t("activeQuoteCount", { count: stats.activeCount })}
-          tone="accent"
+          value={<AnimatedNumber value={stats.stageValue.active} format={formatCompactMoney} />}
+          detail={t("activeQuoteCount", { count: stats.activeCount })}
+          tone="primary"
         />
-        <MetricCell
-          delay={0.06}
-          icon={Gauge}
+        <DashboardMetricCard
+          icon={<Gauge className="size-4" />}
           label={t("averageMargin")}
-          value={stats.avgMargin * 100}
-          format={(value) => `${value.toFixed(1)}%`}
-          sub={t("projectedProfit", { profit: formatCompactMoney(stats.totalProfit) })}
+          value={<AnimatedNumber value={stats.avgMargin * 100} format={(value) => `${value.toFixed(1)}%`} />}
+          detail={t("projectedProfit", { profit: formatCompactMoney(stats.totalProfit) })}
           tone={stats.avgMargin >= 0.18 ? "success" : stats.avgMargin >= 0.1 ? "warning" : "danger"}
         />
-        <MetricCell
-          delay={0.09}
-          icon={Award}
+        <DashboardMetricCard
+          icon={<Award className="size-4" />}
           label={t("winRate")}
-          value={stats.winRate * 100}
-          format={(value) => `${Math.round(value)}%`}
-          sub={stats.decided ? t("decidedQuotes", { count: stats.decided }) : t("noDecisionsYet")}
+          value={<AnimatedNumber value={stats.winRate * 100} format={(value) => `${Math.round(value)}%`} />}
+          detail={stats.decided ? t("decidedQuotes", { count: stats.decided }) : t("noDecisionsYet")}
           tone="success"
         />
-        <MetricCell
-          delay={0.12}
-          icon={AlertTriangle}
+        <DashboardMetricCard
+          icon={<AlertTriangle className="size-4" />}
           label={t("exceptions")}
-          value={stats.stale.length + stats.lowMargin.length}
-          format={formatInteger}
-          sub={t("exceptionSummary", { aging: stats.stale.length, margin: stats.lowMargin.length })}
+          value={<AnimatedNumber value={stats.stale.length + stats.lowMargin.length} format={formatInteger} />}
+          detail={t("exceptionSummary", { aging: stats.stale.length, margin: stats.lowMargin.length })}
           tone={stats.stale.length + stats.lowMargin.length > 0 ? "warning" : "success"}
         />
       </div>
@@ -241,47 +222,6 @@ export function ProjectDashboard({
         </div>
       </div>
     </div>
-  );
-}
-
-function MetricCell({
-  delay,
-  format,
-  icon: Icon,
-  label,
-  sub,
-  tone,
-  value,
-}: {
-  delay: number;
-  format: (value: number) => string;
-  icon: typeof CircleDollarSign;
-  label: string;
-  sub: string;
-  tone: Tone;
-  value: number;
-}) {
-  return (
-    <motion.div
-      initial={{ opacity: 0, y: 6 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay, duration: 0.28 }}
-      className="relative overflow-hidden rounded-lg border border-line bg-panel px-3 py-2.5"
-    >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-fg/45">
-            <Icon className={cn("h-3.5 w-3.5", toneClass(tone))} />
-            {label}
-          </div>
-          <div className="mt-1 text-xl font-semibold tabular-nums text-fg">
-            <AnimatedNumber value={value} format={format} />
-          </div>
-          <div className="mt-0.5 truncate text-[11px] text-fg/40">{sub}</div>
-        </div>
-        <span className={cn("mt-1 h-2 w-2 rounded-full", dotClass(tone))} />
-      </div>
-    </motion.div>
   );
 }
 
@@ -305,7 +245,7 @@ function PipelineMap({
     .slice(0, 16);
 
   return (
-    <Panel className="relative min-h-0 overflow-hidden">
+    <DashboardPanel className="relative min-h-0" bodyClassName="p-0">
       <div className="relative z-10 flex items-center justify-between border-b border-line px-4 py-3">
         <div>
           <div className="flex items-center gap-2 text-sm font-semibold text-fg">
@@ -322,15 +262,15 @@ function PipelineMap({
       <div className="relative min-h-0 flex-1 overflow-hidden p-4">
         <motion.div
           aria-hidden
-          className="absolute inset-4 opacity-40 [background-image:linear-gradient(hsl(var(--fg)/0.07)_1px,transparent_1px),linear-gradient(90deg,hsl(var(--fg)/0.05)_1px,transparent_1px)] [background-size:30px_30px]"
+          className="absolute inset-4 opacity-40 [background-image:linear-gradient(rgb(var(--ch-fg)/0.07)_1px,transparent_1px),linear-gradient(90deg,rgb(var(--ch-fg)/0.05)_1px,transparent_1px)] [background-size:30px_30px]"
           animate={{ backgroundPosition: ["0px 0px", "60px 30px"] }}
           transition={{ duration: 22, repeat: Infinity, ease: "linear" }}
         />
         <motion.svg aria-hidden className="absolute inset-0 h-full w-full opacity-75" preserveAspectRatio="none" viewBox="0 0 900 420">
           <defs>
             <linearGradient id="pipeline-flow" x1="0" x2="1" y1="0" y2="0">
-              <stop stopColor="hsl(var(--accent) / 0)" />
-              <stop offset="0.45" stopColor="hsl(var(--accent) / 0.5)" />
+              <stop stopColor="rgb(var(--ch-primary) / 0)" />
+              <stop offset="0.45" stopColor="rgb(var(--ch-primary) / 0.5)" />
               <stop offset="0.75" stopColor="hsl(169 62% 45% / 0.4)" />
               <stop offset="1" stopColor="hsl(214 84% 56% / 0)" />
             </linearGradient>
@@ -352,7 +292,7 @@ function PipelineMap({
 
         {projects.length === 0 ? (
           <div className="relative z-10 flex h-full items-center justify-center">
-            <EmptyState className="w-full max-w-md">{t("noPipeline")}</EmptyState>
+            <EmptyState className="w-full max-w-md" title={t("noPipeline")} />
           </div>
         ) : (
           <div className="relative z-10 grid h-full gap-3 md:grid-cols-4">
@@ -421,7 +361,7 @@ function PipelineMap({
           </div>
         )}
       </div>
-    </Panel>
+    </DashboardPanel>
   );
 }
 
@@ -443,21 +383,21 @@ function BidQualityPanel({
 
   return (
     <div className="grid min-h-0 gap-3 md:grid-cols-[0.92fr_1.08fr]">
-      <Panel className="p-4">
+      <DashboardPanel>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm font-semibold text-fg">
             <BarChart3 className="h-4 w-4 text-success" />
             {t("bidQuality")}
           </div>
-          <Badge tone={stats.lowMargin.length ? "warning" : "success"}>{stats.lowMargin.length ? t("watch") : t("clear")}</Badge>
+          <Badge variant={stats.lowMargin.length ? "warning" : "success"}>{stats.lowMargin.length ? t("watch") : t("clear")}</Badge>
         </div>
         <div className="mt-4 grid grid-cols-2 gap-3">
           <RadialMeter label={t("margin")} value={marginPct} display={`${marginPct.toFixed(1)}%`} tone="success" />
           <RadialMeter label={t("win")} value={winPct} display={`${Math.round(winPct)}%`} tone="accent" />
         </div>
-      </Panel>
+      </DashboardPanel>
 
-      <Panel className="p-4">
+      <DashboardPanel>
         <div className="flex items-center gap-2 text-sm font-semibold text-fg">
           <Zap className="h-4 w-4 text-accent" />
           {t("operatingSignal")}
@@ -467,7 +407,7 @@ function BidQualityPanel({
           <SignalBlock label={t("aging")} value={stats.stale.length} tone={stats.stale.length ? "warning" : "success"} />
           <SignalBlock label={t("won30d")} value={stats.recentlyWon.length} tone="success" />
         </div>
-      </Panel>
+      </DashboardPanel>
     </div>
   );
 }
@@ -519,13 +459,13 @@ function AttentionPanel({
   ].filter((item): item is NonNullable<typeof item> => Boolean(item));
 
   return (
-    <Panel className="flex min-h-0 flex-col overflow-hidden">
+    <DashboardPanel className="min-h-0" bodyClassName="p-0">
       <div className="flex items-center justify-between border-b border-line px-4 py-3">
         <div className="flex items-center gap-2 text-sm font-semibold text-fg">
           <AlertTriangle className="h-4 w-4 text-warning" />
           {t("attention")}
         </div>
-        <Badge tone={attention.length ? "warning" : "success"}>{attention.length || t("clear")}</Badge>
+        <Badge variant={attention.length ? "warning" : "success"}>{attention.length || t("clear")}</Badge>
       </div>
       <div className="min-h-0 flex-1 space-y-2 overflow-hidden p-3">
         {attention.length === 0 ? (
@@ -560,14 +500,14 @@ function AttentionPanel({
           })
         )}
       </div>
-    </Panel>
+    </DashboardPanel>
   );
 }
 
 function QuotePulse({ quotes }: { quotes: ProjectListItem[] }) {
   const t = useTranslations("Dashboard");
   return (
-    <Panel className="flex min-h-0 flex-col overflow-hidden">
+    <DashboardPanel className="min-h-0" bodyClassName="p-0">
       <div className="flex items-center justify-between border-b border-line px-4 py-2.5">
         <div className="flex items-center gap-2 text-sm font-semibold text-fg">
           <CalendarClock className="h-4 w-4 text-accent" />
@@ -593,7 +533,7 @@ function QuotePulse({ quotes }: { quotes: ProjectListItem[] }) {
           })
         )}
       </div>
-    </Panel>
+    </DashboardPanel>
   );
 }
 
@@ -604,7 +544,7 @@ function RadialMeter({ display, label, tone, value }: { display: string; label: 
   return (
     <div className="flex items-center gap-3 rounded-lg border border-line/70 bg-bg/45 px-3 py-2">
       <svg className="h-16 w-16 shrink-0 -rotate-90" viewBox="0 0 80 80" aria-hidden>
-        <circle cx="40" cy="40" r={radius} fill="none" stroke="hsl(var(--line))" strokeWidth="7" />
+        <circle cx="40" cy="40" r={radius} fill="none" stroke="rgb(var(--ch-border))" strokeWidth="7" />
         <motion.circle
           cx="40"
           cy="40"
@@ -637,19 +577,6 @@ function SignalBlock({ label, tone, value }: { label: string; tone: Tone; value:
   );
 }
 
-function Panel({ children, className }: { children: React.ReactNode; className?: string }) {
-  return (
-    <motion.section
-      initial={{ opacity: 0, y: 8 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.34, ease: [0.16, 1, 0.3, 1] }}
-      className={cn("rounded-lg border border-line bg-panel shadow-sm", className)}
-    >
-      {children}
-    </motion.section>
-  );
-}
-
 function toneClass(tone: Tone) {
   switch (tone) {
     case "success":
@@ -662,20 +589,5 @@ function toneClass(tone: Tone) {
       return "text-blue-500";
     default:
       return "text-accent";
-  }
-}
-
-function dotClass(tone: Tone) {
-  switch (tone) {
-    case "success":
-      return "bg-success";
-    case "warning":
-      return "bg-warning";
-    case "danger":
-      return "bg-danger";
-    case "info":
-      return "bg-blue-500";
-    default:
-      return "bg-accent";
   }
 }

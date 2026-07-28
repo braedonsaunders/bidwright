@@ -2,7 +2,12 @@
 
 import { Fragment, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, GripVertical, Trash2 } from "lucide-react";
-import { Badge, Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
+import {
+  Badge,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 import type {
   ProjectPhase,
@@ -246,13 +251,13 @@ export function ListView({
       {selectedIds.size > 0 && (
         <div className="shrink-0 flex items-center gap-2 border-b border-line bg-accent/5 px-4 py-2">
           <span className="text-xs text-fg/60">{selectedIds.size} selected</span>
-          <Button variant="ghost" size="xs" onClick={() => void handleBulkStatusChange("in_progress")} data-testid="schedule-list-bulk-in-progress">
+          <Button variant="ghost" size="sm" onClick={() => void handleBulkStatusChange("in_progress")} data-testid="schedule-list-bulk-in-progress">
             Mark In Progress
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => void handleBulkStatusChange("complete")} data-testid="schedule-list-bulk-complete">
+          <Button variant="ghost" size="sm" onClick={() => void handleBulkStatusChange("complete")} data-testid="schedule-list-bulk-complete">
             Mark Complete
           </Button>
-          <Button variant="ghost" size="xs" onClick={() => setSelectedIds(new Set())}>
+          <Button variant="ghost" size="sm" onClick={() => setSelectedIds(new Set())}>
             Clear
           </Button>
         </div>
@@ -551,7 +556,7 @@ export function ListView({
                               {task.status !== "in_progress" ? (
                                 <Button
                                   variant="ghost"
-                                  size="xs"
+                                  size="sm"
                                   onClick={() => void onUpdateTask(task.id, { status: "in_progress" })}
                                   className="h-6 px-2 text-[10px]"
                                 >
@@ -561,7 +566,7 @@ export function ListView({
                               {task.status !== "complete" ? (
                                 <Button
                                   variant="ghost"
-                                  size="xs"
+                                  size="sm"
                                   onClick={() => void onUpdateTask(task.id, { status: "complete", progress: 1 })}
                                   className="h-6 px-2 text-[10px]"
                                 >

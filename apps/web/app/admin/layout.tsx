@@ -4,15 +4,13 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { Building2, LayoutDashboard, Library, LogOut, Shield, Users } from "lucide-react";
+import { Button, SettingsShell, ThemeProvider, UiLinkProvider } from "@appkit/ui";
 import { useAuth } from "@/components/auth-provider";
-import { BidwrightMark } from "@/components/brand-logo";
-import { Button } from "@/components/ui";
-import { cn } from "@/lib/utils";
 
 const adminNav = [
   { href: "/admin", label: "Overview", icon: LayoutDashboard },
   { href: "/admin/organizations", label: "Organizations", icon: Building2 },
-  { href: "/admin/users", label: "All Users", icon: Users },
+  { href: "/admin/users", label: "People", icon: Users },
   { href: "/admin/catalogs", label: "Library", icon: Library },
 ];
 
@@ -42,59 +40,48 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
 
   if (!isSuperAdmin) return null;
 
+  const activeKey =
+    adminNav.find((item) =>
+      item.href === "/admin" ? pathname === "/admin" : pathname.startsWith(item.href),
+    )?.href ?? "/admin";
+
   return (
-    <div className="flex min-h-screen bg-bg text-fg">
-      <aside className="flex w-60 shrink-0 flex-col border-r border-line bg-panel">
-        <div className="flex items-center gap-2.5 border-b border-line px-4 py-4">
-          <BidwrightMark className="h-7 w-7" />
-          <div>
-            <h1 className="text-sm font-bold text-fg">Bidwright</h1>
-            <p className="text-[10px] text-fg/30">System Administration</p>
-          </div>
+    <UiLinkProvider link={Link}>
+      <ThemeProvider storageKey="bidwright-theme">
+        <div className="h-screen bg-bg text-fg">
+          <SettingsShell
+            title="System administration"
+            description="Manage Bidwright organizations, people, access, and shared libraries."
+            back={{ href: "/", label: "Back to Bidwright" }}
+            contentWidth="full"
+            nav={[
+              {
+                label: "Platform",
+                items: adminNav.map((item) => {
+                  const Icon = item.icon;
+                  return { key: item.href, label: item.label, icon: <Icon /> };
+                }),
+              },
+            ]}
+            activeKey={activeKey}
+            onSelect={(href) => router.push(href)}
+            actions={
+              <div className="flex items-center gap-2">
+                <span className="hidden items-center gap-2 text-xs text-fg-muted md:flex">
+                  <Shield className="size-3.5 text-primary" />
+                  {user.name}
+                </span>
+                <Button variant="ghost" size="sm" onClick={logout}>
+                  <LogOut className="size-3.5" />
+                  Sign out
+                </Button>
+              </div>
+            }
+          >
+            {children}
+          </SettingsShell>
         </div>
-
-        <nav className="flex-1 space-y-0.5 px-3 py-3">
-          {adminNav.map((item) => {
-            const Icon = item.icon;
-            const active = item.href === "/admin"
-              ? pathname === "/admin"
-              : pathname.startsWith(item.href);
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={cn(
-                  "flex items-center gap-2.5 rounded-lg px-3 py-2 text-xs font-medium transition-colors",
-                  active
-                    ? "bg-accent/10 text-accent"
-                    : "text-fg/50 hover:bg-panel2/50 hover:text-fg/70"
-                )}
-              >
-                <Icon className="h-4 w-4" />
-                {item.label}
-              </Link>
-            );
-          })}
-        </nav>
-
-        <div className="border-t border-line px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-7 w-7 items-center justify-center rounded-full bg-accent/10">
-              <Shield className="h-3.5 w-3.5 text-accent" />
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium text-fg/70">{user.name}</p>
-              <p className="truncate text-[10px] text-fg/30">{user.email}</p>
-            </div>
-          </div>
-          <Button variant="ghost" size="xs" className="mt-2 w-full" onClick={logout}>
-            <LogOut className="mr-1.5 h-3 w-3" />
-            Sign Out
-          </Button>
-        </div>
-      </aside>
-
-      <main className="flex-1 overflow-auto">{children}</main>
-    </div>
+      </ThemeProvider>
+    </UiLinkProvider>
   );
 }

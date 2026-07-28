@@ -276,17 +276,17 @@ export function ImpersonationBanner() {
   if (!impersonating || pathname.startsWith("/admin") || dismissed || isOwnOrg) return null;
 
   return (
-    <div className="relative z-[100] flex items-center justify-center gap-3 bg-amber-500 px-4 py-1 text-xs font-medium text-black">
+    <div className="relative z-[100] flex items-center justify-center gap-3 border-b border-warning/30 bg-warning-subtle px-4 py-1 text-xs font-medium text-warning">
       <span>Viewing as <strong>{organization?.name ?? "Unknown"}</strong></span>
       <button
         onClick={stopImpersonation}
-        className="rounded bg-black/20 px-1.5 py-0.5 text-[10px] font-semibold hover:bg-black/30 transition-colors"
+        className="rounded bg-warning/15 px-1.5 py-0.5 text-[10px] font-semibold transition-colors hover:bg-warning/25"
       >
         Return to Admin
       </button>
       <button
         onClick={() => setDismissed(true)}
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1 text-black/50 hover:text-black hover:bg-black/10 transition-colors"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-1 text-warning/60 transition-colors hover:bg-warning/10 hover:text-warning"
         aria-label="Dismiss"
       >
         &times;

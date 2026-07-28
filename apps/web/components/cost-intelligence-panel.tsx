@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
-import { createPortal } from "react-dom";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
@@ -29,7 +28,27 @@ import {
 } from "lucide-react";
 
 import { SearchablePicker, type SearchablePickerOption } from "@/components/shared/searchable-picker";
-import { Badge, Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Select, Textarea } from "@/components/ui";
+import {
+  Button,
+  Badge,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Dialog,
+  Drawer,
+  Input,
+  Label,
+  SearchSelect,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+  Tabs,
+  Textarea,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import {
   analyzeCostSpreadsheetEvidence,
@@ -93,7 +112,7 @@ type CostSort = "updated" | "name" | "cost_desc" | "confidence_desc" | "sample_d
 type VendorRegistrySort = "latest_desc" | "name_asc" | "products_desc" | "evidence_desc" | "cost_basis_desc";
 type VendorProductSort = "latest_desc" | "name_asc" | "cost_desc" | "cost_asc" | "trend_desc" | "evidence_desc";
 type EffectiveCostDrawerMode = "create" | "edit";
-type BadgeTone = "default" | "success" | "warning" | "danger" | "info";
+type BadgeTone = "secondary" | "success" | "warning" | "destructive" | "info";
 
 const COST_IMPORT_OPTIONS: Array<{
   id: CostImportSource;
@@ -304,10 +323,10 @@ function methodLabel(value: string) {
   return value.replace(/_/g, " ");
 }
 
-function confidenceTone(confidence: number): "success" | "warning" | "danger" {
+function confidenceTone(confidence: number): "success" | "warning" | "destructive" {
   if (confidence >= 0.8) return "success";
   if (confidence >= 0.65) return "warning";
-  return "danger";
+  return "destructive";
 }
 
 function documentTypeLabel(value: string | null | undefined) {
@@ -599,7 +618,7 @@ function EvidenceBars({ points }: { points: ChartPoint[] }) {
           <div className="text-[10px] uppercase text-fg/35">Evidence volume</div>
           <div className="mt-0.5 text-lg font-semibold tabular-nums text-fg">{points.reduce((sum, point) => sum + point.value, 0).toLocaleString()}</div>
         </div>
-        <Badge tone="info">{points.length} periods</Badge>
+        <Badge variant="info">{points.length} periods</Badge>
       </div>
       <div className="flex h-28 items-end gap-1.5">
         {points.slice(-18).map((point, index) => (
@@ -1511,7 +1530,7 @@ export function CostIntelligencePanel({
     if (agentReviewError) return { label: "Review attention", tone: "warning" };
     if (!analysisResult) {
       if (vendorPdfFiles.length > 0) return { label: "Ready to analyze", tone: "info" };
-      return reviewRuns.length > 0 ? { label: "Open saved review", tone: "default" } : { label: "Select PDFs", tone: "default" };
+      return reviewRuns.length > 0 ? { label: "Open saved review", tone: "secondary" } : { label: "Select PDFs", tone: "secondary" };
     }
     if (approvedReviewCount > 0) return { label: "Ready to commit", tone: "success" };
     if (pendingReviewCount > 0) return { label: "Review candidates", tone: "warning" };
@@ -1933,7 +1952,7 @@ export function CostIntelligencePanel({
                   <div className="truncate font-medium text-fg/75">{run.fileNames.join(", ") || run.batchId}</div>
                   <div className="truncate text-[10px] text-fg/35">{run.batchId}</div>
                 </div>
-                <Badge tone={run.status === "reviewed" ? "success" : run.status === "analyzed" ? "info" : "warning"} className="justify-center">
+                <Badge variant={run.status === "reviewed" ? "success" : run.status === "analyzed" ? "info" : "warning"} className="justify-center">
                   {reviewRunStatusLabel(run.status)}
                 </Badge>
                 <div className="text-right tabular-nums text-fg/60">{run.candidateCount.toLocaleString()} rows</div>
@@ -1994,33 +2013,29 @@ export function CostIntelligencePanel({
         </CardHeader>
       )}
 
-      <CardBody className={cn(embedded ? "flex min-h-0 flex-1 flex-col gap-3 px-3 py-3" : "flex min-h-[720px] flex-col gap-3")}>
-        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-line bg-panel2/45 p-1">
-          <div role="tablist" aria-label="Cost intelligence views" className="flex min-w-0 flex-wrap gap-1">
-            {COST_INTELLIGENCE_SUBTABS.map((tab) => {
-              const active = activeCostTab === tab.id;
+      <CardContent className={cn(embedded ? "flex min-h-0 flex-1 flex-col gap-3 px-3 py-3" : "flex min-h-[720px] flex-col gap-3")}>
+        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2">
+          <Tabs
+            value={activeCostTab}
+            onValueChange={(value) => setActiveCostTab(value as CostIntelligenceSubtab)}
+            className="min-w-0 flex-wrap"
+            tabs={COST_INTELLIGENCE_SUBTABS.map((tab) => {
               const count = tab.id === "ingest"
                 ? (analysisResult?.candidateCount ?? vendorPdfFiles.length)
                 : tab.id === "vendors" ? vendorRecords.length : filteredCosts.length;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setActiveCostTab(tab.id)}
-                  className={cn(
-                    "flex h-9 min-w-0 items-center gap-2 rounded-md px-3 text-left text-xs transition-colors",
-                    active ? "bg-panel text-fg shadow-sm" : "text-fg/55 hover:bg-panel/70 hover:text-fg",
-                  )}
-                >
-                  {tab.id === "ingest" ? <UploadCloud className="h-3.5 w-3.5 shrink-0" /> : <Database className="h-3.5 w-3.5 shrink-0" />}
-                  <span className="truncate font-medium">{tab.label}</span>
-                  <Badge tone={active ? "info" : "default"}>{compactCount(count)}</Badge>
-                </button>
-              );
+              const Icon = tab.id === "ingest" ? UploadCloud : Database;
+              return {
+                value: tab.id,
+                label: (
+                  <span className="flex min-w-0 items-center gap-2 text-xs">
+                    <Icon className="h-3.5 w-3.5 shrink-0" />
+                    <span className="truncate">{tab.label}</span>
+                    <Badge variant="secondary">{compactCount(count)}</Badge>
+                  </span>
+                ),
+              };
             })}
-          </div>
+          />
           {embedded && (
             <Button variant="ghost" size="sm" onClick={refresh} disabled={loading}>
               {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
@@ -2032,7 +2047,7 @@ export function CostIntelligencePanel({
         {activeCostTab === "costs" && (
           <section className="flex min-h-0 flex-1 flex-col gap-3">
             <div className="shrink-0 rounded-lg border border-line bg-bg/40 p-2">
-              <div className="grid grid-cols-[minmax(170px,2fr)_repeat(6,minmax(0,1fr))_32px_32px] items-center gap-2">
+              <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-2 xl:grid-cols-[minmax(170px,2fr)_repeat(6,minmax(120px,1fr))_32px_32px]">
                 <div className="relative min-w-0">
                   <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/30" />
                   <Input
@@ -2042,63 +2057,62 @@ export function CostIntelligencePanel({
                     className="h-8 min-w-0 pl-7 text-xs"
                   />
                 </div>
-                <select
-                  aria-label="Type"
+                <SearchSelect
+                  ariaLabel="Type"
                   value={resourceTypeFilter}
-                  onChange={(event) => setResourceTypeFilter(event.target.value)}
-                  className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none"
-                >
-                  <option value="all">All types</option>
-                  {resourceTypes.map((type) => <option key={type} value={type}>{type}</option>)}
-                </select>
-                <select
-                  aria-label="Category"
+                  onChange={setResourceTypeFilter}
+                  options={[{ value: "all", label: "All types" }, ...resourceTypes.map((type) => ({ value: type, label: type }))]}
+                  triggerClassName="h-8 min-w-0 text-xs"
+                />
+                <SearchSelect
+                  ariaLabel="Category"
                   value={categoryFilter}
-                  onChange={(event) => setCategoryFilter(event.target.value)}
-                  className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none"
-                >
-                  <option value="all">All categories</option>
-                  {categories.map((category) => <option key={category} value={category}>{category}</option>)}
-                </select>
+                  onChange={setCategoryFilter}
+                  options={[{ value: "all", label: "All categories" }, ...categories.map((category) => ({ value: category, label: category }))]}
+                  triggerClassName="h-8 min-w-0 text-xs"
+                />
                 <VendorVisibilityFilter vendors={vendorFilterOptions} excluded={excludedVendors} onChange={setExcludedVendors} />
-                <select
-                  aria-label="Confidence"
+                <SearchSelect
+                  ariaLabel="Confidence"
                   value={confidenceFilter}
-                  onChange={(event) => setConfidenceFilter(event.target.value as CostConfidenceFilter)}
-                  className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none"
-                >
-                  <option value="all">Any conf.</option>
-                  <option value="high">High 80%+</option>
-                  <option value="review">Review</option>
-                  <option value="low">Low</option>
-                </select>
-                <select
-                  aria-label="Evidence"
+                  onChange={(value) => setConfidenceFilter(value as CostConfidenceFilter)}
+                  options={[
+                    { value: "all", label: "Any confidence" },
+                    { value: "high", label: "High 80%+" },
+                    { value: "review", label: "Review" },
+                    { value: "low", label: "Low" },
+                  ]}
+                  triggerClassName="h-8 min-w-0 text-xs"
+                />
+                <SearchSelect
+                  ariaLabel="Evidence"
                   value={evidenceFilter}
-                  onChange={(event) => setEvidenceFilter(event.target.value as EvidenceFilter)}
-                  className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none"
-                >
-                  <option value="all">All evidence</option>
-                  <option value="multi">Multi-sample</option>
-                  <option value="single">Single</option>
-                  <option value="stale">Stale</option>
-                </select>
-                <select
-                  aria-label="Sort"
+                  onChange={(value) => setEvidenceFilter(value as EvidenceFilter)}
+                  options={[
+                    { value: "all", label: "All evidence" },
+                    { value: "multi", label: "Multi-sample" },
+                    { value: "single", label: "Single" },
+                    { value: "stale", label: "Stale" },
+                  ]}
+                  triggerClassName="h-8 min-w-0 text-xs"
+                />
+                <SearchSelect
+                  ariaLabel="Sort"
                   value={sortBy}
-                  onChange={(event) => setSortBy(event.target.value as CostSort)}
-                  className="h-8 min-w-0 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none"
-                >
-                  <option value="updated">Recent</option>
-                  <option value="name">Name</option>
-                  <option value="cost_desc">Cost high</option>
-                  <option value="confidence_desc">Conf. high</option>
-                  <option value="sample_desc">Most samples</option>
-                </select>
+                  onChange={(value) => setSortBy(value as CostSort)}
+                  options={[
+                    { value: "updated", label: "Recent" },
+                    { value: "name", label: "Name" },
+                    { value: "cost_desc", label: "Cost high" },
+                    { value: "confidence_desc", label: "Confidence high" },
+                    { value: "sample_desc", label: "Most samples" },
+                  ]}
+                  triggerClassName="h-8 min-w-0 text-xs"
+                />
                 <Button type="button" size="sm" variant="ghost" onClick={clearFilters} className="h-8 w-8 px-0" title="Clear filters" aria-label="Clear filters">
                   <X className="h-3.5 w-3.5" />
                 </Button>
-                <Button type="button" size="sm" variant="accent" onClick={openCreateCostDrawer} className="h-8 w-8 px-0" title="Add cost" aria-label="Add cost">
+                <Button type="button" size="sm" variant="default" onClick={openCreateCostDrawer} className="h-8 w-8 px-0" title="Add cost" aria-label="Add cost">
                   <Plus className="h-3.5 w-3.5" />
                 </Button>
               </div>
@@ -2119,7 +2133,7 @@ export function CostIntelligencePanel({
                 <div className="flex items-center gap-2">
                   {selectedCostCount > 0 && (
                     <>
-                      <Badge tone="info">{selectedCostCount.toLocaleString()} selected</Badge>
+                      <Badge variant="info">{selectedCostCount.toLocaleString()} selected</Badge>
                       <Button
                         type="button"
                         size="sm"
@@ -2133,7 +2147,7 @@ export function CostIntelligencePanel({
                       <Button
                         type="button"
                         size="sm"
-                        variant="danger"
+                        variant="destructive"
                         onClick={() => {
                           setBulkDeleteCostError(null);
                           setBulkDeleteCostConfirmOpen(true);
@@ -2147,7 +2161,7 @@ export function CostIntelligencePanel({
                     </>
                   )}
                   {loading && <Loader2 className="h-3.5 w-3.5 animate-spin text-fg/40" />}
-                  <Badge tone="success">{compactCount(filteredCosts.length)}</Badge>
+                  <Badge variant="success">{compactCount(filteredCosts.length)}</Badge>
                 </div>
               </div>
 
@@ -2157,10 +2171,10 @@ export function CostIntelligencePanel({
                     No cost basis rows match the current filters.
                   </div>
                 ) : (
-                  <table className="w-full text-xs">
-                    <thead className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--line)]">
-                      <tr className="border-b border-line text-[10px] uppercase text-fg/35">
-                        <th className="w-10 px-3 py-2 text-left font-medium">
+                  <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full text-xs">
+                    <TableHeader className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--color-line)]">
+                      <TableRow className="border-b border-line text-[10px] uppercase text-fg/35">
+                        <TableHead className="w-10 px-3 py-2 text-left font-medium">
                           <input
                             type="checkbox"
                             checked={allVisibleCostsSelected}
@@ -2169,21 +2183,21 @@ export function CostIntelligencePanel({
                             className="h-3.5 w-3.5 rounded border-line accent-accent"
                             aria-label="Select visible cost basis rows"
                           />
-                        </th>
-                        <th className="min-w-[280px] px-3 py-2 text-left font-medium">Item</th>
-                        <th className="w-40 px-3 py-2 text-left font-medium">Scope</th>
-                        <th className="w-36 px-3 py-2 text-right font-medium">Cost Basis</th>
-                        <th className="w-48 px-3 py-2 text-left font-medium">Evidence</th>
-                        <th className="w-32 px-3 py-2 text-left font-medium">Confidence</th>
-                        <th className="w-32 px-3 py-2 text-left font-medium">Freshness</th>
-                      </tr>
-                    </thead>
-                    <tbody>
+                        </TableHead>
+                        <TableHead className="min-w-[280px] px-3 py-2 text-left font-medium">Item</TableHead>
+                        <TableHead className="w-40 px-3 py-2 text-left font-medium">Scope</TableHead>
+                        <TableHead className="w-36 px-3 py-2 text-right font-medium">Cost Basis</TableHead>
+                        <TableHead className="w-48 px-3 py-2 text-left font-medium">Evidence</TableHead>
+                        <TableHead className="w-32 px-3 py-2 text-left font-medium">Confidence</TableHead>
+                        <TableHead className="w-32 px-3 py-2 text-left font-medium">Freshness</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
                       {visibleCosts.map((cost) => {
                         const stale = isStale(cost);
                         const selected = selectedCostIds.has(cost.id);
                         return (
-                          <tr
+                          <TableRow
                             key={cost.id}
                             className={cn(
                               "cursor-pointer border-b border-line/70 transition-colors hover:bg-panel2/65",
@@ -2191,7 +2205,7 @@ export function CostIntelligencePanel({
                             )}
                             onClick={() => openEditCostDrawer(cost)}
                           >
-                            <td className="px-3 py-2" onClick={(event) => event.stopPropagation()}>
+                            <TableCell className="px-3 py-2" onClick={(event) => event.stopPropagation()}>
                               <input
                                 type="checkbox"
                                 checked={selected}
@@ -2199,33 +2213,33 @@ export function CostIntelligencePanel({
                                 className="h-3.5 w-3.5 rounded border-line accent-accent"
                                 aria-label={`Select ${costResourceName(cost)}`}
                               />
-                            </td>
-                            <td className="max-w-0 px-3 py-2">
+                            </TableCell>
+                            <TableCell className="max-w-0 px-3 py-2">
                               <div className="truncate font-semibold text-fg">{costResourceName(cost)}</div>
                               <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[10px] text-fg/40">
                                 <span className="truncate">{costItemSecondaryLabel(cost)}</span>
                                 {displayToken(cost.sourceObservation?.vendorSku) && <span className="truncate">SKU {displayToken(cost.sourceObservation?.vendorSku)}</span>}
                               </div>
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <div className="flex flex-wrap gap-1">
                                 <Badge>{costResourceType(cost)}</Badge>
-                                <Badge tone="info" className="max-w-28 truncate">{costResourceCategory(cost)}</Badge>
+                                <Badge variant="info" className="max-w-28 truncate">{costResourceCategory(cost)}</Badge>
                               </div>
-                            </td>
-                            <td className="px-3 py-2 text-right">
+                            </TableCell>
+                            <TableCell className="px-3 py-2 text-right">
                               <div className="font-semibold tabular-nums text-fg">{formatMoney(cost.unitCost, cost.currency)}</div>
                               <div className="text-[10px] text-fg/40">per {cost.uom}</div>
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <div className="truncate font-medium text-fg/70">{costVendor(cost)}</div>
                               <div className="truncate text-[10px] text-fg/40">
                                 {costSourceLabel(cost)} · {cost.sampleSize} sample{cost.sampleSize === 1 ? "" : "s"}
                               </div>
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <div className="flex items-center gap-2">
-                                <Badge tone={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
+                                <Badge variant={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
                                 <div className="h-1.5 w-16 overflow-hidden rounded-full bg-panel2">
                                   <div
                                     className={cn(
@@ -2236,16 +2250,16 @@ export function CostIntelligencePanel({
                                   />
                                 </div>
                               </div>
-                            </td>
-                            <td className="px-3 py-2">
+                            </TableCell>
+                            <TableCell className="px-3 py-2">
                               <div className={cn("font-medium text-fg/65", stale && "text-warning")}>{formatDate(costEvidenceDate(cost))}</div>
                               <div className="text-[10px] text-fg/35">{methodLabel(cost.method)}</div>
-                            </td>
-                          </tr>
+                            </TableCell>
+                          </TableRow>
                         );
                       })}
-                    </tbody>
-                  </table>
+                    </TableBody>
+                  </Table>
                 )}
               </div>
 
@@ -2263,7 +2277,7 @@ export function CostIntelligencePanel({
                     <UploadCloud className="h-3.5 w-3.5 shrink-0 text-accent" />
                     <span className="truncate">Import</span>
                   </div>
-                  <Badge tone="info">4 sources</Badge>
+                  <Badge variant="info">4 sources</Badge>
                 </div>
                 <div className="min-h-0 flex-1 overflow-auto p-3">
                   <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
@@ -2283,7 +2297,7 @@ export function CostIntelligencePanel({
                             <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-line bg-panel">
                               <Icon className="h-4 w-4 text-accent" />
                             </div>
-                            <Badge tone={option.id === "pdf" ? "success" : "default"}>{option.badge}</Badge>
+                            <Badge variant={option.id === "pdf" ? "success" : "default"}>{option.badge}</Badge>
                           </div>
                           <div className="min-w-0">
                             <div className="truncate text-sm font-semibold text-fg">{option.label}</div>
@@ -2339,10 +2353,10 @@ export function CostIntelligencePanel({
                       </Button>
                       <SelectedImportIcon className="h-4 w-4 shrink-0 text-accent" />
                       <span className="shrink-0 text-xs font-semibold text-fg">{importIntakeTitle}</span>
-                      <Badge tone={pdfBatchFileCount > 0 ? "info" : "default"} className="shrink-0">{pdfBatchFileCount} {importFileKindLabel}{activeImportSource === "excel" ? " file" : ""}{pdfBatchFileCount === 1 ? "" : activeImportSource === "excel" ? "s" : "s"}</Badge>
+                      <Badge variant={pdfBatchFileCount > 0 ? "info" : "default"} className="shrink-0">{pdfBatchFileCount} {importFileKindLabel}{activeImportSource === "excel" ? " file" : ""}{pdfBatchFileCount === 1 ? "" : activeImportSource === "excel" ? "s" : "s"}</Badge>
                       <Badge className="shrink-0">{pdfBatchSizeLabel}</Badge>
                       <Badge className="shrink-0">{organizationCurrency}</Badge>
-                      <Badge tone={pdfFlowStatus.tone} className="shrink-0">{pdfFlowStatus.label}</Badge>
+                      <Badge variant={pdfFlowStatus.tone} className="shrink-0">{pdfFlowStatus.label}</Badge>
                     </div>
 
                     <div className="flex shrink-0 items-center justify-end gap-1">
@@ -2424,7 +2438,7 @@ export function CostIntelligencePanel({
                           <Button
                             type="button"
                             size="sm"
-                            variant="accent"
+                            variant="default"
                             onClick={handleApproveCandidates}
                             disabled={ingesting || agentReviewLoading || approvedReviewCount === 0}
                             className="h-7 w-7 shrink-0 px-0"
@@ -2495,7 +2509,7 @@ export function CostIntelligencePanel({
                       <div className="shrink-0 border-b border-line bg-panel2/35 px-3 py-2">
                         <div className="flex flex-wrap items-center gap-1.5">
                           {ingestMetrics.map((metric) => (
-                            <Badge key={metric.label} tone={metric.label === "Approved" ? "success" : metric.label === "Discarded" ? "warning" : "default"}>
+                            <Badge key={metric.label} variant={metric.label === "Approved" ? "success" : metric.label === "Discarded" ? "warning" : "default"}>
                               {metric.label}: {metric.value}
                             </Badge>
                           ))}
@@ -2507,7 +2521,7 @@ export function CostIntelligencePanel({
                           <span className="min-w-0 truncate" title={analysisResult.runtime.workDir ?? analysisResult.reviewFolder ?? undefined}>
                             {analysisResult.runtime.workDir ?? analysisResult.reviewFolder ?? "review workspace not written"}
                           </span>
-                          {agentReviewRun && <Badge tone="info">{agentReviewRun.runtime} session {agentReviewRun.status}</Badge>}
+                          {agentReviewRun && <Badge variant="info">{agentReviewRun.runtime} session {agentReviewRun.status}</Badge>}
                         </div>
                       </div>
 
@@ -2529,7 +2543,7 @@ export function CostIntelligencePanel({
                             No cost candidates were extracted from this batch.
                           </div>
                         ) : (
-                          <table className="w-full table-fixed text-xs">
+                          <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full table-fixed text-xs">
                             <colgroup>
                               <col style={{ width: "13%" }} />
                               <col style={{ width: "21%" }} />
@@ -2537,30 +2551,32 @@ export function CostIntelligencePanel({
                               <col style={{ width: "14%" }} />
                               <col style={{ width: "17%" }} />
                             </colgroup>
-                            <thead className="sticky top-0 z-10 bg-panel2/95">
-                              <tr className="border-b border-line text-[10px] uppercase text-fg/35">
-                                <th className="px-2 py-2 text-left font-medium">Decision</th>
-                                <th className="px-2 py-2 text-left font-medium">Vendor / Doc</th>
-                                <th className="px-2 py-2 text-left font-medium">Cost Item / Product</th>
-                                <th className="px-2 py-2 text-right font-medium">Cost</th>
-                                <th className="px-2 py-2 text-left font-medium">Review</th>
-                              </tr>
-                            </thead>
-                            <tbody>
+                            <TableHeader className="sticky top-0 z-10 bg-panel2/95">
+                              <TableRow className="border-b border-line text-[10px] uppercase text-fg/35">
+                                <TableHead className="px-2 py-2 text-left font-medium">Decision</TableHead>
+                                <TableHead className="px-2 py-2 text-left font-medium">Vendor / Doc</TableHead>
+                                <TableHead className="px-2 py-2 text-left font-medium">Cost Item / Product</TableHead>
+                                <TableHead className="px-2 py-2 text-right font-medium">Cost</TableHead>
+                                <TableHead className="px-2 py-2 text-left font-medium">Review</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
                               {visibleCandidates.map((candidate) => (
-                                <tr key={candidate.id} className="border-b border-line/70 last:border-b-0">
-                                  <td className="px-2 py-2 align-top">
-                                    <select
+                                <TableRow key={candidate.id} className="border-b border-line/70 last:border-b-0">
+                                  <TableCell className="px-2 py-2 align-top">
+                                    <SearchSelect
                                       value={candidate.decision}
-                                      onChange={(event) => updateReviewCandidate(candidate.id, { decision: event.target.value as VendorPdfReviewCandidate["decision"] })}
-                                      className="h-7 w-full min-w-0 rounded-md border border-line bg-panel px-1.5 text-[11px] text-fg outline-none"
-                                    >
-                                      <option value="pending">Pending</option>
-                                      <option value="approved">Approve</option>
-                                      <option value="discarded">Discard</option>
-                                    </select>
-                                  </td>
-                                  <td className="max-w-0 px-2 py-2 align-top">
+                                      onChange={(value) => updateReviewCandidate(candidate.id, { decision: value as VendorPdfReviewCandidate["decision"] })}
+                                      options={[
+                                        { value: "pending", label: "Pending" },
+                                        { value: "approved", label: "Approve" },
+                                        { value: "discarded", label: "Discard" },
+                                      ]}
+                                      triggerClassName="h-7 min-w-0 text-[11px]"
+                                      searchable={false}
+                                    />
+                                  </TableCell>
+                                  <TableCell className="max-w-0 px-2 py-2 align-top">
                                     <Input
                                       value={candidate.vendorName}
                                       onChange={(event) => updateReviewCandidate(candidate.id, { vendorName: event.target.value })}
@@ -2569,8 +2585,8 @@ export function CostIntelligencePanel({
                                     <div className="mt-1 min-w-0 truncate text-[10px] text-fg/35">
                                       {documentTypeLabel(candidate.documentType)} {candidate.documentNumber || ""}{candidate.pageNumber ? ` · p.${candidate.pageNumber}` : ""}
                                     </div>
-                                  </td>
-                                  <td className="max-w-0 px-2 py-2 align-top">
+                                  </TableCell>
+                                  <TableCell className="max-w-0 px-2 py-2 align-top">
                                     <Input
                                       value={candidate.resourceName}
                                       onChange={(event) => updateReviewCandidate(candidate.id, { resourceName: event.target.value, description: event.target.value })}
@@ -2590,8 +2606,8 @@ export function CostIntelligencePanel({
                                       />
                                     </div>
                                     <div className="mt-1 min-w-0 truncate text-[10px] text-fg/35">{candidate.rawText}</div>
-                                  </td>
-                                  <td className="px-2 py-2 align-top">
+                                  </TableCell>
+                                  <TableCell className="px-2 py-2 align-top">
                                     <Input
                                       value={formatNumberInput(candidate.unitCost)}
                                       onChange={(event) => updateReviewCandidate(candidate.id, { unitCost: Number(event.target.value) || 0 })}
@@ -2614,20 +2630,20 @@ export function CostIntelligencePanel({
                                     {candidate.existingUnitCost != null && (
                                       <div className="mt-1 truncate text-right text-[10px] text-fg/35">was {formatMoney(candidate.existingUnitCost, candidate.currency)}</div>
                                     )}
-                                  </td>
-                                  <td className="max-w-0 px-2 py-2 align-top">
+                                  </TableCell>
+                                  <TableCell className="max-w-0 px-2 py-2 align-top">
                                     <div className="flex min-w-0 flex-wrap items-center gap-1">
-                                      <Badge tone={candidate.recommendation === "duplicate" ? "warning" : candidate.recommendation === "update_cost_basis" ? "info" : "success"}>
+                                      <Badge variant={candidate.recommendation === "duplicate" ? "warning" : candidate.recommendation === "update_cost_basis" ? "info" : "success"}>
                                         {candidate.recommendation.replace(/_/g, " ")}
                                       </Badge>
                                       <Badge>{Math.round(candidate.confidence * 100)}%</Badge>
                                     </div>
                                     <div className="mt-1 line-clamp-2 text-[10px] text-fg/40">{candidate.recommendationReason}</div>
-                                  </td>
-                                </tr>
+                                  </TableCell>
+                                </TableRow>
                               ))}
-                            </tbody>
-                          </table>
+                            </TableBody>
+                          </Table>
                         )}
                       </div>
                       <PanelPagination label="candidates" onPageChange={setEvidencePage} page={evidencePage} pageSize={candidatePageSize} total={reviewCandidates.length} />
@@ -2711,29 +2727,19 @@ export function CostIntelligencePanel({
                   )}
 
                   <div className="flex shrink-0 items-center justify-between gap-2 border-b border-line bg-panel2/35 px-3 py-2">
-                    <div role="tablist" aria-label="Vendor detail views" className="flex min-w-0 flex-wrap gap-1 rounded-lg bg-bg/45 p-1">
-                      {VENDOR_DETAIL_SUBTABS.map((tab) => {
-                        const active = vendorDetailTab === tab.id;
+                    <Tabs
+                      value={vendorDetailTab}
+                      onValueChange={(value) => setVendorDetailTab(value as VendorDetailTab)}
+                      className="min-w-0 flex-wrap border-0 bg-transparent p-0"
+                      tabs={VENDOR_DETAIL_SUBTABS.map((tab) => {
                         const Icon = tab.icon;
-                        return (
-                          <button
-                            key={tab.id}
-                            type="button"
-                            role="tab"
-                            aria-selected={active}
-                            onClick={() => setVendorDetailTab(tab.id)}
-                            className={cn(
-                              "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors",
-                              active ? "bg-panel text-fg shadow-sm" : "text-fg/50 hover:bg-panel/70 hover:text-fg",
-                            )}
-                          >
-                            <Icon className="h-3.5 w-3.5" />
-                            {tab.label}
-                          </button>
-                        );
+                        return {
+                          value: tab.id,
+                          label: <span className="flex items-center gap-1.5 text-xs"><Icon className="h-3.5 w-3.5" />{tab.label}</span>,
+                        };
                       })}
-                    </div>
-                    <Badge tone="info">{compactCount(filteredVendorProductRows.length)} products</Badge>
+                    />
+                    <Badge variant="info">{compactCount(filteredVendorProductRows.length)} products</Badge>
                   </div>
 
                   <div className="min-h-0 flex-1 overflow-hidden bg-bg/15 p-3">
@@ -2815,19 +2821,20 @@ export function CostIntelligencePanel({
                                   className="h-8 pl-7 text-xs"
                                 />
                               </div>
-                              <select
-                                aria-label="Sort products"
+                              <SearchSelect
+                                ariaLabel="Sort products"
                                 value={vendorProductSortBy}
-                                onChange={(event) => setVendorProductSortBy(event.target.value as VendorProductSort)}
-                                className="h-8 min-w-40 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none transition-colors hover:border-accent/30"
-                              >
-                                <option value="latest_desc">Latest first</option>
-                                <option value="name_asc">Name A-Z</option>
-                                <option value="cost_desc">Cost high</option>
-                                <option value="cost_asc">Cost low</option>
-                                <option value="trend_desc">Trend high</option>
-                                <option value="evidence_desc">Most evidence</option>
-                              </select>
+                                onChange={(value) => setVendorProductSortBy(value as VendorProductSort)}
+                                options={[
+                                  { value: "latest_desc", label: "Latest first" },
+                                  { value: "name_asc", label: "Name A-Z" },
+                                  { value: "cost_desc", label: "Cost high" },
+                                  { value: "cost_asc", label: "Cost low" },
+                                  { value: "trend_desc", label: "Trend high" },
+                                  { value: "evidence_desc", label: "Most evidence" },
+                                ]}
+                                triggerClassName="h-8 min-w-40 text-xs"
+                              />
                             </div>
                           </div>
 
@@ -2837,19 +2844,19 @@ export function CostIntelligencePanel({
                                 No vendor products match the current search.
                               </div>
                             ) : (
-                              <table className="w-full min-w-[980px] table-fixed text-xs">
-                                <thead className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--line)]">
-                                  <tr className="border-b border-line text-[10px] uppercase text-fg/35">
-                                    <th className="w-[30%] px-3 py-2 text-left font-medium">Product</th>
-                                    <th className="w-[12%] px-3 py-2 text-left font-medium">SKU</th>
-                                    <th className="w-[13%] px-3 py-2 text-right font-medium">Latest Cost</th>
-                                    <th className="w-[13%] px-3 py-2 text-left font-medium">Trend</th>
-                                    <th className="w-[16%] px-3 py-2 text-left font-medium">Range</th>
-                                    <th className="w-[8%] px-3 py-2 text-left font-medium">Evidence</th>
-                                    <th className="w-[8%] px-3 py-2 text-left font-medium">Latest</th>
-                                  </tr>
-                                </thead>
-                                <tbody>
+                              <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full min-w-[980px] table-fixed text-xs">
+                                <TableHeader className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--color-line)]">
+                                  <TableRow className="border-b border-line text-[10px] uppercase text-fg/35">
+                                    <TableHead className="w-[30%] px-3 py-2 text-left font-medium">Product</TableHead>
+                                    <TableHead className="w-[12%] px-3 py-2 text-left font-medium">SKU</TableHead>
+                                    <TableHead className="w-[13%] px-3 py-2 text-right font-medium">Latest Cost</TableHead>
+                                    <TableHead className="w-[13%] px-3 py-2 text-left font-medium">Trend</TableHead>
+                                    <TableHead className="w-[16%] px-3 py-2 text-left font-medium">Range</TableHead>
+                                    <TableHead className="w-[8%] px-3 py-2 text-left font-medium">Evidence</TableHead>
+                                    <TableHead className="w-[8%] px-3 py-2 text-left font-medium">Latest</TableHead>
+                                  </TableRow>
+                                </TableHeader>
+                                <TableBody>
                                   {visibleVendorProducts.map((product, index) => {
                                     const trendPct = productTrendPercent(product);
                                     const clickable = Boolean(findCostForProduct(product));
@@ -2865,43 +2872,43 @@ export function CostIntelligencePanel({
                                           clickable && "cursor-pointer transition-colors hover:bg-panel2/65",
                                         )}
                                       >
-                                        <td className="px-3 py-2">
+                                        <TableCell className="px-3 py-2">
                                           <div className="truncate font-semibold text-fg">{product.name}</div>
                                           <div className="mt-0.5 truncate text-[10px] text-fg/35">{product.resourceName || "Unlinked cost item"} · per {product.uom}</div>
-                                        </td>
-                                        <td className="px-3 py-2 text-fg/55">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-fg/55">
                                           <span className="block truncate">{product.vendorSku || "No SKU"}</span>
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-right">
                                           <div className="font-semibold tabular-nums text-fg">{formatMoney(product.latestUnitCost, product.currency)}</div>
                                           <div className="text-[10px] text-fg/35">{product.currency}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
                                           <div className="flex items-center gap-2">
                                             <ProductSparkline points={product.points} />
                                             <span className={cn("min-w-12 text-right text-[11px] tabular-nums", trendPct == null ? "text-fg/35" : trendPct >= 0 ? "text-warning" : "text-success")}>
                                               {trendPct == null ? "-" : `${trendPct >= 0 ? "+" : ""}${trendPct.toFixed(1)}%`}
                                             </span>
                                           </div>
-                                        </td>
-                                        <td className="px-3 py-2">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
                                           <div className="truncate tabular-nums text-fg/65">
                                             {formatMoney(product.minUnitCost, product.currency)} - {formatMoney(product.maxUnitCost, product.currency)}
                                           </div>
                                           <div className="text-[10px] text-fg/35">avg {formatMoney(product.averageUnitCost, product.currency)}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
                                           <div className="font-medium tabular-nums text-fg/70">{compactCount(product.observationCount)}</div>
                                           <div className="text-[10px] text-fg/35">{compactCount(product.costBasisCount)} basis</div>
-                                        </td>
-                                        <td className="px-3 py-2 text-fg/55">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-fg/55">
                                           <div className="truncate">{formatDate(product.latestObservedAt)}</div>
-                                        </td>
+                                        </TableCell>
                                       </motion.tr>
                                     );
                                   })}
-                                </tbody>
-                              </table>
+                                </TableBody>
+                              </Table>
                             )}
                           </div>
                           <PanelPagination label="products" onPageChange={setVendorProductPage} page={vendorProductPage} pageSize={vendorProductPageSize} total={filteredVendorProductRows.length} />
@@ -2929,39 +2936,39 @@ export function CostIntelligencePanel({
                               {vendorDetailObservations.length === 0 ? (
                                 <div className="flex h-full min-h-48 items-center justify-center text-center text-xs text-fg/35">No observations for this vendor.</div>
                               ) : (
-                                <table className="w-full min-w-[640px] table-fixed text-xs">
-                                  <thead className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--line)]">
-                                    <tr className="border-b border-line text-[10px] uppercase text-fg/35">
-                                      <th className="w-[34%] px-3 py-2 text-left font-medium">Product</th>
-                                      <th className="w-[18%] px-3 py-2 text-right font-medium">Unit Cost</th>
-                                      <th className="w-[16%] px-3 py-2 text-left font-medium">Evidence</th>
-                                      <th className="w-[16%] px-3 py-2 text-left font-medium">Confidence</th>
-                                      <th className="w-[16%] px-3 py-2 text-left font-medium">Date</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
+                                <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full min-w-[640px] table-fixed text-xs">
+                                  <TableHeader className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--color-line)]">
+                                    <TableRow className="border-b border-line text-[10px] uppercase text-fg/35">
+                                      <TableHead className="w-[34%] px-3 py-2 text-left font-medium">Product</TableHead>
+                                      <TableHead className="w-[18%] px-3 py-2 text-right font-medium">Unit Cost</TableHead>
+                                      <TableHead className="w-[16%] px-3 py-2 text-left font-medium">Evidence</TableHead>
+                                      <TableHead className="w-[16%] px-3 py-2 text-left font-medium">Confidence</TableHead>
+                                      <TableHead className="w-[16%] px-3 py-2 text-left font-medium">Date</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
                                     {vendorDetailObservations.map((observation) => (
-                                      <tr key={observation.id} className="h-12 border-b border-line/70 last:border-b-0">
-                                        <td className="px-3 py-2">
+                                      <TableRow key={observation.id} className="h-12 border-b border-line/70 last:border-b-0">
+                                        <TableCell className="px-3 py-2">
                                           <div className="truncate font-medium text-fg">{observationProductName(observation, resourceById)}</div>
                                           <div className="truncate text-[10px] text-fg/35">{observation.vendorSku || "No SKU"} · {observation.observedUom}</div>
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-right">
                                           <div className="font-semibold tabular-nums text-fg">{formatMoney(observation.unitCost, observation.currency)}</div>
                                           <div className="text-[10px] text-fg/35">qty {observation.quantity}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
                                           <div className="truncate text-fg/60">{documentTypeLabel(observation.documentType)}</div>
                                           <div className="truncate text-[10px] text-fg/35">{observation.rawText}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
-                                          <Badge tone={confidenceTone(observation.confidence)}>{Math.round(observation.confidence * 100)}%</Badge>
-                                        </td>
-                                        <td className="px-3 py-2 text-fg/55">{formatDate(observation.effectiveDate || observation.observedAt)}</td>
-                                      </tr>
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
+                                          <Badge variant={confidenceTone(observation.confidence)}>{Math.round(observation.confidence * 100)}%</Badge>
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-fg/55">{formatDate(observation.effectiveDate || observation.observedAt)}</TableCell>
+                                      </TableRow>
                                     ))}
-                                  </tbody>
-                                </table>
+                                  </TableBody>
+                                </Table>
                               )}
                             </div>
                           </div>
@@ -2978,39 +2985,39 @@ export function CostIntelligencePanel({
                               {vendorDetailCosts.length === 0 ? (
                                 <div className="flex h-full min-h-48 items-center justify-center text-center text-xs text-fg/35">No cost basis rows for this vendor.</div>
                               ) : (
-                                <table className="w-full min-w-[640px] table-fixed text-xs">
-                                  <thead className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--line)]">
-                                    <tr className="border-b border-line text-[10px] uppercase text-fg/35">
-                                      <th className="w-[38%] px-3 py-2 text-left font-medium">Resource</th>
-                                      <th className="w-[18%] px-3 py-2 text-right font-medium">Cost</th>
-                                      <th className="w-[18%] px-3 py-2 text-left font-medium">Method</th>
-                                      <th className="w-[13%] px-3 py-2 text-left font-medium">Confidence</th>
-                                      <th className="w-[13%] px-3 py-2 text-left font-medium">Date</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
+                                <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full min-w-[640px] table-fixed text-xs">
+                                  <TableHeader className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--color-line)]">
+                                    <TableRow className="border-b border-line text-[10px] uppercase text-fg/35">
+                                      <TableHead className="w-[38%] px-3 py-2 text-left font-medium">Resource</TableHead>
+                                      <TableHead className="w-[18%] px-3 py-2 text-right font-medium">Cost</TableHead>
+                                      <TableHead className="w-[18%] px-3 py-2 text-left font-medium">Method</TableHead>
+                                      <TableHead className="w-[13%] px-3 py-2 text-left font-medium">Confidence</TableHead>
+                                      <TableHead className="w-[13%] px-3 py-2 text-left font-medium">Date</TableHead>
+                                    </TableRow>
+                                  </TableHeader>
+                                  <TableBody>
                                     {vendorDetailCosts.map((cost) => (
-                                      <tr key={cost.id} className="h-12 border-b border-line/70 last:border-b-0">
-                                        <td className="px-3 py-2">
+                                      <TableRow key={cost.id} className="h-12 border-b border-line/70 last:border-b-0">
+                                        <TableCell className="px-3 py-2">
                                           <div className="truncate font-medium text-fg">{costResourceName(cost)}</div>
                                           <div className="truncate text-[10px] text-fg/35">{costResourceCategory(cost)} · {cost.uom}</div>
-                                        </td>
-                                        <td className="px-3 py-2 text-right">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-right">
                                           <div className="font-semibold tabular-nums text-fg">{formatMoney(cost.unitCost, cost.currency)}</div>
                                           <div className="text-[10px] text-fg/35">{cost.sampleSize} sample{cost.sampleSize === 1 ? "" : "s"}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
                                           <div className="truncate text-fg/60">{methodLabel(cost.method)}</div>
                                           <div className="truncate text-[10px] text-fg/35">{costSourceLabel(cost)}</div>
-                                        </td>
-                                        <td className="px-3 py-2">
-                                          <Badge tone={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
-                                        </td>
-                                        <td className="px-3 py-2 text-fg/55">{formatDate(costEvidenceDate(cost))}</td>
-                                      </tr>
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2">
+                                          <Badge variant={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
+                                        </TableCell>
+                                        <TableCell className="px-3 py-2 text-fg/55">{formatDate(costEvidenceDate(cost))}</TableCell>
+                                      </TableRow>
                                     ))}
-                                  </tbody>
-                                </table>
+                                  </TableBody>
+                                </Table>
                               )}
                             </div>
                           </div>
@@ -3043,19 +3050,20 @@ export function CostIntelligencePanel({
                           className="h-8 pl-7 text-xs"
                         />
                       </div>
-                      <select
-                        aria-label="Sort vendors"
+                      <SearchSelect
+                        ariaLabel="Sort vendors"
                         value={vendorSortBy}
-                        onChange={(event) => setVendorSortBy(event.target.value as VendorRegistrySort)}
-                        className="h-8 min-w-40 rounded-lg border border-line bg-panel px-2 text-xs text-fg outline-none transition-colors hover:border-accent/30"
-                      >
-                        <option value="latest_desc">Latest first</option>
-                        <option value="name_asc">Name A-Z</option>
-                        <option value="products_desc">Most products</option>
-                        <option value="evidence_desc">Most evidence</option>
-                        <option value="cost_basis_desc">Most cost basis</option>
-                      </select>
-                      <Badge tone="info">{compactCount(filteredVendorRecords.length)} / {compactCount(vendorRecords.length)}</Badge>
+                        onChange={(value) => setVendorSortBy(value as VendorRegistrySort)}
+                        options={[
+                          { value: "latest_desc", label: "Latest first" },
+                          { value: "name_asc", label: "Name A-Z" },
+                          { value: "products_desc", label: "Most products" },
+                          { value: "evidence_desc", label: "Most evidence" },
+                          { value: "cost_basis_desc", label: "Most cost basis" },
+                        ]}
+                        triggerClassName="h-8 min-w-40 text-xs"
+                      />
+                      <Badge variant="info">{compactCount(filteredVendorRecords.length)} / {compactCount(vendorRecords.length)}</Badge>
                     </div>
                   </div>
 
@@ -3069,17 +3077,17 @@ export function CostIntelligencePanel({
                         No vendors match the current search.
                       </div>
                     ) : (
-                      <table className="w-full min-w-[820px] table-fixed text-xs">
-                        <thead className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--line)]">
-                          <tr className="border-b border-line text-[10px] uppercase text-fg/35">
-                            <th className="w-[27%] px-3 py-2 text-left font-medium">Vendor</th>
-                            <th className="w-[35%] px-3 py-2 text-left font-medium">Product Coverage</th>
-                            <th className="w-[13%] px-3 py-2 text-left font-medium">Evidence</th>
-                            <th className="w-[13%] px-3 py-2 text-left font-medium">Currencies</th>
-                            <th className="w-[12%] px-3 py-2 text-left font-medium">Latest</th>
-                          </tr>
-                        </thead>
-                        <tbody>
+                      <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full min-w-[820px] table-fixed text-xs">
+                        <TableHeader className="sticky top-0 z-20 bg-panel2/95 shadow-[0_1px_0_0_var(--color-line)]">
+                          <TableRow className="border-b border-line text-[10px] uppercase text-fg/35">
+                            <TableHead className="w-[27%] px-3 py-2 text-left font-medium">Vendor</TableHead>
+                            <TableHead className="w-[35%] px-3 py-2 text-left font-medium">Product Coverage</TableHead>
+                            <TableHead className="w-[13%] px-3 py-2 text-left font-medium">Evidence</TableHead>
+                            <TableHead className="w-[13%] px-3 py-2 text-left font-medium">Currencies</TableHead>
+                            <TableHead className="w-[12%] px-3 py-2 text-left font-medium">Latest</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
                           {filteredVendorRecords.map((vendor, index) => {
                             const primaryProduct = vendor.products[0];
                             return (
@@ -3099,43 +3107,43 @@ export function CostIntelligencePanel({
                                 }}
                                 className="h-16 cursor-pointer border-b border-line/70 outline-none transition-colors last:border-b-0 hover:bg-panel2/65 focus:bg-panel2/65"
                               >
-                                <td className="px-3 py-2">
+                                <TableCell className="px-3 py-2">
                                   <div className="truncate font-semibold text-fg">{vendor.vendorName}</div>
                                   <div className="mt-0.5 text-[10px] text-fg/40">
                                     {compactCount(vendor.productCount)} product{vendor.productCount === 1 ? "" : "s"} linked
                                   </div>
-                                </td>
-                                <td className="px-3 py-2">
+                                </TableCell>
+                                <TableCell className="px-3 py-2">
                                   <div className="truncate font-medium text-fg/75">{primaryProduct?.name ?? "No approved products yet"}</div>
                                   <div className="mt-0.5 truncate text-[10px] text-fg/35">
                                     {primaryProduct
                                       ? `${primaryProduct.vendorSku ? `SKU ${primaryProduct.vendorSku}` : "No SKU"} · ${primaryProduct.resourceName || "Unlinked cost item"}`
                                       : "Open the vendor page to review evidence and imported rows"}
                                   </div>
-                                </td>
-                                <td className="px-3 py-2">
+                                </TableCell>
+                                <TableCell className="px-3 py-2">
                                   <div className="font-medium tabular-nums text-fg/70">{compactCount(vendor.observationCount)}</div>
                                   <div className="text-[10px] text-fg/35">{compactCount(vendor.costBasisCount)} cost basis rows</div>
-                                </td>
-                                <td className="px-3 py-2">
+                                </TableCell>
+                                <TableCell className="px-3 py-2">
                                   <div className="flex flex-wrap gap-1">
                                     {vendor.currencies.length > 0
                                       ? vendor.currencies.slice(0, 3).map((currency) => <Badge key={currency}>{currency}</Badge>)
                                       : <Badge>None</Badge>}
                                     {vendor.currencies.length > 3 && <Badge>+{vendor.currencies.length - 3}</Badge>}
                                   </div>
-                                </td>
-                                <td className="px-3 py-2">
+                                </TableCell>
+                                <TableCell className="px-3 py-2">
                                   <div className="flex items-center justify-between gap-2">
                                     <span className="truncate text-fg/60">{formatDate(vendor.latestObservedAt)}</span>
                                     <ArrowRight className="h-3.5 w-3.5 shrink-0 text-fg/30" />
                                   </div>
-                                </td>
+                                </TableCell>
                               </motion.tr>
                             );
                           })}
-                        </tbody>
-                      </table>
+                        </TableBody>
+                      </Table>
                     )}
                   </div>
                 </motion.div>
@@ -3143,175 +3151,70 @@ export function CostIntelligencePanel({
             </AnimatePresence>
           </section>
         )}
-      </CardBody>
+      </CardContent>
     </Card>
-    {typeof document !== "undefined" && createPortal(
-      <AnimatePresence>
-        {drawerMode && (
-          <>
-            <motion.div
-              key="effective-cost-drawer-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-40 bg-black/20"
-              onClick={closeCostDrawer}
-            />
-            <EffectiveCostDrawer
-              key={drawerMode === "edit" ? selectedCostId ?? "edit" : "create"}
-              mode={drawerMode}
-              cost={selectedCost}
-              form={costForm}
-              resourceOptions={resourceOptions}
-              resourceRecords={resources}
-              saving={costSaving}
-              deleting={costDeleting}
-              error={costFormError}
-              onChange={(patch) => setCostForm((current) => ({ ...current, ...patch }))}
-              onClose={closeCostDrawer}
-              onSave={() => void handleSaveEffectiveCost()}
-              onDelete={() => void handleDeleteEffectiveCost()}
-            />
-          </>
-        )}
-        {bulkDeleteCostConfirmOpen && (
-          <>
-            <motion.div
-              key="bulk-delete-cost-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[60] bg-black/30"
-              onClick={() => {
-                if (!bulkDeletingCosts) setBulkDeleteCostConfirmOpen(false);
-              }}
-            />
-            <div
-              key="bulk-delete-cost-modal-frame"
-              className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center p-4"
-            >
-              <motion.div
-                key="bulk-delete-cost-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="bulk-delete-cost-title"
-                initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                transition={{ duration: 0.16, ease: "easeOut" }}
-                className="pointer-events-auto w-full max-w-[440px] rounded-lg border border-line bg-panel p-4 shadow-2xl"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-danger/25 bg-danger/10 text-danger">
-                    <Trash2 className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div id="bulk-delete-cost-title" className="text-sm font-semibold text-fg">Delete selected cost basis rows?</div>
-                    <div className="mt-1 text-xs leading-relaxed text-fg/50">
-                      This deletes {selectedCostCount.toLocaleString()} current cost basis row{selectedCostCount === 1 ? "" : "s"}. Price observations, vendor products, and PDF review evidence stay in history.
-                    </div>
-                    {bulkDeleteCostError && (
-                      <div className="mt-2 text-[11px] text-danger">{bulkDeleteCostError}</div>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-4 flex justify-end gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setBulkDeleteCostConfirmOpen(false)}
-                    disabled={bulkDeletingCosts}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="danger"
-                    onClick={() => void confirmBulkDeleteCosts()}
-                    disabled={bulkDeletingCosts || selectedCostCount === 0}
-                  >
-                    {bulkDeletingCosts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                    Delete
-                  </Button>
-                </div>
-              </motion.div>
-            </div>
-          </>
-        )}
-        {deleteReviewRunTarget && (
-          <>
-            <motion.div
-              key="delete-review-run-backdrop"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              className="fixed inset-0 z-[60] bg-black/30"
-              onClick={() => {
-                if (!deletingReviewRunId) setDeleteReviewRunTarget(null);
-              }}
-            />
-            <div
-              key="delete-review-run-modal-frame"
-              className="pointer-events-none fixed inset-0 z-[70] flex items-center justify-center p-4"
-            >
-              <motion.div
-                key="delete-review-run-modal"
-                role="dialog"
-                aria-modal="true"
-                aria-labelledby="delete-review-run-title"
-                initial={{ opacity: 0, y: 12, scale: 0.98 }}
-                animate={{ opacity: 1, y: 0, scale: 1 }}
-                exit={{ opacity: 0, y: 8, scale: 0.98 }}
-                transition={{ duration: 0.16, ease: "easeOut" }}
-                className="pointer-events-auto w-full max-w-[440px] rounded-lg border border-line bg-panel p-4 shadow-2xl"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-danger/25 bg-danger/10 text-danger">
-                    <Trash2 className="h-4 w-4" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div id="delete-review-run-title" className="text-sm font-semibold text-fg">Archive PDF review?</div>
-                    <div className="mt-1 text-xs leading-relaxed text-fg/50">
-                      This removes {deleteReviewRunTarget.fileNames.join(", ") || deleteReviewRunTarget.batchId} from active PDF Intake history and keeps the review workspace in the archive. It does not delete committed cost basis rows.
-                    </div>
-                    <div className="mt-2 truncate rounded-md border border-line bg-bg/45 px-2 py-1.5 text-[11px] text-fg/45">
-                      {deleteReviewRunTarget.batchId}
-                    </div>
-                    {deleteReviewRunError && (
-                      <div className="mt-2 text-[11px] text-danger">{deleteReviewRunError}</div>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-4 flex justify-end gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => setDeleteReviewRunTarget(null)}
-                    disabled={Boolean(deletingReviewRunId)}
-                  >
-                    Cancel
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="danger"
-                    onClick={() => void confirmDeleteReviewRun()}
-                    disabled={Boolean(deletingReviewRunId)}
-                  >
-                    {deletingReviewRunId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-                    Archive
-                  </Button>
-                </div>
-              </motion.div>
-            </div>
-          </>
-        )}
-      </AnimatePresence>,
-      document.body,
+    {drawerMode && (
+      <EffectiveCostDrawer
+        key={drawerMode === "edit" ? selectedCostId ?? "edit" : "create"}
+        mode={drawerMode}
+        cost={selectedCost}
+        form={costForm}
+        resourceOptions={resourceOptions}
+        resourceRecords={resources}
+        saving={costSaving}
+        deleting={costDeleting}
+        error={costFormError}
+        onChange={(patch) => setCostForm((current) => ({ ...current, ...patch }))}
+        onClose={closeCostDrawer}
+        onSave={() => void handleSaveEffectiveCost()}
+        onDelete={() => void handleDeleteEffectiveCost()}
+      />
     )}
+    <Dialog
+      open={bulkDeleteCostConfirmOpen}
+      onClose={() => {
+        if (!bulkDeletingCosts) setBulkDeleteCostConfirmOpen(false);
+      }}
+      title="Delete selected cost basis rows?"
+      description={`This deletes ${selectedCostCount.toLocaleString()} current cost basis row${selectedCostCount === 1 ? "" : "s"}. Price observations, vendor products, and PDF review evidence stay in history.`}
+      footer={
+        <>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setBulkDeleteCostConfirmOpen(false)} disabled={bulkDeletingCosts}>Cancel</Button>
+          <Button type="button" size="sm" variant="destructive" onClick={() => void confirmBulkDeleteCosts()} disabled={bulkDeletingCosts || selectedCostCount === 0}>
+            {bulkDeletingCosts ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Delete
+          </Button>
+        </>
+      }
+    >
+      {bulkDeleteCostError ? <div className="text-xs text-danger">{bulkDeleteCostError}</div> : null}
+    </Dialog>
+    <Dialog
+      open={Boolean(deleteReviewRunTarget)}
+      onClose={() => {
+        if (!deletingReviewRunId) setDeleteReviewRunTarget(null);
+      }}
+      title="Archive PDF review?"
+      description={deleteReviewRunTarget
+        ? `This removes ${deleteReviewRunTarget.fileNames.join(", ") || deleteReviewRunTarget.batchId} from active PDF Intake history and keeps the review workspace in the archive. It does not delete committed cost basis rows.`
+        : undefined}
+      footer={
+        <>
+          <Button type="button" size="sm" variant="ghost" onClick={() => setDeleteReviewRunTarget(null)} disabled={Boolean(deletingReviewRunId)}>Cancel</Button>
+          <Button type="button" size="sm" variant="destructive" onClick={() => void confirmDeleteReviewRun()} disabled={Boolean(deletingReviewRunId)}>
+            {deletingReviewRunId ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+            Archive
+          </Button>
+        </>
+      }
+    >
+      {deleteReviewRunTarget ? (
+        <div className="space-y-2">
+          <div className="truncate rounded-md border border-line bg-bg/45 px-2 py-1.5 text-[11px] text-fg/45">{deleteReviewRunTarget.batchId}</div>
+          {deleteReviewRunError ? <div className="text-xs text-danger">{deleteReviewRunError}</div> : null}
+        </div>
+      ) : null}
+    </Dialog>
     </>
   );
 }
@@ -3508,28 +3411,28 @@ function PriceHistoryTab({ resourceId, currency, uom }: { resourceId: string; cu
       <PriceHistoryChart series={series} currency={currency} uom={uom} />
       {observations.length > 0 && (
         <div className="overflow-hidden rounded-lg border border-line">
-          <table className="w-full text-xs">
-            <thead className="bg-panel2/45 text-[10px] uppercase text-fg/40">
-              <tr>
-                <th className="px-3 py-2 text-left font-medium">Date</th>
-                <th className="px-3 py-2 text-left font-medium">Vendor</th>
-                <th className="px-3 py-2 text-left font-medium">SKU</th>
-                <th className="px-3 py-2 text-right font-medium">Unit Cost</th>
-                <th className="px-3 py-2 text-left font-medium">Source</th>
-              </tr>
-            </thead>
-            <tbody>
+          <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full text-xs">
+            <TableHeader className="bg-panel2/45 text-[10px] uppercase text-fg/40">
+              <TableRow>
+                <TableHead className="px-3 py-2 text-left font-medium">Date</TableHead>
+                <TableHead className="px-3 py-2 text-left font-medium">Vendor</TableHead>
+                <TableHead className="px-3 py-2 text-left font-medium">SKU</TableHead>
+                <TableHead className="px-3 py-2 text-right font-medium">Unit Cost</TableHead>
+                <TableHead className="px-3 py-2 text-left font-medium">Source</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {observations.slice(0, 50).map((obs) => (
-                <tr key={obs.id} className="border-t border-line/70">
-                  <td className="px-3 py-1.5 text-fg/75">{formatDate(obs.observedAt)}</td>
-                  <td className="px-3 py-1.5 text-fg/75">{obs.vendorName || "—"}</td>
-                  <td className="px-3 py-1.5 text-fg/55">{obs.vendorSku || "—"}</td>
-                  <td className="px-3 py-1.5 text-right font-medium tabular-nums text-fg">{formatMoney(obs.unitCost, obs.currency)}</td>
-                  <td className="px-3 py-1.5 text-fg/55">{obs.documentType || "—"}</td>
-                </tr>
+                <TableRow key={obs.id} className="border-t border-line/70">
+                  <TableCell className="px-3 py-1.5 text-fg/75">{formatDate(obs.observedAt)}</TableCell>
+                  <TableCell className="px-3 py-1.5 text-fg/75">{obs.vendorName || "—"}</TableCell>
+                  <TableCell className="px-3 py-1.5 text-fg/55">{obs.vendorSku || "—"}</TableCell>
+                  <TableCell className="px-3 py-1.5 text-right font-medium tabular-nums text-fg">{formatMoney(obs.unitCost, obs.currency)}</TableCell>
+                  <TableCell className="px-3 py-1.5 text-fg/55">{obs.documentType || "—"}</TableCell>
+                </TableRow>
               ))}
-            </tbody>
-          </table>
+            </TableBody>
+          </Table>
           {observations.length > 50 && (
             <div className="border-t border-line/70 px-3 py-1.5 text-[10px] text-fg/40">
               Showing 50 of {observations.length} observations
@@ -3586,34 +3489,34 @@ function VendorsTab({ resourceId }: { resourceId: string }) {
 
   return (
     <div className="overflow-hidden rounded-lg border border-line">
-      <table className="w-full text-xs">
-        <thead className="bg-panel2/45 text-[10px] uppercase text-fg/40">
-          <tr>
-            <th className="px-3 py-2 text-left font-medium">Vendor</th>
-            <th className="px-3 py-2 text-left font-medium">SKU</th>
-            <th className="px-3 py-2 text-right font-medium">Cost Basis</th>
-            <th className="px-3 py-2 text-left font-medium">UOM</th>
-            <th className="px-3 py-2 text-right font-medium">Samples</th>
-            <th className="px-3 py-2 text-left font-medium">Effective</th>
-            <th className="px-3 py-2 text-right font-medium">Confidence</th>
-          </tr>
-        </thead>
-        <tbody>
+      <Table containerClassName="rounded-none border-0 bg-transparent shadow-none" className="w-full text-xs">
+        <TableHeader className="bg-panel2/45 text-[10px] uppercase text-fg/40">
+          <TableRow>
+            <TableHead className="px-3 py-2 text-left font-medium">Vendor</TableHead>
+            <TableHead className="px-3 py-2 text-left font-medium">SKU</TableHead>
+            <TableHead className="px-3 py-2 text-right font-medium">Cost Basis</TableHead>
+            <TableHead className="px-3 py-2 text-left font-medium">UOM</TableHead>
+            <TableHead className="px-3 py-2 text-right font-medium">Samples</TableHead>
+            <TableHead className="px-3 py-2 text-left font-medium">Effective</TableHead>
+            <TableHead className="px-3 py-2 text-right font-medium">Confidence</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {costs.map((cost) => (
-            <tr key={cost.id} className="border-t border-line/70">
-              <td className="px-3 py-2 font-medium text-fg/75">{cost.vendorName || costVendor(cost) || "—"}</td>
-              <td className="px-3 py-2 text-fg/55">{cost.sourceObservation?.vendorSku || "—"}</td>
-              <td className="px-3 py-2 text-right font-semibold tabular-nums text-fg">{formatMoney(cost.unitCost, cost.currency)}</td>
-              <td className="px-3 py-2 text-fg/55">{cost.uom}</td>
-              <td className="px-3 py-2 text-right tabular-nums text-fg/65">{cost.sampleSize}</td>
-              <td className="px-3 py-2 text-fg/65">{formatDate(costEvidenceDate(cost))}</td>
-              <td className="px-3 py-2 text-right tabular-nums">
-                <Badge tone={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
-              </td>
-            </tr>
+            <TableRow key={cost.id} className="border-t border-line/70">
+              <TableCell className="px-3 py-2 font-medium text-fg/75">{cost.vendorName || costVendor(cost) || "—"}</TableCell>
+              <TableCell className="px-3 py-2 text-fg/55">{cost.sourceObservation?.vendorSku || "—"}</TableCell>
+              <TableCell className="px-3 py-2 text-right font-semibold tabular-nums text-fg">{formatMoney(cost.unitCost, cost.currency)}</TableCell>
+              <TableCell className="px-3 py-2 text-fg/55">{cost.uom}</TableCell>
+              <TableCell className="px-3 py-2 text-right tabular-nums text-fg/65">{cost.sampleSize}</TableCell>
+              <TableCell className="px-3 py-2 text-fg/65">{formatDate(costEvidenceDate(cost))}</TableCell>
+              <TableCell className="px-3 py-2 text-right tabular-nums">
+                <Badge variant={confidenceTone(cost.confidence)}>{Math.round(cost.confidence * 100)}%</Badge>
+              </TableCell>
+            </TableRow>
           ))}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -3675,61 +3578,59 @@ function EffectiveCostDrawer({
   }
 
   return (
-    <motion.aside
-      initial={{ x: "100%" }}
-      animate={{ x: 0 }}
-      exit={{ x: "100%" }}
-      transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed inset-y-0 right-0 z-50 flex w-[min(760px,calc(100vw-24px))] flex-col border-l border-line bg-panel shadow-2xl"
-    >
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel2/35 px-5 py-4">
+    <Drawer
+      open
+      onClose={onClose}
+      size="lg"
+      title={
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             <Database className="h-4 w-4 text-success" />
-            <h2 className="truncate text-sm font-semibold text-fg">{title}</h2>
+            <span className="truncate">{title}</span>
           </div>
-          <p className="mt-0.5 truncate text-[11px] text-fg/45">
-            {mode === "create" ? "Manual entry for the cost basis register." : `${methodLabel(cost?.method ?? "manual")} · updated ${formatDate(cost?.updatedAt)}`}
-          </p>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded p-1.5 text-fg/45 transition-colors hover:bg-panel2/70 hover:text-fg"
-          title="Close"
-        >
-          <X className="h-4 w-4" />
-        </button>
-      </div>
-
-      {showTabs && (
-        <div className="flex shrink-0 items-center gap-2 border-b border-line bg-panel2/35 px-3 py-2">
-          <div role="tablist" aria-label="Cost basis detail views" className="flex min-w-0 flex-wrap gap-1 rounded-lg bg-bg/45 p-1">
-            {EFFECTIVE_COST_DRAWER_TABS.map((tab) => {
-              const active = activeTab === tab.id;
+      }
+      description={mode === "create" ? "Manual entry for the cost basis register." : `${methodLabel(cost?.method ?? "manual")} · updated ${formatDate(cost?.updatedAt)}`}
+      subtabs={showTabs ? (
+        <div className="border-b border-line bg-panel2/35 px-3 py-2">
+          <Tabs
+            value={activeTab}
+            onValueChange={(value) => setActiveTab(value as EffectiveCostDrawerTab)}
+            className="min-w-0 flex-wrap border-0 bg-transparent p-0"
+            tabs={EFFECTIVE_COST_DRAWER_TABS.map((tab) => {
               const Icon = tab.icon;
-              return (
-                <button
-                  key={tab.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  onClick={() => setActiveTab(tab.id)}
-                  className={cn(
-                    "inline-flex h-8 items-center gap-1.5 rounded-md px-3 text-xs font-medium transition-colors",
-                    active ? "bg-panel text-fg shadow-sm" : "text-fg/50 hover:bg-panel/70 hover:text-fg",
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5" />
-                  {tab.label}
-                </button>
-              );
+              return {
+                value: tab.id,
+                label: <span className="flex items-center gap-1.5 text-xs"><Icon className="h-3.5 w-3.5" />{tab.label}</span>,
+              };
             })}
+          />
+        </div>
+      ) : undefined}
+      footer={
+        <div className="flex w-full items-center justify-between gap-3">
+          <div>
+            {mode === "edit" && (
+              <Button variant="destructive" size="sm" onClick={onDelete} disabled={saving || deleting}>
+                {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete
+              </Button>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose} disabled={saving || deleting}>
+              {(!showTabs || activeTab === "details") ? "Cancel" : "Close"}
+            </Button>
+            {(!showTabs || activeTab === "details") && (
+              <Button variant="default" size="sm" onClick={onSave} disabled={saving || deleting}>
+                {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+                Save
+              </Button>
+            )}
           </div>
         </div>
-      )}
-
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      }
+    >
         {error && (
           <div className="mb-4 rounded-lg border border-danger/30 bg-danger/10 px-3 py-2 text-xs text-danger">
             {error}
@@ -3852,9 +3753,9 @@ function EffectiveCostDrawer({
               </div>
               <div>
                 <Label>Currency</Label>
-                <Select
+                <SearchSelect
                   value={currencyValue}
-                  onValueChange={(currency) => onChange({ currency })}
+                  onChange={(currency) => onChange({ currency })}
                   options={currencyOptions}
                   triggerClassName="text-sm uppercase"
                 />
@@ -3926,14 +3827,15 @@ function EffectiveCostDrawer({
               </div>
               <div>
                 <Label>Method</Label>
-                <select
+                <SearchSelect
                   value={form.method}
-                  onChange={(event) => onChange({ method: event.target.value === "contract" ? "contract" : "manual" })}
-                  className="h-9 w-full rounded-lg border border-line bg-bg/50 px-3 text-sm text-fg outline-none focus:border-accent/50 focus:ring-1 focus:ring-accent/20"
-                >
-                  <option value="manual">Manual</option>
-                  <option value="contract">Contract</option>
-                </select>
+                  onChange={(value) => onChange({ method: value === "contract" ? "contract" : "manual" })}
+                  options={[
+                    { value: "manual", label: "Manual" },
+                    { value: "contract", label: "Contract" },
+                  ]}
+                  triggerClassName="text-sm"
+                />
               </div>
               <div className="md:col-span-2">
                 <Label>Notes</Label>
@@ -3960,29 +3862,6 @@ function EffectiveCostDrawer({
           )}
         </div>
         )}
-      </div>
-
-      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-line bg-panel2/35 px-5 py-3">
-        <div>
-          {mode === "edit" && (
-            <Button variant="danger" size="sm" onClick={onDelete} disabled={saving || deleting}>
-              {deleting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
-              Delete
-            </Button>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving || deleting}>
-            {(!showTabs || activeTab === "details") ? "Cancel" : "Close"}
-          </Button>
-          {(!showTabs || activeTab === "details") && (
-            <Button variant="accent" size="sm" onClick={onSave} disabled={saving || deleting}>
-              {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-              Save
-            </Button>
-          )}
-        </div>
-      </div>
-    </motion.aside>
+    </Drawer>
   );
 }

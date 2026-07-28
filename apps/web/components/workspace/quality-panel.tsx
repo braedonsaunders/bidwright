@@ -1,7 +1,17 @@
 "use client";
 
 import { AlertTriangle, CheckCircle2, CircleAlert, Info, ShieldCheck } from "lucide-react";
-import { Badge, Card, CardBody, CardHeader, CardTitle, EmptyState, Progress } from "@/components/ui";
+import {
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Progress,
+} from "@appkit/ui";
+import {
+  Badge,
+  EmptyState,
+} from "@/components/legacy-controls";
 import { cn } from "@/lib/utils";
 
 export type QualityFindingSeverity = "error" | "warning" | "info" | "pass";
@@ -114,7 +124,7 @@ export function QualityPanel({
         <Badge tone={tone}>{badgeLabel}</Badge>
       </CardHeader>
 
-      <CardBody className="space-y-4">
+      <CardContent className="space-y-4">
         <div className="rounded-lg border border-line bg-bg/35 p-3">
           <div className="flex items-end justify-between gap-3">
             <div>
@@ -203,7 +213,7 @@ export function QualityPanel({
             })}
           </div>
         )}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

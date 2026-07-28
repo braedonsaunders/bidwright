@@ -3,11 +3,9 @@
 /**
  * "My Credentials" page — per-user CLI auth + API key management.
  *
- * Each row corresponds to a CLI runtime (Claude Code, Codex, OpenCode,
- * Gemini). The user can:
- *   • Sign in with the runtime's interactive OAuth flow (PTY modal)
- *   • Paste a personal API key for the relevant provider
- *   • Clear their personal value (falls through to the org default)
+ * Each row corresponds to an agent runtime (Claude, Codex, OpenRouter,
+ * OpenCode, Gemini). Server deployments default to organization-managed API keys.
+ * Interactive OAuth remains an optional desktop-only capability.
  *
  * Resolution at spawn time is user-overrides → org defaults → env (handled
  * by `store.getEffectiveIntegrations(userId)` server-side). This page
@@ -15,18 +13,18 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import Link from "next/link";
 import {
+  Alert,
+  AlertDescription,
   Badge,
   Button,
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
   Input,
   Label,
-} from "@/components/ui";
-import { AppShell } from "@/components/app-shell";
+} from "@appkit/ui";
 import { CliLoginModal } from "@/components/cli-login-modal";
 import { detectCli, type CliRuntimeStatus } from "@/lib/api";
 import {
@@ -52,6 +50,7 @@ interface RuntimeRow {
 const RUNTIME_API_KEY_FIELD: Record<string, RuntimeRow["apiKeyField"]> = {
   "claude-code": "anthropicKey",
   codex: "openaiKey",
+  openrouter: "openrouterKey",
   opencode: "anthropicKey",
   gemini: "geminiKey",
 };
@@ -59,6 +58,7 @@ const RUNTIME_API_KEY_FIELD: Record<string, RuntimeRow["apiKeyField"]> = {
 const RUNTIME_API_KEY_LABEL: Record<string, string> = {
   "claude-code": "Anthropic API key",
   codex: "OpenAI API key",
+  openrouter: "OpenRouter API key",
   opencode: "Anthropic API key (OpenCode also accepts OpenAI / Google / OpenRouter)",
   gemini: "Google / Gemini API key",
 };
@@ -66,6 +66,7 @@ const RUNTIME_API_KEY_LABEL: Record<string, string> = {
 const RUNTIME_API_KEY_PLACEHOLDER: Record<string, string> = {
   "claude-code": "sk-ant-…",
   codex: "sk-…",
+  openrouter: "sk-or-…",
   opencode: "sk-ant-…",
   gemini: "AIza…",
 };
@@ -78,6 +79,7 @@ export default function MyCredentialsPage() {
   const [message, setMessage] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
   const [loginModal, setLoginModal] = useState<{ runtime: string; label: string } | null>(null);
   const [pendingKeys, setPendingKeys] = useState<Record<string, string>>({});
+  const [interactiveLoginAvailable, setInteractiveLoginAvailable] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -95,6 +97,7 @@ export default function MyCredentialsPage() {
       }));
       list.sort((a, b) => a.displayName.localeCompare(b.displayName));
       setRuntimes(list);
+      setInteractiveLoginAvailable(detect.interactiveLoginAvailable);
       setUserSettings(mySettings);
       setLoadError(null);
     } catch (err) {
@@ -157,37 +160,25 @@ export default function MyCredentialsPage() {
   const cards = useMemo(() => runtimes ?? [], [runtimes]);
 
   return (
-    <AppShell>
-      <div className="mx-auto max-w-3xl space-y-6">
-        <div className="flex items-end justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-bold text-fg">My credentials</h1>
-            <p className="mt-1 text-sm text-fg/60">
-              Sign in to a CLI runtime with your own subscription, or paste a personal API key.
-              These values override the organization defaults whenever they're set.
-            </p>
-          </div>
-          <Link href="/profile" className="text-xs text-fg/60 hover:text-fg underline-offset-4 hover:underline">
-            ← Back to profile
-          </Link>
+    <>
+      <div className="space-y-6">
+        <div>
+          <h2 className="text-base font-semibold text-fg">Agent credentials</h2>
+          <p className="mt-1 text-sm text-fg-muted">
+            {interactiveLoginAvailable
+              ? "Desktop mode can use your local interactive sign-in or a personal API key."
+              : "Your organization manages the default OpenAI and Anthropic credentials. Personal API keys remain an optional override."}
+          </p>
         </div>
 
         {message && (
-          <div
-            className={`rounded-lg border px-4 py-2 text-sm ${
-              message.kind === "ok"
-                ? "border-success/30 bg-success/10 text-success"
-                : "border-danger/30 bg-danger/10 text-danger"
-            }`}
-          >
-            {message.text}
-          </div>
+          <Alert variant={message.kind === "ok" ? "success" : "destructive"}>
+            <AlertDescription>{message.text}</AlertDescription>
+          </Alert>
         )}
 
         {loadError && (
-          <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
-            {loadError}
-          </div>
+          <Alert variant="destructive"><AlertDescription>{loadError}</AlertDescription></Alert>
         )}
 
         {!runtimes && !loadError && (
@@ -209,40 +200,53 @@ export default function MyCredentialsPage() {
                   <CardTitle>{runtime.displayName}</CardTitle>
                   <div className="flex items-center gap-2">
                     {!runtime.available ? (
-                      <Badge tone="warning">Not installed</Badge>
+                      <Badge variant="warning">Not installed</Badge>
                     ) : runtime.authenticated ? (
-                      <Badge tone="success">
+                      <Badge variant="success">
                         Auth: {runtime.authMethod === "api_key" ? "API key" : runtime.authMethod}
                       </Badge>
                     ) : (
-                      <Badge tone="warning">Not signed in</Badge>
+                      <Badge variant="warning">Not signed in</Badge>
                     )}
                   </div>
                 </div>
               </CardHeader>
-              <CardBody className="space-y-4">
+              <CardContent className="space-y-4">
                 {!runtime.available ? (
                   <p className="text-xs text-fg/60">{runtime.installHint}</p>
                 ) : null}
 
-                <div className="flex flex-wrap items-center gap-2">
-                  <Button
-                    variant="accent"
-                    size="sm"
-                    disabled={!runtime.available}
-                    onClick={() =>
-                      setLoginModal({ runtime: runtime.id, label: runtime.displayName })
-                    }
-                  >
-                    {runtime.authenticated && runtime.authMethod !== "api_key"
-                      ? "Re-authenticate"
-                      : `Sign in with ${runtime.displayName}`}
-                  </Button>
-                  <span className="text-[11px] text-fg/50">
-                    Opens a terminal session. Credentials are stored in your private namespace
-                    on this server, scoped to your account only.
-                  </span>
-                </div>
+                {interactiveLoginAvailable && runtime.id !== "openrouter" ? (
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Button
+                      variant="default"
+                      size="sm"
+                      disabled={!runtime.available}
+                      onClick={() =>
+                        setLoginModal({ runtime: runtime.id, label: runtime.displayName })
+                      }
+                    >
+                      {runtime.authenticated && runtime.authMethod !== "api_key"
+                        ? "Re-authenticate"
+                        : `Sign in with ${runtime.displayName}`}
+                    </Button>
+                    <span className="text-[11px] text-fg/50">
+                      Opens a local terminal session and stores credentials in your desktop profile.
+                    </span>
+                  </div>
+                ) : runtime.id === "openrouter" ? (
+                  <Alert>
+                    <AlertDescription>
+                      OpenRouter uses API-key authentication. Add a personal key below or use the organization-managed default.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <Alert>
+                    <AlertDescription>
+                      Browser-based CLI sign-in is disabled in server mode. This runtime uses the organization-managed provider key unless you set a personal API key below.
+                    </AlertDescription>
+                  </Alert>
+                )}
 
                 <div className="space-y-2">
                   <Label htmlFor={`apikey-${runtime.id}`}>{runtime.apiKeyLabel}</Label>
@@ -283,7 +287,7 @@ export default function MyCredentialsPage() {
                       : "No personal key. The agent will use the organization default if one is configured."}
                   </p>
                 </div>
-              </CardBody>
+              </CardContent>
             </Card>
           );
         })}
@@ -297,6 +301,6 @@ export default function MyCredentialsPage() {
           onClose={handleLoginClosed}
         />
       ) : null}
-    </AppShell>
+    </>
   );
 }

@@ -5,13 +5,15 @@ import { Eye, EyeOff, Pencil, Trash2, ChevronDown, ChevronRight, Check, X, Link2
 import { cn } from "@/lib/utils";
 import {
   Card,
-  CardBody,
+  CardContent,
   CardHeader,
   CardTitle,
-  EmptyState,
   Input,
   Separator,
-} from "@/components/ui";
+} from "@appkit/ui";
+import {
+  EmptyState,
+} from "@/components/legacy-controls";
 import type { Pickup } from "./annotation-canvas";
 import type { PickupLinkRecord } from "@/lib/api";
 
@@ -354,9 +356,9 @@ export function AnnotationSidebar({
           {totalCount} item{totalCount !== 1 ? "s" : ""} &middot; {visibleCount} visible
         </p>
       </CardHeader>
-      <CardBody className="flex flex-1 flex-col gap-1 overflow-auto py-2 px-2">
+      <CardContent className="flex flex-1 flex-col gap-1 overflow-auto py-2 px-2">
         {content}
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

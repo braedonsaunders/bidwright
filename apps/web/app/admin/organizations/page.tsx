@@ -1,458 +1,585 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import {
-  adminListOrganizations,
   adminCreateOrganization,
-  adminUpdateOrganization,
-  adminDeleteOrganization,
-  adminListOrgUsers,
-  adminUpdateOrgLimits,
   adminCreateOrgUser,
-  adminUpdateUser,
+  adminDeleteOrganization,
   adminDeleteUser,
+  adminListOrganizations,
+  adminListOrgUsers,
+  adminUpdateOrganization,
+  adminUpdateOrgLimits,
+  adminUpdateUser,
   seedSampleData,
   type AdminOrg,
   type AuthUser,
   type OrgLimits,
 } from "@/lib/api";
 import {
+  Badge,
   Button,
-  Card,
-  CardBody,
-  CardHeader,
-  CardTitle,
+  Drawer,
+  EmptyState,
   Input,
   Label,
-  Badge,
-  ModalBackdrop,
-  Select,
-} from "@/components/ui";
+  PageHeader,
+  RecordList,
+  type RecordColumn,
+  SearchSelect,
+  SubtabNav,
+} from "@appkit/ui";
 import {
   Building2,
-  ChevronDown,
-  ChevronUp,
-  Edit3,
-  LogIn,
+  ExternalLink,
+  Loader2,
   Plus,
   Save,
-  Settings,
   Trash2,
   UserPlus,
-  Users,
-  X,
 } from "lucide-react";
+
+type OrganizationTab = "overview" | "users" | "limits";
+
+function formatDate(value: string | null) {
+  if (!value) return "Never";
+  return new Intl.DateTimeFormat("en-CA", { dateStyle: "medium" }).format(new Date(value));
+}
 
 export default function OrganizationsPage() {
   const { impersonate } = useAuth();
   const [orgs, setOrgs] = useState<AdminOrg[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
-  const [editingOrg, setEditingOrg] = useState<AdminOrg | null>(null);
-  const [busyOrgAction, setBusyOrgAction] = useState<string | null>(null);
-  const [expandedOrg, setExpandedOrg] = useState<string | null>(null);
-  const [expandedSection, setExpandedSection] = useState<"users" | "limits">("users");
+  const [search, setSearch] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedTab, setSelectedTab] = useState<OrganizationTab>("overview");
   const [orgUsers, setOrgUsers] = useState<Record<string, AuthUser[]>>({});
+  const [usersLoading, setUsersLoading] = useState(false);
+
+  const selectedOrg = orgs.find((org) => org.id === selectedId) ?? null;
 
   const fetchOrgs = useCallback(async () => {
+    setLoading(true);
     try {
-      const data = await adminListOrganizations();
-      setOrgs(data);
-    } catch { /* ignore */ }
-    finally { setLoading(false); }
+      setOrgs(await adminListOrganizations());
+    } finally {
+      setLoading(false);
+    }
   }, []);
-
-  useEffect(() => { fetchOrgs(); }, [fetchOrgs]);
-
-  const toggleOrg = useCallback(async (orgId: string, section: "users" | "limits") => {
-    if (expandedOrg === orgId && expandedSection === section) {
-      setExpandedOrg(null);
-      return;
-    }
-    setExpandedOrg(orgId);
-    setExpandedSection(section);
-    if (section === "users" && !orgUsers[orgId]) {
-      try {
-        const users = await adminListOrgUsers(orgId);
-        setOrgUsers((prev) => ({ ...prev, [orgId]: users }));
-      } catch { /* ignore */ }
-    }
-  }, [expandedOrg, expandedSection, orgUsers]);
-
-  const handleDelete = useCallback(async (orgId: string, orgName: string) => {
-    if (!confirm(`Delete "${orgName}"? This permanently deletes all its data.`)) return;
-    try {
-      await adminDeleteOrganization(orgId);
-      setOrgs((prev) => prev.filter((o) => o.id !== orgId));
-    } catch { /* ignore */ }
-  }, []);
-
-  const handleSeedSampleData = useCallback(async (orgId: string, orgName: string) => {
-    if (!confirm(`Load sample data into "${orgName}"?`)) return;
-    setBusyOrgAction(`${orgId}:sample`);
-    try {
-      await seedSampleData(orgId);
-      await fetchOrgs();
-    } catch { /* ignore */ }
-    finally {
-      setBusyOrgAction(null);
-    }
-  }, [fetchOrgs]);
 
   const refreshOrgUsers = useCallback(async (orgId: string) => {
+    setUsersLoading(true);
     try {
       const users = await adminListOrgUsers(orgId);
-      setOrgUsers((prev) => ({ ...prev, [orgId]: users }));
-    } catch { /* ignore */ }
+      setOrgUsers((current) => ({ ...current, [orgId]: users }));
+    } finally {
+      setUsersLoading(false);
+    }
   }, []);
 
+  useEffect(() => {
+    void fetchOrgs();
+  }, [fetchOrgs]);
+
+  const openOrganization = useCallback((org: AdminOrg) => {
+    setSelectedId(org.id);
+    setSelectedTab("overview");
+    if (!orgUsers[org.id]) void refreshOrgUsers(org.id);
+  }, [orgUsers, refreshOrgUsers]);
+
+  const filteredOrgs = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    if (!query) return orgs;
+    return orgs.filter((org) => [org.name, org.slug].some((value) => value.toLowerCase().includes(query)));
+  }, [orgs, search]);
+
+  const columns = useMemo<RecordColumn<AdminOrg>[]>(() => [
+    {
+      key: "name",
+      label: "Organization",
+      width: "32%",
+      render: (org) => (
+        <div className="min-w-0">
+          <div className="truncate font-medium text-fg">{org.name}</div>
+          <div className="truncate text-xs text-fg-muted">{org.slug}</div>
+        </div>
+      ),
+    },
+    {
+      key: "userCount",
+      label: "Users",
+      kind: "amount",
+      format: (value, org) => `${Number(value).toLocaleString()}${org.limits.maxUsers > 0 ? ` / ${org.limits.maxUsers.toLocaleString()}` : ""}`,
+    },
+    {
+      key: "projectCount",
+      label: "Projects",
+      kind: "amount",
+      format: (value, org) => `${Number(value).toLocaleString()}${org.limits.maxProjects > 0 ? ` / ${org.limits.maxProjects.toLocaleString()}` : ""}`,
+    },
+    {
+      key: "limits",
+      label: "Capacity",
+      render: (org) => (
+        org.limits.maxUsers > 0 || org.limits.maxProjects > 0 ? (
+          <Badge variant="warning">Limited</Badge>
+        ) : (
+          <Badge variant="secondary">Unlimited</Badge>
+        )
+      ),
+    },
+    {
+      key: "createdAt",
+      label: "Created",
+      format: (value) => formatDate(String(value)),
+    },
+  ], []);
+
   return (
-    <div className="p-6">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-xl font-bold text-fg">Organizations</h2>
-        <Button variant="accent" size="sm" onClick={() => setShowCreate(true)}>
-          <Plus className="mr-1.5 h-4 w-4" />
-          New Organization
-        </Button>
+    <>
+      <div className="space-y-5">
+        <PageHeader
+          title="Organizations"
+          description="Provision tenants, manage capacity, and enter organization workspaces."
+          actions={(
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <Plus className="size-4" /> New organization
+            </Button>
+          )}
+        />
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16 text-sm text-fg-muted">
+            <Loader2 className="mr-2 size-4 animate-spin" /> Loading organizations…
+          </div>
+        ) : (
+          <RecordList
+            columns={columns}
+            rows={filteredOrgs}
+            getRowId={(org) => org.id}
+            search={{ value: search, onChange: setSearch, placeholder: "Search organizations…" }}
+            empty={{
+              icon: <Building2 />,
+              title: search ? "No organizations match this search" : "No organizations yet",
+              description: search ? "Try a broader organization name or slug." : "Create the first tenant to get started.",
+              action: search ? undefined : (
+                <Button size="sm" onClick={() => setCreating(true)}>
+                  <Plus className="size-4" /> New organization
+                </Button>
+              ),
+            }}
+            onRowClick={openOrganization}
+          />
+        )}
       </div>
 
-      {loading ? (
-        <div className="text-xs text-fg/40">Loading...</div>
-      ) : orgs.length === 0 ? (
-        <Card>
-          <CardBody>
-            <div className="py-8 text-center text-sm text-fg/40">
-              No organizations yet. Create one to get started.
-            </div>
-          </CardBody>
-        </Card>
-      ) : (
-        <div className="space-y-2">
-          {orgs.map((org) => (
-            <Card key={org.id}>
-              <CardBody>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-panel2">
-                      <Building2 className="h-4 w-4 text-fg/40" />
-                    </div>
-                    <div>
-                      <div className="font-medium text-sm text-fg">{org.name}</div>
-                      <div className="text-xs text-fg/40">
-                        {org.slug} &middot; Created {new Date(org.createdAt).toLocaleDateString()}
-                      </div>
-                    </div>
-                  </div>
+      <CreateOrganizationDrawer
+        open={creating}
+        onClose={() => setCreating(false)}
+        onCreated={async () => {
+          setCreating(false);
+          await fetchOrgs();
+        }}
+      />
 
-                  <div className="flex items-center gap-4 text-xs text-fg/40">
-                    <span>{org.userCount}{org.limits.maxUsers > 0 ? `/${org.limits.maxUsers}` : ""} users</span>
-                    <span>{org.projectCount}{org.limits.maxProjects > 0 ? `/${org.limits.maxProjects}` : ""} projects</span>
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant={expandedOrg === org.id && expandedSection === "users" ? "accent" : "ghost"}
-                        size="xs"
-                        onClick={() => toggleOrg(org.id, "users")}
-                      >
-                        <Users className="mr-1 h-3 w-3" />
-                        Users
-                        {expandedOrg === org.id && expandedSection === "users"
-                          ? <ChevronUp className="ml-0.5 h-3 w-3" />
-                          : <ChevronDown className="ml-0.5 h-3 w-3" />}
-                      </Button>
-                      <Button
-                        variant={expandedOrg === org.id && expandedSection === "limits" ? "accent" : "ghost"}
-                        size="xs"
-                        onClick={() => toggleOrg(org.id, "limits")}
-                      >
-                        <Settings className="mr-1 h-3 w-3" />
-                        Limits
-                      </Button>
-                      <Button variant="accent" size="xs" onClick={() => impersonate(org.id)}>
-                        <LogIn className="mr-1 h-3 w-3" />
-                        Enter
-                      </Button>
-                      <Button variant="ghost" size="xs" onClick={() => setEditingOrg(org)}>
-                        <Edit3 className="h-3 w-3" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => handleSeedSampleData(org.id, org.name)}
-                        disabled={busyOrgAction === `${org.id}:sample`}
-                      >
-                        Sample
-                      </Button>
-                      <Button variant="danger" size="xs" onClick={() => handleDelete(org.id, org.name)}>
-                        <Trash2 className="h-3 w-3" />
-                      </Button>
-                    </div>
-                  </div>
-                </div>
+      <Drawer
+        open={Boolean(selectedOrg)}
+        onClose={() => setSelectedId(null)}
+        size="xl"
+        title={selectedOrg?.name ?? "Organization"}
+        description={selectedOrg ? `${selectedOrg.slug} · Created ${formatDate(selectedOrg.createdAt)}` : undefined}
+        subtabs={selectedOrg ? (
+          <SubtabNav
+            active={selectedTab}
+            onSelect={(key) => setSelectedTab(key as OrganizationTab)}
+            tabs={[
+              { key: "overview", label: "Overview" },
+              { key: "users", label: "Users", count: selectedOrg.userCount },
+              { key: "limits", label: "Capacity" },
+            ]}
+          />
+        ) : undefined}
+        headerActions={selectedOrg ? (
+          <Button size="sm" variant="outline" onClick={() => void impersonate(selectedOrg.id)}>
+            <ExternalLink className="size-3.5" /> Enter workspace
+          </Button>
+        ) : undefined}
+      >
+        {selectedOrg && selectedTab === "overview" && (
+          <OrganizationOverview
+            org={selectedOrg}
+            onSaved={async () => {
+              await fetchOrgs();
+            }}
+            onDeleted={async () => {
+              setSelectedId(null);
+              await fetchOrgs();
+            }}
+          />
+        )}
+        {selectedOrg && selectedTab === "users" && (
+          <OrganizationUsers
+            orgId={selectedOrg.id}
+            users={orgUsers[selectedOrg.id]}
+            loading={usersLoading}
+            onRefresh={async () => {
+              await Promise.all([refreshOrgUsers(selectedOrg.id), fetchOrgs()]);
+            }}
+          />
+        )}
+        {selectedOrg && selectedTab === "limits" && (
+          <OrganizationLimits
+            key={`${selectedOrg.id}:${JSON.stringify(selectedOrg.limits)}`}
+            orgId={selectedOrg.id}
+            limits={selectedOrg.limits}
+            onSaved={(limits) => {
+              setOrgs((current) => current.map((org) => org.id === selectedOrg.id ? { ...org, limits } : org));
+            }}
+          />
+        )}
+      </Drawer>
+    </>
+  );
+}
 
-                {expandedOrg === org.id && expandedSection === "users" && (
-                  <OrgUsersSection
-                    orgId={org.id}
-                    users={orgUsers[org.id]}
-                    onRefresh={() => { refreshOrgUsers(org.id); fetchOrgs(); }}
-                  />
-                )}
+function OrganizationOverview({
+  org,
+  onSaved,
+  onDeleted,
+}: {
+  org: AdminOrg;
+  onSaved: () => Promise<void>;
+  onDeleted: () => Promise<void>;
+}) {
+  const [name, setName] = useState(org.name);
+  const [slug, setSlug] = useState(org.slug);
+  const [saving, setSaving] = useState(false);
+  const [busyAction, setBusyAction] = useState<"sample" | "delete" | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
-                {expandedOrg === org.id && expandedSection === "limits" && (
-                  <OrgLimitsSection
-                    orgId={org.id}
-                    limits={org.limits}
-                    onSaved={(newLimits) => {
-                      setOrgs((prev) =>
-                        prev.map((o) => (o.id === org.id ? { ...o, limits: newLimits } : o))
-                      );
-                    }}
-                  />
-                )}
-              </CardBody>
-            </Card>
-          ))}
+  useEffect(() => {
+    setName(org.name);
+    setSlug(org.slug);
+  }, [org.id, org.name, org.slug]);
+
+  async function save() {
+    setSaving(true);
+    setError(null);
+    try {
+      await adminUpdateOrganization(org.id, { name, slug });
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to update organization");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function loadSampleData() {
+    if (!confirm(`Load sample data into "${org.name}"?`)) return;
+    setBusyAction("sample");
+    try {
+      await seedSampleData(org.id);
+      await onSaved();
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  async function remove() {
+    if (!confirm(`Delete "${org.name}"? This permanently deletes all its data.`)) return;
+    setBusyAction("delete");
+    try {
+      await adminDeleteOrganization(org.id);
+      await onDeleted();
+    } finally {
+      setBusyAction(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <Metric label="Users" value={org.userCount.toLocaleString()} />
+        <Metric label="Projects" value={org.projectCount.toLocaleString()} />
+        <Metric label="Created" value={formatDate(org.createdAt)} />
+      </div>
+
+      {error && <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger">{error}</div>}
+
+      <section className="space-y-4 rounded-xl border border-border bg-surface p-4">
+        <div>
+          <h3 className="text-sm font-semibold text-fg">Organization identity</h3>
+          <p className="text-sm text-fg-muted">The tenant name and stable URL identifier.</p>
         </div>
-      )}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="organization-name">Name</Label>
+            <Input id="organization-name" value={name} onChange={(event) => setName(event.target.value)} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="organization-slug">Slug</Label>
+            <Input id="organization-slug" value={slug} onChange={(event) => setSlug(event.target.value)} />
+          </div>
+        </div>
+        <div className="flex justify-end">
+          <Button size="sm" onClick={() => void save()} disabled={saving || !name.trim() || !slug.trim()}>
+            <Save className="size-3.5" /> {saving ? "Saving…" : "Save organization"}
+          </Button>
+        </div>
+      </section>
 
-      {showCreate && (
-        <CreateOrgModal
-          onClose={() => setShowCreate(false)}
-          onCreated={() => { setShowCreate(false); fetchOrgs(); }}
-        />
-      )}
-
-      {editingOrg && (
-        <EditOrgModal
-          org={editingOrg}
-          onClose={() => setEditingOrg(null)}
-          onSaved={() => { setEditingOrg(null); fetchOrgs(); }}
-        />
-      )}
+      <section className="rounded-xl border border-border bg-surface p-4">
+        <h3 className="text-sm font-semibold text-fg">Deployment actions</h3>
+        <p className="mt-1 text-sm text-fg-muted">Load demonstration records or permanently remove this tenant.</p>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => void loadSampleData()} disabled={busyAction !== null}>
+            {busyAction === "sample" ? "Loading…" : "Load sample data"}
+          </Button>
+          <Button variant="destructive" size="sm" onClick={() => void remove()} disabled={busyAction !== null}>
+            <Trash2 className="size-3.5" /> {busyAction === "delete" ? "Deleting…" : "Delete organization"}
+          </Button>
+        </div>
+      </section>
     </div>
   );
 }
 
-// ── Org Users Section ─────────────────────────────────────────────────
-
-function OrgUsersSection({
+function OrganizationUsers({
   orgId,
   users,
+  loading,
   onRefresh,
 }: {
   orgId: string;
   users?: AuthUser[];
-  onRefresh: () => void;
+  loading: boolean;
+  onRefresh: () => Promise<void>;
 }) {
-  const [showAddUser, setShowAddUser] = useState(false);
-  const [editingUser, setEditingUser] = useState<string | null>(null);
-  const [editRole, setEditRole] = useState("");
+  const [adding, setAdding] = useState(false);
+  const [selectedUser, setSelectedUser] = useState<AuthUser | null>(null);
 
-  const handleToggleActive = useCallback(async (user: AuthUser) => {
-    try {
-      await adminUpdateUser(user.id, { active: !user.active });
-      onRefresh();
-    } catch { /* ignore */ }
-  }, [onRefresh]);
+  const columns = useMemo<RecordColumn<AuthUser>[]>(() => [
+    {
+      key: "name",
+      label: "User",
+      render: (user) => (
+        <div>
+          <div className="font-medium text-fg">{user.name}</div>
+          <div className="text-xs text-fg-muted">{user.email}</div>
+        </div>
+      ),
+    },
+    {
+      key: "role",
+      label: "Role",
+      render: (user) => <Badge variant={user.role === "admin" ? "info" : "outline"}>{user.role}</Badge>,
+    },
+    {
+      key: "active",
+      label: "Status",
+      render: (user) => <Badge variant={user.active ? "success" : "destructive"}>{user.active ? "Active" : "Inactive"}</Badge>,
+    },
+    { key: "lastLoginAt", label: "Last login", format: (value) => formatDate(value ? String(value) : null) },
+  ], []);
 
-  const handleRoleChange = useCallback(async (userId: string) => {
-    try {
-      await adminUpdateUser(userId, { role: editRole });
-      setEditingUser(null);
-      onRefresh();
-    } catch { /* ignore */ }
-  }, [editRole, onRefresh]);
-
-  const handleDeleteUser = useCallback(async (user: AuthUser) => {
-    if (!confirm(`Remove ${user.name} (${user.email}) from this organization?`)) return;
-    try {
-      await adminDeleteUser(user.id);
-      onRefresh();
-    } catch { /* ignore */ }
-  }, [onRefresh]);
+  if (loading && !users) {
+    return <div className="flex items-center justify-center py-16 text-sm text-fg-muted"><Loader2 className="mr-2 size-4 animate-spin" /> Loading users…</div>;
+  }
 
   return (
-    <div className="mt-3 border-t border-line pt-3">
-      <div className="flex items-center justify-between mb-2">
-        <span className="text-xs font-medium text-fg/50">Organization Users</span>
-        <Button variant="ghost" size="xs" onClick={() => setShowAddUser(!showAddUser)}>
-          <UserPlus className="mr-1 h-3 w-3" />
-          Add User
-        </Button>
-      </div>
+    <>
+      <RecordList
+        columns={columns}
+        rows={users ?? []}
+        getRowId={(user) => user.id}
+        toolbarActions={(
+          <Button size="sm" onClick={() => setAdding(true)}>
+            <UserPlus className="size-3.5" /> Add user
+          </Button>
+        )}
+        empty={{
+          title: "No users in this organization",
+          description: "Add the first person who can access this tenant.",
+          action: <Button size="sm" onClick={() => setAdding(true)}><UserPlus className="size-3.5" /> Add user</Button>,
+        }}
+        onRowClick={setSelectedUser}
+      />
 
-      {showAddUser && (
-        <AddUserForm
-          orgId={orgId}
-          onCreated={() => { setShowAddUser(false); onRefresh(); }}
-          onCancel={() => setShowAddUser(false)}
-        />
-      )}
-
-      {!users ? (
-        <div className="text-xs text-fg/40">Loading users...</div>
-      ) : users.length === 0 ? (
-        <div className="text-xs text-fg/40">No users.</div>
-      ) : (
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="text-fg/30 border-b border-line">
-              <th className="text-left py-1.5 font-medium">Name</th>
-              <th className="text-left py-1.5 font-medium">Email</th>
-              <th className="text-left py-1.5 font-medium">Role</th>
-              <th className="text-left py-1.5 font-medium">Status</th>
-              <th className="text-left py-1.5 font-medium">Last Login</th>
-              <th className="text-right py-1.5 font-medium">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id} className="border-b border-line/50">
-                <td className="py-1.5 text-fg">{u.name}</td>
-                <td className="py-1.5 text-fg/60">{u.email}</td>
-                <td className="py-1.5">
-                  {editingUser === u.id ? (
-                    <div className="flex items-center gap-1">
-                      <Select
-                        size="xs"
-                        className="w-28"
-                        value={editRole}
-                        onValueChange={setEditRole}
-                        options={[
-                          { value: "admin", label: "admin" },
-                          { value: "estimator", label: "estimator" },
-                          { value: "viewer", label: "viewer" },
-                        ]}
-                      />
-                      <button onClick={() => handleRoleChange(u.id)} className="text-accent hover:text-accent/80">
-                        <Save className="h-3 w-3" />
-                      </button>
-                      <button onClick={() => setEditingUser(null)} className="text-fg/30 hover:text-fg/60">
-                        <X className="h-3 w-3" />
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => { setEditingUser(u.id); setEditRole(u.role); }}
-                      className="group flex items-center gap-1"
-                    >
-                      <Badge tone={u.role === "admin" ? "info" : "default"} className="text-[10px]">
-                        {u.role}
-                      </Badge>
-                      <Edit3 className="h-2.5 w-2.5 text-fg/20 opacity-0 group-hover:opacity-100 transition-opacity" />
-                    </button>
-                  )}
-                </td>
-                <td className="py-1.5">
-                  <button onClick={() => handleToggleActive(u)}>
-                    <Badge tone={u.active ? "success" : "danger"} className="text-[10px] cursor-pointer hover:opacity-80">
-                      {u.active ? "Active" : "Inactive"}
-                    </Badge>
-                  </button>
-                </td>
-                <td className="py-1.5 text-fg/40">
-                  {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleDateString() : "Never"}
-                </td>
-                <td className="py-1.5 text-right">
-                  <Button variant="danger" size="xs" onClick={() => handleDeleteUser(u)}>
-                    <Trash2 className="h-3 w-3" />
-                  </Button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </div>
+      <AddUserDrawer open={adding} orgId={orgId} onClose={() => setAdding(false)} onCreated={async () => {
+        setAdding(false);
+        await onRefresh();
+      }} />
+      <UserDrawer user={selectedUser} onClose={() => setSelectedUser(null)} onSaved={async () => {
+        setSelectedUser(null);
+        await onRefresh();
+      }} />
+    </>
   );
 }
 
-// ── Add User Form ─────────────────────────────────────────────────────
+function UserDrawer({ user, onClose, onSaved }: { user: AuthUser | null; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [role, setRole] = useState("estimator");
+  const [active, setActive] = useState(true);
+  const [saving, setSaving] = useState(false);
 
-function AddUserForm({
+  useEffect(() => {
+    if (!user) return;
+    setRole(user.role);
+    setActive(user.active);
+  }, [user]);
+
+  async function save() {
+    if (!user) return;
+    setSaving(true);
+    try {
+      await adminUpdateUser(user.id, { role, active });
+      await onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove() {
+    if (!user || !confirm(`Remove ${user.name} (${user.email}) from this organization?`)) return;
+    setSaving(true);
+    try {
+      await adminDeleteUser(user.id);
+      await onSaved();
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Drawer
+      open={Boolean(user)}
+      onClose={onClose}
+      stacked
+      size="sm"
+      title={user?.name ?? "User"}
+      description={user?.email}
+      footer={(
+        <div className="flex w-full items-center justify-between">
+          <Button variant="destructive" size="sm" onClick={() => void remove()} disabled={saving}>
+            <Trash2 className="size-3.5" /> Remove
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button size="sm" onClick={() => void save()} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+          </div>
+        </div>
+      )}
+    >
+      <div className="space-y-4">
+        <div className="space-y-1.5">
+          <Label>Role</Label>
+          <SearchSelect
+            value={role}
+            onChange={setRole}
+            searchable={false}
+            options={[
+              { value: "admin", label: "Admin" },
+              { value: "estimator", label: "Estimator" },
+              { value: "viewer", label: "Viewer" },
+            ]}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Account status</Label>
+          <SearchSelect
+            value={active ? "active" : "inactive"}
+            onChange={(value) => setActive(value === "active")}
+            searchable={false}
+            options={[
+              { value: "active", label: "Active" },
+              { value: "inactive", label: "Inactive" },
+            ]}
+          />
+        </div>
+      </div>
+    </Drawer>
+  );
+}
+
+function AddUserDrawer({
+  open,
   orgId,
+  onClose,
   onCreated,
-  onCancel,
 }: {
+  open: boolean;
   orgId: string;
-  onCreated: () => void;
-  onCancel: () => void;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
 }) {
   const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [role, setRole] = useState("estimator");
   const [password, setPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function create() {
+    setSaving(true);
     setError(null);
-    setLoading(true);
     try {
       await adminCreateOrgUser(orgId, { email, name, role, password: password || undefined });
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create user");
+      setEmail("");
+      setName("");
+      setRole("estimator");
+      setPassword("");
+      await onCreated();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to create user");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
   return (
-    <form onSubmit={handleSubmit} className="mb-3 rounded-lg border border-line bg-panel2/30 p-3">
-      {error && (
-        <div className="mb-2 rounded border border-danger/30 bg-danger/10 px-3 py-1.5 text-[11px] text-danger">
-          {error}
+    <Drawer
+      open={open}
+      onClose={onClose}
+      stacked
+      size="sm"
+      title="Add user"
+      description="Create a login identity in this organization."
+      footer={(
+        <div className="flex w-full justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={() => void create()} disabled={saving || !name.trim() || !email.trim()}>
+            {saving ? "Adding…" : "Add user"}
+          </Button>
         </div>
       )}
-      <div className="grid grid-cols-4 gap-2">
-        <Input
-          placeholder="Name"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          className="text-xs h-8"
-          required
-        />
-        <Input
-          type="email"
-          placeholder="Email"
-          value={email}
-          onChange={(e) => setEmail(e.target.value)}
-          className="text-xs h-8"
-          required
-        />
-        <Select
-          size="sm"
-          value={role}
-          onValueChange={setRole}
-          options={[
-            { value: "admin", label: "Admin" },
-            { value: "estimator", label: "Estimator" },
-            { value: "viewer", label: "Viewer" },
-          ]}
-        />
-        <Input
-          type="password"
-          placeholder="Password (optional)"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="text-xs h-8"
-        />
+    >
+      <div className="space-y-4">
+        {error && <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger">{error}</div>}
+        <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={(event) => setName(event.target.value)} autoFocus /></div>
+        <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={email} onChange={(event) => setEmail(event.target.value)} /></div>
+        <div className="space-y-1.5">
+          <Label>Role</Label>
+          <SearchSelect
+            value={role}
+            onChange={setRole}
+            searchable={false}
+            options={[
+              { value: "admin", label: "Admin" },
+              { value: "estimator", label: "Estimator" },
+              { value: "viewer", label: "Viewer" },
+            ]}
+          />
+        </div>
+        <div className="space-y-1.5"><Label>Password</Label><Input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Optional" /></div>
       </div>
-      <div className="flex justify-end gap-2 mt-2">
-        <Button variant="ghost" size="xs" type="button" onClick={onCancel}>Cancel</Button>
-        <Button variant="accent" size="xs" type="submit" disabled={loading || !name.trim() || !email.trim()}>
-          {loading ? "Adding..." : "Add User"}
-        </Button>
-      </div>
-    </form>
+    </Drawer>
   );
 }
 
-// ── Org Limits Section ────────────────────────────────────────────────
-
-function OrgLimitsSection({
+function OrganizationLimits({
   orgId,
   limits,
   onSaved,
@@ -461,109 +588,80 @@ function OrgLimitsSection({
   limits: OrgLimits;
   onSaved: (limits: OrgLimits) => void;
 }) {
-  const [maxUsers, setMaxUsers] = useState(limits.maxUsers);
-  const [maxProjects, setMaxProjects] = useState(limits.maxProjects);
-  const [maxStorage, setMaxStorage] = useState(limits.maxStorage);
-  const [maxKnowledgeBooks, setMaxKnowledgeBooks] = useState(limits.maxKnowledgeBooks);
+  const [values, setValues] = useState(limits);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
 
-  const handleSave = useCallback(async () => {
+  async function save() {
     setSaving(true);
     try {
-      const result = await adminUpdateOrgLimits(orgId, {
-        maxUsers,
-        maxProjects,
-        maxStorage,
-        maxKnowledgeBooks,
-      });
-      onSaved(result);
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } catch { /* ignore */ }
-    finally { setSaving(false); }
-  }, [orgId, maxUsers, maxProjects, maxStorage, maxKnowledgeBooks, onSaved]);
+      onSaved(await adminUpdateOrgLimits(orgId, values));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const fields: Array<{ key: keyof OrgLimits; label: string }> = [
+    { key: "maxUsers", label: "Maximum users" },
+    { key: "maxProjects", label: "Maximum projects" },
+    { key: "maxStorage", label: "Maximum storage (MB)" },
+    { key: "maxKnowledgeBooks", label: "Maximum knowledge books" },
+  ];
 
   return (
-    <div className="mt-3 border-t border-line pt-3">
-      <span className="text-xs font-medium text-fg/50 mb-2 block">Organization Limits</span>
-      <p className="text-[11px] text-fg/30 mb-3">Set to 0 for unlimited.</p>
-      <div className="grid grid-cols-4 gap-3">
-        <div>
-          <Label className="text-[10px]">Max Users</Label>
-          <Input
-            type="number"
-            min={0}
-            value={maxUsers}
-            onChange={(e) => setMaxUsers(Number(e.target.value))}
-            className="text-xs h-8"
-          />
-        </div>
-        <div>
-          <Label className="text-[10px]">Max Projects</Label>
-          <Input
-            type="number"
-            min={0}
-            value={maxProjects}
-            onChange={(e) => setMaxProjects(Number(e.target.value))}
-            className="text-xs h-8"
-          />
-        </div>
-        <div>
-          <Label className="text-[10px]">Max Storage (MB)</Label>
-          <Input
-            type="number"
-            min={0}
-            value={maxStorage}
-            onChange={(e) => setMaxStorage(Number(e.target.value))}
-            className="text-xs h-8"
-          />
-        </div>
-        <div>
-          <Label className="text-[10px]">Max Knowledge Books</Label>
-          <Input
-            type="number"
-            min={0}
-            value={maxKnowledgeBooks}
-            onChange={(e) => setMaxKnowledgeBooks(Number(e.target.value))}
-            className="text-xs h-8"
-          />
-        </div>
+    <section className="space-y-4 rounded-xl border border-border bg-surface p-4">
+      <div>
+        <h3 className="text-sm font-semibold text-fg">Organization capacity</h3>
+        <p className="text-sm text-fg-muted">Use 0 for unlimited capacity.</p>
       </div>
-      <div className="flex items-center gap-2 mt-3">
-        <Button variant="accent" size="xs" onClick={handleSave} disabled={saving}>
-          <Save className="mr-1 h-3 w-3" />
-          {saving ? "Saving..." : "Save Limits"}
+      <div className="grid gap-4 sm:grid-cols-2">
+        {fields.map((field) => (
+          <div key={field.key} className="space-y-1.5">
+            <Label htmlFor={field.key}>{field.label}</Label>
+            <Input
+              id={field.key}
+              type="number"
+              min={0}
+              value={values[field.key]}
+              onChange={(event) => setValues((current) => ({ ...current, [field.key]: Number(event.target.value) }))}
+            />
+          </div>
+        ))}
+      </div>
+      <div className="flex justify-end">
+        <Button size="sm" onClick={() => void save()} disabled={saving}>
+          <Save className="size-3.5" /> {saving ? "Saving…" : "Save capacity"}
         </Button>
-        {saved && <span className="text-[10px] text-success">Saved!</span>}
       </div>
-    </div>
+    </section>
   );
 }
 
-// ── Create Org Modal ──────────────────────────────────────────────────
-
-function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+function CreateOrganizationDrawer({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => Promise<void>;
+}) {
   const [name, setName] = useState("");
   const [slug, setSlug] = useState("");
   const [slugEdited, setSlugEdited] = useState(false);
   const [adminEmail, setAdminEmail] = useState("");
   const [adminName, setAdminName] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleNameChange = useCallback((value: string) => {
+  function changeName(value: string) {
     setName(value);
-    if (!slugEdited) {
-      setSlug(value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
-    }
-  }, [slugEdited]);
+    if (!slugEdited) setSlug(value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""));
+  }
 
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
+  async function create() {
+    setSaving(true);
     setError(null);
-    setLoading(true);
     try {
       await adminCreateOrganization({
         name,
@@ -572,115 +670,69 @@ function CreateOrgModal({ onClose, onCreated }: { onClose: () => void; onCreated
         adminName: adminName || undefined,
         adminPassword: adminPassword || undefined,
       });
-      onCreated();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to create org");
+      setName("");
+      setSlug("");
+      setSlugEdited(false);
+      setAdminEmail("");
+      setAdminName("");
+      setAdminPassword("");
+      await onCreated();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Failed to create organization");
     } finally {
-      setLoading(false);
+      setSaving(false);
     }
   }
 
   return (
-    <ModalBackdrop open={true} onClose={onClose} size="md">
-      <CardHeader>
-        <CardTitle>Create Organization</CardTitle>
-      </CardHeader>
-      <CardBody>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
-              {error}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="orgName">Organization Name</Label>
-              <Input id="orgName" value={name} onChange={(e) => handleNameChange(e.target.value)} placeholder="Acme Corp" required autoFocus />
-            </div>
-            <div>
-              <Label htmlFor="orgSlug">Slug</Label>
-              <Input id="orgSlug" value={slug} onChange={(e) => { setSlug(e.target.value); setSlugEdited(true); }} placeholder="acme-corp" />
-            </div>
+    <Drawer
+      open={open}
+      onClose={onClose}
+      size="md"
+      title="Create organization"
+      description="Provision a new isolated Bidwright tenant."
+      footer={(
+        <div className="flex w-full justify-end gap-2">
+          <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+          <Button size="sm" onClick={() => void create()} disabled={saving || !name.trim()}>
+            {saving ? "Creating…" : "Create organization"}
+          </Button>
+        </div>
+      )}
+    >
+      <div className="space-y-5">
+        {error && <div className="rounded-lg border border-danger/30 bg-danger-subtle px-3 py-2 text-sm text-danger">{error}</div>}
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div className="space-y-1.5">
+            <Label htmlFor="new-organization-name">Organization name</Label>
+            <Input id="new-organization-name" value={name} onChange={(event) => changeName(event.target.value)} autoFocus />
           </div>
-          <div className="border-t border-line pt-3">
-            <p className="text-xs text-fg/40 mb-3">Admin User (optional)</p>
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="adminName">Name</Label>
-                <Input id="adminName" value={adminName} onChange={(e) => setAdminName(e.target.value)} placeholder="Jane Smith" />
-              </div>
-              <div>
-                <Label htmlFor="adminEmail">Email</Label>
-                <Input id="adminEmail" type="email" value={adminEmail} onChange={(e) => setAdminEmail(e.target.value)} placeholder="jane@acme.com" />
-              </div>
-            </div>
-            <div className="mt-3">
-              <Label htmlFor="adminPassword">Password</Label>
-              <Input id="adminPassword" type="password" value={adminPassword} onChange={(e) => setAdminPassword(e.target.value)} placeholder="Optional" />
-            </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="new-organization-slug">Slug</Label>
+            <Input id="new-organization-slug" value={slug} onChange={(event) => { setSlug(event.target.value); setSlugEdited(true); }} />
           </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-            <Button variant="accent" type="submit" disabled={loading || !name.trim()}>
-              {loading ? "Creating..." : "Create"}
-            </Button>
+        </div>
+        <div className="space-y-4 border-t border-border pt-5">
+          <div>
+            <h3 className="text-sm font-semibold text-fg">Initial administrator</h3>
+            <p className="text-sm text-fg-muted">Optional. You can add people later from the organization drawer.</p>
           </div>
-        </form>
-      </CardBody>
-    </ModalBackdrop>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>Name</Label><Input value={adminName} onChange={(event) => setAdminName(event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Email</Label><Input type="email" value={adminEmail} onChange={(event) => setAdminEmail(event.target.value)} /></div>
+          </div>
+          <div className="space-y-1.5"><Label>Password</Label><Input type="password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} placeholder="Optional" /></div>
+        </div>
+      </div>
+    </Drawer>
   );
 }
 
-function EditOrgModal({ org, onClose, onSaved }: { org: AdminOrg; onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState(org.name);
-  const [slug, setSlug] = useState(org.slug);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function handleSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    setError(null);
-    setLoading(true);
-    try {
-      await adminUpdateOrganization(org.id, { name, slug });
-      onSaved();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to update org");
-    } finally {
-      setLoading(false);
-    }
-  }
-
+function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <ModalBackdrop open={true} onClose={onClose} size="md">
-      <CardHeader>
-        <CardTitle>Edit Organization</CardTitle>
-      </CardHeader>
-      <CardBody>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {error && (
-            <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
-              {error}
-            </div>
-          )}
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <Label htmlFor="editOrgName">Organization Name</Label>
-              <Input id="editOrgName" value={name} onChange={(e) => setName(e.target.value)} required autoFocus />
-            </div>
-            <div>
-              <Label htmlFor="editOrgSlug">Slug</Label>
-              <Input id="editOrgSlug" value={slug} onChange={(e) => setSlug(e.target.value)} required />
-            </div>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
-            <Button variant="accent" type="submit" disabled={loading || !name.trim() || !slug.trim()}>
-              {loading ? "Saving..." : "Save"}
-            </Button>
-          </div>
-        </form>
-      </CardBody>
-    </ModalBackdrop>
+    <div className="rounded-xl border border-border bg-bg-subtle px-4 py-3">
+      <div className="text-xs font-medium uppercase tracking-wide text-fg-subtle">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-fg">{value}</div>
+    </div>
   );
 }

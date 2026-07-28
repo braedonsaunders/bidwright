@@ -3,7 +3,14 @@
 import { useState } from "react";
 import { Layers, X } from "lucide-react";
 import { saveSelectionAsAssembly } from "@/lib/api";
-import { Button, Input, Label, ModalBackdrop } from "@/components/ui";
+import {
+  Button,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  ModalBackdrop,
+} from "@/components/legacy-controls";
 import { UomSelect } from "@/components/shared/uom-select";
 
 interface Props {

@@ -3,7 +3,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Loader2, Plus, Search, X } from "lucide-react";
 
-import { Button, Card, CardBody, CardHeader, CardTitle, Input, Label, Select } from "@/components/ui";
+import {
+  Button,
+  Card,
+  CardContent,
+  CardHeader,
+  CardTitle,
+  Input,
+  Label,
+} from "@appkit/ui";
+import {
+  Select,
+} from "@/components/legacy-controls";
 import { detectCli, listCliModels, type CliRuntimeStatus } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -48,7 +59,7 @@ function isAgentRuntime(value: unknown, status: DetectCliResult | null): value i
   if (typeof value !== "string" || !value) return false;
   if (!status?.runtimes) {
     // Fall back to known legacy ids while detection is still loading.
-    return value === "claude-code" || value === "codex" || value === "opencode" || value === "gemini";
+    return value === "claude-code" || value === "codex" || value === "openrouter" || value === "opencode" || value === "gemini";
   }
   return value in status.runtimes;
 }
@@ -353,7 +364,7 @@ export function AgentRuntimeSettings({
       <CardHeader>
         <CardTitle>Agent Runtime</CardTitle>
       </CardHeader>
-      <CardBody className="space-y-4">
+      <CardContent className="space-y-4">
         <div className="rounded-lg border border-line p-4 space-y-3">
           <h4 className="text-xs font-semibold text-fg/60 uppercase tracking-wider">Detected CLIs</h4>
           {detecting ? (
@@ -424,13 +435,12 @@ export function AgentRuntimeSettings({
             const models = effectiveRuntime ? liveModels[effectiveRuntime] || [] : [];
             const displayModels = models.filter((model, index) => models.findIndex((candidate) => candidate.id === model.id) === index);
             return (
-              <Select
-                value={currentModel || "__default__"}
-                onValueChange={(v) => onUpdate({ agentModel: v === "__default__" ? null : v })}
-                options={[
-                  { value: "__default__", label: "Default" },
-                  ...displayModels.map((m) => ({ value: m.id, label: `${m.name} — ${m.description}` })),
-                ]}
+              <SearchableModelSelect
+                value={currentModel}
+                onChange={(value) => onUpdate({ agentModel: value || null })}
+                models={displayModels}
+                loading={modelsLoading}
+                placeholder="Default"
               />
             );
           })()}
@@ -508,7 +518,7 @@ export function AgentRuntimeSettings({
           </p>
           <p>API keys configured in the API Keys tab are passed to the CLI as the org-wide fallback.</p>
         </div>
-      </CardBody>
+      </CardContent>
     </Card>
   );
 }

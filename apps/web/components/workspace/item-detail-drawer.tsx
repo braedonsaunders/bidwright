@@ -19,7 +19,17 @@ import {
 import { formatMoney } from "@/lib/format";
 import { isWorksheetCostLibraryManaged } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
-import { Badge, Input, Select, Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui";
+import {
+  Input,
+} from "@appkit/ui";
+import {
+  Badge,
+  Select,
+  Tabs,
+  TabsContent,
+  TabsList,
+  TabsTrigger,
+} from "@/components/legacy-controls";
 import { UomSelect } from "@/components/shared/uom-select";
 import { ItemPluginTab } from "./item-plugin-tab";
 import {

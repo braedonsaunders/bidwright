@@ -6495,23 +6495,28 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   registerCliRoutes(app);
   registerReviewRoutes(app);
 
-  app.addHook("onReady", async () => {
-    await cleanExpiredSessions(prisma);
+  app.addHook("onReady", () => {
+    // Housekeeping must not hold API readiness hostage to a slow database
+    // replica. Run it immediately, but outside Fastify's startup timeout.
+    void cleanExpiredSessions(prisma).catch((err) => {
+      console.error("[startup] Failed to clean expired sessions:", err);
+    });
     setInterval(() => cleanExpiredSessions(prisma), 60 * 60 * 1000);
 
     // Clean up orphaned AI runs stuck at "running" from previous server crashes/restarts.
     // On startup, no CLI sessions are actually running, so any "running" AI run is orphaned.
-    try {
-      const orphaned = await prisma.aiRun.updateMany({
+    void prisma.aiRun.updateMany({
         where: { status: "running" },
         data: { status: "stopped" },
+      })
+      .then((orphaned) => {
+        if (orphaned.count > 0) {
+          console.log(`[startup] Cleaned ${orphaned.count} orphaned AI run(s) stuck at "running" → "stopped"`);
+        }
+      })
+      .catch((err) => {
+        console.error("[startup] Failed to clean orphaned AI runs:", err);
       });
-      if (orphaned.count > 0) {
-        console.log(`[startup] Cleaned ${orphaned.count} orphaned AI run(s) stuck at "running" → "stopped"`);
-      }
-    } catch (err) {
-      console.error("[startup] Failed to clean orphaned AI runs:", err);
-    }
   });
 
   return app;

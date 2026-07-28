@@ -34,15 +34,10 @@ services:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
-    # Capabilities + security options for the bubblewrap-based per-tenant
-    # CLI sandbox (BubblewrappedHost). bwrap needs CAP_SYS_ADMIN to do
-    # pivot_root + mount(2) inside the new namespaces, and the default
-    # Docker seccomp/apparmor profiles block enough syscalls that bwrap
-    # fails even with the cap. These are scoped to the api container only;
-    # the spawned CLI processes never see them because bwrap drops all
-    # caps before exec'ing the child.
-    cap_add:
-      - SYS_ADMIN
+    # Bubblewrap is setuid inside the trusted image, so the API container does
+    # not receive CAP_SYS_ADMIN. Relaxed syscall profiles are still required
+    # for namespace/mount setup; the sandbox drops all capabilities before
+    # exec'ing the agent child.
     security_opt:
       - seccomp:unconfined
       - apparmor:unconfined
@@ -56,18 +51,14 @@ services:
       REDIS_URL: redis://redis:6379
       DATA_DIR: /data
       API_PORT: "3001"
-      # Multi-tenant server mode: each authenticated user gets their own CLI
-      # auth namespace under AGENT_HOME_ROOT/users/<userId>. The runtime sets
-      # CLAUDE_CONFIG_DIR / CODEX_HOME / XDG_DATA_HOME / HOME at spawn time
-      # so user A's Claude OAuth never leaks into user B's CLI session.
+      # Server mode always uses the fail-closed AppKit process sandbox.
+      # Per-user runtime state lives under AGENT_HOME_ROOT/users/<userId>;
+      # organization-managed provider API keys are the default credential.
       BIDWRIGHT_MODE: server
       AGENT_HOME_ROOT: /data/agent-home
-      # When true, every CLI spawn runs inside a per-user bwrap sandbox
-      # (BubblewrappedHost). Required for any deployment with more than one
-      # Bidwright user — otherwise users can read each other's project
-      # files via the shared API container FS. bwrap ships setuid root in
-      # the api image so no --privileged flag is needed at the container
-      # level. Default false here so single-user self-host stays cheap.
+      # Legacy deployment flag: the process sandbox no longer depends on it.
+      # Enabling it starts the outbound egress allowlist proxy as an
+      # additional server hardening layer.
       BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-false}"
       # ── Workspace storage (project files survive host restarts and
       # ── follow users across hosts in a stateless pool). Set to "s3"

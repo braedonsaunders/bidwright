@@ -1,24 +1,17 @@
 "use client";
 
 import { useState, useMemo, useCallback, useEffect } from "react";
-import { createPortal } from "react-dom";
-import { motion, AnimatePresence } from "motion/react";
 import {
   Check,
-  ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   Edit3,
   FileSpreadsheet,
   Library,
   Loader2,
   Package,
   Plus,
-  Search,
   Trash2,
   X,
 } from "lucide-react";
-import * as RadixSelect from "@radix-ui/react-select";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent } from "@/lib/format";
 import type { CatalogSummary, CatalogItem, EntityCategory } from "@/lib/api";
@@ -43,11 +36,19 @@ import {
   Card,
   CardHeader,
   CardTitle,
+  Drawer,
   EmptyState,
-  FadeIn,
   Input,
-  Select,
-} from "@/components/ui";
+  RecordList,
+  type RecordColumn,
+  SearchSelect,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@appkit/ui";
 import { UomSelect } from "@/components/shared/uom-select";
 
 /* ─── Constants ─── */
@@ -63,7 +64,9 @@ const LEGACY_CATALOG_KIND_LABELS: Record<string, string> = {
   subcontract: "Subcontract",
 };
 
-const KIND_BADGE_TONE: Record<string, "default" | "success" | "warning" | "danger" | "info"> = {
+type CatalogBadgeVariant = "secondary" | "success" | "warning" | "destructive" | "info";
+
+const KIND_BADGE_TONE: Record<string, CatalogBadgeVariant> = {
   labor: "warning",
   labour: "warning",
   labourclass: "warning",
@@ -74,7 +77,7 @@ const KIND_BADGE_TONE: Record<string, "default" | "success" | "warning" | "dange
   material: "success",
   stockitem: "success",
   consumable: "success",
-  rate_book: "danger",
+  rate_book: "destructive",
 };
 
 /* ─── Helpers ─── */
@@ -108,15 +111,15 @@ function catalogKindLabel(kind: string, categories: EntityCategory[]) {
   return matchedCategory?.name ?? LEGACY_CATALOG_KIND_LABELS[kind] ?? LEGACY_CATALOG_KIND_LABELS[normalizedKind] ?? humanizeToken(kind);
 }
 
-function catalogKindTone(kind: string, categories: EntityCategory[]): "default" | "success" | "warning" | "danger" | "info" {
+function catalogKindTone(kind: string, categories: EntityCategory[]): CatalogBadgeVariant {
   const label = catalogKindLabel(kind, categories);
   const normalized = normalizeToken(`${kind} ${label}`);
   if (KIND_BADGE_TONE[normalizeToken(kind)]) return KIND_BADGE_TONE[normalizeToken(kind)];
   if (normalized.includes("labour") || normalized.includes("labor")) return "warning";
   if (normalized.includes("equipment") || normalized.includes("rental")) return "info";
   if (normalized.includes("material") || normalized.includes("stock") || normalized.includes("consumable")) return "success";
-  if (normalized.includes("ratebook")) return "danger";
-  return "default";
+  if (normalized.includes("ratebook")) return "destructive";
+  return "secondary";
 }
 
 function isCatalogNotFoundError(error: unknown) {
@@ -184,45 +187,32 @@ function CatalogItemDrawer({
   }, [catalogId, item.id, form, onSave]);
 
   return (
-    <motion.div
-      initial={{ x: "100%" }}
-      animate={{ x: 0 }}
-      exit={{ x: "100%" }}
-      transition={{ type: "spring", damping: 30, stiffness: 300 }}
-      className="fixed inset-y-0 right-0 z-50 w-[400px] bg-panel border-l border-line shadow-2xl flex flex-col"
+    <Drawer
+      open
+      onClose={onClose}
+      size="sm"
+      title={(
+        <div className="flex min-w-0 items-center gap-2">
+          {form.category && <Badge variant="secondary">{form.category}</Badge>}
+          <span className="truncate">{form.name || "New item"}</span>
+        </div>
+      )}
+      description={form.code || "Catalog item"}
+      footer={(
+        <div className="flex w-full items-center justify-between gap-2">
+          <Button variant="destructive" size="sm" onClick={() => onDelete(item.id)}>
+            <Trash2 className="size-3.5" /> Delete
+          </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button size="sm" onClick={() => void handleSave()} disabled={saving}>
+              {saving ? "Saving…" : "Save item"}
+            </Button>
+          </div>
+        </div>
+      )}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-5 py-4 border-b border-line bg-panel2/40">
-        <div className="flex items-center gap-2 min-w-0">
-          {form.category && (
-            <Badge tone="default" className="shrink-0 text-[10px]">
-              {form.category}
-            </Badge>
-          )}
-          <span className="text-sm font-semibold truncate">
-            {form.name || "New Item"}
-          </span>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            className="p-1.5 rounded hover:bg-danger/10 text-fg/40 hover:text-danger transition-colors"
-            onClick={() => onDelete(item.id)}
-            title="Delete item"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-          </button>
-          <button
-            className="p-1.5 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 transition-colors"
-            onClick={onClose}
-            title="Close"
-          >
-            <X className="h-4 w-4" />
-          </button>
-        </div>
-      </div>
-
-      {/* Body */}
-      <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      <div className="space-y-4">
         <div>
           <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
             Item Code
@@ -252,14 +242,14 @@ function CatalogItemDrawer({
             <label className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">
               Category
             </label>
-            <Select
+            <SearchSelect
               className="mt-1"
-              value={form.category || "__none__"}
-              onValueChange={(v) => setForm({ ...form, category: v === "__none__" ? "" : v })}
-              options={[
-                { value: "__none__", label: "None" },
-                ...categoryOptions.map((cat) => ({ value: cat, label: cat })),
-              ]}
+              value={form.category}
+              onChange={(value) => setForm({ ...form, category: value })}
+              options={categoryOptions.map((category) => ({ value: category, label: category }))}
+              clearable
+              emptyLabel="None"
+              searchable
             />
           </div>
 
@@ -324,17 +314,7 @@ function CatalogItemDrawer({
           </div>
         </div>
       </div>
-
-      {/* Footer */}
-      <div className="border-t border-line px-5 py-3 flex items-center justify-end gap-2 bg-panel2/20">
-        <Button variant="secondary" size="sm" onClick={onClose}>
-          Cancel
-        </Button>
-        <Button variant="accent" size="sm" onClick={handleSave} disabled={saving}>
-          {saving ? "Saving..." : "Save"}
-        </Button>
-      </div>
-    </motion.div>
+    </Drawer>
   );
 }
 
@@ -513,7 +493,6 @@ export function ItemsManager({
   // Reset page when filters change
   useEffect(() => { setPage(0); }, [search, categoryFilter, selectedCatalogId]);
 
-  const totalPages = Math.max(1, Math.ceil(filteredItems.length / pageSize));
   const paginatedItems = filteredItems.slice(page * pageSize, (page + 1) * pageSize);
 
   // Catalog CRUD
@@ -701,15 +680,52 @@ export function ItemsManager({
     }
   };
 
-  const columns = [
-    { key: "code", label: "Code", className: "w-28" },
-    { key: "name", label: "Name", className: "min-w-[160px]" },
-    { key: "category", label: "Category", className: "w-32" },
-    { key: "unit", label: "Unit", className: "w-20" },
-    { key: "unitCost", label: "Unit Cost", className: "w-28 text-right" },
-    { key: "unitPrice", label: "Unit Price", className: "w-28 text-right" },
-    { key: "margin", label: "Margin", className: "w-24 text-right" },
-  ];
+  const columns = useMemo<RecordColumn<CatalogItem>[]>(() => [
+    {
+      key: "selection",
+      label: "",
+      width: 40,
+      render: (item) => (
+        <input
+          type="checkbox"
+          checked={selectedItems.has(item.id)}
+          onChange={() => {}}
+          onClick={(event) => toggleSelectItem(event, item.id)}
+          className="rounded border-border"
+          aria-label={`Select ${item.name}`}
+        />
+      ),
+    },
+    { key: "code", label: "Code", width: 112, render: (item) => <span className="font-mono text-xs text-fg-muted">{item.code || "—"}</span> },
+    { key: "name", label: "Name", width: "28%" },
+    {
+      key: "category",
+      label: "Category",
+      width: 140,
+      render: (item) => {
+        const category = typeof item.metadata?.category === "string" ? item.metadata.category : "";
+        return category ? <Badge variant="secondary">{category}</Badge> : <span className="text-fg-subtle">—</span>;
+      },
+    },
+    { key: "unit", label: "Unit", width: 80 },
+    { key: "unitCost", label: "Unit cost", kind: "amount", width: 112, format: (value) => formatMoney(Number(value), 2) },
+    { key: "unitPrice", label: "Unit price", kind: "amount", width: 112, format: (value) => formatMoney(Number(value), 2) },
+    {
+      key: "margin",
+      label: "Margin",
+      kind: "custom",
+      align: "right",
+      width: 96,
+      render: (item) => {
+        const margin = computeMargin(item.unitCost, item.unitPrice);
+        return (
+          <span className={cn("block text-right tabular-nums", margin > 0 && "text-success", margin < 0 && "text-danger")}>
+            {formatPercent(margin)}
+          </span>
+        );
+      },
+    },
+  ], [selectedItems]);
   const deleteTargetItemCount = deleteCatalogTarget?.itemCount ?? deleteCatalogTarget?.items?.length ?? 0;
   const deleteCatalogMessage = deleteCatalogTarget
     ? deleteCatalogError
@@ -725,7 +741,7 @@ export function ItemsManager({
   return (
     <div className={cn(embedded ? "flex h-full min-h-0 flex-col gap-3" : "space-y-5")}>
       {!embedded && (
-      <FadeIn>
+      <div>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between">
             <div>
@@ -734,18 +750,18 @@ export function ItemsManager({
                 Manage your material, labor, and equipment catalogs
               </p>
             </div>
-            <Button variant="accent" size="xs" onClick={openLibrary}>
+            <Button variant="default" size="sm" onClick={openLibrary}>
               <Library className="h-3.5 w-3.5" />
               Browse Library
             </Button>
           </CardHeader>
         </Card>
-      </FadeIn>
+      </div>
       )}
 
       <div className={cn("flex", embedded ? "min-h-0 flex-1 gap-3" : "gap-5")}>
         {/* ─── Catalog Sidebar ─── */}
-        <FadeIn delay={0.05} className={cn("w-60 shrink-0", embedded && "min-h-0")}>
+        <div className={cn("w-60 shrink-0", embedded && "min-h-0")}>
           <Card className={cn("overflow-hidden", embedded && "flex h-full min-h-0 flex-col")}>
             <CardHeader className="flex shrink-0 flex-row items-center justify-between px-3 py-2.5">
               <CardTitle>Catalogs</CardTitle>
@@ -757,14 +773,8 @@ export function ItemsManager({
               </button>
             </CardHeader>
             <div className={cn("space-y-0.5 p-2", embedded && "min-h-0 flex-1 overflow-y-auto")}>
-              <AnimatePresence>
-                {showNewCatalog && (
-                  <motion.div
-                    initial={{ opacity: 0, height: 0 }}
-                    animate={{ opacity: 1, height: "auto" }}
-                    exit={{ opacity: 0, height: 0 }}
-                    className="space-y-1.5 px-2 py-2 mb-1 border border-line rounded-lg bg-panel2/30"
-                  >
+              {showNewCatalog && (
+                  <div className="mb-1 space-y-1.5 rounded-lg border border-line bg-panel2/30 px-2 py-2">
                     <Input
                       className="h-7 text-xs"
                       placeholder="Catalog name"
@@ -778,11 +788,10 @@ export function ItemsManager({
                       }}
                       autoFocus
                     />
-                    <Select
-                      size="xs"
+                    <SearchSelect
                       value={newCatalog.category}
-                      onValueChange={(v) =>
-                        setNewCatalog((p) => ({ ...p, category: v }))
+                      onChange={(value) =>
+                        setNewCatalog((current) => ({ ...current, category: value }))
                       }
                       options={
                         catalogCategoryOptions.length > 0
@@ -807,9 +816,8 @@ export function ItemsManager({
                         <X className="h-3.5 w-3.5" />
                       </button>
                     </div>
-                  </motion.div>
-                )}
-              </AnimatePresence>
+                  </div>
+              )}
 
               {catalogs.length === 0 && !showNewCatalog && (
                 <p className="px-3 py-4 text-center text-xs text-fg/40">
@@ -863,7 +871,7 @@ export function ItemsManager({
                       </span>
 
                       <Badge
-                        tone={catalogKindTone(catalog.kind, entityCategories)}
+                        variant={catalogKindTone(catalog.kind, entityCategories)}
                         className="max-w-20 shrink-0 truncate text-[9px]"
                       >
                         {catalogKindLabel(catalog.kind, entityCategories)}
@@ -899,322 +907,124 @@ export function ItemsManager({
               })}
             </div>
           </Card>
-        </FadeIn>
+        </div>
 
         {/* ─── Items Table ─── */}
-        <FadeIn delay={0.1} className={cn("min-w-0 flex-1", embedded && "min-h-0")}>
+        <div className={cn("min-w-0 flex-1", embedded && "min-h-0")}>
           <Card className={cn(embedded && "flex h-full min-h-0 flex-col overflow-hidden")}>
-            {/* Toolbar */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-line px-3 py-2">
-              <div className="relative flex-1">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/25" />
-                <Input
-                  className="h-8 pl-8 text-xs"
-                  placeholder="Search items by name, code, or category..."
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
+            {!selectedCatalog ? (
+              <div className="p-5">
+                <EmptyState
+                  icon={<Package />}
+                  title="Select a catalog"
+                  description="Choose a catalog from the left to view and edit its items."
                 />
               </div>
-
-              <RadixSelect.Root value={categoryFilter || "__all__"} onValueChange={(val) => setCategoryFilter(val === "__all__" ? "" : val)}>
-                <RadixSelect.Trigger className="inline-flex items-center gap-1.5 h-8 px-2.5 text-xs rounded-lg border border-line bg-bg/50 text-fg outline-none hover:border-accent/30 focus:border-accent/50 focus:ring-1 focus:ring-accent/20 transition-colors whitespace-nowrap">
-                  <RadixSelect.Value placeholder="All" />
-                  <RadixSelect.Icon className="ml-1 shrink-0">
-                    <ChevronDown className="h-3 w-3 text-fg/40" />
-                  </RadixSelect.Icon>
-                </RadixSelect.Trigger>
-                <RadixSelect.Portal>
-                  <RadixSelect.Content className="z-50 rounded-lg border border-line bg-panel shadow-xl" position="popper" sideOffset={4}>
-                    <RadixSelect.Viewport className="p-1">
-                      <RadixSelect.Item value="__all__" className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
-                        <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
-                        <RadixSelect.ItemText>All</RadixSelect.ItemText>
-                      </RadixSelect.Item>
-                      {itemCategoryOptions.map((cat) => (
-                        <RadixSelect.Item key={cat} value={cat} className="flex items-center gap-2 px-2 py-1.5 text-xs rounded-md outline-none cursor-pointer hover:bg-accent/10 data-[highlighted]:bg-accent/10 data-[state=checked]:text-accent">
-                          <RadixSelect.ItemIndicator className="shrink-0"><Check className="h-3 w-3" /></RadixSelect.ItemIndicator>
-                          <RadixSelect.ItemText>{cat}</RadixSelect.ItemText>
-                        </RadixSelect.Item>
-                      ))}
-                    </RadixSelect.Viewport>
-                  </RadixSelect.Content>
-                </RadixSelect.Portal>
-              </RadixSelect.Root>
-
-              {selectedItems.size > 0 && (
-                <Button variant="danger" size="sm" onClick={handleBulkDelete}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                  Delete {selectedItems.size}
-                </Button>
-              )}
-
-              <Button
-                variant="ghost"
-                size="sm"
-                className="whitespace-nowrap"
-                onClick={() => setShowImport(true)}
-                disabled={catalogs.length === 0}
-                title="Import items from XLSX, CSV, or PDF using AI column mapping"
-              >
-                <FileSpreadsheet className="h-3.5 w-3.5" />
-                Import
-              </Button>
-
-              <Button
-                variant="accent"
-                size="sm"
-                className="whitespace-nowrap"
-                onClick={handleAddItem}
-                disabled={!selectedCatalogId}
-              >
-                <Plus className="h-3.5 w-3.5" />
-                Add Item
-              </Button>
-            </div>
-
-            {!selectedCatalog ? (
-              <EmptyState className="m-5">
-                <Package className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                Select a catalog to view items
-              </EmptyState>
             ) : loadingItems ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="h-5 w-5 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+              <div className="flex items-center justify-center py-12 text-sm text-fg-muted">
+                <Loader2 className="mr-2 size-4 animate-spin" /> Loading items…
               </div>
             ) : (
-              <>
-              <div className={cn("overflow-x-auto", embedded && "min-h-0 flex-1 overflow-auto")}>
-                <table className="w-full text-sm">
-                  <thead className={cn(embedded && "sticky top-0 z-10 bg-panel")}>
-                    <tr className="border-b border-line">
-                      <th className="w-10 px-3 py-3">
-                        <input
-                          type="checkbox"
-                          checked={
-                            filteredItems.length > 0 &&
-                            selectedItems.size === filteredItems.length
-                          }
-                          onChange={toggleSelectAll}
-                          className="rounded border-line"
-                        />
-                      </th>
-                      {columns.map((col) => (
-                        <th
-                          key={col.key}
-                          className={cn(
-                            "px-4 py-3 text-left text-[11px] font-medium uppercase tracking-wider text-fg/40",
-                            col.className
-                          )}
-                        >
-                          {col.label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {paginatedItems.length === 0 && (
-                      <tr>
-                        <td
-                          colSpan={columns.length + 1}
-                          className="px-5 py-12 text-center text-sm text-fg/40"
-                        >
-                          <Package className="mx-auto mb-2 h-8 w-8 text-fg/20" />
-                          No items in this catalog
-                        </td>
-                      </tr>
-                    )}
-                    {paginatedItems.map((item, i) => {
-                      const category =
-                        (item.metadata?.category as string) ?? "";
-                      const margin = computeMargin(
-                        item.unitCost,
-                        item.unitPrice
-                      );
-                      const isActive = drawerItemId === item.id;
-
-                      return (
-                        <motion.tr
-                          key={item.id}
-                          initial={{ opacity: 0, y: 4 }}
-                          animate={{ opacity: 1, y: 0 }}
-                          transition={{
-                            duration: 0.2,
-                            delay: Math.min(i * 0.02, 0.3),
-                            ease: "easeOut",
-                          }}
-                          onClick={() => setDrawerItemId(item.id)}
-                          className={cn(
-                            "border-b border-line last:border-0 transition-colors cursor-pointer",
-                            isActive
-                              ? "bg-accent/5"
-                              : "hover:bg-panel2/40"
-                          )}
-                        >
-                          {/* Checkbox */}
-                          <td className="px-3 py-2.5">
-                            <input
-                              type="checkbox"
-                              checked={selectedItems.has(item.id)}
-                              onChange={() => {}}
-                              onClick={(e) => toggleSelectItem(e, item.id)}
-                              className="rounded border-line"
-                            />
-                          </td>
-
-                          {columns.map((col) => {
-                            let rawValue: string | number;
-                            if (col.key === "category") {
-                              rawValue = category;
-                            } else if (col.key === "margin") {
-                              rawValue = margin;
-                            } else {
-                              rawValue = (
-                                item as unknown as Record<string, string | number>
-                              )[col.key] ?? "";
-                            }
-
-                            let displayValue: string;
-                            if (col.key === "unitCost" || col.key === "unitPrice") {
-                              displayValue = formatMoney(rawValue as number, 2);
-                            } else if (col.key === "margin") {
-                              displayValue = formatPercent(rawValue as number);
-                            } else {
-                              displayValue = String(rawValue ?? "");
-                            }
-
-                            return (
-                              <td
-                                key={col.key}
-                                className={cn(
-                                  "px-4 py-2.5 text-xs",
-                                  col.className
-                                )}
-                              >
-                                <span
-                                  className={cn(
-                                    "text-fg/70",
-                                    col.key === "margin" &&
-                                      margin > 0 &&
-                                      "text-success",
-                                    col.key === "margin" &&
-                                      margin < 0 &&
-                                      "text-danger"
-                                  )}
-                                >
-                                  {displayValue || (
-                                    <span className="text-fg/25 italic">
-                                      —
-                                    </span>
-                                  )}
-                                </span>
-                              </td>
-                            );
-                          })}
-                        </motion.tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className={cn("p-3", embedded && "min-h-0 flex-1")}>
+                <RecordList
+                  columns={columns}
+                  rows={paginatedItems}
+                  getRowId={(item) => item.id}
+                  className={cn(embedded && "flex h-full min-h-0 flex-col")}
+                  tableContainerClassName={cn(
+                    "rounded-none border-0 shadow-none",
+                    embedded && "min-h-0 flex-1 overflow-auto",
+                  )}
+                  search={{
+                    value: search,
+                    onChange: setSearch,
+                    placeholder: "Search items by name, code, or category…",
+                  }}
+                  filters={(
+                    <SearchSelect
+                      className="w-44"
+                      value={categoryFilter}
+                      onChange={setCategoryFilter}
+                      options={itemCategoryOptions.map((category) => ({ value: category, label: category }))}
+                      clearable
+                      emptyLabel="All categories"
+                      searchable
+                      ariaLabel="Filter by category"
+                    />
+                  )}
+                  toolbarActions={(
+                    <>
+                      {filteredItems.length > 0 && (
+                        <Button variant="ghost" size="sm" onClick={toggleSelectAll}>
+                          {selectedItems.size === filteredItems.length ? "Clear selection" : "Select all"}
+                        </Button>
+                      )}
+                      {selectedItems.size > 0 && (
+                        <Button variant="destructive" size="sm" onClick={() => void handleBulkDelete()}>
+                          <Trash2 className="size-3.5" /> Delete {selectedItems.size}
+                        </Button>
+                      )}
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowImport(true)}
+                        disabled={catalogs.length === 0}
+                        title="Import items from XLSX, CSV, or PDF using AI column mapping"
+                      >
+                        <FileSpreadsheet className="size-3.5" /> Import
+                      </Button>
+                      <Button size="sm" onClick={() => void handleAddItem()} disabled={!selectedCatalogId}>
+                        <Plus className="size-3.5" /> Add item
+                      </Button>
+                    </>
+                  )}
+                  pagination={{
+                    page: page + 1,
+                    perPage: pageSize,
+                    total: filteredItems.length,
+                    onPageChange: (nextPage) => setPage(nextPage - 1),
+                  }}
+                  empty={{
+                    icon: <Package />,
+                    title: search || categoryFilter ? "No items match these filters" : "No items in this catalog",
+                    description: search || categoryFilter
+                      ? "Try a broader search or clear the category filter."
+                      : "Add or import the first catalog item.",
+                    action: search || categoryFilter ? undefined : (
+                      <Button size="sm" onClick={() => void handleAddItem()}><Plus className="size-3.5" /> Add item</Button>
+                    ),
+                  }}
+                  onRowClick={(item) => setDrawerItemId(item.id)}
+                />
               </div>
-
-              {/* Pagination */}
-              {filteredItems.length > 0 && (
-                <div className="flex shrink-0 items-center justify-between border-t border-line px-3 py-2.5">
-                  <span className="text-[11px] text-fg/40">
-                    {page * pageSize + 1}–{Math.min((page + 1) * pageSize, filteredItems.length)} of {filteredItems.length} items
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setPage((p) => Math.max(0, p - 1))}
-                      disabled={page === 0}
-                      className="p-1 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </button>
-                    <span className="text-[11px] text-fg/50 min-w-[4rem] text-center">
-                      Page {page + 1} of {totalPages}
-                    </span>
-                    <button
-                      onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
-                      disabled={page >= totalPages - 1}
-                      className="p-1 rounded hover:bg-panel2/60 text-fg/40 hover:text-fg/70 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              )}
-              </>
             )}
           </Card>
-        </FadeIn>
+        </div>
       </div>
 
       {/* ─── Item Detail Drawer ─── */}
-      {typeof document !== "undefined" && createPortal(
-        <AnimatePresence>
-          {drawerItem && selectedCatalogId && (
-            <>
-              <motion.div
-                key="item-drawer-backdrop"
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
-                className="fixed inset-0 z-40 bg-black/20"
-                onClick={() => setDrawerItemId(null)}
-              />
-              <CatalogItemDrawer
-                key={drawerItem.id}
-                categoryOptions={itemCategoryOptions}
-                item={drawerItem}
-                catalogId={selectedCatalogId}
-                onSave={handleDrawerSave}
-                onDelete={handleDeleteItem}
-                onClose={() => setDrawerItemId(null)}
-              />
-            </>
-          )}
-        </AnimatePresence>,
-        document.body
+      {drawerItem && selectedCatalogId && (
+        <CatalogItemDrawer
+          key={drawerItem.id}
+          categoryOptions={itemCategoryOptions}
+          item={drawerItem}
+          catalogId={selectedCatalogId}
+          onSave={handleDrawerSave}
+          onDelete={handleDeleteItem}
+          onClose={() => setDrawerItemId(null)}
+        />
       )}
 
-      {/* ─── Library Browser Modal ─── */}
-      {typeof document !== "undefined" && createPortal(
-      <AnimatePresence>
-        {showLibrary && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
-            onClick={() => { setShowLibrary(false); setLibraryPreview(null); }}
-          >
-            <motion.div
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              transition={{ duration: 0.2 }}
-              className="bg-panel border border-line rounded-xl shadow-2xl w-[800px] max-h-[80vh] flex flex-col overflow-hidden"
-              onClick={(e) => e.stopPropagation()}
-            >
-              {/* Header */}
-              <div className="flex items-center justify-between px-6 py-4 border-b border-line">
-                <div>
-                  <h2 className="text-base font-semibold text-fg">Catalog Library</h2>
-                  <p className="text-xs text-fg/50 mt-0.5">
-                    Browse and import catalog templates into your organization
-                  </p>
-                </div>
-                <button
-                  onClick={() => { setShowLibrary(false); setLibraryPreview(null); }}
-                  className="p-1.5 rounded-lg hover:bg-panel2/60 text-fg/40 hover:text-fg transition-colors"
-                >
-                  <X className="h-4 w-4" />
-                </button>
-              </div>
-
-              {/* Content */}
-              <div className="flex flex-1 min-h-0">
+      {/* ─── Library Browser Drawer ─── */}
+      <Drawer
+        open={showLibrary}
+        onClose={() => { setShowLibrary(false); setLibraryPreview(null); }}
+        size="xl"
+        title="Catalog library"
+        description="Browse and import catalog templates into your organization."
+        bodyClassName="p-0"
+      >
+              <div className="flex h-[70vh] min-h-[520px]">
                 {/* Template list */}
                 <div className="w-64 border-r border-line overflow-y-auto p-3 space-y-1">
                   {libraryLoading ? (
@@ -1241,7 +1051,7 @@ export function ItemsManager({
                       >
                         <div className="text-sm font-medium text-fg truncate">{template.name}</div>
                         <div className="flex items-center gap-2 mt-1">
-                          <Badge tone={catalogKindTone(template.kind, entityCategories)} className="text-[10px]">
+                          <Badge variant={catalogKindTone(template.kind, entityCategories)} className="text-[10px]">
                             {catalogKindLabel(template.kind, entityCategories)}
                           </Badge>
                           {template.itemCount != null && (
@@ -1302,34 +1112,34 @@ export function ItemsManager({
                         </div>
                       </div>
                       <div className="flex-1 overflow-y-auto">
-                        <table className="w-full text-xs">
-                          <thead className="sticky top-0 bg-panel2/80 backdrop-blur-sm">
-                            <tr className="border-b border-line">
-                              <th className="text-left py-2 px-4 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Code</th>
-                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Name</th>
-                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Category</th>
-                              <th className="text-left py-2 px-2 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Unit</th>
-                              <th className="text-right py-2 px-4 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Cost</th>
-                              <th className="text-right py-2 px-4 text-[10px] font-medium text-fg/40 uppercase tracking-wider">Price</th>
-                            </tr>
-                          </thead>
-                          <tbody>
+                        <Table>
+                          <TableHeader className="sticky top-0 bg-panel2/80 backdrop-blur-sm">
+                            <TableRow noAnimate>
+                              <TableHead>Code</TableHead>
+                              <TableHead>Name</TableHead>
+                              <TableHead>Category</TableHead>
+                              <TableHead>Unit</TableHead>
+                              <TableHead className="text-right">Cost</TableHead>
+                              <TableHead className="text-right">Price</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
                             {libraryPreview.items.map((item, idx) => (
-                              <tr key={item.id || idx} className="border-b border-line/30 hover:bg-panel2/20">
-                                <td className="py-1.5 px-4 font-mono text-fg/50">{item.code || "—"}</td>
-                                <td className="py-1.5 px-2 text-fg">{item.name}</td>
-                                <td className="py-1.5 px-2 text-fg/50">{(item.metadata as Record<string, string>)?.category || "—"}</td>
-                                <td className="py-1.5 px-2 text-fg/50">{item.unit}</td>
-                                <td className="py-1.5 px-4 text-right tabular-nums text-fg/60">
+                              <TableRow key={item.id || idx}>
+                                <TableCell className="font-mono text-fg-muted">{item.code || "—"}</TableCell>
+                                <TableCell>{item.name}</TableCell>
+                                <TableCell className="text-fg-muted">{(item.metadata as Record<string, string>)?.category || "—"}</TableCell>
+                                <TableCell className="text-fg-muted">{item.unit}</TableCell>
+                                <TableCell className="text-right tabular-nums">
                                   {item.unitCost > 0 ? `$${item.unitCost.toFixed(2)}` : "—"}
-                                </td>
-                                <td className="py-1.5 px-4 text-right tabular-nums text-fg/60">
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums">
                                   {item.unitPrice > 0 ? `$${item.unitPrice.toFixed(2)}` : "—"}
-                                </td>
-                              </tr>
+                                </TableCell>
+                              </TableRow>
                             ))}
-                          </tbody>
-                        </table>
+                          </TableBody>
+                        </Table>
                         {libraryPreview.total > libraryPreview.items.length && (
                           <div className="text-center py-3 text-[10px] text-fg/30">
                             Showing {libraryPreview.items.length} of {libraryPreview.total} items
@@ -1340,12 +1150,7 @@ export function ItemsManager({
                   ) : null}
                 </div>
               </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>,
-      document.body
-      )}
+      </Drawer>
 
       <ConfirmModal
         open={Boolean(deleteCatalogTarget)}

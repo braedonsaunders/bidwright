@@ -1,6 +1,7 @@
 import {
-  createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual,
+  createHmac, timingSafeEqual,
 } from "node:crypto";
+import { createContextualSealer } from "@appkit/crypto";
 
 /**
  * Per-tenant credential encryption.
@@ -21,11 +22,7 @@ import {
  * org.
  */
 
-const ALG = "aes-256-gcm";
 const KEY_LEN = 32;
-const IV_LEN = 12;
-const TAG_LEN = 16;
-const VERSION = 0x01;
 const HKDF_INFO = "bidwright:integrations:credential:v1";
 
 export interface CryptoEnv {
@@ -61,21 +58,13 @@ function getMasterKey(env: CryptoEnv = {}): Buffer {
   return key;
 }
 
-/**
- * RFC 5869 HKDF-SHA256, simplified for fixed 32-byte output.
- */
-function hkdf(ikm: Buffer, salt: Buffer, info: Buffer): Buffer {
-  // Extract
-  const prk = createHmac("sha256", salt).update(ikm).digest();
-  // Expand (single block for 32-byte output)
-  const t1 = createHmac("sha256", prk).update(info).update(Buffer.from([0x01])).digest();
-  return t1.subarray(0, KEY_LEN);
-}
-
-function deriveTenantKey(orgId: string, env: CryptoEnv = {}): Buffer {
+function credentialSealer(orgId: string, env: CryptoEnv = {}) {
   if (!orgId) throw new IntegrationCryptoError("Organization id required for key derivation.");
   const master = getMasterKey(env);
-  return hkdf(master, Buffer.from(orgId, "utf8"), Buffer.from(HKDF_INFO, "utf8"));
+  return {
+    sealer: createContextualSealer(master, { hkdfInfo: HKDF_INFO }),
+    salt: orgId,
+  };
 }
 
 /**
@@ -88,14 +77,11 @@ export function encryptForOrg(
   keyContext: string,
   env: CryptoEnv = {},
 ): string {
-  const key = deriveTenantKey(orgId, env);
-  const iv = randomBytes(IV_LEN);
-  const aad = Buffer.from(keyContext, "utf8");
-  const cipher = createCipheriv(ALG, key, iv, { authTagLength: TAG_LEN });
-  cipher.setAAD(aad);
-  const enc = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([Buffer.from([VERSION]), iv, tag, enc]).toString("base64");
+  const { sealer, salt } = credentialSealer(orgId, env);
+  return sealer.sealSecret(plaintext, {
+    salt,
+    additionalData: keyContext,
+  });
 }
 
 /**
@@ -108,24 +94,17 @@ export function decryptForOrg(
   keyContext: string,
   env: CryptoEnv = {},
 ): string {
-  const buf = Buffer.from(payload, "base64");
-  if (buf.length < 1 + IV_LEN + TAG_LEN) {
-    throw new IntegrationCryptoError("Ciphertext too short.");
+  const { sealer, salt } = credentialSealer(orgId, env);
+  const plaintext = sealer.unsealSecret(payload, {
+    salt,
+    additionalData: keyContext,
+  });
+  if (plaintext === null) {
+    throw new IntegrationCryptoError(
+      "Credential ciphertext is invalid, unsupported, or bound to a different context.",
+    );
   }
-  const version = buf[0];
-  if (version !== VERSION) {
-    throw new IntegrationCryptoError(`Unsupported credential version: ${version}`);
-  }
-  const iv = buf.subarray(1, 1 + IV_LEN);
-  const tag = buf.subarray(1 + IV_LEN, 1 + IV_LEN + TAG_LEN);
-  const enc = buf.subarray(1 + IV_LEN + TAG_LEN);
-  const key = deriveTenantKey(orgId, env);
-  const aad = Buffer.from(keyContext, "utf8");
-  const decipher = createDecipheriv(ALG, key, iv, { authTagLength: TAG_LEN });
-  decipher.setAAD(aad);
-  decipher.setAuthTag(tag);
-  const out = Buffer.concat([decipher.update(enc), decipher.final()]);
-  return out.toString("utf8");
+  return plaintext;
 }
 
 /**

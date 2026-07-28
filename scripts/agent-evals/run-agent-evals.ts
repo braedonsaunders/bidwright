@@ -15,6 +15,7 @@ type RunMode = "full-intake" | "manual-question";
 interface Args {
   apiUrl: string;
   token?: string;
+  tokenFile?: string;
   email?: string;
   password?: string;
   orgSlug?: string;
@@ -558,10 +559,11 @@ Usage:
   pnpm eval:agent -- ./cases/pump-station.zip ./cases/fab-package.zip
 
 Auth:
-  BIDWRIGHT_AUTH_TOKEN=... or BIDWRIGHT_EMAIL=... BIDWRIGHT_PASSWORD=...
+  BIDWRIGHT_AUTH_TOKEN=..., BIDWRIGHT_AUTH_TOKEN_FILE=..., or BIDWRIGHT_EMAIL=... BIDWRIGHT_PASSWORD=...
 
 Options:
   --api-url <url>                  Default: BIDWRIGHT_API_URL or http://localhost:4001
+  --token-file <path>              Read a bearer token from a mode-0600 file
   --project-id <id>                Reuse an already-ingested project instead of uploading zips
   --cases <dir>                    Directory of .zip cases
   --out <dir>                      Output directory. Default: ./.bidwright/evals/<timestamp>
@@ -616,6 +618,7 @@ function parseArgs(argv: string[]): Args {
   const args: Args = {
     apiUrl: process.env.BIDWRIGHT_API_URL || "http://localhost:4001",
     token: process.env.BIDWRIGHT_AUTH_TOKEN,
+    tokenFile: process.env.BIDWRIGHT_AUTH_TOKEN_FILE,
     email: process.env.BIDWRIGHT_EMAIL,
     password: process.env.BIDWRIGHT_PASSWORD,
     orgSlug: process.env.BIDWRIGHT_ORG_SLUG,
@@ -668,6 +671,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--token":
         args.token = next();
+        break;
+      case "--token-file":
+        args.tokenFile = next();
         break;
       case "--email":
         args.email = next();
@@ -941,6 +947,11 @@ async function main() {
   if (args.help) {
     process.stdout.write(usage());
     return;
+  }
+
+  if (!args.token && args.tokenFile) {
+    args.token = (await readFile(path.resolve(args.tokenFile), "utf8")).trim();
+    if (!args.token) throw new Error("Bearer token file is empty.");
   }
 
   const discoveredCases = args.projectId

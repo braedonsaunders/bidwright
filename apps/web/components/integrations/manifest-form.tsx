@@ -1,7 +1,15 @@
 "use client";
 
 import { useMemo } from "react";
-import { Input, Label, Select, Textarea, Toggle } from "@/components/ui";
+import {
+  Input,
+  Label,
+  Textarea,
+} from "@appkit/ui";
+import {
+  Select,
+  Toggle,
+} from "@/components/legacy-controls";
 import type { ManifestField } from "@/lib/api/integrations";
 
 /**

@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { AppShell } from "@/components/app-shell";
 import { ClientDetail } from "@/components/client-detail";
 import {
   getCustomer,
@@ -39,19 +38,17 @@ export default function ClientDetailPage() {
   }, [clientId]);
 
   return (
-    <AppShell projects={projects}>
-      {loading ? (
-        <div className="flex items-center justify-center py-20">
-          <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
-        </div>
-      ) : (
-        <ClientDetail
-          customer={customer}
-          projects={projects}
-          users={users}
-          departments={departments}
-        />
-      )}
-    </AppShell>
+    loading ? (
+      <div className="flex items-center justify-center py-20">
+        <div className="h-6 w-6 animate-spin rounded-full border-2 border-accent border-t-transparent" />
+      </div>
+    ) : (
+      <ClientDetail
+        customer={customer}
+        projects={projects}
+        users={users}
+        departments={departments}
+      />
+    )
   );
 }

@@ -2,7 +2,9 @@
 
 import { useEffect, useRef, useState, useCallback, type MutableRefObject } from "react";
 import { Loader2, Maximize2, Box, AlertCircle, RotateCcw } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 import { cn } from "@/lib/utils";
 
 type CadViewerState = "loading" | "ready" | "error";

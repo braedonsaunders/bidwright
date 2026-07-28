@@ -5,7 +5,9 @@ import { Workbook } from "@fortune-sheet/react";
 import type { Sheet } from "@fortune-sheet/core";
 import "@fortune-sheet/react/dist/index.css";
 import { Save, X } from "lucide-react";
-import { Button } from "@/components/ui";
+import {
+  Button,
+} from "@appkit/ui";
 
 interface SpreadsheetEditorProps {
   fileName: string;
@@ -76,13 +78,13 @@ export function SpreadsheetEditor({
         <span className="text-sm font-medium text-fg truncate">{fileName}</span>
         <div className="flex items-center gap-1">
           {onSave && (
-            <Button variant="ghost" size="xs" onClick={handleSave}>
+            <Button variant="ghost" size="sm" onClick={handleSave}>
               <Save className="w-4 h-4 mr-1" />
               Save
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="xs" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose}>
               <X className="w-4 h-4" />
             </Button>
           )}
