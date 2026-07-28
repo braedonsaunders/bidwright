@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type CSSProperties } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
 import {
@@ -172,6 +172,22 @@ import {
   createBidwrightIamService,
 } from "@/lib/bidwright-iam-service";
 
+const NON_LOGIN_SECRET_INPUT_PROPS = {
+  autoComplete: "new-password",
+  "data-form-type": "other",
+  "data-lpignore": "true",
+  "data-1p-ignore": "true",
+  spellCheck: false,
+} as const;
+
+const PROVIDER_API_KEY_FIELDS: Record<string, keyof AppSettingsRecord["integrations"]> = {
+  anthropic: "anthropicKey",
+  openai: "openaiKey",
+  openrouter: "openrouterKey",
+  gemini: "geminiKey",
+  lmstudio: "lmstudioBaseUrl",
+};
+
 const AZURE_DI_MODEL_OPTIONS = [
   { value: "prebuilt-layout", label: "Layout" },
   { value: "prebuilt-read", label: "Read" },
@@ -268,6 +284,7 @@ export function SettingsPage({
 
   // Integrations
   const [keyTestStatus, setKeyTestStatus] = useState<{ loading: boolean; result?: { success: boolean; message: string } }>({ loading: false });
+  const [providerKeyDraft, setProviderKeyDraft] = useState("");
   const [providerModels, setProviderModels] = useState<{ id: string; name: string }[]>([]);
   const [modelsLoading, setModelsLoading] = useState(false);
 
@@ -846,6 +863,25 @@ export function SettingsPage({
   );
   const updateIntegrations = (patch: Partial<IntegrationSettings>) =>
     setSettings((s) => ({ ...s, integrations: { ...s.integrations, ...patch } }));
+  const persistAiProviderSettings = useCallback(async (patch: Partial<IntegrationSettings>) => {
+    setSettings((current) => ({
+      ...current,
+      integrations: { ...current.integrations, ...patch },
+    }));
+    try {
+      await apiUpdateSettings({
+        integrations: patch as unknown as AppSettingsRecord["integrations"],
+      });
+    } catch (error) {
+      setKeyTestStatus({
+        loading: false,
+        result: {
+          success: false,
+          message: error instanceof Error ? error.message : "Could not save the AI provider settings.",
+        },
+      });
+    }
+  }, []);
   const updateUserLocal = (id: string, patch: Partial<UserRecord>) =>
     setSettings((s) => ({ ...s, users: s.users.map((u) => (u.id === id ? { ...u, ...patch } : u)) }));
   const updateBrandLocal = (patch: Partial<BrandProfile>) =>
@@ -859,15 +895,42 @@ export function SettingsPage({
 
   const handleTestKey = useCallback(async () => {
     const provider = settings.integrations.llmProvider;
-    const key = getProviderKey(provider);
+    const key = provider === "lmstudio"
+      ? settings.integrations.lmstudioBaseUrl
+      : providerKeyDraft.trim();
     setKeyTestStatus({ loading: true });
     try {
       const res = await apiTestProviderKey(provider, key, provider === "lmstudio" ? settings.integrations.lmstudioBaseUrl : undefined);
-      setKeyTestStatus({ loading: false, result: res });
+      if (!res.success) {
+        setKeyTestStatus({ loading: false, result: res });
+        return;
+      }
+      const apiKeyField = PROVIDER_API_KEY_FIELDS[provider];
+      if (!apiKeyField) throw new Error(`Unsupported AI provider: ${provider}`);
+      await apiUpdateSettings({
+        integrations: {
+          [apiKeyField]: key,
+          llmProvider: provider,
+          llmModel: settings.integrations.llmModel,
+        } as unknown as AppSettingsRecord["integrations"],
+      });
+      const config = PROVIDER_CONFIG[provider];
+      if (config) updateIntegrations({ [config.keyField]: key });
+      setProviderKeyDraft("");
+      const modelResult = await apiFetchProviderModels(
+        provider,
+        key,
+        provider === "lmstudio" ? settings.integrations.lmstudioBaseUrl : undefined,
+      );
+      setProviderModels(modelResult.models || []);
+      setKeyTestStatus({
+        loading: false,
+        result: { success: true, message: "Credential verified and saved for the organization." },
+      });
     } catch (err: any) {
       setKeyTestStatus({ loading: false, result: { success: false, message: err.message || "Test failed" } });
     }
-  }, [settings.integrations, getProviderKey]);
+  }, [providerKeyDraft, settings.integrations]);
 
   const handleFetchModels = useCallback(async (provider?: string, apiKey?: string) => {
     const p = provider || settings.integrations.llmProvider;
@@ -1285,7 +1348,7 @@ export function SettingsPage({
                       </div>
                       <div>
                         <Label>Password</Label>
-                        <Input type="password" value={settings.email.smtpPassword} onChange={(e) => updateEmail({ smtpPassword: e.target.value })} placeholder="********" />
+                        <Input type="password" value={settings.email.smtpPassword} onChange={(e) => updateEmail({ smtpPassword: e.target.value })} placeholder="********" name="organization-smtp-password" {...NON_LOGIN_SECRET_INPUT_PROPS} />
                       </div>
                     </div>
                   </>
@@ -1311,7 +1374,7 @@ export function SettingsPage({
                       </div>
                       <div>
                         <Label>Client Secret</Label>
-                        <Input type="password" value={settings.email.oauth2ClientSecret} onChange={(e) => updateEmail({ oauth2ClientSecret: e.target.value })} placeholder="********" />
+                        <Input type="password" value={settings.email.oauth2ClientSecret} onChange={(e) => updateEmail({ oauth2ClientSecret: e.target.value })} placeholder="********" name="organization-email-oauth-client-secret" {...NON_LOGIN_SECRET_INPUT_PROPS} />
                       </div>
                     </div>
                   </>
@@ -1492,8 +1555,10 @@ export function SettingsPage({
           {activeGroup === "integrations" && integrationsSubTab === "llm" && (() => {
             const provider = settings.integrations.llmProvider;
             const cfg = PROVIDER_CONFIG[provider];
-            const currentKey = cfg ? (settings.integrations[cfg.keyField] as string) : "";
+            const configuredKey = cfg ? (settings.integrations[cfg.keyField] as string) : "";
             const isLmStudio = provider === "lmstudio";
+            const currentKey = isLmStudio ? configuredKey : providerKeyDraft;
+            const credentialConfigured = Boolean(configuredKey);
             return (
               <Card>
                 <CardHeader>
@@ -1509,7 +1574,8 @@ export function SettingsPage({
                     <SearchSelect
                       value={provider}
                       onChange={(v) => {
-                        updateIntegrations({ llmProvider: v, llmModel: "" });
+                        void persistAiProviderSettings({ llmProvider: v, llmModel: "" });
+                        setProviderKeyDraft("");
                         setKeyTestStatus({ loading: false });
                         setProviderModels([]);
                       }}
@@ -1519,13 +1585,24 @@ export function SettingsPage({
                   <div>
                     <Label>{cfg?.keyLabel || "API Key"}</Label>
                     <Input
-                      type={isLmStudio ? "text" : "password"}
+                      type="text"
                       value={currentKey}
-                      onChange={(e) => cfg && updateIntegrations({ [cfg.keyField]: e.target.value })}
-                      placeholder={cfg?.placeholder || ""}
+                      onChange={(e) => {
+                        if (!cfg) return;
+                        if (isLmStudio) updateIntegrations({ [cfg.keyField]: e.target.value });
+                        else setProviderKeyDraft(e.target.value);
+                      }}
+                      placeholder={
+                        !isLmStudio && credentialConfigured
+                          ? "Credential configured — enter a replacement"
+                          : cfg?.placeholder || ""
+                      }
+                      name={`organization-${provider}-credential`}
+                      {...(!isLmStudio ? NON_LOGIN_SECRET_INPUT_PROPS : {})}
+                      style={!isLmStudio ? { WebkitTextSecurity: "disc" } as CSSProperties : undefined}
                     />
-                    {currentKey && !isLmStudio && (
-                      <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(currentKey)}</p>
+                    {credentialConfigured && !isLmStudio && (
+                      <p className="mt-1 text-[11px] text-fg/40">Organization credential configured.</p>
                     )}
                     {isLmStudio && (
                       <p className="mt-1 text-[11px] text-fg/40">URL for your local LM Studio server</p>
@@ -1539,9 +1616,9 @@ export function SettingsPage({
                       disabled={keyTestStatus.loading || (!currentKey && !isLmStudio)}
                     >
                       {keyTestStatus.loading ? (
-                        <><Loader2 className="h-3 w-3 animate-spin" /> Testing...</>
+                        <><Loader2 className="h-3 w-3 animate-spin" /> Verifying...</>
                       ) : (
-                        <><Zap className="h-3 w-3" /> Test Connection</>
+                        <><Zap className="h-3 w-3" /> Verify & save</>
                       )}
                     </Button>
                     {keyTestStatus.result && (
@@ -1559,7 +1636,7 @@ export function SettingsPage({
                         variant="ghost"
                         size="sm"
                         onClick={() => handleFetchModels()}
-                        disabled={modelsLoading || (!currentKey && !isLmStudio)}
+                        disabled={modelsLoading || (!credentialConfigured && !currentKey && !isLmStudio)}
                         className="text-[10px] h-5 px-1.5"
                       >
                         {modelsLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : "Refresh"}
@@ -1567,10 +1644,10 @@ export function SettingsPage({
                     </div>
                     <SearchableModelSelect
                       value={settings.integrations.llmModel}
-                      onChange={(v) => updateIntegrations({ llmModel: v })}
+                      onChange={(v) => void persistAiProviderSettings({ llmModel: v })}
                       models={providerModels}
                       loading={modelsLoading}
-                      placeholder={!currentKey && !isLmStudio ? "Enter API key first..." : "Select a model..."}
+                      placeholder={!credentialConfigured && !currentKey && !isLmStudio ? "Enter API key first..." : "Select a model..."}
                     />
                   </div>
                 </CardContent>
@@ -1655,6 +1732,8 @@ export function SettingsPage({
                     value={settings.integrations.azureDiKey}
                     onChange={(e) => updateIntegrations({ azureDiKey: e.target.value })}
                     placeholder="Enter Azure DI key..."
+                    name="organization-azure-document-intelligence-key"
+                    {...NON_LOGIN_SECRET_INPUT_PROPS}
                   />
                   {settings.integrations.azureDiKey && (
                     <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.azureDiKey)}</p>
@@ -1693,6 +1772,8 @@ export function SettingsPage({
                       value={settings.integrations.autodeskClientSecret}
                       onChange={(e) => updateIntegrations({ autodeskClientSecret: e.target.value })}
                       placeholder="APS client secret"
+                      name="organization-autodesk-client-secret"
+                      {...NON_LOGIN_SECRET_INPUT_PROPS}
                     />
                     {settings.integrations.autodeskClientSecret && (
                       <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.autodeskClientSecret)}</p>
@@ -1764,6 +1845,8 @@ export function SettingsPage({
                           value={settings.integrations.landingAiApiKey}
                           onChange={(e) => updateIntegrations({ landingAiApiKey: e.target.value })}
                           placeholder="Enter LandingAI key..."
+                          name="organization-landing-ai-api-key"
+                          {...NON_LOGIN_SECRET_INPUT_PROPS}
                         />
                         {settings.integrations.landingAiApiKey && (
                           <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.landingAiApiKey)}</p>
@@ -1803,6 +1886,8 @@ export function SettingsPage({
                           value={settings.integrations.geminiApiKey}
                           onChange={(e) => updateIntegrations({ geminiApiKey: e.target.value })}
                           placeholder="AIza..."
+                          name="organization-gemini-drawing-api-key"
+                          {...NON_LOGIN_SECRET_INPUT_PROPS}
                         />
                         {settings.integrations.geminiApiKey && (
                           <p className="mt-1 text-[11px] text-fg/40">Current: {maskKey(settings.integrations.geminiApiKey)}</p>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Check, ChevronDown, Eye, EyeOff, KeyRound, Loader2, Plus, Search, X } from "lucide-react";
 
 import {
@@ -343,6 +343,8 @@ export function AgentRuntimeSettings({
   const [showProviderKey, setShowProviderKey] = useState(false);
   const [savingProviderKey, setSavingProviderKey] = useState(false);
   const [providerKeyMessage, setProviderKeyMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const [runtimeSaveMessage, setRuntimeSaveMessage] = useState<{ ok: boolean; text: string } | null>(null);
+  const runtimeSaveRevision = useRef(0);
   const isServerMode = cliStatus?.deploymentMode === "server";
 
   const refreshDetection = useCallback(async () => {
@@ -380,6 +382,27 @@ export function AgentRuntimeSettings({
   const selectedCliPath = getRuntimeCliPath(effectiveRuntime, settings.integrations, cliStatus);
   const providerConfig = effectiveRuntime ? RUNTIME_PROVIDER_CONFIG[effectiveRuntime] : undefined;
 
+  const persistRuntimeSettings = useCallback(async (patch: Record<string, unknown>) => {
+    onUpdate(patch);
+    const revision = ++runtimeSaveRevision.current;
+    setRuntimeSaveMessage(null);
+    try {
+      await updateSettings({
+        integrations: patch as unknown as AppSettingsRecord["integrations"],
+      });
+      if (revision === runtimeSaveRevision.current) {
+        setRuntimeSaveMessage({ ok: true, text: "Agent runtime settings saved." });
+      }
+    } catch (error) {
+      if (revision === runtimeSaveRevision.current) {
+        setRuntimeSaveMessage({
+          ok: false,
+          text: error instanceof Error ? error.message : "Could not save the agent runtime settings.",
+        });
+      }
+    }
+  }, [onUpdate]);
+
   useEffect(() => {
     setProviderKeyDraft("");
     setShowProviderKey(false);
@@ -400,9 +423,17 @@ export function AgentRuntimeSettings({
       await updateSettings({
         integrations: {
           [providerConfig.apiField]: apiKey,
+          agentRuntime: currentRuntime || null,
+          agentModel: currentModel || null,
+          agentReasoningEffort: reasoningEffort,
         } as unknown as AppSettingsRecord["integrations"],
       });
-      onUpdate({ [providerConfig.uiField]: apiKey });
+      onUpdate({
+        [providerConfig.uiField]: apiKey,
+        agentRuntime: currentRuntime || null,
+        agentModel: currentModel || null,
+        agentReasoningEffort: reasoningEffort,
+      });
       setProviderKeyDraft("");
       setProviderKeyMessage({
         ok: true,
@@ -421,7 +452,7 @@ export function AgentRuntimeSettings({
     } finally {
       setSavingProviderKey(false);
     }
-  }, [effectiveRuntime, onUpdate, providerConfig, providerKeyDraft, refreshDetection]);
+  }, [currentModel, currentRuntime, effectiveRuntime, onUpdate, providerConfig, providerKeyDraft, reasoningEffort, refreshDetection]);
 
   const clearProviderKey = useCallback(async () => {
     if (!providerConfig) return;
@@ -578,9 +609,15 @@ export function AgentRuntimeSettings({
               const raw = v === "__auto__" ? "" : v;
               const nextRuntime = isAgentRuntime(raw, cliStatus) ? raw : null;
               const nextEffectiveRuntime = nextRuntime ?? getAutoRuntime(cliStatus);
-              onUpdate({
+              const targetModels = nextEffectiveRuntime ? liveModels[nextEffectiveRuntime] || [] : [];
+              const nextModel =
+                nextEffectiveRuntime === effectiveRuntime ||
+                targetModels.some((model) => model.id === rawCurrentModel)
+                  ? rawCurrentModel || null
+                  : null;
+              void persistRuntimeSettings({
                 agentRuntime: nextRuntime,
-                agentModel: isCompatibleModel(nextEffectiveRuntime, rawCurrentModel, cliStatus) ? rawCurrentModel : null,
+                agentModel: nextModel,
               });
             }}
             options={[
@@ -622,7 +659,7 @@ export function AgentRuntimeSettings({
             <div className="flex flex-col gap-2 sm:flex-row">
               <div className="relative flex-1">
                 <Input
-                  type={showProviderKey ? "text" : "password"}
+                  type="text"
                   value={providerKeyDraft}
                   onChange={(event) => setProviderKeyDraft(event.target.value)}
                   onKeyDown={(event) => {
@@ -637,6 +674,14 @@ export function AgentRuntimeSettings({
                       : providerConfig.placeholder
                   }
                   autoComplete="new-password"
+                  name={`organization-${providerConfig.provider}-agent-api-key`}
+                  data-form-type="other"
+                  data-lpignore="true"
+                  data-1p-ignore="true"
+                  spellCheck={false}
+                  style={{
+                    WebkitTextSecurity: showProviderKey ? "none" : "disc",
+                  } as CSSProperties}
                   className="pr-10"
                 />
                 <button
@@ -686,7 +731,7 @@ export function AgentRuntimeSettings({
             return (
               <SearchableModelSelect
                 value={currentModel}
-                onChange={(value) => onUpdate({ agentModel: value || null })}
+                onChange={(value) => void persistRuntimeSettings({ agentModel: value || null })}
                 models={displayModels}
                 loading={modelsLoading}
                 placeholder="Default"
@@ -705,7 +750,7 @@ export function AgentRuntimeSettings({
           <Label>Reasoning Effort</Label>
           <Select
             value={reasoningEffort}
-            onValueChange={(v) => onUpdate({ agentReasoningEffort: v || "extra_high" })}
+            onValueChange={(v) => void persistRuntimeSettings({ agentReasoningEffort: v || "extra_high" })}
             options={REASONING_EFFORT_OPTIONS.map((option) => ({
               value: option.value,
               label: `${option.label} - ${option.description}`,
@@ -725,7 +770,7 @@ export function AgentRuntimeSettings({
                 : ""}
               onChange={(e) => {
                 if (!effectiveRuntimeStatus) return;
-                onUpdate({ [effectiveRuntimeStatus.pathSettingKey]: e.target.value || null });
+                void persistRuntimeSettings({ [effectiveRuntimeStatus.pathSettingKey]: e.target.value || null });
               }}
               disabled={!effectiveRuntimeStatus}
             />
@@ -750,7 +795,7 @@ export function AgentRuntimeSettings({
           <Label>Max Concurrent Sub-Agents</Label>
           <Select
             value={String(settings.integrations.maxConcurrentSubAgents ?? 2)}
-            onValueChange={(v) => onUpdate({ maxConcurrentSubAgents: parseInt(v) })}
+            onValueChange={(v) => void persistRuntimeSettings({ maxConcurrentSubAgents: parseInt(v) })}
             options={[
               { value: "1", label: "1 — Sequential (safest, slowest)" },
               { value: "2", label: "2 — Recommended" },
@@ -760,6 +805,15 @@ export function AgentRuntimeSettings({
           />
           <p className="mt-1 text-[11px] text-fg/40">How many worksheet sub-agents the AI runs in parallel. Lower values avoid Anthropic API rate limit errors; higher values finish faster.</p>
         </div>
+
+        {runtimeSaveMessage && (
+          <p className={cn(
+            "text-xs",
+            runtimeSaveMessage.ok ? "text-success" : "text-danger",
+          )}>
+            {runtimeSaveMessage.text}
+          </p>
+        )}
 
         <div className="rounded-lg border border-line/50 bg-panel2/30 p-3 text-xs text-fg/40 space-y-1">
           <p className="font-medium text-fg/50">{isServerMode ? "Managed authentication" : "Authentication"}</p>
