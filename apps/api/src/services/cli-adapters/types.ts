@@ -112,6 +112,11 @@ export interface SpawnPlan {
   args: string[];
   /** Extra env vars to merge with the runtime's MCP env. */
   extraEnv: Record<string, string>;
+  /**
+   * Approved executable exposed as synthetic `/proc/self/exe` by the AppKit
+   * sandbox for native runtimes on hosts that prohibit procfs mounts.
+   */
+  sandboxSelfExecutable?: string;
   promptHandling: PromptHandling;
 }
 

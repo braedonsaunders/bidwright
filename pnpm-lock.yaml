@@ -34,8 +34,8 @@ importers:
         specifier: file:../../vendor/appkit/appkit-crypto-0.3.0.tgz
         version: file:vendor/appkit/appkit-crypto-0.3.0.tgz
       '@appkit/process-sandbox':
-        specifier: file:../../vendor/appkit/appkit-process-sandbox-0.1.4.tgz
-        version: file:vendor/appkit/appkit-process-sandbox-0.1.4.tgz
+        specifier: file:../../vendor/appkit/appkit-process-sandbox-0.1.5.tgz
+        version: file:vendor/appkit/appkit-process-sandbox-0.1.5.tgz
       '@aws-sdk/client-s3':
         specifier: ^3.715.0
         version: 3.1045.0
@@ -688,9 +688,9 @@ packages:
       react-dom:
         optional: true
 
-  '@appkit/process-sandbox@file:vendor/appkit/appkit-process-sandbox-0.1.4.tgz':
-    resolution: {integrity: sha512-XidFCveSYitX/rLARwHgSZiFMSI828hFbkGSzhDuamjqj8OyaAOgdlbWN3nfnZjBUOsPSTo+azKu+TSx2Ke82Q==, tarball: file:vendor/appkit/appkit-process-sandbox-0.1.4.tgz}
-    version: 0.1.4
+  '@appkit/process-sandbox@file:vendor/appkit/appkit-process-sandbox-0.1.5.tgz':
+    resolution: {integrity: sha512-j/QBgUpSDl/FshdQHspO+3PVFq0GCUpwo8kcxiFd4INjw3olpRAqnL7q+T+kvbmM//P+nx/uOJCGQ0MmKtZg4w==, tarball: file:vendor/appkit/appkit-process-sandbox-0.1.5.tgz}
+    version: 0.1.5
     engines: {node: '>=22'}
 
   '@appkit/tokens@file:vendor/appkit/appkit-tokens-0.1.1.tgz':
@@ -7460,7 +7460,7 @@ snapshots:
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@appkit/process-sandbox@file:vendor/appkit/appkit-process-sandbox-0.1.4.tgz': {}
+  '@appkit/process-sandbox@file:vendor/appkit/appkit-process-sandbox-0.1.5.tgz': {}
 
   '@appkit/tokens@file:vendor/appkit/appkit-tokens-0.1.1.tgz(tailwindcss@4.3.3)':
     dependencies:

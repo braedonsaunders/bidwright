@@ -66,6 +66,8 @@ export async function createRuntimeBrokerPlan(
   return {
     cliCmd: worker.command,
     args: [...worker.args, requestPath],
+    sandboxSelfExecutable:
+      request.transport === "codex-app-server" ? request.codexCommand : undefined,
     extraEnv: {
       ...extraEnv,
       BIDWRIGHT_RUNTIME_TRANSPORT: request.transport,

@@ -128,4 +128,5 @@ test("source-mode broker plan resolves the tsx loader before changing to the pro
   } else {
     assert.equal(isAbsolute(plan.args[0] || ""), true);
   }
+  assert.equal(plan.sandboxSelfExecutable, process.execPath);
 });

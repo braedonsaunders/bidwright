@@ -159,6 +159,7 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       maskedPaths: ["/data", "/home", "/root", "/var"],
       bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
       launcherIdentity,
+      syntheticSelfExecutable: plan.sandboxSelfExecutable,
       environment: stripBlankCredentialEnv({
         ...safeHostEnvironment(),
         ...cliEnv,
