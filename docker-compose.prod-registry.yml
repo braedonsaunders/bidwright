@@ -79,13 +79,11 @@ services:
     restart: "no"
     user: "0:0"
     environment:
-      DATA_DIR: "${DATA_DIR:-/data}"
       AGENT_HOME_ROOT: "${AGENT_HOME_ROOT:-/data/agent-home}"
       BIDWRIGHT_RUNTIME_UID: "${BIDWRIGHT_RUNTIME_UID:-1000}"
       BIDWRIGHT_RUNTIME_GID: "${BIDWRIGHT_RUNTIME_GID:-1000}"
     command: ["sh", "/app/scripts/deploy/prepare-runtime-storage.sh"]
     volumes:
-      - bidwright-data:/data
       - bidwright-agent-home:/data/agent-home
     networks:
       - default
@@ -97,10 +95,9 @@ services:
       resources:
         limits:
           memory: 2g
-    user: "${BIDWRIGHT_RUNTIME_UID:-1000}:${BIDWRIGHT_RUNTIME_GID:-1000}"
-    # The API process is unprivileged. These capabilities remain in the
-    # container bounding set so Debian's setuid bubblewrap helper can create
-    # the sandbox namespaces; the AppKit policy drops all of them before exec.
+    # The API retains access to legacy project storage. AppKit launches only
+    # agent subprocesses as the configured unprivileged identity and drops
+    # capabilities before the requested command starts.
     cap_add:
       - SYS_ADMIN
       - NET_ADMIN
@@ -141,6 +138,8 @@ services:
       # sandbox. Per-user runtime state is isolated under AGENT_HOME_ROOT.
       BIDWRIGHT_MODE: "${BIDWRIGHT_MODE:-server}"
       AGENT_HOME_ROOT: "${AGENT_HOME_ROOT:-/data/agent-home}"
+      BIDWRIGHT_RUNTIME_UID: "${BIDWRIGHT_RUNTIME_UID:-1000}"
+      BIDWRIGHT_RUNTIME_GID: "${BIDWRIGHT_RUNTIME_GID:-1000}"
       # Legacy flag retained for the outbound egress allowlist proxy. Agent
       # process sandboxing is mandatory for all server-mode deployments.
       BIDWRIGHT_MULTITENANT: "${BIDWRIGHT_MULTITENANT:-true}"
@@ -224,7 +223,6 @@ services:
       resources:
         limits:
           memory: 1g
-    user: "${BIDWRIGHT_RUNTIME_UID:-1000}:${BIDWRIGHT_RUNTIME_GID:-1000}"
     depends_on:
       db-migrate:
         condition: service_completed_successfully

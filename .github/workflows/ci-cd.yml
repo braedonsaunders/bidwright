@@ -84,6 +84,7 @@ jobs:
           pnpm exec tsx --test
           apps/api/src/bootstrap-key-validation.test.ts
           apps/api/src/settings-secret-crypto.test.ts
+          apps/api/src/services/agent-host/launcher-identity.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
           packages/agent/src/tenant-config.test.ts
           apps/web/lib/schedule-utils.test.ts
@@ -98,18 +99,14 @@ jobs:
           set -euo pipefail
           TEST_ROOT="$(mktemp -d)"
           trap 'rm -rf "${TEST_ROOT}"' EXIT
-          mkdir -p "${TEST_ROOT}/data/projects/example" "${TEST_ROOT}/agent/users/example"
-          touch "${TEST_ROOT}/data/projects/example/file"
+          mkdir -p "${TEST_ROOT}/agent/users/example"
           BIDWRIGHT_RUNTIME_UID="$(id -u)" \
           BIDWRIGHT_RUNTIME_GID="$(id -g)" \
-          DATA_DIR="${TEST_ROOT}/data" \
           AGENT_HOME_ROOT="${TEST_ROOT}/agent" \
             sh scripts/deploy/prepare-runtime-storage.sh
-          test -f "${TEST_ROOT}/data/.bidwright-runtime-owner-$(id -u)-$(id -g)"
           test -f "${TEST_ROOT}/agent/.bidwright-runtime-owner-$(id -u)-$(id -g)"
           BIDWRIGHT_RUNTIME_UID="$(id -u)" \
           BIDWRIGHT_RUNTIME_GID="$(id -g)" \
-          DATA_DIR="${TEST_ROOT}/data" \
           AGENT_HOME_ROOT="${TEST_ROOT}/agent" \
             sh scripts/deploy/prepare-runtime-storage.sh
 

@@ -16,6 +16,7 @@ import { localProcessHost } from "./local-process.js";
 import type { AgentRuntimeHost } from "./types.js";
 import { verifyProcessSandbox } from "@appkit/process-sandbox";
 import { getBidwrightMode } from "../agent-home.js";
+import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 
 export type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
 
@@ -38,6 +39,7 @@ export async function assertAgentRuntimeHostReady(): Promise<void> {
   }
   const result = await verifyProcessSandbox({
     bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
+    launcherIdentity: getProcessSandboxLauncherIdentity(),
   });
   console.log(`[agent-host] AppKit process sandbox verified at ${result.bubblewrapPath}`);
 }

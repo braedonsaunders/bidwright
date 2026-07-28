@@ -37,6 +37,7 @@ import { spawnBubblewrappedProcess } from "@appkit/process-sandbox";
 
 import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
 import { stripBlankCredentialEnv } from "./env-sanitize.js";
+import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
 
 const SAFE_HOST_ENV = [
@@ -148,6 +149,7 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       ],
       maskedPaths: ["/data", "/home", "/root", "/var"],
       bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
+      launcherIdentity: getProcessSandboxLauncherIdentity(),
       environment: stripBlankCredentialEnv({
         ...safeHostEnvironment(),
         ...cliEnv,

@@ -113,7 +113,6 @@ services:
     restart: "no"
     user: "0:0"
     environment:
-      DATA_DIR: "/data"
       AGENT_HOME_ROOT: "/data/agent-home"
       BIDWRIGHT_RUNTIME_UID: "${BIDWRIGHT_RUNTIME_UID:-1000}"
       BIDWRIGHT_RUNTIME_GID: "${BIDWRIGHT_RUNTIME_GID:-1000}"
@@ -124,10 +123,9 @@ services:
   api:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-api:${BIDWRIGHT_TAG:-latest}"
     restart: unless-stopped
-    user: "${BIDWRIGHT_RUNTIME_UID:-1000}:${BIDWRIGHT_RUNTIME_GID:-1000}"
-    # The API process is unprivileged. These capabilities remain in the
-    # container bounding set so Debian's setuid bubblewrap helper can create
-    # the sandbox namespaces; the AppKit policy drops all of them before exec.
+    # The API retains access to legacy project storage. AppKit launches only
+    # agent subprocesses as the configured unprivileged identity and drops
+    # capabilities before the requested command starts.
     cap_add:
       - SYS_ADMIN
       - NET_ADMIN
@@ -154,6 +152,8 @@ services:
       BIDWRIGHT_MODE: server
       BIDWRIGHT_MULTITENANT: "true"
       AGENT_HOME_ROOT: "/data/agent-home"
+      BIDWRIGHT_RUNTIME_UID: "${BIDWRIGHT_RUNTIME_UID:-1000}"
+      BIDWRIGHT_RUNTIME_GID: "${BIDWRIGHT_RUNTIME_GID:-1000}"
       WORKSPACE_STORAGE_PROVIDER: "s3"
       WORKSPACE_S3_BUCKET: "${WORKSPACE_S3_BUCKET}"
       WORKSPACE_S3_REGION: "${WORKSPACE_S3_REGION:-auto}"
@@ -204,7 +204,6 @@ services:
   worker:
     image: "${BIDWRIGHT_REGISTRY:-ghcr.io/braedonsaunders}/bidwright-worker:${BIDWRIGHT_TAG:-latest}"
     restart: unless-stopped
-    user: "${BIDWRIGHT_RUNTIME_UID:-1000}:${BIDWRIGHT_RUNTIME_GID:-1000}"
     depends_on:
       postgres:
         condition: service_healthy

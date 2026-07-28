@@ -3,7 +3,6 @@ set -eu
 
 runtime_uid="${BIDWRIGHT_RUNTIME_UID:-1000}"
 runtime_gid="${BIDWRIGHT_RUNTIME_GID:-1000}"
-data_root="${DATA_DIR:-/data}"
 agent_home_root="${AGENT_HOME_ROOT:-/data/agent-home}"
 
 case "${runtime_uid}:${runtime_gid}" in
@@ -22,5 +21,4 @@ prepare_root() {
   chown "${runtime_uid}:${runtime_gid}" "${root}" "${marker}"
 }
 
-prepare_root "${data_root}"
 prepare_root "${agent_home_root}"

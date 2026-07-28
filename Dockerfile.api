@@ -87,10 +87,9 @@ RUN corepack enable
 # bubblewrap is the per-tenant CLI sandbox primitive used by
 # BubblewrappedHost whenever BIDWRIGHT_MODE=server.
 # The Debian package installs /usr/bin/bwrap setuid-root by default. Production
-# runs the API as an unprivileged UID and gives the container only the
-# capabilities bubblewrap needs in its bounding set; AppKit drops them before
-# the agent command starts. Re-assert the setuid bit defensively in case a
-# future Debian build changes the default.
+# uses AppKit's launcherIdentity to invoke bubblewrap as an unprivileged UID;
+# AppKit drops capabilities before the agent command starts. Re-assert the
+# setuid bit defensively in case a future Debian build changes the default.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-venv \
