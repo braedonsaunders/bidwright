@@ -1,15 +1,8 @@
-import { BrandSplash } from "@/components/brand-logo";
-import { SplashHold } from "@/components/brand-splash";
+import { RouteLoadingFallback } from "@/components/brand-splash";
 
-// Root route-loading fallback. The visible splash is the <SplashScreen />
-// overlay in the root layout (mounted once per document load, so the
-// draw-in always completes); SplashHold keeps it up while content streams.
-// BrandSplash here just covers the frame before the hold takes effect.
+// Root route-loading fallback. While the once-per-session intro is live it
+// holds the <SplashScreen /> overlay open; afterwards it's a plain spinner —
+// in-app navigations never replay the splash.
 export default function Loading() {
-  return (
-    <>
-      <SplashHold />
-      <BrandSplash />
-    </>
-  );
+  return <RouteLoadingFallback />;
 }

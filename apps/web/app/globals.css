@@ -99,6 +99,22 @@ body {
   }
 }
 
+/* Once-per-session switch (components/brand-splash.tsx): an inline script
+   adds bw-skip-splash to <html> before first paint when this session has
+   already played the intro, so repeat document loads show route fallbacks'
+   plain spinner instead of the splash — with no flash of either. */
+[data-bw-splash-alt] {
+  display: none;
+}
+
+.bw-skip-splash [data-bw-splash] {
+  display: none;
+}
+
+.bw-skip-splash [data-bw-splash-alt] {
+  display: flex;
+}
+
 @keyframes bw-draw {
   from {
     stroke-dashoffset: 1;

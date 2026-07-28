@@ -1,27 +1,40 @@
 "use client";
 
-// Guarantees the brand splash stays up long enough for the draw-in animation
-// to complete, even when the route resolves instantly. <SplashScreen /> is a
-// fixed overlay mounted once in the root layout: it server-renders visible on
-// every document load, then fades out once BOTH the minimum duration has
-// elapsed AND no route fallback is holding it open. Route loading fallbacks
-// mount <SplashHold /> to keep it up (and re-show it, replaying the draw-in)
-// while content streams.
+// Brand splash orchestration. The draw-in intro plays ONCE per browser
+// session: <SplashScreen /> is a fixed overlay mounted once in the root
+// layout that server-renders visible on every document load, stays up until
+// BOTH the minimum duration has elapsed AND no route fallback is holding it
+// open, then fades out for good — in-app navigations and programmatic full
+// reloads (org switch, sign-out bounce, error-recovery reloads) never replay
+// it. Repeat loads are detected via sessionStorage; an inline script applies
+// the `bw-skip-splash` class to <html> before first paint so skipped loads
+// never flash the overlay (globals.css hides [data-bw-splash] under it).
+// Route loading fallbacks render <RouteLoadingFallback />: the splash while
+// the intro is live, a plain spinner ever after.
 
 import { useEffect, useRef, useState } from "react";
+import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { BrandSplash } from "./brand-logo";
 
 const MIN_VISIBLE_MS = 2200; // full draw-in completes at ~1.9s
 const REDUCED_MOTION_MIN_MS = 500; // static logo — no reason to linger
 const FADE_MS = 400;
+const SEEN_KEY = "bw:splash-shown";
+
+// Runs while the document parses, before the overlay can paint.
+const SKIP_SNIPPET = `try{if(sessionStorage.getItem(${JSON.stringify(
+  SEEN_KEY,
+)}))document.documentElement.classList.add("bw-skip-splash")}catch(e){}`;
+
+// True once the intro has finished (or was skipped) on this document.
+let introDone = false;
 
 let holds = 0;
 const listeners = new Set<() => void>();
 const notify = () => listeners.forEach((l) => l());
 
-/** Keeps the splash on screen while mounted. Render inside route loading
- *  fallbacks that should show the full-screen splash. */
+/** Keeps a live splash on screen while mounted. No-op after the intro. */
 export function SplashHold() {
   useEffect(() => {
     holds++;
@@ -47,15 +60,29 @@ export function SplashScreen() {
     const apply = (p: Phase) => {
       phaseRef.current = p;
       setPhase(p);
+      if (p === "gone") introDone = true;
     };
+
+    // Repeat load in this session: the overlay is already display:none via
+    // bw-skip-splash — retire it without ever showing. The class stays on
+    // <html> so streamed route fallbacks keep resolving to the spinner.
+    if (document.documentElement.classList.contains("bw-skip-splash")) {
+      apply("gone");
+      return;
+    }
+    try {
+      sessionStorage.setItem(SEEN_KEY, "1");
+    } catch {
+      // Storage unavailable — the splash will replay on reload, nothing worse.
+    }
 
     const sync = () => {
       clearTimeout(fadeT);
       clearTimeout(goneT);
+      // The intro plays once: a hold arriving after it's gone stays a no-op.
+      if (phaseRef.current === "gone") return;
       if (holds > 0) {
-        // Re-showing from gone remounts the splash, replaying the draw-in;
-        // a hold arriving mid-fade just keeps the already-drawn logo up.
-        if (phaseRef.current === "gone") shownAt.current = performance.now();
+        // A hold arriving mid-fade keeps the already-drawn logo up.
         if (phaseRef.current !== "visible") apply("visible");
         return;
       }
@@ -78,17 +105,55 @@ export function SplashScreen() {
     };
   }, []);
 
-  if (phase === "gone") return null;
+  return (
+    <>
+      <script dangerouslySetInnerHTML={{ __html: SKIP_SNIPPET }} />
+      {phase !== "gone" && (
+        <div
+          aria-hidden
+          data-bw-splash
+          className={cn(
+            "fixed inset-0 z-[100] transition-opacity ease-out",
+            phase === "visible" ? "opacity-100" : "pointer-events-none opacity-0",
+          )}
+          style={{ transitionDuration: `${FADE_MS}ms` }}
+        >
+          <BrandSplash />
+        </div>
+      )}
+    </>
+  );
+}
+
+function FallbackSpinner({ hiddenUntilSkip = false }: { hiddenUntilSkip?: boolean }) {
   return (
     <div
-      aria-hidden
-      className={cn(
-        "fixed inset-0 z-[100] transition-opacity ease-out",
-        phase === "visible" ? "opacity-100" : "pointer-events-none opacity-0",
-      )}
-      style={{ transitionDuration: `${FADE_MS}ms` }}
+      {...(hiddenUntilSkip ? { "data-bw-splash-alt": true } : {})}
+      className="flex h-dvh w-full items-center justify-center"
+      style={{ background: "rgb(var(--ch-bg))" }}
     >
-      <BrandSplash />
+      <Loader2 className="size-5 animate-spin text-fg/40" aria-hidden />
     </div>
+  );
+}
+
+/** Route loading fallback. During the once-per-session intro it holds the
+ *  splash overlay open (and covers the frame beneath it); afterwards — and on
+ *  skipped repeat loads, via the bw-skip-splash CSS switch — it's a plain
+ *  spinner. */
+export function RouteLoadingFallback() {
+  // Deterministic per document: matches the server render for the fallback
+  // streamed on initial load, and flips to spinner-only for fallbacks mounted
+  // by later client-side navigations.
+  const [splashActive] = useState(() => !introDone);
+  if (!splashActive) return <FallbackSpinner />;
+  return (
+    <>
+      <SplashHold />
+      <div data-bw-splash>
+        <BrandSplash />
+      </div>
+      <FallbackSpinner hiddenUntilSkip />
+    </>
   );
 }

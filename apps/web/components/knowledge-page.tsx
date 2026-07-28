@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
   BookOpen,
@@ -3151,14 +3152,14 @@ function DatasetDetail({
             {dataset.sourceBookId && (() => {
               const book = books.find((b) => b.id === dataset.sourceBookId);
               return book ? (
-                <a
+                <Link
                   href={`/knowledge?tab=books&book=${book.id}`}
                   className="inline-flex items-center gap-1 rounded-full bg-accent/10 border border-accent/20 px-2 py-0.5 text-[10px] font-medium text-accent hover:bg-accent/20 transition-colors"
                 >
                   <BookOpen className="h-3 w-3" />
                   {book.name}
                   {dataset.sourcePages && <span className="text-accent/50">p.{dataset.sourcePages}</span>}
-                </a>
+                </Link>
               ) : null;
             })()}
           </div>

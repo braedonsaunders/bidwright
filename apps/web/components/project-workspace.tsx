@@ -2400,7 +2400,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           startTransition(async () => {
             try {
               await deleteProject(workspace.project.id);
-              window.location.href = "/";
+              router.push("/");
             } catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
           });
         }} isPending={isPending} />
