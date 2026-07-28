@@ -82,6 +82,7 @@ jobs:
       - name: Run focused unit tests
         run: >
           pnpm exec tsx --test
+          apps/api/src/bootstrap-key-validation.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
           apps/web/lib/schedule-utils.test.ts
 
@@ -226,9 +227,13 @@ jobs:
         run: |
           set -euo pipefail
           : "${INTEGRATIONS_ENCRYPTION_KEY:?BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY is not configured}"
+          INTEGRATIONS_ENCRYPTION_KEY="$(
+            printf '%s' "${INTEGRATIONS_ENCRYPTION_KEY}" | tr -d '\r\n '
+          )"
           SHORT_SHA="${GITHUB_SHA:0:7}"
           NEW_TAG="sha-${SHORT_SHA}"
           echo "Pinning ${TAG_ENV_KEY}=${NEW_TAG} on Dokploy compose '${COMPOSE_NAME}'…"
+          dq() { psql -h dokploy-postgres -U dokploy -d dokploy -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true; }
 
           # Update the compose's stored env (postgres is the source of truth;
           # Dokploy writes it to disk on each deploy). Bare-quotes the
@@ -261,9 +266,15 @@ jobs:
           FROM compose WHERE name = '${COMPOSE_NAME}';
           SQL
 
+          STORED_KEY="$(dq "SELECT (regexp_match(env, '(^|\\n)INTEGRATIONS_ENCRYPTION_KEY=([^\\n]+)'))[2] FROM compose WHERE name='${COMPOSE_NAME}';")"
+          if [ "${STORED_KEY}" != "${INTEGRATIONS_ENCRYPTION_KEY}" ]; then
+            echo "::error title=Encryption key mismatch::Dokploy did not store the protected Bidwright key byte-for-byte."
+            exit 1
+          fi
+          echo "Protected integrations encryption key stored exactly."
+
           # Record the latest deployment id BEFORE triggering so we can identify
           # THIS run's deployment when polling for its outcome.
-          dq() { psql -h dokploy-postgres -U dokploy -d dokploy -tAc "$1" 2>/dev/null | tr -d '[:space:]' || true; }
           COMPOSE_ID="$(dq "SELECT \"composeId\" FROM compose WHERE name='${COMPOSE_NAME}';")"
           PREV_DEPLOY="$(dq "SELECT \"deploymentId\" FROM deployment WHERE \"composeId\"='${COMPOSE_ID}' ORDER BY \"createdAt\" DESC LIMIT 1;")"
 
