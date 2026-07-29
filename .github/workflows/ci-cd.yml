@@ -72,6 +72,12 @@ jobs:
       - name: Typecheck worker
         run: pnpm --filter @bidwright/worker exec tsc --noEmit
 
+      - name: Build domain
+        run: pnpm --filter @bidwright/domain build
+
+      - name: Build database package
+        run: pnpm --filter @bidwright/db build
+
       - name: Build API
         run: pnpm --filter @bidwright/api build
 
