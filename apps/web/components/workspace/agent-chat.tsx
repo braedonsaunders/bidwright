@@ -2451,6 +2451,21 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     setDockedPortalTarget(document.body);
   }, []);
 
+  useEffect(() => {
+    const root = document.documentElement;
+    const drawerIsDocked = open && dockMode !== "detached";
+
+    if (drawerIsDocked) {
+      root.dataset.bidwrightAgentDrawerOpen = "true";
+    } else {
+      delete root.dataset.bidwrightAgentDrawerOpen;
+    }
+
+    return () => {
+      delete root.dataset.bidwrightAgentDrawerOpen;
+    };
+  }, [dockMode, open]);
+
   const closeDetachedWindow = useCallback(() => {
     if (detachedWindowRef.current && !detachedWindowRef.current.closed) {
       detachedWindowRef.current.close();

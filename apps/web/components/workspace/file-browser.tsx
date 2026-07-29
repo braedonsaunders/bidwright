@@ -2996,7 +2996,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         />
 
         {/* ─── Right Panel: Preview ─── */}
-        <div className="flex flex-1 flex-col overflow-hidden min-w-0">
+        <div data-bidwright-file-preview-surface className="flex flex-1 flex-col overflow-hidden min-w-0">
           {/* File header — only in normal panel view (not in fullscreen/detached) */}
           {editorMode === "none" && selectedItem && selectedItem.type === "file" && (
             <>
@@ -3074,7 +3074,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               </Button>
             </div>
           </div>
-          <div className="flex-1 overflow-hidden flex flex-col">
+          <div data-bidwright-file-preview-surface className="flex-1 overflow-hidden flex flex-col">
             {previewContent}
           </div>
         </div>
