@@ -39,8 +39,12 @@ import { ensureUserAgentHome, getBidwrightMode } from "../services/agent-home.js
 
 const CLI_RUN_KINDS = ["cli-intake", "cli-qa", "cli-assist"] as const;
 
+function isAgentChatMode(value: unknown): value is AgentChatMode {
+  return value === "qa" || value === "assist_edit" || value === "build_estimate";
+}
+
 function normalizeAgentChatMode(value: unknown): AgentChatMode {
-  return value === "assist_edit" || value === "build_estimate" ? value : "qa";
+  return isAgentChatMode(value) ? value : "qa";
 }
 
 function runKindForMode(mode: AgentChatMode) {
@@ -1619,7 +1623,7 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
   // ── Resume Session ──────────────────────────────────────────
   app.post("/api/cli/:projectId/resume", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const body = (request.body || {}) as { prompt?: string; model?: string };
+    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode };
     const projectDir = resolveProjectDir(projectId);
     const store = request.store!;
     const workspace = await store.getWorkspace(projectId);
@@ -1628,19 +1632,23 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
     }
 
     const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
+    const requestedMode = isAgentChatMode(body.mode) ? body.mode : undefined;
     const latestRun = await prisma.aiRun.findFirst({
-      where: { projectId, kind: { in: [...CLI_RUN_KINDS] } },
+      where: {
+        projectId,
+        kind: requestedMode ? runKindForMode(requestedMode) : { in: [...CLI_RUN_KINDS] },
+      },
       orderBy: { createdAt: "desc" },
       select: { id: true, model: true, input: true, kind: true },
     });
     const latestRuntime = (latestRun?.input as any)?.runtime;
-    const mode = (latestRun?.input as any)?.mode
+    const mode = requestedMode ?? ((latestRun?.input as any)?.mode
       ? normalizeAgentChatMode((latestRun?.input as any)?.mode)
       : latestRun?.kind === "cli-intake"
         ? "build_estimate"
         : latestRun?.kind === "cli-assist"
           ? "assist_edit"
-          : "qa";
+          : "qa");
     const runKind = runKindForMode(mode);
     const runtime: AgentRuntime = isCliRuntime(latestRuntime)
       ? latestRuntime
@@ -1942,22 +1950,38 @@ ${message}`;
   // ── Session Status ──────────────────────────────────────────
   app.get("/api/cli/:projectId/status", async (request) => {
     const { projectId } = request.params as { projectId: string };
-    const session = getSession(projectId);
+    const { mode: queryMode } = (request.query || {}) as { mode?: string };
+    const requestedMode = isAgentChatMode(queryMode) ? queryMode : undefined;
+    const activeSession = getSession(projectId);
+    const activeSessionMode = activeSession
+      ? normalizeAgentChatMode((activeSession._spawnOpts as any)?.agentMode)
+      : undefined;
+    const session = !requestedMode || activeSessionMode === requestedMode
+      ? activeSession
+      : undefined;
 
-    // Get all interactive agent modes for this project, oldest first.
+    // Get the requested mode's persisted history, or all interactive modes
+    // for older clients that do not provide the mode query, oldest first.
     // Background runs (id prefix "cli-background-") capture interrupt-style
     // notifications and are not meant for display — their events are already
     // mirrored into the main run's transcript via SSE. Filter them out before
     // merging or picking latestRun so chronological ordering, latestRun
     // selection, and completion derivation are based on real interactive runs.
     const runsRaw = await prisma.aiRun.findMany({
-      where: { projectId, kind: { in: [...CLI_RUN_KINDS] } },
+      where: {
+        projectId,
+        kind: requestedMode ? runKindForMode(requestedMode) : { in: [...CLI_RUN_KINDS] },
+      },
       orderBy: { createdAt: "asc" },
     });
     const runs = runsRaw.filter((run) => !(typeof run.id === "string" && run.id.startsWith("cli-background-")));
 
     if (runs.length === 0 && !session) {
-      return { status: "none" };
+      return {
+        status: "none",
+        mode: requestedMode,
+        activeMode: activeSession?.status === "running" ? activeSessionMode : undefined,
+      };
     }
 
     const latestRun = runs[runs.length - 1];
@@ -2032,6 +2056,8 @@ ${message}`;
           runId: run.id,
           status: run.status,
           model: run.model,
+          mode: (run.input as any)?.mode
+            || (run.kind === "cli-intake" ? "build_estimate" : run.kind === "cli-assist" ? "assist_edit" : "qa"),
           startedAt: run.createdAt?.toISOString?.() || "",
         },
         timestamp: run.createdAt?.toISOString?.() || "",
@@ -2067,11 +2093,12 @@ ${message}`;
     return {
       status: currentStatus,
       runtime: (latestRun?.input as any)?.runtime || session?.runtime,
-      mode: (latestRun?.input as any)?.mode
+      mode: requestedMode || (latestRun?.input as any)?.mode
         || (latestRun?.kind === "cli-intake" ? "build_estimate" : latestRun?.kind === "cli-assist" ? "assist_edit" : "qa"),
       sessionId: latestRun?.id || session?.sessionId,
-      startedAt: runs[0]?.createdAt?.toISOString?.() || "",
+      startedAt: runs[0]?.createdAt?.toISOString?.() || session?.startedAt || "",
       source: session?.status === "running" ? "live" : "db",
+      activeMode: activeSession?.status === "running" ? activeSessionMode : undefined,
       events: mergedEvents,
       runCount: runs.filter(r => ((r.output as any)?.events || []).length >= 3).length,
     };

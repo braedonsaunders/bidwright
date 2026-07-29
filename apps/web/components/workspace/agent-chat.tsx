@@ -2364,9 +2364,11 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const streamRevisionRef = useRef("");
   const sseReconnectCount = useRef(0);
   const pollFailCount = useRef(0);
+  const historyRequestRef = useRef(0);
   const intakeScopeEditedRef = useRef(false);
   const [dockMode, setDockMode] = useState<AgentDockMode>("right");
   const [detachedContainer, setDetachedContainer] = useState<HTMLDivElement | null>(null);
+  const [dockedPortalTarget, setDockedPortalTarget] = useState<HTMLElement | null>(null);
   const effectiveCliModel = cliRuntime ? normalizeCliModel(cliRuntime, cliAgentModel, cliRuntimeMap) : null;
 
   const recordCliPrompt = useCallback((prompt: PendingQuestionPrompt) => {
@@ -2444,6 +2446,10 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     if (isAgentDockMode(stored) && stored !== "detached") setDockMode(stored);
     else setDockMode("right");
   }, [projectId]);
+
+  useEffect(() => {
+    setDockedPortalTarget(document.body);
+  }, []);
 
   const closeDetachedWindow = useCallback(() => {
     if (detachedWindowRef.current && !detachedWindowRef.current.closed) {
@@ -2633,47 +2639,12 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     return () => { active = false; clearInterval(interval); };
   }, [projectId, open]);
 
-  // Restore latest CLI session on mount
+  // Restore the selected mode's persisted transcript. Completed intake/edit
+  // runs must not replace the default Q&A conversation when a quote opens.
   useEffect(() => {
-    getCliStatus(projectId)
-      .then((data) => {
-        if (data.status === "none") throw new Error("no cli session");
-        restoredFromDb.current = true;
-        if (data.mode) setChatMode(data.mode);
-        setIntakeSessionId(data.sessionId || null);
-        const events = data.events || [];
-        setIntakeStatus({
-          sessionId: data.sessionId || "", projectId, scope: "", status: data.status as any,
-          toolCallCount: events.filter((e: any) => e.type === "tool_call").length,
-          messageCount: events.filter((e: any) => e.type === "message").length,
-          summary: null, createdAt: data.startedAt || "", updatedAt: "", recentToolCalls: [],
-          events,
-        } as any);
-
-        // Hydrate tool calls and messages from stored events
-        setLiveToolCalls(pairToolEvents(events));
-
-        const restoredMsgs: ChatMessage[] = events
-          .filter((e: any) => e.type === "message")
-          .map((e: any, i: number) => ({
-            id: `restored-msg-${i}`,
-            role: e.data?.role || "assistant",
-            content: e.data?.content || "",
-            timestamp: e.timestamp || "",
-          }));
-        setMessages(restoredMsgs);
-
-        const restoredThinking = events
-          .filter((e: any) => e.type === "thinking")
-          .map((e: any, i: number) => ({ id: `restored-think-${i}`, content: e.data?.content || "" }));
-        setThinkingBlocks(restoredThinking.slice(-5));
-
-        // If running, reconnect SSE for live updates
-        if (data.status === "running") {
-          connectToSseStream(projectId);
-        }
-      })
-      .catch(() => {});
+    const restoreMode: AgentChatMode = autoStartIntake ? "build_estimate" : "qa";
+    restoredFromDb.current = false;
+    void loadModeHistory(restoreMode, { markRestored: true, followActive: true });
   }, [projectId]);
 
   useEffect(() => {
@@ -2693,7 +2664,9 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   // settings and document ingestion to finish before handleStartIntake runs.
   // Normal quote-panel opens still default to read-only Q&A.
   useEffect(() => {
-    if (autoStartIntake) setChatMode("build_estimate");
+    if (autoStartIntake && chatMode !== "build_estimate") {
+      void loadModeHistory("build_estimate", { markRestored: true });
+    }
   }, [autoStartIntake]);
 
   // Auto-scroll only when user hasn't manually scrolled up
@@ -2749,6 +2722,87 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const intakeAutoStarted = useRef(false);
   const restoredFromDb = useRef(false);
 
+  async function loadModeHistory(
+    mode: AgentChatMode,
+    options: { markRestored?: boolean; followActive?: boolean } = {},
+  ) {
+    const requestId = ++historyRequestRef.current;
+    setChatMode(mode);
+    setSessionError(null);
+    setCliPendingQuestion(null);
+    setIntakeSessionId(null);
+    setIntakeStatus(null);
+    setMessages([]);
+    setLiveToolCalls([]);
+    setThinkingBlocks([]);
+    lastRefreshToolCount.current = 0;
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+      eventSourceRef.current = null;
+    }
+    setSseConnected(false);
+
+    try {
+      const data = await getCliStatus(projectId, mode);
+      if (requestId !== historyRequestRef.current) return;
+
+      if (options.followActive && data.activeMode && data.activeMode !== mode) {
+        await loadModeHistory(data.activeMode, {
+          markRestored: options.markRestored,
+          followActive: false,
+        });
+        return;
+      }
+
+      if (data.status === "none") return;
+      if (options.markRestored) restoredFromDb.current = true;
+
+      const events = data.events || [];
+      setIntakeSessionId(data.sessionId || null);
+      setIntakeStatus({
+        sessionId: data.sessionId || "",
+        projectId,
+        scope: "",
+        status: data.status as any,
+        toolCallCount: events.filter((event: any) => event.type === "tool_call").length,
+        messageCount: events.filter((event: any) => event.type === "message").length,
+        summary: null,
+        createdAt: data.startedAt || "",
+        updatedAt: "",
+        recentToolCalls: [],
+        events,
+      } as any);
+      setLiveToolCalls(pairToolEvents(events));
+      setMessages(events
+        .filter((event: any) => event.type === "message")
+        .map((event: any, index: number) => ({
+          id: `restored-${mode}-msg-${index}`,
+          role: event.data?.role || "assistant",
+          content: event.data?.content || "",
+          timestamp: event.timestamp || "",
+        })));
+      setThinkingBlocks(events
+        .filter((event: any) => event.type === "thinking")
+        .map((event: any, index: number) => ({
+          id: `restored-${mode}-think-${index}`,
+          content: event.data?.content || "",
+        }))
+        .slice(-5));
+
+      if (data.status === "running") {
+        connectToSseStream(projectId, mode);
+      }
+    } catch (error) {
+      if (requestId !== historyRequestRef.current) return;
+      setSessionError(error instanceof Error ? error.message : "Could not load this agent history.");
+    }
+  }
+
+  function handleChatModeChange(mode: AgentChatMode) {
+    if (mode === chatMode) return;
+    void loadModeHistory(mode);
+  }
+
   async function sendMessage(content: string) {
     if (!content.trim() || isLoading) return;
 
@@ -2780,7 +2834,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
             toolCallCount: 0, messageCount: 0, summary: null,
             createdAt: new Date().toISOString(), updatedAt: "", recentToolCalls: [],
           } as any);
-          connectToSseStream(projectId);
+          connectToSseStream(projectId, chatMode);
         }
         setIsLoading(false);
         return;
@@ -2808,6 +2862,16 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   }
 
   async function handleStartIntake(): Promise<boolean> {
+    // Setup can launch an intake while another mode's transcript is visible.
+    // Clear that mode immediately; the build-estimate history is restored by
+    // the mode-scoped status response and must never be appended to Q&A/edit.
+    if (chatMode !== "build_estimate") {
+      historyRequestRef.current += 1;
+      setIntakeSessionId(null);
+      setIntakeStatus(null);
+      setMessages([]);
+      setCliPendingQuestion(null);
+    }
     setChatMode("build_estimate");
     setIntakeLoading(true);
     setLiveToolCalls([]);
@@ -2821,7 +2885,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       // Check if there's already a running session (e.g. page refresh)
       if (cliRuntime) {
         try {
-          const existing = await getCliStatus(projectId);
+          const existing = await getCliStatus(projectId, "build_estimate");
           if (existing.status === "running") {
             // Session already running - just reconnect to it
             setIntakeSessionId(existing.sessionId || null);
@@ -2832,7 +2896,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               summary: null, createdAt: existing.startedAt || "", updatedAt: "", recentToolCalls: [],
               events: existing.events,
             } as any);
-            connectToSseStream(projectId);
+            connectToSseStream(projectId, "build_estimate");
             setIntakeLoading(false);
             return true;
           }
@@ -2858,7 +2922,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), recentToolCalls: [],
         });
         // Connect SSE stream
-        connectToSseStream(projectId);
+        connectToSseStream(projectId, "build_estimate");
         return true;
       } else {
         throw new Error("No managed agent runtime is ready. Ask an administrator to configure an organization provider key in Settings → Integrations → AI Providers.");
@@ -2888,7 +2952,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     if (cliRuntime) {
       setIntakeLoading(true);
       try {
-        const resumed = await resumeCliSession(projectId);
+        const resumed = await resumeCliSession(projectId, undefined, chatMode);
         setIntakeSessionId(resumed.sessionId || intakeSessionId);
         setIntakeStatus((prev) => prev ? {
           ...prev,
@@ -2905,7 +2969,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           updatedAt: new Date().toISOString(),
           recentToolCalls: [],
         } as any);
-        connectToSseStream(projectId);
+        connectToSseStream(projectId, chatMode);
         return;
       } catch {
         // Fall back to a clean restart if the prior CLI session cannot be resumed.
@@ -2918,7 +2982,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   }
 
   // SSE stream connection for CLI runtime
-  function connectToSseStream(pid: string) {
+  function connectToSseStream(pid: string, mode: AgentChatMode) {
     // Cleanup existing connection
     if (eventSourceRef.current) {
       eventSourceRef.current.close();
@@ -3087,7 +3151,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         es.close();
         eventSourceRef.current = null;
         window.setTimeout(() => {
-          void getCliStatus(projectId)
+          void getCliStatus(projectId, mode)
           .then((latest) => {
             const events = latest.events || [];
             const tools = events.filter((evt: any) => evt.type === "tool_call");
@@ -3154,7 +3218,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       setTimeout(async () => {
         // Poll backend for actual session status before reconnecting
         try {
-          const data = await getCliStatus(pid);
+          const data = await getCliStatus(pid, mode);
           if (data.status !== "running") {
             // Session already finished - update state and stop reconnecting
             window.clearTimeout(stableConnectionTimer);
@@ -3181,7 +3245,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         window.clearTimeout(stableConnectionTimer);
         es.close();
         eventSourceRef.current = null;
-        connectToSseStream(pid);
+        connectToSseStream(pid, mode);
       }, delay);
     };
   }
@@ -3209,7 +3273,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
 
     const poll = async () => {
       try {
-        const data = await getCliStatus(projectId);
+        const data = await getCliStatus(projectId, chatMode);
         pollFailCount.current = 0; // Reset on success
         const events = data.events || [];
         if (events.length > 0) {
@@ -3296,7 +3360,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         if (pollFailCount.current >= 4) {
           // After ~20s of failures, accept it's gone and check DB one last time
           try {
-            const recovered = await getCliStatus(projectId);
+            const recovered = await getCliStatus(projectId, chatMode);
             const finalStatus = recovered.status === "running" ? "stopped" : recovered.status;
             setIntakeStatus((prev) => prev ? { ...prev, status: finalStatus as any, events: recovered.events } : prev);
           } catch {
@@ -3513,7 +3577,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   }, [isUserScrolledUp, showBlockingAgentPanel, streamRevision]);
 
   const dockedClassName = cn(
-    "fixed z-50 flex w-full max-w-[100vw] flex-col bg-panel shadow-2xl",
+    "fixed z-[400] flex w-full max-w-[100vw] flex-col bg-panel shadow-2xl",
     dockMode === "left"
       ? "inset-y-0 left-0 border-r border-line sm:max-w-[720px] lg:max-w-[860px] xl:max-w-[960px]"
       : dockMode === "bottom"
@@ -3644,7 +3708,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               <legend className="sr-only">Agent mode</legend>
               <Tabs
                 value={chatMode}
-                onValueChange={(value) => setChatMode(value as AgentChatMode)}
+                onValueChange={(value) => handleChatModeChange(value as AgentChatMode)}
                 tabs={AGENT_CHAT_MODE_OPTIONS}
                 className="max-sm:flex max-sm:w-full [&>button]:whitespace-nowrap [&>button]:px-2.5 [&>button]:py-1 [&>button]:text-xs max-sm:[&>button]:flex-1"
               />
@@ -3968,20 +4032,25 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
 
   return (
     <>
-      <AnimatePresence>
-        {open && dockMode !== "detached" && (
-          <motion.div
-            key={dockMode}
-            initial={dockedInitial}
-            animate={{ x: 0, y: 0 }}
-            exit={dockedExit}
-            transition={{ type: "spring", damping: 30, stiffness: 300 }}
-            className={dockedClassName}
-          >
-            {panelContent}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {dockedPortalTarget
+        ? createPortal(
+          <AnimatePresence>
+            {open && dockMode !== "detached" && (
+              <motion.div
+                key={dockMode}
+                initial={dockedInitial}
+                animate={{ x: 0, y: 0 }}
+                exit={dockedExit}
+                transition={{ type: "spring", damping: 30, stiffness: 300 }}
+                className={dockedClassName}
+              >
+                {panelContent}
+              </motion.div>
+            )}
+          </AnimatePresence>,
+          dockedPortalTarget,
+        )
+        : null}
       {open && dockMode === "detached" && detachedContainer
         ? createPortal(
           <div className="flex h-screen w-full flex-col bg-panel text-fg">

@@ -5416,11 +5416,15 @@ export async function stopCliSession(projectId: string) {
   return apiRequest<{ stopped: boolean }>(`/api/cli/${projectId}/stop`, { method: "POST" });
 }
 
-export async function resumeCliSession(projectId: string, prompt?: string) {
+export async function resumeCliSession(
+  projectId: string,
+  prompt?: string,
+  mode?: "qa" | "assist_edit" | "build_estimate",
+) {
   return apiRequest<{ sessionId: string; status: string }>(`/api/cli/${projectId}/resume`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ prompt }),
+    body: JSON.stringify({ prompt, mode }),
   });
 }
 
@@ -5458,16 +5462,21 @@ export async function askAi(projectId: string, prompt: string, imagePath?: strin
   });
 }
 
-export async function getCliStatus(projectId: string) {
+export async function getCliStatus(
+  projectId: string,
+  mode?: "qa" | "assist_edit" | "build_estimate",
+) {
+  const query = mode ? `?mode=${encodeURIComponent(mode)}` : "";
   return apiRequest<{
     status: string;
     runtime?: string;
     mode?: "qa" | "assist_edit" | "build_estimate";
+    activeMode?: "qa" | "assist_edit" | "build_estimate";
     sessionId?: string;
     startedAt?: string;
     source?: "live" | "db";
     events?: any[];
-  }>(`/api/cli/${projectId}/status`);
+  }>(`/api/cli/${projectId}/status${query}`);
 }
 
 export async function getCliPendingQuestion(projectId: string) {

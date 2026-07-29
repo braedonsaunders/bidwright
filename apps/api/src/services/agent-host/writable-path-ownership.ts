@@ -3,6 +3,18 @@ import { join } from "node:path";
 
 import type { ProcessSandboxLauncherIdentity } from "@appkit/process-sandbox";
 
+/**
+ * Every sandbox launch must be able to traverse the project workspace and
+ * open API-generated 0600 control files. Whether the workspace is writable
+ * inside the namespace is a separate bind-mount policy.
+ */
+export function launcherAccessiblePaths(
+  projectDir: string,
+  agentRuntimePaths: readonly string[],
+): string[] {
+  return [...new Set([projectDir, ...agentRuntimePaths])];
+}
+
 async function chownTree(
   path: string,
   identity: ProcessSandboxLauncherIdentity,

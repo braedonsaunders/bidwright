@@ -4,7 +4,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { prepareLauncherWritablePaths } from "./writable-path-ownership.js";
+import {
+  launcherAccessiblePaths,
+  prepareLauncherWritablePaths,
+} from "./writable-path-ownership.js";
+
+test("always prepares the project path in addition to writable runtime state", () => {
+  assert.deepEqual(
+    launcherAccessiblePaths("/data/projects/project-1", [
+      "/data/agent-home/users/user-1/.codex",
+      "/data/agent-home/users/user-1/.codex",
+    ]),
+    [
+      "/data/projects/project-1",
+      "/data/agent-home/users/user-1/.codex",
+    ],
+  );
+});
 
 test("prepares nested writable paths without following symlink targets", async () => {
   const root = await mkdtemp(join(tmpdir(), "bidwright-launcher-path-"));

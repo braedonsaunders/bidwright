@@ -87,6 +87,7 @@ jobs:
           apps/api/src/bootstrap-key-validation.test.ts
           apps/api/src/settings-secret-crypto.test.ts
           apps/api/src/services/agent-host/launcher-identity.test.ts
+          apps/api/src/services/agent-host/writable-path-ownership.test.ts
           apps/api/src/services/cli-adapters/codex.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts

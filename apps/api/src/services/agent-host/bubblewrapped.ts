@@ -39,7 +39,10 @@ import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
 import { stripBlankCredentialEnv } from "./env-sanitize.js";
 import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
-import { prepareLauncherWritablePaths } from "./writable-path-ownership.js";
+import {
+  launcherAccessiblePaths,
+  prepareLauncherWritablePaths,
+} from "./writable-path-ownership.js";
 
 const SAFE_HOST_ENV = [
   "LANG",
@@ -136,9 +139,14 @@ export const bubblewrappedHost: AgentRuntimeHost = {
 
     // The API owns newly generated instruction and broker files as root, but
     // AppKit intentionally invokes bubblewrap as an unprivileged identity.
-    // Normalize only these tenant-scoped writable binds immediately before
-    // spawn so 0600 broker requests remain private and readable by the child.
-    await prepareLauncherWritablePaths(writablePaths, launcherIdentity);
+    // The project must be launcher-owned even when it is mounted read-only:
+    // Q&A still needs to open the freshly written 0600 broker request. The
+    // mount policy below, not host ownership, enforces read-only workspace
+    // access inside the sandbox.
+    await prepareLauncherWritablePaths(
+      launcherAccessiblePaths(projectDir, agentRuntimePaths),
+      launcherIdentity,
+    );
 
     console.log(
       `[cli:spawn:bwrap] cmd=${plan.cliCmd} cwd=${projectDir} userId=${userId ?? "none"} argCount=${plan.args.length}`,
