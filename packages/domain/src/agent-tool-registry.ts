@@ -120,6 +120,8 @@ export const AGENT_TOOL_REGISTRY = {
   saveReviewRecommendation: { id: "saveReviewRecommendation", displayName: "Save recommendation", category: "review", mutates: true },
   saveReviewSummary: { id: "saveReviewSummary", displayName: "Save review summary", category: "review", mutates: true },
 
+  listProjectImages: { id: "listProjectImages", displayName: "List project images", category: "vision" },
+  inspectProjectImage: { id: "inspectProjectImage", displayName: "Inspect project image", category: "vision" },
   listDrawingPages: { id: "listDrawingPages", displayName: "List drawing pages", category: "vision" },
   addSourceToDrawingAtlas: { id: "addSourceToDrawingAtlas", displayName: "Add source to drawing atlas", category: "vision", mutates: true },
   promotePdfToDrawingEvidence: { id: "promotePdfToDrawingEvidence", displayName: "Promote PDF to drawing evidence", category: "vision", mutates: true },

@@ -35,6 +35,47 @@ const drawingAnalysisPresetSchema = z.enum([
   "structural",
 ]);
 
+const PROJECT_IMAGE_MIME_BY_EXTENSION: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  webp: "image/webp",
+  gif: "image/gif",
+};
+
+function projectImageMime(node: any): string | null {
+  const fileType = String(node?.fileType ?? "").trim().toLowerCase();
+  if (Object.values(PROJECT_IMAGE_MIME_BY_EXTENSION).includes(fileType)) {
+    return fileType;
+  }
+  const typeAsExtension = fileType.replace(/^\./, "");
+  if (PROJECT_IMAGE_MIME_BY_EXTENSION[typeAsExtension]) {
+    return PROJECT_IMAGE_MIME_BY_EXTENSION[typeAsExtension];
+  }
+  const extension = String(node?.name ?? "")
+    .trim()
+    .toLowerCase()
+    .split(".")
+    .pop() ?? "";
+  return PROJECT_IMAGE_MIME_BY_EXTENSION[extension] ?? null;
+}
+
+function fileNodeDisplayPath(node: any, byId: Map<string, any>): string {
+  const segments = [String(node?.name ?? "unnamed")];
+  const visited = new Set<string>([String(node?.id ?? "")]);
+  let parentId = String(node?.parentId ?? "");
+
+  while (parentId && !visited.has(parentId)) {
+    visited.add(parentId);
+    const parent = byId.get(parentId);
+    if (!parent) break;
+    segments.unshift(String(parent.name ?? "folder"));
+    parentId = String(parent.parentId ?? "");
+  }
+
+  return segments.join("/");
+}
+
 function imageBase64(dataUrl: unknown) {
   const match = String(dataUrl ?? "").match(/^data:image\/png;base64,(.+)$/);
   return match?.[1] ?? null;
@@ -146,6 +187,115 @@ async function saveMatchesAsAnnotations(opts: {
 }
 
 export function registerVisionTools(server: McpServer) {
+
+  // ── listProjectImages ──────────────────────────────────────
+  server.tool(
+    "listProjectImages",
+    `List raster images uploaded through Documents → Files for the current project.
+
+WHEN TO USE: Call this whenever project photos, marked-up screenshots, equipment nameplates, site conditions, sketches, or other JPG/PNG/WebP/GIF files may affect the answer or estimate. These files are separate from ingested source-document PDFs and will not necessarily appear in listDocuments or listDrawingPages.
+
+OUTPUT: Project-scoped fileNodeId values, names, folder paths, MIME types, and sizes. Pass fileNodeId to inspectProjectImage to actually see the image.
+
+COMMON PITFALLS:
+- Listing an image is not visual inspection; call inspectProjectImage for every relevant image
+- Do not infer visual content from the file name
+- Use listDrawingPages/renderDrawingPage for PDF drawings instead`,
+    {
+      q: z.string().optional().describe("Optional case-insensitive file name or folder-path filter"),
+      limit: z.coerce.number().int().positive().max(200).default(100),
+    },
+    async ({ q, limit }) => {
+      const nodes = await apiGet(`/projects/${getProjectId()}/files/tree?scope=project`);
+      const records = Array.isArray(nodes) ? nodes : [];
+      const byId = new Map(records.map((node: any) => [String(node.id), node]));
+      const query = String(q ?? "").trim().toLowerCase();
+      const images = records
+        .filter((node: any) => node?.type === "file" && projectImageMime(node))
+        .map((node: any) => {
+          const path = fileNodeDisplayPath(node, byId);
+          return {
+            fileNodeId: String(node.id),
+            fileName: String(node.name ?? ""),
+            path,
+            mimeType: projectImageMime(node),
+            size: Number(node.size ?? 0),
+          };
+        })
+        .filter((image: any) => !query || `${image.fileName} ${image.path}`.toLowerCase().includes(query))
+        .sort((left: any, right: any) => left.path.localeCompare(right.path))
+        .slice(0, limit);
+
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            images,
+            returned: images.length,
+            guidance: images.length
+              ? "Call inspectProjectImage with a fileNodeId to visually inspect an image."
+              : "No matching PNG, JPG/JPEG, WebP, or GIF files were found in Documents → Files.",
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
+  // ── inspectProjectImage ────────────────────────────────────
+  server.tool(
+    "inspectProjectImage",
+    `Visually inspect one raster image uploaded through Documents → Files.
+
+WHEN TO USE: After listProjectImages identifies a relevant project photo, marked-up screenshot, equipment nameplate, sketch, or other raster image. This returns the original image bytes as a native MCP image block so the selected multimodal model can actually see the pixels.
+
+INPUT: fileNodeId from listProjectImages.
+
+SUPPORTED FORMATS: PNG, JPG/JPEG, WebP, and GIF, up to 20 MB.
+
+COMMON PITFALLS:
+- Do not claim to have inspected an image if you only listed it
+- Use the returned file name/path in your evidence notes
+- Use renderDrawingPage/zoomDrawingRegion for PDFs rather than this tool`,
+    {
+      fileNodeId: z.string().min(1).describe("Project file node ID returned by listProjectImages"),
+    },
+    async ({ fileNodeId }) => {
+      const result = await apiPost("/api/vision/project-image", {
+        projectId: getProjectId(),
+        fileNodeId,
+      });
+      const match = String(result.image ?? "").match(/^data:([^;]+);base64,(.+)$/);
+      if (!result.success || !match) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Failed to inspect project image: ${result.message ?? result.error ?? "unexpected image payload"}`,
+          }],
+          isError: true,
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: "image" as const,
+            data: match[2],
+            mimeType: String(result.mimeType ?? match[1]),
+          },
+          {
+            type: "text" as const,
+            text: JSON.stringify({
+              fileNodeId: result.fileNodeId,
+              fileName: result.fileName,
+              mimeType: result.mimeType,
+              size: result.size,
+              note: "The preceding content is the original project image. Base conclusions on the visible pixels, not the file name.",
+            }, null, 2),
+          },
+        ],
+      };
+    },
+  );
 
   // ── listDrawingPages ───────────────────────────────────────
   server.tool(

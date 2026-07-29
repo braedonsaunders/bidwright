@@ -365,7 +365,7 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 - Pricing evidence: \`getItemConfig\`, \`recommendEstimateBasis\`, \`queryLibrary\`, \`recommendCostSource\`, \`listLaborUnitTree\`, \`listLaborUnits\`, \`getLaborUnit\`, \`previewAssembly\`, \`listRateSchedules\`, \`getRateSchedule\`, \`importRateSchedule\`, \`listRateScheduleItems\`.
 - Estimate edits: \`updateQuote\`, \`createWorksheet\`, \`createRateScheduleWorksheetItem\`, \`createWorksheetItem\`, \`updateWorksheetItem\`, \`createCondition\`, \`createPhase\`, \`applySummaryPreset\`, \`recalculateTotals\`.
 - Estimate factors: \`listEstimateFactorLibrary\`, \`listEstimateFactors\`, \`createEstimateFactor\`, \`updateEstimateFactor\`, \`deleteEstimateFactor\`. Use global factors for estimate-wide/phase/category/worksheet production adjustments; use line-level factors only for specific worksheet items after row IDs exist.
-- Drawing/takeoff: \`buildDrawingAtlas\`, \`searchDrawingRegions\`, \`inspectDrawingRegion\`, \`saveDrawingEvidenceClaim\`, \`verifyDrawingEvidenceLedger\`, \`addSourceToDrawingAtlas\`, \`listDrawingPages\`, \`scanDrawingSymbols\`, \`countSymbols\`, \`countSymbolsAllPages\`, \`renderDrawingPage\`, \`zoomDrawingRegion\`, \`listPickups\`, \`linkPickupToWorksheetItem\`.
+- Images/drawing/takeoff: \`listProjectImages\`, \`inspectProjectImage\`, \`buildDrawingAtlas\`, \`searchDrawingRegions\`, \`inspectDrawingRegion\`, \`saveDrawingEvidenceClaim\`, \`verifyDrawingEvidenceLedger\`, \`addSourceToDrawingAtlas\`, \`listDrawingPages\`, \`scanDrawingSymbols\`, \`countSymbols\`, \`countSymbolsAllPages\`, \`renderDrawingPage\`, \`zoomDrawingRegion\`, \`listPickups\`, \`linkPickupToWorksheetItem\`.
 
 ## Estimating Rules
 
@@ -535,6 +535,7 @@ The project documents are in the \`documents/\` folder as real files on disk.
 - PDFs, DOCX, TXT, CSV: Use \`readDocumentText\` with the document ID from the manifest below. It returns Bidwright's extracted text and supports an optional \`pages\` range for long PDFs.
 - Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID from the manifest below â€” this parses the binary file server-side and returns markdown tables.
 - Table-heavy PDFs and forms: Use \`getDocumentStructured\` to inspect structured tables, key-value pairs, and section headings. This is mandatory for BOMs, bill-of-materials PDFs, parts lists, equipment schedules, bid forms, vendor quote sheets, and takeoff summaries.
+- Project images uploaded through Documents → Files (.png, .jpg/.jpeg, .webp, .gif): Call \`listProjectImages\`, then call \`inspectProjectImage\` for every image that may affect scope, quantities, site conditions, equipment identification, or assumptions. The listing is metadata only; \`inspectProjectImage\` returns the original pixels as a native image block.
 - Drawings and symbol-driven PDFs: use the vision/drawing tools as a primary takeoff workflow whenever drawings drive counts, device quantities, or visual scope validation.
 - **Do NOT install local parsers or shell utilities just to read Bidwright project files.** Use the MCP document tools first.
 - **Do NOT use renderDrawingPage to read document text.** That tool is for visual drawing inspection and symbol counting, not for spec/RFQ text extraction.
@@ -545,6 +546,7 @@ ${docManifest}
 - You MUST read EVERY document listed above. No skipping, no shortcuts, no "estimated from primary documents."
 - **Every P&ID must be individually read** â€” secondary P&IDs often contain additional equipment, piping runs, instruments, tie-ins, and connections NOT shown on the primary P&ID. Skipping them means missing scope.
 - **Every spreadsheet must be read** using the \`readSpreadsheet\` tool â€” spreadsheets often contain BOMs, quantity takeoffs, or quotation details that are CRITICAL to accurate pricing.
+- **Every relevant project image must be visually inspected** using \`inspectProjectImage\` after discovery with \`listProjectImages\`. Do not infer a photo, screenshot, markup, sketch, or equipment nameplate from its filename.
 - **Every BOM/parts-list/takeoff artifact must be elevated** before visual takeoff. If it is a spreadsheet, use \`readSpreadsheet\`. If it is a PDF, use \`getDocumentStructured\` plus focused \`readDocumentText\`. Treat its item quantities as the quantity baseline unless explicit source evidence proves they are superseded. A later drawing date or isolated drawing callout is not enough by itself; the drawing may have missing context. If a BOM/spec/schedule conflicts with a drawing, save both claims and either use the high-authority table, attach explicit supersession/order-of-precedence/client-or-vendor confirmation evidence, or carry an assumption/ask the user. A carried assumption is not permission to price the lower-context drawing value as baseline when the BOM/spec/table carries the higher value; use the high-authority baseline plus a clarification/alternate unless the user/vendor/client explicitly confirms otherwise. For high-risk vendor/component/accessory counts, save dedicated quantity claims instead of burying those counts inside dimensions/weight/source-note prose.
 - **Every specification section must be read** â€” use the \`pages\` parameter with \`readDocumentText\` to read large PDFs in chunks (e.g. pages: "1-20", then "21-40", etc.) until you've covered the entire document.
 - If a document cannot be read (corrupted, format issue), log it as a HIGH-impact assumption and flag it to the user â€” do NOT silently skip it.
@@ -598,6 +600,7 @@ ${benchmarkToolLine}
 - **finalizeEstimateStrategy** â€” Mark the staged estimate workflow complete after reconcile
 - **getItemConfig** â€” CALL THIS FIRST. Discovers item categories, rate schedules, and catalog items configured for this organization. The response tells you exactly how to create items for each category.
 - **queryProjectFile** â€” Single-call ranked search across THIS project's source documents (RFQ, specs, drawings, vendor sheets, BOMs/parts-lists): full extracted text + Azure structured tables + key-value pairs. Returns documentId/pageNumber/snippet — drill in with \`readDocumentText\` or \`getDocumentStructured\`.
+- **listProjectImages / inspectProjectImage** â€” Discover raster files uploaded through Documents → Files and inspect their original pixels natively. Use for site photos, screenshots, markups, sketches, nameplates, and other PNG/JPG/WebP/GIF evidence.
 - **recommendEstimateBasis** â€” Candidate pack for a priced scope row: cost source candidates, labour units, and takeoff annotation hints in one response. Treat it as retrieval, not authority.
 - **queryLibrary** â€” Search the unified line-item index: catalogs, imported rates, cost-intelligence effective costs/resources, labor units, assemblies, and provider actions. Use this before creating priced rows.
 - **recommendCostSource** â€” Pick the best structured cost source for a scope phrase and return a ready-to-use worksheet item patch with provenance.
@@ -651,6 +654,7 @@ Only call concrete tools returned by ToolSearch. A server namespace without a co
 
 These tools are for automated drawing evidence, takeoff, and symbol counting on construction drawings. Use them before making drawing-driven quantity assumptions. To read document text, still use \`readDocumentText\` / \`getDocumentStructured\`.
 
+- **listProjectImages / inspectProjectImage** â€” Discover and natively view standalone raster images from Documents → Files. These are not PDF drawing pages and may not appear in the source-document manifest.
 - **buildDrawingAtlas** â€” Build/reuse the drawing atlas for the whole package: page render hashes, sheet registry, semantic regions, Azure/local/PDF-native evidence, and any completed Gemini regions tied to crop coordinates. Gemini drawing extraction is queued when enabled and must not block the first estimating pass.
 - **addSourceToDrawingAtlas** â€” Add a relevant PDF/DWG/DXF to the atlas during estimating with a rationale. Use this when the pre-classification missed something important. Batch related additions with \`rebuildAtlas:false\`, then rebuild/search once so the agent does not stall on repeated atlas rebuilds.
 - **searchDrawingRegions** â€” Ask for regions by intent, e.g. anchor counts, platform or equipment BOMs, vendor accessory tables, footing dimensions, valve symbols, support details, or schedule rows. Do this before inspecting crops, and prioritize high-authority table/spec/schedule matches before visual-only counts.
@@ -1281,7 +1285,7 @@ ${documentList}
 
 ## Useful read-only tools
 
-getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath.
+getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, listProjectImages, inspectProjectImage, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath.
 `;
   for (const filename of ALL_INSTRUCTION_FILENAMES) {
     await writeFile(join(params.projectDir, filename), content, "utf-8");
@@ -1352,6 +1356,7 @@ The project documents are in the \`documents/\` folder as real files on disk.
 **How to read documents:**
 - PDFs, DOCX, TXT, CSV: Use \`readDocumentText\` with the document ID (use \`pages\` for large PDFs)
 - Spreadsheets (.xlsx, .xls): Use the \`readSpreadsheet\` tool with the document ID
+- Project images in Documents → Files: Use \`listProjectImages\`, then \`inspectProjectImage\` to visually inspect the original PNG/JPG/WebP/GIF pixels
 - Drawings and symbol-driven PDFs: use the vision tools as a primary validation workflow whenever drawings drive device/component counts or visual scope checks
 - \`getDocumentStructured\` â€” for Azure Form Recognizer extracted tables
 
@@ -1361,6 +1366,7 @@ ${docManifest}
 - Read EVERY document listed above. No skipping.
 - Every P&ID must be individually read â€” secondary P&IDs contain additional scope.
 - Every spreadsheet must be read using \`readSpreadsheet\`.
+- Every relevant project image must be inspected with \`inspectProjectImage\`; filenames and metadata are not visual evidence.
 - Read large PDFs in chunks using the \`pages\` parameter.
 
 ${buildDrawingAnalysisSection(params.documents, "review")}
@@ -1405,10 +1411,12 @@ You have access to Bidwright tools via MCP. For this review, use:
 - **getDocumentStructured** â€” Get structured document data
 - **readSpreadsheet** â€” Read Excel/CSV files
 - **readMemory** â€” Read project memory from prior sessions
+- **listProjectImages / inspectProjectImage** â€” Discover and natively inspect standalone project photos, screenshots, markups, sketches, and nameplates from Documents → Files
 
 Large read-only tools are compact and paginated. Use q/category/documentId/scheduleId/datasetId plus limit/offset instead of broad reads when checking rate books, datasets, spreadsheets, model manifests, and document text.
 
 ### Drawing / Vision Tools
+- **listProjectImages / inspectProjectImage** - Discover and visually inspect standalone PNG/JPG/WebP/GIF files uploaded through Documents → Files
 - **listDrawingPages** - List drawing PDFs and page counts before any drawing CV workflow
 - **scanDrawingSymbols** - Optional symbol-heavy sheet discovery only; do not use as a general overview or substitute for targeted zoom/count work
 - **countSymbols** - Refine a single-page symbol count using a representative bounding box

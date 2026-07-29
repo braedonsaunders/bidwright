@@ -5,6 +5,7 @@ import { randomUUID } from "node:crypto";
 import { prisma } from "@bidwright/db";
 import { emitSessionEvent } from "../services/cli-runtime.js";
 import { getDwgProcessingResult } from "../services/dwg-processing-service.js";
+import { validateAgentProjectImage } from "../services/project-image-service.js";
 
 /** Helper: resolve a document's absolute PDF path from its storagePath. */
 async function resolveDocPdf(store: any, projectId: string, documentId: string): Promise<{ absPath: string; doc: any } | { error: string; status: number }> {
@@ -1258,6 +1259,51 @@ export async function visionRoutes(app: FastifyInstance) {
       });
     }
     return result;
+  });
+
+  // ── POST /api/vision/project-image ────────────────────────────────────
+  // Returns an original raster uploaded through Documents → Files as a
+  // project-scoped image block for the agent's MCP visual inspection tools.
+  app.post("/api/vision/project-image", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = String(body.projectId ?? "").trim();
+    const fileNodeId = String(body.fileNodeId ?? "").trim();
+    if (!projectId || !fileNodeId) {
+      return reply.code(400).send({ message: "projectId and fileNodeId required" });
+    }
+
+    const node = await request.store!.getFileNode(fileNodeId);
+    if (!node || node.projectId !== projectId || node.type === "directory") {
+      return reply.code(404).send({ message: "Project image not found" });
+    }
+
+    const resolved = await resolveDocPdf(request.store!, projectId, fileNodeId);
+    if ("error" in resolved) {
+      return reply.code(resolved.status).send({ message: resolved.error });
+    }
+
+    const bytes = await readFile(resolved.absPath);
+    let mimeType: string;
+    try {
+      mimeType = validateAgentProjectImage({
+        bytes,
+        fileName: node.name,
+        fileType: node.fileType,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = message.includes("exceeds") ? 413 : 415;
+      return reply.code(status).send({ message });
+    }
+
+    return {
+      success: true,
+      fileNodeId: node.id,
+      fileName: node.name,
+      mimeType,
+      size: bytes.byteLength,
+      image: `data:${mimeType};base64,${bytes.toString("base64")}`,
+    };
   });
 
   // ── POST /api/vision/count-symbols ─────────────────────────────────────
