@@ -2787,14 +2787,14 @@ function SnapQuoteSheet({
 
   const inferredCustomer = useMemo(() => {
     if (customerId) return customerOptions.find((customer) => customer.id === customerId) ?? null;
-    const clientLabel = (workspace.quote.customerString || workspace.project.clientName || "").trim().toLowerCase();
+    const clientLabel = (workspace.quote.customerString || "").trim().toLowerCase();
     if (!clientLabel) return null;
     return customerOptions.find((customer) => {
       const name = customer.name.trim().toLowerCase();
       const shortName = (customer.shortName || "").trim().toLowerCase();
       return name === clientLabel || Boolean(shortName && shortName === clientLabel);
     }) ?? null;
-  }, [customerId, customerOptions, workspace.project.clientName, workspace.quote.customerString]);
+  }, [customerId, customerOptions, workspace.quote.customerString]);
 
   const customerPickerValue = customerId || inferredCustomer?.id || null;
   const customerPickerOptions = useMemo(() => {
@@ -2830,7 +2830,7 @@ function SnapQuoteSheet({
     if (!selectedCustomer) return;
 
     const alreadyLinked = nextCustomerId === (workspace.quote.customerId ?? "");
-    const alreadyNamed = selectedCustomer.name === workspace.quote.customerString && selectedCustomer.name === workspace.project.clientName;
+    const alreadyNamed = selectedCustomer.name === workspace.quote.customerString;
     if (alreadyLinked && alreadyNamed) return;
 
     setSavingField("customerId");
@@ -2852,7 +2852,6 @@ function SnapQuoteSheet({
         customerContactString: "",
         customerContactEmailString: "",
       });
-      await updateProject(workspace.project.id, { clientName: selectedCustomer.name });
       const ratePatch = await importAssignedRateSchedules(workspace.project.id);
       onApply((prev) => mergeWorkspacePatch(prev, ratePatch));
     } catch (error) {

@@ -4,7 +4,6 @@ export const PDF_SECTION_KEYS = [
   "leadLetter",
   "lineItems",
   "phases",
-  "modifiers",
   "conditions",
   "terms",
   "pricingSummary",
@@ -40,7 +39,6 @@ const LABELS: Record<PdfSectionKey, string> = {
   leadLetter: "Lead Letter",
   lineItems: "Line Items",
   phases: "Phases",
-  modifiers: "Adjustments",
   conditions: "Conditions",
   terms: "Terms & Conditions",
   pricingSummary: "Price Build",
@@ -78,7 +76,7 @@ export const PDF_DOCUMENT_PROFILES: Record<PdfDocumentType, PdfDocumentProfile> 
     customerFacing: true,
     sections: sections(
       ALL_SECTIONS,
-      ["coverPage", "scopeOfWork", "leadLetter", "modifiers", "conditions", "terms", "pricingSummary", "notes", "reportSections"],
+      ["coverPage", "scopeOfWork", "leadLetter", "conditions", "terms", "pricingSummary", "notes", "reportSections"],
       { pricingSummary: "Every proposal includes the client-facing Price Build." },
     ),
   },
@@ -89,7 +87,7 @@ export const PDF_DOCUMENT_PROFILES: Record<PdfDocumentType, PdfDocumentProfile> 
     customerFacing: false,
     sections: sections(
       ALL_SECTIONS,
-      ["coverPage", "scopeOfWork", "lineItems", "phases", "modifiers", "conditions", "terms", "pricingSummary", "hoursSummary", "labourSummary", "notes", "reportSections"],
+      ["coverPage", "scopeOfWork", "lineItems", "phases", "conditions", "terms", "pricingSummary", "hoursSummary", "labourSummary", "notes", "reportSections"],
     ),
   },
   sitecopy: {

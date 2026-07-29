@@ -11,6 +11,7 @@ import type {
   EstimateFactorTotalEntry,
   PricingLadderRow,
   ProjectWorkspace,
+  Quote,
   QuoteRevision,
   RevisionTotals,
   SourceTotalEntry,
@@ -2035,10 +2036,20 @@ export function calculateTotals(
   };
 }
 
+function quoteClientName(quote: Quote | null | undefined) {
+  return quote?.customerName?.trim()
+    || quote?.customerString?.trim()
+    || "Unassigned Client";
+}
+
 export function listProjects(store: BidwrightStore) {
-  return store.projects.map((project) => {
-    const quote = getQuoteByProjectId(store, project.id);
+  return store.projects.map((storedProject) => {
+    const quote = getQuoteByProjectId(store, storedProject.id);
     const revision = quote ? getCurrentRevision(store, quote.id) : undefined;
+    const project = {
+      ...storedProject,
+      clientName: quoteClientName(quote),
+    };
     return {
       ...project,
       quote: quote
@@ -2064,13 +2075,17 @@ export function listProjects(store: BidwrightStore) {
 }
 
 export function getProjectById(store: BidwrightStore, projectId: string) {
-  const project = store.projects.find((entry) => entry.id === projectId);
-  if (!project) {
+  const storedProject = store.projects.find((entry) => entry.id === projectId);
+  if (!storedProject) {
     return null;
   }
 
   const quote = getQuoteByProjectId(store, projectId);
   const revision = quote ? getCurrentRevision(store, quote.id) : undefined;
+  const project = {
+    ...storedProject,
+    clientName: quoteClientName(quote),
+  };
 
   return {
     ...project,
@@ -2082,8 +2097,8 @@ export function getProjectById(store: BidwrightStore, projectId: string) {
 }
 
 export function buildProjectWorkspace(store: BidwrightStore, projectId: string): ProjectWorkspace | null {
-  const project = store.projects.find((entry) => entry.id === projectId);
-  if (!project) {
+  const storedProject = store.projects.find((entry) => entry.id === projectId);
+  if (!storedProject) {
     return null;
   }
 
@@ -2091,6 +2106,10 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
   if (!quote) {
     return null;
   }
+  const project = {
+    ...storedProject,
+    clientName: quoteClientName(quote),
+  };
 
   const revision = getCurrentRevision(store, quote.id);
   if (!revision) {

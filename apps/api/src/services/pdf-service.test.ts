@@ -73,7 +73,7 @@ export function workspaceFixture() {
     ],
   };
   return {
-    quote: { quoteNumber: "Q-1" },
+    quote: { quoteNumber: "Q-1", customerString: "Kingdom Construction" },
     currentRevision: {
       revisionNumber: 1,
       title: "Test",
@@ -85,7 +85,7 @@ export function workspaceFixture() {
       totalHours: 20,
       pricingLadder,
     },
-    project: { clientName: "Client", location: "Site" },
+    project: { clientName: "Oxford County", location: "Site" },
     entityCategories: [
       { id: "labour", name: "Labour", entityType: "Labour", analyticsBucket: "labour", calculationType: "tiered_rate" },
       { id: "equipment", name: "Equipment", entityType: "Equipment", analyticsBucket: "equipment", calculationType: "duration_rate" },
@@ -148,8 +148,11 @@ test("proposal renders the shared Price Build without internal cost", () => {
   const data = buildPdfDataPackage(workspaceFixture());
   const html = generatePdfHtml(data, "main");
   assert.match(html, /Price Build/);
+  assert.match(html, />Rollup</);
   assert.match(html, /Fuel Adjustment/);
-  assert.match(html, /Customer Total/);
+  assert.match(html, /Prepared for <strong>Kingdom Construction/);
+  assert.doesNotMatch(html, /Oxford County/);
+  assert.doesNotMatch(html, /<h2>Adjustments/);
   assert.doesNotMatch(html, />Direct Cost</);
   assert.doesNotMatch(html, />Margin</);
 });
@@ -163,7 +166,6 @@ test("site copy honours dynamic labour tiers and excludes equipment duration fro
       leadLetter: false,
       lineItems: true,
       phases: false,
-      modifiers: false,
       conditions: false,
       terms: false,
       pricingSummary: false,

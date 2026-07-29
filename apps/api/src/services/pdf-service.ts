@@ -84,7 +84,16 @@ export interface PdfDataPackage {
     phaseClassificationTotals?: Array<{ id: string; phaseId?: string | null; label: string; value: number; cost: number; margin: number }>;
     worksheetClassificationTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
     categoryClassificationTotals?: Array<{ id: string; label: string; value: number; cost: number; margin: number }>;
-    adjustmentTotals: Array<{ id: string; label: string; show: string; value: number; cost: number; margin: number }>;
+    adjustmentTotals: Array<{
+      id: string;
+      label: string;
+      show: string;
+      active: boolean;
+      affectsSubtotal: boolean;
+      value: number;
+      cost: number;
+      margin: number;
+    }>;
   };
   summaryRows: Array<{
     id: string;
@@ -127,7 +136,6 @@ export interface PdfLayoutOptions {
     leadLetter: boolean;
     lineItems: boolean;
     phases: boolean;
-    modifiers: boolean;
     conditions: boolean;
     terms: boolean;
     pricingSummary: boolean;
@@ -186,7 +194,6 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
       leadLetter: true,
       lineItems: false,
       phases: false,
-      modifiers: true,
       conditions: true,
       terms: true,
       pricingSummary: true,
@@ -198,7 +205,7 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
     },
     sectionOrder: [
       "coverPage", "scopeOfWork", "notes", "leadLetter", "lineItems", "phases",
-      "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary", "schedule", "terms",
+      "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary", "schedule", "terms",
     ],
     lineItemOptions: {
       showCostColumn: true,
@@ -295,7 +302,9 @@ export function buildPdfDataPackage(
     orgName: organization.companyName ?? "",
     orgLogoUrl: organization.logoUrl ?? "",
     orgWebsite: organization.website ?? "",
-    clientName: workspace.project?.clientName ?? "",
+    clientName: workspace.quote?.customerName?.trim()
+      || workspace.quote?.customerString?.trim()
+      || "Unassigned Client",
     location: workspace.project?.location ?? "",
     type: rev?.type ?? "Firm",
     status: rev?.status ?? "Open",
@@ -437,6 +446,9 @@ export function generatePdfHtml(
   const defaults = getDefaultPdfLayoutOptions();
   let opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
   opts = applyDocumentProfile(opts, templateType, !options);
+  // "Adjustments" used to be a standalone PDF section. They now form part of
+  // the customer-facing Price Build, so discard the stale key from saved layouts.
+  opts.sectionOrder = opts.sectionOrder.filter((key) => key !== "modifiers");
 
   // Ensure any new section keys present in defaults are added to sectionOrder
   for (const key of defaults.sectionOrder) {
@@ -529,37 +541,10 @@ export function generatePdfHtml(
   };
 
   const renderPricingSummary = (): string => {
-    const showCost = !opts.customerFacing;
+    // Price Build is the customer-visible commercial statement. Internal cost
+    // detail belongs in the cost/backup sections, never in this output.
+    const showCost = false;
     const ladder = data.pricingLadder;
-    if (ladder?.rows?.length) {
-      const rows = ladder.rows.filter((row) =>
-        row.visible
-        && row.rowType !== "profit"
-        && (!opts.customerFacing || row.financialCategory !== "direct_cost"),
-      );
-      let result = `<h2>Price Build</h2>`;
-      result += `<div class="summary-grid">`;
-      if (showCost) {
-        result += `<div class="summary-card"><div class="summary-card-label">Direct Cost</div><div class="summary-card-value">${formatMoney(ladder.directCost)}</div></div>`;
-        result += `<div class="summary-card"><div class="summary-card-label">Line Subtotal</div><div class="summary-card-value">${formatMoney(ladder.lineSubtotal)}</div></div>`;
-      }
-      result += `<div class="summary-card"><div class="summary-card-label">Customer Total</div><div class="summary-card-value">${formatMoney(ladder.grandTotal)}</div></div>`;
-      if (showCost) {
-        result += `<div class="summary-card"><div class="summary-card-label">Margin</div><div class="summary-card-value">${formatPct(ladder.internalMargin)}</div></div>`;
-      }
-      result += `</div>`;
-      result += `<table><thead><tr><th>Layer</th>${showCost ? '<th class="num">Base</th>' : ""}<th class="num">Amount</th><th class="num">Running</th></tr></thead><tbody>`;
-      for (const row of rows) {
-        result += `<tr${row.rowType === "total" ? ' class="totals"' : ""}>
-          <td><strong>${escapeHtml(row.label)}</strong>${row.active ? "" : '<br><span style="color:#888">Inactive</span>'}</td>
-          ${showCost ? `<td class="num">${formatMoney(row.baseAmount)}</td>` : ""}
-          <td class="num">${formatMoney(row.value)}</td>
-          <td class="num"><strong>${formatMoney(row.runningTotal)}</strong></td>
-        </tr>`;
-      }
-      result += `</tbody></table>`;
-      return result;
-    }
     const builder = data.summaryBuilder;
     const summaryTotals = data.summaryTotals;
 
@@ -573,7 +558,12 @@ export function generatePdfHtml(
         return null;
       };
       const pairKey = (leftId: string | null | undefined, rightId: string | null | undefined) => `${leftId ?? "__unphased__"}::${rightId ?? ""}`;
-      const adjustmentTotals = summaryTotals.adjustmentTotals.filter((entry) => entry.show !== "No");
+      const adjustmentTotals = summaryTotals.adjustmentTotals.filter((entry) =>
+        entry.active && entry.show !== "No" && entry.affectsSubtotal
+      );
+      const lineSubtotal = ladder?.lineSubtotal
+        ?? data.subtotal - adjustmentTotals.reduce((sum, entry) => sum + entry.value, 0);
+      const priceBuild = ladder?.grandTotal ?? data.subtotal;
 
       if (builder.mode === "pivot") {
         const rows = [...builder.rows].filter((row) => row.visible).sort((a, b) => a.order - b.order);
@@ -606,7 +596,7 @@ export function generatePdfHtml(
 
         const dimensionLabel = (d: typeof builder.rowDimension) =>
           d === "phase" ? "Phase" : d === "category" ? "Category" : d === "worksheet" ? "Worksheet" : d === "classification" ? "Construction Code" : "";
-        let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">${escapeHtml(dimensionLabel(builder.rowDimension))}</th>`;
+        let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">${escapeHtml(dimensionLabel(builder.rowDimension))}</th>`;
         for (const column of columns) {
           result += `<th class="num">${escapeHtml(column.label)}</th>`;
         }
@@ -624,12 +614,8 @@ export function generatePdfHtml(
           result += `<td class="num">${formatMoney(total?.value ?? 0)}</td></tr>`;
         }
 
-        for (const adjustment of adjustmentTotals) {
-          result += `<tr><td colspan="${columns.length + (showCost ? 1 : 0) + 1}" style="text-align:left">${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
-        }
-
         if (builder.totals.visible) {
-          result += `<tr style="font-weight:700;border-top:2px solid #333"><td>${escapeHtml(builder.totals.label)}</td>`;
+          result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Rollup</td>`;
           for (const column of columns) {
             const total = axisTotal(builder.columnDimension, column.sourceId);
             result += `<td class="num">${formatMoney(total?.value ?? 0)}</td>`;
@@ -637,44 +623,69 @@ export function generatePdfHtml(
           if (showCost) {
             result += `<td class="num">${formatMoney(data.cost)}</td>`;
           }
-          result += `<td class="num">${formatMoney(data.subtotal)}</td></tr>`;
+          result += `<td class="num">${formatMoney(lineSubtotal)}</td></tr>`;
         }
 
+        for (const adjustment of adjustmentTotals) {
+          result += `<tr><td colspan="${columns.length + (showCost ? 1 : 0) + 1}" style="text-align:left">${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
+        }
+
+        result += `<tr style="font-weight:700;border-top:2px solid #333"><td colspan="${columns.length + (showCost ? 1 : 0) + 1}">Price Build</td><td class="num">${formatMoney(priceBuild)}</td></tr>`;
         result += `</tbody></table>`;
         return result;
       }
 
       if (builder.mode === "grouped") {
         const rows = [...builder.rows].filter((row) => row.visible).sort((a, b) => a.order - b.order);
-        let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
+        let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
 
         for (const row of rows) {
           const total = axisTotal(builder.rowDimension, row.sourceId);
           result += `<tr><td>${escapeHtml(row.label)}</td>${showCost ? `<td class="num">${formatMoney(total?.cost ?? 0)}</td>` : ""}<td class="num">${formatMoney(total?.value ?? 0)}</td></tr>`;
         }
 
+        if (builder.totals.visible) {
+          result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Rollup</td>${showCost ? `<td class="num">${formatMoney(data.cost)}</td>` : ""}<td class="num">${formatMoney(lineSubtotal)}</td></tr>`;
+        }
+
         for (const adjustment of adjustmentTotals) {
           result += `<tr><td>${escapeHtml(adjustment.label)}</td>${showCost ? `<td class="num">${formatMoney(adjustment.cost)}</td>` : ""}<td class="num">${formatMoney(adjustment.value)}</td></tr>`;
         }
 
-        if (builder.totals.visible) {
-          result += `<tr style="font-weight:700;border-top:2px solid #333"><td>${escapeHtml(builder.totals.label)}</td>${showCost ? `<td class="num">${formatMoney(data.cost)}</td>` : ""}<td class="num">${formatMoney(data.subtotal)}</td></tr>`;
-        }
-
+        result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Price Build</td>${showCost ? `<td></td>` : ""}<td class="num">${formatMoney(priceBuild)}</td></tr>`;
         result += `</tbody></table>`;
         return result;
       }
 
       if (builder.mode === "total") {
-        return `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody><tr style="font-weight:700"><td>${escapeHtml(builder.totals.label)}</td>${showCost ? `<td class="num">${formatMoney(data.cost)}</td>` : ""}<td class="num">${formatMoney(data.subtotal)}</td></tr></tbody></table>`;
+        let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">Description</th><th class="num">Amount</th></tr></thead><tbody>`;
+        result += `<tr><td>Rollup</td><td class="num">${formatMoney(lineSubtotal)}</td></tr>`;
+        for (const adjustment of adjustmentTotals) {
+          result += `<tr><td>${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
+        }
+        result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Price Build</td><td class="num">${formatMoney(priceBuild)}</td></tr></tbody></table>`;
+        return result;
       }
+    }
+
+    if (ladder) {
+      const adjustments = ladder.rows.filter((row) =>
+        row.rowType === "adjustment" && row.active && row.visible && row.affectsTotal
+      );
+      let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">Description</th><th class="num">Amount</th></tr></thead><tbody>`;
+      result += `<tr><td>Rollup</td><td class="num">${formatMoney(ladder.lineSubtotal)}</td></tr>`;
+      for (const adjustment of adjustments) {
+        result += `<tr><td>${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
+      }
+      result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Price Build</td><td class="num">${formatMoney(ladder.grandTotal)}</td></tr></tbody></table>`;
+      return result;
     }
 
     const visibleRows = data.summaryRows.filter((r) => r.visible).sort((a, b) => a.order - b.order);
     if (visibleRows.length === 0) return "";
 
     const colCount = showCost ? 3 : 2;
-    let result = `<h2>Pricing Summary</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
+    let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">Description</th>${showCost ? `<th class="num">Cost</th>` : ""}<th class="num">Amount</th></tr></thead><tbody>`;
 
     for (const row of visibleRows) {
       if (row.type === "separator") {
@@ -691,7 +702,7 @@ export function generatePdfHtml(
         <td class="num">${isSubtotal ? `<strong>${formatMoney(row.computedValue)}</strong>` : formatMoney(row.computedValue)}</td>
       </tr>`;
     }
-    result += `</tbody></table>`;
+    result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Price Build</td>${showCost ? `<td></td>` : ""}<td class="num">${formatMoney(data.subtotal)}</td></tr></tbody></table>`;
 
     return result;
   };
@@ -795,17 +806,6 @@ export function generatePdfHtml(
       <thead><tr><th>#</th><th>Phase</th><th>Description</th></tr></thead><tbody>`;
     for (const p of data.phases) {
       result += `<tr><td>${escapeHtml(p.number)}</td><td><strong>${escapeHtml(p.name)}</strong></td><td>${escapeHtml(p.description)}</td></tr>`;
-    }
-    result += `</tbody></table>`;
-    return result;
-  };
-
-  const renderAdjustments = (): string => {
-    const visibleAdjustments = data.adjustments.filter((adjustment) => adjustment.show !== "No");
-    if (visibleAdjustments.length === 0) return "";
-    let result = `<h2>Adjustments</h2><table><thead><tr><th>Name</th><th>Mode</th><th>Applies To</th><th class="num">%</th><th class="num">Amount</th></tr></thead><tbody>`;
-    for (const adjustment of visibleAdjustments) {
-      result += `<tr><td>${escapeHtml(adjustment.name)}</td><td>${escapeHtml(adjustment.type || adjustment.pricingMode)}</td><td>${escapeHtml(adjustment.appliesTo)}</td><td class="num">${adjustment.percentage != null ? formatPct(adjustment.percentage) : ""}</td><td class="num">${adjustment.amount != null ? formatMoney(adjustment.amount) : ""}</td></tr>`;
     }
     result += `</tbody></table>`;
     return result;
@@ -987,7 +987,6 @@ export function generatePdfHtml(
     pricingSummary: renderPricingSummary,
     lineItems: renderLineItems,
     phases: renderPhases,
-    modifiers: renderAdjustments,
     conditions: renderConditions,
     terms: renderTerms,
     schedule: renderSchedule,
@@ -1423,7 +1422,9 @@ export function buildSchedulePdfData(workspace: any): SchedulePdfData {
 
   return {
     projectName: workspace.project?.name ?? "",
-    clientName: workspace.project?.clientName ?? "",
+    clientName: workspace.quote?.customerName?.trim()
+      || workspace.quote?.customerString?.trim()
+      || "Unassigned Client",
     dateStart: workspace.currentRevision?.dateWorkStart ?? null,
     dateEnd: workspace.currentRevision?.dateWorkEnd ?? null,
     phases,

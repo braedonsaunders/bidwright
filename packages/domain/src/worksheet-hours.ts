@@ -149,6 +149,43 @@ function findTierByIdOrPrefix(
   return tiers.find((tier) => tier.id === tierId || tier.id.startsWith(tierId)) ?? null;
 }
 
+const TIER_KEY_LABELS: Record<string, string> = {
+  __unit: "Units",
+  unit: "Units",
+  units: "Units",
+  __reg: "Regular",
+  reg: "Regular",
+  regular: "Regular",
+  __ot: "Overtime",
+  ot: "Overtime",
+  overtime: "Overtime",
+  __dt: "Double Time",
+  dt: "Double Time",
+  doubletime: "Double Time",
+};
+
+function findTierByAlias(tiers: WorksheetHourTierLike[], rawTierId: string) {
+  const expectedLabel = TIER_KEY_LABELS[normalizeToken(rawTierId)];
+  if (!expectedLabel) return null;
+  const expected = normalizeToken(expectedLabel);
+  return tiers.find((tier) => normalizeToken(tier.name) === expected) ?? null;
+}
+
+function safeTierLabel(rawTierId: string) {
+  const known = TIER_KEY_LABELS[normalizeToken(rawTierId)];
+  if (known) return known;
+  // Persisted tier IDs are implementation details. If a tier was replaced or
+  // deleted, never leak its UUID into customer-facing tables or summaries.
+  if (/^(?:rst|tier)-[a-f0-9-]{12,}$/i.test(rawTierId)) return "Standard";
+  const readable = rawTierId
+    .replace(/^__/, "")
+    .replace(/[_-]+/g, " ")
+    .trim();
+  return readable
+    ? readable.replace(/\b\w/g, (character) => character.toUpperCase())
+    : "Standard";
+}
+
 function compareTiers(
   a: { sortOrder?: number | null; multiplier?: number | null },
   b: { sortOrder?: number | null; multiplier?: number | null },
@@ -170,16 +207,27 @@ export function getWorksheetHourBreakdown(
 
   const schedule = findMatchingSchedule(item, schedules);
   const tiers = schedule?.tiers ?? [];
+  const populatedTierIds = Object.keys(tierUnits);
+  const soleUnresolvedTier = populatedTierIds.length === 1
+    && !findTierByIdOrPrefix(tiers, populatedTierIds[0]!)
+    && !findTierByAlias(tiers, populatedTierIds[0]!);
+  const defaultScheduleTier = soleUnresolvedTier
+    ? [...tiers].sort(compareTiers).find((tier) => toNumber(tier.multiplier) === 1)
+      ?? [...tiers].sort(compareTiers)[0]
+      ?? null
+    : null;
 
   const breakdown: WorksheetHourTierBreakdown[] = [];
   let total = 0;
   for (const [rawTierId, rawHours] of Object.entries(tierUnits)) {
     const hours = toNumber(rawHours);
     if (hours <= 0) continue;
-    const tier = findTierByIdOrPrefix(tiers, rawTierId);
+    const tier = findTierByIdOrPrefix(tiers, rawTierId)
+      ?? findTierByAlias(tiers, rawTierId)
+      ?? defaultScheduleTier;
     breakdown.push({
       tierId: tier?.id ?? rawTierId,
-      name: tier?.name ?? rawTierId,
+      name: tier?.name ?? safeTierLabel(rawTierId),
       multiplier: toNumber(tier?.multiplier) || 1,
       sortOrder: Number.isFinite(tier?.sortOrder ?? null) ? Number(tier?.sortOrder) : Number.POSITIVE_INFINITY,
       uom: String(tier?.uom ?? "").trim(),

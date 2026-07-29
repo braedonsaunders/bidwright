@@ -89,12 +89,15 @@ jobs:
           apps/api/src/services/agent-host/launcher-identity.test.ts
           apps/api/src/services/agent-host/writable-path-ownership.test.ts
           apps/api/src/services/cli-adapters/codex.test.ts
+          apps/api/src/services/cli-runtime-recovery.test.ts
+          apps/api/src/services/pdf-service.test.ts
           apps/api/src/services/project-image-service.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
           packages/agent/src/tenant-config.test.ts
           packages/ingestion/src/drawing-providers/index.test.ts
           packages/mcp-server/src/project-image-tools.test.ts
+          packages/domain/src/worksheet-hours.test.ts
           apps/web/lib/schedule-utils.test.ts
 
       - name: Validate production compose

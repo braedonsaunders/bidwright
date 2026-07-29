@@ -599,7 +599,7 @@ function GeneralSubTab({
     () => customerOptions.find((c) => c.id === customerId) ?? null,
     [customerId, customerOptions],
   );
-  const sourceClientLabel = (quote.customerString || workspace.project.clientName || "").trim();
+  const sourceClientLabel = (quote.customerString || "").trim();
   const showClientAliasNote = Boolean(
     selectedCustomer
     && sourceClientLabel

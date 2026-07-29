@@ -1455,19 +1455,17 @@ export function SummarizeTab({
             onDeleteAdjustment={handleDeleteAdjustment}
           />
         ) : null}
-        {activeSubTab === "pricing" ? <PricingLadderPanel totals={totals} /> : null}
+        {activeSubTab === "pricing" ? (
+          <PricingLadderPanel
+            builder={draftBuilder}
+            totals={totals}
+            rows={sortedRows}
+            columns={sortedColumns}
+          />
+        ) : null}
         {activeSubTab === "costs" ? <CostBreakdownPanel entries={totals.costBreakdown ?? []} totalCost={totals.cost} /> : null}
         {activeSubTab === "resources" ? <ResourceBreakdownPanel resources={resourceSummaryRows} /> : null}
       </div>
-    </div>
-  );
-}
-
-function FinancialMetric({ label, value, highlight = false }: { label: string; value: string; highlight?: boolean }) {
-  return (
-    <div className={cn("rounded-xl border border-line bg-bg/35 p-3", highlight && "border-orange-500/35 bg-orange-500/10")}>
-      <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-fg/45">{label}</div>
-      <div className="mt-1 font-mono text-sm font-semibold text-fg">{value}</div>
     </div>
   );
 }
@@ -1494,61 +1492,80 @@ function FactorRollupNotice({ totals }: { totals: ProjectWorkspaceData["estimate
   );
 }
 
-function PricingLadderPanel({ totals }: { totals: ProjectWorkspaceData["estimate"]["totals"] }) {
+function PricingLadderPanel({
+  builder,
+  totals,
+  rows,
+  columns,
+}: {
+  builder: SummaryBuilderConfig;
+  totals: ProjectWorkspaceData["estimate"]["totals"];
+  rows: SummaryBuilderAxisItem[];
+  columns: SummaryBuilderAxisItem[];
+}) {
   const ladder = totals.pricingLadder;
-  const rows = ladder?.rows ?? [];
-  const factorRows = rows.filter((row) => row.rowType === "factor");
-  const adjustmentRows = rows.filter((row) => row.rowType === "adjustment");
-  const visibleStatementRows = rows.filter((row) => row.rowType !== "profit");
+  const visibleRows = rows.filter((row) => row.visible);
+  const visibleColumns = builder.mode === "pivot" ? columns.filter((column) => column.visible) : [];
+  const adjustments = totals.adjustmentTotals.filter((entry) => entry.active && entry.show !== "No" && entry.affectsSubtotal);
+  const lineSubtotal = ladder?.lineSubtotal ?? totals.subtotal - adjustments.reduce((sum, entry) => sum + entry.value, 0);
+  const priceBuild = ladder?.grandTotal ?? totals.subtotal;
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-panel">
       <div className="shrink-0 border-b border-line px-4 py-3">
         <div className="text-sm font-semibold text-fg">Price Build</div>
-        <div className="mt-1 text-[11px] text-fg/55">Read-only audit from direct cost through factors, line subtotal, adjustments, and customer total.</div>
+        <div className="mt-1 text-[11px] text-fg/55">The configured rollup plus visible quote adjustments—the price the client sees.</div>
       </div>
       <div className="min-h-0 flex-1 space-y-3 overflow-auto p-3">
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <FinancialMetric label="Direct Cost" value={formatMoney(ladder?.directCost ?? totals.cost)} />
-          <FinancialMetric label="Line Subtotal" value={formatMoney(ladder?.lineSubtotal ?? totals.subtotal)} />
-          <FinancialMetric label="Customer Total" value={formatMoney(ladder?.grandTotal ?? totals.subtotal)} highlight />
-          <FinancialMetric label="Margin" value={formatPercent(ladder?.internalMargin ?? totals.estimatedMargin)} />
+        <div className="rounded-xl border border-orange-500/35 bg-orange-500/10 p-4">
+          <div className="text-[10px] font-medium uppercase tracking-[0.14em] text-fg/45">Client Price</div>
+          <div className="mt-1 font-mono text-xl font-semibold text-fg">{formatMoney(priceBuild)}</div>
         </div>
 
         <div className="overflow-hidden rounded-xl border border-line">
-          <table className="w-full min-w-[760px] text-xs">
+          <table className="w-full min-w-[520px] text-xs">
             <thead className="sticky top-0 z-10 bg-panel2/80">
               <tr className="border-b border-line text-left text-[10px] font-medium uppercase tracking-[0.14em] text-fg/35">
-                <th className="px-3 py-2">Layer</th>
-                <th className="px-3 py-2 text-right">Base</th>
+                <th className="px-3 py-2">Description</th>
+                {visibleColumns.map((column) => <th key={column.key} className="px-3 py-2 text-right">{column.label}</th>)}
                 <th className="px-3 py-2 text-right">Amount</th>
-                <th className="px-3 py-2 text-right">Running</th>
               </tr>
             </thead>
             <tbody>
-              {visibleStatementRows.map((row) => (
-                <tr key={row.id} className={cn("border-t border-line/60", (!row.active || !row.visible) && "opacity-50", row.rowType === "total" && "bg-panel2/35 font-semibold")}>
-                  <td className="px-3 py-2">
-                    <div className="font-medium text-fg/80">{row.label}</div>
-                    <div className="mt-0.5 text-[10px] text-fg/45">
-                      {row.rowType === "factor"
-                        ? `Productivity factor · ${row.appliesTo ?? "Scoped"}`
-                        : row.rowType === "adjustment"
-                        ? `${financialCategoryLabel(row.financialCategory)} · ${calculationBaseLabel(row.calculationBase ?? "selected_scope")}`
-                        : financialCategoryLabel(row.financialCategory)}
-                    </div>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-[11px] text-fg/65">{formatMoney(row.baseAmount)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-[11px] text-fg/80">{formatMoney(row.value)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-[11px] font-semibold text-fg">{formatMoney(row.runningTotal)}</td>
+              {builder.mode !== "total" ? visibleRows.map((row) => {
+                const total = resolveAxisTotal(builder.rowDimension, row.sourceId, totals);
+                return (
+                  <tr key={row.key} className="border-t border-line/60">
+                    <td className="px-3 py-2 font-medium text-fg/80">{row.label}</td>
+                    {visibleColumns.map((column) => (
+                      <td key={`${row.key}:${column.key}`} className="px-3 py-2 text-right font-mono text-[11px] text-fg/70">
+                        {formatMoney(resolvePivotCell(builder, row, column, totals).value)}
+                      </td>
+                    ))}
+                    <td className="px-3 py-2 text-right font-mono text-[11px] text-fg/80">{formatMoney(total?.value ?? 0)}</td>
+                  </tr>
+                );
+              }) : null}
+              <tr className="border-t border-line bg-panel2/35 font-semibold">
+                <td colSpan={visibleColumns.length + 1} className="px-3 py-2">Rollup</td>
+                <td className="px-3 py-2 text-right font-mono">{formatMoney(lineSubtotal)}</td>
+              </tr>
+              {adjustments.map((adjustment) => (
+                <tr key={adjustment.id} className="border-t border-line/60">
+                  <td colSpan={visibleColumns.length + 1} className="px-3 py-2 text-fg/80">{adjustment.label}</td>
+                  <td className="px-3 py-2 text-right font-mono text-[11px] text-fg/80">{formatMoney(adjustment.value)}</td>
                 </tr>
               ))}
+              <tr className="border-t-2 border-fg/30 bg-orange-500/10 font-semibold">
+                <td colSpan={visibleColumns.length + 1} className="px-3 py-2.5">Price Build</td>
+                <td className="px-3 py-2.5 text-right font-mono">{formatMoney(priceBuild)}</td>
+              </tr>
             </tbody>
           </table>
         </div>
 
-        {factorRows.length === 0 && adjustmentRows.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-line px-3 py-4 text-center text-xs text-fg/45">No estimate factors or quote adjustments in the price build.</div>
+        {adjustments.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-line px-3 py-4 text-center text-xs text-fg/45">No visible quote adjustments. Price Build currently equals the rollup.</div>
         ) : null}
       </div>
     </section>

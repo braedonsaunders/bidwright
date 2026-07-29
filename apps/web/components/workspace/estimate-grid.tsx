@@ -324,6 +324,7 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
   "description",
   "quantity",
   "uom",
+  "factors",
   "units",
   "cost",
   "extCost",

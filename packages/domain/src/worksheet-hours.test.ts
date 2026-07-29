@@ -111,6 +111,38 @@ test("getWorksheetHourBreakdown sorts tiers by sortOrder then multiplier", () =>
   );
 });
 
+test("getWorksheetHourBreakdown never exposes stale tier UUIDs", () => {
+  const breakdown = getWorksheetHourBreakdown(
+    {
+      entityName: "Trade Labour",
+      rateScheduleItemId: "rsi-labour",
+      tierUnits: { "rst-813613ad-a68a-4480-9e49-6bc121925385": 32 },
+    },
+    labourSchedules,
+  );
+
+  assert.deepEqual(
+    breakdown.tiers.map((tier) => ({
+      tierId: tier.tierId,
+      name: tier.name,
+      hours: tier.hours,
+    })),
+    [{ tierId: "tier-reg", name: "Regular", hours: 32 }],
+  );
+});
+
+test("getWorksheetHourBreakdown gives synthetic tier keys readable labels", () => {
+  const breakdown = getWorksheetHourBreakdown(
+    { tierUnits: { __ot: 4, __dt: 2, __unit: 1 } },
+    [],
+  );
+
+  assert.deepEqual(
+    breakdown.tiers.map((tier) => tier.name).sort(),
+    ["Double Time", "Overtime", "Units"],
+  );
+});
+
 test("getExtendedWorksheetHourBreakdown preserves a zero quantity", () => {
   const breakdown = getExtendedWorksheetHourBreakdown(
     {

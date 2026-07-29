@@ -52,7 +52,6 @@ export interface PdfLayoutOptions {
     leadLetter: boolean;
     lineItems: boolean;
     phases: boolean;
-    modifiers: boolean;
     conditions: boolean;
     terms: boolean;
     pricingSummary: boolean;
@@ -106,7 +105,6 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
     leadLetter: true,
     lineItems: false,
     phases: false,
-    modifiers: true,
     conditions: true,
     terms: true,
     pricingSummary: true,
@@ -118,7 +116,7 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
   },
   sectionOrder: [
     "coverPage", "scopeOfWork", "notes", "leadLetter", "lineItems", "phases",
-    "modifiers", "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary", "schedule", "terms",
+    "conditions", "hoursSummary", "labourSummary", "reportSections", "pricingSummary", "schedule", "terms",
   ],
   lineItemOptions: { showCostColumn: true, showMarkupColumn: true, groupBy: "worksheet" },
   branding: { accentColor: "#3b82f6", headerBgColor: "#1a1a1a", fontFamily: "sans" },

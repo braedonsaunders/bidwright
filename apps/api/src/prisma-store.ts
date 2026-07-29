@@ -6052,7 +6052,7 @@ export class PrismaApiStore {
     }
     if (opts.clientNames && opts.clientNames.length > 0) {
       params.push(opts.clientNames);
-      whereParts.push(`COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", ''), '—') = ANY($${paramIdx++}::text[])`);
+      whereParts.push(`COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), 'Unassigned Client') = ANY($${paramIdx++}::text[])`);
     }
     const search = opts.search?.trim();
     if (search) {
@@ -6063,7 +6063,6 @@ export class PrismaApiStore {
         q.title ILIKE $${idx} OR
         COALESCE(c.name, '') ILIKE $${idx} OR
         q."customerString" ILIKE $${idx} OR
-        p."clientName" ILIKE $${idx} OR
         p.name ILIKE $${idx} OR
         p.location ILIKE $${idx}
       )`);
@@ -6119,7 +6118,7 @@ export class PrismaApiStore {
           q.status AS q_status,
           COALESCE(r.subtotal, 0) AS r_subtotal,
           COALESCE(r."estimatedMargin", 0) AS r_margin,
-          COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", ''), '—') AS client_disp,
+          COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), 'Unassigned Client') AS client_disp,
           COALESCE(NULLIF(u.name, ''), NULLIF(d.name, '')) AS estimator_disp,
           CASE WHEN ws.state->>'quoteMode' = 'snap'
                 AND COALESCE((ws.state->>'snapUpgraded')::boolean, false) = false
@@ -6137,12 +6136,12 @@ export class PrismaApiStore {
 
     // Distinct client display names for the filter dropdown (org-wide, not just current page)
     const clientOptionsSql = `
-      SELECT DISTINCT COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", ''), '—') AS name
+      SELECT DISTINCT COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), 'Unassigned Client') AS name
       FROM "Project" p
       INNER JOIN "Quote" q ON q."projectId" = p.id
       LEFT JOIN "Customer" c ON c.id = q."customerId"
       WHERE p."organizationId" = $1
-        AND COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), NULLIF(p."clientName", '')) IS NOT NULL
+        AND COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", '')) IS NOT NULL
       ORDER BY name ASC
     `;
 
@@ -12922,13 +12921,49 @@ export class PrismaApiStore {
       quoteNumber: quote.quoteNumber,
       currentRevisionId: quote.currentRevisionId,
     };
-    const updated = await this.db.quote.update({
-      where: { id: quote.id },
-      data: { ...patch as any, updatedAt: new Date() },
+    const touchesCustomer = Object.prototype.hasOwnProperty.call(patch, "customerId")
+      || Object.prototype.hasOwnProperty.call(patch, "customerString");
+    const effectiveCustomerId = Object.prototype.hasOwnProperty.call(patch, "customerId")
+      ? patch.customerId
+      : quote.customerId;
+    const linkedCustomer = touchesCustomer && effectiveCustomerId
+      ? await this.db.customer.findFirst({
+          where: { id: effectiveCustomerId, organizationId: this.organizationId },
+          select: { name: true },
+        })
+      : null;
+    const canonicalClientName = touchesCustomer
+      ? linkedCustomer?.name.trim()
+        || patch.customerString?.trim()
+        || "Unassigned Client"
+      : null;
+    const normalizedPatch = touchesCustomer
+      ? {
+          ...patch,
+          customerString: canonicalClientName!,
+          customerExistingNew: effectiveCustomerId ? "Existing" as const : "New" as const,
+        }
+      : patch;
+    const now = new Date();
+    const updated = await this.db.$transaction(async (tx) => {
+      const nextQuote = await tx.quote.update({
+        where: { id: quote.id },
+        data: { ...normalizedPatch as any, updatedAt: now },
+        include: { customer: true },
+      });
+      if (canonicalClientName) {
+        // Project is an internal workspace container. Keep this legacy display
+        // field synchronized for old integrations, but Quote/Customer owns identity.
+        await tx.project.update({
+          where: { id: projectId },
+          data: { clientName: canonicalClientName, updatedAt: now },
+        });
+      }
+      return nextQuote;
     });
 
     await this.pushActivity(projectId, updated.currentRevisionId ?? null, "quote_updated", {
-      fields: Object.keys(patch),
+      fields: Object.keys(normalizedPatch),
       before,
       after: {
         id: updated.id,

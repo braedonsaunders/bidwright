@@ -91,6 +91,8 @@ export interface CliSession {
   _recoveryCount?: number;
   /** Suppress the next child-exit assistant message when the process is intentionally interrupted/resumed. */
   _suppressNextExitMessage?: boolean;
+  /** The watchdog is replacing this process; its intentional exit is not the end of the logical run. */
+  _recovering?: boolean;
 }
 
 // ── Module state ──────────────────────────────────────────────────
@@ -565,6 +567,11 @@ function wireChildProcess(
 
   child.on("exit", (code, signal) => {
     console.log(`[cli:exit:${session.projectId}] code=${code} signal=${signal}`);
+    if (session._recovering) {
+      session.status = "stopped";
+      persistSessionState(session, { recovering: true }).catch(() => {});
+      return;
+    }
     session.status =
       signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
     persistSessionState(session).catch(() => {});
@@ -798,34 +805,20 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
         },
       });
 
+      session._recovering = true;
+      session._suppressNextExitMessage = true;
       session.status = "stopped";
       killProcess(child, "SIGKILL");
       await new Promise((r) => setTimeout(r, 2000));
 
       try {
-        const newSession = await resumeSession({
-          projectId: opts.projectId,
-          projectDir: opts.projectDir,
-          runtime: opts.runtime,
-          prompt:
-            "You were interrupted due to inactivity. Check the current state with getWorkspace, then continue where you left off. Do NOT re-create items that already exist.",
-          model: opts.model,
-          customCliPath: opts.customCliPath,
-          authToken: opts.authToken,
-          apiBaseUrl: opts.apiBaseUrl,
-          revisionId: opts.revisionId,
-          quoteId: opts.quoteId,
-          anthropicApiKey: opts.anthropicApiKey,
-          openaiApiKey: opts.openaiApiKey,
-          googleApiKey: opts.googleApiKey,
-          openrouterApiKey: opts.openrouterApiKey,
-          reasoningEffort: opts.reasoningEffort,
-        });
+        const newSession = await resumeSession(buildWatchdogRecoveryOptions(opts));
         newSession._spawnOpts = session._spawnOpts;
         newSession._recoveryCount = recoveries + 1;
         newSession.events.on("event", (evt: any) => events.emit("event", evt));
         newSession.events.on("done", (status: string) => events.emit("done", status));
       } catch (err) {
+        session._recovering = false;
         console.error(`[cli] Recovery failed for project ${opts.projectId}:`, err);
         events.emit("event", {
           type: "error",
@@ -855,6 +848,16 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
 
   await persistSessionState(session);
   return session;
+}
+
+export function buildWatchdogRecoveryOptions(
+  opts: SpawnSessionOpts,
+): ResumeSessionOpts {
+  return {
+    ...opts,
+    prompt:
+      "You were interrupted due to inactivity. Check the current state with getWorkspace, then continue where you left off. Do NOT re-create items that already exist.",
+  };
 }
 
 /**
@@ -999,15 +1002,7 @@ async function spawnResumedSession(
     startedAt: new Date().toISOString(),
     pid: child.pid || 0,
   };
-  session._spawnOpts = {
-    ...opts,
-    projectDir: opts.projectDir,
-    runtime: opts.runtime,
-    customCliPath: opts.customCliPath,
-    anthropicApiKey: opts.anthropicApiKey,
-    openaiApiKey: opts.openaiApiKey,
-    reasoningEffort,
-  };
+  session._spawnOpts = { ...opts, reasoningEffort };
 
   sessions.set(opts.projectId, session);
   wireChildProcess(child, session, adapter, events);
