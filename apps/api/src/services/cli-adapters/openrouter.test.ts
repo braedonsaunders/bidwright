@@ -11,6 +11,14 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
   const projectDir = await mkdtemp(join(tmpdir(), "bidwright-openrouter-adapter-"));
   const fakeCodex = join(projectDir, "codex");
   await writeFile(fakeCodex, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({
+    data: [{
+      id: "~openai/gpt-latest",
+      context_length: 1_050_000,
+      top_provider: { context_length: 1_050_000 },
+    }],
+  }));
 
   const ctx: SpawnCtx = {
     projectDir,
@@ -65,9 +73,12 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
       request.appServerArgs.includes('model_providers.openrouter.wire_api="responses"'),
       true,
     );
+    assert.equal(request.appServerArgs.includes("model_context_window=1050000"), true);
+    assert.equal(request.suppressUnknownModelMetadataWarning, true);
     assert.equal(JSON.stringify(request).includes("sk-or-test-secret"), false);
     assert.equal(JSON.stringify(request).includes("test-mcp-token"), false);
   } finally {
+    globalThis.fetch = originalFetch;
     await rm(projectDir, { recursive: true, force: true });
   }
 });
@@ -82,7 +93,7 @@ test("OpenRouter runtime accepts only OpenRouter-style model ids and API-key aut
   );
 });
 
-test("OpenRouter supplies exact model context metadata to Codex App Server", async () => {
+test("OpenRouter supplies catalog metadata for arbitrary exact model ids", async () => {
   const projectDir = await mkdtemp(join(tmpdir(), "bidwright-openrouter-metadata-"));
   const fakeCodex = join(projectDir, "codex");
   await writeFile(fakeCodex, "#!/bin/sh\nexit 0\n", { mode: 0o700 });

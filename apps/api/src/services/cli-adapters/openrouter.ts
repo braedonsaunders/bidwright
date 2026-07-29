@@ -108,11 +108,6 @@ async function fetchOpenRouterModelMetadata(
   apiKey: string,
   model: string,
 ): Promise<OpenRouterModelMetadata | undefined> {
-  // OpenRouter aliases are intentionally dynamic, so Codex's own fallback
-  // metadata remains the safer choice for those. Exact provider/model slugs
-  // can be resolved against OpenRouter's current model catalog.
-  if (model.startsWith("~")) return undefined;
-
   try {
     const response = await fetch(OPENROUTER_MODELS_URL, {
       headers: { Authorization: `Bearer ${apiKey}` },
