@@ -3090,6 +3090,11 @@ function multiplierFromPercent(value: number) {
 }
 
 function factorScopeValueFromScope(scope: EstimateFactorScope = {}) {
+  if (scope.worksheetItemIds?.length) {
+    return scope.worksheetItemIds.length === 1
+      ? `line:${scope.worksheetItemIds[0]}`
+      : `lines:${scope.worksheetItemIds.join("|")}`;
+  }
   if (scope.phaseIds?.[0]) return `phase:${scope.phaseIds[0]}`;
   if (scope.worksheetIds?.[0]) return `worksheet:${scope.worksheetIds[0]}`;
   if (scope.categoryIds?.[0]) return `category:${scope.categoryIds[0]}`;
@@ -3102,6 +3107,29 @@ function factorScopeValue(factor: EstimateFactor) {
 }
 
 function factorScopeFromValue(value: string, workspace: ProjectWorkspaceData): { scope: EstimateFactorScope; appliesTo: string } {
+  if (value.startsWith("line:") || value.startsWith("lines:")) {
+    const itemIds = (value.startsWith("lines:")
+      ? value.slice("lines:".length).split("|")
+      : [value.slice("line:".length)])
+      .filter(Boolean);
+    const itemById = new Map(workspace.worksheets.flatMap((worksheet) => worksheet.items.map((item) => [item.id, item] as const)));
+    const items = itemIds.map((id) => itemById.get(id)).filter((item): item is WorkspaceWorksheetItem => Boolean(item));
+    const worksheetIds = Array.from(new Set(items.map((item) => item.worksheetId)));
+    const categoryIds = Array.from(new Set(items.map((item) => item.categoryId).filter((id): id is string => Boolean(id))));
+    const categoryNames = Array.from(new Set(items.map((item) => item.category).filter(Boolean)));
+    return {
+      scope: {
+        mode: "line",
+        worksheetItemIds: itemIds,
+        worksheetIds,
+        categoryIds: categoryIds.length ? categoryIds : undefined,
+        categoryNames: categoryNames.length ? categoryNames : undefined,
+      },
+      appliesTo: items.length === 1
+        ? items[0].entityName || items[0].description || "Worksheet line"
+        : `${itemIds.length} worksheet lines`,
+    };
+  }
   if (value.startsWith("bucket:")) {
     const bucket = value.slice("bucket:".length);
     return { scope: { mode: "category", analyticsBuckets: [bucket] }, appliesTo: bucket === "labour" ? "Labour" : bucket };
@@ -3148,6 +3176,25 @@ function factorScopeOptions(workspace: ProjectWorkspaceData) {
     })),
     ...workspace.worksheets.map((worksheet) => ({ value: `worksheet:${worksheet.id}`, label: `Worksheet: ${worksheet.name}` })),
   ];
+}
+
+function lineFactorScopeOptions(workspace: ProjectWorkspaceData, currentScopeValue?: string) {
+  const options = workspace.worksheets.flatMap((worksheet) =>
+    worksheet.items.map((item) => ({
+      value: `line:${item.id}`,
+      label: `${worksheet.name} / ${item.lineOrder}. ${item.entityName || item.description || "Worksheet line"}`,
+    })),
+  );
+  if (currentScopeValue?.startsWith("lines:")) {
+    const count = currentScopeValue.slice("lines:".length).split("|").filter(Boolean).length;
+    options.unshift({ value: currentScopeValue, label: `${count} worksheet lines (current selection)` });
+  }
+  return options;
+}
+
+function isLineEstimateFactor(factor: EstimateFactor) {
+  return factor.applicationScope === "line"
+    || Boolean(factor.scope?.worksheetItemIds?.length);
 }
 
 function factorDeltaClass(value: number) {
@@ -3214,6 +3261,10 @@ function factorDraftFromState(state: FactorFlyoutState, workspace: ProjectWorksp
   const sourceRef = source?.sourceRef ?? {};
   const baseScope = source?.scope ?? { mode: "all" };
   const defaultScopeValue = state.mode === "create" ? "all" : factorScopeValueFromScope(baseScope);
+  const availableScopeValues = [
+    ...factorScopeOptions(workspace),
+    ...lineFactorScopeOptions(workspace, defaultScopeValue),
+  ];
   return {
     name: source?.name ?? "Custom Productivity Factor",
     code: source?.code ?? "CUSTOM",
@@ -3223,7 +3274,7 @@ function factorDraftFromState(state: FactorFlyoutState, workspace: ProjectWorksp
     percent: String(Math.round(factorPercent(source?.value ?? 1) * 100) / 100),
     active: state.mode === "edit" ? state.factor.active : true,
     applicationScope: (source?.applicationScope ?? (state.mode === "create" ? "global" : "both")) as EstimateFactorApplicationScope,
-    scopeValue: factorScopeOptions(workspace).some((option) => option.value === defaultScopeValue) ? defaultScopeValue : "all",
+    scopeValue: availableScopeValues.some((option) => option.value === defaultScopeValue) ? defaultScopeValue : "all",
     formulaType: (source?.formulaType ?? "fixed_multiplier") as EstimateFactorFormulaType,
     parameters: source?.parameters ?? {},
     confidence: (source?.confidence ?? "medium") as EstimateFactorConfidence,
@@ -3282,16 +3333,57 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
   const [isPending, startTransition] = useTransition();
   const [library, setLibrary] = useState<EstimateFactorLibraryRecord[]>([]);
   const [libraryQuery, setLibraryQuery] = useState("");
+  const [factorView, setFactorView] = useState<"global" | "line">("global");
+  const [lineQuery, setLineQuery] = useState("");
+  const [lineWorksheetId, setLineWorksheetId] = useState("all");
   const [flyout, setFlyout] = useState<FactorFlyoutState | null>(null);
   const projectId = workspace.project.id;
   const allFactors = [...(workspace.estimateFactors ?? [])].sort((left, right) => left.order - right.order || left.name.localeCompare(right.name));
-  const factors = allFactors.filter((factor) => (factor.applicationScope ?? "global") !== "line");
-  const lineFactorCount = allFactors.length - factors.length;
+  const factors = allFactors.filter((factor) => !isLineEstimateFactor(factor));
+  const lineFactors = allFactors.filter(isLineEstimateFactor);
   const factorTotalsById = useMemo(() => new Map((workspace.estimate.totals.factorTotals ?? []).map((entry) => [entry.id, entry])), [workspace.estimate.totals.factorTotals]);
   const activeFactors = factors.filter((factor) => factor.active);
+  const activeLineFactors = lineFactors.filter((factor) => factor.active);
   const valueDelta = (workspace.estimate.totals.factorTotals ?? []).reduce((sum, entry) => sum + entry.valueDelta, 0);
   const hoursDelta = (workspace.estimate.totals.factorTotals ?? []).reduce((sum, entry) => sum + entry.hoursDelta, 0);
   const scopeOptions = useMemo(() => factorScopeOptions(workspace), [workspace]);
+  const worksheetOptions = useMemo(() => [
+    { value: "all", label: "All worksheets" },
+    ...workspace.worksheets.map((worksheet) => ({ value: worksheet.id, label: worksheet.name })),
+  ], [workspace.worksheets]);
+  const lineAssignments = useMemo(() => {
+    const targets = new Map(workspace.worksheets.flatMap((worksheet) =>
+      worksheet.items.map((item) => [item.id, { item, worksheet }] as const),
+    ));
+    return lineFactors.flatMap((factor) => {
+      const targetIds = factor.scope?.worksheetItemIds ?? [];
+      if (targetIds.length === 0) {
+        return [{ factor, item: null, worksheet: null, targetIndex: 0, targetCount: 0 }];
+      }
+      return targetIds.map((itemId, targetIndex) => {
+        const target = targets.get(itemId);
+        return {
+          factor,
+          item: target?.item ?? null,
+          worksheet: target?.worksheet ?? null,
+          targetIndex,
+          targetCount: targetIds.length,
+        };
+      });
+    }).filter((assignment) => {
+      if (lineWorksheetId !== "all" && assignment.worksheet?.id !== lineWorksheetId) return false;
+      const query = lineQuery.trim().toLowerCase();
+      if (!query) return true;
+      return [
+        assignment.worksheet?.name,
+        assignment.item?.entityName,
+        assignment.item?.description,
+        assignment.item?.category,
+        assignment.factor.name,
+        assignment.factor.code,
+      ].filter(Boolean).join(" ").toLowerCase().includes(query);
+    });
+  }, [lineFactors, lineQuery, lineWorksheetId, workspace.worksheets]);
 
   useEffect(() => {
     let cancelled = false;
@@ -3330,11 +3422,29 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <div className="grid gap-2 md:grid-cols-4">
         <FactorMetric icon={SlidersHorizontal} label="Global Factors" value={`${activeFactors.length}/${factors.length}`} />
+        <FactorMetric icon={Layers3} label="Line Factors" value={`${activeLineFactors.length}/${lineFactors.length}`} />
         <FactorMetric icon={Percent} label="Sell Impact" value={formatMoney(valueDelta)} valueClassName={factorDeltaClass(valueDelta)} />
         <FactorMetric icon={Clock} label="Hour Impact" value={`${hoursDelta >= 0 ? "+" : ""}${Math.round(hoursDelta * 100) / 100} hr`} valueClassName={factorDeltaClass(hoursDelta)} />
-        <FactorMetric icon={Target} label="Before Factors" value={formatMoney(workspace.estimate.totals.lineSubtotalBeforeFactors ?? workspace.estimate.totals.subtotal)} />
       </div>
 
+      <div className="flex shrink-0 items-center gap-1 rounded-lg border border-line bg-panel p-1">
+        <button
+          type="button"
+          className={cn("rounded-md px-3 py-1.5 text-xs font-medium transition-colors", factorView === "global" ? "bg-accent text-white" : "text-fg/55 hover:bg-panel2 hover:text-fg")}
+          onClick={() => setFactorView("global")}
+        >
+          Global <span className="ml-1 opacity-70">{factors.length}</span>
+        </button>
+        <button
+          type="button"
+          className={cn("rounded-md px-3 py-1.5 text-xs font-medium transition-colors", factorView === "line" ? "bg-accent text-white" : "text-fg/55 hover:bg-panel2 hover:text-fg")}
+          onClick={() => setFactorView("line")}
+        >
+          Worksheet Lines <span className="ml-1 opacity-70">{lineFactors.length}</span>
+        </button>
+      </div>
+
+      {factorView === "global" ? (
       <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(340px,0.9fr)_minmax(520px,1.35fr)]">
         <section className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
           <div className="shrink-0 border-b border-line px-4 py-3">
@@ -3382,10 +3492,9 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
             <div className="flex items-center justify-between gap-3">
               <div>
                 <div className="flex items-center gap-2 text-sm font-semibold text-fg"><Zap className="h-4 w-4 text-accent" /> Applied Factors</div>
-                <div className="mt-1 text-[11px] text-fg/55">Global factors change the estimate production model before rollups, summaries, and quote-level adjustments. Line factors stay in the worksheet column.</div>
+                <div className="mt-1 text-[11px] text-fg/55">Global factors change the estimate production model before rollups, summaries, and quote-level adjustments.</div>
               </div>
               <div className="flex items-center gap-2">
-                {lineFactorCount > 0 ? <Badge tone="info">{lineFactorCount} line</Badge> : null}
                 <Badge tone={valueDelta >= 0 ? "warning" : "success"}>{valueDelta >= 0 ? "+" : ""}{formatMoney(valueDelta)}</Badge>
               </div>
             </div>
@@ -3419,6 +3528,63 @@ function FactorsTab({ workspace, onApply, onError }: { workspace: ProjectWorkspa
           </div>
         </section>
       </div>
+      ) : (
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-panel">
+          <div className="shrink-0 border-b border-line px-4 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 text-sm font-semibold text-fg"><Layers3 className="h-4 w-4 text-accent" /> Worksheet Line Factors</div>
+                <div className="mt-1 text-[11px] text-fg/55">Every row-specific factor with its worksheet and line-item target. Edit here or from the Factors column in a worksheet.</div>
+              </div>
+              <Badge tone="info">{lineAssignments.length} assignments</Badge>
+            </div>
+            <div className="mt-3 grid gap-2 sm:grid-cols-[220px_minmax(220px,1fr)]">
+              <Select
+                value={lineWorksheetId}
+                onValueChange={setLineWorksheetId}
+                options={worksheetOptions}
+                size="sm"
+                ariaLabel="Filter line factors by worksheet"
+              />
+              <div className="relative">
+                <SearchCheck className="pointer-events-none absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/35" />
+                <Input
+                  className="h-8 pl-7 text-xs"
+                  value={lineQuery}
+                  onChange={(event) => setLineQuery(event.target.value)}
+                  placeholder="Search worksheet, line item, or factor"
+                />
+              </div>
+            </div>
+          </div>
+          <div className="min-h-0 flex-1 overflow-auto">
+            {lineAssignments.length === 0 ? (
+              <EmptyState>{lineFactors.length === 0 ? "No worksheet line factors yet" : "No line factors match these filters"}</EmptyState>
+            ) : (
+              <div className="min-w-[820px]">
+                <div className="grid grid-cols-[180px_minmax(220px,1fr)_minmax(180px,0.8fr)_86px_108px_72px] gap-3 border-b border-line bg-panel2/55 px-3 py-2 text-[10px] font-medium uppercase text-fg/35">
+                  <div>Worksheet</div>
+                  <div>Line Item</div>
+                  <div>Factor</div>
+                  <div>Mult.</div>
+                  <div>Impact</div>
+                  <div />
+                </div>
+                {lineAssignments.map((assignment) => (
+                  <LineFactorRow
+                    key={`${assignment.factor.id}:${assignment.item?.id ?? `missing-${assignment.targetIndex}`}`}
+                    {...assignment}
+                    totals={factorTotalsById.get(assignment.factor.id)}
+                    onEdit={() => setFlyout({ mode: "edit", factor: assignment.factor })}
+                    onDelete={() => removeFactor(assignment.factor.id)}
+                    disabled={isPending}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
       <FactorFlyout
         state={flyout}
         workspace={workspace}
@@ -3494,6 +3660,72 @@ function FactorRow({
   );
 }
 
+function LineFactorRow({
+  factor,
+  item,
+  worksheet,
+  targetCount,
+  totals,
+  onEdit,
+  onDelete,
+  disabled,
+}: {
+  factor: EstimateFactor;
+  item: WorkspaceWorksheetItem | null;
+  worksheet: WorkspaceWorksheet | null;
+  targetIndex: number;
+  targetCount: number;
+  totals?: ProjectWorkspaceData["estimate"]["totals"]["factorTotals"][number];
+  onEdit: () => void;
+  onDelete: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[180px_minmax(220px,1fr)_minmax(180px,0.8fr)_86px_108px_72px] items-center gap-3 border-b border-line/70 px-3 py-2 text-xs">
+      <div className="min-w-0">
+        <div className="truncate font-medium text-fg/75">{worksheet?.name ?? "Missing worksheet"}</div>
+        {targetCount > 1 ? <div className="mt-0.5 text-[10px] text-fg/40">{targetCount} targeted lines</div> : null}
+      </div>
+      <div className="min-w-0">
+        {item ? (
+          <>
+            <div className="truncate font-medium text-fg">{item.entityName || item.description || `Line ${item.lineOrder}`}</div>
+            <div className="mt-0.5 truncate text-[10px] text-fg/45">{item.category || item.entityType || "Uncategorized"} / line {item.lineOrder}</div>
+          </>
+        ) : (
+          <Badge tone="danger">Target line no longer exists</Badge>
+        )}
+      </div>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <Badge tone={factor.active ? "success" : "default"}>{factor.active ? "On" : "Off"}</Badge>
+          <button type="button" className="min-w-0 flex-1 truncate text-left font-medium text-fg hover:text-accent" onClick={onEdit} disabled={disabled}>
+            {factor.name}
+          </button>
+        </div>
+        <div className="mt-0.5 truncate text-[10px] text-fg/45">{factor.code || factor.category || factorFormulaLabel(factor.formulaType)}</div>
+      </div>
+      <div className={cn("font-mono text-[11px]", factor.value >= 1 ? "text-warning" : "text-success")}>
+        {factorPercentLabel(totals?.value ?? factor.value)}
+      </div>
+      <div className="font-mono text-[11px]">
+        <div className={factorDeltaClass(totals?.valueDelta ?? 0)}>{formatMoney(totals?.valueDelta ?? 0)}</div>
+        <div className="mt-0.5 text-fg/40">
+          {factorImpactLabel(factor.impact)}{targetCount > 1 ? " · factor total" : ""}
+        </div>
+      </div>
+      <div className="flex justify-end gap-1">
+        <Button size="sm" variant="ghost" className="h-8 px-2" onClick={onEdit} disabled={disabled}>
+          <Settings2 className="h-3.5 w-3.5" />
+        </Button>
+        <Button size="sm" variant="ghost" className="h-8 px-2" onClick={onDelete} disabled={disabled}>
+          <Trash2 className="h-3.5 w-3.5 text-danger" />
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function FactorFlyout({
   state,
   workspace,
@@ -3513,7 +3745,14 @@ function FactorFlyout({
 }) {
   const [isPending, startTransition] = useTransition();
   const [draft, setDraft] = useState<FactorDraft | null>(null);
-  const scopeOptions = useMemo(() => factorScopeOptions(workspace), [workspace]);
+  const globalScopeOptions = useMemo(() => factorScopeOptions(workspace), [workspace]);
+  const lineScopeOptions = useMemo(
+    () => lineFactorScopeOptions(workspace, draft?.scopeValue),
+    [draft?.scopeValue, workspace],
+  );
+  const scopeOptions = draft && (draft.applicationScope === "line" || draft.scopeValue.startsWith("line"))
+    ? lineScopeOptions
+    : globalScopeOptions;
 
   useEffect(() => {
     setDraft(state ? factorDraftFromState(state, workspace) : null);
@@ -3530,6 +3769,20 @@ function FactorFlyout({
 
   function updateDraft(patch: Partial<FactorDraft>) {
     setDraft((current) => current ? { ...current, ...patch } : current);
+  }
+
+  function updateApplicationScope(applicationScope: EstimateFactorApplicationScope) {
+    setDraft((current) => {
+      if (!current) return current;
+      const currentlyLineScoped = current.scopeValue.startsWith("line");
+      if (applicationScope === "line" && !currentlyLineScoped) {
+        return { ...current, applicationScope, scopeValue: lineScopeOptions[0]?.value ?? "all" };
+      }
+      if (applicationScope === "global" && currentlyLineScoped) {
+        return { ...current, applicationScope, scopeValue: "all" };
+      }
+      return { ...current, applicationScope };
+    });
   }
 
   function save() {
@@ -3629,7 +3882,7 @@ function FactorFlyout({
             </div>
             <div className="space-y-1.5">
               <Label>Apply As</Label>
-              <Select value={draft.applicationScope} onValueChange={(applicationScope) => updateDraft({ applicationScope: applicationScope as EstimateFactorApplicationScope })} options={FACTOR_APPLICATION_SCOPE_OPTIONS} />
+              <Select value={draft.applicationScope} onValueChange={(applicationScope) => updateApplicationScope(applicationScope as EstimateFactorApplicationScope)} options={FACTOR_APPLICATION_SCOPE_OPTIONS} />
             </div>
             <div className="space-y-1.5">
               <Label>Formula</Label>
