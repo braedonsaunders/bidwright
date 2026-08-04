@@ -40,6 +40,7 @@ import {
 } from "./agent-home.js";
 import { getAgentRuntimeHost } from "./agent-host/index.js";
 import { removeLegacyRuntimeCredentials } from "./runtime-config-security.js";
+import { hasFinalAssistantAnswer, type CliConversationEvent } from "./cli-conversation.js";
 import {
   BIDWRIGHT_PERMISSIONS,
   BIDWRIGHT_QA_PERMISSIONS,
@@ -442,6 +443,10 @@ export interface SpawnSessionOpts {
   stoppedMessage?: string;
   failedMessagePrefix?: string;
   emitCompletionMessage?: boolean;
+  /** Require a real assistant response after the final tool result. */
+  requireFinalAssistantMessage?: boolean;
+  /** Internal guard preventing an endless final-answer recovery loop. */
+  completionRecoveryAttempt?: number;
   agentMode?: AgentChatMode;
   /**
    * The Bidwright user this session belongs to. In server mode the runtime
@@ -512,9 +517,12 @@ function wireChildProcess(
     stoppedMessage?: string;
     failedMessagePrefix?: string;
     emitCompletionMessage?: boolean;
+    requireFinalAssistantMessage?: boolean;
+    completionRecoveryOpts?: SpawnSessionOpts;
   },
 ): void {
   let stderrSuppressing = false;
+  const observedEvents: CliConversationEvent[] = [];
 
   if (child.stdout) {
     const rl = createInterface({ input: child.stdout });
@@ -525,6 +533,7 @@ function wireChildProcess(
         const parsed = JSON.parse(line);
         const sseEvents = adapter.parseEvent(parsed, parserState);
         for (const evt of sseEvents) {
+          observedEvents.push(evt as CliConversationEvent);
           events.emit("event", evt);
         }
         const sessionId = adapter.extractSessionId(parsed);
@@ -534,10 +543,12 @@ function wireChildProcess(
         }
       } catch {
         if (line.trim()) {
-          events.emit("event", {
+          const event = {
             type: "message",
             data: { role: "system", content: line.trim() },
-          });
+          };
+          observedEvents.push(event);
+          events.emit("event", event);
         }
       }
     });
@@ -565,15 +576,66 @@ function wireChildProcess(
     });
   }
 
-  child.on("exit", (code, signal) => {
+  child.on("exit", async (code, signal) => {
     console.log(`[cli:exit:${session.projectId}] code=${code} signal=${signal}`);
     if (session._recovering) {
       session.status = "stopped";
       persistSessionState(session, { recovering: true }).catch(() => {});
       return;
     }
-    session.status =
-      signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
+    const processSucceeded = signal !== "SIGINT" && code === 0;
+    const missingFinalAnswer = processSucceeded
+      && opts?.requireFinalAssistantMessage === true
+      && !hasFinalAssistantAnswer(observedEvents);
+
+    if (missingFinalAnswer) {
+      const recoveryOpts = opts?.completionRecoveryOpts;
+      const attempt = recoveryOpts?.completionRecoveryAttempt ?? 0;
+      if (recoveryOpts && attempt < 1 && session.sessionId) {
+        events.emit("event", {
+          type: "progress",
+          data: {
+            phase: "Finalizing answer",
+            detail: "The runtime finished its tool work without an answer. Recovering the same session to synthesize the result.",
+          },
+        });
+        session._recovering = true;
+        try {
+          await spawnResumedSession({
+            ...recoveryOpts,
+            prompt: [
+              "The prior turn ended after tool use without giving the user a final answer.",
+              "Use the evidence already retrieved in this same session and answer the user's question now.",
+              "Lead with the result, show the calculation and assumptions, cite exact sources, and explicitly reconcile any conflicting values.",
+              "Do not finish with a tool call or progress note; finish with a complete assistant response.",
+            ].join(" "),
+            completionRecoveryAttempt: attempt + 1,
+          }, session.sessionId, events);
+          return;
+        } catch (error) {
+          console.error(`[cli:final-answer-recovery:${session.projectId}]`, error);
+          events.emit("event", {
+            type: "error",
+            data: {
+              message: `The runtime did not produce a final answer and automatic recovery failed: ${error instanceof Error ? error.message : "unknown error"}`,
+            },
+          });
+        }
+      } else {
+        events.emit("event", {
+          type: "error",
+          data: {
+            message: attempt >= 1
+              ? "The runtime completed its retry without producing a final answer. The run was marked failed instead of falsely reporting success."
+              : "The runtime stopped after tool use without producing a final answer and had no resumable session.",
+          },
+        });
+      }
+    }
+
+    session.status = missingFinalAnswer
+      ? "failed"
+      : signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
     persistSessionState(session).catch(() => {});
 
     const completionMsg =
@@ -838,6 +900,8 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     stoppedMessage: opts.stoppedMessage,
     failedMessagePrefix: opts.failedMessagePrefix,
     emitCompletionMessage: opts.emitCompletionMessage,
+    requireFinalAssistantMessage: opts.requireFinalAssistantMessage,
+    completionRecoveryOpts: opts,
   });
   child.on("exit", () => {
     if (inactivityTimer) clearTimeout(inactivityTimer);
@@ -897,6 +961,7 @@ export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession
 async function spawnResumedSession(
   opts: SpawnSessionOpts,
   sessionId: string,
+  sharedEvents?: EventEmitter,
 ): Promise<CliSession> {
   const adapter = getAdapter(opts.runtime);
   const reasoningEffort = normalizeAgentReasoningEffort(opts.reasoningEffort);
@@ -991,7 +1056,7 @@ async function spawnResumedSession(
     opts.agentMode === "qa" ? "read-only" : "read-write",
   );
 
-  const events = new EventEmitter();
+  const events = sharedEvents ?? new EventEmitter();
   const session: CliSession = {
     projectId: opts.projectId,
     runtime: opts.runtime,
@@ -1005,7 +1070,14 @@ async function spawnResumedSession(
   session._spawnOpts = { ...opts, reasoningEffort };
 
   sessions.set(opts.projectId, session);
-  wireChildProcess(child, session, adapter, events);
+  wireChildProcess(child, session, adapter, events, {
+    completionMessage: opts.completionMessage,
+    stoppedMessage: opts.stoppedMessage,
+    failedMessagePrefix: opts.failedMessagePrefix,
+    emitCompletionMessage: opts.emitCompletionMessage,
+    requireFinalAssistantMessage: opts.requireFinalAssistantMessage,
+    completionRecoveryOpts: opts,
+  });
 
   // Mirror the spawnSession flow: snapshot the workspace on exit so a
   // resumed session also persists its final state to remote storage.

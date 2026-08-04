@@ -1747,12 +1747,12 @@ function normalizeEstimatorSearchText(value: unknown) {
     .trim();
 }
 
-function estimatorSearchTokens(value: unknown) {
+export function estimatorSearchTokens(value: unknown) {
   const normalized = normalizeEstimatorSearchText(value);
   if (!normalized) return [];
   return normalized
     .split(" ")
-    .filter((token) => token.length > 1 && !ESTIMATE_SEARCH_STOPWORDS.has(token));
+    .filter((token) => (token.length > 1 || /^\d+(?:\.\d+)?$/.test(token)) && !ESTIMATE_SEARCH_STOPWORDS.has(token));
 }
 
 function uniqueStrings(values: string[]) {
@@ -1760,6 +1760,7 @@ function uniqueStrings(values: string[]) {
 }
 
 function singularPluralVariants(token: string) {
+  if (/^\d+(?:\.\d+)?$/.test(token)) return [token];
   if (token.endsWith("ies") && token.length > 4) return [token, `${token.slice(0, -3)}y`];
   if (token.endsWith("s") && token.length > 3) return [token, token.slice(0, -1)];
   return [token, `${token}s`];
@@ -1775,7 +1776,7 @@ function estimatorSearchTermWeight(token: string) {
   return 1;
 }
 
-function buildEstimatorSearchProfile(query: string): SearchProfile {
+export function buildEstimatorSearchProfile(query: string): SearchProfile {
   const raw = normalizeEstimatorSearchText(query);
   const tokens = estimatorSearchTokens(query);
   const terms = uniqueStrings(tokens).map((token) => {
@@ -1817,7 +1818,10 @@ function lineItemAutocompleteTsQuery(value: unknown) {
 }
 
 function estimatorTermMatches(haystack: string, term: SearchProfileTerm) {
-  return term.variants.some((variant) => haystack.includes(variant));
+  const tokens = new Set(haystack.split(" "));
+  return term.variants.some((variant) =>
+    /^\d+(?:\.\d+)?$/.test(variant) ? tokens.has(variant) : haystack.includes(variant),
+  );
 }
 
 function scoreEstimatorSearchText(profile: SearchProfile, textValue: unknown, headingValue: unknown = "") {
@@ -1864,7 +1868,7 @@ function scoreEstimatorSearchText(profile: SearchProfile, textValue: unknown, he
   };
 }
 
-function rankEstimatorSearchItems<T>(
+export function rankEstimatorSearchItems<T>(
   items: T[],
   profile: SearchProfile,
   getText: (item: T) => unknown,
@@ -1881,6 +1885,36 @@ function rankEstimatorSearchItems<T>(
       right.coverage - left.coverage ||
       right.anchorMatches - left.anchorMatches
     );
+}
+
+const DATASET_IDENTITY_COLUMN = /(?:^|_)(?:size|diameter|nominal|nps|dn|gauge|schedule|class|rating|code|model|part|item)(?:_|$)/i;
+
+export function datasetRowIdentityText(data: unknown): string {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return "";
+  return Object.entries(data as Record<string, unknown>)
+    .filter(([key, value]) => DATASET_IDENTITY_COLUMN.test(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2")) && (typeof value === "string" || typeof value === "number"))
+    .map(([key, value]) => `${key} ${String(value)}`)
+    .join(" ");
+}
+
+export type DatasetQueryFilter = {
+  column: string;
+  op: "eq" | "gt" | "lt" | "gte" | "lte" | "contains";
+  value: unknown;
+};
+
+export function datasetValueMatchesFilter(value: unknown, filter: DatasetQueryFilter): boolean {
+  const numericValue = typeof value === "number" ? value : typeof value === "string" && value.trim() !== "" ? Number(value) : Number.NaN;
+  const numericFilter = typeof filter.value === "number" ? filter.value : typeof filter.value === "string" && filter.value.trim() !== "" ? Number(filter.value) : Number.NaN;
+  const bothNumeric = Number.isFinite(numericValue) && Number.isFinite(numericFilter);
+  switch (filter.op) {
+    case "eq": return bothNumeric ? numericValue === numericFilter : value === filter.value;
+    case "gt": return bothNumeric && numericValue > numericFilter;
+    case "lt": return bothNumeric && numericValue < numericFilter;
+    case "gte": return bothNumeric && numericValue >= numericFilter;
+    case "lte": return bothNumeric && numericValue <= numericFilter;
+    case "contains": return String(value ?? "").toLowerCase().includes(String(filter.value).toLowerCase());
+  }
 }
 
 function reweightSearchProfileForCorpus<T>(profile: SearchProfile, items: T[], getText: (item: T) => unknown): SearchProfile {
@@ -18007,6 +18041,7 @@ export class PrismaApiStore {
       rows,
       profile,
       (row) => JSON.stringify(row.data ?? {}),
+      (row) => datasetRowIdentityText(row.data),
     )
       .map((entry) => mapDatasetRow({
         ...entry.item,
@@ -18023,7 +18058,7 @@ export class PrismaApiStore {
       }));
   }
 
-  async queryDataset(datasetId: string, filters: Array<{ column: string; op: "eq" | "gt" | "lt" | "gte" | "lte" | "contains"; value: unknown }>): Promise<DatasetRow[]> {
+  async queryDataset(datasetId: string, filters: DatasetQueryFilter[]): Promise<DatasetRow[]> {
     const resolved = await this._resolveDatasetRecordForRead(datasetId);
     if (!resolved) {
       return [];
@@ -18034,15 +18069,7 @@ export class PrismaApiStore {
       .filter((r) => {
         return filters.every((f) => {
           const val = r.data[f.column];
-          switch (f.op) {
-            case "eq": return val === f.value;
-            case "gt": return typeof val === "number" && typeof f.value === "number" && val > f.value;
-            case "lt": return typeof val === "number" && typeof f.value === "number" && val < f.value;
-            case "gte": return typeof val === "number" && typeof f.value === "number" && val >= f.value;
-            case "lte": return typeof val === "number" && typeof f.value === "number" && val <= f.value;
-            case "contains": return String(val ?? "").toLowerCase().includes(String(f.value).toLowerCase());
-            default: return true;
-          }
+          return datasetValueMatchesFilter(val, f);
         });
       });
   }

@@ -26,12 +26,27 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Fetch with exponential backoff retry on 429 / transient server errors */
-async function fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+export async function fetchWithRetry(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
   const MAX_RETRIES = 4;
   let lastRes: Response | undefined;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-    lastRes = await fetch(url, init);
+    try {
+      lastRes = await fetch(url, {
+        ...init,
+        signal: init.signal ?? AbortSignal.timeout(timeoutMs),
+      });
+    } catch (error) {
+      const name = error instanceof Error ? error.name : "";
+      if (name === "AbortError" || name === "TimeoutError") {
+        throw new Error(`API request timed out after ${Math.round(timeoutMs / 1000)}s: ${init.method ?? "GET"} ${url}`);
+      }
+      if (attempt < MAX_RETRIES) {
+        await sleep(Math.min(1000 * Math.pow(2, attempt), 10_000));
+        continue;
+      }
+      throw error;
+    }
 
     if (lastRes.status === 429 || lastRes.status === 502 || lastRes.status === 503 || lastRes.status === 504) {
       if (attempt < MAX_RETRIES) {
@@ -52,7 +67,7 @@ async function fetchWithRetry(url: string, init: RequestInit): Promise<Response>
 
 export async function apiGet<T = any>(path: string): Promise<T> {
   const url = `${API_URL}${path}`;
-  const res = await fetchWithRetry(url, { method: "GET", headers: headers() });
+  const res = await fetchWithRetry(url, { method: "GET", headers: headers() }, 60_000);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`API GET ${path} failed: ${res.status} ${res.statusText} ${text}`);
@@ -66,7 +81,7 @@ export async function apiPost<T = any>(path: string, body?: unknown): Promise<T>
     method: "POST",
     headers: headers(),
     body: body ? JSON.stringify(body) : undefined,
-  });
+  }, 5 * 60_000);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`API POST ${path} failed: ${res.status} ${res.statusText} ${text}`);
@@ -80,7 +95,7 @@ export async function apiPatch<T = any>(path: string, body: unknown): Promise<T>
     method: "PATCH",
     headers: headers(),
     body: JSON.stringify(body),
-  });
+  }, 2 * 60_000);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`API PATCH ${path} failed: ${res.status} ${res.statusText} ${text}`);
@@ -90,7 +105,7 @@ export async function apiPatch<T = any>(path: string, body: unknown): Promise<T>
 
 export async function apiDelete<T = any>(path: string): Promise<T> {
   const url = `${API_URL}${path}`;
-  const res = await fetchWithRetry(url, { method: "DELETE", headers: headers() });
+  const res = await fetchWithRetry(url, { method: "DELETE", headers: headers() }, 60_000);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`API DELETE ${path} failed: ${res.status} ${res.statusText} ${text}`);

@@ -236,11 +236,16 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── queryKnowledgeDataset ──────────────────────────────────
   server.tool(
     "queryKnowledgeDataset",
-    "Search structured knowledge datasets for precise values — man hours, material weights, labour rates, equipment specs, productivity-by-condition tables. Returns matching datasets with context (description, tags, notes) and sample rows. Use for concrete tabular numbers. For prose / handbook chapters use queryKnowledgeBook; for project documents use queryProjectFile; for catalogs/cost-intel/labor-units/rates/assemblies use queryLibrary.",
+    "Search structured knowledge datasets for precise values — man hours, material weights, labour rates, equipment specs, productivity-by-condition tables. Discover with query, then use datasetId plus typed filters for exact numeric/keyed rows. Returns matching datasets with context (description, tags, notes) and rows. Use for concrete tabular numbers. For prose / handbook chapters use queryKnowledgeBook; for project documents use queryProjectFile; for catalogs/cost-intel/labor-units/rates/assemblies use queryLibrary.",
     {
       query: z.string().optional().describe("Search query — e.g. 'weld neck flange 6 inch 150 lb man hours'"),
       q: z.string().optional().describe("Alias for query; accepted for consistency with other search tools."),
       datasetId: z.string().optional().describe("Search within a specific dataset ID (if known from previous query)"),
+      filters: z.array(z.object({
+        column: z.string().min(1).describe("Exact dataset column key returned by discovery."),
+        op: z.enum(["eq", "gt", "lt", "gte", "lte", "contains"]).default("eq"),
+        value: z.union([z.string(), z.number(), z.boolean()]),
+      })).optional().default([]).describe("Typed exact filters. Prefer these over fuzzy query for sizes, quantities, rates, and factors."),
       limit: z.coerce.number().int().positive().max(25).optional().default(5).describe("Max datasets to return"),
       offset: z.coerce.number().int().min(0).default(0).describe("Row offset when datasetId is provided."),
       rowLimit: z.coerce.number().int().positive().max(200).default(50).describe("Max matching rows to return when datasetId is provided."),
@@ -248,17 +253,19 @@ export function registerKnowledgeTools(server: McpServer) {
     },
     async (input) => {
       const query = resolveQuery(input);
-      const { datasetId, limit, offset, rowLimit, sampleRowLimit } = input;
-      if (!query) {
+      const { datasetId, filters, limit, offset, rowLimit, sampleRowLimit } = input;
+      if (!query && !(datasetId && filters.length > 0)) {
         return {
-          content: [{ type: "text" as const, text: "ERROR: query is required. Pass query (or q) with the dataset/man-hour phrase to search." }],
+          content: [{ type: "text" as const, text: "ERROR: pass query for discovery/fuzzy search, or pass datasetId with at least one exact filter." }],
           isError: true,
         };
       }
       if (datasetId) {
-        // Search within a specific dataset. Keep rows paginated so one dataset cannot consume the tool context.
-        const params = new URLSearchParams({ q: query });
-        const data = await apiGet(`/datasets/${datasetId}/search?${params}`);
+        // Exact filters are deterministic and preferred for numeric/keyed rows.
+        // Fuzzy search remains available for unstructured discovery within a known dataset.
+        const data = filters.length > 0
+          ? await apiPost(`/datasets/${datasetId}/query`, { filters })
+          : await apiGet(`/datasets/${datasetId}/search?${new URLSearchParams({ q: query })}`);
         const dataset = await apiGet(`/datasets/${datasetId}`);
         const rawRows = Array.isArray(data) ? data : (Array.isArray(data.rows) ? data.rows : []);
         const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset }, 50, 200);
@@ -284,7 +291,10 @@ export function registerKnowledgeTools(server: McpServer) {
             hasMore: page.hasMore,
             values: page.rows,
           },
-          note: "Rows compact + paginated. Continue with offset/rowLimit or narrow the query. Column names encode units and conditions.",
+          evidence: filters.length > 0 ? { match: "exact_filters", filters } : { match: "fuzzy_query", query },
+          note: filters.length > 0
+            ? "Rows matched every typed filter. Use the returned dataset name, column keys, values, and units in the answer."
+            : "Rows compact + paginated. For sizes, quantities, rates, or factors, repeat with datasetId + exact filters. Column names encode units and conditions.",
         }, null, 2) }] };
       }
 
@@ -300,7 +310,7 @@ export function registerKnowledgeTools(server: McpServer) {
         columnCount: r.columns?.length ?? 0,
         rowCount: r.rowCount,
         sampleRows: Array.isArray(r.sampleRows) ? r.sampleRows.slice(0, sampleRowLimit).map((row: any) => compactRow(row)) : [],
-        note: "Drill in: queryKnowledgeDataset({ datasetId, query, rowLimit, offset }) for focused matching rows.",
+        note: "Drill in with datasetId + filters for exact keyed/numeric rows; use datasetId + query only when no exact key is available.",
       }));
       return { content: [{ type: "text" as const, text: JSON.stringify({
         query,

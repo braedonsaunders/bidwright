@@ -97,6 +97,7 @@ import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
+import { datasetSearchFitnessAdjustment } from "./services/dataset-search-fitness.js";
 import { registerReviewRoutes } from "./routes/review-routes.js";
 import { estimateRoutes } from "./routes/estimate-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
@@ -6402,8 +6403,11 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
       .replace(/[^a-z0-9]+/g, " ")
       .trim()
       .split(/\s+/)
-      .filter((word) => word.length > 1 && !stop.has(word));
-    const anchorWords = words.filter((word) => /\d/.test(word) || word.length >= 6);
+      .filter((word) => (word.length > 1 || /^\d+(?:\.\d+)?$/.test(word)) && !stop.has(word));
+    // Sizes and quantities normally live in dataset rows rather than dataset
+    // metadata, so numeric tokens must not disqualify an otherwise relevant
+    // dataset before its rows are searched.
+    const anchorWords = words.filter((word) => word.length >= 6 && !/^\d+(?:\.\d+)?$/.test(word));
 
     // Get all datasets
     const allDatasets = await request.store!.listDatasets();
@@ -6428,6 +6432,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
         if (columnsL.some((c: string) => c.includes(w))) { score += isAnchor ? 3 : 1.5; matched = true; }
         if (matched && isAnchor) anchorMatches += 1;
       }
+      score += datasetSearchFitnessAdjustment(q, d);
       return { dataset: d, score, anchorMatches };
     });
 
