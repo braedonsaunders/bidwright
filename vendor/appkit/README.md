@@ -7,11 +7,11 @@ repository after its package checks pass.
 Current packages:
 
 - `@appkit/tokens` `0.1.1`
-- `@appkit/ui` `0.1.8`
+- `@appkit/ui` `0.1.10`
 - `@appkit/dashboard` `1.0.2`
 - `@appkit/iam` `1.0.0`
 - `@appkit/crypto` `0.3.0`
-- `@appkit/process-sandbox` `0.1.3`
+- `@appkit/process-sandbox` `0.1.5`
 
 The root pnpm override intentionally resolves `@appkit/ui`'s token dependency
 to the vendored token tarball. Server packages consume the vendored crypto and

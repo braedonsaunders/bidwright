@@ -37,12 +37,16 @@ import {
 } from "@/lib/client-analytics";
 import {
   createRateBookAssignment,
+  createCustomerContact,
+  deleteCustomerContact,
   deleteRateBookAssignment,
   listRateBookAssignments,
   listRateSchedules,
   updateCustomer,
+  updateCustomerContact,
   updateRateBookAssignment,
   type Customer,
+  type CustomerContact,
   type CustomerWithContacts,
   type OrgDepartment,
   type OrgUser,
@@ -55,8 +59,12 @@ import { SearchablePicker } from "@/components/shared/searchable-picker";
 import {
   Button,
   Card,
+  Checkbox,
+  Drawer,
   Input,
   Label,
+  PagedTable,
+  type PagedColumn,
 } from "@appkit/ui";
 import {
   Badge,
@@ -78,10 +86,11 @@ type EditableCustomerFields = Pick<
   | "notes"
 >;
 
-type ClientTab = "quotes" | "ratebooks";
+type ClientTab = "quotes" | "contacts" | "ratebooks";
 
 const CLIENT_TABS: Array<{ id: ClientTab; label: string }> = [
   { id: "quotes", label: "Quotes" },
+  { id: "contacts", label: "Contacts" },
   { id: "ratebooks", label: "Ratebooks" },
 ];
 
@@ -440,50 +449,225 @@ function ProfilePanel({
   );
 }
 
-function ContactsPanel({ customer, className }: { customer: CustomerWithContacts | null; className?: string }) {
-  const contacts = customer?.contacts ?? [];
+type ContactForm = Pick<CustomerContact, "name" | "title" | "email" | "phone" | "isPrimary" | "active">;
+
+const EMPTY_CONTACT: ContactForm = {
+  name: "",
+  title: "",
+  email: "",
+  phone: "",
+  isPrimary: false,
+  active: true,
+};
+
+function ClientContactsPanel({
+  customer,
+  onChange,
+}: {
+  customer: CustomerWithContacts;
+  onChange: (contacts: CustomerContact[]) => void;
+}) {
+  const [editing, setEditing] = useState<CustomerContact | "new" | null>(null);
+  const [form, setForm] = useState<ContactForm>(EMPTY_CONTACT);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  function openNew() {
+    setForm(EMPTY_CONTACT);
+    setError("");
+    setEditing("new");
+  }
+
+  function openEdit(contact: CustomerContact) {
+    setForm({
+      name: contact.name,
+      title: contact.title,
+      email: contact.email,
+      phone: contact.phone,
+      isPrimary: contact.isPrimary,
+      active: contact.active,
+    });
+    setError("");
+    setEditing(contact);
+  }
+
+  async function saveContact(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!form.name.trim()) {
+      setError("Contact name is required.");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      const payload = { ...form, name: form.name.trim() };
+      const saved = editing === "new"
+        ? await createCustomerContact(customer.id, payload)
+        : await updateCustomerContact(customer.id, editing!.id, payload);
+      const withoutSaved = customer.contacts.filter((contact) => contact.id !== saved.id);
+      const next = form.isPrimary
+        ? [...withoutSaved.map((contact) => ({ ...contact, isPrimary: false })), saved]
+        : [...withoutSaved, saved];
+      onChange(next);
+      setEditing(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not save the contact.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeContact(contact: CustomerContact) {
+    if (!window.confirm(`Delete ${contact.name}? This removes the contact from ${customer.name}.`)) return;
+    setSaving(true);
+    setError("");
+    try {
+      await deleteCustomerContact(customer.id, contact.id);
+      onChange(customer.contacts.filter((entry) => entry.id !== contact.id));
+      if (editing !== "new" && editing?.id === contact.id) setEditing(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not delete the contact.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const columns: PagedColumn<CustomerContact>[] = [
+    {
+      key: "name",
+      header: "Contact",
+      search: (contact) => `${contact.name} ${contact.title}`,
+      sortValue: (contact) => contact.name,
+      cell: (contact) => (
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 font-medium text-fg">
+            <UserRound className="size-3.5 shrink-0 text-accent" />
+            <span className="truncate">{contact.name}</span>
+            {contact.isPrimary && <Badge tone="info">Primary</Badge>}
+          </div>
+          <div className="mt-0.5 text-xs text-fg/45">{contact.title || "No title"}</div>
+        </div>
+      ),
+    },
+    {
+      key: "email",
+      header: "Email",
+      search: (contact) => contact.email,
+      sortValue: (contact) => contact.email,
+      cell: (contact) => contact.email || <span className="text-fg/35">No email</span>,
+    },
+    {
+      key: "phone",
+      header: "Phone",
+      search: (contact) => contact.phone,
+      cell: (contact) => contact.phone || <span className="text-fg/35">No phone</span>,
+    },
+    {
+      key: "status",
+      header: "Status",
+      sortValue: (contact) => contact.active ? 1 : 0,
+      cell: (contact) => <Badge tone={contact.active ? "success" : "default"}>{contact.active ? "Active" : "Inactive"}</Badge>,
+    },
+    {
+      key: "actions",
+      header: "",
+      align: "right",
+      cell: (contact) => (
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          disabled={saving}
+          onClick={(event) => {
+            event.stopPropagation();
+            void removeContact(contact);
+          }}
+          title="Delete contact"
+        >
+          <Trash2 className="size-3.5" />
+        </Button>
+      ),
+    },
+  ];
 
   return (
-    <Card className={cn("flex min-h-0 flex-col rounded-lg", className)}>
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3">
-        <div>
-          <h2 className="text-sm font-semibold text-fg">Contacts</h2>
-          <p className="mt-0.5 text-xs text-fg/45">People attached to the account.</p>
+    <>
+      <Card className="flex h-full min-h-0 flex-col rounded-lg">
+        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div>
+            <h2 className="text-sm font-semibold text-fg">Client contacts</h2>
+            <p className="mt-0.5 text-xs text-fg/45">People available for this client and its quotes.</p>
+          </div>
+          <Button type="button" size="sm" variant="default" onClick={openNew}>
+            <Plus className="size-3.5" />
+            Add Contact
+          </Button>
         </div>
-        <Badge>{contacts.length}</Badge>
-      </div>
-      <div className="min-h-0 flex-1 divide-y divide-line overflow-auto">
-        {contacts.length === 0 && (
-          <div className="px-4 py-8">
-            <EmptyState className="py-6">No contacts on this client yet.</EmptyState>
-          </div>
+        <div className="min-h-0 flex-1 overflow-auto p-4">
+          {error && !editing && <div className="mb-3 rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">{error}</div>}
+          <PagedTable
+            rows={customer.contacts}
+            columns={columns}
+            searchable
+            pageSize={15}
+            defaultSort={{ key: "name", dir: "asc" }}
+            rowKey={(contact) => contact.id}
+            onRowClick={openEdit}
+            empty={(
+              <EmptyState className="py-12">
+                <UserRound className="mx-auto mb-2 size-8 text-fg/20" />
+                No contacts on this client yet.
+              </EmptyState>
+            )}
+          />
+        </div>
+      </Card>
+
+      <Drawer
+        open={editing !== null}
+        onClose={() => !saving && setEditing(null)}
+        title={editing === "new" ? "Add contact" : "Edit contact"}
+        description={`Contact details for ${customer.name}.`}
+        size="sm"
+        footer={(
+          <>
+            <Button type="button" size="sm" variant="ghost" onClick={() => setEditing(null)} disabled={saving}>Cancel</Button>
+            <Button type="submit" size="sm" variant="default" form="client-contact-form" disabled={saving || !form.name.trim()}>
+              {saving ? <Loader2 className="size-3.5 animate-spin" /> : <CheckCircle2 className="size-3.5" />}
+              Save Contact
+            </Button>
+          </>
         )}
-        {contacts.map((contact) => (
-          <div key={contact.id} className="px-4 py-3">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <UserRound className="h-3.5 w-3.5 text-accent" />
-                  <span className="truncate text-xs font-semibold text-fg">{contact.name || "Unnamed contact"}</span>
-                </div>
-                <div className="mt-1 text-[11px] text-fg/40">{contact.title || "No title"}</div>
-              </div>
-              {contact.isPrimary && <Badge tone="info">Primary</Badge>}
-            </div>
-            <div className="mt-2 grid gap-1 text-[11px] text-fg/50">
-              <span className="flex items-center gap-1.5 truncate">
-                <Mail className="h-3 w-3 text-fg/25" />
-                <span className="truncate">{contact.email || "No email"}</span>
-              </span>
-              <span className="flex items-center gap-1.5 truncate">
-                <Phone className="h-3 w-3 text-fg/25" />
-                <span>{contact.phone || "No phone"}</span>
-              </span>
-            </div>
+      >
+        <form id="client-contact-form" onSubmit={saveContact} className="space-y-4">
+          <div>
+            <Label>Name</Label>
+            <Input autoFocus value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))} disabled={saving} />
           </div>
-        ))}
-      </div>
-    </Card>
+          <div>
+            <Label>Title</Label>
+            <Input value={form.title} onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))} disabled={saving} />
+          </div>
+          <div>
+            <Label>Email</Label>
+            <Input type="email" autoComplete="off" value={form.email} onChange={(event) => setForm((current) => ({ ...current, email: event.target.value }))} disabled={saving} />
+          </div>
+          <div>
+            <Label>Phone</Label>
+            <Input type="tel" autoComplete="off" value={form.phone} onChange={(event) => setForm((current) => ({ ...current, phone: event.target.value }))} disabled={saving} />
+          </div>
+          <label className="flex items-center gap-2 text-sm text-fg/70">
+            <Checkbox checked={form.isPrimary} onChange={(event) => setForm((current) => ({ ...current, isPrimary: event.target.checked }))} disabled={saving} />
+            Primary contact
+          </label>
+          <label className="flex items-center gap-2 text-sm text-fg/70">
+            <Checkbox checked={form.active} onChange={(event) => setForm((current) => ({ ...current, active: event.target.checked }))} disabled={saving} />
+            Active
+          </label>
+          {error && <div className="rounded-lg border border-danger/25 bg-danger/8 px-3 py-2 text-xs text-danger">{error}</div>}
+        </form>
+      </Drawer>
+    </>
   );
 }
 
@@ -867,12 +1051,18 @@ export function ClientDetail({
               </div>
               <div className="min-h-0 space-y-4 xl:overflow-auto xl:pr-1">
                 <ProfilePanel customer={customer} onEdit={() => setEditOpen(true)} />
-                <ContactsPanel customer={customer} />
                 <StageDistribution projects={scopedProjects} />
                 <SignalPanel projects={scopedProjects} />
               </div>
             </div>
           </div>
+        )}
+
+        {activeTab === "contacts" && (
+          <ClientContactsPanel
+            customer={customer}
+            onChange={(contacts) => setCustomer((current) => current ? { ...current, contacts } : current)}
+          />
         )}
 
         {activeTab === "ratebooks" && (

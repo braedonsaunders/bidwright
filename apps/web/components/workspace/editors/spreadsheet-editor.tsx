@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Workbook } from "@fortune-sheet/react";
 import type { Sheet } from "@fortune-sheet/core";
 import "@fortune-sheet/react/dist/index.css";
@@ -12,7 +12,7 @@ import {
 interface SpreadsheetEditorProps {
   fileName: string;
   initialData?: Sheet[];
-  onSave?: (blob: Blob) => void;
+  onSave?: (blob: Blob) => void | Promise<void>;
   onClose?: () => void;
 }
 
@@ -65,33 +65,43 @@ export function SpreadsheetEditor({
   onClose,
 }: SpreadsheetEditorProps) {
   const sheetDataRef = useRef<Sheet[]>(initialData ?? defaultSheets);
+  const [saving, setSaving] = useState(false);
+  const [dirty, setDirty] = useState(false);
 
   const handleSave = async () => {
-    if (!onSave) return;
-    const blob = await sheetsToXlsx(sheetDataRef.current);
-    onSave(blob);
+    if (!onSave || saving) return;
+    setSaving(true);
+    try {
+      const blob = await sheetsToXlsx(sheetDataRef.current);
+      await onSave(blob);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-line bg-panel">
-        <span className="text-sm font-medium text-fg truncate">{fileName}</span>
+    <div className="flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="relative z-20 flex shrink-0 items-center justify-between border-b border-line bg-panel px-3 py-2 shadow-sm">
+        <span className="min-w-0 truncate text-sm font-medium text-fg">
+          {fileName}
+          {dirty && <span className="ml-2 text-xs font-normal text-fg/45">Unsaved changes</span>}
+        </span>
         <div className="flex items-center gap-1">
           {onSave && (
-            <Button variant="ghost" size="sm" onClick={handleSave}>
+            <Button variant="default" size="sm" onClick={handleSave} disabled={saving}>
               <Save className="w-4 h-4 mr-1" />
-              Save
+              {saving ? "Saving..." : "Save changes"}
             </Button>
           )}
           {onClose && (
-            <Button variant="ghost" size="sm" onClick={onClose}>
+            <Button variant="ghost" size="sm" onClick={onClose} disabled={saving} title="Exit editor">
               <X className="w-4 h-4" />
             </Button>
           )}
         </div>
       </div>
-      <div className="flex-1 min-h-0">
-        <Workbook data={initialData ?? defaultSheets} onChange={(d: Sheet[]) => { sheetDataRef.current = d; }} />
+      <div className="relative z-0 min-h-0 flex-1 overflow-hidden">
+        <Workbook data={initialData ?? defaultSheets} onChange={(d: Sheet[]) => { sheetDataRef.current = d; setDirty(true); }} />
       </div>
     </div>
   );

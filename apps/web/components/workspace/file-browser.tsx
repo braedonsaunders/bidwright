@@ -168,6 +168,7 @@ interface TreeItem {
   pageCount?: number;
   createdAt?: string;
   extractedText?: string;
+  isRoot?: boolean;
 }
 
 export interface FileBrowserProps {
@@ -227,6 +228,14 @@ const FILE_UPLOAD_ACCEPT = [
 ].join(",");
 const FILE_NODE_DND_TYPE = "application/x-bidwright-file-node";
 const ROOT_PARENT_VALUE = "__root__";
+const FILES_ROOT_ITEM: TreeItem = {
+  id: ROOT_PARENT_VALUE,
+  name: "Files",
+  type: "directory",
+  parentId: null,
+  children: [],
+  isRoot: true,
+};
 
 /* ─── Helpers ─── */
 
@@ -260,8 +269,8 @@ function isTakeoffOpenableFileName(name: string) {
 
 function getTakeoffDocumentIdForItem(item: TreeItem): string | null {
   if (item.type !== "file" || !isTakeoffOpenableFileName(item.name)) return null;
-  if (item.fileNode) return `file-${item.fileNode.id}`;
   if (item.sourceDocument) return item.sourceDocument.id;
+  if (item.fileNode) return `file-${item.fileNode.id}`;
   return null;
 }
 
@@ -386,8 +395,8 @@ function getDownloadUrl(item: TreeItem, projectId: string, inline = false): stri
 
 function getIngestSourceReference(item?: TreeItem | null): { sourceKind: "source_document" | "file_node"; sourceId: string } | null {
   if (!item || item.type !== "file") return null;
-  if (item.fileNode) return { sourceKind: "file_node", sourceId: item.fileNode.id };
   if (item.sourceDocument) return { sourceKind: "source_document", sourceId: item.sourceDocument.id };
+  if (item.fileNode) return { sourceKind: "file_node", sourceId: item.fileNode.id };
   return null;
 }
 
@@ -405,9 +414,11 @@ function findModelAssetForItem(assets: ModelAsset[], item?: TreeItem | null) {
   );
 }
 
-function buildTreeFromNodes(nodes: FileNode[]): TreeItem[] {
+function buildTreeFromNodes(nodes: FileNode[], sourceDocuments: SourceDocument[]): TreeItem[] {
+  const sourceDocumentById = new Map(sourceDocuments.map((document) => [document.id, document]));
   const map = new Map<string | null, TreeItem[]>();
   for (const node of nodes) {
+    const sourceDocument = node.documentId ? sourceDocumentById.get(node.documentId) : undefined;
     const parentKey = node.parentId ?? null;
     if (!map.has(parentKey)) map.set(parentKey, []);
     map.get(parentKey)!.push({
@@ -417,9 +428,13 @@ function buildTreeFromNodes(nodes: FileNode[]): TreeItem[] {
       parentId: node.parentId,
       children: [],
       fileNode: node,
-      fileType: node.fileType,
+      sourceDocument,
+      documentType: sourceDocument?.documentType,
+      fileType: node.fileType ?? sourceDocument?.fileType,
       size: node.size,
+      pageCount: sourceDocument?.pageCount,
       createdAt: node.createdAt,
+      extractedText: sourceDocument?.extractedText,
     });
   }
 
@@ -606,13 +621,6 @@ function buildMoveTargetOptions(nodes: FileNode[], movingNodeId?: string) {
   return [{ value: ROOT_PARENT_VALUE, label: "Files" }, ...directories];
 }
 
-function buildSourceDocumentMoveTargetOptions() {
-  return FOLDER_CONFIG.map((folder) => ({
-    value: folder.documentType,
-    label: folder.label,
-  }));
-}
-
 function getMutableItemId(item: TreeItem) {
   if (item.fileNode) return `fn:${item.fileNode.id}`;
   if (item.sourceDocument) return `doc:${item.sourceDocument.id}`;
@@ -643,6 +651,8 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const pdfDocRef = useRef<any>(null);
   const renderTaskRef = useRef<any>(null);
+  const renderFrameRef = useRef<number | null>(null);
+  const renderGenerationRef = useRef(0);
   const fitScaleRef = useRef<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -692,10 +702,12 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
     loadPdf();
     return () => {
       cancelled = true;
+      renderGenerationRef.current += 1;
+      if (renderTaskRef.current) renderTaskRef.current.cancel();
     };
   }, [url]);
 
-  const renderPage = useCallback(async () => {
+  const renderPage = useCallback(async (generation: number) => {
     const doc = pdfDocRef.current;
     const canvas = canvasRef.current;
     const container = containerRef.current;
@@ -704,15 +716,19 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
     const clampedPage = Math.max(1, Math.min(pageNumber, doc.numPages));
 
     try {
-      if (renderTaskRef.current) {
-        renderTaskRef.current.cancel();
-        renderTaskRef.current = null;
+      const previousTask = renderTaskRef.current;
+      if (previousTask) {
+        previousTask.cancel();
+        await previousTask.promise.catch(() => undefined);
       }
+      if (generation !== renderGenerationRef.current) return;
 
       const page = await doc.getPage(clampedPage);
+      if (generation !== renderGenerationRef.current) return;
 
       // Calculate fit-to-width scale based on container
       const containerWidth = container.clientWidth - 32; // subtract padding
+      if (containerWidth <= 0) return;
       const unscaledViewport = page.getViewport({ scale: 1 });
       const fitScale = containerWidth / unscaledViewport.width;
       fitScaleRef.current = fitScale;
@@ -721,30 +737,42 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
       const viewport = page.getViewport({ scale: effectiveScale });
 
       // Use 2x device pixel ratio for sharp rendering
-      const dpr = window.devicePixelRatio || 1;
-      canvas.width = viewport.width * dpr;
-      canvas.height = viewport.height * dpr;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      canvas.width = Math.max(1, Math.floor(viewport.width * dpr));
+      canvas.height = Math.max(1, Math.floor(viewport.height * dpr));
       canvas.style.width = `${viewport.width}px`;
       canvas.style.height = `${viewport.height}px`;
 
       const ctx = canvas.getContext("2d");
-      if (ctx) ctx.scale(dpr, dpr);
+      if (!ctx) return;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const renderTask = page.render({
-        canvasContext: ctx!,
+        canvasContext: ctx,
         viewport,
+        transform: dpr === 1 ? undefined : [dpr, 0, 0, dpr, 0, 0],
       });
       renderTaskRef.current = renderTask;
       await renderTask.promise;
-      renderTaskRef.current = null;
+      if (renderTaskRef.current === renderTask) renderTaskRef.current = null;
     } catch (err: unknown) {
-      if (err instanceof Error && err.message?.includes("Rendering cancelled")) return;
+      if (err instanceof Error && (err.name === "RenderingCancelledException" || err.message?.includes("Rendering cancelled"))) return;
     }
   }, [pageNumber, zoom, isFitMode]);
 
+  const scheduleRender = useCallback(() => {
+    const generation = ++renderGenerationRef.current;
+    if (renderFrameRef.current !== null) cancelAnimationFrame(renderFrameRef.current);
+    renderFrameRef.current = requestAnimationFrame(() => {
+      renderFrameRef.current = null;
+      void renderPage(generation);
+    });
+  }, [renderPage]);
+
   useEffect(() => {
-    if (!loading && !error) renderPage();
-  }, [loading, error, renderPage]);
+    if (!loading && !error) scheduleRender();
+  }, [loading, error, scheduleRender]);
 
   // Re-render on container resize for fit-to-width
   useEffect(() => {
@@ -753,14 +781,16 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
     if (!container) return;
 
     const observer = new ResizeObserver(() => {
-      renderPage();
+      scheduleRender();
     });
     observer.observe(container);
     return () => observer.disconnect();
-  }, [isFitMode, loading, error, renderPage]);
+  }, [isFitMode, loading, error, scheduleRender]);
 
   useEffect(() => {
     return () => {
+      renderGenerationRef.current += 1;
+      if (renderFrameRef.current !== null) cancelAnimationFrame(renderFrameRef.current);
       if (renderTaskRef.current) renderTaskRef.current.cancel();
       if (pdfDocRef.current) {
         pdfDocRef.current.destroy();
@@ -869,8 +899,8 @@ function PdfPreview({ url, fileName }: { url: string; fileName: string }) {
       </div>
 
       {/* PDF Canvas */}
-      <div ref={containerRef} className="overflow-auto bg-bg/30 flex-1 flex justify-center p-4 min-h-0">
-        <canvas ref={canvasRef} className="block shadow-lg" />
+      <div ref={containerRef} aria-label={`Preview of ${fileName}`} className="overflow-auto bg-bg/30 flex-1 flex justify-center p-4 min-h-0">
+        <canvas ref={canvasRef} className="block shrink-0 shadow-lg" />
       </div>
     </div>
   );
@@ -1285,6 +1315,7 @@ function TreeNode({
     return (
       <div>
         <div
+          data-file-tree-item="true"
           className={cn(
             "group flex items-center gap-1 rounded-md px-2 py-1.5 text-xs transition-colors cursor-pointer",
             isSelected
@@ -1408,6 +1439,7 @@ function TreeNode({
 
   return (
     <div
+      data-file-tree-item="true"
       className={cn(
         "group flex items-center gap-2 rounded-md px-2 py-1.5 text-xs transition-colors cursor-pointer",
         isSelected
@@ -1519,8 +1551,8 @@ function FileTreeContextMenu({
 
   const { item } = menu;
   const canModify = Boolean(item.fileNode || item.sourceDocument);
-  const canUploadInside = item.type === "directory" && Boolean(item.fileNode || item.isAutoFolder);
-  const canCreateInside = item.type === "directory" && Boolean(item.fileNode);
+  const canUploadInside = item.type === "directory" && Boolean(item.fileNode || item.isAutoFolder || item.isRoot);
+  const canCreateInside = item.type === "directory" && Boolean(item.fileNode || item.isRoot);
   const downloadUrl = item.type === "file" ? getDownloadUrl(item, projectId, false) : null;
   const takeoffDocumentId = canOpenInTakeoff ? getTakeoffDocumentIdForItem(item) : null;
   const menuItemClass =
@@ -1552,7 +1584,7 @@ function FileTreeContextMenu({
       }}
       onPointerDown={(e) => e.stopPropagation()}
     >
-      {button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
+      {!item.isRoot && button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
       {item.type === "file" && button("open-fullscreen", "Open Fullscreen", <Maximize2 className="h-3.5 w-3.5" />)}
       {takeoffDocumentId && button("open-takeoff", "Open in Takeoff", <Ruler className="h-3.5 w-3.5" />)}
       {downloadUrl && (
@@ -1605,16 +1637,13 @@ function MoveFileModal({
   const fileNode = item?.fileNode;
   const sourceDocument = item?.sourceDocument;
   const options = useMemo(() => {
-    if (sourceDocument) return buildSourceDocumentMoveTargetOptions();
     return buildMoveTargetOptions(nodes, fileNode?.id);
-  }, [fileNode?.id, nodes, sourceDocument]);
+  }, [fileNode?.id, nodes]);
   const nextParentId = targetId === ROOT_PARENT_VALUE ? null : targetId;
   const currentParentId = fileNode?.parentId ?? null;
   const isSameLocation = fileNode
     ? nextParentId === currentParentId
-    : sourceDocument
-      ? targetId === sourceDocument.documentType
-      : true;
+    : !sourceDocument;
 
   return (
     <ModalBackdrop open={Boolean(item && (fileNode || sourceDocument))} onClose={onClose} size="sm">
@@ -1700,6 +1729,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
   const pendingUploadParentIdRef = useRef<string | null | undefined>(undefined);
   const pendingUploadDocumentTypeRef = useRef<string | undefined>(undefined);
+  const pendingUploadAsFileNodeRef = useRef(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
     new Set(["auto-specs", "auto-drawings"])
@@ -1774,8 +1804,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
   // Build tree
   const tree = useMemo(() => {
-    const autoFolders = buildAutoFolders(sourceDocuments);
-    const userTree = buildTreeFromNodes(userNodes);
+    const linkedSourceDocumentIds = new Set(userNodes.map((node) => node.documentId).filter(Boolean));
+    const autoFolders = buildAutoFolders(sourceDocuments.filter((document) => !linkedSourceDocumentIds.has(document.id)));
+    const userTree = buildTreeFromNodes(userNodes, sourceDocuments);
     return [...autoFolders, ...userTree];
   }, [sourceDocuments, userNodes]);
 
@@ -1819,14 +1850,14 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
   // ── Upload handling ────────────────────────────────────────────────────
 
-  const handleUploadFiles = useCallback(async (files: FileList | File[], parentOverride?: string | null, documentTypeOverride?: string) => {
+  const handleUploadFiles = useCallback(async (files: FileList | File[], parentOverride?: string | null, documentTypeOverride?: string, forceFileNode = false) => {
     if (files.length === 0) return;
     setUploading(true);
     setErrorMessage(null);
 
     // Determine parent: if a directory is selected, upload into it
     const parentId = parentOverride !== undefined ? parentOverride : activeFileParentId;
-    const shouldUploadAsFileNode = Boolean(parentId) || Boolean(selectedItem?.fileNode);
+    const shouldUploadAsFileNode = forceFileNode || Boolean(parentId) || Boolean(selectedItem?.fileNode);
     const documentType = documentTypeOverride ?? selectedItem?.documentType ?? selectedItem?.sourceDocument?.documentType ?? "reference";
 
     try {
@@ -1854,9 +1885,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [activeFileParentId, projectId, selectedItem?.documentType, selectedItem?.fileNode, selectedItem?.sourceDocument?.documentType, showError, notifyFilesMutated]);
 
-  const openFilePickerForParent = useCallback((parentId?: string | null, documentType?: string) => {
+  const openFilePickerForParent = useCallback((parentId?: string | null, documentType?: string, forceFileNode = false) => {
     pendingUploadParentIdRef.current = parentId;
     pendingUploadDocumentTypeRef.current = documentType;
+    pendingUploadAsFileNodeRef.current = forceFileNode;
     fileInputRef.current?.click();
   }, []);
 
@@ -1894,16 +1926,28 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [canMoveNode, projectId, showError, userNodes]);
 
-  const handleMoveSourceDocument = useCallback(async (documentId: string, documentType: string) => {
+  const handleMoveSourceDocument = useCallback(async (documentId: string, targetId: string) => {
     try {
-      const updated = await updateSourceDocument(projectId, documentId, { documentType });
-      setSourceDocuments((prev) => prev.map((document) => document.id === updated.id ? updated : document));
+      const document = sourceDocuments.find((entry) => entry.id === documentId);
+      if (!document) throw new Error("Source document not found");
+      const parentId = targetId === ROOT_PARENT_VALUE ? null : targetId;
+      const node = await createFileNode(projectId, {
+        parentId,
+        name: splitSourceDocumentPath(document.fileName).pop() ?? document.fileName,
+        type: "file",
+        fileType: document.fileType,
+        documentId: document.id,
+        storagePath: document.storagePath,
+        metadata: { linkedSourceDocument: true },
+      });
+      setUserNodes((prev) => [...prev, node]);
+      notifyFilesMutated();
       setMovingItem(null);
-      setExpandedFolders((prev) => new Set([...prev, `auto-${FOLDER_CONFIG.find((folder) => folder.documentType === documentType)?.key ?? "other"}`]));
+      if (parentId) setExpandedFolders((prev) => new Set([...prev, parentId]));
     } catch (err) {
       showError(`Failed to move: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, showError]);
+  }, [notifyFilesMutated, projectId, showError, sourceDocuments]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -1916,7 +1960,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       return;
     }
     if (e.dataTransfer.files.length > 0) {
-      handleUploadFiles(e.dataTransfer.files, null);
+      handleUploadFiles(e.dataTransfer.files, null, undefined, true);
     }
   }, [draggingNodeId, handleMoveNode, handleUploadFiles]);
 
@@ -2003,6 +2047,28 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   const handleDelete = useCallback(async (item: TreeItem) => {
     if (!item.fileNode && !item.sourceDocument) return;
     try {
+      if (item.fileNode) {
+        const fileNode = item.fileNode;
+        await deleteFileNode(projectId, fileNode.id);
+        const deletedIds = new Set<string>([fileNode.id]);
+        let changed = true;
+        while (changed) {
+          changed = false;
+          for (const n of userNodes) {
+            if (n.parentId && deletedIds.has(n.parentId) && !deletedIds.has(n.id)) {
+              deletedIds.add(n.id);
+              changed = true;
+            }
+          }
+        }
+        setUserNodes((prev) => prev.filter((n) => !deletedIds.has(n.id)));
+        notifyFilesMutated();
+        if (selectedId && deletedIds.has(selectedId)) setSelectedId(null);
+        if (modelEditorFileNodeId === fileNode.id) setModelEditorFileNodeId(null);
+        setDeletingItem(null);
+        return;
+      }
+
       if (item.sourceDocument) {
         await deleteSourceDocument(projectId, item.sourceDocument.id);
         setSourceDocuments((prev) => prev.filter((document) => document.id !== item.sourceDocument!.id));
@@ -2012,26 +2078,6 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         return;
       }
 
-      const fileNode = item.fileNode;
-      if (!fileNode) return;
-
-      await deleteFileNode(projectId, fileNode.id);
-      const deletedIds = new Set<string>([fileNode.id]);
-      let changed = true;
-      while (changed) {
-        changed = false;
-        for (const n of userNodes) {
-          if (n.parentId && deletedIds.has(n.parentId) && !deletedIds.has(n.id)) {
-            deletedIds.add(n.id);
-            changed = true;
-          }
-        }
-      }
-      setUserNodes((prev) => prev.filter((n) => !deletedIds.has(n.id)));
-      notifyFilesMutated();
-      if (selectedId && deletedIds.has(selectedId)) setSelectedId(null);
-      if (modelEditorFileNodeId === fileNode.id) setModelEditorFileNodeId(null);
-      setDeletingItem(null);
     } catch (err) {
       showError(`Failed to delete: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
@@ -2064,12 +2110,12 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         handleSelect(item);
         onOpenInTakeoff?.(takeoffDocumentId);
       }
-    } else if (action === "new-folder" && item.fileNode && item.type === "directory") {
+    } else if (action === "new-folder" && item.type === "directory" && (item.fileNode || item.isRoot)) {
       setCreatingFolder(true);
-      setNewFolderParentId(item.fileNode.id);
-      setExpandedFolders((prev) => new Set([...prev, item.fileNode!.id]));
+      setNewFolderParentId(item.fileNode?.id ?? null);
+      if (item.fileNode) setExpandedFolders((prev) => new Set([...prev, item.fileNode!.id]));
     } else if (action === "upload" && item.type === "directory") {
-      openFilePickerForParent(item.fileNode?.id, item.documentType);
+      openFilePickerForParent(item.fileNode?.id ?? null, item.documentType, Boolean(item.isRoot));
     } else if (action === "rename") {
       const mutableId = getMutableItemId(item);
       if (!mutableId) return;
@@ -2078,7 +2124,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       setSelectedId(item.id);
     } else if (action === "move" && (item.fileNode || item.sourceDocument)) {
       setMovingItem(item);
-      setMoveTargetId(item.fileNode?.parentId ?? item.sourceDocument?.documentType ?? ROOT_PARENT_VALUE);
+      setMoveTargetId(item.fileNode?.parentId ?? ROOT_PARENT_VALUE);
     } else if (action === "delete") {
       setDeletingItem(item);
     }
@@ -2842,9 +2888,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 onChange={(e) => {
                   const parentId = pendingUploadParentIdRef.current;
                   const documentType = pendingUploadDocumentTypeRef.current;
+                  const forceFileNode = pendingUploadAsFileNodeRef.current;
                   pendingUploadParentIdRef.current = undefined;
                   pendingUploadDocumentTypeRef.current = undefined;
-                  if (e.target.files) handleUploadFiles(e.target.files, parentId, documentType);
+                  pendingUploadAsFileNodeRef.current = false;
+                  if (e.target.files) handleUploadFiles(e.target.files, parentId, documentType, forceFileNode);
                   e.target.value = "";
                 }}
               />
@@ -2941,6 +2989,12 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
+            onContextMenu={(event) => {
+              const target = event.target;
+              if (target instanceof Element && target.closest('[data-file-tree-item="true"]')) return;
+              event.preventDefault();
+              handleOpenContextMenu(FILES_ROOT_ITEM, { x: event.clientX, y: event.clientY });
+            }}
           >
             {/* Drag overlay */}
             {dragActive && (

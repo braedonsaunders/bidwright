@@ -73,10 +73,10 @@ export function workspaceFixture() {
     ],
   };
   return {
-    quote: { quoteNumber: "Q-1", customerString: "Kingdom Construction" },
+    quote: { quoteNumber: "Q-1", title: "Canonical Quote", customerString: "Kingdom Construction" },
     currentRevision: {
       revisionNumber: 1,
-      title: "Test",
+      title: "Stale Revision Title",
       description: "Scope",
       subtotal: 1100,
       cost: 600,
@@ -147,6 +147,9 @@ export function workspaceFixture() {
 test("proposal renders the shared Price Build without internal cost", () => {
   const data = buildPdfDataPackage(workspaceFixture());
   const html = generatePdfHtml(data, "main");
+  assert.equal(data.title, "Canonical Quote");
+  assert.match(html, /Canonical Quote/);
+  assert.doesNotMatch(html, /Stale Revision Title/);
   assert.match(html, /Price Build/);
   assert.match(html, />Rollup</);
   assert.match(html, /Fuel Adjustment/);

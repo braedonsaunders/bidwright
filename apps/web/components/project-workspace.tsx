@@ -1372,13 +1372,9 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         console.warn("[bidwright] Server returned empty description — preserving local. Prev length:", prev.description.length);
         next.description = prev.description;
       }
-      if (prev.title && !next.title) {
-        console.warn("[bidwright] Server returned empty title — preserving local. Prev:", prev.title);
-        next.title = prev.title;
-      }
       return next;
     });
-  }, [workspace.currentRevision.id, workspace.currentRevision.description, workspace.currentRevision.title, workspace.currentRevision.notes]);
+  }, [workspace.currentRevision.id, workspace.currentRevision.description, workspace.currentRevision.notes]);
 
   useEffect(() => {
     if (!findWs(workspace, selectedWsId)) setSelectedWsId((workspace.worksheets ?? [])[0]?.id ?? "all");
@@ -2040,7 +2036,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       <div className="flex items-center gap-4 shrink-0">
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <h1 className="text-sm font-semibold truncate">{workspace.project.name}</h1>
+            <h1 className="text-sm font-semibold truncate">{workspace.quote.title}</h1>
             <StatusDropdown
               value={workspace.currentRevision.status ?? "Open"}
               onChange={handleStatusChange}
@@ -2749,7 +2745,7 @@ function SnapQuoteSheet({
   onOpenPluginTools?: (target?: PluginToolsTarget) => void;
   isPending: boolean;
 }) {
-  const [title, setTitle] = useState(workspace.project.name);
+  const [title, setTitle] = useState(workspace.quote.title);
   const [customerId, setCustomerId] = useState(workspace.quote.customerId ?? "");
   const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
   const [location, setLocation] = useState(workspace.project.location);
@@ -2772,13 +2768,13 @@ function SnapQuoteSheet({
   }, []);
 
   useEffect(() => {
-    setTitle(workspace.project.name);
+    setTitle(workspace.quote.title);
     setCustomerId(workspace.quote.customerId ?? "");
     setLocation(workspace.project.location);
     setDescription(workspace.currentRevision.description ?? "");
     setDateDue(toDateInput(workspace.currentRevision.dateDue));
   }, [
-    workspace.project.name,
+    workspace.quote.title,
     workspace.project.location,
     workspace.quote.customerId,
     workspace.currentRevision.description,
@@ -2810,15 +2806,31 @@ function SnapQuoteSheet({
       }));
   }, [customerId, customerOptions, inferredCustomer?.id]);
 
-  async function saveProjectField(field: "name" | "location", value: string) {
+  async function saveProjectField(field: "location", value: string) {
     const trimmed = value.trim();
-    if (field === "name" && (!trimmed || trimmed === workspace.project.name)) return;
     if (field === "location" && trimmed === workspace.project.location) return;
 
     setSavingField(field);
     try {
       onApply(await updateProject(workspace.project.id, { [field]: trimmed || "TBD" }));
     } catch (error) {
+      onError(error instanceof Error ? error.message : "Save failed.");
+    } finally {
+      setSavingField(null);
+    }
+  }
+
+  async function saveQuoteTitle(value: string) {
+    const trimmed = value.trim();
+    if (!trimmed || trimmed === workspace.quote.title) {
+      if (!trimmed) setTitle(workspace.quote.title);
+      return;
+    }
+    setSavingField("title");
+    try {
+      onApply(await updateQuote(workspace.project.id, { title: trimmed }));
+    } catch (error) {
+      setTitle(workspace.quote.title);
       onError(error instanceof Error ? error.message : "Save failed.");
     } finally {
       setSavingField(null);
@@ -2898,7 +2910,7 @@ function SnapQuoteSheet({
                 className="h-9 min-w-0 flex-1 bg-transparent text-xl font-semibold tracking-normal text-fg outline-none placeholder:text-fg/25"
                 value={title}
                 onChange={(event) => setTitle(event.target.value)}
-                onBlur={() => saveProjectField("name", title)}
+                onBlur={() => void saveQuoteTitle(title)}
                 disabled={saving}
                 placeholder="Snap title"
               />
@@ -2984,7 +2996,7 @@ function SnapQuoteSheet({
 function buildRevDraftFromWs(workspace: ProjectWorkspaceData) {
   const r = workspace.currentRevision;
   return {
-    title: r.title, description: r.description, notes: r.notes,
+    description: r.description, notes: r.notes,
     breakoutStyle: r.breakoutStyle,
   };
 }

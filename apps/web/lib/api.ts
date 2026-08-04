@@ -1773,6 +1773,7 @@ export interface RevisionPatchInput {
 }
 
 export interface QuotePatchInput {
+  title?: string;
   customerExistingNew?: "Existing" | "New";
   customerId?: string | null;
   customerString?: string;
@@ -3777,7 +3778,7 @@ export async function getFileTree(projectId: string, scope?: string) {
 
 export async function createFileNode(
   projectId: string,
-  input: { parentId?: string | null; name: string; type: "file" | "directory"; fileType?: string; size?: number; documentId?: string; metadata?: Record<string, unknown> }
+  input: { parentId?: string | null; name: string; type: "file" | "directory"; fileType?: string; size?: number; documentId?: string; storagePath?: string; metadata?: Record<string, unknown> }
 ) {
   return apiRequest<FileNode>(`/projects/${projectId}/files`, {
     method: "POST",

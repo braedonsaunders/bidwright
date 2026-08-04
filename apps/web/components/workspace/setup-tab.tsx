@@ -99,7 +99,6 @@ type EstimateSearchSettings = {
 };
 
 type RevisionDraft = {
-  title: string;
   description: string;
   notes: string;
   breakoutStyle: string;
@@ -403,7 +402,6 @@ export function SetupTab({
     // overwriting concurrent agent updates with stale local state
     const dirty = dirtyFieldsRef.current;
     const payload: Partial<RevisionPatchInput> = {};
-    if (dirty.has("title")) payload.title = revDraft.title;
     if (dirty.has("description")) payload.description = revDraft.description;
     if (dirty.has("notes")) payload.notes = revDraft.notes;
     if (dirty.has("breakoutStyle")) payload.breakoutStyle = revDraft.breakoutStyle;
@@ -472,6 +470,7 @@ export function SetupTab({
             saveQuote={saveQuote}
             busy={busy}
             markDirty={markDirty}
+            onError={onError}
           />
         )}
         {subTab === "conditions" && (
@@ -532,6 +531,7 @@ function GeneralSubTab({
   saveQuote,
   busy,
   markDirty,
+  onError,
 }: {
   workspace: ProjectWorkspaceData;
   revDraft: RevisionDraft;
@@ -540,6 +540,7 @@ function GeneralSubTab({
   saveQuote: (patch: QuotePatchInput) => void;
   busy: boolean;
   markDirty: (field: string) => void;
+  onError: (message: string) => void;
 }) {
   const rev = workspace.currentRevision;
   const quote = workspace.quote;
@@ -556,6 +557,7 @@ function GeneralSubTab({
   const [quoteType, setQuoteType] = useState<"Firm" | "Budget" | "BudgetDNE">(rev.type ?? "Firm");
   const [dateQuote, setDateQuote] = useState(toDateInput(rev.dateQuote));
   const [dateDue, setDateDue] = useState(toDateInput(rev.dateDue));
+  const [quoteTitle, setQuoteTitle] = useState(quote.title);
 
   // Loaded dropdown options
   const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
@@ -586,6 +588,7 @@ function GeneralSubTab({
     setQuoteType(rev.type ?? "Firm");
     setDateQuote(toDateInput(rev.dateQuote));
     setDateDue(toDateInput(rev.dateDue));
+    setQuoteTitle(quote.title);
   }, [
     quote.customerId,
     quote.customerContactId,
@@ -593,6 +596,7 @@ function GeneralSubTab({
     rev.type,
     rev.dateQuote,
     rev.dateDue,
+    quote.title,
   ]);
 
   const selectedCustomer = useMemo(
@@ -612,11 +616,11 @@ function GeneralSubTab({
   const optionsRef = useRef({ customerOptions, contactOptions });
   optionsRef.current = { customerOptions, contactOptions };
 
-  const doSave = useCallback(() => {
-    const s = stateRef.current;
+  const doSave = useCallback((overrides: Partial<typeof stateRef.current> = {}, customerOverride?: Customer, contactOverride?: CustomerContact) => {
+    const s = { ...stateRef.current, ...overrides };
     const o = optionsRef.current;
-    const selectedCustomer = o.customerOptions.find((c) => c.id === s.customerId);
-    const selectedContact = o.contactOptions.find((c) => c.id === s.customerContactId);
+    const selectedCustomer = customerOverride ?? o.customerOptions.find((c) => c.id === s.customerId);
+    const selectedContact = contactOverride ?? o.contactOptions.find((c) => c.id === s.customerContactId);
 
     saveQuote({
       customerExistingNew: "Existing",
@@ -634,8 +638,6 @@ function GeneralSubTab({
     });
   }, [saveQuote, saveRevision]);
 
-  const { trigger: debouncedSave } = useDebouncedSave(doSave);
-
   async function handleQuickAdd() {
     if (!quickAddName.trim()) return;
     setQuickAddSaving(true);
@@ -645,9 +647,9 @@ function GeneralSubTab({
       setCustomerId(created.id);
       setQuickAddName("");
       setQuickAddOpen(false);
-      setTimeout(() => doSave(), 0);
-    } catch {
-      /* ignore */
+      doSave({ customerId: created.id, customerContactId: "" }, created);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not create the client.");
     } finally {
       setQuickAddSaving(false);
     }
@@ -662,19 +664,12 @@ function GeneralSubTab({
       setCustomerContactId(created.id);
       setContactQuickAddName("");
       setContactQuickAddOpen(false);
-      setTimeout(() => doSave(), 0);
-    } catch {
-      /* ignore */
+      doSave({ customerContactId: created.id }, undefined, created);
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not create the contact.");
     } finally {
       setContactQuickAddSaving(false);
     }
-  }
-
-  // Auto-save on select/date changes
-  function onSelectChange(setter: (v: string) => void, value: string) {
-    setter(value);
-    // Use setTimeout to let state update before saving
-    setTimeout(() => doSave(), 0);
   }
 
   return (
@@ -692,9 +687,17 @@ function GeneralSubTab({
                 {quote.quoteNumber}
               </span>
               <Input
-                value={revDraft.title}
-                onChange={(e) => { markDirty("title"); setRevDraft((d) => ({ ...d, title: e.target.value })); }}
-                onBlur={() => saveRevision()}
+                value={quoteTitle}
+                onChange={(e) => setQuoteTitle(e.target.value)}
+                onBlur={() => {
+                  const title = quoteTitle.trim();
+                  if (!title) {
+                    setQuoteTitle(quote.title);
+                    onError("Quote title is required.");
+                    return;
+                  }
+                  if (title !== quote.title) saveQuote({ title });
+                }}
                 placeholder="Quote title"
               />
             </div>
@@ -727,7 +730,7 @@ function GeneralSubTab({
                     onChange={(v) => {
                       setCustomerId(v);
                       setCustomerContactId("");
-                      setTimeout(() => doSave(), 0);
+                      doSave({ customerId: v, customerContactId: "" });
                     }}
                     options={customerOptions.filter((c) => c.active).map((c) => ({
                       value: c.id,
@@ -771,7 +774,7 @@ function GeneralSubTab({
                     value={customerContactId}
                     onChange={(v) => {
                       setCustomerContactId(v);
-                      setTimeout(() => doSave(), 0);
+                      doSave({ customerContactId: v });
                     }}
                     options={contactOptions.filter((c) => c.active).map((c) => ({
                       value: c.id,
@@ -794,7 +797,7 @@ function GeneralSubTab({
                 value={departmentId}
                 onChange={(v) => {
                   setDepartmentId(v);
-                  setTimeout(() => doSave(), 0);
+                  doSave({ departmentId: v });
                 }}
                 options={departmentOptions.filter((d) => d.active).map((d) => ({
                   value: d.id,
@@ -808,8 +811,9 @@ function GeneralSubTab({
               <Combobox
                 value={quoteType}
                 onChange={(v) => {
-                  setQuoteType(v as "Firm" | "Budget" | "BudgetDNE");
-                  setTimeout(() => doSave(), 0);
+                  const type = v as "Firm" | "Budget" | "BudgetDNE";
+                  setQuoteType(type);
+                  doSave({ quoteType: type });
                 }}
                 options={[
                   { value: "Firm", label: "Firm" },
@@ -830,7 +834,7 @@ function GeneralSubTab({
                 value={dateQuote}
                 onChange={(e) => {
                   setDateQuote(e.target.value);
-                  setTimeout(() => doSave(), 0);
+                  doSave({ dateQuote: e.target.value });
                 }}
               />
             </div>
@@ -841,7 +845,7 @@ function GeneralSubTab({
                 value={dateDue}
                 onChange={(e) => {
                   setDateDue(e.target.value);
-                  setTimeout(() => doSave(), 0);
+                  doSave({ dateDue: e.target.value });
                 }}
               />
             </div>

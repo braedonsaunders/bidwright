@@ -713,6 +713,7 @@ export interface RevisionPatchInput {
 }
 
 export interface QuotePatchInput {
+  title?: string;
   customerExistingNew?: Quote["customerExistingNew"];
   customerId?: string | null;
   customerString?: string;
@@ -7987,6 +7988,7 @@ export class PrismaApiStore {
     phone?: string;
     email?: string;
     isPrimary?: boolean;
+    active?: boolean;
   }): Promise<CustomerContact> {
     // Verify customer belongs to org
     const customer = await this.db.customer.findFirst({
@@ -7994,16 +7996,22 @@ export class PrismaApiStore {
     });
     if (!customer) throw new Error(`Customer ${customerId} not found`);
 
-    const c = await this.db.customerContact.create({
-      data: {
-        id: createId("ccon"),
-        customerId,
-        name: input.name,
-        title: input.title ?? "",
-        phone: input.phone ?? "",
-        email: input.email ?? "",
-        isPrimary: input.isPrimary ?? false,
-      },
+    const c = await this.db.$transaction(async (tx) => {
+      if (input.isPrimary) {
+        await tx.customerContact.updateMany({ where: { customerId }, data: { isPrimary: false } });
+      }
+      return tx.customerContact.create({
+        data: {
+          id: createId("ccon"),
+          customerId,
+          name: input.name,
+          title: input.title ?? "",
+          phone: input.phone ?? "",
+          email: input.email ?? "",
+          isPrimary: input.isPrimary ?? false,
+          active: input.active ?? true,
+        },
+      });
     });
     return mapCustomerContact(c);
   }
@@ -8023,7 +8031,15 @@ export class PrismaApiStore {
       if (patch[f] !== undefined) data[f] = patch[f];
     }
 
-    const updated = await this.db.customerContact.update({ where: { id: contactId }, data });
+    const updated = await this.db.$transaction(async (tx) => {
+      if (data.isPrimary === true) {
+        await tx.customerContact.updateMany({
+          where: { customerId: existing.customerId, id: { not: contactId } },
+          data: { isPrimary: false },
+        });
+      }
+      return tx.customerContact.update({ where: { id: contactId }, data });
+    });
     return mapCustomerContact(updated);
   }
 
@@ -12951,6 +12967,25 @@ export class PrismaApiStore {
         data: { ...normalizedPatch as any, updatedAt: now },
         include: { customer: true },
       });
+      if (normalizedPatch.title !== undefined) {
+        // Quote owns the customer-facing title. Revisions and standalone
+        // workspace names are compatibility projections, never independent
+        // editable title sources.
+        await tx.quoteRevision.updateMany({
+          where: { quoteId: quote.id },
+          data: { title: normalizedPatch.title, updatedAt: now },
+        });
+        const project = await tx.project.findFirst({
+          where: { id: projectId },
+          select: { isStandalone: true },
+        });
+        if (project?.isStandalone) {
+          await tx.project.update({
+            where: { id: projectId },
+            data: { name: normalizedPatch.title, updatedAt: now },
+          });
+        }
+      }
       if (canonicalClientName) {
         // Project is an internal workspace container. Keep this legacy display
         // field synchronized for old integrations, but Quote/Customer owns identity.
@@ -15366,7 +15401,7 @@ export class PrismaApiStore {
     // Gather storagePaths before deleting records
     const nodes = await this.db.fileNode.findMany({
       where: { id: { in: Array.from(toDelete) }, storagePath: { not: null } },
-      select: { storagePath: true },
+      select: { storagePath: true, documentId: true },
     });
 
     await this.db.fileNode.deleteMany({ where: { id: { in: Array.from(toDelete) } } });
@@ -15374,7 +15409,7 @@ export class PrismaApiStore {
     // Clean up files on disk
     await Promise.allSettled(
       nodes
-        .filter((n) => n.storagePath)
+        .filter((n) => n.storagePath && !n.documentId)
         .map((n) => rm(resolveApiPath(n.storagePath!), { recursive: true, force: true })),
     );
 

@@ -209,16 +209,16 @@ importers:
     dependencies:
       '@appkit/dashboard':
         specifier: file:../../vendor/appkit/appkit-dashboard-1.0.2.tgz
-        version: file:vendor/appkit/appkit-dashboard-1.0.2.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: file:vendor/appkit/appkit-dashboard-1.0.2.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@appkit/iam':
         specifier: file:../../vendor/appkit/appkit-iam-1.0.0.tgz
-        version: file:vendor/appkit/appkit-iam-1.0.0.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: file:vendor/appkit/appkit-iam-1.0.0.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@appkit/tokens':
         specifier: file:../../vendor/appkit/appkit-tokens-0.1.1.tgz
         version: file:vendor/appkit/appkit-tokens-0.1.1.tgz(tailwindcss@4.3.3)
       '@appkit/ui':
-        specifier: file:../../vendor/appkit/appkit-ui-0.1.8.tgz
-        version: file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
+        specifier: file:../../vendor/appkit/appkit-ui-0.1.10.tgz
+        version: file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
       '@bidwright/domain':
         specifier: workspace:*
         version: link:../../packages/domain
@@ -700,9 +700,9 @@ packages:
     peerDependencies:
       tailwindcss: ^4.0.0
 
-  '@appkit/ui@file:vendor/appkit/appkit-ui-0.1.8.tgz':
-    resolution: {integrity: sha512-SaROGliOxjKE5cGMifnumUmo96xH8Y/wjOSXBw+rdZQDkJnVPtMhReh4boA/eWCSkefrTjVzT5yKDYlMzK6Mhg==, tarball: file:vendor/appkit/appkit-ui-0.1.8.tgz}
-    version: 0.1.8
+  '@appkit/ui@file:vendor/appkit/appkit-ui-0.1.10.tgz':
+    resolution: {integrity: sha512-Hf2ZOVR1au/KKIo4fv5KwIy2zuw1ofI9TyLWV6kJ2JUSl+AFqSORuMW9snvLai5rS6A4QlbhHHoewYjDfYdEcQ==, tarball: file:vendor/appkit/appkit-ui-0.1.10.tgz}
+    version: 0.1.10
     engines: {node: '>=22'}
     peerDependencies:
       react: ^19.0.0
@@ -7446,16 +7446,16 @@ snapshots:
 
   '@appkit/crypto@file:vendor/appkit/appkit-crypto-0.3.0.tgz': {}
 
-  '@appkit/dashboard@file:vendor/appkit/appkit-dashboard-1.0.2.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@appkit/dashboard@file:vendor/appkit/appkit-dashboard-1.0.2.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     optionalDependencies:
-      '@appkit/ui': file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
+      '@appkit/ui': file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
       lucide-react: 0.474.0(react@19.2.4)
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@appkit/iam@file:vendor/appkit/appkit-iam-1.0.0.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@appkit/iam@file:vendor/appkit/appkit-iam-1.0.0.tgz(@appkit/ui@file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     optionalDependencies:
-      '@appkit/ui': file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
+      '@appkit/ui': file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
       lucide-react: 0.474.0(react@19.2.4)
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
@@ -7466,7 +7466,7 @@ snapshots:
     dependencies:
       tailwindcss: 4.3.3
 
-  '@appkit/ui@file:vendor/appkit/appkit-ui-0.1.8.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)':
+  '@appkit/ui@file:vendor/appkit/appkit-ui-0.1.10.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)':
     dependencies:
       '@appkit/tokens': file:vendor/appkit/appkit-tokens-0.1.1.tgz(tailwindcss@4.3.3)
       class-variance-authority: 0.7.1

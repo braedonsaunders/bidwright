@@ -297,7 +297,7 @@ export function buildPdfDataPackage(
   return {
     quoteNumber: workspace.quote?.quoteNumber ?? "",
     revisionNumber: rev?.revisionNumber ?? 0,
-    title: rev?.title ?? "",
+    title: workspace.quote?.title ?? "",
     description: rev?.description ?? "",
     orgName: organization.companyName ?? "",
     orgLogoUrl: organization.logoUrl ?? "",

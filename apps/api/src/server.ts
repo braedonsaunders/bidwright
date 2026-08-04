@@ -189,6 +189,7 @@ const revisionPatchSchema = z.object({
   pdfPreferences: z.record(z.unknown()).optional()
 });
 const quotePatchSchema = z.object({
+  title: z.string().trim().min(1).optional(),
   customerExistingNew: z.enum(["Existing", "New"]).optional(),
   customerId: z.string().nullable().optional(),
   customerString: z.string().optional(),

@@ -7793,7 +7793,7 @@ export function TakeoffTab({
                   activeWorksheetId={selectedWorksheet?.id ?? null}
                   projectContextText={[
                     workspace.project.name,
-                    workspace.currentRevision.title,
+                    workspace.quote.title,
                     workspace.currentRevision.description,
                   ].filter(Boolean).join("\n")}
                   photoFiles={photoSources}
