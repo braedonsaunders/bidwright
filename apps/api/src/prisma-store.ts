@@ -15634,6 +15634,65 @@ export class PrismaApiStore {
     return mapDwgEntityLink(link);
   }
 
+  async createDwgEntityLinks(
+    projectId: string,
+    inputs: Array<{
+      documentId: string;
+      entityId: string;
+      entityType?: string;
+      layer?: string;
+      worksheetItemId: string;
+      quantity: number;
+      multiplier?: number;
+      selection?: Record<string, unknown>;
+    }>,
+  ) {
+    await this.requireProject(projectId);
+    if (inputs.length === 0) return { created: 0 };
+    if (inputs.length > 500) throw new Error("A maximum of 500 DWG entity links can be created at once");
+
+    const worksheetItemIds = Array.from(new Set(inputs.map((input) => input.worksheetItemId).filter(Boolean)));
+    if (worksheetItemIds.length !== 1) throw new Error("All DWG entity links must target one worksheet item");
+    if (inputs.some((input) => !input.documentId || !input.entityId)) {
+      throw new Error("documentId and entityId are required for every DWG entity link");
+    }
+
+    const item = await this.db.worksheetItem.findFirst({ where: { id: worksheetItemIds[0] } });
+    if (!item) throw new Error(`Worksheet item ${worksheetItemIds[0]} not found`);
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (revision) {
+      const worksheet = await this.db.worksheet.findFirst({ where: { id: item.worksheetId } });
+      if (!worksheet || worksheet.revisionId !== revision.id) {
+        throw new Error(`Worksheet item ${worksheetItemIds[0]} not in current revision`);
+      }
+    }
+
+    const now = new Date();
+    const result = await this.db.dwgEntityLink.createMany({
+      data: inputs.map((input) => {
+        const quantity = Number.isFinite(input.quantity) ? input.quantity : 0;
+        const multiplier = Number.isFinite(input.multiplier) ? Number(input.multiplier) : 1;
+        return {
+          id: createId("dlink"),
+          projectId,
+          documentId: input.documentId,
+          entityId: input.entityId,
+          entityType: input.entityType ?? "",
+          layer: input.layer ?? "",
+          worksheetItemId: input.worksheetItemId,
+          quantity,
+          multiplier,
+          derivedQuantity: quantity * multiplier,
+          selection: (input.selection ?? {}) as any,
+          createdAt: now,
+          updatedAt: now,
+        };
+      }),
+      skipDuplicates: true,
+    });
+    return { created: result.count };
+  }
+
   async deleteDwgEntityLink(linkId: string) {
     const link = await this.db.dwgEntityLink.findFirst({ where: { id: linkId } });
     if (!link) throw new Error(`DWG entity link ${linkId} not found`);

@@ -4820,6 +4820,26 @@ export async function createDwgEntityLink(
   });
 }
 
+export async function createDwgEntityLinks(
+  projectId: string,
+  links: Array<{
+    documentId: string;
+    entityId: string;
+    entityType?: string;
+    layer?: string;
+    worksheetItemId: string;
+    quantity: number;
+    multiplier?: number;
+    selection?: Record<string, unknown>;
+  }>,
+) {
+  return apiRequest<{ created: number }>(`/api/takeoff/${projectId}/dwg-links/bulk`, {
+    method: "POST",
+    body: JSON.stringify({ links }),
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 export async function deleteDwgEntityLink(projectId: string, linkId: string) {
   return apiRequest<{ deleted: boolean }>(`/api/takeoff/${projectId}/dwg-links/${linkId}`, {
     method: "DELETE",
@@ -5849,6 +5869,7 @@ export async function queryModelElements(projectId: string, modelId: string, fil
   material?: string;
   name?: string;
   limit?: number;
+  offset?: number;
 } = {}) {
   const params = new URLSearchParams();
   Object.entries(filters).forEach(([key, value]) => {
@@ -5856,7 +5877,7 @@ export async function queryModelElements(projectId: string, modelId: string, fil
     params.set(key, String(value));
   });
   const qs = params.toString();
-  return apiRequest<{ elements: ModelElement[]; count: number }>(
+  return apiRequest<{ elements: ModelElement[]; count: number; offset: number; limit: number }>(
     `/api/models/${projectId}/assets/${modelId}/elements${qs ? `?${qs}` : ""}`,
   );
 }
@@ -6048,6 +6069,28 @@ export async function createModelTakeoffLink(
   },
 ) {
   return apiRequest<{ link: ModelPickupLinkRecord }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function createModelTakeoffLinks(
+  projectId: string,
+  modelId: string,
+  input: {
+    worksheetItemId: string;
+    links: Array<{
+      modelElementId: string;
+      modelQuantityId?: string | null;
+      quantityField?: string;
+      multiplier?: number;
+      derivedQuantity: number;
+      selection?: unknown;
+    }>;
+  },
+) {
+  return apiRequest<{ count: number }>(`/api/models/${projectId}/assets/${modelId}/takeoff-links/bulk`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),

@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import {
   createModelTakeoffLink,
+  createModelTakeoffLinks,
   createProjectFederation,
   deleteModelTakeoffLink,
   deleteProjectFederation,
@@ -50,6 +51,18 @@ const createModelTakeoffLinkSchema = z.object({
   multiplier: z.coerce.number().finite().optional(),
   derivedQuantity: z.coerce.number().finite().optional(),
   selection: z.unknown().optional(),
+});
+
+const createModelTakeoffLinksSchema = z.object({
+  worksheetItemId: z.string().min(1),
+  links: z.array(z.object({
+    modelElementId: z.string().min(1),
+    modelQuantityId: z.string().min(1).nullable().optional(),
+    quantityField: z.string().min(1).optional(),
+    multiplier: z.coerce.number().finite().optional(),
+    derivedQuantity: z.coerce.number().finite(),
+    selection: z.unknown().optional(),
+  })).min(1).max(500),
 });
 
 // ── Element classification/LOD update ──────────────────────────────────
@@ -248,6 +261,21 @@ export async function modelRoutes(app: FastifyInstance) {
       const link = await createModelTakeoffLink(projectId, { ...parsed.data, modelId });
       reply.code(201);
       return { link };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/assets/:modelId/takeoff-links/bulk", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    const parsed = createModelTakeoffLinksSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const result = await createModelTakeoffLinks(projectId, { ...parsed.data, modelId });
+      reply.code(201);
+      return result;
     } catch (error) {
       return routeError(reply, error);
     }

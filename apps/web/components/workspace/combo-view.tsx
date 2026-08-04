@@ -497,16 +497,18 @@ function RightPanel({
         {tab === "inspect" && (
           <>
             <DocumentSummaryCard snapshot={inspectSnapshot} />
-            <div className="flex min-h-0 flex-1 flex-col rounded-md border border-line bg-panel/40 p-2">
-              <TakeoffLinkView
-                workspace={workspace}
-                selection={takeoffSelection}
-                annotations={annotationsCache}
-                activeWorksheetId={activeWorksheetId}
-                onLinksMutated={onLinksMutated}
-                onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
-                onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
-              />
+            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-panel/40 p-2">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
+                <TakeoffLinkView
+                  workspace={workspace}
+                  selection={takeoffSelection}
+                  annotations={annotationsCache}
+                  activeWorksheetId={activeWorksheetId}
+                  onLinksMutated={onLinksMutated}
+                  onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
+                  onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
+                />
+              </div>
             </div>
           </>
         )}

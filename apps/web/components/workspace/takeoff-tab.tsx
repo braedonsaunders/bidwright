@@ -102,7 +102,9 @@ import {
   createPickupLink,
   listDwgEntityLinks,
   createDwgEntityLink,
+  createDwgEntityLinks,
   createModelTakeoffLink,
+  createModelTakeoffLinks,
   deleteModelTakeoffLink,
   deleteWorksheetItem,
   createWorksheetItem,
@@ -1949,7 +1951,10 @@ export function TakeoffTab({
 
   /* Core state */
   const [selectedDocId, setSelectedDocId] = useState(initialDocumentId ?? projectPdfs[0]?.id ?? "");
-  const [showLanding, setShowLanding] = useState(!detached && !initialDocumentId);
+  // Remembering the last document is useful once the user chooses a takeoff
+  // source, but it must not silently bypass the launcher on a fresh estimate
+  // visit. Detached viewers remain direct-document surfaces.
+  const [showLanding, setShowLanding] = useState(!detached);
   type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "photo";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
@@ -1978,10 +1983,10 @@ export function TakeoffTab({
     }
   }, [drawings.length, selectedDocId]);
   useEffect(() => {
-    if (detached || initialDocumentId) {
+    if (detached) {
       setShowLanding(false);
     }
-  }, [detached, initialDocumentId]);
+  }, [detached]);
   const [page, setPage] = useState(safeInitialPage);
   const [zoom, setZoom] = useState(safeInitialZoom);
   const [totalPages, setTotalPages] = useState(1);
@@ -2276,8 +2281,10 @@ export function TakeoffTab({
   const [modelSelection, setModelSelection] = useState<BidwrightModelSelectionMessage | null>(null);
   const [modelTakeoffLinks, setModelTakeoffLinks] = useState<ModelPickupLinkRecord[]>([]);
   const [modelElements, setModelElements] = useState<ModelElementWithQuantities[]>([]);
+  const [modelElementCount, setModelElementCount] = useState(0);
   const [modelElementSearch, setModelElementSearch] = useState("");
   const [modelElementsLoading, setModelElementsLoading] = useState(false);
+  const modelElementsRequestRef = useRef(0);
   const [modelLedgerBasis, setModelLedgerBasis] = useState<ModelQuantityBasis>("count");
   const [selectedModelElementIds, setSelectedModelElementIds] = useState<Set<string>>(() => new Set());
   const [modelSyncing, setModelSyncing] = useState(false);
@@ -2299,6 +2306,7 @@ export function TakeoffTab({
     | { kind: "create-single-annotation"; pickupId: string; pick: InspectCategoryPick }
     | { kind: "create-annotation-group"; pickupIds: string[]; groupLabel: string; pick: InspectCategoryPick }
     | { kind: "create-dwg-row"; rowId: string; rowType: "entity" | "autoCount" | "system"; pick: InspectCategoryPick }
+    | { kind: "create-dwg-group"; entityIds: string[]; groupLabel: string; pick: InspectCategoryPick }
     | { kind: "create-spreadsheet-row"; rowIndex: number; mode: SpreadsheetPanelView; pick: InspectCategoryPick }
     | { kind: "create-spreadsheet-all"; mode: SpreadsheetPanelView; pick: InspectCategoryPick };
   const [worksheetPickerAction, setWorksheetPickerAction] = useState<WorksheetPickerAction | null>(null);
@@ -2445,28 +2453,59 @@ export function TakeoffTab({
   }, [refreshModelTakeoffLinks]);
 
   const refreshModelElements = useCallback(async () => {
+    const requestId = ++modelElementsRequestRef.current;
     if (!projectId || !selectedModelAsset?.id) {
       setModelElements([]);
+      setModelElementCount(0);
       return;
     }
     setModelElementsLoading(true);
     try {
-      const result = await queryModelElements(projectId, selectedModelAsset.id, {
+      const modelId = selectedModelAsset.id;
+      const filters = {
         text: modelElementSearch.trim() || undefined,
-        limit: 400,
+      };
+      const pageSize = 1000;
+      const first = await queryModelElements(projectId, modelId, {
+        ...filters,
+        limit: pageSize,
+        offset: 0,
       });
-      setModelElements(result.elements ?? []);
+      const total = first.count ?? first.elements?.length ?? 0;
+      if (requestId !== modelElementsRequestRef.current) return;
+      setModelElementCount(total);
+      setModelElements(first.elements ?? []);
+      const offsets = Array.from(
+        { length: Math.max(0, Math.ceil(total / pageSize) - 1) },
+        (_, index) => (index + 1) * pageSize,
+      );
+      const remaining = await Promise.all(
+        offsets.map((offset) => queryModelElements(projectId, modelId, {
+          ...filters,
+          limit: pageSize,
+          offset,
+        })),
+      );
+      if (requestId !== modelElementsRequestRef.current) return;
+      setModelElements([
+        ...(first.elements ?? []),
+        ...remaining.flatMap((page) => page.elements ?? []),
+      ]);
     } catch (error) {
+      if (requestId !== modelElementsRequestRef.current) return;
       console.error("[takeoff] Failed to load model elements:", error);
       setModelElements([]);
+      setModelElementCount(0);
     } finally {
-      setModelElementsLoading(false);
+      if (requestId === modelElementsRequestRef.current) setModelElementsLoading(false);
     }
   }, [modelElementSearch, projectId, selectedModelAsset?.id]);
 
   useEffect(() => {
     if (!selectedModelAsset?.id) {
+      modelElementsRequestRef.current += 1;
       setModelElements([]);
+      setModelElementCount(0);
       return;
     }
     const timeout = window.setTimeout(() => {
@@ -2479,6 +2518,7 @@ export function TakeoffTab({
     setModelSelection(null);
     setModelTakeoffLinks([]);
     setModelElements([]);
+    setModelElementCount(0);
     setSelectedModelElementIds(new Set());
   }, [selectedDocId]);
 
@@ -2492,21 +2532,24 @@ export function TakeoffTab({
     [modelElements, selectedModelElementIds],
   );
 
-  // Map an IFC raycast hit (expressID) back to a ModelElement and publish a
-  // model-element selection so the side-panel Link view populates.
-  const handleIfcElementSelect = useCallback(
-    (sel: { expressID: number; elementClass: string }) => {
-      if (!selectedModelAsset) return;
-      if (sel.expressID < 0) {
+  const pendingModelExternalIdRef = useRef<string | null>(null);
+
+  const publishIndexedModelElementSelection = useCallback(
+    (element: ModelElementWithQuantities | null, syncViewer = false) => {
+      if (!element || !selectedModelAsset) {
+        setSelectedModelElementIds(new Set());
+        if (syncViewer) modelViewerActionsRef.current?.selectElement(null);
         if (selection?.kind === "model-element" || !onSelectionChange) publishTakeoffSelection(null);
         return;
       }
-      const wanted = `#${sel.expressID}`;
-      const element = modelElements.find((e) => {
-        const props = (e.properties as Record<string, unknown> | null) ?? {};
-        return props.expressId === wanted;
-      });
-      if (!element) return;
+      setSelectedModelElementIds(new Set([element.id]));
+      if (syncViewer) {
+        const properties = (element.properties as Record<string, unknown> | null) ?? {};
+        const viewerExternalId = typeof properties.expressId === "string" && properties.expressId
+          ? properties.expressId
+          : element.externalId;
+        modelViewerActionsRef.current?.selectElement(viewerExternalId);
+      }
       publishTakeoffSelection({
         kind: "model-element",
         assetId: selectedModelAsset.id,
@@ -2518,7 +2561,55 @@ export function TakeoffTab({
         quantitySummary: formatElementQuantity(element, modelLedgerBasis),
       });
     },
-    [onSelectionChange, selectedModelAsset, modelElements, modelLedgerBasis, selection],
+    [modelLedgerBasis, onSelectionChange, selectedModelAsset, selection],
+  );
+
+  const handleHostedModelElementSelect = useCallback(
+    (selected: { externalId: string } | null) => {
+      pendingModelExternalIdRef.current = selected?.externalId ?? null;
+      if (!selected) {
+        publishIndexedModelElementSelection(null);
+        return;
+      }
+      const element = modelElements.find((candidate) => candidate.externalId === selected.externalId);
+      if (element) {
+        pendingModelExternalIdRef.current = null;
+        publishIndexedModelElementSelection(element);
+      }
+    },
+    [modelElements, publishIndexedModelElementSelection],
+  );
+
+  // A user can click the Autodesk model while the final element pages are
+  // still loading. Resolve that pending dbId as soon as its page arrives so
+  // Inspect populates without requiring a second click or a trip to Pickups.
+  useEffect(() => {
+    const externalId = pendingModelExternalIdRef.current;
+    if (!externalId) return;
+    const element = modelElements.find((candidate) => candidate.externalId === externalId);
+    if (!element) return;
+    pendingModelExternalIdRef.current = null;
+    publishIndexedModelElementSelection(element);
+  }, [modelElements, publishIndexedModelElementSelection]);
+
+  // Map an IFC raycast hit (expressID) back to a ModelElement and publish a
+  // model-element selection so the side-panel Link view populates.
+  const handleIfcElementSelect = useCallback(
+    (sel: { expressID: number; elementClass: string }) => {
+      if (!selectedModelAsset) return;
+      if (sel.expressID < 0) {
+        publishIndexedModelElementSelection(null);
+        return;
+      }
+      const wanted = `#${sel.expressID}`;
+      const element = modelElements.find((e) => {
+        const props = (e.properties as Record<string, unknown> | null) ?? {};
+        return props.expressId === wanted;
+      });
+      if (!element) return;
+      publishIndexedModelElementSelection(element);
+    },
+    [selectedModelAsset, modelElements, publishIndexedModelElementSelection],
   );
 
   useEffect(() => {
@@ -2912,21 +3003,12 @@ export function TakeoffTab({
         setModelBasis: (b) => setModelLedgerBasis(b),
         selectModelElement: (id) => {
           if (!id || !selectedModelAsset) {
-            if (selection?.kind === "model-element" || !onSelectionChange) publishTakeoffSelection(null);
+            publishIndexedModelElementSelection(null, true);
             return;
           }
           const element = modelElements.find((e) => e.id === id);
           if (!element) return;
-          publishTakeoffSelection({
-            kind: "model-element",
-            assetId: selectedModelAsset.id,
-            elementId: element.id,
-            elementName: element.name || element.externalId,
-            elementClass: element.elementClass ?? undefined,
-            material: element.material ?? undefined,
-            level: element.level ?? undefined,
-            quantitySummary: formatElementQuantity(element, modelLedgerBasis),
-          });
+          publishIndexedModelElementSelection(element, true);
         },
         createLineItemFromElement: async (id, pick) => {
           // The pick is selected in the per-click popover that wraps each
@@ -2998,6 +3080,9 @@ export function TakeoffTab({
         },
         createLineItemFromDwgEntity: async (id, pick) => {
           await handleCreateDwgRowLineItem("entity", id, pick);
+        },
+        createLineItemFromDwgEntityGroup: async (ids, groupLabel, pick) => {
+          await handleCreateDwgEntityGroupLineItem(ids, groupLabel, pick);
         },
         createLineItemFromDwgAutoCount: async (id, pick) => {
           await handleCreateDwgRowLineItem("autoCount", id, pick);
@@ -6051,6 +6136,8 @@ export function TakeoffTab({
             name: element.name || element.externalId,
             externalId: element.externalId,
             elementClass: element.elementClass ?? null,
+            elementType: element.elementType ?? null,
+            system: element.system ?? null,
             material: element.material ?? null,
             level: element.level ?? null,
             // Phase 2 BIM fields. classification is the typed record; lod/lodSource
@@ -6136,6 +6223,7 @@ export function TakeoffTab({
         : null,
       dwgIntelligence: mode === "dwg" ? enrichedDwgIntelligence : null,
       modelElements: inspectModelElements,
+      modelElementCount,
       modelElementsLoading,
       modelError,
       modelSyncing,
@@ -6242,6 +6330,7 @@ export function TakeoffTab({
     canvasSize.height,
     zoom,
     modelElements,
+    modelElementCount,
     modelElementsLoading,
     modelError,
     modelSyncing,
@@ -6691,6 +6780,123 @@ export function TakeoffTab({
     }
   }
 
+  async function createLineItemFromDwgEntityGroup(
+    entityIds: string[],
+    groupLabel: string,
+    pickInput: string | InspectCategoryPick,
+    explicitWs?: { id: string; name: string },
+  ) {
+    const pick = normalizeTakeoffCategoryPick(pickInput);
+    const intel = enrichedDwgIntelligence ?? dwgIntelligence;
+    const requestedIds = new Set(entityIds);
+    const entities = intel?.entities.filter((entity) => requestedIds.has(entity.id)) ?? [];
+    if (!intel || entities.length === 0) {
+      setToastType("error");
+      setToastMessage("Those CAD entities are no longer available.");
+      return null;
+    }
+    const ws = explicitWs ?? selectedWorksheet;
+    if (!ws) {
+      setWorksheetPickerAction({ kind: "create-dwg-group", entityIds, groupLabel, pick });
+      return null;
+    }
+
+    const uoms = Array.from(new Set(entities.map((entity) => entity.uom)));
+    if (uoms.length !== 1) {
+      setToastType("error");
+      setToastMessage("A grouped CAD line must use one measurement unit. Add another grouping field first.");
+      return null;
+    }
+    const normalizedUom = uoms[0].toLowerCase();
+    if (normalizedUom === "du" || normalizedUom === "du2") {
+      setToastType("error");
+      setToastMessage("Set the DWG/DXF scale before adding measured vector entities to a worksheet.");
+      return null;
+    }
+    const takeoffCategory = entityCategories.find((category) => category.id === pick.categoryId && category.enabled);
+    if (!takeoffCategory) {
+      setToastType("error");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
+      return null;
+    }
+
+    const previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
+    const quantity = entities.reduce((total, entity) => total + (Number.isFinite(entity.quantity) ? entity.quantity : 0), 0);
+    const basePayload: CreateWorksheetItemInput = {
+      categoryId: takeoffCategory.id,
+      category: takeoffCategory.name,
+      entityType: takeoffCategory.entityType,
+      entityName: groupLabel,
+      description: "",
+      quantity,
+      uom: uoms[0],
+      cost: 0,
+      markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+      price: 0,
+      sourceNotes: [
+        "From grouped DWG/DXF native entities",
+        selectedDoc?.fileName ? `doc: ${selectedDoc.fileName}` : "",
+        `${entities.length} source entities`,
+      ].filter(Boolean).join(" · "),
+    };
+    const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
+    if (!payload) return null;
+
+    setDwgEntitySavingId(`group:${groupLabel}`);
+    try {
+      const result = await createWorksheetItem(projectId, ws.id, payload);
+      const createdItem = result.workspace.worksheets
+        .flatMap((worksheet) => worksheet.items)
+        .find((item) => !previousItemIds.has(item.id));
+      if (!createdItem) return null;
+
+      const links = entities.map((entity) => ({
+        documentId: intel.documentId,
+        entityId: entity.id,
+        entityType: entity.type,
+        layer: entity.layer,
+        worksheetItemId: createdItem.id,
+        quantity: entity.quantity,
+        multiplier: 1,
+        selection: {
+          mode: "group",
+          label: groupLabel,
+          fileName: intel.fileName,
+          selectedLayout: intel.selectedLayout,
+          sourceEntityCount: entities.length,
+          lineItemDraft: payload,
+        },
+      }));
+      for (let index = 0; index < links.length; index += 500) {
+        await createDwgEntityLinks(projectId, links.slice(index, index + 500));
+      }
+      return { createdItem };
+    } finally {
+      setDwgEntitySavingId(null);
+    }
+  }
+
+  async function handleCreateDwgEntityGroupLineItem(
+    entityIds: string[],
+    groupLabel: string,
+    pick: string | InspectCategoryPick,
+  ) {
+    try {
+      const created = await createLineItemFromDwgEntityGroup(entityIds, groupLabel, pick);
+      if (!created) return;
+      await loadDwgEntityLinks();
+      notifyWorkspaceMutated();
+      notifyPickupLinksMutated();
+      setToastType("success");
+      setToastMessage(`Created one worksheet line from ${entityIds.length} CAD entities.`);
+    } catch (error) {
+      console.error("[takeoff] Failed to create grouped DWG/DXF line item:", error);
+      setDwgEntitySavingId(null);
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Could not create a line item from that CAD group."));
+    }
+  }
+
   function clearDwgSelectionIf(sourceEntityIds: string[]) {
     const selectedEntityId = (enrichedDwgIntelligence ?? dwgIntelligence)?.selectedEntityId;
     if (!selectedEntityId || !sourceEntityIds.includes(selectedEntityId)) return;
@@ -6948,36 +7154,38 @@ export function TakeoffTab({
       .flatMap((w) => w.items)
       .find((i) => !previousItemIds.has(i.id));
     if (!createdItem) return null;
-    // Bind every element to the summed line item via a ModelTakeoffLink so
-    // revision diff against the underlying model still tracks the rollup.
-    await Promise.all(
-      elements.map((element) => {
-        const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
-        return createModelTakeoffLink(projectId, modelAsset.id, {
-          worksheetItemId: createdItem.id,
+    // Bind every element to the summed line item so revision-diff keeps the
+    // rollup traceable. Use server-side bulk inserts in bounded chunks: a BIM
+    // class can contain thousands of objects and one HTTP request per object
+    // made the otherwise-correct group workflow unusable on real models.
+    const linkInputs = elements.map((element) => {
+      const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+      return {
+        modelElementId: element.id,
+        modelQuantityId: primary?.quantityId,
+        quantityField: "quantity",
+        multiplier: 1,
+        derivedQuantity: primary?.quantity ?? 0,
+        selection: {
+          mode: "model-element-group",
+          groupLabel,
+          fileName: selectedDoc?.fileName ?? modelAsset.fileName,
           modelElementId: element.id,
-          modelQuantityId: primary?.quantityId,
-          quantityField: "quantity",
-          multiplier: 1,
-          derivedQuantity: primary?.quantity ?? 0,
-          selection: {
-            mode: "model-element",
-            fileName: selectedDoc?.fileName ?? modelAsset.fileName,
-            modelElementId: element.id,
-            externalId: element.externalId,
-            elementName: element.name,
-            elementClass: element.elementClass,
-            material: element.material,
-            quantityBasis: modelLedgerBasis,
-            quantityType: primary?.quantityType ?? primaryQuantityType,
-            quantities: element.quantities ?? [],
-            lineItemDraft: payload,
-          },
-        }).catch((err) => {
-          console.warn(`[takeoff] Could not link element ${element.id} to summed line item:`, err);
-        });
-      }),
-    );
+          externalId: element.externalId,
+          elementName: element.name,
+          elementClass: element.elementClass,
+          material: element.material,
+          quantityBasis: modelLedgerBasis,
+          quantityType: primary?.quantityType ?? primaryQuantityType,
+        },
+      };
+    });
+    for (let offset = 0; offset < linkInputs.length; offset += 500) {
+      await createModelTakeoffLinks(projectId, modelAsset.id, {
+        worksheetItemId: createdItem.id,
+        links: linkInputs.slice(offset, offset + 500),
+      });
+    }
     return { createdItem };
   }
 
@@ -7445,6 +7653,14 @@ export function TakeoffTab({
       notifyPickupLinksMutated();
       setToastType("success");
       setToastMessage("Created line item from DWG/DXF entity.");
+    } else if (action.kind === "create-dwg-group") {
+      const created = await createLineItemFromDwgEntityGroup(action.entityIds, action.groupLabel, action.pick, ws);
+      if (!created) return;
+      await loadDwgEntityLinks();
+      notifyWorkspaceMutated();
+      notifyPickupLinksMutated();
+      setToastType("success");
+      setToastMessage(`Created one worksheet line from ${action.entityIds.length} CAD entities.`);
     } else if (action.kind === "create-spreadsheet-row") {
       const result = await createLineItemFromSpreadsheetRow(action.rowIndex, action.pick, ws, action.mode);
       notifyWorkspaceMutated();
@@ -8741,6 +8957,7 @@ export function TakeoffTab({
                 fileUrl={documentUrl}
                 fileName={selectedDoc?.fileName}
                 onIfcElementSelect={handleIfcElementSelect}
+                onModelElementSelect={handleHostedModelElementSelect}
                 actionsRef={modelViewerActionsRef}
                 displayMode={modelDisplayMode}
                 showGrid={modelGridVisible}
@@ -9358,7 +9575,7 @@ export function TakeoffTab({
         <p className="text-[11px] text-fg/40">
           {isCadDocument
             ? isBimDocument
-              ? "BIM takeoff active. Select IFC elements to inspect and create worksheet items."
+              ? "BIM takeoff active. Select model elements to inspect and create worksheet items."
               : "3D model takeoff active. Use View and Display to inspect geometry."
             : TOOL_STATUS_TEXT[activeTool] ?? "Select a tool to begin."}
         </p>

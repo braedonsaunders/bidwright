@@ -1,12 +1,14 @@
 "use client";
 
-import { Fragment, useMemo, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Check, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, ScanSearch, Settings2, Sigma, Trash2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import {
   Input,
 } from "@appkit/ui";
 import { cn } from "@/lib/utils";
+import { groupModelElements, type ModelElementGroupAxis } from "@/lib/model-element-groups";
+import { groupCadEntities, type CadEntityGroupAxis } from "@/lib/cad-entity-groups";
 import type { Pickup } from "@/components/workspace/takeoff/annotation-canvas";
 import type {
   DrawingAnalysisPreset,
@@ -288,6 +290,8 @@ export interface InspectModelElement {
   name: string;
   externalId: string;
   elementClass?: string | null;
+  elementType?: string | null;
+  system?: string | null;
   material?: string | null;
   level?: string | null;
   /** Construction classification keyed by standard. Same shape and keys as
@@ -356,6 +360,7 @@ export interface InspectSnapshot {
   dwgIntelligence: InspectDwgIntelligenceSnapshot | null;
   // 3D model
   modelElements: InspectModelElement[];
+  modelElementCount: number;
   modelElementsLoading: boolean;
   modelError: string | null;
   modelSyncing: boolean;
@@ -431,6 +436,7 @@ export interface InspectActions {
   selectDwgEntity: (id: string | null) => void;
   selectDwgEntities: (ids: string[]) => void;
   createLineItemFromDwgEntity: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
+  createLineItemFromDwgEntityGroup: (ids: string[], label: string, pick: InspectCategoryPick) => Promise<void> | void;
   createLineItemFromDwgAutoCount: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   createLineItemFromDwgSystem: (id: string, pick: InspectCategoryPick) => Promise<void> | void;
   deleteDwgEntity: (id: string) => void;
@@ -1036,6 +1042,8 @@ function DwgEntitiesInspect({
 }) {
   const intel = snapshot.dwgIntelligence;
   const [query, setQuery] = useState("");
+  const [groupBy, setGroupBy] = useState<CadEntityGroupAxis[]>(["layer", "type"]);
+  const [flatVisibleCount, setFlatVisibleCount] = useState(250);
   // Precondition: TakeoffInspectView only routes here when intel is populated,
   // so this is purely a TS narrow.
   if (!intel) return null;
@@ -1047,7 +1055,67 @@ function DwgEntitiesInspect({
   const systems = intel.systems.filter((row) => matches([row.label, row.layer, row.uom, row.segmentCount]));
   const autoCounts = intel.autoCounts.filter((row) => matches([row.label, row.type, row.layer, row.count]));
   const entities = intel.entities.filter((row) => matches([row.label, row.type, row.layer, row.layoutName, row.measurementLabel]));
-  const shownEntities = entities.slice(0, 500);
+  const groupedEntities = groupCadEntities(entities, groupBy);
+  const shownEntities = entities.slice(0, flatVisibleCount);
+
+  const toggleGroupAxis = (axis: CadEntityGroupAxis) => {
+    setGroupBy((current) => {
+      if (current.includes(axis)) return current.filter((candidate) => candidate !== axis);
+      return [...current, axis].slice(-3);
+    });
+  };
+
+  const groupBuilder = (
+    <div className="mt-1.5 rounded-md border border-line/70 bg-bg/35 p-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-semibold text-fg/65">Group pickups</p>
+          <p className="text-[9px] text-fg/35">Build ordered CAD rollups, then add a whole group as one worksheet line.</p>
+        </div>
+        <span className="shrink-0 font-mono text-[9px] tabular-nums text-fg/40">
+          {groupBy.length === 0 ? "Flat list" : `${groupedEntities.length.toLocaleString()} groups`}
+        </span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {([
+          { id: "layer", label: "Layer" },
+          { id: "type", label: "Type" },
+          { id: "layoutName", label: "Layout" },
+        ] as Array<{ id: CadEntityGroupAxis; label: string }>).map((option) => {
+          const order = groupBy.indexOf(option.id);
+          return (
+            <button
+              key={option.id}
+              type="button"
+              onClick={() => toggleGroupAxis(option.id)}
+              className={cn(
+                "inline-flex h-6 items-center gap-1 rounded-md border px-1.5 text-[9px] font-medium transition-colors",
+                order >= 0
+                  ? "border-sky-500/35 bg-sky-500/10 text-sky-500"
+                  : "border-line bg-panel text-fg/45 hover:text-fg/70",
+              )}
+            >
+              {order >= 0 && (
+                <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-sky-500/15 font-mono text-[8px]">
+                  {order + 1}
+                </span>
+              )}
+              {option.label}
+            </button>
+          );
+        })}
+        {groupBy.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setGroupBy([])}
+            className="h-6 rounded-md px-1.5 text-[9px] font-medium text-fg/40 hover:bg-panel2 hover:text-fg/65"
+          >
+            Clear
+          </button>
+        )}
+      </div>
+    </div>
+  );
 
   // Total candidate count for the header. Mirrors what the PDF panel does so
   // both surfaces present a consistent header chrome. Counts everything the
@@ -1081,6 +1149,7 @@ function DwgEntitiesInspect({
       settingsContent={settingsBody}
       settingsOpen={showSettings}
       onToggleSettings={() => setShowSettings((v) => !v)}
+      belowSearchContent={groupBuilder}
     >
       <div className="space-y-1.5">
         <DetectionGroup
@@ -1138,33 +1207,73 @@ function DwgEntitiesInspect({
           onDelete={(id) => actions?.deleteDwgAutoCount(id)}
         />
 
-        <DetectionGroup
-          title="CAD entities"
-          accentColor="#94a3b8"
-          count={entities.length}
-          rows={shownEntities.map((entity) => ({
-            id: entity.id,
-            kind: "cad-entity" as const,
-            source: "cad" as const,
-            title: entity.label,
-            subtitle: `${entity.type} · layer ${entity.layer} · ${entity.layoutName}`,
-            value: entity.measurementLabel,
-            selected: intel.selectedEntityId === entity.id,
-            saving: false,
-            savedCount: entity.linkCount,
-            linkCount: entity.linkCount,
-            color: entity.color,
-          }))}
-          snapshot={snapshot}
-          actions={actions}
-          onSelect={(id) => actions?.selectDwgEntity(intel.selectedEntityId === id ? null : id)}
-          onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgEntity(id, pick)}
-          onDelete={(id) => actions?.deleteDwgEntity(id)}
-        />
-        {entities.length > shownEntities.length && (
-          <p className="rounded-md border border-line/70 bg-bg/25 px-2 py-1.5 text-center text-[10px] text-fg/35">
-            Showing first {shownEntities.length.toLocaleString()} pickups. Filter to narrow the list.
-          </p>
+        {groupBy.length > 0 ? groupedEntities.map((group) => (
+          <DetectionGroup
+            key={group.key}
+            title={group.label}
+            accentColor="#94a3b8"
+            count={group.entities.length}
+            rows={group.entities.map((entity) => ({
+              id: entity.id,
+              kind: "cad-entity" as const,
+              source: "cad" as const,
+              title: entity.label,
+              subtitle: `${entity.type} · layer ${entity.layer} · ${entity.layoutName}`,
+              value: entity.measurementLabel,
+              selected: intel.selectedEntityId === entity.id,
+              saving: false,
+              savedCount: entity.linkCount,
+              linkCount: entity.linkCount,
+              color: entity.color,
+            }))}
+            snapshot={snapshot}
+            actions={actions}
+            onSelect={(id) => actions?.selectDwgEntity(intel.selectedEntityId === id ? null : id)}
+            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgEntity(id, pick)}
+            onDelete={(id) => actions?.deleteDwgEntity(id)}
+            initialCollapsed={!group.entities.some((entity) => entity.id === intel.selectedEntityId)}
+            groupAction={{
+              triggerTitle: `Add one summed line item from all ${group.entities.length} CAD entities in ${group.label}`,
+              onPick: (pick) => void actions?.createLineItemFromDwgEntityGroup(
+                group.entities.map((entity) => entity.id),
+                group.label,
+                pick,
+              ),
+            }}
+          />
+        )) : (
+          <DetectionGroup
+            title="Ungrouped CAD entities"
+            accentColor="#94a3b8"
+            count={entities.length}
+            rows={shownEntities.map((entity) => ({
+              id: entity.id,
+              kind: "cad-entity" as const,
+              source: "cad" as const,
+              title: entity.label,
+              subtitle: `${entity.type} · layer ${entity.layer} · ${entity.layoutName}`,
+              value: entity.measurementLabel,
+              selected: intel.selectedEntityId === entity.id,
+              saving: false,
+              savedCount: entity.linkCount,
+              linkCount: entity.linkCount,
+              color: entity.color,
+            }))}
+            snapshot={snapshot}
+            actions={actions}
+            onSelect={(id) => actions?.selectDwgEntity(intel.selectedEntityId === id ? null : id)}
+            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgEntity(id, pick)}
+            onDelete={(id) => actions?.deleteDwgEntity(id)}
+          />
+        )}
+        {groupBy.length === 0 && entities.length > shownEntities.length && (
+          <button
+            type="button"
+            onClick={() => setFlatVisibleCount((count) => Math.min(entities.length, count + 250))}
+            className="h-7 w-full rounded-md border border-line bg-bg/35 text-[10px] font-medium text-fg/55 hover:bg-panel2 hover:text-fg/75"
+          >
+            Show 250 more · {shownEntities.length.toLocaleString()} of {entities.length.toLocaleString()}
+          </button>
         )}
 
         {/* Auto/manual annotations live in the SAME panel as the
@@ -1940,6 +2049,7 @@ function DetectionGroup({
   onAdd,
   onDelete,
   groupAction,
+  initialCollapsed = false,
 }: {
   /** Short type label — "Linear", "Counts", "Arcs", etc. NOT "X candidates"
    *  — every row across every section is already a potential line item per
@@ -1967,8 +2077,16 @@ function DetectionGroup({
     triggerTitle: string;
     onPick: (pick: InspectCategoryPick) => void;
   };
+  /** Large model/CAD groups start collapsed so thousands of indexed elements
+   *  don't become thousands of mounted DOM rows. Selecting an element opens
+   *  its containing group automatically. */
+  initialCollapsed?: boolean;
 }) {
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(initialCollapsed);
+  const containsSelection = rows.some((row) => row.selected);
+  useEffect(() => {
+    if (containsSelection) setCollapsed(false);
+  }, [containsSelection]);
   // Per-row expansion state for the match-detail panel (Auto Count). Stored
   // here so toggling an expand chevron only affects that one row — multiple
   // rows can be expanded simultaneously which is what an estimator wants
@@ -2014,8 +2132,8 @@ function DetectionGroup({
             snapshot={snapshot}
             actions={actions}
             onPick={groupAction.onPick}
-            triggerLabel="Σ Add"
-            triggerClassName="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm px-1 text-[9px] font-medium uppercase tracking-wider text-fg/40 opacity-0 transition-opacity hover:bg-accent/10 hover:text-accent group-hover/grouphdr:opacity-100 focus:opacity-100"
+            triggerLabel="Add group"
+            triggerClassName="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm border border-transparent px-1.5 text-[9px] font-medium text-fg/50 transition-colors hover:border-accent/25 hover:bg-accent/10 hover:text-accent"
             triggerTitle={groupAction.triggerTitle}
             triggerIcon={<Sigma className="h-2.5 w-2.5" />}
           />
@@ -2368,13 +2486,12 @@ function AddToCategoryPopover({
  *  classification primitive that powers the estimate summary rollups, so the
  *  element grouping is consistent with how the line items those elements
  *  back will appear in the quote summary. */
-type InspectGroupBy = "none" | "uniformat" | "masterformat" | "elementClass" | "level" | "material";
-
-const GROUP_BY_OPTIONS: { id: InspectGroupBy; label: string }[] = [
-  { id: "none",         label: "Flat" },
+const GROUP_BY_OPTIONS: { id: ModelElementGroupAxis; label: string }[] = [
   { id: "uniformat",    label: "Uniformat" },
   { id: "masterformat", label: "MasterFormat" },
   { id: "elementClass", label: "Class" },
+  { id: "elementType",  label: "Type" },
+  { id: "system",       label: "System" },
   { id: "level",        label: "Level" },
   { id: "material",     label: "Material" },
 ];
@@ -2386,48 +2503,31 @@ function ModelInspect({
   snapshot: InspectSnapshot;
   actions: InspectActions | null;
 }) {
-  const { modelElements, modelElementsLoading, modelError, modelSyncing, modelSearch, modelBasis, modelAsset, selectedModelElementId } = snapshot;
-  const [groupBy, setGroupBy] = useState<InspectGroupBy>("none");
+  const { modelElements, modelElementCount, modelElementsLoading, modelError, modelSyncing, modelSearch, modelBasis, modelAsset, selectedModelElementId } = snapshot;
+  // Native object type is the most useful first rollup across BIM and generic
+  // 3D sources (Pipe, Valve, Beam, Solid, Surface, etc.) and typically turns
+  // thousands of objects into a few dozen pickup groups immediately.
+  const [groupBy, setGroupBy] = useState<ModelElementGroupAxis[]>(["elementType"]);
   const [showSettings, setShowSettings] = useState(false);
+  const [flatVisibleCount, setFlatVisibleCount] = useState(250);
 
-  // Group elements by the selected axis. Same logic as before — only the
-  // rendering changed: grouped output goes through DetectionGroup so the
-  // BIM panel reads identically to the PDF/DXF panels (one EntitiesPanel
-  // wrapper, type-labelled DetectionGroup sections, source pill per row).
-  const groupedElements = useMemo(() => {
-    if (groupBy === "none") return null;
-    const groups = new Map<string, { key: string; label: string; elements: InspectModelElement[] }>();
-    for (const element of modelElements) {
-      let code = "";
-      let label = "";
-      if (groupBy === "uniformat" || groupBy === "masterformat") {
-        code = element.classification?.[groupBy]?.trim() ?? "";
-        label = code || (groupBy === "uniformat" ? "Unclassified — Uniformat" : "Unclassified — MasterFormat");
-      } else if (groupBy === "elementClass") {
-        code = element.elementClass?.trim() ?? "";
-        label = code || "No class";
-      } else if (groupBy === "level") {
-        code = element.level?.trim() ?? "";
-        label = code || "No level";
-      } else if (groupBy === "material") {
-        code = element.material?.trim() ?? "";
-        label = code || "No material";
-      }
-      const key = code || `__unclassified__${groupBy}`;
-      let group = groups.get(key);
-      if (!group) {
-        group = { key, label, elements: [] };
-        groups.set(key, group);
-      }
-      group.elements.push(element);
-    }
-    return Array.from(groups.values()).sort((a, b) => {
-      const aUn = a.key.startsWith("__unclassified__") ? 1 : 0;
-      const bUn = b.key.startsWith("__unclassified__") ? 1 : 0;
-      if (aUn !== bUn) return aUn - bUn;
-      return a.key.localeCompare(b.key);
+  const groupedElements = useMemo(
+    () => groupModelElements(modelElements, groupBy),
+    [modelElements, groupBy],
+  );
+
+  useEffect(() => {
+    setFlatVisibleCount(250);
+  }, [modelSearch, groupBy]);
+
+  const toggleGroupAxis = (axis: ModelElementGroupAxis) => {
+    setGroupBy((current) => {
+      if (current.includes(axis)) return current.filter((candidate) => candidate !== axis);
+      // Three ordered dimensions are enough to form highly-specific pickup
+      // groups while keeping the resulting labels and controls intelligible.
+      return [...current, axis].slice(-3);
     });
-  }, [modelElements, groupBy]);
+  };
 
   const settingsBody = (
     <div className="grid gap-2">
@@ -2449,23 +2549,53 @@ function ModelInspect({
           ))}
         </div>
       </div>
-      <div>
-        <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-fg/40">Group by</p>
-        <div className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-panel p-1">
-          {GROUP_BY_OPTIONS.map((opt) => (
+    </div>
+  );
+
+  const groupBuilder = (
+    <div className="mt-1.5 rounded-md border border-line/70 bg-bg/35 p-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <div>
+          <p className="text-[10px] font-semibold text-fg/65">Group pickups</p>
+          <p className="text-[9px] text-fg/35">Choose up to 3 fields in order, then add any group as one worksheet line.</p>
+        </div>
+        <span className="shrink-0 font-mono text-[9px] tabular-nums text-fg/40">
+          {groupBy.length === 0 ? "Flat list" : `${groupedElements.length.toLocaleString()} groups`}
+        </span>
+      </div>
+      <div className="mt-1.5 flex flex-wrap gap-1">
+        {GROUP_BY_OPTIONS.map((option) => {
+          const order = groupBy.indexOf(option.id);
+          return (
             <button
-              key={opt.id}
+              key={option.id}
               type="button"
-              onClick={() => setGroupBy(opt.id)}
+              onClick={() => toggleGroupAxis(option.id)}
               className={cn(
-                "rounded px-1.5 py-1 text-[10px] font-medium transition-colors",
-                groupBy === opt.id ? "bg-accent/15 text-accent" : "text-fg/45 hover:text-fg/70",
+                "inline-flex h-6 items-center gap-1 rounded-md border px-1.5 text-[9px] font-medium transition-colors",
+                order >= 0
+                  ? "border-violet-500/35 bg-violet-500/10 text-violet-500"
+                  : "border-line bg-panel text-fg/45 hover:text-fg/70",
               )}
             >
-              {opt.label}
+              {order >= 0 && (
+                <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-500/15 font-mono text-[8px]">
+                  {order + 1}
+                </span>
+              )}
+              {option.label}
             </button>
-          ))}
-        </div>
+          );
+        })}
+        {groupBy.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setGroupBy([])}
+            className="h-6 rounded-md px-1.5 text-[9px] font-medium text-fg/40 hover:bg-panel2 hover:text-fg/65"
+          >
+            Clear
+          </button>
+        )}
       </div>
     </div>
   );
@@ -2499,8 +2629,9 @@ function ModelInspect({
   const onAdd = (id: string, _kind: DetectionRow["kind"], pick: InspectCategoryPick) =>
     void actions?.createLineItemFromElement(id, pick);
 
-  const totalCount = modelElements.length;
+  const totalCount = modelElementCount;
   const linkedCount = modelElements.filter((e) => e.isLinked).length;
+  const flatRows = modelElements.slice(0, flatVisibleCount);
 
   return (
     <EntitiesPanel
@@ -2518,13 +2649,21 @@ function ModelInspect({
       settingsContent={settingsBody}
       settingsOpen={showSettings}
       onToggleSettings={() => setShowSettings((value) => !value)}
-      belowSearchContent={modelError
-        ? (
-          <p className="mt-2 rounded-md border border-danger/30 bg-danger/5 px-2 py-1.5 text-[10px] text-danger">
-            {modelError}
-          </p>
-        )
-        : null}
+      belowSearchContent={(
+        <>
+          {groupBuilder}
+          {modelError && (
+            <p className="mt-2 rounded-md border border-danger/30 bg-danger/5 px-2 py-1.5 text-[10px] text-danger">
+              {modelError}
+            </p>
+          )}
+          {modelElementsLoading && modelElements.length > 0 && (
+            <p className="mt-1.5 flex items-center gap-1 text-[9px] text-fg/40">
+              <Loader2 className="h-2.5 w-2.5 animate-spin" /> Loading all {modelElementCount.toLocaleString()} indexed objects…
+            </p>
+          )}
+        </>
+      )}
       emptyState={
         modelElementsLoading && modelElements.length === 0 ? (
           <div className="flex items-center justify-center gap-2 py-4 text-[11px] text-fg/40">
@@ -2537,7 +2676,7 @@ function ModelInspect({
         )
       }
     >
-      {modelElements.length === 0 ? null : groupedElements ? (
+      {modelElements.length === 0 ? null : groupBy.length > 0 ? (
         <div className="space-y-1.5">
           {groupedElements.map((group) => (
             <DetectionGroup
@@ -2550,6 +2689,7 @@ function ModelInspect({
               actions={actions}
               onSelect={onSelect}
               onAdd={onAdd}
+              initialCollapsed={!group.elements.some((element) => element.id === selectedModelElementId)}
               groupAction={{
                 triggerTitle: `Add one summed line item from all ${group.elements.length} elements in ${group.label}`,
                 onPick: (pick) => void actions?.createLineItemFromElementGroup(
@@ -2563,15 +2703,24 @@ function ModelInspect({
         </div>
       ) : (
         <DetectionGroup
-          title="Model elements"
+          title="Ungrouped model elements"
           accentColor="#a78bfa"
           count={modelElements.length}
-          rows={modelElements.map(rowFor)}
+          rows={flatRows.map(rowFor)}
           snapshot={snapshot}
           actions={actions}
           onSelect={onSelect}
           onAdd={onAdd}
         />
+      )}
+      {groupBy.length === 0 && flatVisibleCount < modelElements.length && (
+        <button
+          type="button"
+          onClick={() => setFlatVisibleCount((count) => Math.min(modelElements.length, count + 250))}
+          className="mt-2 h-7 w-full rounded-md border border-line bg-bg/35 text-[10px] font-medium text-fg/55 hover:bg-panel2 hover:text-fg/75"
+        >
+          Show 250 more · {flatVisibleCount.toLocaleString()} of {modelElements.length.toLocaleString()}
+        </button>
       )}
     </EntitiesPanel>
   );

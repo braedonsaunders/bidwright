@@ -7,6 +7,7 @@ import {
 } from "@appkit/ui";
 import { cn } from "@/lib/utils";
 import { prepareModelViewer, type ModelViewerSession } from "@/lib/api";
+import { firstAutodeskSelectedDbId } from "@/lib/autodesk-viewer-selection";
 
 type CadViewerState = "loading" | "ready" | "error";
 
@@ -16,6 +17,9 @@ interface CadViewerProps {
   className?: string;
   /** Fires on IFC click. expressID -1 means "miss / background". */
   onIfcElementSelect?: (selection: { expressID: number; elementClass: string }) => void;
+  /** Fires when hosted model geometry is selected. externalId maps directly
+   *  to the indexed ModelElement.externalId. null means the selection cleared. */
+  onModelElementSelect?: (selection: { externalId: string } | null) => void;
   actionsRef?: MutableRefObject<CadViewerActions | null>;
   displayMode?: CadViewerDisplayMode;
   showGrid?: boolean;
@@ -36,6 +40,7 @@ export interface CadViewerActions {
   setGridVisible: (visible: boolean) => void;
   setDisplayMode: (mode: CadViewerDisplayMode) => void;
   setAutoRotate: (enabled: boolean) => void;
+  selectElement: (externalId: string | null) => void;
 }
 
 /* ─── Supported format detection ─── */
@@ -217,6 +222,51 @@ async function createScene(container: HTMLDivElement) {
     });
   }
 
+  const highlightedMaterials = new Map<any, any>();
+  const externalIdForObject = (object: any): string | null => {
+    let current = object;
+    while (current) {
+      const externalId = current.userData?.modelExternalId;
+      if (typeof externalId === "string" && externalId) return externalId;
+      current = current.parent;
+    }
+    return null;
+  };
+
+  function clearElementHighlight() {
+    for (const [object, originalMaterial] of highlightedMaterials) {
+      const active = Array.isArray(object.material) ? object.material : [object.material];
+      active.forEach((material: any) => {
+        if (material !== originalMaterial && typeof material?.dispose === "function") material.dispose();
+      });
+      object.material = originalMaterial;
+    }
+    highlightedMaterials.clear();
+  }
+
+  function selectElement(externalId: string | null) {
+    clearElementHighlight();
+    if (!externalId) return;
+    scene.traverse((object: any) => {
+      if (!object.isMesh || externalIdForObject(object) !== externalId || !object.material) return;
+      const originalMaterial = object.material;
+      const originals = Array.isArray(originalMaterial) ? originalMaterial : [originalMaterial];
+      const highlighted = originals.map((material: any) => {
+        const clone = material.clone();
+        if (clone.emissive?.setHex) {
+          clone.emissive.setHex(0x2563eb);
+          clone.emissiveIntensity = 0.75;
+        } else if (clone.color?.lerp) {
+          clone.color.lerp(new THREE.Color(0x60a5fa), 0.65);
+        }
+        clone.needsUpdate = true;
+        return clone;
+      });
+      highlightedMaterials.set(object, originalMaterial);
+      object.material = Array.isArray(originalMaterial) ? highlighted : highlighted[0];
+    });
+  }
+
   return {
     scene,
     camera,
@@ -252,7 +302,10 @@ async function createScene(container: HTMLDivElement) {
       controls.autoRotate = enabled;
       controls.autoRotateSpeed = 1.4;
     },
+    selectElement,
+    externalIdForObject,
     dispose: () => {
+      clearElementHighlight();
       cancelAnimationFrame(animId);
       ro.disconnect();
       controls.dispose();
@@ -336,6 +389,7 @@ async function loadSTEP(
       flatShading: normals.length !== positions.length,
     });
     const obj = new THREE.Mesh(geo, mat);
+    obj.userData.modelExternalId = `occt-mesh-${group.children.length}`;
     group.add(obj);
   }
 
@@ -361,13 +415,16 @@ async function loadMesh(
     geo.computeVertexNormals();
     const mat = new THREE.MeshPhongMaterial({ color: 0x6699cc, side: THREE.DoubleSide });
     const mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.modelExternalId = "STL_MESH";
     scene.add(mesh);
   } else if (ext === "obj") {
     const { OBJLoader } = await import("three/examples/jsm/loaders/OBJLoader.js");
     const loader = new OBJLoader();
     const text = new TextDecoder().decode(data);
     const obj = loader.parse(text);
+    obj.userData.modelExternalId = "default";
     obj.traverse((child: any) => {
+      if (child.name) child.userData.modelExternalId = child.name;
       if (child.isMesh) {
         child.material = new THREE.MeshPhongMaterial({ color: 0x6699cc, side: THREE.DoubleSide });
       }
@@ -383,7 +440,14 @@ async function loadMesh(
     const loader = new GLTFLoader();
     return new Promise<void>((resolve, reject) => {
       loader.parse(data, "", (gltf) => {
+        gltf.scene.traverse((object: any) => {
+          const association = (gltf.parser as any)?.associations?.get?.(object);
+          if (Number.isInteger(association?.nodes)) {
+            object.userData.modelExternalId = `node-${association.nodes}`;
+          }
+        });
         scene.add(gltf.scene);
+        sceneCtx.fitToContent();
         resolve();
       }, reject);
     });
@@ -475,6 +539,7 @@ async function loadIFC(
       obj.applyMatrix4(matrix);
 
       obj.userData.ifc = { expressID, elementClass };
+      obj.userData.modelExternalId = `#${expressID}`;
       group.add(obj);
 
       ifcGeo.delete();
@@ -523,12 +588,63 @@ function attachIfcPicker(
     for (const hit of hits) {
       const info = (hit.object as any)?.userData?.ifc;
       if (info && typeof info.expressID === "number" && info.expressID > 0) {
+        sceneCtx.selectElement(`#${info.expressID}`);
         onSelectRef.current?.({ expressID: info.expressID, elementClass: info.elementClass ?? "" });
         return;
       }
     }
     // Background miss — clear the selection.
+    sceneCtx.selectElement(null);
     onSelectRef.current?.({ expressID: -1, elementClass: "" });
+  };
+
+  canvas.addEventListener("pointerdown", onDown);
+  canvas.addEventListener("pointerup", onUp);
+  return () => {
+    canvas.removeEventListener("pointerdown", onDown);
+    canvas.removeEventListener("pointerup", onUp);
+  };
+}
+
+/* ─── Generic STEP / mesh click picking ─── */
+
+function attachModelPicker(
+  sceneCtx: Awaited<ReturnType<typeof createScene>>,
+  onSelectRef: { current?: (sel: { externalId: string } | null) => void },
+) {
+  const { THREE, scene, camera, renderer, externalIdForObject } = sceneCtx;
+  const raycaster = new THREE.Raycaster();
+  const ndc = new THREE.Vector2();
+  const canvas = renderer.domElement;
+  let downAt: { x: number; y: number; t: number } | null = null;
+
+  const onDown = (event: PointerEvent) => {
+    if (event.button !== 0) return;
+    downAt = { x: event.clientX, y: event.clientY, t: performance.now() };
+  };
+  const onUp = (event: PointerEvent) => {
+    if (!downAt) return;
+    const moved = Math.max(Math.abs(event.clientX - downAt.x), Math.abs(event.clientY - downAt.y));
+    const elapsed = performance.now() - downAt.t;
+    downAt = null;
+    if (moved > 4 || elapsed > 350) return;
+
+    const rect = canvas.getBoundingClientRect();
+    ndc.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+    ndc.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(scene.children, true);
+    for (const hit of hits) {
+      if ((hit.object as any).name === "scene-grid") continue;
+      const externalId = externalIdForObject(hit.object);
+      if (externalId) {
+        sceneCtx.selectElement(externalId);
+        onSelectRef.current?.({ externalId });
+        return;
+      }
+    }
+    sceneCtx.selectElement(null);
+    onSelectRef.current?.(null);
   };
 
   canvas.addEventListener("pointerdown", onDown);
@@ -546,6 +662,7 @@ export function CadViewer({
   fileName,
   className,
   onIfcElementSelect,
+  onModelElementSelect,
   actionsRef,
   displayMode = "shaded",
   showGrid = true,
@@ -567,6 +684,10 @@ export function CadViewer({
   useEffect(() => {
     onIfcElementSelectRef.current = onIfcElementSelect;
   }, [onIfcElementSelect]);
+  const onModelElementSelectRef = useRef<typeof onModelElementSelect>(undefined);
+  useEffect(() => {
+    onModelElementSelectRef.current = onModelElementSelect;
+  }, [onModelElementSelect]);
 
   const handleFitView = useCallback(() => {
     viewerActionsRef.current?.fitToContent();
@@ -598,6 +719,7 @@ export function CadViewer({
 
     let cancelled = false;
     let detachPicker: (() => void) | null = null;
+    let detachApsSelection: (() => void) | null = null;
     let apsViewer: any = null;
     const abortController = new AbortController();
     const container = canvasContainerRef.current;
@@ -665,6 +787,13 @@ export function CadViewer({
                     const geometry = document.getRoot().getDefaultGeometry();
                     if (!geometry) throw new Error("The translated model has no viewable geometry.");
                     await apsViewer.loadDocumentNode(document, geometry);
+                    const selectionEvent = Viewing.SELECTION_CHANGED_EVENT;
+                    const handleSelection = (event: unknown) => {
+                      const dbId = firstAutodeskSelectedDbId(event);
+                      onModelElementSelectRef.current?.(dbId == null ? null : { externalId: String(dbId) });
+                    };
+                    apsViewer.addEventListener(selectionEvent, handleSelection);
+                    detachApsSelection = () => apsViewer?.removeEventListener?.(selectionEvent, handleSelection);
                     resolve();
                   } catch (error) {
                     reject(error);
@@ -686,6 +815,14 @@ export function CadViewer({
               apsViewer?.setGhosting?.(mode === "xray");
             },
             setAutoRotate: () => undefined,
+            selectElement: (externalId) => {
+              const dbId = externalId == null ? null : Number(externalId);
+              if (dbId != null && Number.isInteger(dbId) && dbId > 0) {
+                apsViewer?.select?.([dbId]);
+              } else {
+                apsViewer?.clearSelection?.();
+              }
+            },
           };
           viewerActionsRef.current = apsActions;
           if (actionsRef) actionsRef.current = apsActions;
@@ -705,6 +842,7 @@ export function CadViewer({
           setGridVisible: sceneCtx.setGridVisible,
           setDisplayMode: sceneCtx.setDisplayMode,
           setAutoRotate: sceneCtx.setAutoRotate,
+          selectElement: sceneCtx.selectElement,
         };
         if (actionsRef) actionsRef.current = viewerActionsRef.current;
         sceneCtx.setDisplayMode(displayMode);
@@ -721,9 +859,11 @@ export function CadViewer({
         if (category === "step") {
           setLoadingText("Parsing CAD geometry (OpenCascade)...");
           await loadSTEP(sceneCtx, data);
+          if (!cancelled) detachPicker = attachModelPicker(sceneCtx, onModelElementSelectRef);
         } else if (category === "mesh") {
           setLoadingText(`Loading ${ext.toUpperCase()} model...`);
           await loadMesh(sceneCtx, data, ext);
+          if (!cancelled) detachPicker = attachModelPicker(sceneCtx, onModelElementSelectRef);
         } else if (category === "ifc") {
           setLoadingText("Parsing BIM model (IFC)...");
           await loadIFC(sceneCtx, data);
@@ -748,6 +888,7 @@ export function CadViewer({
       cancelled = true;
       abortController.abort();
       detachPicker?.();
+      detachApsSelection?.();
       apsViewer?.finish?.();
       sceneRef.current?.dispose();
       sceneRef.current = null;

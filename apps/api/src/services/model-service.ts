@@ -1288,6 +1288,9 @@ export async function queryModelElements(projectId: string, modelId: string, fil
       { name: { contains: text, mode: "insensitive" } },
       { externalId: { contains: text, mode: "insensitive" } },
       { elementClass: { contains: text, mode: "insensitive" } },
+      { elementType: { contains: text, mode: "insensitive" } },
+      { system: { contains: text, mode: "insensitive" } },
+      { level: { contains: text, mode: "insensitive" } },
       { material: { contains: text, mode: "insensitive" } },
     ];
   }
@@ -1424,6 +1427,56 @@ export async function createModelTakeoffLink(projectId: string, input: {
       selection: (input.selection ?? {}) as any,
     },
   });
+}
+
+export async function createModelTakeoffLinks(projectId: string, input: {
+  modelId: string;
+  worksheetItemId: string;
+  links: Array<{
+    modelElementId: string;
+    modelQuantityId?: string | null;
+    quantityField?: string;
+    multiplier?: number;
+    derivedQuantity: number;
+    selection?: unknown;
+  }>;
+}) {
+  const model = await prisma.modelAsset.findFirst({ where: { id: input.modelId, projectId } });
+  if (!model) throw new Error(`Model ${input.modelId} not found`);
+  const item = await prisma.worksheetItem.findFirst({
+    where: { id: input.worksheetItemId },
+    include: { worksheet: { include: { revision: { include: { quote: true } } } } },
+  });
+  if (!item || item.worksheet.revision.quote.projectId !== projectId) {
+    throw new Error(`Worksheet item ${input.worksheetItemId} not found for project ${projectId}`);
+  }
+
+  const elementIds = Array.from(new Set(input.links.map((link) => link.modelElementId)));
+  const quantityIds = Array.from(new Set(input.links.map((link) => link.modelQuantityId).filter((id): id is string => Boolean(id))));
+  const [validElements, validQuantities] = await Promise.all([
+    prisma.modelElement.findMany({ where: { modelId: input.modelId, id: { in: elementIds } }, select: { id: true } }),
+    quantityIds.length > 0
+      ? prisma.modelQuantity.findMany({ where: { modelId: input.modelId, id: { in: quantityIds } }, select: { id: true } })
+      : Promise.resolve([]),
+  ]);
+  if (validElements.length !== elementIds.length || validQuantities.length !== quantityIds.length) {
+    throw new Error("One or more BIM pickup links do not belong to this model");
+  }
+
+  const result = await prisma.modelTakeoffLink.createMany({
+    data: input.links.map((link) => ({
+      projectId,
+      modelId: input.modelId,
+      modelElementId: link.modelElementId,
+      modelQuantityId: link.modelQuantityId ?? null,
+      worksheetItemId: input.worksheetItemId,
+      quantityField: link.quantityField ?? "quantity",
+      multiplier: typeof link.multiplier === "number" && Number.isFinite(link.multiplier) ? link.multiplier : 1,
+      derivedQuantity: link.derivedQuantity,
+      selection: (link.selection ?? {}) as any,
+    })),
+  });
+  return { count: result.count };
 }
 
 export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {

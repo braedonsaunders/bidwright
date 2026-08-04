@@ -489,6 +489,38 @@ export async function takeoffRoutes(app: FastifyInstance) {
     }
   });
 
+  // ── POST /api/takeoff/:projectId/dwg-links/bulk ──────────────────────
+  // Grouped CAD pickups can contain hundreds of native entities. Persist
+  // their traceability links in bounded batches rather than issuing one HTTP
+  // request and one revision lookup per entity.
+  app.post("/api/takeoff/:projectId/dwg-links/bulk", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const bodySchema = z.object({
+      links: z.array(z.object({
+        documentId: z.string().min(1),
+        entityId: z.string().min(1),
+        entityType: z.string().optional(),
+        layer: z.string().optional(),
+        worksheetItemId: z.string().min(1),
+        quantity: z.number().finite(),
+        multiplier: z.number().finite().optional(),
+        selection: z.record(z.string(), z.unknown()).optional(),
+      })).min(1).max(500),
+    });
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: parsed.error.message });
+    }
+    try {
+      const result = await request.store!.createDwgEntityLinks(projectId, parsed.data.links);
+      reply.code(201);
+      return result;
+    } catch (error) {
+      console.error("[dwg-link:create-bulk] Failed:", error instanceof Error ? error.message : error);
+      return reply.code(400).send({ message: error instanceof Error ? error.message : "Bad request" });
+    }
+  });
+
   // ── DELETE /api/takeoff/:projectId/dwg-links/:linkId ──────────────────
   app.delete("/api/takeoff/:projectId/dwg-links/:linkId", async (request, reply) => {
     const { linkId } = request.params as { projectId: string; linkId: string };
