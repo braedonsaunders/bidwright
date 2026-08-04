@@ -20,6 +20,7 @@ interface ApsBucketDetails {
   objectId: string;
   objectKey: string;
   urn: string;
+  size?: number;
 }
 
 interface ApsManifestProgress {
@@ -34,14 +35,15 @@ interface ApsManifestProgress {
 interface ApsObjectMetadata {
   objectid: number;
   name: string;
-  properties?: Record<string, Record<string, { value: unknown; units?: string }>>;
+  properties?: Record<string, Record<string, unknown>>;
   children?: ApsObjectMetadata[];
 }
 
 interface ApsPropertiesResponse {
   data: {
     type: string;
-    objects: ApsObjectMetadata[];
+    objects?: ApsObjectMetadata[];
+    collection?: ApsObjectMetadata[];
   };
 }
 
@@ -226,6 +228,24 @@ export class ApsClient {
     };
   }
 
+  async getObjectDetails(objectKey: string): Promise<ApsBucketDetails | null> {
+    const bucketKey = await this.ensureBucket();
+    const headers = await this.authedHeaders();
+    try {
+      const result = await this.fetchJson(
+        `${APS_OSS_URL}/buckets/${bucketKey}/objects/${encodeURIComponent(objectKey)}/details`,
+        { headers },
+      ) as { bucketKey: string; objectId: string; objectKey: string; size?: number };
+      return {
+        ...result,
+        urn: Buffer.from(result.objectId, "utf-8").toString("base64").replace(/=/g, ""),
+      };
+    } catch (error) {
+      if (error instanceof ApsApiError && error.status === 404) return null;
+      throw error;
+    }
+  }
+
   async submitTranslation(urn: string): Promise<void> {
     const headers = await this.authedHeaders();
     await this.fetchJson(`${APS_MD_URL}/job`, {
@@ -312,7 +332,8 @@ export class ApsClient {
 
     const primary = views[0]!;
     const propsResponse = await this.getViewProperties(urn, primary.guid);
-    const flatObjects = flattenApsTree(propsResponse.data.objects);
+    const propertyObjects = propsResponse.data?.collection ?? propsResponse.data?.objects ?? [];
+    const flatObjects = flattenApsTree(propertyObjects);
 
     const mapped = flatObjects.map((obj) => {
       const props = obj.properties ?? {};
@@ -355,14 +376,14 @@ function flattenApsTree(objects: ApsObjectMetadata[]): ApsObjectMetadata[] {
 }
 
 function firstStringValue(
-  props: Record<string, Record<string, { value: unknown; units?: string }>>,
+  props: Record<string, Record<string, unknown>>,
   ...keys: string[]
 ): string | null {
   for (const group of Object.values(props)) {
     for (const key of keys) {
-      const entry = group[key];
-      if (entry?.value != null && entry.value !== "" && entry.value !== "none") {
-        return String(entry.value);
+      const value = apsPropertyValue(group[key]);
+      if (value != null && value !== "" && value !== "none") {
+        return String(value);
       }
     }
   }
@@ -370,7 +391,7 @@ function firstStringValue(
 }
 
 function extractQuantities(
-  props: Record<string, Record<string, { value: unknown; units?: string }>>
+  props: Record<string, Record<string, unknown>>
 ): Array<{ quantityType: string; value: number; unit: string }> {
   const quantities: Array<{ quantityType: string; value: number; unit: string }> = [];
   const quantityHints = new Set([
@@ -383,13 +404,14 @@ function extractQuantities(
 
   for (const group of Object.values(props)) {
     for (const [key, entry] of Object.entries(group)) {
-      if (typeof entry.value !== "number" || !isFinite(entry.value) || entry.value === 0) continue;
+      const value = apsPropertyValue(entry);
+      if (typeof value !== "number" || !isFinite(value) || value === 0) continue;
       const lowerKey = key.toLowerCase().trim();
       if (quantityHints.has(lowerKey) || lowerKey.includes("area") || lowerKey.includes("volume") || lowerKey.includes("length")) {
         quantities.push({
           quantityType: key,
-          value: entry.value,
-          unit: entry.units ?? "",
+          value,
+          unit: apsPropertyUnits(entry),
         });
       }
     }
@@ -398,13 +420,27 @@ function extractQuantities(
 }
 
 function serializeProperties(
-  props: Record<string, Record<string, { value: unknown; units?: string }>>
+  props: Record<string, Record<string, unknown>>
 ): Record<string, unknown> {
   const result: Record<string, unknown> = {};
   for (const [groupName, group] of Object.entries(props)) {
     for (const [key, entry] of Object.entries(group)) {
-      result[`${groupName}.${key}`] = entry.units ? `${entry.value} ${entry.units}` : entry.value;
+      const value = apsPropertyValue(entry);
+      const units = apsPropertyUnits(entry);
+      result[`${groupName}.${key}`] = units ? `${value} ${units}` : value;
     }
   }
   return result;
+}
+
+function apsPropertyValue(entry: unknown): unknown {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return entry;
+  const record = entry as Record<string, unknown>;
+  return record.value ?? record.displayValue ?? record.display_value ?? entry;
+}
+
+function apsPropertyUnits(entry: unknown): string {
+  if (!entry || typeof entry !== "object" || Array.isArray(entry)) return "";
+  const units = (entry as Record<string, unknown>).units;
+  return typeof units === "string" ? units : "";
 }

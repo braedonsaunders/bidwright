@@ -76,21 +76,33 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
     const method = `aps_model_derivative_${context.format}`;
     const client = new ApsClient(clientId, clientSecret);
 
-    const objectKey = `${source.projectId}/${source.id}/${source.fileName}`;
+    const legacyObjectKey = `${source.projectId}/${source.id}/${source.fileName}`;
+    const objectKey = `${source.projectId}/${source.id}/${context.checksum}-${source.fileName}`;
 
     let uploaded;
     try {
-      uploaded = await client.uploadObject(objectKey, context.absPath);
+      uploaded = await client.getObjectDetails(objectKey);
+      // Recover models uploaded by the pre-checksum implementation without
+      // paying to upload/translate them again. Size equality prevents a
+      // replaced source at the same logical path from reusing stale geometry.
+      if (!uploaded) {
+        const legacy = await client.getObjectDetails(legacyObjectKey);
+        if (legacy && legacy.size === context.size) uploaded = legacy;
+      }
+      uploaded ??= await client.uploadObject(objectKey, context.absPath);
     } catch (err) {
       return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_upload_failed");
     }
 
     let translationStatus;
     try {
-      await client.submitTranslation(uploaded.urn);
-      translationStatus = await client.waitForTranslation(uploaded.urn, MAX_TRANSLATION_WAIT_MS);
+      translationStatus = await client.getManifest(uploaded.urn).catch(() => null);
+      if (translationStatus?.status !== "success") {
+        await client.submitTranslation(uploaded.urn);
+        translationStatus = await client.waitForTranslation(uploaded.urn, MAX_TRANSLATION_WAIT_MS);
+      }
     } catch (err) {
-      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_translation_failed");
+      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_translation_failed", { urn: uploaded.urn });
     }
 
     if (translationStatus.status === "timeout") {
@@ -101,7 +113,11 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
     try {
       modelData = await client.extractModelData(uploaded.urn);
     } catch (err) {
-      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_metadata_extraction_failed");
+      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_metadata_extraction_failed", {
+        urn: uploaded.urn,
+        translationStatus: translationStatus.status,
+        translationRegion: translationStatus.region,
+      });
     }
 
     const elements: CanonicalModelElement[] = modelData.objects.map((obj) => {
@@ -295,10 +311,18 @@ function buildMissingResult(source: ModelIngestSource, context: ModelIngestConte
   return { status: "partial", units: "", manifest: summary, elementStats: {}, elements: [], quantities: [], bomRows: [], issues: [issue], canonicalManifest, artifacts: [] };
 }
 
-function buildErrorResult(source: ModelIngestSource, context: ModelIngestContext, activeCapability: ModelIngestCapability, method: string, message: string, code: string): ModelAdapterIngestResult {
+function buildErrorResult(
+  source: ModelIngestSource,
+  context: ModelIngestContext,
+  activeCapability: ModelIngestCapability,
+  method: string,
+  message: string,
+  code: string,
+  details: Record<string, unknown> = {},
+): ModelAdapterIngestResult {
   const issue = { severity: "error" as const, code, message };
   const provenance = makeProvenance({ source, format: context.format, checksum: context.checksum, size: context.size, capability: activeCapability, method, confidence: 0.1 });
-  const summary = { parser: method, nativeFormat: context.format, provider: "autodesk-aps", error: message };
+  const summary = { parser: method, nativeFormat: context.format, provider: "autodesk-aps", error: message, ...details };
   const canonicalManifest = makeCanonicalManifest({ status: "failed", units: "", capability: activeCapability, provenance, summary, elementStats: {}, issues: [issue] });
   return { status: "failed", units: "", manifest: summary, elementStats: {}, elements: [], quantities: [], bomRows: [], issues: [issue], canonicalManifest, artifacts: [] };
 }

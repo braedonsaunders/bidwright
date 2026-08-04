@@ -64,3 +64,29 @@ test("APS viewer tokens are restricted to viewables:read", async () => {
     globalThis.fetch = originalFetch;
   }
 });
+
+test("APS metadata extraction accepts the current properties collection shape", async () => {
+  const client = new ApsClient("client", "secret") as any;
+  client.getMetadataViews = async () => ({
+    data: { type: "metadata", metadata: [{ guid: "view-1", name: "Main", role: "3d" }] },
+  });
+  client.getViewProperties = async () => ({
+    data: {
+      type: "properties",
+      collection: [{
+        objectid: 42,
+        name: "Pipe",
+        properties: {
+          Identity: { Category: "Pipes", Type: { displayValue: "Steel Pipe" } },
+          Dimensions: { Length: { value: 12, units: "ft" } },
+        },
+      }],
+    },
+  });
+
+  const result = await client.extractModelData("urn");
+  assert.equal(result.objects.length, 1);
+  assert.equal(result.objects[0].elementClass, "Pipes");
+  assert.equal(result.objects[0].elementType, "Steel Pipe");
+  assert.deepEqual(result.objects[0].quantities, [{ quantityType: "Length", value: 12, unit: "ft" }]);
+});
