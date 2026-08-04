@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useCallback, useEffect, useMemo } from "react";
-import { motion, AnimatePresence } from "motion/react";
 import {
   Calculator,
   Check,
@@ -9,6 +8,7 @@ import {
   DollarSign,
   Edit3,
   Plus,
+  Search,
   SlidersHorizontal,
   Trash2,
   X,
@@ -590,6 +590,7 @@ export function RateScheduleManager({
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [drawerTab, setDrawerTab] = useState<DrawerTab>("pricing");
   const [search, setSearch] = useState("");
+  const [itemSearch, setItemSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("");
   const [page, setPage] = useState(0);
 
@@ -642,7 +643,10 @@ export function RateScheduleManager({
   const [editingTierId, setEditingTierId] = useState<string | null>(null);
   const [editTierForm, setEditTierForm] = useState<{ name: string; multiplier: string; uom: string }>({ name: "", multiplier: "1.0", uom: "__none__" });
   const [showAddItem, setShowAddItem] = useState(false);
+  const [addingItem, setAddingItem] = useState(false);
+  const [addItemError, setAddItemError] = useState("");
   const [resourceQuery, setResourceQuery] = useState("");
+  const [resourcePage, setResourcePage] = useState(0);
   const [componentDraft, setComponentDraft] = useState<RatebookComponentRule>(emptyComponentDraft);
   const [componentTemplatesOpen, setComponentTemplatesOpen] = useState(false);
   const [componentEditorOpen, setComponentEditorOpen] = useState(false);
@@ -741,6 +745,10 @@ export function RateScheduleManager({
     setEditingCell(null);
     setShowAddTier(false);
     setShowAddItem(false);
+    setItemSearch("");
+    setResourceQuery("");
+    setResourcePage(0);
+    setAddItemError("");
     setEditingHeader(false);
     setIsCreating(false);
     setDrawerTab("pricing");
@@ -1056,8 +1064,34 @@ export function RateScheduleManager({
     );
   }, [resourceQuery, resources]);
 
+  const resourcePageSize = 12;
+  const resourceTotalPages = Math.max(1, Math.ceil(filteredResources.length / resourcePageSize));
+  const visibleResources = useMemo(
+    () => filteredResources.slice(resourcePage * resourcePageSize, (resourcePage + 1) * resourcePageSize),
+    [filteredResources, resourcePage],
+  );
+
+  useEffect(() => {
+    setResourcePage(0);
+  }, [resourceQuery]);
+
+  useEffect(() => {
+    setResourcePage((current) => Math.min(current, resourceTotalPages - 1));
+  }, [resourceTotalPages]);
+
+  const closeAddItemDrawer = useCallback(() => {
+    if (addingItem) return;
+    setShowAddItem(false);
+    setResourceQuery("");
+    setResourcePage(0);
+    setAddItemError("");
+    setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null });
+  }, [addingItem]);
+
   const handleAddItem = useCallback(async () => {
     if (!detail || !newItemForm.catalogItemId) return;
+    setAddingItem(true);
+    setAddItemError("");
     try {
       const updated = await addRateScheduleItem(detail.id, {
         resourceId: newItemForm.resourceId,
@@ -1066,9 +1100,13 @@ export function RateScheduleManager({
       applyScheduleUpdate(updated);
       setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null });
       setResourceQuery("");
+      setResourcePage(0);
       setShowAddItem(false);
     } catch (err) {
       console.error("Failed to add item:", err);
+      setAddItemError(err instanceof Error ? err.message : "Could not add this resource to the Ratebook.");
+    } finally {
+      setAddingItem(false);
     }
   }, [detail, newItemForm, applyScheduleUpdate]);
 
@@ -1135,6 +1173,51 @@ export function RateScheduleManager({
 
   const fmt = (n: number | undefined) =>
     n != null ? `$${n.toFixed(2)}` : "—";
+
+  const visibleRatebookItems = useMemo(() => {
+    if (!detail) return [];
+    const query = itemSearch.trim().toLowerCase();
+    return detail.items
+      .filter((item) => !query || [item.code, item.name, item.unit].some((value) => value.toLowerCase().includes(query)))
+      .slice()
+      .sort((left, right) => left.sortOrder - right.sortOrder);
+  }, [detail, itemSearch]);
+
+  const resourceColumns = useMemo<RecordColumn<ResourceCatalogRecord>[]>(() => [
+    {
+      key: "name",
+      label: "Resource",
+      width: "48%",
+      render: (resource) => (
+        <div className="min-w-0">
+          <div className="truncate text-xs font-semibold text-fg">{resource.name}</div>
+          <div className="mt-0.5 truncate font-mono text-[10px] text-fg/40">{resource.code || "No resource code"}</div>
+        </div>
+      ),
+    },
+    {
+      key: "category",
+      label: "Category",
+      width: "24%",
+      render: (resource) => <span className="text-xs text-fg/55">{resource.category || resource.resourceType || "—"}</span>,
+    },
+    {
+      key: "defaultUom",
+      label: "UoM",
+      width: "10%",
+      render: (resource) => <span className="text-xs font-medium text-fg/60">{resource.defaultUom || "EA"}</span>,
+    },
+    {
+      key: "catalogItemId",
+      label: "Cost source",
+      width: "18%",
+      render: (resource) => (
+        <Badge variant={resource.catalogItemId ? "success" : "warning"} className="text-[10px]">
+          {resource.catalogItemId ? "Ready" : "Missing"}
+        </Badge>
+      ),
+    },
+  ], []);
 
   const scheduleColumns = useMemo<RecordColumn<RateSchedule>[]>(() => [
     {
@@ -1300,6 +1383,7 @@ export function RateScheduleManager({
       <Drawer
         open={Boolean(isCreating || (selectedId && detail))}
         onClose={() => {
+          closeAddItemDrawer();
           if (isCreating) {
             setIsCreating(false);
             setEditingHeader(false);
@@ -1331,7 +1415,7 @@ export function RateScheduleManager({
             Edit
           </Button>
         ) : undefined}
-        bodyClassName="p-0"
+        bodyClassName="overflow-y-auto p-0"
       >
               {editingHeader ? (
                 <div className="space-y-3 p-5">
@@ -1875,15 +1959,35 @@ export function RateScheduleManager({
 
                   {/* Items & Rates */}
                   <div>
-                    <div className="flex items-center justify-between mb-3">
+                    <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                       <h3 className="text-[11px] font-medium text-fg/40 uppercase tracking-wider">Items & Rates</h3>
-                      {!showAddItem && (
-                        <Button size="sm" variant="ghost" onClick={() => setShowAddItem(true)}><Plus className="h-3 w-3" /> Add Item</Button>
-                      )}
+                      <div className="flex w-full flex-wrap items-center justify-end gap-2 sm:w-auto">
+                        <div className="relative w-full sm:w-64">
+                          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/35" />
+                          <Input
+                            value={itemSearch}
+                            onChange={(event) => setItemSearch(event.target.value)}
+                            placeholder="Search Ratebook items..."
+                            className="h-8 pl-8 text-xs"
+                          />
+                        </div>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setAddItemError("");
+                            setShowAddItem(true);
+                          }}
+                        >
+                          <Plus className="h-3 w-3" /> Add Item
+                        </Button>
+                      </div>
                     </div>
 
-                  {detail.items.length === 0 && !showAddItem ? (
+                  {detail.items.length === 0 ? (
                     <p className="text-xs text-fg/30 py-4 text-center">No items yet. Add rate items to this schedule.</p>
+                  ) : visibleRatebookItems.length === 0 ? (
+                    <p className="py-4 text-center text-xs text-fg/30">No Ratebook items match “{itemSearch}”.</p>
                   ) : (
                     <Table
                       className="w-full min-w-max text-xs"
@@ -1919,7 +2023,7 @@ export function RateScheduleManager({
                             ) : null}
                           </TableHeader>
                           <TableBody>
-                            {detail.items.sort((a, b) => a.sortOrder - b.sortOrder).map((item) => (
+                            {visibleRatebookItems.map((item) => (
                               <TableRow key={item.id} className="group border-b border-line/50 hover:bg-panel2/20">
                                 <TableCell className="py-1.5 pr-2 font-mono text-[11px] text-fg/60">{item.code || "—"}</TableCell>
                                 <TableCell className="max-w-[160px] truncate py-1.5 pr-2 text-[11px] font-medium text-fg">{item.name}</TableCell>
@@ -1977,52 +2081,74 @@ export function RateScheduleManager({
                           </TableBody>
                     </Table>
                     )}
-                    <AnimatePresence>
-                      {showAddItem && (
-                        <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.15 }} className="overflow-hidden">
-                          <div className="flex items-end gap-2 mt-3 p-3 rounded-lg border border-accent/20 bg-accent/5">
-                            <div className="flex-1 min-w-0">
-                              <label className="text-[10px] font-medium text-fg/40 uppercase">Resource</label>
-                              <div className="mt-1 grid grid-cols-1 gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(12rem,18rem)]">
-                                <Input
-                                  value={resourceQuery}
-                                  onChange={(event) => setResourceQuery(event.target.value)}
-                                  placeholder="Search resources..."
-                                  className="h-8"
-                                />
-                                <SearchSelect
-                                  value={newItemForm.resourceId ?? ""}
-                                  onChange={handleResourceSelect}
-                                  options={filteredResources.slice(0, 100).map((resource) => ({
-                                    value: resource.id,
-                                    label: [resource.code, resource.name].filter(Boolean).join(" · ") || resource.id,
-                                  }))}
-                                  placeholder="Select resource"
-                                  disabled={resources.length === 0}
-                                  searchable
-                                />
-                              </div>
-                              {resources.length === 0 ? (
-                                <p className="mt-1 text-[11px] text-fg/40">No resources found.</p>
-                              ) : null}
-                              {newItemForm.resourceId && (
-                                <p className="mt-1 text-[10px] text-fg/40">
-                                  {newItemForm.code && <span className="font-mono mr-1">{newItemForm.code}</span>}
-                                  {newItemForm.name} · {newItemForm.unit}
-                                  {!newItemForm.catalogItemId && <span className="ml-1 text-danger">No catalog item cost source</span>}
-                                </p>
-                              )}
-                            </div>
-                            <Button size="sm" onClick={handleAddItem} disabled={!newItemForm.catalogItemId}>Add</Button>
-                            <Button size="sm" variant="ghost" onClick={() => { setShowAddItem(false); setResourceQuery(""); setNewItemForm({ name: "", code: "", unit: "EA", resourceId: null, catalogItemId: null }); }}><X className="h-3 w-3" /></Button>
-                          </div>
-                        </motion.div>
-                      )}
-                    </AnimatePresence>
                   </div>
                 </>
               )}
             </div>
+      </Drawer>
+
+      <Drawer
+        open={Boolean(showAddItem && detail)}
+        onClose={closeAddItemDrawer}
+        stacked
+        size="lg"
+        title="Add Ratebook Item"
+        description={detail ? `Choose a catalog resource for ${detail.name}.` : "Choose a catalog resource."}
+        footer={(
+          <>
+            <Button type="button" variant="ghost" onClick={closeAddItemDrawer} disabled={addingItem}>
+              Cancel
+            </Button>
+            <Button type="button" onClick={handleAddItem} disabled={!newItemForm.catalogItemId || addingItem}>
+              {addingItem ? "Adding…" : "Add to Ratebook"}
+            </Button>
+          </>
+        )}
+      >
+        <RecordList
+          columns={resourceColumns}
+          rows={visibleResources}
+          getRowId={(resource) => resource.id}
+          search={{
+            value: resourceQuery,
+            onChange: setResourceQuery,
+            placeholder: "Search resources by name, code, category, or manufacturer...",
+          }}
+          toolbarActions={(
+            <span className="text-xs text-fg/40">
+              {formatCount(filteredResources.length)} resource{filteredResources.length === 1 ? "" : "s"}
+            </span>
+          )}
+          pagination={{
+            page: resourcePage + 1,
+            perPage: resourcePageSize,
+            total: filteredResources.length,
+            onPageChange: (nextPage) => setResourcePage(nextPage - 1),
+          }}
+          activeRowId={newItemForm.resourceId}
+          onRowClick={(resource) => {
+            handleResourceSelect(resource.id);
+            setAddItemError("");
+          }}
+          empty={{
+            title: resourceQuery ? "No resources match this search." : "No catalog resources are available.",
+            description: resourceQuery ? "Try a broader resource name, code, category, or manufacturer." : "Add resources to the catalog before using them in a Ratebook.",
+          }}
+        />
+
+        {newItemForm.resourceId ? (
+          <div className="mt-4 rounded-lg border border-line bg-bg/30 p-3">
+            <div className="text-xs font-semibold text-fg">{newItemForm.name}</div>
+            <div className="mt-1 text-[11px] text-fg/45">
+              {[newItemForm.code, newItemForm.unit].filter(Boolean).join(" · ")}
+            </div>
+            {!newItemForm.catalogItemId ? (
+              <p className="mt-2 text-xs text-danger">This resource has no catalog cost source and cannot be added yet.</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        {addItemError ? <p className="mt-3 text-sm text-danger">{addItemError}</p> : null}
       </Drawer>
     </div>
   );
