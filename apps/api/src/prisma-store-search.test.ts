@@ -7,7 +7,7 @@ import {
   datasetValueMatchesFilter,
   estimatorSearchTokens,
   rankEstimatorSearchItems,
-} from "./prisma-store.js";
+} from "./services/estimator-search.js";
 
 test("structured search retains one-digit sizes and does not confuse 3 with 30", () => {
   assert.deepEqual(estimatorSearchTokens("3 inch butt weld"), ["3", "inch", "butt", "weld"]);
