@@ -1192,7 +1192,15 @@ export async function prepareProjectModelViewer(
   const manifest = recordValue(asset.manifest);
   const urn = typeof manifest.urn === "string" ? manifest.urn : "";
   const region = typeof manifest.translationRegion === "string" ? manifest.translationRegion : "US";
-  if (!input.force && asset.status === "indexed" && urn) {
+  const recordedSize = typeof manifest.size === "number" ? manifest.size : null;
+  const sourceChanged = asset.fileName !== source.fileName
+    || asset.storagePath !== (source.storagePath ?? "")
+    || Boolean(source.checksum && asset.checksum !== source.checksum)
+    || Boolean(source.size != null && recordedSize != null && source.size !== recordedSize);
+  // A successful APS derivative is durable. Opening or retrying the viewer must
+  // never upload/translate an unchanged source again; `force` only recovers a
+  // failed first translation. Changed source identity/fingerprint invalidates it.
+  if (!sourceChanged && asset.status === "indexed" && urn) {
     const token = await new ApsClient(clientId, clientSecret).createViewerToken();
     return {
       status: "ready",
