@@ -2,24 +2,13 @@ import { prisma } from "@bidwright/db";
 import { generateFileIngestManifest, getFileIngestCapabilities } from "./file-ingest/orchestrator.js";
 import type { FileIngestSettings, FileIngestSource, FileIngestSourceKind } from "./file-ingest/types.js";
 
-async function getProjectFileIngestSettings(projectId: string): Promise<FileIngestSettings> {
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { organizationId: true },
-  });
-  if (!project) throw new Error(`Project ${projectId} not found`);
-  const settings = await prisma.organizationSettings.findUnique({
-    where: { organizationId: project.organizationId },
-    select: { integrations: true },
-  });
-  const integrations = settings?.integrations;
-  return integrations && typeof integrations === "object" && !Array.isArray(integrations)
-    ? { integrations: integrations as Record<string, unknown> }
-    : {};
-}
-
-export async function getProjectFileIngestCapabilities(projectId: string, format?: string) {
-  const settings = await getProjectFileIngestSettings(projectId);
+export async function getProjectFileIngestCapabilities(
+  projectId: string,
+  format: string | undefined,
+  settings: FileIngestSettings,
+) {
+  const projectExists = await prisma.project.count({ where: { id: projectId } });
+  if (!projectExists) throw new Error(`Project ${projectId} not found`);
   return {
     capabilities: await getFileIngestCapabilities(format, settings),
   };
@@ -70,8 +59,8 @@ export async function ingestProjectFileSource(args: {
   projectId: string;
   sourceKind: Exclude<FileIngestSourceKind, "raw_file">;
   sourceId: string;
+  settings: FileIngestSettings;
 }) {
   const source = await resolveProjectFileIngestSource(args.projectId, args.sourceKind, args.sourceId);
-  const settings = await getProjectFileIngestSettings(args.projectId);
-  return generateFileIngestManifest(source, settings);
+  return generateFileIngestManifest(source, args.settings);
 }

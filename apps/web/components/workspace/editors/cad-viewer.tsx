@@ -6,6 +6,7 @@ import {
   Button,
 } from "@appkit/ui";
 import { cn } from "@/lib/utils";
+import { prepareModelViewer, type ModelViewerSession } from "@/lib/api";
 
 type CadViewerState = "loading" | "ready" | "error";
 
@@ -20,6 +21,9 @@ interface CadViewerProps {
   showGrid?: boolean;
   autoRotate?: boolean;
   showOverlayToolbar?: boolean;
+  projectId?: string;
+  sourceKind?: "source_document" | "file_node";
+  sourceId?: string;
 }
 
 export type CadViewerDisplayMode = "shaded" | "wireframe" | "xray";
@@ -56,6 +60,54 @@ function categorizeFile(name: string): FileCategory {
   if (DXF_EXTS.has(ext)) return "dxf";
   if (NAVISWORKS_EXTS.has(ext)) return "navisworks";
   return "unknown";
+}
+
+let autodeskViewerSdkPromise: Promise<any> | null = null;
+
+function loadAutodeskViewerSdk(): Promise<any> {
+  if (typeof window === "undefined") return Promise.reject(new Error("The Autodesk Viewer requires a browser."));
+  const existing = (window as any).Autodesk?.Viewing;
+  if (existing) return Promise.resolve(existing);
+  if (autodeskViewerSdkPromise) return autodeskViewerSdkPromise;
+
+  autodeskViewerSdkPromise = new Promise((resolve, reject) => {
+    if (!document.querySelector('link[data-bidwright-autodesk-viewer="true"]')) {
+      const stylesheet = document.createElement("link");
+      stylesheet.rel = "stylesheet";
+      stylesheet.href = "https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/style.min.css";
+      stylesheet.dataset.bidwrightAutodeskViewer = "true";
+      document.head.appendChild(stylesheet);
+    }
+    const prior = document.querySelector('script[data-bidwright-autodesk-viewer="true"]') as HTMLScriptElement | null;
+    const script = prior ?? document.createElement("script");
+    const onReady = () => {
+      const viewing = (window as any).Autodesk?.Viewing;
+      if (viewing) resolve(viewing);
+      else reject(new Error("Autodesk Viewer loaded without its runtime API."));
+    };
+    script.addEventListener("load", onReady, { once: true });
+    script.addEventListener("error", () => reject(new Error("Could not load the Autodesk Viewer SDK.")), { once: true });
+    if (!prior) {
+      script.src = "https://developer.api.autodesk.com/modelderivative/v2/viewers/7.*/viewer3D.min.js";
+      script.async = true;
+      script.dataset.bidwrightAutodeskViewer = "true";
+      document.head.appendChild(script);
+    }
+  }).catch((error) => {
+    autodeskViewerSdkPromise = null;
+    throw error;
+  });
+  return autodeskViewerSdkPromise;
+}
+
+function delay(ms: number, signal: AbortSignal) {
+  return new Promise<void>((resolve, reject) => {
+    const timer = window.setTimeout(resolve, ms);
+    signal.addEventListener("abort", () => {
+      window.clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    }, { once: true });
+  });
 }
 
 /* ─── Three.js scene setup (lazy loaded) ─── */
@@ -499,12 +551,17 @@ export function CadViewer({
   showGrid = true,
   autoRotate = false,
   showOverlayToolbar = true,
+  projectId,
+  sourceKind,
+  sourceId,
 }: CadViewerProps) {
   const [state, setState] = useState<CadViewerState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [loadingText, setLoadingText] = useState("Initializing 3D engine...");
+  const [retryNonce, setRetryNonce] = useState(0);
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<Awaited<ReturnType<typeof createScene>> | null>(null);
+  const viewerActionsRef = useRef<CadViewerActions | null>(null);
   // Stable ref so the picker handler reads the latest callback without rebinding.
   const onIfcElementSelectRef = useRef<typeof onIfcElementSelect>(undefined);
   useEffect(() => {
@@ -512,37 +569,28 @@ export function CadViewer({
   }, [onIfcElementSelect]);
 
   const handleFitView = useCallback(() => {
-    sceneRef.current?.fitToContent();
+    viewerActionsRef.current?.fitToContent();
   }, []);
 
   const handleResetView = useCallback(() => {
-    sceneRef.current?.resetView();
+    viewerActionsRef.current?.resetView();
   }, []);
 
   useEffect(() => {
     if (!actionsRef) return;
-    actionsRef.current = sceneRef.current
-      ? {
-          fitToContent: sceneRef.current.fitToContent,
-          resetView: sceneRef.current.resetView,
-          setStandardView: sceneRef.current.setStandardView,
-          setGridVisible: sceneRef.current.setGridVisible,
-          setDisplayMode: sceneRef.current.setDisplayMode,
-          setAutoRotate: sceneRef.current.setAutoRotate,
-        }
-      : null;
+    actionsRef.current = viewerActionsRef.current;
   });
 
   useEffect(() => {
-    sceneRef.current?.setDisplayMode(displayMode);
+    viewerActionsRef.current?.setDisplayMode(displayMode);
   }, [displayMode]);
 
   useEffect(() => {
-    sceneRef.current?.setGridVisible(showGrid);
+    viewerActionsRef.current?.setGridVisible(showGrid);
   }, [showGrid]);
 
   useEffect(() => {
-    sceneRef.current?.setAutoRotate(autoRotate);
+    viewerActionsRef.current?.setAutoRotate(autoRotate);
   }, [autoRotate]);
 
   useEffect(() => {
@@ -550,29 +598,125 @@ export function CadViewer({
 
     let cancelled = false;
     let detachPicker: (() => void) | null = null;
+    let apsViewer: any = null;
+    const abortController = new AbortController();
     const container = canvasContainerRef.current;
+    setState("loading");
+    setErrorMessage("");
 
     (async () => {
       try {
-        // 1. Create Three.js scene
+        const ext = getFileExt(fileName);
+        const category = categorizeFile(fileName);
+
+        if (category === "navisworks") {
+          if (!projectId || !sourceKind || !sourceId) {
+            throw new Error("This Navisworks file is missing its project source reference.");
+          }
+          setLoadingText("Connecting to Autodesk APS...");
+          const deadline = Date.now() + 15 * 60_000;
+          let session: ModelViewerSession;
+          let firstRequest = true;
+          do {
+            session = await prepareModelViewer(projectId, {
+              sourceKind,
+              sourceId,
+              force: retryNonce > 0 && firstRequest,
+            });
+            firstRequest = false;
+            if (session.status === "failed") throw new Error(session.message);
+            if (session.status === "ready") break;
+            setLoadingText(session.message || "Autodesk is translating the Navisworks model...");
+            await delay(5_000, abortController.signal);
+          } while (Date.now() < deadline);
+
+          if (session.status !== "ready") {
+            throw new Error("Autodesk APS is still translating the model. Try again in a few minutes.");
+          }
+          if (cancelled) return;
+          setLoadingText("Loading Autodesk Viewer...");
+          const Viewing = await loadAutodeskViewerSdk();
+          if (cancelled) return;
+
+          const refreshViewerToken = async (callback: (token: string, expiresIn: number) => void) => {
+            try {
+              const refreshed = await prepareModelViewer(projectId, { sourceKind, sourceId });
+              if (refreshed.status === "ready") callback(refreshed.accessToken, refreshed.expiresIn);
+              else callback("", 0);
+            } catch {
+              callback("", 0);
+            }
+          };
+
+          await new Promise<void>((resolve, reject) => {
+            Viewing.Initializer({
+              env: "AutodeskProduction2",
+              api: session.api,
+              getAccessToken: refreshViewerToken,
+            }, () => {
+              if (cancelled) return resolve();
+              apsViewer = new Viewing.GuiViewer3D(container, { extensions: ["Autodesk.DocumentBrowser"] });
+              const startCode = apsViewer.start();
+              if (startCode > 0) return reject(new Error(`Autodesk Viewer failed to start (${startCode}).`));
+              Viewing.Document.load(
+                `urn:${session.urn}`,
+                async (document: any) => {
+                  try {
+                    const geometry = document.getRoot().getDefaultGeometry();
+                    if (!geometry) throw new Error("The translated model has no viewable geometry.");
+                    await apsViewer.loadDocumentNode(document, geometry);
+                    resolve();
+                  } catch (error) {
+                    reject(error);
+                  }
+                },
+                (code: number, message: string) => reject(new Error(`Autodesk Viewer could not load the model (${code}): ${message || "unknown error"}`)),
+              );
+            });
+          });
+
+          if (cancelled) return;
+          const apsActions: CadViewerActions = {
+            fitToContent: () => apsViewer?.fitToView(),
+            resetView: () => apsViewer?.navigation?.setRequestHomeView?.(true),
+            setStandardView: (view) => apsViewer?.setViewCube?.(view === "iso" ? "home" : view),
+            setGridVisible: () => undefined,
+            setDisplayMode: (mode) => {
+              apsViewer?.setDisplayEdges?.(mode === "wireframe");
+              apsViewer?.setGhosting?.(mode === "xray");
+            },
+            setAutoRotate: () => undefined,
+          };
+          viewerActionsRef.current = apsActions;
+          if (actionsRef) actionsRef.current = apsActions;
+          apsActions.setDisplayMode(displayMode);
+          setState("ready");
+          return;
+        }
+
+        // Local formats use the embedded Three.js scene.
         setLoadingText("Setting up 3D scene...");
         const sceneCtx = await createScene(container);
         sceneRef.current = sceneCtx;
+        viewerActionsRef.current = {
+          fitToContent: sceneCtx.fitToContent,
+          resetView: sceneCtx.resetView,
+          setStandardView: sceneCtx.setStandardView,
+          setGridVisible: sceneCtx.setGridVisible,
+          setDisplayMode: sceneCtx.setDisplayMode,
+          setAutoRotate: sceneCtx.setAutoRotate,
+        };
+        if (actionsRef) actionsRef.current = viewerActionsRef.current;
         sceneCtx.setDisplayMode(displayMode);
         sceneCtx.setGridVisible(showGrid);
         sceneCtx.setAutoRotate(autoRotate);
         if (cancelled) { sceneCtx.dispose(); return; }
 
-        // 2. Fetch the file
         setLoadingText("Downloading model...");
         const resp = await fetch(fileUrl, { credentials: "include" });
         if (!resp.ok) throw new Error(`Failed to fetch: ${resp.status}`);
         const data = await resp.arrayBuffer();
         if (cancelled) { sceneCtx.dispose(); return; }
-
-        // 3. Parse based on format
-        const ext = getFileExt(fileName);
-        const category = categorizeFile(fileName);
 
         if (category === "step") {
           setLoadingText("Parsing CAD geometry (OpenCascade)...");
@@ -587,9 +731,6 @@ export function CadViewer({
         } else if (category === "dxf") {
           setLoadingText("DXF/DWG viewer loading...");
           throw new Error("DXF/DWG viewing requires an additional parser. Upload a PDF export instead, or convert to STEP/IFC.");
-        } else if (category === "navisworks") {
-          setLoadingText("Navisworks model loading via Autodesk APS...");
-          throw new Error("Navisworks files (.nwd/.nwf/.nwc) require Autodesk APS cloud extraction to view. Configure APS credentials in organization settings to enable Navisworks viewing and takeoff.");
         } else {
           throw new Error(`Unsupported format: .${ext}`);
         }
@@ -605,12 +746,15 @@ export function CadViewer({
 
     return () => {
       cancelled = true;
+      abortController.abort();
       detachPicker?.();
+      apsViewer?.finish?.();
       sceneRef.current?.dispose();
       sceneRef.current = null;
+      viewerActionsRef.current = null;
       if (actionsRef) actionsRef.current = null;
     };
-  }, [fileUrl, fileName]);
+  }, [fileUrl, fileName, projectId, sourceKind, sourceId, retryNonce]);
 
   return (
     <div className={cn("relative w-full h-full overflow-hidden", className)}>
@@ -648,6 +792,14 @@ export function CadViewer({
                 <span className="text-[10px] text-zinc-600 ml-auto uppercase">{getFileExt(fileName)}</span>
               </div>
             )}
+            <Button
+              variant="secondary"
+              size="sm"
+              onClick={() => setRetryNonce((value) => value + 1)}
+            >
+              <RotateCcw className="mr-2 h-3.5 w-3.5" />
+              Retry
+            </Button>
           </div>
         </div>
       )}

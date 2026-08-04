@@ -2651,7 +2651,13 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                     onSaveDocument={handleModelDocumentSave}
                   />
                 ) : (
-                  <CadViewer fileUrl={previewUrl} fileName={selectedItem.name} />
+                  <CadViewer
+                    fileUrl={previewUrl}
+                    fileName={selectedItem.name}
+                    projectId={projectId}
+                    sourceKind={ingestSourceRef?.sourceKind}
+                    sourceId={ingestSourceRef?.sourceId}
+                  />
                 )}
               </div>
             )}

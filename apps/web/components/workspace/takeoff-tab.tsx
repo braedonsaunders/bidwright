@@ -8746,6 +8746,9 @@ export function TakeoffTab({
                 showGrid={modelGridVisible}
                 autoRotate={modelAutoRotate}
                 showOverlayToolbar={false}
+                projectId={projectId}
+                sourceKind={selectedDoc.fileNodeId ? "file_node" : selectedDoc.source === "project" ? "source_document" : undefined}
+                sourceId={selectedDoc.fileNodeId ?? (selectedDoc.source === "project" ? selectedDoc.id : undefined)}
               />
             </div>
           ) : (

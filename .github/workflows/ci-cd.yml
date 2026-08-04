@@ -100,6 +100,7 @@ jobs:
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/pdf-service.test.ts
           apps/api/src/services/project-image-service.test.ts
+          apps/api/src/services/model-ingest/aps-client.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
           apps/api/src/prisma-store-search.test.ts

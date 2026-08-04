@@ -181,6 +181,7 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
       views: modelData.views.map((v) => ({ guid: v.guid, name: v.name, role: v.role })),
       translationStatus: translationStatus.status,
       translationProgress: translationStatus.progress,
+      translationRegion: translationStatus.region,
       objectCount: elements.length,
       quantityCount: quantities.length,
     };

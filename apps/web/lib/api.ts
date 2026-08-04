@@ -5799,6 +5799,30 @@ export async function syncModelAssets(projectId: string) {
   });
 }
 
+export type ModelViewerSession =
+  | { status: "processing"; modelId: string; message: string }
+  | { status: "failed"; modelId: string; message: string }
+  | {
+      status: "ready";
+      modelId: string;
+      urn: string;
+      accessToken: string;
+      expiresIn: number;
+      api: "streamingV2" | "streamingV2_EU";
+      region: string;
+    };
+
+export async function prepareModelViewer(
+  projectId: string,
+  input: { sourceKind: "source_document" | "file_node"; sourceId: string; force?: boolean },
+) {
+  return apiRequest<ModelViewerSession>(`/api/models/${projectId}/viewer`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
 export async function getModelAsset(projectId: string, modelId: string) {
   return apiRequest<{
     asset: ModelAsset & {

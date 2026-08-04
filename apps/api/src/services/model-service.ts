@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { prisma } from "@bidwright/db";
+import { ApsClient } from "./model-ingest/aps-client.js";
 import { generateModelIngestManifest, getModelIngestCapabilities } from "./model-ingest/orchestrator.js";
 import { MODEL_INGEST_FORMATS, isModelIngestFileName } from "./model-ingest/registry.js";
 import type { ModelIngestSettings } from "./model-ingest/types.js";
@@ -13,8 +14,29 @@ const MAX_GEOMETRY_BYTES = 80 * 1024 * 1024;
 const CAD_GEOMETRY_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep"]);
 const OCCT_LINEAR_UNIT = "foot";
 const require = createRequire(import.meta.url);
+const APS_VIEWER_EXTENSIONS = new Set(["nwd", "nwf", "nwc"]);
+const activeViewerPreparations = new Map<string, Promise<void>>();
 
 type ModelSourceKind = "source_document" | "file_node";
+
+export interface ProjectModelViewerInput {
+  sourceKind: ModelSourceKind;
+  sourceId: string;
+  force?: boolean;
+}
+
+export type ProjectModelViewerResult =
+  | { status: "processing"; modelId: string; message: string }
+  | { status: "failed"; modelId: string; message: string }
+  | {
+      status: "ready";
+      modelId: string;
+      urn: string;
+      accessToken: string;
+      expiresIn: number;
+      api: "streamingV2" | "streamingV2_EU";
+      region: string;
+    };
 
 interface ModelSource {
   id: string;
@@ -789,24 +811,41 @@ function parseGlb(buffer: Buffer): GeneratedManifest {
   return parseGltf(buffer.toString("utf8", 20, 20 + jsonLength));
 }
 
-async function getProjectModelIngestSettings(projectId: string): Promise<ModelIngestSettings> {
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { organizationId: true },
-  });
-  if (!project) return {};
-  const settings = await prisma.organizationSettings.findUnique({
-    where: { organizationId: project.organizationId },
-    select: { integrations: true },
-  });
-  const integrations = settings?.integrations;
-  return integrations && typeof integrations === "object" && !Array.isArray(integrations)
-    ? { integrations: integrations as Record<string, unknown> }
-    : {};
-}
-
 async function generateManifest(source: ModelSource, settings?: ModelIngestSettings): Promise<GeneratedManifest & { checksum: string; size: number }> {
   return generateModelIngestManifest(source, settings);
+}
+
+async function resolveProjectModelSource(
+  projectId: string,
+  sourceKind: ModelSourceKind,
+  sourceId: string,
+): Promise<ModelSource> {
+  if (sourceKind === "source_document") {
+    const document = await prisma.sourceDocument.findFirst({ where: { id: sourceId, projectId } });
+    if (!document || !isModelFileName(document.fileName)) throw new Error("Model source not found");
+    return {
+      id: document.id,
+      source: sourceKind,
+      projectId,
+      fileName: document.fileName,
+      fileType: document.fileType,
+      storagePath: document.storagePath,
+      checksum: document.checksum,
+    };
+  }
+
+  const node = await prisma.fileNode.findFirst({ where: { id: sourceId, projectId, type: "file" } });
+  if (!node || !isModelFileName(node.name)) throw new Error("Model source not found");
+  return {
+    id: node.id,
+    source: sourceKind,
+    projectId,
+    fileName: node.name,
+    fileType: node.fileType,
+    storagePath: node.storagePath,
+    size: node.size,
+    metadata: node.metadata,
+  };
 }
 
 function modelAssetPayload(source: ModelSource, generated: GeneratedManifest & { checksum: string; size: number }) {
@@ -1033,28 +1072,30 @@ async function discoverProjectModelAssets(projectId: string) {
   };
 }
 
-export async function syncProjectModelAssets(projectId: string) {
+async function syncProjectModelSource(source: ModelSource, ingestSettings: ModelIngestSettings) {
+  const generated = await generateManifest(source, ingestSettings);
+  const payload = modelAssetPayload(source, generated);
+  const existing = await prisma.modelAsset.findFirst({
+    where: source.source === "source_document"
+      ? { projectId: source.projectId, sourceDocumentId: source.id }
+      : { projectId: source.projectId, fileNodeId: source.id },
+  });
+  const asset = existing
+    ? await prisma.modelAsset.update({ where: { id: existing.id }, data: payload as any })
+    : await prisma.modelAsset.create({ data: payload as any });
+  await replaceModelChildren(asset.id, generated);
+  return { asset, generated };
+}
+
+export async function syncProjectModelAssets(projectId: string, ingestSettings: ModelIngestSettings) {
   const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) throw new Error(`Project ${projectId} not found`);
 
   const sources = await collectProjectModelSources(projectId);
   const syncedIds: string[] = [];
-  const ingestSettings = await getProjectModelIngestSettings(projectId);
 
   for (const source of sources) {
-    const generated = await generateManifest(source, ingestSettings);
-    const payload = modelAssetPayload(source, generated);
-    const existing = await prisma.modelAsset.findFirst({
-      where: source.source === "source_document"
-        ? { projectId, sourceDocumentId: source.id }
-        : { projectId, fileNodeId: source.id },
-    });
-
-    const asset = existing
-      ? await prisma.modelAsset.update({ where: { id: existing.id }, data: payload as any })
-      : await prisma.modelAsset.create({ data: payload as any });
-
-    await replaceModelChildren(asset.id, generated);
+    const { asset } = await syncProjectModelSource(source, ingestSettings);
     syncedIds.push(asset.id);
   }
 
@@ -1062,6 +1103,119 @@ export async function syncProjectModelAssets(projectId: string) {
     assets: await listProjectModelAssets(projectId, { discover: false }),
     syncedIds,
     sourceCount: sources.length,
+  };
+}
+
+function integrationString(settings: ModelIngestSettings, key: string): string {
+  const value = settings.integrations?.[key];
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function recordValue(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function assetErrorMessage(asset: { manifest: unknown }): string {
+  const manifest = recordValue(asset.manifest);
+  const direct = manifest.error;
+  if (typeof direct === "string" && direct.trim()) return direct;
+  const modelIngest = recordValue(manifest.modelIngest);
+  const summary = recordValue(modelIngest.summary);
+  return typeof summary.error === "string" && summary.error.trim()
+    ? summary.error
+    : "Autodesk APS could not prepare this model.";
+}
+
+async function existingSourceAsset(source: ModelSource) {
+  return prisma.modelAsset.findFirst({
+    where: source.source === "source_document"
+      ? { projectId: source.projectId, sourceDocumentId: source.id }
+      : { projectId: source.projectId, fileNodeId: source.id },
+  });
+}
+
+function startViewerPreparation(source: ModelSource, settings: ModelIngestSettings, modelId: string) {
+  const run = (async () => {
+    const current = await prisma.modelAsset.findUnique({ where: { id: modelId }, select: { manifest: true } });
+    await prisma.modelAsset.update({
+      where: { id: modelId },
+      data: {
+        status: "processing",
+        manifest: {
+          ...recordValue(current?.manifest),
+          parser: "autodesk-aps",
+          processingStartedAt: new Date().toISOString(),
+        } as any,
+      },
+    });
+    return syncProjectModelSource(source, settings);
+  })()
+    .then(async ({ asset, generated }) => {
+      if (generated.status === "failed") {
+        await prisma.modelAsset.update({ where: { id: asset.id }, data: { status: "failed" } });
+      }
+    })
+    .catch(async (error) => {
+      const message = error instanceof Error ? error.message : "Autodesk APS preparation failed";
+      await prisma.modelAsset.update({
+        where: { id: modelId },
+        data: {
+          status: "failed",
+          manifest: { parser: "autodesk-aps", error: message, failedAt: new Date().toISOString() } as any,
+        },
+      }).catch(() => undefined);
+    })
+    .finally(() => activeViewerPreparations.delete(modelId));
+  activeViewerPreparations.set(modelId, run);
+}
+
+export async function prepareProjectModelViewer(
+  projectId: string,
+  input: ProjectModelViewerInput,
+  settings: ModelIngestSettings,
+): Promise<ProjectModelViewerResult> {
+  const source = await resolveProjectModelSource(projectId, input.sourceKind, input.sourceId);
+  const extension = getExt(source.fileName);
+  if (!APS_VIEWER_EXTENSIONS.has(extension)) throw new Error(`.${extension || "unknown"} is not an APS viewer source`);
+
+  const clientId = integrationString(settings, "autodeskClientId");
+  const clientSecret = integrationString(settings, "autodeskClientSecret");
+  if (!clientId || !clientSecret) {
+    throw new Error("Configure the Autodesk APS client ID and secret in Organization settings before opening Navisworks files.");
+  }
+
+  let asset = await existingSourceAsset(source);
+  if (!asset) asset = await prisma.modelAsset.create({ data: modelAssetShellPayload(source) as any });
+
+  const manifest = recordValue(asset.manifest);
+  const urn = typeof manifest.urn === "string" ? manifest.urn : "";
+  const region = typeof manifest.translationRegion === "string" ? manifest.translationRegion : "US";
+  if (!input.force && asset.status === "indexed" && urn) {
+    const token = await new ApsClient(clientId, clientSecret).createViewerToken();
+    return {
+      status: "ready",
+      modelId: asset.id,
+      urn,
+      accessToken: token.accessToken,
+      expiresIn: token.expiresIn,
+      api: region.toUpperCase().includes("EMEA") || region.toUpperCase().includes("EU") ? "streamingV2_EU" : "streamingV2",
+      region,
+    };
+  }
+
+  if (!input.force && asset.status === "failed") {
+    return { status: "failed", modelId: asset.id, message: assetErrorMessage(asset) };
+  }
+
+  if (!activeViewerPreparations.has(asset.id)) {
+    startViewerPreparation(source, settings, asset.id);
+  }
+  return {
+    status: "processing",
+    modelId: asset.id,
+    message: "Uploading and translating the Navisworks model with Autodesk APS. This can take several minutes.",
   };
 }
 

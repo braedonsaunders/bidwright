@@ -12,6 +12,7 @@ import {
   listModelTakeoffLinks,
   listProjectFederations,
   listProjectModelAssets,
+  prepareProjectModelViewer,
   queryModelElements,
   removeFederationMember,
   syncProjectModelAssets,
@@ -121,6 +122,12 @@ const listFederationsQuerySchema = z.object({
   revisionId: z.string().min(1).optional(),
 });
 
+const prepareViewerSchema = z.object({
+  sourceKind: z.enum(["source_document", "file_node"]),
+  sourceId: z.string().min(1),
+  force: z.boolean().optional(),
+});
+
 function routeError(reply: any, error: unknown) {
   const message = error instanceof Error ? error.message : "Request failed";
   const status = message.includes("not found") ? 404 : 400;
@@ -142,8 +149,10 @@ export async function modelRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     const query = request.query as { refresh?: string };
     try {
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
       if (query.refresh === "1" || query.refresh === "true") {
-        return await syncProjectModelAssets(projectId);
+        const settings = await request.store!.getSettings();
+        return await syncProjectModelAssets(projectId, { integrations: settings.integrations });
       }
       return { assets: await listProjectModelAssets(projectId) };
     } catch (error) {
@@ -154,7 +163,27 @@ export async function modelRoutes(app: FastifyInstance) {
   app.post("/api/models/:projectId/assets/scan", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     try {
-      return await syncProjectModelAssets(projectId);
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+      const settings = await request.store!.getSettings();
+      return await syncProjectModelAssets(projectId, { integrations: settings.integrations });
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/viewer", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = prepareViewerSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
+    try {
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+      const settings = await request.store!.getSettings();
+      const result = await prepareProjectModelViewer(
+        projectId,
+        parsed.data,
+        { integrations: settings.integrations },
+      );
+      return reply.code(result.status === "processing" ? 202 : 200).send(result);
     } catch (error) {
       return routeError(reply, error);
     }

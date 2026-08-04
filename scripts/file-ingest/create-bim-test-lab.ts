@@ -1086,7 +1086,7 @@ async function main() {
   // ── Run model ingest so BIM + 3D files turn into ModelAsset + element rows ──
   console.log("[bim-test-lab] Running model ingest (extracts elements + classification + LOD)…");
   try {
-    const sync = await syncProjectModelAssets(projectId);
+    const sync = await syncProjectModelAssets(projectId, {});
     console.log(`  · ingested ${sync.syncedIds.length} model asset(s) from ${sync.sourceCount} source(s).`);
   } catch (err) {
     console.warn(`  · model ingest failed: ${(err as Error).message}`);

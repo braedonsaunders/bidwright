@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 
 const APS_AUTH_URL = "https://developer.api.autodesk.com/authentication/v2/token";
 const APS_OSS_URL = "https://developer.api.autodesk.com/oss/v2";
@@ -8,6 +8,11 @@ const APS_MD_URL = "https://developer.api.autodesk.com/modelderivative/v2/design
 interface TokenCache {
   accessToken: string;
   expiresAt: number;
+}
+
+export interface ApsViewerToken {
+  accessToken: string;
+  expiresIn: number;
 }
 
 interface ApsBucketDetails {
@@ -52,6 +57,17 @@ interface ApsMetadataResponse {
   };
 }
 
+class ApsApiError extends Error {
+  constructor(
+    readonly status: number,
+    url: string,
+    body: string,
+  ) {
+    super(`APS API ${status} at ${url}: ${body.slice(0, 500)}`);
+    this.name = "ApsApiError";
+  }
+}
+
 export class ApsClient {
   private clientId: string;
   private clientSecret: string;
@@ -66,31 +82,41 @@ export class ApsClient {
     const response = await fetch(url, init);
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(`APS API ${response.status} at ${url}: ${body.slice(0, 500)}`);
+      throw new ApsApiError(response.status, url, body);
     }
     return response.json();
   }
 
-  async authenticate(): Promise<string> {
-    if (this.tokenCache && Date.now() < this.tokenCache.expiresAt - 60_000) {
-      return this.tokenCache.accessToken;
-    }
+  private async requestToken(scope: string): Promise<{ accessToken: string; expiresIn: number }> {
     const body = new URLSearchParams({
       client_id: this.clientId,
       client_secret: this.clientSecret,
       grant_type: "client_credentials",
-      scope: "data:read data:write bucket:read bucket:create viewables:read",
+      scope,
     });
     const result = await this.fetchJson(APS_AUTH_URL, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: body.toString(),
     }) as { access_token: string; expires_in: number };
+    return { accessToken: result.access_token, expiresIn: result.expires_in };
+  }
+
+  async authenticate(): Promise<string> {
+    if (this.tokenCache && Date.now() < this.tokenCache.expiresAt - 60_000) {
+      return this.tokenCache.accessToken;
+    }
+    const result = await this.requestToken("data:read data:write bucket:read bucket:create viewables:read");
     this.tokenCache = {
-      accessToken: result.access_token,
-      expiresAt: Date.now() + result.expires_in * 1000,
+      accessToken: result.accessToken,
+      expiresAt: Date.now() + result.expiresIn * 1000,
     };
-    return result.access_token;
+    return result.accessToken;
+  }
+
+  async createViewerToken(): Promise<ApsViewerToken> {
+    const token = await this.requestToken("viewables:read");
+    return { accessToken: token.accessToken, expiresIn: token.expiresIn };
   }
 
   private async authedHeaders(): Promise<Record<string, string>> {
@@ -100,7 +126,7 @@ export class ApsClient {
 
   private bucketKey(): string {
     const hash = createHash("sha256").update(this.clientId).digest("hex").slice(0, 16).toLowerCase();
-    return `bidwright-ingest-${hash}`;
+    return `bidwright-models-${hash}`;
   }
 
   async ensureBucket(): Promise<string> {
@@ -108,13 +134,14 @@ export class ApsClient {
     const headers = await this.authedHeaders();
     try {
       await this.fetchJson(`${APS_OSS_URL}/buckets/${bucketKey}/details`, { headers });
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ApsApiError) || error.status !== 404) throw error;
       await this.fetchJson(`${APS_OSS_URL}/buckets`, {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           bucketKey,
-          policyKey: "transient",
+          policyKey: "persistent",
         }),
       });
     }
@@ -123,13 +150,73 @@ export class ApsClient {
 
   async uploadObject(objectKey: string, filePath: string): Promise<ApsBucketDetails> {
     const bucketKey = await this.ensureBucket();
-    const fileData = await readFile(filePath);
     const headers = await this.authedHeaders();
-    const result = await this.fetchJson(`${APS_OSS_URL}/buckets/${bucketKey}/objects/${objectKey}`, {
-      method: "PUT",
-      headers: { ...headers, "Content-Type": "application/octet-stream" },
-      body: fileData,
-    }) as { objectId: string; objectKey: string; bucketKey: string };
+    const encodedObjectKey = encodeURIComponent(objectKey);
+    const chunkSize = 5 << 20;
+    const file = await open(filePath, "r");
+    const fileSize = (await file.stat()).size;
+    if (fileSize === 0) {
+      await file.close();
+      throw new Error("APS cannot upload an empty model file.");
+    }
+    const totalParts = Math.ceil(fileSize / chunkSize);
+    let partsUploaded = 0;
+    let uploadKey = "";
+    let signedUrlRefreshes = 0;
+
+    try {
+      upload: while (partsUploaded < totalParts) {
+        const batchSize = Math.min(25, totalParts - partsUploaded);
+        const query = new URLSearchParams({
+          parts: String(batchSize),
+          firstPart: String(partsUploaded + 1),
+          minutesExpiration: "10",
+          ...(uploadKey ? { uploadKey } : {}),
+        });
+        const signed = await this.fetchJson(
+          `${APS_OSS_URL}/buckets/${bucketKey}/objects/${encodedObjectKey}/signeds3upload?${query}`,
+          { headers },
+        ) as { urls: string[]; uploadKey: string };
+        if (!signed.uploadKey || signed.urls.length !== batchSize) {
+          throw new Error("APS returned an incomplete signed upload response.");
+        }
+        uploadKey = signed.uploadKey;
+
+        for (const url of signed.urls) {
+          const start = partsUploaded * chunkSize;
+          const length = Math.min(chunkSize, fileSize - start);
+          const chunk = Buffer.allocUnsafe(length);
+          const { bytesRead } = await file.read(chunk, 0, length, start);
+          if (bytesRead !== length) throw new Error(`Could not read APS upload part ${partsUploaded + 1}.`);
+          const response = await fetch(url, {
+            method: "PUT",
+            headers: { "Content-Type": "application/octet-stream" },
+            body: chunk,
+          });
+          if (!response.ok) {
+            if (response.status === 403 && signedUrlRefreshes < 3) {
+              signedUrlRefreshes += 1;
+              continue upload;
+            }
+            const body = await response.text().catch(() => "");
+            throw new Error(`APS signed upload failed for part ${partsUploaded + 1} (${response.status}): ${body.slice(0, 500)}`);
+          }
+          signedUrlRefreshes = 0;
+          partsUploaded += 1;
+        }
+      }
+    } finally {
+      await file.close();
+    }
+
+    const result = await this.fetchJson(
+      `${APS_OSS_URL}/buckets/${bucketKey}/objects/${encodedObjectKey}/signeds3upload`,
+      {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json", "x-ads-meta-Content-Type": "application/octet-stream" },
+        body: JSON.stringify({ uploadKey }),
+      },
+    ) as { objectId: string; objectKey: string; bucketKey: string };
     const urn = Buffer.from(result.objectId, "utf-8").toString("base64").replace(/=/g, "");
     return {
       bucketKey: result.bucketKey,

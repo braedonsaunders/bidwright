@@ -18,7 +18,11 @@ export async function fileIngestRoutes(app: FastifyInstance) {
     const { projectId } = request.params as { projectId: string };
     const query = request.query as { format?: string };
     try {
-      return await getProjectFileIngestCapabilities(projectId, query.format);
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+      const settings = await request.store!.getSettings();
+      return await getProjectFileIngestCapabilities(projectId, query.format, {
+        integrations: settings.integrations,
+      });
     } catch (error) {
       return routeError(reply, error);
     }
@@ -31,10 +35,13 @@ export async function fileIngestRoutes(app: FastifyInstance) {
       return reply.code(400).send({ message: parsed.error.message });
     }
     try {
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+      const settings = await request.store!.getSettings();
       return await ingestProjectFileSource({
         projectId,
         sourceKind: parsed.data.sourceKind,
         sourceId: parsed.data.sourceId,
+        settings: { integrations: settings.integrations },
       });
     } catch (error) {
       return routeError(reply, error);
