@@ -2,22 +2,29 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
-import { Compass, FileText, Layers, Maximize2, Minimize2, PanelRightClose } from "lucide-react";
+import { ArrowRight, Check, Compass, FileText, GripHorizontal, Layers, ListPlus, Maximize2, Minimize2, PanelRightClose, Sparkles, TableProperties } from "lucide-react";
+import { Button, Drawer } from "@appkit/ui";
 import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
 import { EstimateGrid } from "./estimate-grid";
 import { TakeoffLinkView, type TakeoffSelection } from "./takeoff-link-view";
-import { TakeoffInspectView, type InspectActions, type InspectSnapshot } from "./takeoff-inspect-view";
+import {
+  TakeoffCategoryChooser,
+  TakeoffInspectView,
+  type InspectActions,
+  type InspectCategoryPick,
+  type InspectSnapshot,
+  type TakeoffComposeRequest,
+} from "./takeoff-inspect-view";
 import type { Pickup } from "./takeoff/annotation-canvas";
 import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
-/** Inspect = current document summary + details about the selected entity.
- *  Entities = full scrolling list of every entity in the document, with
- *  per-row "+ Add" to the active worksheet. The old "Link" tab folded into
- *  Inspect's selection details since both were keyed off the same selection. */
-type RightPanelTab = "inspect" | "entities";
+/** Pickups is the persistent query/grouping workspace. Inspect and Add are
+ *  progressive AppKit drawers so the model/drawing never loses its working
+ *  context while an estimator verifies or prices selected scope. */
+type RightPanelTab = "pickups" | "inspect" | "add";
 
 export interface ComboViewProps {
   workspace: ProjectWorkspaceData;
@@ -75,7 +82,9 @@ export function ComboView({
   highlightItemId,
   revisionImpactByItem,
 }: ComboViewProps) {
-  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("inspect");
+  const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("pickups");
+  const [inspectDrawerOpen, setInspectDrawerOpen] = useState(false);
+  const [composeRequest, setComposeRequest] = useState<TakeoffComposeRequest | null>(null);
   const [fullscreen, setFullscreen] = useState(false);
   const [takeoffDetached, setTakeoffDetached] = useState(false);
   const [takeoffSelection, setTakeoffSelection] = useState<TakeoffSelection | null>(null);
@@ -89,6 +98,14 @@ export function ComboView({
     setTakeoffSelection((prev) => (
       serializeTakeoffSelection(prev) === serializeTakeoffSelection(next) ? prev : next
     ));
+    if (next) {
+      setInspectDrawerOpen(true);
+      setRightPanelTab("inspect");
+    }
+  }, []);
+  const handleRequestCompose = useCallback((request: TakeoffComposeRequest) => {
+    setComposeRequest(request);
+    setRightPanelTab("add");
   }, []);
   const takeoffViewStateSignatureRef = useRef<string | null>(serializeTakeoffViewState(takeoffViewState));
   const handleTakeoffViewStateChange = useCallback((next: TakeoffViewState) => {
@@ -144,6 +161,61 @@ export function ComboView({
     inspectSnapshotSignatureRef.current = signature;
     setInspectSnapshot(next);
   }, []);
+  const handleRightPanelTabChange = useCallback((tab: RightPanelTab) => {
+    setRightPanelTab(tab);
+    if (tab === "pickups") {
+      setInspectDrawerOpen(false);
+      setComposeRequest(null);
+    } else if (tab === "inspect") {
+      setInspectDrawerOpen(true);
+    } else if (tab === "add" && !composeRequest) {
+      const actions = inspectActionsRef.current;
+      const selection = takeoffSelection;
+      if (!actions || !selection) return;
+      if (selection.kind === "annotation") {
+        const annotation = inspectSnapshot?.annotations.find((candidate) => candidate.id === selection.pickupId);
+        handleRequestCompose({
+          id: `selection:annotation:${selection.pickupId}`,
+          title: annotation?.label || "Selected takeoff pickup",
+          description: annotation?.measurement ? `${annotation.measurement.value ?? 1} ${annotation.measurement.unit ?? "EA"}` : undefined,
+          sourceLabel: "Drawing pickup",
+          count: 1,
+          mode: "single",
+          execute: (pick) => actions.createLineItemFromAnnotation(selection.pickupId, pick),
+        });
+      } else if (selection.kind === "model-element") {
+        handleRequestCompose({
+          id: `selection:model:${selection.elementId}`,
+          title: selection.elementName,
+          description: [selection.elementClass, selection.material, selection.level, selection.quantitySummary].filter(Boolean).join(" · "),
+          sourceLabel: "Model element",
+          count: 1,
+          mode: "single",
+          execute: (pick) => actions.createLineItemFromElement(selection.elementId, pick),
+        });
+      } else if (selection.kind === "cad-entity") {
+        handleRequestCompose({
+          id: `selection:cad:${selection.entityId}`,
+          title: selection.label || selection.entityType || "CAD entity",
+          description: [selection.layer, selection.summary].filter(Boolean).join(" · "),
+          sourceLabel: "CAD entity",
+          count: 1,
+          mode: "single",
+          execute: (pick) => actions.createLineItemFromDwgEntity(selection.entityId, pick),
+        });
+      } else if (selection.kind === "model-selection" && selection.selectedNodeIds.length > 0) {
+        handleRequestCompose({
+          id: `selection:model-group:${selection.selectedNodeIds.join(",")}`,
+          title: `${selection.selectedCount} selected model objects`,
+          description: selection.fileName,
+          sourceLabel: "3D model selection",
+          count: selection.selectedCount,
+          mode: "group",
+          execute: (pick) => actions.createLineItemFromElementGroup(selection.selectedNodeIds, `${selection.selectedCount} selected model objects`, pick),
+        });
+      }
+    }
+  }, [composeRequest, handleRequestCompose, inspectSnapshot, takeoffSelection]);
 
   const toggleFullscreen = useCallback(() => {
     if (typeof document === "undefined") return;
@@ -166,7 +238,7 @@ export function ComboView({
   const handleDetachedWindowChange = useCallback((open: boolean, win?: Window | null) => {
     detachedTakeoffWindowRef.current = open ? win ?? detachedTakeoffWindowRef.current : null;
     setTakeoffDetached(open);
-    if (open) setRightPanelTab("entities");
+    if (open) setRightPanelTab("pickups");
   }, []);
 
   const handleMergeDetachedTakeoff = useCallback(() => {
@@ -199,7 +271,9 @@ export function ComboView({
   }), []);
 
   const verticalLayout = useDefaultLayout({
-    id: "combo-view-vertical",
+    // Versioned so the Takeoff Studio cutover resets legacy, often-crushed
+    // local panel sizes to the deliberate 2/3 canvas + 1/3 worksheet dock.
+    id: "combo-view-vertical-studio-v1",
     panelIds: ["combo-top", "combo-bottom"],
     storage: layoutStorage,
   });
@@ -236,7 +310,7 @@ export function ComboView({
       modelSendToEstimateRef={modelSendToEstimateRef}
       modelElementCreateLineItemRef={modelElementCreateLineItemRef}
       inspectActionsRef={inspectActionsRef}
-      onOpenInspectEntities={() => setRightPanelTab("entities")}
+      onOpenInspectEntities={() => setRightPanelTab("pickups")}
       onInspectSnapshotChange={handleInspectSnapshotChange}
       onDetachedWindowChange={handleDetachedWindowChange}
     />
@@ -303,7 +377,7 @@ export function ComboView({
                 workspace={workspace}
                 activeWorksheetId={activeWorksheetId}
                 tab={rightPanelTab}
-                onTabChange={setRightPanelTab}
+                onTabChange={handleRightPanelTabChange}
                 onOpenAgentChat={onOpenAgentChat}
                 fullscreen={fullscreen}
                 onToggleFullscreen={toggleFullscreen}
@@ -314,6 +388,12 @@ export function ComboView({
                 onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
                 inspectSnapshot={inspectSnapshot}
                 inspectActionsRef={inspectActionsRef}
+                inspectDrawerOpen={inspectDrawerOpen}
+                onInspectDrawerOpenChange={setInspectDrawerOpen}
+                composeRequest={composeRequest}
+                onRequestCompose={handleRequestCompose}
+                onCloseComposer={() => { setComposeRequest(null); setRightPanelTab(inspectDrawerOpen ? "inspect" : "pickups"); }}
+                onActiveWorksheetChange={onActiveWorksheetChange}
               />
             </div>
           </Panel>
@@ -336,7 +416,7 @@ export function ComboView({
         defaultLayout={verticalLayout.defaultLayout}
         onLayoutChanged={verticalLayout.onLayoutChanged}
       >
-        <Panel id="combo-top" defaultSize="67%" minSize="30%">
+        <Panel id="combo-top" defaultSize="67%" minSize="45%">
           <Group
             orientation="horizontal"
             className="h-full"
@@ -355,8 +435,8 @@ export function ComboView({
 
             <Panel
               id="combo-right"
-              defaultSize="22%"
-              minSize="15%"
+              defaultSize="28%"
+              minSize="20%"
               collapsible
               collapsedSize="0%"
             >
@@ -365,7 +445,7 @@ export function ComboView({
                   workspace={workspace}
                   activeWorksheetId={activeWorksheetId}
                   tab={rightPanelTab}
-                  onTabChange={setRightPanelTab}
+                  onTabChange={handleRightPanelTabChange}
                   onOpenAgentChat={onOpenAgentChat}
                   fullscreen={fullscreen}
                   onToggleFullscreen={toggleFullscreen}
@@ -376,6 +456,12 @@ export function ComboView({
                   onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
                   inspectSnapshot={inspectSnapshot}
                   inspectActionsRef={inspectActionsRef}
+                  inspectDrawerOpen={inspectDrawerOpen}
+                  onInspectDrawerOpenChange={setInspectDrawerOpen}
+                  composeRequest={composeRequest}
+                  onRequestCompose={handleRequestCompose}
+                  onCloseComposer={() => { setComposeRequest(null); setRightPanelTab(inspectDrawerOpen ? "inspect" : "pickups"); }}
+                  onActiveWorksheetChange={onActiveWorksheetChange}
                 />
               </div>
             </Panel>
@@ -383,30 +469,69 @@ export function ComboView({
         </Panel>
 
         <Separator className="group relative !h-px bg-line transition-colors hover:bg-accent/60 data-[resize-active]:bg-accent">
-          <div className="absolute inset-x-0 -top-1 -bottom-1" />
+          <div className="absolute inset-x-0 -top-2 -bottom-2 z-10 flex items-center justify-center">
+            <span className="flex h-4 w-8 items-center justify-center rounded-full border border-line bg-panel text-fg/25 opacity-0 shadow-sm transition-opacity group-hover:opacity-100 group-data-[resize-active]:opacity-100">
+              <GripHorizontal className="h-3 w-3" />
+            </span>
+          </div>
         </Separator>
 
         <Panel
           id="combo-bottom"
           defaultSize="33%"
-          minSize="15%"
+          minSize="22%"
+          maxSize="55%"
           collapsible
           collapsedSize="0%"
         >
-          <div className="h-full min-h-0 flex flex-col">
-            <EstimateGrid
-              workspace={workspace}
-              onApply={onApply}
-              onError={onError}
-              onRefresh={onRefresh}
-              highlightItemId={highlightItemId}
-              activeWorksheetId={activeWorksheetId}
-              onActiveWorksheetChange={onActiveWorksheetChange}
-              onOpenPluginTools={onOpenPluginTools}
-              onOpenTakeoffLink={onOpenTakeoffLink}
-              revisionImpactByItem={revisionImpactByItem}
-              onOpenRevisionDiff={onOpenRevisionDiff}
-            />
+          <div className="flex h-full min-h-0 flex-col bg-panel/15">
+            <div className={cn(
+              "flex h-9 shrink-0 items-center gap-2 border-b border-line px-3 transition-colors",
+              composeRequest && "border-accent/30 bg-accent/5",
+            )}>
+              <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-panel2 text-fg/55">
+                <TableProperties className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0">
+                <p className="truncate text-[10px] font-semibold uppercase tracking-wider text-fg/40">Worksheet dock</p>
+              </div>
+              {(() => {
+                const worksheet = workspace.worksheets.find((candidate) => candidate.id === activeWorksheetId) ?? workspace.worksheets[0];
+                return worksheet ? (
+                  <>
+                    <span className="text-fg/20">/</span>
+                    <span className="min-w-0 truncate text-xs font-medium text-fg/75">{worksheet.name}</span>
+                    <span className="shrink-0 rounded-full border border-line bg-bg/40 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-fg/40">
+                      {(worksheet.items ?? []).length.toLocaleString()} lines
+                    </span>
+                  </>
+                ) : null;
+              })()}
+              <div className="ml-auto flex shrink-0 items-center gap-2">
+                {composeRequest && (
+                  <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 text-[9px] font-medium text-accent">
+                    <ArrowRight className="h-2.5 w-2.5" />
+                    {composeRequest.mode === "batch" ? `${composeRequest.count} staged lines` : "Incoming pickup"}
+                  </span>
+                )}
+                <span className="hidden text-[9px] text-fg/30 xl:inline">Drag divider to resize</span>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1">
+              <EstimateGrid
+                workspace={workspace}
+                onApply={onApply}
+                onError={onError}
+                onRefresh={onRefresh}
+                highlightItemId={highlightItemId}
+                activeWorksheetId={activeWorksheetId}
+                onActiveWorksheetChange={onActiveWorksheetChange}
+                onOpenPluginTools={onOpenPluginTools}
+                onOpenTakeoffLink={onOpenTakeoffLink}
+                revisionImpactByItem={revisionImpactByItem}
+                onOpenRevisionDiff={onOpenRevisionDiff}
+              />
+            </div>
           </div>
         </Panel>
       </Group>
@@ -429,6 +554,12 @@ function RightPanel({
   onCreateLineItemFromModelElement,
   inspectSnapshot,
   inspectActionsRef,
+  inspectDrawerOpen,
+  onInspectDrawerOpenChange,
+  composeRequest,
+  onRequestCompose,
+  onCloseComposer,
+  onActiveWorksheetChange,
 }: {
   workspace: ProjectWorkspaceData;
   activeWorksheetId?: string;
@@ -444,16 +575,17 @@ function RightPanel({
   onCreateLineItemFromModelElement: (elementId: string) => Promise<void> | void;
   inspectSnapshot: InspectSnapshot | null;
   inspectActionsRef: React.MutableRefObject<InspectActions | null>;
+  inspectDrawerOpen: boolean;
+  onInspectDrawerOpenChange: (open: boolean) => void;
+  composeRequest: TakeoffComposeRequest | null;
+  onRequestCompose: (request: TakeoffComposeRequest) => void;
+  onCloseComposer: () => void;
+  onActiveWorksheetChange?: (worksheetId: string) => void;
 }) {
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
+    { id: "pickups", label: "Pickups", icon: Layers },
     { id: "inspect", label: "Inspect", icon: Compass },
-    // "Pickups" — estimator term for measurable items found during takeoff.
-    // Avoids overlap with the worksheet "line items" column the estimator
-    // promotes things INTO. Every source (CAD entity, traced system,
-    // count group, vector arc, manual annotation, smart count, BIM
-    // element, spreadsheet row, photo BOM item) is a pickup until the
-    // estimator + Add-s it as an actual worksheet line item.
-    { id: "entities", label: "Pickups", icon: Layers },
+    { id: "add", label: "Add", icon: ListPlus },
   ];
 
   const FsIcon = fullscreen ? Minimize2 : Maximize2;
@@ -469,9 +601,11 @@ function RightPanel({
               key={t.id}
               type="button"
               onClick={() => onTabChange(t.id)}
+              disabled={(t.id === "inspect" && !takeoffSelection) || (t.id === "add" && !takeoffSelection && !composeRequest)}
               className={cn(
                 "flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium transition-colors",
                 isActive ? "bg-panel2 text-fg" : "text-fg/45 hover:text-fg/70",
+                "disabled:cursor-not-allowed disabled:opacity-35",
               )}
             >
               <Icon className="h-3 w-3" />
@@ -489,34 +623,191 @@ function RightPanel({
         </button>
       </div>
 
-      {/* Inspect needs flex flex-col so the doc summary stays pinned at the top
-          and the selection-details pane below it owns its own internal scroll
-          on the linked-items list — the primary action button (Send to estimate)
-          must never fall off-screen, so the pane itself stays fit-to-height. */}
-      <div className="flex-1 min-h-0 p-3 flex flex-col gap-2 overflow-hidden">
-        {tab === "inspect" && (
-          <>
-            <DocumentSummaryCard snapshot={inspectSnapshot} />
-            <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-md border border-line bg-panel/40 p-2">
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
-                <TakeoffLinkView
-                  workspace={workspace}
-                  selection={takeoffSelection}
-                  annotations={annotationsCache}
-                  activeWorksheetId={activeWorksheetId}
-                  onLinksMutated={onLinksMutated}
-                  onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
-                  onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
-                />
-              </div>
-            </div>
-          </>
-        )}
-        {tab === "entities" && (
-          <TakeoffInspectView snapshot={inspectSnapshot} actions={inspectActionsRef.current} />
-        )}
+      <div className="shrink-0 border-b border-line/70 bg-bg/25 px-3 py-2">
+        <p className="text-[10px] font-semibold text-fg/70">Find, group, and stage measurable scope</p>
+        <p className="mt-0.5 text-[9px] leading-relaxed text-fg/40">Click a row to inspect it. Check several rows to build a batch. Use a group action for one summed estimate line.</p>
       </div>
+
+      <div className="min-h-0 flex-1 overflow-hidden p-2">
+        <TakeoffInspectView
+          snapshot={inspectSnapshot}
+          actions={inspectActionsRef.current}
+          onRequestCompose={onRequestCompose}
+        />
+      </div>
+
+      <Drawer
+        open={inspectDrawerOpen}
+        onClose={() => {
+          onInspectDrawerOpenChange(false);
+          if (!composeRequest) onTabChange("pickups");
+        }}
+        title="Inspect pickup"
+        description="Verify source geometry, quantities, properties, and existing worksheet links."
+        size="md"
+        bodyClassName="min-h-0 overflow-hidden p-4"
+        footer={takeoffSelection ? (
+          <div className="flex w-full items-center justify-between gap-3">
+            <p className="text-xs text-fg/45">Ready to place this pickup in the estimate?</p>
+            <Button size="sm" onClick={() => onTabChange("add")}>
+              Add to estimate <ArrowRight className="h-3.5 w-3.5" />
+            </Button>
+          </div>
+        ) : undefined}
+      >
+        <div className="flex h-full min-h-0 flex-col gap-3">
+          <DocumentSummaryCard snapshot={inspectSnapshot} />
+          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-lg border border-line bg-panel/35 p-3">
+            <TakeoffLinkView
+              workspace={workspace}
+              selection={takeoffSelection}
+              annotations={annotationsCache}
+              activeWorksheetId={activeWorksheetId}
+              onLinksMutated={onLinksMutated}
+              onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
+              onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
+            />
+          </div>
+        </div>
+      </Drawer>
+
+      <TakeoffComposerDrawer
+        request={composeRequest}
+        workspace={workspace}
+        activeWorksheetId={activeWorksheetId}
+        snapshot={inspectSnapshot}
+        actions={inspectActionsRef.current}
+        stacked={inspectDrawerOpen}
+        onClose={onCloseComposer}
+        onActiveWorksheetChange={onActiveWorksheetChange}
+      />
     </>
+  );
+}
+
+function TakeoffComposerDrawer({
+  request,
+  workspace,
+  activeWorksheetId,
+  snapshot,
+  actions,
+  stacked,
+  onClose,
+  onActiveWorksheetChange,
+}: {
+  request: TakeoffComposeRequest | null;
+  workspace: ProjectWorkspaceData;
+  activeWorksheetId?: string;
+  snapshot: InspectSnapshot | null;
+  actions: InspectActions | null;
+  stacked: boolean;
+  onClose: () => void;
+  onActiveWorksheetChange?: (worksheetId: string) => void;
+}) {
+  const defaultWorksheetId = activeWorksheetId ?? workspace.worksheets[0]?.id ?? "";
+  const [worksheetId, setWorksheetId] = useState(defaultWorksheetId);
+  const [categoryPick, setCategoryPick] = useState<InspectCategoryPick | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    setWorksheetId(activeWorksheetId ?? workspace.worksheets[0]?.id ?? "");
+    const lastCategoryId = snapshot?.takeoffCategoryId;
+    const lastCategory = snapshot?.availableCategories.find((category) => category.id === lastCategoryId);
+    setCategoryPick(lastCategory && lastCategory.itemSource !== "rate_schedule" ? { categoryId: lastCategory.id } : null);
+    setSubmitting(false);
+  }, [activeWorksheetId, request?.id, snapshot?.takeoffCategoryId, workspace.worksheets[0]?.id]);
+
+  const submit = async () => {
+    if (!request || !categoryPick || submitting) return;
+    setSubmitting(true);
+    try {
+      if (worksheetId && worksheetId !== activeWorksheetId) {
+        onActiveWorksheetChange?.(worksheetId);
+        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+      }
+      await request.execute(categoryPick);
+      onClose();
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const targetWorksheet = workspace.worksheets.find((worksheet) => worksheet.id === worksheetId);
+  return (
+    <Drawer
+      open={Boolean(request)}
+      onClose={onClose}
+      title="Add to estimate"
+      description="Turn verified takeoff scope into traceable worksheet pricing."
+      size="lg"
+      stacked={stacked}
+      bodyClassName="p-0"
+      footer={(
+        <div className="flex w-full items-center justify-between gap-3">
+          <div className="min-w-0 text-xs text-fg/45">
+            <span className="font-medium text-fg/70">{targetWorksheet?.name ?? "Worksheet"}</span>
+            <span> · {request?.mode === "batch" ? `${request.count} lines` : "1 line"}</span>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
+            <Button size="sm" onClick={() => void submit()} disabled={!categoryPick || !worksheetId || submitting}>
+              {submitting ? "Adding…" : "Add to estimate"}
+              {!submitting && <ArrowRight className="h-3.5 w-3.5" />}
+            </Button>
+          </div>
+        </div>
+      )}
+    >
+      <div className="flex min-h-full flex-col">
+        <div className="border-b border-line bg-panel/30 px-5 py-4">
+          <div className="flex items-start gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
+              {request?.mode === "group" ? <Sparkles className="h-5 w-5" /> : request?.mode === "batch" ? <ListPlus className="h-5 w-5" /> : <Check className="h-5 w-5" />}
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="truncate text-sm font-semibold text-fg">{request?.title ?? "Pickup"}</h3>
+                <span className="rounded-full border border-line bg-bg/50 px-2 py-0.5 text-[10px] font-medium text-fg/50">{request?.sourceLabel}</span>
+                {request && request.count > 1 && <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">{request.count.toLocaleString()} pickups</span>}
+              </div>
+              {request?.description && <p className="mt-1 text-xs leading-relaxed text-fg/50">{request.description}</p>}
+            </div>
+          </div>
+        </div>
+
+        <div className="grid min-h-0 flex-1 lg:grid-cols-[220px_minmax(0,1fr)]">
+          <aside className="border-b border-line bg-bg/30 p-4 lg:border-b-0 lg:border-r">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-fg/40">Destination</p>
+            <label className="mt-3 block text-xs font-medium text-fg/70" htmlFor="takeoff-target-worksheet">Worksheet</label>
+            <select
+              id="takeoff-target-worksheet"
+              value={worksheetId}
+              onChange={(event) => setWorksheetId(event.target.value)}
+              className="mt-1.5 h-9 w-full rounded-md border border-line bg-panel px-2.5 text-xs text-fg outline-none focus:border-accent focus:ring-2 focus:ring-accent/15"
+            >
+              {workspace.worksheets.map((worksheet) => <option key={worksheet.id} value={worksheet.id}>{worksheet.name}</option>)}
+            </select>
+            <div className="mt-4 rounded-lg border border-line bg-panel/45 p-3">
+              <p className="text-[10px] font-semibold text-fg/65">Creation mode</p>
+              <p className="mt-1 text-[11px] leading-relaxed text-fg/45">
+                {request?.mode === "group"
+                  ? "One summed worksheet line with every source pickup linked for revision traceability."
+                  : request?.mode === "batch"
+                    ? "One worksheet line per staged pickup, all placed into the same category."
+                    : "One worksheet line linked back to this source pickup."}
+              </p>
+            </div>
+          </aside>
+          <main className="min-h-0 p-5">
+            <div className="mb-3">
+              <p className="text-sm font-semibold text-fg">Price as</p>
+              <p className="mt-0.5 text-xs text-fg/45">Choose the estimate category and, when required, the exact ratebook item.</p>
+            </div>
+            <TakeoffCategoryChooser snapshot={snapshot} actions={actions} value={categoryPick} onChange={setCategoryPick} />
+          </main>
+        </div>
+      </div>
+    </Drawer>
   );
 }
 

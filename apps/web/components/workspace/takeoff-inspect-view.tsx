@@ -1,7 +1,7 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Check, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, ScanSearch, Settings2, Sigma, Trash2, X } from "lucide-react";
+import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Check, CheckSquare2, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, ScanSearch, Search, Settings2, Sigma, Trash2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import {
   Input,
@@ -478,6 +478,34 @@ export interface InspectActions {
   refreshModel: () => void;
 }
 
+export interface TakeoffComposeRequest {
+  id: string;
+  title: string;
+  description?: string;
+  sourceLabel: string;
+  count: number;
+  mode: "single" | "group" | "batch";
+  execute: (pick: InspectCategoryPick) => Promise<void> | void;
+}
+
+interface BasketEntry {
+  id: string;
+  title: string;
+  sourceLabel: string;
+  execute: (pick: InspectCategoryPick) => Promise<void> | void;
+}
+
+interface TakeoffComposeContextValue {
+  requestCompose?: (request: TakeoffComposeRequest) => void;
+  basketIds: Set<string>;
+  toggleBasket: (entry: BasketEntry) => void;
+}
+
+const TakeoffComposeContext = createContext<TakeoffComposeContextValue>({
+  basketIds: new Set(),
+  toggleBasket: () => undefined,
+});
+
 const TYPE_LABELS: Record<string, string> = {
   distance: "Distance",
   "area-rectangle": "Rectangle area",
@@ -489,6 +517,101 @@ const TYPE_LABELS: Record<string, string> = {
 const EDIT_COLORS = ["#3b82f6", "#ef4444", "#22c55e", "#f59e0b", "#8b5cf6", "#ec4899", "#06b6d4", "#f97316"];
 
 export function TakeoffInspectView({
+  snapshot,
+  actions,
+  onRequestCompose,
+}: {
+  snapshot: InspectSnapshot | null;
+  actions: InspectActions | null;
+  onRequestCompose?: (request: TakeoffComposeRequest) => void;
+}) {
+  const [basket, setBasket] = useState<Map<string, BasketEntry>>(() => new Map());
+  const scopeKey = useMemo(() => {
+    if (!snapshot) return "empty";
+    return [
+      snapshot.mode,
+      snapshot.modelAsset?.id,
+      snapshot.dwgIntelligence?.documentId,
+      snapshot.drawingAnalysis?.documentId,
+      snapshot.smartCount?.documentId,
+      snapshot.spreadsheet?.sourceName,
+      snapshot.photoBom?.summary,
+    ].filter(Boolean).join(":");
+  }, [snapshot]);
+  useEffect(() => setBasket(new Map()), [scopeKey]);
+  const basketIds = useMemo(() => new Set(basket.keys()), [basket]);
+  const toggleBasket = useCallback((entry: BasketEntry) => {
+    setBasket((current) => {
+      const next = new Map(current);
+      if (next.has(entry.id)) next.delete(entry.id);
+      else next.set(entry.id, entry);
+      return next;
+    });
+  }, []);
+  const contextValue = useMemo<TakeoffComposeContextValue>(() => ({
+    requestCompose: onRequestCompose,
+    basketIds,
+    toggleBasket,
+  }), [basketIds, onRequestCompose, toggleBasket]);
+
+  const content = (
+    <TakeoffInspectContent snapshot={snapshot} actions={actions} />
+  );
+
+  return (
+    <TakeoffComposeContext.Provider value={contextValue}>
+      <div className="relative flex h-full min-h-0 flex-col">
+        <div className={cn("min-h-0 flex-1", basket.size > 0 && "pb-14")}>
+          {content}
+        </div>
+        {basket.size > 0 && (
+          <div className="absolute inset-x-0 bottom-0 z-10 border-t border-accent/25 bg-panel/95 px-2 py-2 shadow-[0_-8px_24px_rgba(0,0,0,0.12)] backdrop-blur">
+            <div className="flex items-center gap-2">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent/12 text-accent">
+                <CheckSquare2 className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-[10px] font-semibold text-fg">{basket.size.toLocaleString()} pickup{basket.size === 1 ? "" : "s"} staged</p>
+                <p className="truncate text-[9px] text-fg/40">Review and place them together, or keep browsing.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setBasket(new Map())}
+                className="h-7 rounded-md px-2 text-[10px] font-medium text-fg/45 hover:bg-panel2 hover:text-fg/70"
+              >
+                Clear
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const entries = Array.from(basket.values());
+                  onRequestCompose?.({
+                    id: `basket:${entries.map((entry) => entry.id).sort().join(",")}`,
+                    title: `${entries.length} staged pickups`,
+                    description: "Create one worksheet line per staged pickup. Group headers can still be used when you want one summed line.",
+                    sourceLabel: "Mixed pickup selection",
+                    count: entries.length,
+                    mode: "batch",
+                    execute: async (pick) => {
+                      for (const entry of entries) await entry.execute(pick);
+                      setBasket(new Map());
+                    },
+                  });
+                }}
+                className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md bg-accent px-2.5 text-[10px] font-semibold text-accent-fg shadow-sm hover:bg-accent/90"
+              >
+                Add to estimate
+                <ChevronRight className="h-3 w-3" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </TakeoffComposeContext.Provider>
+  );
+}
+
+function TakeoffInspectContent({
   snapshot,
   actions,
 }: {
@@ -743,7 +866,7 @@ function AutoCountGroup({
       snapshot={snapshot}
       actions={actions}
       onSelect={(id) => actions?.selectAnnotation(selectedPickupId === id ? null : id)}
-      onAdd={(id, _kind, pick) => void actions?.createLineItemFromAnnotation(id, pick)}
+      onAdd={(id, _kind, pick) => actions?.createLineItemFromAnnotation(id, pick)}
       onDelete={(id) => actions?.deleteAnnotation(id)}
     />
   );
@@ -794,7 +917,7 @@ function ManualAnnotationsGroup({
       snapshot={snapshot}
       actions={actions}
       onSelect={(id) => actions?.selectAnnotation(selectedPickupId === id ? null : id)}
-      onAdd={(id, _kind, pick) => void actions?.createLineItemFromAnnotation(id, pick)}
+      onAdd={(id, _kind, pick) => actions?.createLineItemFromAnnotation(id, pick)}
       onDelete={(id) => actions?.deleteAnnotation(id)}
     />
   );
@@ -866,7 +989,7 @@ function SmartCountGroup({
       snapshot={snapshot}
       actions={actions}
       onSelect={(id) => actions?.selectSmartCountItem(smart.selectedItemId === id ? null : id)}
-      onAdd={(id, _kind, pick) => void actions?.createLineItemFromSmartCountItem(id, pick)}
+      onAdd={(id, _kind, pick) => actions?.createLineItemFromSmartCountItem(id, pick)}
       onDelete={(id) => actions?.deleteSmartCountItem(id)}
     />
   );
@@ -1177,7 +1300,7 @@ function DwgEntitiesInspect({
             const targets = intel.systems.find((system) => system.id === id)?.sourceEntityIds ?? [];
             actions?.selectDwgEntities(targets);
           }}
-          onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgSystem(id, pick)}
+          onAdd={(id, _kind, pick) => actions?.createLineItemFromDwgSystem(id, pick)}
           onDelete={(id) => actions?.deleteDwgSystem(id)}
         />
 
@@ -1203,7 +1326,7 @@ function DwgEntitiesInspect({
             const targets = intel.autoCounts.find((row) => row.id === id)?.sourceEntityIds ?? [];
             actions?.selectDwgEntities(targets);
           }}
-          onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgAutoCount(id, pick)}
+          onAdd={(id, _kind, pick) => actions?.createLineItemFromDwgAutoCount(id, pick)}
           onDelete={(id) => actions?.deleteDwgAutoCount(id)}
         />
 
@@ -1229,12 +1352,12 @@ function DwgEntitiesInspect({
             snapshot={snapshot}
             actions={actions}
             onSelect={(id) => actions?.selectDwgEntity(intel.selectedEntityId === id ? null : id)}
-            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgEntity(id, pick)}
+            onAdd={(id, _kind, pick) => actions?.createLineItemFromDwgEntity(id, pick)}
             onDelete={(id) => actions?.deleteDwgEntity(id)}
             initialCollapsed={!group.entities.some((entity) => entity.id === intel.selectedEntityId)}
             groupAction={{
               triggerTitle: `Add one summed line item from all ${group.entities.length} CAD entities in ${group.label}`,
-              onPick: (pick) => void actions?.createLineItemFromDwgEntityGroup(
+              onPick: (pick) => actions?.createLineItemFromDwgEntityGroup(
                 group.entities.map((entity) => entity.id),
                 group.label,
                 pick,
@@ -1262,7 +1385,7 @@ function DwgEntitiesInspect({
             snapshot={snapshot}
             actions={actions}
             onSelect={(id) => actions?.selectDwgEntity(intel.selectedEntityId === id ? null : id)}
-            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDwgEntity(id, pick)}
+            onAdd={(id, _kind, pick) => actions?.createLineItemFromDwgEntity(id, pick)}
             onDelete={(id) => actions?.deleteDwgEntity(id)}
           />
         )}
@@ -1590,7 +1713,7 @@ function DrawingAnalysisInspect({
             snapshot={snapshot}
             actions={actions}
             onSelect={(id) => actions?.selectDrawingDetection(id, "system")}
-            onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "system", pick)}
+            onAdd={(id, _kind, pick) => actions?.createLineItemFromDrawingDetection(id, "system", pick)}
             onDelete={(id) => actions?.deleteDrawingDetection(id, "system")}
           />
           <DetectionGroup
@@ -1625,7 +1748,7 @@ function DrawingAnalysisInspect({
             }}
             onAdd={(id, _kind, pick) => {
               const group = countGroups.find((item) => item.id === id);
-              if (group) void actions?.createLineItemFromDrawingSymbolGroup(group.symbolIds, group.label, pick);
+              if (group) return actions?.createLineItemFromDrawingSymbolGroup(group.symbolIds, group.label, pick);
             }}
             onDelete={(id) => {
               const group = countGroups.find((item) => item.id === id);
@@ -1654,7 +1777,7 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "circle")}
-              onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "circle", pick)}
+              onAdd={(id, _kind, pick) => actions?.createLineItemFromDrawingDetection(id, "circle", pick)}
               onDelete={(id) => actions?.deleteDrawingDetection(id, "circle")}
             />
           )}
@@ -1681,7 +1804,7 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "line")}
-              onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "line", pick)}
+              onAdd={(id, _kind, pick) => actions?.createLineItemFromDrawingDetection(id, "line", pick)}
               onDelete={(id) => actions?.deleteDrawingDetection(id, "line")}
             />
           )}
@@ -1713,7 +1836,7 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "arc")}
-              onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "arc", pick)}
+              onAdd={(id, _kind, pick) => actions?.createLineItemFromDrawingDetection(id, "arc", pick)}
               onDelete={(id) => actions?.deleteDrawingDetection(id, "arc")}
             />
           )}
@@ -1741,7 +1864,7 @@ function DrawingAnalysisInspect({
               snapshot={snapshot}
               actions={actions}
               onSelect={(id) => actions?.selectDrawingDetection(id, "curve")}
-              onAdd={(id, _kind, pick) => void actions?.createLineItemFromDrawingDetection(id, "curve", pick)}
+              onAdd={(id, _kind, pick) => actions?.createLineItemFromDrawingDetection(id, "curve", pick)}
               onDelete={(id) => actions?.deleteDrawingDetection(id, "curve")}
             />
           )}
@@ -2067,7 +2190,7 @@ function DetectionGroup({
   /** kind passed to onAdd / onDelete is the row's own — callers can ignore
    *  it when their data source has a single fixed action. Widened to
    *  string so manual / smart / cad-entity row kinds flow through. */
-  onAdd?: (id: string, kind: DetectionRow["kind"], pick: InspectCategoryPick) => void;
+  onAdd?: (id: string, kind: DetectionRow["kind"], pick: InspectCategoryPick) => Promise<void> | void;
   onDelete?: (id: string, kind: DetectionRow["kind"]) => void;
   /** Optional "Σ Add" on the section header — adds one summed line item
    *  from ALL rows in the group. Used by the BIM model classification
@@ -2075,13 +2198,14 @@ function DetectionGroup({
    *  up an entire bucket in one click. */
   groupAction?: {
     triggerTitle: string;
-    onPick: (pick: InspectCategoryPick) => void;
+    onPick: (pick: InspectCategoryPick) => Promise<void> | void;
   };
   /** Large model/CAD groups start collapsed so thousands of indexed elements
    *  don't become thousands of mounted DOM rows. Selecting an element opens
    *  its containing group automatically. */
   initialCollapsed?: boolean;
 }) {
+  const compose = useContext(TakeoffComposeContext);
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const containsSelection = rows.some((row) => row.selected);
   useEffect(() => {
@@ -2101,6 +2225,18 @@ function DetectionGroup({
     });
   };
   const shownCount = rows.length;
+  const requestForRow = useCallback((row: DetectionRow): TakeoffComposeRequest | null => {
+    if (!onAdd || row.kind === "text" || row.linkCount > 0 || row.requiresCalibration) return null;
+    return {
+      id: `pickup:${row.source}:${row.id}`,
+      title: row.title,
+      description: [row.subtitle, row.detail, row.value].filter(Boolean).join(" · "),
+      sourceLabel: SOURCE_PILL_TEXT[row.source],
+      count: 1,
+      mode: "single",
+      execute: (pick) => onAdd(row.id, row.kind, pick),
+    };
+  }, [onAdd]);
   return (
     <section>
       {/* Section header reads as a TYPE LABEL inside the panel's "Potential
@@ -2128,15 +2264,35 @@ function DetectionGroup({
           </span>
         </button>
         {groupAction && (
-          <AddToCategoryPopover
-            snapshot={snapshot}
-            actions={actions}
-            onPick={groupAction.onPick}
-            triggerLabel="Add group"
-            triggerClassName="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm border border-transparent px-1.5 text-[9px] font-medium text-fg/50 transition-colors hover:border-accent/25 hover:bg-accent/10 hover:text-accent"
-            triggerTitle={groupAction.triggerTitle}
-            triggerIcon={<Sigma className="h-2.5 w-2.5" />}
-          />
+          compose.requestCompose ? (
+            <button
+              type="button"
+              onClick={() => compose.requestCompose?.({
+                id: `group:${title}:${rows.length}:${rows[0]?.id ?? "empty"}:${rows[rows.length - 1]?.id ?? "empty"}`,
+                title,
+                description: `Create one summed worksheet line from all ${rows.length.toLocaleString()} pickups in this group.`,
+                sourceLabel: rows[0] ? SOURCE_PILL_TEXT[rows[0].source] : "Pickup group",
+                count: rows.length,
+                mode: "group",
+                execute: groupAction.onPick,
+              })}
+              className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm border border-transparent px-1.5 text-[9px] font-medium text-fg/50 transition-colors hover:border-accent/25 hover:bg-accent/10 hover:text-accent"
+              title={groupAction.triggerTitle}
+            >
+              <Sigma className="h-2.5 w-2.5" />
+              Add group
+            </button>
+          ) : (
+            <AddToCategoryPopover
+              snapshot={snapshot}
+              actions={actions}
+              onPick={groupAction.onPick}
+              triggerLabel="Add group"
+              triggerClassName="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm border border-transparent px-1.5 text-[9px] font-medium text-fg/50 transition-colors hover:border-accent/25 hover:bg-accent/10 hover:text-accent"
+              triggerTitle={groupAction.triggerTitle}
+              triggerIcon={<Sigma className="h-2.5 w-2.5" />}
+            />
+          )
         )}
       </div>
       {!collapsed && (
@@ -2145,6 +2301,8 @@ function DetectionGroup({
             <p className="rounded-md border border-line bg-bg/25 px-2 py-2 text-center text-[10px] text-fg/35">None found</p>
           ) : rows.map((row) => {
             const expanded = expandedRowIds.has(row.id);
+            const composeRequest = requestForRow(row);
+            const staged = composeRequest ? compose.basketIds.has(composeRequest.id) : false;
             return (
             <Fragment key={row.id}>
             <div
@@ -2176,6 +2334,32 @@ function DetectionGroup({
                 </div>
               ) : (
                 <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
+              )}
+              {composeRequest && compose.requestCompose && (
+                <button
+                  type="button"
+                  role="checkbox"
+                  aria-checked={staged}
+                  aria-label={`${staged ? "Remove" : "Stage"} ${row.title}`}
+                  title={staged ? "Remove from staged pickups" : "Stage this pickup for a batch add"}
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    compose.toggleBasket({
+                      id: composeRequest.id,
+                      title: composeRequest.title,
+                      sourceLabel: composeRequest.sourceLabel,
+                      execute: composeRequest.execute,
+                    });
+                  }}
+                  className={cn(
+                    "inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors",
+                    staged
+                      ? "border-accent bg-accent text-accent-fg"
+                      : "border-line bg-bg/50 text-transparent hover:border-accent/50",
+                  )}
+                >
+                  <Check className="h-2.5 w-2.5" />
+                </button>
               )}
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
@@ -2225,6 +2409,19 @@ function DetectionGroup({
                       disabled
                       title="Set drawing scale before adding linear detections to a worksheet"
                       className="inline-flex h-6 items-center gap-1 rounded-md border border-warning/25 bg-warning/10 px-1.5 text-[10px] font-medium text-warning/70 disabled:cursor-not-allowed"
+                    >
+                      <Plus className="h-3 w-3" />
+                      Add
+                    </button>
+                  ) : composeRequest && compose.requestCompose ? (
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        compose.requestCompose?.(composeRequest);
+                      }}
+                      className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      title="Review and add this pickup to the estimate"
                     >
                       <Plus className="h-3 w-3" />
                       Add
@@ -2481,6 +2678,158 @@ function AddToCategoryPopover({
   );
 }
 
+/** Full-size category + ratebook picker for the Takeoff Studio composer.
+ *  Unlike the compact row popover, this keeps the choice staged until the
+ *  estimator confirms the destination worksheet in the Add drawer. */
+export function TakeoffCategoryChooser({
+  snapshot,
+  actions,
+  value,
+  onChange,
+}: {
+  snapshot: InspectSnapshot | null;
+  actions: InspectActions | null;
+  value: InspectCategoryPick | null;
+  onChange: (pick: InspectCategoryPick) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [expandedCategoryId, setExpandedCategoryId] = useState<string | null>(null);
+  const categories = snapshot?.availableCategories ?? [];
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return categories;
+    return categories.filter((category) =>
+      category.name.toLowerCase().includes(needle)
+      || (category.rateScheduleItems ?? []).some((item) =>
+        [item.name, item.code, item.scheduleName].some((candidate) => candidate.toLowerCase().includes(needle)),
+      ),
+    );
+  }, [categories, query]);
+
+  useEffect(() => {
+    if (value?.categoryId) setExpandedCategoryId(value.categoryId);
+  }, [value?.categoryId]);
+
+  const choose = (pick: InspectCategoryPick) => {
+    onChange(pick);
+    actions?.setTakeoffCategoryId(pick.categoryId);
+  };
+
+  if (categories.length === 0) {
+    return (
+      <div className="rounded-lg border border-warning/30 bg-warning/5 px-3 py-3 text-sm text-warning">
+        Enable at least one estimate category in Settings before adding pickups.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-fg/35" />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          placeholder="Search categories, ratebook items, or codes..."
+          className="pl-9"
+          autoComplete="off"
+        />
+      </div>
+      <div className="max-h-[44vh] space-y-1.5 overflow-y-auto pr-1">
+        {filtered.map((category) => {
+          const isRatebook = category.itemSource === "rate_schedule";
+          const expanded = expandedCategoryId === category.id;
+          const categorySelected = value?.categoryId === category.id;
+          const items = category.rateScheduleItems ?? [];
+          return (
+            <div
+              key={category.id}
+              className={cn(
+                "overflow-hidden rounded-lg border transition-colors",
+                categorySelected ? "border-accent/45 bg-accent/5" : "border-line bg-panel/35",
+              )}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  if (isRatebook) {
+                    setExpandedCategoryId(expanded ? null : category.id);
+                  } else {
+                    choose({ categoryId: category.id });
+                  }
+                }}
+                className="flex w-full items-center gap-3 px-3 py-2.5 text-left hover:bg-panel2/45"
+              >
+                <span className={cn(
+                  "inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full border",
+                  categorySelected ? "border-accent bg-accent text-accent-fg" : "border-line bg-bg text-transparent",
+                )}>
+                  <Check className="h-3 w-3" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-fg">{category.name}</span>
+                  <span className="block text-[11px] text-fg/45">
+                    {isRatebook ? `${items.length.toLocaleString()} ratebook item${items.length === 1 ? "" : "s"}` : category.itemSource === "catalog" ? "Catalog-backed category" : "Freeform estimate category"}
+                  </span>
+                </span>
+                {isRatebook && <ChevronRight className={cn("h-4 w-4 text-fg/35 transition-transform", expanded && "rotate-90")} />}
+              </button>
+              {isRatebook && expanded && (
+                <div className="border-t border-line/70 bg-bg/30 p-1.5">
+                  {items.length === 0 ? (
+                    <p className="px-2 py-2 text-xs text-warning">Import a {category.name} ratebook before using this category.</p>
+                  ) : (
+                    <div className="space-y-0.5">
+                      {items
+                        .filter((item) => {
+                          const needle = query.trim().toLowerCase();
+                          return !needle || [item.name, item.code, item.scheduleName].some((candidate) => candidate.toLowerCase().includes(needle));
+                        })
+                        .map((item) => {
+                          const selected = value?.rateScheduleItemId === item.id;
+                          return (
+                            <button
+                              key={item.id}
+                              type="button"
+                              onClick={() => choose({
+                                categoryId: category.id,
+                                rateScheduleItemId: item.id,
+                                rateScheduleItemName: item.name,
+                                rateScheduleItemUnit: item.unit,
+                                tierUnits: item.tierUnits,
+                              })}
+                              className={cn(
+                                "flex w-full items-center gap-2 rounded-md px-2 py-2 text-left transition-colors",
+                                selected ? "bg-accent/12 text-accent" : "text-fg/70 hover:bg-panel2",
+                              )}
+                            >
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-xs font-medium">{item.name}</span>
+                                <span className="block truncate text-[10px] text-fg/40">{item.scheduleName}{item.code ? ` · ${item.code}` : ""}</span>
+                              </span>
+                              <span className="shrink-0 text-right text-[10px] text-fg/45">
+                                <span className="block font-mono">{item.rate != null ? `$${item.rate.toFixed(2)}` : "—"}</span>
+                                <span>{item.unit}</span>
+                              </span>
+                              {selected && <Check className="h-3.5 w-3.5 shrink-0" />}
+                            </button>
+                          );
+                        })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {filtered.length === 0 && (
+          <p className="rounded-lg border border-line bg-panel/30 px-3 py-6 text-center text-xs text-fg/45">No categories or ratebook items match that search.</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 
 /** Grouping axes for the BIM element list. Reuses the same construction-
  *  classification primitive that powers the estimate summary rollups, so the
@@ -2627,7 +2976,7 @@ function ModelInspect({
 
   const onSelect = (id: string) => actions?.selectModelElement(selectedModelElementId === id ? null : id);
   const onAdd = (id: string, _kind: DetectionRow["kind"], pick: InspectCategoryPick) =>
-    void actions?.createLineItemFromElement(id, pick);
+    actions?.createLineItemFromElement(id, pick);
 
   const totalCount = modelElementCount;
   const linkedCount = modelElements.filter((e) => e.isLinked).length;
@@ -2692,7 +3041,7 @@ function ModelInspect({
               initialCollapsed={!group.elements.some((element) => element.id === selectedModelElementId)}
               groupAction={{
                 triggerTitle: `Add one summed line item from all ${group.elements.length} elements in ${group.label}`,
-                onPick: (pick) => void actions?.createLineItemFromElementGroup(
+                onPick: (pick) => actions?.createLineItemFromElementGroup(
                   group.elements.map((el) => el.id),
                   group.label,
                   pick,
@@ -2871,13 +3220,13 @@ function SpreadsheetInspect({
           onSelect={() => {}}
           onAdd={(id, _kind, pick) => {
             const row = ss.rows.find((r) => r.id === id);
-            if (row) void actions?.createLineItemFromSpreadsheetRow(row.index, pick);
+            if (row) return actions?.createLineItemFromSpreadsheetRow(row.index, pick);
           }}
           groupAction={{
             triggerTitle: isPivotMode
               ? "Create one worksheet line item per pivot group"
               : "Import every row as its own worksheet line item",
-            onPick: (pick) => void actions?.createLineItemsFromAllSpreadsheetRows(pick),
+            onPick: (pick) => actions?.createLineItemsFromAllSpreadsheetRows(pick),
           }}
         />
       )}
@@ -2999,10 +3348,10 @@ function PhotoBomInspect({
           snapshot={snapshot}
           actions={actions}
           onSelect={() => {}}
-          onAdd={(id, _kind, pick) => void actions?.createLineItemFromPhotoBomRow(id, pick)}
+          onAdd={(id, _kind, pick) => actions?.createLineItemFromPhotoBomRow(id, pick)}
           groupAction={{
             triggerTitle: `Add all ${unlinkedCount} unlinked rows under one category`,
-            onPick: (pick) => void actions?.createLineItemsFromAllPhotoBomRows(pick),
+            onPick: (pick) => actions?.createLineItemsFromAllPhotoBomRows(pick),
           }}
         />
       )}

@@ -108,6 +108,7 @@ import {
   deleteModelTakeoffLink,
   deleteWorksheetItem,
   createWorksheetItem,
+  createWorksheetItemFast,
   createWorksheet,
   getEntityCategories,
   listModelTakeoffLinks,
@@ -1769,6 +1770,12 @@ export function TakeoffTab({
     (selectedWorksheetId ? workspace.worksheets.find((worksheet) => worksheet.id === selectedWorksheetId) : null) ??
     workspace.worksheets[0] ??
     null;
+  // Takeoff actions are exposed through refs and may be invoked by a stacked
+  // composer created on an earlier render. Always resolve the destination at
+  // execution time so changing the worksheet in the Studio cannot write to
+  // the stale worksheet captured by that earlier action closure.
+  const selectedWorksheetRef = useRef(selectedWorksheet);
+  selectedWorksheetRef.current = selectedWorksheet;
   const safeInitialPage = Number.isFinite(initialPage) ? Math.max(1, Math.floor(initialPage)) : 1;
   const safeInitialZoom = roundPdfZoom(initialZoom);
 
@@ -6385,15 +6392,14 @@ export function TakeoffTab({
             })
       ).slice(0, 250);
       const modelAsset = await resolveSelectedModelAsset();
-      let previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
       let createdCount = 0;
-      let targetWorksheetName = explicitWs?.name ?? selectedWorksheet?.name ?? "worksheet";
+      let targetWorksheetName = explicitWs?.name ?? selectedWorksheetRef.current?.name ?? "worksheet";
 
       for (const draft of draftList) {
         const targetWs =
           (draft?.worksheetId
             ? workspace.worksheets.find((worksheet) => worksheet.id === draft.worksheetId)
-            : null) ?? explicitWs ?? selectedWorksheet;
+            : null) ?? explicitWs ?? selectedWorksheetRef.current;
         if (!targetWs) {
           setWorksheetPickerAction({ kind: "send-selection" });
           return;
@@ -6407,10 +6413,8 @@ export function TakeoffTab({
           category: takeoffCategory,
         });
         const payload = normalizeModelLineItemDraft(draft, fallbackPayload);
-        const result = await createWorksheetItem(projectId, targetWs.id, payload);
-        const createdItem = result.workspace.worksheets
-          .flatMap((worksheet) => worksheet.items)
-          .find((item) => !previousItemIds.has(item.id));
+        const result = await createWorksheetItemFast(projectId, targetWs.id, payload);
+        const createdItem = result.item;
 
         if (modelAsset && createdItem) {
           await createModelTakeoffLink(projectId, modelAsset.id, {
@@ -6436,7 +6440,6 @@ export function TakeoffTab({
           createdCount += 1;
         }
 
-        previousItemIds = new Set(result.workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
       }
 
       if (modelAsset) {
@@ -6456,11 +6459,10 @@ export function TakeoffTab({
   async function createLineItemFromModelElement(
     element: ModelElementWithQuantities,
     pickInput: string | InspectCategoryPick,
-    previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id)),
     explicitWs?: { id: string; name: string },
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({ kind: "create-single-element", elementId: element.id, pick });
       return null;
@@ -6486,10 +6488,8 @@ export function TakeoffTab({
     });
     const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
     if (!payload) return null;
-    const result = await createWorksheetItem(projectId, ws.id, payload);
-    const createdItem = result.workspace.worksheets
-      .flatMap((worksheet) => worksheet.items)
-      .find((item) => !previousItemIds.has(item.id));
+    const result = await createWorksheetItemFast(projectId, ws.id, payload);
+    const createdItem = result.item;
     if (!createdItem) return null;
 
     await createModelTakeoffLink(projectId, modelAsset.id, {
@@ -6568,7 +6568,7 @@ export function TakeoffTab({
       return null;
     }
     const pick = normalizeTakeoffCategoryPick(pickInput);
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({ kind: "create-single-annotation", pickupId: annotation.id, pick });
       return null;
@@ -6581,7 +6581,6 @@ export function TakeoffTab({
     }
 
     const { quantity, uom } = annotationToQuantity(annotation);
-    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
@@ -6601,10 +6600,8 @@ export function TakeoffTab({
     };
     const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
     if (!payload) return null;
-    const result = await createWorksheetItem(projectId, ws.id, payload);
-    const createdItem = result.workspace.worksheets
-      .flatMap((w) => w.items)
-      .find((i) => !previousItemIds.has(i.id));
+    const result = await createWorksheetItemFast(projectId, ws.id, payload);
+    const createdItem = result.item;
     if (!createdItem) return null;
     await createPickupLink(projectId, {
       pickupId: annotation.id,
@@ -6677,7 +6674,7 @@ export function TakeoffTab({
       setToastMessage("That DWG/DXF entity is no longer available.");
       return null;
     }
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({ kind: "create-dwg-row", rowId, rowType, pick });
       return null;
@@ -6695,7 +6692,6 @@ export function TakeoffTab({
       return null;
     }
 
-    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
@@ -6719,10 +6715,8 @@ export function TakeoffTab({
 
     setDwgEntitySavingId(rowId);
     try {
-      const result = await createWorksheetItem(projectId, ws.id, payload);
-      const createdItem = result.workspace.worksheets
-        .flatMap((w) => w.items)
-        .find((i) => !previousItemIds.has(i.id));
+      const result = await createWorksheetItemFast(projectId, ws.id, payload);
+      const createdItem = result.item;
       if (!createdItem) return null;
 
       const entityLookup = new Map((intel.entities ?? []).map((row) => [row.id, row]));
@@ -6795,7 +6789,7 @@ export function TakeoffTab({
       setToastMessage("Those CAD entities are no longer available.");
       return null;
     }
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({ kind: "create-dwg-group", entityIds, groupLabel, pick });
       return null;
@@ -6820,7 +6814,6 @@ export function TakeoffTab({
       return null;
     }
 
-    const previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
     const quantity = entities.reduce((total, entity) => total + (Number.isFinite(entity.quantity) ? entity.quantity : 0), 0);
     const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
@@ -6844,10 +6837,8 @@ export function TakeoffTab({
 
     setDwgEntitySavingId(`group:${groupLabel}`);
     try {
-      const result = await createWorksheetItem(projectId, ws.id, payload);
-      const createdItem = result.workspace.worksheets
-        .flatMap((worksheet) => worksheet.items)
-        .find((item) => !previousItemIds.has(item.id));
+      const result = await createWorksheetItemFast(projectId, ws.id, payload);
+      const createdItem = result.item;
       if (!createdItem) return null;
 
       const links = entities.map((entity) => ({
@@ -6981,7 +6972,7 @@ export function TakeoffTab({
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
     if (annotations.length === 0) return null;
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({
         kind: "create-annotation-group",
@@ -7020,7 +7011,6 @@ export function TakeoffTab({
       uom = "EA";
     }
 
-    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
@@ -7040,10 +7030,8 @@ export function TakeoffTab({
     };
     const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
     if (!payload) return null;
-    const result = await createWorksheetItem(projectId, ws.id, payload);
-    const createdItem = result.workspace.worksheets
-      .flatMap((w) => w.items)
-      .find((i) => !previousItemIds.has(i.id));
+    const result = await createWorksheetItemFast(projectId, ws.id, payload);
+    const createdItem = result.item;
     if (!createdItem) return null;
     // Link each annotation to the summed line item so revision diff can
     // reconcile additions/removals against the same worksheet row.
@@ -7085,7 +7073,7 @@ export function TakeoffTab({
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
     if (elements.length === 0) return null;
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({
         kind: "create-element-group",
@@ -7129,7 +7117,6 @@ export function TakeoffTab({
       uom = "EA";
     }
 
-    const previousItemIds = new Set(workspace.worksheets.flatMap((w) => w.items).map((i) => i.id));
     const basePayload: CreateWorksheetItemInput = {
       categoryId: takeoffCategory.id,
       category: takeoffCategory.name,
@@ -7149,10 +7136,8 @@ export function TakeoffTab({
     };
     const payload = applyCategoryPickToPayload(basePayload, takeoffCategory, pick);
     if (!payload) return null;
-    const result = await createWorksheetItem(projectId, ws.id, payload);
-    const createdItem = result.workspace.worksheets
-      .flatMap((w) => w.items)
-      .find((i) => !previousItemIds.has(i.id));
+    const result = await createWorksheetItemFast(projectId, ws.id, payload);
+    const createdItem = result.item;
     if (!createdItem) return null;
     // Bind every element to the summed line item so revision-diff keeps the
     // rollup traceable. Use server-side bulk inserts in bounded chunks: a BIM
@@ -7308,7 +7293,7 @@ export function TakeoffTab({
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
     if (!spreadsheetPreview) return null;
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({ kind: "create-spreadsheet-row", rowIndex, mode: modeOverride, pick });
       return null;
@@ -7354,7 +7339,7 @@ export function TakeoffTab({
   ) {
     const pick = normalizeTakeoffCategoryPick(pickInput);
     if (!spreadsheetPreview) return null;
-    const ws = explicitWs ?? selectedWorksheet;
+    const ws = explicitWs ?? selectedWorksheetRef.current;
     if (!ws) {
       setWorksheetPickerAction({ kind: "create-spreadsheet-all", mode: modeOverride, pick });
       return null;
@@ -7410,7 +7395,7 @@ export function TakeoffTab({
     if (!photoBomResult) return;
     const row = photoBomResult.items[rowIndex];
     if (!row) return;
-    const ws = selectedWorksheet;
+    const ws = selectedWorksheetRef.current;
     if (!ws) {
       setToastType("error");
       setToastMessage("Pick an active worksheet before adding photo-BOM rows.");
@@ -7519,13 +7504,9 @@ export function TakeoffTab({
 
     try {
       let created = 0;
-      let previousItemIds = new Set(workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
       for (const element of candidates.slice(0, 250)) {
-        const createdResult = await createLineItemFromModelElement(element, categoryId, previousItemIds, explicitWs);
+        const createdResult = await createLineItemFromModelElement(element, categoryId, explicitWs);
         if (createdResult?.createdItem) created += 1;
-        if (createdResult?.result) {
-          previousItemIds = new Set(createdResult.result.workspace.worksheets.flatMap((worksheet) => worksheet.items).map((item) => item.id));
-        }
       }
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
@@ -7598,7 +7579,7 @@ export function TakeoffTab({
         setToastMessage("That model element is no longer available.");
         return;
       }
-      await createLineItemFromModelElement(element, action.pick, undefined, ws);
+      await createLineItemFromModelElement(element, action.pick, ws);
       await refreshModelTakeoffLinks();
       notifyWorkspaceMutated();
       setToastType("success");
