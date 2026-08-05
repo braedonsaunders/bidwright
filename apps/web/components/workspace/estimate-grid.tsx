@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type ReactNode, type RefObject, useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { createPortal } from "react-dom";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -135,6 +135,22 @@ import {
 
 /* ─── Types ─── */
 
+export interface WorksheetLineItemPickerRequest {
+  id: string;
+  title: string;
+  description?: string;
+  sourceLabel?: string;
+  selectionCount: number;
+  creationMode: "single" | "group" | "batch";
+  /** Optional control outside the worksheet grid that should visually own the
+   *  shared entity-name dropdown. Takeoff Studio uses this to keep the exact
+   *  worksheet picker in the Inspect tab instead of making the user hunt for
+   *  a temporary row in the worksheet dock. */
+  anchorRef?: RefObject<HTMLElement | null>;
+  onSelect: (template: CreateWorksheetItemInput) => Promise<void> | void;
+  onCancel?: () => void;
+}
+
 export interface EstimateGridProps {
   workspace: ProjectWorkspaceData;
   onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
@@ -162,6 +178,14 @@ export interface EstimateGridProps {
   /** Opens the revision-diff modal (parent owns this; same handler that drives
    *  the toolbar Compare button). */
   onOpenRevisionDiff?: () => void;
+  /** Opens the worksheet's existing universal line-item command center for
+   *  another workspace surface (for example Takeoff Studio). The picker UI,
+   *  indexed search, source cards, and pricing payload builder remain shared. */
+  lineItemPickerRequest?: WorksheetLineItemPickerRequest | null;
+  /** Compact embedded worksheet surface used by Takeoff Studio's bottom
+   *  dock. The parent owns worksheet navigation, so duplicate tab chrome is
+   *  removed and the grid gets the vertical space. */
+  dockMode?: boolean;
 }
 
 type EditingCell = {
@@ -1452,6 +1476,12 @@ const LINE_ITEM_SEARCH_SOURCE_TYPES: LineItemSearchSourceType[] = [
   "plugin_tool",
   "external_action",
 ];
+const DIRECT_PRICING_SOURCE_TYPES: LineItemSearchSourceType[] = [
+  "catalog_item",
+  "rate_schedule_item",
+  "labor_unit",
+  "effective_cost",
+];
 
 function asPlainRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
@@ -1486,6 +1516,14 @@ function enabledSearchSourcesForRequest(
 ) {
   if (!sourceTypes) return undefined;
   return sourceTypes.filter((sourceType) => searchSourceTypeEnabled(settings, sourceType));
+}
+
+function pricingTemplateSearchSources(
+  settings: EstimateSearchSettings,
+  sourceTypes: LineItemSearchSourceType[] | undefined,
+) {
+  const enabled = enabledSearchSourcesForRequest(settings, sourceTypes ?? DIRECT_PRICING_SOURCE_TYPES);
+  return enabled?.filter((source) => DIRECT_PRICING_SOURCE_TYPES.includes(source));
 }
 
 function browseCardIsEnabled(settings: EstimateSearchSettings, card: { sources: LineItemSearchSourceType[] }) {
@@ -2330,6 +2368,8 @@ export function EstimateGrid({
   lockedWorksheetId,
   revisionImpactByItem,
   onOpenRevisionDiff,
+  lineItemPickerRequest,
+  dockMode = false,
 }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
   const isSnapMode = variant === "snap";
@@ -2397,7 +2437,7 @@ export function EstimateGrid({
   const [entityHighlightIdx, setEntityHighlightIdx] = useState(0);
   const entitySearchRef = useRef<HTMLInputElement | null>(null);
   const [entityDropdownPos, setEntityDropdownPos] = useState<EntityDropdownPosition>(null);
-  const entityCellRef = useRef<HTMLTableCellElement | null>(null);
+  const entityCellRef = useRef<HTMLElement | null>(null);
   const entityDropdownRef = useRef<HTMLDivElement | null>(null);
   const entityDropdownCloseTimerRef = useRef<number | null>(null);
   const entityDropdownOpenFrameRef = useRef<number | null>(null);
@@ -2500,6 +2540,8 @@ export function EstimateGrid({
   const addItemsRequestRef = useRef(0);
   const addItemsLoadingMoreRef = useRef(false);
   const addItemsSearchAbortRef = useRef<AbortController | null>(null);
+  const openedExternalPickerRequestRef = useRef<string | null>(null);
+  const externalPickerDraftRowIdRef = useRef<string | null>(null);
 
   // ─── NEW STATE: Assembly insert ───
   const [showAssemblyPicker, setShowAssemblyPicker] = useState(false);
@@ -2709,8 +2751,12 @@ export function EstimateGrid({
     });
   }, [applyMutationError, onApply, workspace.project.id]);
 
-  const positionEntityDropdown = useCallback((anchorEl?: HTMLTableCellElement | null, rowId?: string | null) => {
+  const positionEntityDropdown = useCallback((anchorEl?: HTMLElement | null, rowId?: string | null) => {
     const lookupRowId = rowId ?? entityDropdownRowId ?? entityDropdownClosingRowId;
+    const externalAnchor =
+      lookupRowId && externalPickerDraftRowIdRef.current === lookupRowId
+        ? lineItemPickerRequest?.anchorRef?.current ?? null
+        : null;
     const refAnchor = entityCellRef.current;
     const refAnchorMatchesRow =
       !!refAnchor &&
@@ -2718,6 +2764,7 @@ export function EstimateGrid({
       (!lookupRowId || refAnchor.dataset.cellRow === lookupRowId);
     const anchor =
       anchorEl ??
+      externalAnchor ??
       (refAnchorMatchesRow ? refAnchor : null) ??
       (lookupRowId
         ? document.querySelector<HTMLTableCellElement>(
@@ -2774,7 +2821,7 @@ export function EstimateGrid({
       listMaxHeight,
       placement,
     });
-  }, [entityDropdownClosingRowId, entityDropdownRowId]);
+  }, [entityDropdownClosingRowId, entityDropdownRowId, lineItemPickerRequest]);
 
   const resetEntityDropdownState = useCallback(() => {
     setEntityDropdownVisible(false);
@@ -2820,7 +2867,7 @@ export function EstimateGrid({
 
   const closeEntityDropdown = useCallback((
     closingRowId?: string | null,
-    options: { preserveTemporaryDraft?: boolean } = {},
+    options: { preserveTemporaryDraft?: boolean; externalSelection?: boolean } = {},
   ) => {
     clearEntityDropdownTimers();
     const rowId = closingRowId ?? entityDropdownRowId;
@@ -2838,16 +2885,20 @@ export function EstimateGrid({
       onApply((current) => applyWorksheetItemDelete(current, rowId));
       if (selectedRowId === rowId) setSelectedRowId(null);
     }
+    if (rowId && externalPickerDraftRowIdRef.current === rowId) {
+      externalPickerDraftRowIdRef.current = null;
+      if (!options.externalSelection) lineItemPickerRequest?.onCancel?.();
+    }
     focusWorksheetGrid();
     entityDropdownCloseTimerRef.current = window.setTimeout(() => {
       entityDropdownCloseTimerRef.current = null;
       resetEntityDropdownState();
     }, 260);
-  }, [clearEntityDropdownTimers, entityDropdownRowId, focusWorksheetGrid, onApply, resetEntityDropdownState, selectedRowId]);
+  }, [clearEntityDropdownTimers, entityDropdownRowId, focusWorksheetGrid, lineItemPickerRequest, onApply, resetEntityDropdownState, selectedRowId]);
 
   const openEntityDropdown = useCallback((
     rowId: string,
-    anchorEl?: HTMLTableCellElement | null,
+    anchorEl?: HTMLElement | null,
     options: {
       browseMode?: EntityBrowseModeId | null;
       searchTerm?: string;
@@ -2890,7 +2941,7 @@ export function EstimateGrid({
     });
   }, [clearEntityDropdownTimers, findEntityCellAnchor, positionEntityDropdown]);
 
-  const createDraftItem = useCallback((worksheetId: string) => {
+  const createDraftItem = useCallback((worksheetId: string, pickerAnchor?: HTMLElement | null) => {
     const temporaryId = `${TEMP_WORKSHEET_ITEM_PREFIX}${crypto.randomUUID()}`;
     const worksheet = workspace.worksheets.find((entry) => entry.id === worksheetId);
     const fallbackOrder =
@@ -2932,7 +2983,8 @@ export function EstimateGrid({
     // Route through openEntityDropdown so the picker gets the deferred RAF re-position
     // — without it the dropdown can land at top-left for the brand-new row whose <td>
     // hasn't been laid out by the time the position effect fires.
-    openEntityDropdown(temporaryId);
+    openEntityDropdown(temporaryId, pickerAnchor);
+    return temporaryId;
   }, [onApply, openEntityDropdown, workspace.currentRevision.defaultMarkup, workspace.worksheets]);
 
   const handleEntityDropdownExitComplete = useCallback(() => {
@@ -3133,7 +3185,9 @@ export function EstimateGrid({
           q: entitySearchTerm,
           category: activeEntityRow.category,
           worksheetId: activeEntityRow.worksheetId,
-          sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+          sourceTypes: lineItemPickerRequest && externalPickerDraftRowIdRef.current === activeEntityRow.id
+            ? pricingTemplateSearchSources(estimateSearchSettings, browseCard?.sources)
+            : enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
           disabledSourceTypes: browseCard?.id === "rate_books"
             ? estimateSearchSettings.disabledSourceTypes.filter((sourceType) => sourceType !== "rate_schedule_item")
             : estimateSearchSettings.disabledSourceTypes,
@@ -3166,7 +3220,7 @@ export function EstimateGrid({
       window.clearTimeout(timer);
       controller?.abort();
     };
-  }, [activeEntityBrowseCard, activeEntityRow, entityCategories, entityBrowseMode, entityDropdownClosingRowId, entityDropdownRowId, entitySearchTerm, estimateSearchSettings, workspace.project.id]);
+  }, [activeEntityBrowseCard, activeEntityRow, entityCategories, entityBrowseMode, entityDropdownClosingRowId, entityDropdownRowId, entitySearchTerm, estimateSearchSettings, lineItemPickerRequest, workspace.project.id]);
 
   const loadMoreEntitySearchResults = useCallback(async () => {
     if (
@@ -3191,7 +3245,9 @@ export function EstimateGrid({
         q: entitySearchTerm,
         category: activeEntityRow.category,
         worksheetId: activeEntityRow.worksheetId,
-        sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+        sourceTypes: lineItemPickerRequest && externalPickerDraftRowIdRef.current === activeEntityRow.id
+          ? pricingTemplateSearchSources(estimateSearchSettings, browseCard?.sources)
+          : enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
         disabledSourceTypes: browseCard?.id === "rate_books"
           ? estimateSearchSettings.disabledSourceTypes.filter((sourceType) => sourceType !== "rate_schedule_item")
           : estimateSearchSettings.disabledSourceTypes,
@@ -3227,6 +3283,7 @@ export function EstimateGrid({
     entitySearchOffset,
     entitySearchTerm,
     estimateSearchSettings,
+    lineItemPickerRequest,
     workspace.project.id,
   ]);
 
@@ -3429,6 +3486,15 @@ export function EstimateGrid({
       rows = ws ? ws.items : [];
     }
 
+    // The takeoff picker borrows a temporary worksheet row only for the
+    // worksheet's payload-building logic. Its visible control lives in the
+    // Inspect tab, so exposing that implementation row in the dock is both
+    // confusing and causes the grid to jump while the picker is open.
+    const externalDraftId = externalPickerDraftRowIdRef.current;
+    if (externalDraftId) {
+      rows = rows.filter((row) => row.id !== externalDraftId);
+    }
+
     if (categoryFilter) {
       rows = rows.filter((r) => r.category === categoryFilter);
     }
@@ -3478,7 +3544,7 @@ export function EstimateGrid({
     }
 
     return rows;
-  }, [categoryFilter, phaseFilter, activeTab, workspace, sortState, getRowHourBreakdown, displayLineItem]);
+  }, [categoryFilter, phaseFilter, activeTab, workspace, sortState, getRowHourBreakdown, displayLineItem, lineItemPickerRequest]);
 
   const visibleSelectableRowIds = useMemo(
     () => visibleRows.filter((row) => !isTemporaryWorksheetItemId(row.id)).map((row) => row.id),
@@ -3498,6 +3564,30 @@ export function EstimateGrid({
     }
     return workspace.worksheets[0] ?? null;
   }, [activeFolderId, activeTab, workspace]);
+
+  useEffect(() => {
+    if (!lineItemPickerRequest) {
+      openedExternalPickerRequestRef.current = null;
+      externalPickerDraftRowIdRef.current = null;
+      return;
+    }
+    if (openedExternalPickerRequestRef.current === lineItemPickerRequest.id) return;
+    const worksheet = activeWorksheetForActions;
+    if (!worksheet) {
+      onError("Create or select a worksheet before choosing a takeoff line item.");
+      lineItemPickerRequest.onCancel?.();
+      return;
+    }
+    if (activeTab === "all" || worksheetViewIsFolder(activeTab)) {
+      setActiveTab(worksheet.id);
+      return;
+    }
+    openedExternalPickerRequestRef.current = lineItemPickerRequest.id;
+    externalPickerDraftRowIdRef.current = createDraftItem(
+      worksheet.id,
+      lineItemPickerRequest.anchorRef?.current,
+    );
+  }, [activeTab, activeWorksheetForActions, createDraftItem, lineItemPickerRequest, onError, setActiveTab]);
 
   const activeViewLabel = activeTab === "all"
     ? "All worksheets"
@@ -3614,7 +3704,9 @@ export function EstimateGrid({
         const results = await searchLineItemCandidates(workspace.project.id, {
           q: addItemsSearchTerm,
           worksheetId: activeWorksheetForActions?.id,
-          sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+          sourceTypes: lineItemPickerRequest
+            ? pricingTemplateSearchSources(estimateSearchSettings, browseCard?.sources)
+            : enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
           disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
           disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
           disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
@@ -3651,6 +3743,7 @@ export function EstimateGrid({
     addItemsSearchTerm,
     entityCategories,
     estimateSearchSettings,
+    lineItemPickerRequest,
     showAddItemsPicker,
     workspace.project.id,
   ]);
@@ -3676,7 +3769,9 @@ export function EstimateGrid({
       const results = await searchLineItemCandidates(workspace.project.id, {
         q: addItemsSearchTerm,
         worksheetId: activeWorksheetForActions?.id,
-        sourceTypes: enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
+        sourceTypes: lineItemPickerRequest
+          ? pricingTemplateSearchSources(estimateSearchSettings, browseCard?.sources)
+          : enabledSearchSourcesForRequest(estimateSearchSettings, browseCard?.sources),
         disabledSourceTypes: estimateSearchSettings.disabledSourceTypes,
         disabledLaborLibraryIds: estimateSearchSettings.disabledLaborLibraryIds,
         disabledCatalogIds: estimateSearchSettings.disabledCatalogIds,
@@ -3708,6 +3803,7 @@ export function EstimateGrid({
     addItemsSearchTerm,
     entityCategories,
     estimateSearchSettings,
+    lineItemPickerRequest,
     showAddItemsPicker,
     workspace.project.id,
   ]);
@@ -4152,7 +4248,8 @@ export function EstimateGrid({
     options: { focusColumn?: EditableColumn } = {},
   ) {
     setPendingCategorySelection(null);
-    const row = visibleRows.find((r) => r.id === rowId);
+    const row = visibleRows.find((r) => r.id === rowId)
+      ?? workspace.worksheets.flatMap((worksheet) => worksheet.items).find((candidate) => candidate.id === rowId);
     const newCatDef = entityCategories.find((c) => c.name === categoryName);
     const oldCategory = row?.category;
     const categoryChanged = oldCategory !== categoryName;
@@ -4287,6 +4384,26 @@ export function EstimateGrid({
         resourceComposition: patchValue("resourceComposition", row.resourceComposition ?? {}) as Record<string, unknown>,
         sourceEvidence: patchValue("sourceEvidence", row.sourceEvidence ?? {}) as Record<string, unknown>,
       };
+
+      if (lineItemPickerRequest && externalPickerDraftRowIdRef.current === row.id) {
+        closeEntityDropdown(rowId, { externalSelection: true });
+        setPendingLaborSelections((current) => {
+          if (!Object.prototype.hasOwnProperty.call(current, rowId)) return current;
+          const next = { ...current };
+          delete next[rowId];
+          return next;
+        });
+        startTransition(async () => {
+          try {
+            await lineItemPickerRequest.onSelect(createPayload);
+          } catch (error) {
+            openedExternalPickerRequestRef.current = null;
+            lineItemPickerRequest.onCancel?.();
+            onError(error instanceof Error ? error.message : "Could not apply that worksheet line item to the takeoff selection.");
+          }
+        });
+        return;
+      }
 
       const optimisticItem: WorkspaceWorksheetItem = {
         ...row,
@@ -5505,6 +5622,20 @@ export function EstimateGrid({
 
     startTransition(async () => {
       try {
+        if (lineItemPickerRequest) {
+          const entry = selected[0];
+          const result = buildCreatePayloadFromEntityOption(entry.group, entry.item, baseOrder + 1);
+          if (!result.payload) {
+            onError(result.error ?? "That source cannot be used as a takeoff pricing template.");
+            return;
+          }
+          await lineItemPickerRequest.onSelect(result.payload);
+          setShowAddItemsPicker(false);
+          setSelectedAddItems(new Map());
+          setAddItemsSearchTerm("");
+          setAddItemsBrowseMode(null);
+          return;
+        }
         let last: WorkspaceResponse | null = null;
         const errors: string[] = [];
         for (const [index, entry] of selected.entries()) {
@@ -5527,6 +5658,14 @@ export function EstimateGrid({
         onError(e instanceof Error ? e.message : "Add items failed.");
       }
     });
+  }
+
+  function dismissAddItemsPicker() {
+    setShowAddItemsPicker(false);
+    setSelectedAddItems(new Map());
+    setAddItemsSearchTerm("");
+    setAddItemsBrowseMode(null);
+    lineItemPickerRequest?.onCancel?.();
   }
 
   // ─── Copy & Export ───
@@ -6072,6 +6211,10 @@ export function EstimateGrid({
     if (!row) return null;
 
     const isDropdownOpen = entityDropdownRowId === dropdownRowId;
+    const isExternalTakeoffPicker = externalPickerDraftRowIdRef.current === row.id;
+    const pickerEntityBrowseCards = isExternalTakeoffPicker
+      ? enabledEntityBrowseCards.filter((card) => card.id !== "assemblies" && card.id !== "plugins")
+      : enabledEntityBrowseCards;
 
     const orderedGroups = orderEntityGroupsForRow(entityDisplayGroups, row.category, entitySearchTerm.trim().length > 0);
     const manualEntryGroups = orderedGroups.filter((group) => group.source === "freeform");
@@ -6633,7 +6776,7 @@ export function EstimateGrid({
 		            const renderBrowseLaunchpad = () => (
 		              <div className="p-1.5">
 		                <div className="grid grid-cols-2 gap-1">
-		                  {enabledEntityBrowseCards.map((card) => {
+		                  {pickerEntityBrowseCards.map((card) => {
 		                    const BrowseIcon = card.Icon;
 		                    return (
 		                      <button
@@ -6661,7 +6804,7 @@ export function EstimateGrid({
 		                    );
 		                  })}
 		                </div>
-		                {enabledEntityBrowseCards.length === 0 && (
+		                {pickerEntityBrowseCards.length === 0 && (
 		                  <div className="rounded-md border border-dashed border-line bg-bg/35 px-3 py-6 text-center text-[11px] text-fg/42">
 		                    All estimate search sources are disabled for this quote.
 		                  </div>
@@ -7043,7 +7186,7 @@ export function EstimateGrid({
 	      const isDraft = isTemporaryWorksheetItemId(row.id) && !row.category;
 	      return (
 	        <td
-          ref={isDropdownMounted ? entityCellRef : undefined}
+	          ref={isDropdownMounted ? (node) => { entityCellRef.current = node; } : undefined}
           data-cell-row={row.id}
           data-cell-col="entityName"
           className={cn(
@@ -7220,10 +7363,10 @@ export function EstimateGrid({
   // ─── Render ───
 
   return (
-    <div className="flex h-full min-h-0 flex-1 flex-col gap-2 pb-1">
+    <div className={cn("flex h-full min-h-0 flex-1 flex-col pb-1", dockMode ? "gap-1" : "gap-2")}>
       {renderEntityDropdownPortal()}
       {/* ─── Worksheet Navigation ─── */}
-      {!isSnapMode && (
+      {!isSnapMode && !dockMode && (
       <div className="flex items-center gap-2 border-b border-line shrink-0">
         <div className="flex items-center rounded-md border border-line bg-bg/60 p-0.5">
           <button
@@ -8658,6 +8801,9 @@ export function EstimateGrid({
         const browseCard = addItemsSearchTerm.trim() ? null : activeAddItemsBrowseCard;
         const BrowseHeaderIcon = browseCard?.Icon;
         const showBrowseLaunchpad = !addItemsSearchTerm.trim() && !browseCard;
+        const pickerBrowseCards = lineItemPickerRequest
+          ? enabledEntityBrowseCards.filter((card) => card.id !== "assemblies" && card.id !== "plugins")
+          : enabledEntityBrowseCards;
         const selectableVisibleItems = addItemsFlatItems.filter(({ group, item }) =>
           canCreateWorksheetItemFromOption(group, item)
         );
@@ -8676,7 +8822,9 @@ export function EstimateGrid({
           if (!canCreateWorksheetItemFromOption(group, item)) return;
           const key = entityOptionKey(item);
           setSelectedAddItems((current) => {
-            const next = new Map(current);
+            const next = lineItemPickerRequest
+              ? new Map<string, { group: EntityOptionGroup; item: EntityOptionItem }>()
+              : new Map(current);
             if (next.has(key)) next.delete(key);
             else next.set(key, { group, item });
             return next;
@@ -8685,12 +8833,12 @@ export function EstimateGrid({
 
         const handleActionItem = (item: EntityOptionItem) => {
           if (item.actionType === "open_assembly") {
-            setShowAddItemsPicker(false);
+            dismissAddItemsPicker();
             setShowAssemblyPicker(true);
             return;
           }
           if (item.actionType === "plugin_tool" || item.actionType === "plugin_remote_search") {
-            setShowAddItemsPicker(false);
+            dismissAddItemsPicker();
             if (onOpenPluginTools) {
               onOpenPluginTools({
                 pluginId: item.pluginId,
@@ -8705,12 +8853,12 @@ export function EstimateGrid({
 
         const renderBrowseLaunchpad = () => (
           <div className="grid grid-cols-3 gap-2 p-3">
-            <button
+            {!lineItemPickerRequest && <button
               type="button"
               className="group flex min-h-[86px] flex-col justify-between rounded-lg border border-accent/25 bg-accent/8 p-3 text-left transition-colors hover:border-accent/45 hover:bg-accent/10"
               onClick={() => {
                 addNewItem();
-                setShowAddItemsPicker(false);
+                dismissAddItemsPicker();
               }}
             >
               <span className="flex items-center justify-between">
@@ -8723,8 +8871,8 @@ export function EstimateGrid({
                 <span className="block text-sm font-semibold text-fg">Blank Row</span>
                 <span className="block text-[11px] leading-4 text-fg/45">Start with an empty worksheet line</span>
               </span>
-            </button>
-            {enabledEntityBrowseCards.map((card) => {
+            </button>}
+            {pickerBrowseCards.map((card) => {
               const BrowseIcon = card.Icon;
               return (
                 <button
@@ -8746,7 +8894,7 @@ export function EstimateGrid({
                 </button>
               );
             })}
-            {enabledEntityBrowseCards.length === 0 && (
+            {pickerBrowseCards.length === 0 && (
               <div className="col-span-3 rounded-lg border border-dashed border-line bg-bg/35 px-3 py-8 text-center text-xs text-fg/42">
                 All estimate search sources are disabled for this quote.
               </div>
@@ -8855,22 +9003,39 @@ export function EstimateGrid({
         };
 
         return (
-          <ModalBackdrop open={showAddItemsPicker} onClose={() => setShowAddItemsPicker(false)}>
+          <ModalBackdrop open={showAddItemsPicker} onClose={dismissAddItemsPicker}>
             <div className="flex h-[min(76vh,720px)] w-[min(960px,calc(100vw-32px))] flex-col overflow-hidden rounded-xl border border-line bg-panel shadow-2xl">
               <div className="border-b border-line bg-panel2/30 p-3">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <h4 className="flex items-center gap-2 text-sm font-semibold">
                       <Sparkles className="h-4 w-4 text-accent" />
-                      Add Line Items
+                      {lineItemPickerRequest ? lineItemPickerRequest.title : "Add Line Items"}
                     </h4>
                     <p className="mt-0.5 text-[11px] text-fg/42">
-                      Search every indexed source, select many rows, or open assemblies and plugin tools from here.
+                      {lineItemPickerRequest?.description
+                        ?? "Search every indexed source, select many rows, or open assemblies and plugin tools from here."}
                     </p>
                   </div>
-                  <Button size="sm" variant="ghost" onClick={() => setShowAddItemsPicker(false)} title="Close">
-                    <X className="h-3.5 w-3.5" />
-                  </Button>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {lineItemPickerRequest && (
+                      <label className="flex items-center gap-1.5 text-[10px] font-medium text-fg/45">
+                        Worksheet
+                        <select
+                          value={activeWorksheetForActions?.id ?? ""}
+                          onChange={(event) => setActiveTab(event.target.value)}
+                          className="h-7 max-w-[220px] rounded-md border border-line bg-bg px-2 text-[11px] text-fg outline-none focus:border-accent"
+                        >
+                          {workspace.worksheets.map((worksheet) => (
+                            <option key={worksheet.id} value={worksheet.id}>{worksheet.name}</option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <Button size="sm" variant="ghost" onClick={dismissAddItemsPicker} title="Close">
+                      <X className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
                 </div>
 
                 <div className="mt-3 flex items-center gap-2">
@@ -8880,7 +9045,9 @@ export function EstimateGrid({
                       autoFocus
                       type="text"
                       className="h-6 min-w-0 flex-1 bg-transparent text-[13px] text-fg outline-none placeholder:text-fg/30"
-                      placeholder="Search rates, catalogues, labour units, assemblies, cost intel, plugins..."
+                      placeholder={lineItemPickerRequest
+                        ? "Search rates, catalogues, labour units, and cost intelligence..."
+                        : "Search rates, catalogues, labour units, assemblies, cost intel, plugins..."}
                       value={addItemsSearchTerm}
                       onChange={(e) => {
                         const next = e.target.value;
@@ -8888,7 +9055,7 @@ export function EstimateGrid({
                         if (next.trim()) setAddItemsBrowseMode(null);
                       }}
                       onKeyDown={(e) => {
-                        if (e.key === "Escape") setShowAddItemsPicker(false);
+                        if (e.key === "Escape") dismissAddItemsPicker();
                       }}
                     />
                     {addItemsLoading ? (
@@ -8897,17 +9064,17 @@ export function EstimateGrid({
                       <Sparkles className="h-4 w-4 shrink-0 text-accent/70" />
                     )}
                   </div>
-                  <Button
+                  {!lineItemPickerRequest && <Button
                     size="sm"
                     variant="secondary"
                     onClick={() => {
                       addNewItem();
-                      setShowAddItemsPicker(false);
+                      dismissAddItemsPicker();
                     }}
                   >
                     <Plus className="h-3.5 w-3.5" />
                     Blank
-                  </Button>
+                  </Button>}
                 </div>
 
                 <div className="mt-2 flex min-w-0 items-center gap-1 overflow-hidden">
@@ -8932,7 +9099,7 @@ export function EstimateGrid({
                       {label} {count}
                     </span>
                   ))}
-                  {!showBrowseLaunchpad && selectableVisibleItems.length > 0 && (
+                  {!lineItemPickerRequest && !showBrowseLaunchpad && selectableVisibleItems.length > 0 && (
                     <button
                       type="button"
                       className="ml-auto inline-flex shrink-0 items-center gap-1 rounded-md border border-line bg-bg/45 px-1.5 py-0.5 text-[10px] font-medium text-fg/55 hover:border-accent/35 hover:text-accent"
@@ -8997,10 +9164,12 @@ export function EstimateGrid({
 
               <div className="flex items-center justify-between border-t border-line bg-panel2/25 px-3 py-2">
                 <span className="text-xs text-fg/45">
-                  {selectedAddItems.size} item{selectedAddItems.size === 1 ? "" : "s"} selected
+                  {lineItemPickerRequest
+                    ? `${selectedAddItems.size === 1 ? "Pricing item selected" : "Choose one pricing item"} · ${lineItemPickerRequest.selectionCount.toLocaleString()} pickup${lineItemPickerRequest.selectionCount === 1 ? "" : "s"} → ${lineItemPickerRequest.creationMode === "batch" ? `${lineItemPickerRequest.selectionCount.toLocaleString()} worksheet lines` : "1 worksheet line"}`
+                    : `${selectedAddItems.size} item${selectedAddItems.size === 1 ? "" : "s"} selected`}
                 </span>
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="ghost" onClick={() => setShowAddItemsPicker(false)}>
+                  <Button size="sm" variant="ghost" onClick={dismissAddItemsPicker}>
                     Cancel
                   </Button>
                   <Button
@@ -9009,7 +9178,7 @@ export function EstimateGrid({
                     disabled={selectedAddItems.size === 0 || isPending}
                   >
                     <Plus className="h-3.5 w-3.5" />
-                    Add Selected
+                    {lineItemPickerRequest ? "Use selected item" : "Add Selected"}
                   </Button>
                 </div>
               </div>

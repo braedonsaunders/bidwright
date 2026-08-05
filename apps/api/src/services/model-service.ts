@@ -2,6 +2,12 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { prisma } from "@bidwright/db";
+import {
+  buildModelTopology,
+  DEFAULT_MODEL_TOPOLOGY_ESTIMATE_AXES,
+  type ModelTopologyEstimateAxis,
+  type ModelTopologyGroupResult,
+} from "@bidwright/domain";
 import { ApsClient } from "./model-ingest/aps-client.js";
 import { generateModelIngestManifest, getModelIngestCapabilities } from "./model-ingest/orchestrator.js";
 import { MODEL_INGEST_FORMATS, isModelIngestFileName } from "./model-ingest/registry.js";
@@ -942,6 +948,8 @@ async function replaceModelChildren(modelId: string, generated: GeneratedManifes
   await prisma.$transaction([
     prisma.modelIssue.deleteMany({ where: { modelId } }),
     prisma.modelBom.deleteMany({ where: { modelId } }),
+    prisma.modelElementConnection.deleteMany({ where: { modelId } }),
+    prisma.modelTakeoffGroup.deleteMany({ where: { modelId } }),
     prisma.modelQuantity.deleteMany({ where: { modelId } }),
     prisma.modelElement.deleteMany({ where: { modelId } }),
   ]);
@@ -1015,6 +1023,376 @@ async function replaceModelChildren(modelId: string, generated: GeneratedManifes
       })),
     });
   }
+
+  await rebuildModelTakeoffTopology(modelId, generated);
+}
+
+function applyTakeoffOverrides(
+  sourceGroups: ModelTopologyGroupResult[],
+  overrides: Array<{ id: string; kind: string; targetSignature: string; payload: unknown }>,
+  elementIdByExternalId: Map<string, string>,
+) {
+  let groups = sourceGroups.map((group) => ({ ...group, memberElementIds: [...group.memberElementIds] }));
+  for (const override of overrides) {
+    const payload = override.payload && typeof override.payload === "object" && !Array.isArray(override.payload)
+      ? override.payload as Record<string, unknown>
+      : {};
+    if (override.kind === "rename") {
+      const name = typeof payload.name === "string" ? payload.name.trim() : "";
+      if (name) groups = groups.map((group) => group.signature === override.targetSignature ? { ...group, name } : group);
+      continue;
+    }
+    if (override.kind === "exclude") {
+      const elementIds = Array.isArray(payload.elementExternalIds)
+        ? new Set(payload.elementExternalIds.map(String).map((externalId) => elementIdByExternalId.get(externalId)).filter((id): id is string => Boolean(id)))
+        : Array.isArray(payload.elementIds) ? new Set(payload.elementIds.map(String)) : null;
+      if (!elementIds) groups = groups.filter((group) => group.signature !== override.targetSignature);
+      else groups = groups
+        .map((group) => group.signature === override.targetSignature
+          ? { ...group, memberElementIds: group.memberElementIds.filter((id) => !elementIds.has(id)) }
+          : group)
+        .filter((group) => group.memberElementIds.length > 0);
+      continue;
+    }
+    if (override.kind === "merge") {
+      const sourceSignatures = Array.isArray(payload.sourceSignatures)
+        ? new Set(payload.sourceSignatures.map(String))
+        : new Set([override.targetSignature]);
+      sourceSignatures.add(override.targetSignature);
+      const sources = groups.filter((group) => sourceSignatures.has(group.signature));
+      if (sources.length < 2) continue;
+      const units = new Set(sources.map((group) => group.unit));
+      const measurementTypes = new Set(sources.map((group) => group.measurementType));
+      if (units.size > 1 || measurementTypes.size > 1) continue;
+      const first = sources[0];
+      groups = groups.filter((group) => !sourceSignatures.has(group.signature));
+      groups.push({
+        ...first,
+        signature: `override-merge:${override.id}`,
+        name: typeof payload.name === "string" && payload.name.trim() ? payload.name.trim() : sources.map((group) => group.name).join(" + "),
+        source: "detected",
+        confidence: Math.min(...sources.map((group) => group.confidence)),
+        quantity: sources.reduce((sum, group) => sum + group.quantity, 0),
+        memberElementIds: Array.from(new Set(sources.flatMap((group) => group.memberElementIds))).sort(),
+        warnings: Array.from(new Set(sources.flatMap((group) => group.warnings))),
+        metadata: { ...first.metadata, override: "merge", sourceSignatures: Array.from(sourceSignatures) },
+      });
+      continue;
+    }
+    if (override.kind === "split") {
+      const target = groups.find((group) => group.signature === override.targetSignature);
+      const parts = Array.isArray(payload.groups) ? payload.groups : [];
+      if (!target || parts.length < 2) continue;
+      groups = groups.filter((group) => group.signature !== override.targetSignature);
+      for (let index = 0; index < parts.length; index += 1) {
+        const part = parts[index];
+        if (!part || typeof part !== "object" || Array.isArray(part)) continue;
+        const record = part as Record<string, unknown>;
+        const elementIds = Array.isArray(record.elementExternalIds)
+          ? record.elementExternalIds
+              .map(String)
+              .map((externalId) => elementIdByExternalId.get(externalId))
+              .filter((id): id is string => Boolean(id))
+              .filter((id) => target.memberElementIds.includes(id))
+          : Array.isArray(record.elementIds)
+            ? record.elementIds.map(String).filter((id) => target.memberElementIds.includes(id))
+          : [];
+        if (elementIds.length === 0) continue;
+        const explicitQuantity = typeof record.quantity === "number" && Number.isFinite(record.quantity) ? record.quantity : null;
+        const share = elementIds.length / Math.max(1, target.memberElementIds.length);
+        groups.push({
+          ...target,
+          signature: `override-split:${override.id}:${index}`,
+          name: typeof record.name === "string" && record.name.trim() ? record.name.trim() : `${target.name} ${index + 1}`,
+          quantity: explicitQuantity ?? target.quantity * share,
+          memberElementIds: elementIds,
+          warnings: explicitQuantity == null
+            ? [...target.warnings, "Quantity apportioned by split membership; review measurement"]
+            : target.warnings,
+          metadata: { ...target.metadata, override: "split", sourceSignature: target.signature },
+        });
+      }
+    }
+  }
+  return groups;
+}
+
+async function rebuildModelTakeoffTopology(modelId: string, generated: GeneratedManifest) {
+  const asset = await prisma.modelAsset.findUnique({ where: { id: modelId }, select: { projectId: true, units: true, metadata: true } });
+  if (!asset) throw new Error(`Model ${modelId} not found`);
+  const recipeCandidates = await prisma.modelTakeoffRecipe.findMany({
+    where: { projectId: asset.projectId, isDefault: true, OR: [{ modelId }, { modelId: null }] },
+    orderBy: { updatedAt: "desc" },
+  });
+  const activeRecipe = recipeCandidates.find((recipe) => recipe.modelId === modelId)
+    ?? recipeCandidates.find((recipe) => recipe.modelId == null)
+    ?? null;
+  const recipeRules = activeRecipe?.rules && typeof activeRecipe.rules === "object" && !Array.isArray(activeRecipe.rules)
+    ? activeRecipe.rules as Record<string, unknown>
+    : {};
+  const allowedAxes = new Set<ModelTopologyEstimateAxis>(["trade", "role", "specification", "material", "size", "system", "level", "elementClass", "elementType"]);
+  const configuredAxes = Array.isArray(recipeRules.groupBy)
+    ? Array.from(new Set(recipeRules.groupBy.map(String).filter((axis): axis is ModelTopologyEstimateAxis => allowedAxes.has(axis as ModelTopologyEstimateAxis))))
+    : DEFAULT_MODEL_TOPOLOGY_ESTIMATE_AXES;
+  const quantitiesByElement = new Map<string, GeneratedQuantity[]>();
+  const elementByExternalId = new Map(generated.elements.map((element) => [element.externalId, element.id]));
+  for (const quantity of generated.quantities) {
+    const sourceId = quantity.elementId ?? "";
+    const elementId = generated.elements.some((element) => element.id === sourceId)
+      ? sourceId
+      : elementByExternalId.get(sourceId) ?? sourceId;
+    const bucket = quantitiesByElement.get(elementId) ?? [];
+    bucket.push(quantity);
+    quantitiesByElement.set(elementId, bucket);
+  }
+  const topology = buildModelTopology(generated.elements.map((element) => ({
+    ...element,
+    quantities: quantitiesByElement.get(element.id) ?? [],
+  })), { units: asset.units ?? "", estimateGroupBy: configuredAxes.length > 0 ? configuredAxes : DEFAULT_MODEL_TOPOLOGY_ESTIMATE_AXES });
+  const overrides = await prisma.modelTakeoffOverride.findMany({ where: { modelId, active: true }, orderBy: { createdAt: "asc" } });
+  const groups = applyTakeoffOverrides(topology.groups, overrides, elementByExternalId);
+
+  const groupIdBySignature = new Map(groups.map((group) => [group.signature, createId("mtg")]));
+  const groupData = (group: ModelTopologyGroupResult) => ({
+    id: groupIdBySignature.get(group.signature)!,
+    modelId,
+    parentId: group.parentSignature ? groupIdBySignature.get(group.parentSignature) ?? null : null,
+    signature: group.signature,
+    kind: group.kind,
+    name: group.name,
+    trade: group.trade,
+    source: group.source,
+    confidence: group.confidence,
+    measurementType: group.measurementType,
+    quantity: group.quantity,
+    unit: group.unit,
+    warnings: group.warnings as any,
+    metadata: group.metadata as any,
+  });
+  const memberships = groups.flatMap((group) => Array.from(new Set(group.memberElementIds)).map((elementId, ordinal) => ({
+    groupId: groupIdBySignature.get(group.signature)!,
+    elementId,
+    role: group.kind === "estimate" ? "estimating" : group.kind,
+    ordinal,
+    metadata: {} as any,
+  })));
+
+  // Persist the replacement graph atomically. A failed rebuild must leave the
+  // last good topology intact rather than exposing a partially rebuilt model.
+  await prisma.$transaction(async (tx) => {
+    await tx.modelElementConnection.deleteMany({ where: { modelId } });
+    await tx.modelTakeoffGroup.deleteMany({ where: { modelId } });
+
+    if (topology.connections.length > 0) {
+      await tx.modelElementConnection.createMany({
+        data: topology.connections.map((connection) => ({
+        modelId,
+        fromElementId: connection.fromElementId,
+        toElementId: connection.toElementId,
+        signature: connection.signature,
+        kind: connection.kind,
+        source: connection.source,
+        confidence: connection.confidence,
+        metadata: connection.metadata as any,
+        })),
+      });
+    }
+
+    if (groups.length > 0) {
+      const createdSignatures = new Set<string>();
+      let pendingGroups = [...groups];
+      while (pendingGroups.length > 0) {
+        const ready = pendingGroups.filter((group) => !group.parentSignature || createdSignatures.has(group.parentSignature));
+        if (ready.length === 0) {
+          throw new Error(`Takeoff topology contains an unresolved parent cycle for model ${modelId}`);
+        }
+        await tx.modelTakeoffGroup.createMany({ data: ready.map(groupData) });
+        ready.forEach((group) => createdSignatures.add(group.signature));
+        const readySignatures = new Set(ready.map((group) => group.signature));
+        pendingGroups = pendingGroups.filter((group) => !readySignatures.has(group.signature));
+      }
+      for (let offset = 0; offset < memberships.length; offset += 5_000) {
+        await tx.modelTakeoffGroupMember.createMany({ data: memberships.slice(offset, offset + 5_000) });
+      }
+    }
+
+    await tx.modelAsset.update({
+      where: { id: modelId },
+      data: {
+        metadata: {
+          ...(asset.metadata && typeof asset.metadata === "object" && !Array.isArray(asset.metadata) ? asset.metadata as Record<string, unknown> : {}),
+          topology: {
+            ...topology.diagnostics,
+            version: topology.version,
+            rebuiltAt: new Date().toISOString(),
+            recipeId: activeRecipe?.id ?? null,
+            recipeName: activeRecipe?.name ?? "Default estimating rollup",
+            estimateGroupBy: configuredAxes,
+          },
+        } as any,
+      },
+    });
+  }, { timeout: 120_000 });
+}
+
+export async function rebuildPersistedModelTopology(projectId: string, modelId: string) {
+  const model = await prisma.modelAsset.findFirst({
+    where: { id: modelId, projectId },
+    include: { elements: { include: { quantities: true } } },
+  });
+  if (!model) throw new Error(`Model ${modelId} not found`);
+  await rebuildModelTakeoffTopology(modelId, {
+    status: "indexed",
+    units: model.units,
+    manifest: model.manifest as Record<string, unknown>,
+    elementStats: model.elementStats as Record<string, unknown>,
+    elements: model.elements.map((element) => ({
+      id: element.id,
+      externalId: element.externalId,
+      name: element.name,
+      elementClass: element.elementClass,
+      elementType: element.elementType,
+      system: element.system,
+      level: element.level,
+      material: element.material,
+      bbox: element.bbox,
+      geometryRef: element.geometryRef,
+      classification: element.classification as Record<string, string>,
+      lod: element.lod,
+      lodSource: element.lodSource as "pset" | "manual" | "",
+      properties: element.properties as Record<string, unknown>,
+    })),
+    quantities: model.elements.flatMap((element) => element.quantities.map((quantity) => ({
+      id: quantity.id,
+      elementId: element.id,
+      quantityType: quantity.quantityType,
+      value: quantity.value,
+      unit: quantity.unit,
+      method: quantity.method,
+      confidence: quantity.confidence,
+      metadata: quantity.metadata as Record<string, unknown>,
+    }))),
+    bomRows: [],
+    issues: [],
+  });
+  return getModelTakeoffTopology(projectId, modelId);
+}
+
+export async function getModelTakeoffTopology(projectId: string, modelId: string, options: { includeConnections?: boolean } = {}) {
+  const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId }, select: { id: true, metadata: true } });
+  if (!model) throw new Error(`Model ${modelId} not found`);
+  const [groups, connections, connectionCount, recipes, overrides] = await Promise.all([
+    prisma.modelTakeoffGroup.findMany({
+      where: { modelId },
+      orderBy: [{ kind: "asc" }, { name: "asc" }],
+      include: {
+        members: { orderBy: { ordinal: "asc" }, select: { elementId: true, role: true, ordinal: true } },
+        _count: { select: { children: true } },
+      },
+    }),
+    options.includeConnections
+      ? prisma.modelElementConnection.findMany({ where: { modelId }, orderBy: { confidence: "desc" } })
+      : Promise.resolve([]),
+    prisma.modelElementConnection.count({ where: { modelId } }),
+    prisma.modelTakeoffRecipe.findMany({ where: { projectId, OR: [{ modelId }, { modelId: null }] }, orderBy: [{ isDefault: "desc" }, { name: "asc" }] }),
+    prisma.modelTakeoffOverride.findMany({ where: { modelId, active: true }, orderBy: { createdAt: "asc" } }),
+  ]);
+  const metadata = model.metadata && typeof model.metadata === "object" && !Array.isArray(model.metadata)
+    ? model.metadata as Record<string, unknown>
+    : {};
+  return {
+    version: 1,
+    diagnostics: metadata.topology ?? {},
+    groups: groups.map((group) => ({
+      ...group,
+      memberElementIds: group.members.map((member) => member.elementId),
+      memberCount: group.members.length,
+      childCount: group._count.children,
+      members: undefined,
+      _count: undefined,
+    })),
+    connections,
+    connectionCount,
+    recipes,
+    overrides,
+  };
+}
+
+export async function saveModelTakeoffRecipe(projectId: string, input: {
+  id?: string;
+  modelId?: string | null;
+  name: string;
+  trade?: string;
+  isDefault?: boolean;
+  rules?: Record<string, unknown>;
+  createdBy?: string;
+}) {
+  if (input.modelId) {
+    const model = await prisma.modelAsset.findFirst({ where: { id: input.modelId, projectId }, select: { id: true } });
+    if (!model) throw new Error(`Model ${input.modelId} not found`);
+  }
+  const recipe = await prisma.$transaction(async (tx) => {
+    if (input.isDefault) {
+      await tx.modelTakeoffRecipe.updateMany({
+        where: { projectId, modelId: input.modelId ?? null },
+        data: { isDefault: false },
+      });
+    }
+    if (input.id) {
+      const existing = await tx.modelTakeoffRecipe.findFirst({ where: { id: input.id, projectId } });
+      if (!existing) throw new Error(`Takeoff recipe ${input.id} not found`);
+      return tx.modelTakeoffRecipe.update({
+        where: { id: input.id },
+        data: { name: input.name, trade: input.trade ?? existing.trade, isDefault: input.isDefault ?? existing.isDefault, rules: (input.rules ?? existing.rules) as any },
+      });
+    }
+    return tx.modelTakeoffRecipe.create({
+      data: {
+        projectId,
+        modelId: input.modelId ?? null,
+        name: input.name,
+        trade: input.trade ?? "general",
+        isDefault: input.isDefault ?? false,
+        rules: (input.rules ?? {}) as any,
+        createdBy: input.createdBy ?? "",
+      },
+    });
+  });
+  if (recipe.isDefault && recipe.modelId) await rebuildPersistedModelTopology(projectId, recipe.modelId);
+  return recipe;
+}
+
+export async function deleteModelTakeoffRecipe(projectId: string, recipeId: string) {
+  const recipe = await prisma.modelTakeoffRecipe.findFirst({ where: { id: recipeId, projectId } });
+  if (!recipe) throw new Error(`Takeoff recipe ${recipeId} not found`);
+  await prisma.modelTakeoffRecipe.delete({ where: { id: recipeId } });
+  const topology = recipe.isDefault && recipe.modelId
+    ? await rebuildPersistedModelTopology(projectId, recipe.modelId)
+    : null;
+  return { deleted: true, topology };
+}
+
+export async function createModelTakeoffOverride(projectId: string, modelId: string, input: {
+  kind: "rename" | "exclude" | "merge" | "split";
+  targetSignature: string;
+  payload?: Record<string, unknown>;
+  createdBy?: string;
+}) {
+  const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId }, select: { id: true } });
+  if (!model) throw new Error(`Model ${modelId} not found`);
+  const override = await prisma.modelTakeoffOverride.create({
+    data: { modelId, kind: input.kind, targetSignature: input.targetSignature, payload: (input.payload ?? {}) as any, createdBy: input.createdBy ?? "" },
+  });
+  const topology = await rebuildPersistedModelTopology(projectId, modelId);
+  return { override, topology };
+}
+
+export async function deleteModelTakeoffOverride(projectId: string, modelId: string, overrideId: string) {
+  const override = await prisma.modelTakeoffOverride.findFirst({ where: { id: overrideId, modelId, model: { projectId } } });
+  if (!override) throw new Error(`Takeoff override ${overrideId} not found`);
+  await prisma.modelTakeoffOverride.delete({ where: { id: overrideId } });
+  const topology = await rebuildPersistedModelTopology(projectId, modelId);
+  return { deleted: true, topology };
 }
 
 async function discoverProjectModelAssets(projectId: string) {

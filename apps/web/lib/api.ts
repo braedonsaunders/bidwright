@@ -5808,6 +5808,62 @@ export interface ModelIssue {
   createdAt: string;
 }
 
+export type ModelTakeoffGroupKind = "system" | "network" | "run" | "estimate";
+
+export interface ModelTakeoffTopologyGroup {
+  id: string;
+  modelId: string;
+  parentId?: string | null;
+  signature: string;
+  kind: ModelTakeoffGroupKind;
+  name: string;
+  trade: string;
+  source: "authored" | "detected" | "inferred";
+  confidence: number;
+  measurementType: string;
+  quantity: number;
+  unit: string;
+  warnings: string[];
+  metadata: Record<string, unknown>;
+  memberElementIds: string[];
+  memberCount: number;
+  childCount: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ModelElementConnection {
+  id: string;
+  modelId: string;
+  fromElementId: string;
+  toElementId: string;
+  signature: string;
+  kind: string;
+  source: "explicit" | "geometry";
+  confidence: number;
+  metadata: Record<string, unknown>;
+}
+
+export interface ModelTakeoffRecipe {
+  id: string;
+  projectId: string;
+  modelId?: string | null;
+  name: string;
+  trade: string;
+  isDefault: boolean;
+  rules: Record<string, unknown>;
+}
+
+export interface ModelTakeoffTopology {
+  version: number;
+  diagnostics: Record<string, unknown>;
+  groups: ModelTakeoffTopologyGroup[];
+  connections: ModelElementConnection[];
+  connectionCount: number;
+  recipes: ModelTakeoffRecipe[];
+  overrides: Array<{ id: string; kind: string; targetSignature: string; payload: Record<string, unknown> }>;
+}
+
 export async function listModelAssets(projectId: string, refresh = false) {
   const qs = refresh ? "?refresh=1" : "";
   return apiRequest<{ assets: ModelAsset[]; syncedIds?: string[]; sourceCount?: number }>(`/api/models/${projectId}/assets${qs}`);
@@ -5857,6 +5913,52 @@ export async function getModelAsset(projectId: string, modelId: string) {
 export async function getModelBom(projectId: string, modelId: string) {
   return apiRequest<{ model: ModelAsset; rows: Array<Record<string, unknown>>; rowCount: number }>(
     `/api/models/${projectId}/assets/${modelId}/bom`,
+  );
+}
+
+export async function getModelTakeoffTopology(projectId: string, modelId: string) {
+  return apiRequest<ModelTakeoffTopology>(`/api/models/${projectId}/assets/${modelId}/topology`);
+}
+
+export async function rebuildModelTakeoffTopology(projectId: string, modelId: string) {
+  return apiRequest<ModelTakeoffTopology>(`/api/models/${projectId}/assets/${modelId}/topology/rebuild`, { method: "POST" });
+}
+
+export async function saveModelTakeoffRecipe(projectId: string, input: {
+  id?: string;
+  modelId?: string | null;
+  name: string;
+  trade?: string;
+  isDefault?: boolean;
+  rules?: Record<string, unknown>;
+}) {
+  return apiRequest<{ recipe: ModelTakeoffRecipe }>(`/api/models/${projectId}/takeoff-recipes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteModelTakeoffRecipe(projectId: string, recipeId: string) {
+  return apiRequest<{ deleted: boolean; topology: ModelTakeoffTopology | null }>(`/api/models/${projectId}/takeoff-recipes/${recipeId}`, { method: "DELETE" });
+}
+
+export async function createModelTakeoffOverride(projectId: string, modelId: string, input: {
+  kind: "rename" | "exclude" | "merge" | "split";
+  targetSignature: string;
+  payload?: Record<string, unknown>;
+}) {
+  return apiRequest<{ topology: ModelTakeoffTopology }>(`/api/models/${projectId}/assets/${modelId}/topology/overrides`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteModelTakeoffOverride(projectId: string, modelId: string, overrideId: string) {
+  return apiRequest<{ deleted: boolean; topology: ModelTakeoffTopology }>(
+    `/api/models/${projectId}/assets/${modelId}/topology/overrides/${overrideId}`,
+    { method: "DELETE" },
   );
 }
 

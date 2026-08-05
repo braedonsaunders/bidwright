@@ -1,4 +1,4 @@
-export type TakeoffShortcutPreset = "bidwright" | "planswift";
+export type TakeoffShortcutPreset = "bidwright";
 
 export type TakeoffShortcutAction =
   | { kind: "tool"; toolId: string }
@@ -26,11 +26,6 @@ interface ShortcutBinding {
   label: string;
 }
 
-export const TAKEOFF_SHORTCUT_PRESET_OPTIONS: Array<{ value: TakeoffShortcutPreset; label: string }> = [
-  { value: "bidwright", label: "BidWright" },
-  { value: "planswift", label: "PlanSwift" },
-];
-
 const COMMON_BINDINGS: ShortcutBinding[] = [
   { key: "z", ctrlOrMeta: true, action: { kind: "undo" }, label: "Ctrl/Cmd+Z" },
   { key: "z", ctrlOrMeta: true, shift: true, action: { kind: "redo" }, label: "Ctrl/Cmd+Shift+Z" },
@@ -52,18 +47,6 @@ const PRESET_BINDINGS: Record<TakeoffShortcutPreset, ShortcutBinding[]> = {
     { key: "a", action: { kind: "tool", toolId: "area-polygon" }, label: "A" },
     { key: "c", action: { kind: "tool", toolId: "count" }, label: "C" },
     { key: "d", action: { kind: "tool", toolId: "count-by-distance" }, label: "D" },
-    { key: "n", action: { kind: "tool", toolId: "markup-note" }, label: "N" },
-    { key: "h", action: { kind: "tool", toolId: "markup-highlight" }, label: "H" },
-  ],
-  planswift: [
-    { key: "s", action: { kind: "tool", toolId: "select" }, label: "S" },
-    { key: "x", action: { kind: "tool", toolId: "calibrate" }, label: "X" },
-    { key: "l", action: { kind: "tool", toolId: "linear" }, label: "L" },
-    { key: "d", action: { kind: "tool", toolId: "linear-polyline" }, label: "D" },
-    { key: "r", action: { kind: "tool", toolId: "area-rectangle" }, label: "R" },
-    { key: "a", action: { kind: "tool", toolId: "area-polygon" }, label: "A" },
-    { key: "c", action: { kind: "tool", toolId: "count" }, label: "C" },
-    { key: "m", action: { kind: "tool", toolId: "count-by-distance" }, label: "M" },
     { key: "n", action: { kind: "tool", toolId: "markup-note" }, label: "N" },
     { key: "h", action: { kind: "tool", toolId: "markup-highlight" }, label: "H" },
   ],

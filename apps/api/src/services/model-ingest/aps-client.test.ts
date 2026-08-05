@@ -90,3 +90,36 @@ test("APS metadata extraction accepts the current properties collection shape", 
   assert.equal(result.objects[0].elementType, "Steel Pipe");
   assert.deepEqual(result.objects[0].quantities, [{ quantityType: "Length", value: 12, unit: "ft" }]);
 });
+
+test("APS metadata extraction preserves numeric-string BIM quantities", async () => {
+  const client = new ApsClient("client", "secret") as any;
+  client.getMetadataViews = async () => ({
+    data: { type: "metadata", metadata: [{ guid: "view-1", name: "Main", role: "3d" }] },
+  });
+  client.getViewProperties = async () => ({
+    data: {
+      type: "properties",
+      collection: [{
+        objectid: 43,
+        name: "ACPPPIPE",
+        properties: {
+          Item: { Type: "ACPPPIPE" },
+          General: { Layer: "9001" },
+          ItemDisplay: { Material: "AutoCAD Color Index 5" },
+          AutoCAD: {
+            Class: "Pipe",
+            Length: "9.043757",
+            PipeLineNumber: `3\"P-150S1-9001`,
+            "Plant Material": "TP304L",
+          },
+        },
+      }],
+    },
+  });
+
+  const result = await client.extractModelData("urn");
+  assert.equal(result.objects[0].elementClass, "Pipe");
+  assert.equal(result.objects[0].system, `3\"P-150S1-9001`);
+  assert.equal(result.objects[0].material, "TP304L");
+  assert.deepEqual(result.objects[0].quantities, [{ quantityType: "Length", value: 9.043757, unit: "" }]);
+});

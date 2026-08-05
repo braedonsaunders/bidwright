@@ -210,6 +210,7 @@ model Project {
   symbolTemplates             SymbolTemplate[]
   modelAssets                 ModelAsset[]
   modelTakeoffLinks           ModelTakeoffLink[]
+  modelTakeoffRecipes         ModelTakeoffRecipe[]
   modelRevisionDiffs          ModelRevisionDiff[]
   modelFederations            ModelFederation[]
   scheduleTasks               ScheduleTask[]
@@ -1110,6 +1111,10 @@ model ModelAsset {
   revisionDiffsBase ModelRevisionDiff[] @relation("ModelRevisionBase")
   revisionDiffsHead ModelRevisionDiff[] @relation("ModelRevisionHead")
   federationMemberships ModelFederationMember[]
+  topologyConnections   ModelElementConnection[]
+  topologyGroups        ModelTakeoffGroup[]
+  topologyRecipes       ModelTakeoffRecipe[]
+  topologyOverrides     ModelTakeoffOverride[]
 
   @@unique([projectId, sourceDocumentId])
   @@unique([projectId, fileNodeId])
@@ -1157,6 +1162,9 @@ model ModelElement {
   quantities   ModelQuantity[]
   takeoffLinks ModelTakeoffLink[]
   issues       ModelIssue[]
+  topologyConnectionsFrom ModelElementConnection[] @relation("ModelConnectionFrom")
+  topologyConnectionsTo   ModelElementConnection[] @relation("ModelConnectionTo")
+  topologyMemberships     ModelTakeoffGroupMember[]
 
   @@index([modelId])
   @@index([modelId, externalId])
@@ -1223,6 +1231,118 @@ model ModelTakeoffLink {
   @@index([modelElementId])
   @@index([modelQuantityId])
   @@index([worksheetItemId])
+}
+
+/// One auditable physical or semantic edge in the model's takeoff graph.
+/// Source is "explicit" for authored connector references or "geometry" for
+/// compatible endpoint-proximity inference.
+model ModelElementConnection {
+  id            String       @id @default(cuid())
+  modelId       String
+  model         ModelAsset   @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  fromElementId String
+  fromElement   ModelElement @relation("ModelConnectionFrom", fields: [fromElementId], references: [id], onDelete: Cascade)
+  toElementId   String
+  toElement     ModelElement @relation("ModelConnectionTo", fields: [toElementId], references: [id], onDelete: Cascade)
+  signature     String
+  kind          String       @default("physical")
+  source        String
+  confidence    Float        @default(1)
+  metadata      Json         @default("{}")
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  @@unique([modelId, signature])
+  @@index([modelId])
+  @@index([fromElementId])
+  @@index([toElementId])
+}
+
+/// Persisted multi-resolution takeoff grouping. Systems contain networks and
+/// estimate rollups; networks contain branch/run paths. Membership retains the
+/// original BIM objects so every worksheet quantity stays traceable.
+model ModelTakeoffGroup {
+  id              String       @id @default(cuid())
+  modelId         String
+  model           ModelAsset   @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  parentId        String?
+  parent          ModelTakeoffGroup? @relation("ModelTakeoffGroupTree", fields: [parentId], references: [id], onDelete: Cascade)
+  children        ModelTakeoffGroup[] @relation("ModelTakeoffGroupTree")
+  signature       String
+  kind            String
+  name            String
+  trade           String       @default("general")
+  source          String       @default("inferred")
+  confidence      Float        @default(1)
+  measurementType String       @default("count")
+  quantity        Float        @default(0)
+  unit            String       @default("")
+  warnings        Json         @default("[]")
+  metadata        Json         @default("{}")
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+
+  members         ModelTakeoffGroupMember[]
+
+  @@unique([modelId, signature])
+  @@index([modelId, kind])
+  @@index([parentId])
+  @@index([trade])
+}
+
+model ModelTakeoffGroupMember {
+  id        String            @id @default(cuid())
+  groupId   String
+  group     ModelTakeoffGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  elementId String
+  element   ModelElement      @relation(fields: [elementId], references: [id], onDelete: Cascade)
+  role      String            @default("member")
+  ordinal   Int               @default(0)
+  metadata  Json              @default("{}")
+  createdAt DateTime          @default(now())
+
+  @@unique([groupId, elementId])
+  @@index([groupId])
+  @@index([elementId])
+}
+
+/// Reusable estimator-controlled recipe layered on top of the detected graph.
+/// Rules contain ordered rollup dimensions, boundaries and measurement policy.
+model ModelTakeoffRecipe {
+  id          String      @id @default(cuid())
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  modelId     String?
+  model       ModelAsset? @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  name        String
+  trade       String      @default("general")
+  isDefault   Boolean     @default(false)
+  rules       Json        @default("{}")
+  createdBy   String      @default("")
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([projectId])
+  @@index([modelId])
+  @@unique([projectId, modelId, name])
+}
+
+/// Manual corrections survive topology rebuilds and model revisions by using
+/// stable group/element signatures rather than transient database row ids.
+model ModelTakeoffOverride {
+  id              String     @id @default(cuid())
+  modelId         String
+  model           ModelAsset @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  kind            String
+  targetSignature String
+  payload         Json       @default("{}")
+  active          Boolean    @default(true)
+  createdBy       String     @default("")
+  createdAt       DateTime   @default(now())
+  updatedAt       DateTime   @updatedAt
+
+  @@index([modelId])
+  @@index([modelId, targetSignature])
 }
 
 /// A coordinated grouping of one or more ModelAssets that drive a single

@@ -2,28 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
-import { ArrowRight, Check, Compass, FileText, GripHorizontal, Layers, ListPlus, Maximize2, Minimize2, PanelRightClose, Sparkles, TableProperties } from "lucide-react";
-import { Button, Drawer } from "@appkit/ui";
-import type { ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
+import { ArrowRight, Check, ChevronDown, Compass, GripHorizontal, Layers, Loader2, Maximize2, Minimize2, PanelRightClose, Search, TableProperties, X } from "lucide-react";
+import { Button, Input } from "@appkit/ui";
+import type { CreateWorksheetItemInput, ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
-import { EstimateGrid } from "./estimate-grid";
+import { EstimateGrid, type WorksheetLineItemPickerRequest } from "./estimate-grid";
 import { TakeoffLinkView, type TakeoffSelection } from "./takeoff-link-view";
-import {
-  TakeoffCategoryChooser,
-  TakeoffInspectView,
-  type InspectActions,
-  type InspectCategoryPick,
-  type InspectSnapshot,
-  type TakeoffComposeRequest,
-} from "./takeoff-inspect-view";
+import { TakeoffInspectView, type InspectActions, type InspectQuantityOption, type InspectQuantitySelection, type InspectSnapshot, type TakeoffComposeRequest } from "./takeoff-inspect-view";
 import type { Pickup } from "./takeoff/annotation-canvas";
-import type { BidwrightModelSelectionMessage } from "./editors/bidwright-model-editor";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
-/** Pickups is the persistent query/grouping workspace. Inspect and Add are
- *  progressive AppKit drawers so the model/drawing never loses its working
- *  context while an estimator verifies or prices selected scope. */
+/** Browse, inspect and worksheet composition are independent states. */
 type RightPanelTab = "pickups" | "inspect" | "add";
 
 export interface ComboViewProps {
@@ -64,6 +54,187 @@ function serializeTakeoffViewState(state: TakeoffViewState | null) {
   return state ? JSON.stringify(state) : "null";
 }
 
+function humanizeQuantityLabel(value: string) {
+  return value
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[._:-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/^./, (letter) => letter.toUpperCase());
+}
+
+function numericPropertyQuantityOptions(properties: Record<string, unknown>, modelUnit = "") {
+  const options: InspectQuantityOption[] = [];
+  const numericValue = (value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value !== "string" || !/^[-+]?(?:\d+(?:,\d{3})*|\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(value.trim())) return null;
+    const parsed = Number(value.trim().replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const inferredUnit = (key: string, explicit = "") => {
+    if (explicit) return explicit;
+    const lower = key.toLowerCase();
+    if (lower.includes("area")) return modelUnit ? `${modelUnit}²` : "";
+    if (lower.includes("volume")) return modelUnit ? `${modelUnit}³` : "";
+    if (/length|width|height|depth|diameter|radius|perimeter|circumference|thickness|offset|elevation|\.(?:bop|top)$/i.test(lower)) return modelUnit;
+    return "";
+  };
+  const inferredType = (key: string) => /length|perimeter|circumference/i.test(key) ? "length" : /area/i.test(key) ? "area" : /volume/i.test(key) ? "volume" : undefined;
+  const visit = (value: unknown, path: string[], depth: number) => {
+    if (options.length >= 80 || depth > 3) return;
+    const directValue = numericValue(value);
+    if (directValue != null) {
+      const key = path.join(".");
+      const leaf = path[path.length - 1] ?? "";
+      if (
+        !key
+        || !/length|width|height|depth|diameter|radius|perimeter|circumference|thickness|area|volume|weight|count|quantity/i.test(key)
+        || /(?:^|[._\s-])(?:id|guid|handle|index|revision|timestamp|line number|element number|object number|color index)(?:$|[._\s-])/i.test(key)
+        || /pnp(?:id|guid)|uniqueid|objectid|ownerid|port\d*[_\s-]*(?:id|guid)|position\s*[xyz]?$/i.test(leaf)
+      ) return;
+      options.push({
+        id: `property:${key}`,
+        label: humanizeQuantityLabel((path[path.length - 1] ?? key).split(".").pop() ?? key),
+        value: directValue,
+        uom: inferredUnit(key),
+        source: "model-property",
+        detail: `Model property · ${key}`,
+        propertyPath: key,
+        quantityType: inferredType(key),
+      });
+      return;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    const recordValue = numericValue(record.value);
+    if (recordValue != null) {
+      const key = path.join(".");
+      options.push({
+        id: `property:${key}`,
+        label: humanizeQuantityLabel(path[path.length - 1] ?? key),
+        value: recordValue,
+        uom: inferredUnit(key, typeof record.unit === "string" ? record.unit : typeof record.uom === "string" ? record.uom : ""),
+        source: "model-property",
+        detail: `Model property · ${key}`,
+        propertyPath: key,
+        quantityType: inferredType(key),
+      });
+      return;
+    }
+    Object.entries(record).forEach(([key, child]) => visit(child, [...path, key], depth + 1));
+  };
+  Object.entries(properties).forEach(([key, value]) => visit(value, [key], 0));
+  const score = (option: InspectQuantityOption) => /(^|\.)length$/i.test(option.propertyPath ?? "") ? 100 : /area|volume|diameter|radius/i.test(option.propertyPath ?? "") ? 80 : 0;
+  return options.sort((left, right) => score(right) - score(left)).slice(0, 36);
+}
+
+function dedupeQuantityOptions(options: InspectQuantityOption[]) {
+  const seen = new Set<string>();
+  return options.filter((option) => {
+    const key = `${option.id}:${option.value}:${option.uom}`;
+    if (seen.has(key) || !Number.isFinite(option.value)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function quantityOptionsForSelection(
+  request: TakeoffComposeRequest,
+  selection: TakeoffSelection | null,
+  snapshot: InspectSnapshot | null,
+): InspectQuantityOption[] {
+  if (request.mode === "batch") {
+    return [{
+      id: "native-per-pickup",
+      label: "Each pickup's measured quantity",
+      value: request.count,
+      uom: "lines",
+      source: "derived",
+      detail: "Preserves the native mapped quantity on every staged pickup",
+      quantityType: "native",
+    }];
+  }
+  if (request.quantityOptions?.length) return dedupeQuantityOptions(request.quantityOptions);
+  const countOption: InspectQuantityOption = {
+    id: "count",
+    label: request.count === 1 ? "Count" : "Selected object count",
+    value: request.count,
+    uom: "EA",
+    source: "derived",
+    detail: `${request.count.toLocaleString()} selected`,
+    quantityType: "count",
+  };
+  if (!selection) return [countOption];
+
+  if (selection.kind === "model-element") {
+    const element = snapshot?.modelElements.find((candidate) => candidate.id === selection.elementId);
+    if (!element) return [countOption];
+    const options = dedupeQuantityOptions([
+      countOption,
+      ...element.quantities.map((quantity) => ({
+        id: `model-quantity:${quantity.id}`,
+        label: humanizeQuantityLabel(quantity.quantityType),
+        value: quantity.value,
+        uom: quantity.unit,
+        source: "model-quantity" as const,
+        detail: [quantity.method, `${Math.round(quantity.confidence * 100)}% confidence`].filter(Boolean).join(" · "),
+        quantityType: quantity.quantityType,
+        modelQuantityId: quantity.id,
+      })),
+      ...numericPropertyQuantityOptions(element.properties, element.modelUnit),
+    ]);
+    const semantics = [element.name, element.elementClass, element.elementType, element.system, String(element.properties["AutoCAD.Class"] ?? "")].join(" ").toLowerCase();
+    const preferredType = /pipe|duct|cable|conduit|tray|linear|run/.test(semantics) ? "length" : null;
+    const preferredIndex = preferredType ? options.findIndex((option) => option.quantityType === preferredType) : -1;
+    if (preferredIndex > 0) {
+      const [preferred] = options.splice(preferredIndex, 1);
+      options.unshift(preferred);
+    }
+    return options;
+  }
+  if (selection.kind === "model-element-group") {
+    return dedupeQuantityOptions([
+      countOption,
+      ...(selection.quantity > 0 ? [{
+        id: `topology:${selection.groupSignature}`,
+        label: humanizeQuantityLabel(selection.measurementType || "Detected quantity"),
+        value: selection.quantity,
+        uom: selection.unit || "EA",
+        source: "model-quantity" as const,
+        detail: `${selection.elementCount.toLocaleString()} model objects · ${Math.round(selection.confidence * 100)}% confidence`,
+        quantityType: selection.measurementType,
+      }] : []),
+    ]);
+  }
+  if (selection.kind === "model-selection") {
+    return dedupeQuantityOptions([
+      countOption,
+      { id: "selection:surface-area", label: "Surface area", value: selection.totals.surfaceArea, uom: "model²", source: "derived", detail: "Selected geometry", quantityType: "surface_area" },
+      { id: "selection:volume", label: "Volume", value: selection.totals.volume, uom: "model³", source: "derived", detail: "Selected geometry", quantityType: "volume" },
+      { id: "selection:faces", label: "Face count", value: selection.totals.faceCount, uom: "EA", source: "derived", detail: "Selected geometry", quantityType: "count" },
+      { id: "selection:solids", label: "Solid count", value: selection.totals.solidCount, uom: "EA", source: "derived", detail: "Selected geometry", quantityType: "count" },
+    ]).filter((option) => option.value > 0);
+  }
+  if (selection.kind === "annotation") {
+    const annotation = snapshot?.annotations.find((candidate) => candidate.id === selection.pickupId);
+    const measurement = annotation?.measurement;
+    return dedupeQuantityOptions([
+      countOption,
+      ...(typeof measurement?.value === "number" ? [{ id: "measurement:value", label: "Measured value", value: measurement.value, uom: measurement.unit || "EA", source: "measurement" as const, detail: annotation?.type, quantityType: "value" }] : []),
+      ...(typeof measurement?.area === "number" ? [{ id: "measurement:area", label: "Measured area", value: measurement.area, uom: measurement.unit || "SF", source: "measurement" as const, detail: annotation?.type, quantityType: "area" }] : []),
+      ...(typeof measurement?.volume === "number" ? [{ id: "measurement:volume", label: "Measured volume", value: measurement.volume, uom: measurement.unit || "CF", source: "measurement" as const, detail: annotation?.type, quantityType: "volume" }] : []),
+    ]);
+  }
+  if (selection.kind === "cad-entity") {
+    const entity = snapshot?.dwgIntelligence?.entities.find((candidate) => candidate.id === selection.entityId);
+    return dedupeQuantityOptions([
+      countOption,
+      ...(entity ? [{ id: `cad:${entity.id}`, label: entity.measurementLabel || "Measured quantity", value: entity.quantity, uom: entity.uom, source: "measurement" as const, detail: [entity.type, entity.layer].filter(Boolean).join(" · "), quantityType: entity.type }] : []),
+    ]);
+  }
+  return [countOption];
+}
+
 export function ComboView({
   workspace,
   onApply,
@@ -83,8 +254,14 @@ export function ComboView({
   revisionImpactByItem,
 }: ComboViewProps) {
   const [rightPanelTab, setRightPanelTab] = useState<RightPanelTab>("pickups");
-  const [inspectDrawerOpen, setInspectDrawerOpen] = useState(false);
   const [composeRequest, setComposeRequest] = useState<TakeoffComposeRequest | null>(null);
+  const [selectedLineItemTemplate, setSelectedLineItemTemplate] = useState<CreateWorksheetItemInput | null>(null);
+  const [lineItemPickerOpen, setLineItemPickerOpen] = useState(false);
+  const [lineItemPickerNonce, setLineItemPickerNonce] = useState(0);
+  const [quantityOptionId, setQuantityOptionId] = useState("");
+  const [quantityMultiplier, setQuantityMultiplier] = useState(1);
+  const [quantityWastePercent, setQuantityWastePercent] = useState(0);
+  const [addingToWorksheet, setAddingToWorksheet] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [takeoffDetached, setTakeoffDetached] = useState(false);
   const [takeoffSelection, setTakeoffSelection] = useState<TakeoffSelection | null>(null);
@@ -92,19 +269,22 @@ export function ComboView({
     initialDocumentId ? { documentId: initialDocumentId, page: 1, zoom: 1 } : null,
   );
   const [annotationsCache, setAnnotationsCache] = useState<Pickup[]>([]);
+  const lineItemPickerAnchorRef = useRef<HTMLElement | null>(null);
   const [linksReloadSignal, setLinksReloadSignal] = useState(0);
   const handleLinksMutated = useCallback(() => setLinksReloadSignal((k) => k + 1), []);
   const handleTakeoffSelectionChange = useCallback((next: TakeoffSelection | null) => {
     setTakeoffSelection((prev) => (
       serializeTakeoffSelection(prev) === serializeTakeoffSelection(next) ? prev : next
     ));
-    if (next) {
-      setInspectDrawerOpen(true);
-      setRightPanelTab("inspect");
-    }
   }, []);
   const handleRequestCompose = useCallback((request: TakeoffComposeRequest) => {
     setComposeRequest(request);
+    setSelectedLineItemTemplate(null);
+    setQuantityOptionId(request.quantityOptions?.[0]?.id ?? "");
+    setQuantityMultiplier(1);
+    setQuantityWastePercent(0);
+    setLineItemPickerOpen(true);
+    setLineItemPickerNonce((value) => value + 1);
     setRightPanelTab("add");
   }, []);
   const takeoffViewStateSignatureRef = useRef<string | null>(serializeTakeoffViewState(takeoffViewState));
@@ -132,90 +312,167 @@ export function ComboView({
   const containerRef = useRef<HTMLDivElement>(null);
   const detachedTakeoffWindowRef = useRef<Window | null>(null);
 
-  // Bridge: TakeoffTab populates these refs with its action handlers so the
-  // side-panel link view can trigger them without TakeoffTab having to expose
-  // its entire state graph.
-  const modelSendToEstimateRef = useRef<
-    ((selection: BidwrightModelSelectionMessage) => Promise<void> | void) | null
-  >(null);
-  const handleModelSendToEstimate = useCallback(
-    async (selection: BidwrightModelSelectionMessage) => {
-      await modelSendToEstimateRef.current?.(selection);
-    },
-    [],
-  );
-  const modelElementCreateLineItemRef = useRef<((elementId: string) => Promise<void> | void) | null>(null);
-  const handleCreateLineItemFromModelElement = useCallback(async (elementId: string) => {
-    await modelElementCreateLineItemRef.current?.(elementId);
-  }, []);
-
   // Inspect bridge: TakeoffTab publishes a snapshot of what's currently
   // inspectable (annotations or model elements) and populates an actions ref
   // so the side-panel Inspect tab can drive everything.
   const [inspectSnapshot, setInspectSnapshot] = useState<InspectSnapshot | null>(null);
   const inspectActionsRef = useRef<InspectActions | null>(null);
-  const inspectSnapshotSignatureRef = useRef<string | null>(null);
   const handleInspectSnapshotChange = useCallback((next: InspectSnapshot) => {
-    const signature = JSON.stringify(next);
-    if (signature === inspectSnapshotSignatureRef.current) return;
-    inspectSnapshotSignatureRef.current = signature;
     setInspectSnapshot(next);
   }, []);
+  const requestComposeForCurrentSelection = useCallback(() => {
+    const actions = inspectActionsRef.current;
+    const selection = takeoffSelection;
+    if (!actions || !selection) return;
+    if (selection.kind === "annotation") {
+      const annotation = inspectSnapshot?.annotations.find((candidate) => candidate.id === selection.pickupId);
+      handleRequestCompose({
+        id: `selection:annotation:${selection.pickupId}`,
+        title: annotation?.label || "Selected takeoff pickup",
+        description: annotation?.measurement ? `${annotation.measurement.value ?? 1} ${annotation.measurement.unit ?? "EA"}` : undefined,
+        sourceLabel: "Drawing pickup",
+        count: 1,
+        mode: "single",
+        execute: (pick) => actions.createLineItemFromAnnotation(selection.pickupId, pick),
+      });
+    } else if (selection.kind === "model-element") {
+      handleRequestCompose({
+        id: `selection:model:${selection.elementId}`,
+        title: selection.elementName,
+        description: [selection.elementClass, selection.material, selection.level, selection.quantitySummary].filter(Boolean).join(" · "),
+        sourceLabel: "Model element",
+        count: 1,
+        mode: "single",
+        execute: (pick) => actions.createLineItemFromElement(selection.elementId, pick),
+      });
+    } else if (selection.kind === "model-element-group") {
+      handleRequestCompose({
+        id: `selection:model-topology:${selection.groupSignature}`,
+        title: selection.groupName,
+        description: `${selection.elementCount.toLocaleString()} objects · ${selection.quantity.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${selection.unit}`,
+        sourceLabel: `${humanizeQuantityLabel(selection.groupKind)} group`,
+        count: selection.elementCount,
+        mode: "group",
+        quantityOptions: [{
+          id: `topology:${selection.groupSignature}`,
+          label: humanizeQuantityLabel(selection.measurementType),
+          value: selection.quantity,
+          uom: selection.unit,
+          source: "model-quantity",
+          detail: `${selection.elementCount.toLocaleString()} member objects`,
+          quantityType: selection.measurementType,
+        }],
+        execute: (pick) => actions.createLineItemFromElementGroup(selection.elementIds, selection.groupName, pick),
+      });
+    } else if (selection.kind === "cad-entity") {
+      handleRequestCompose({
+        id: `selection:cad:${selection.entityId}`,
+        title: selection.label || selection.entityType || "CAD entity",
+        description: [selection.layer, selection.summary].filter(Boolean).join(" · "),
+        sourceLabel: "CAD entity",
+        count: 1,
+        mode: "single",
+        execute: (pick) => actions.createLineItemFromDwgEntity(selection.entityId, pick),
+      });
+    } else if (selection.kind === "model-selection" && selection.selectedNodeIds.length > 0) {
+      handleRequestCompose({
+        id: `selection:model-group:${selection.selectedNodeIds.join(",")}`,
+        title: `${selection.selectedCount} selected model objects`,
+        description: selection.fileName,
+        sourceLabel: "3D model selection",
+        count: selection.selectedCount,
+        mode: "group",
+        execute: (pick) => actions.createLineItemFromElementGroup(selection.selectedNodeIds, `${selection.selectedCount} selected model objects`, pick),
+      });
+    }
+  }, [handleRequestCompose, inspectSnapshot, takeoffSelection]);
+
   const handleRightPanelTabChange = useCallback((tab: RightPanelTab) => {
     setRightPanelTab(tab);
-    if (tab === "pickups") {
-      setInspectDrawerOpen(false);
-      setComposeRequest(null);
-    } else if (tab === "inspect") {
-      setInspectDrawerOpen(true);
-    } else if (tab === "add" && !composeRequest) {
-      const actions = inspectActionsRef.current;
-      const selection = takeoffSelection;
-      if (!actions || !selection) return;
-      if (selection.kind === "annotation") {
-        const annotation = inspectSnapshot?.annotations.find((candidate) => candidate.id === selection.pickupId);
-        handleRequestCompose({
-          id: `selection:annotation:${selection.pickupId}`,
-          title: annotation?.label || "Selected takeoff pickup",
-          description: annotation?.measurement ? `${annotation.measurement.value ?? 1} ${annotation.measurement.unit ?? "EA"}` : undefined,
-          sourceLabel: "Drawing pickup",
-          count: 1,
-          mode: "single",
-          execute: (pick) => actions.createLineItemFromAnnotation(selection.pickupId, pick),
-        });
-      } else if (selection.kind === "model-element") {
-        handleRequestCompose({
-          id: `selection:model:${selection.elementId}`,
-          title: selection.elementName,
-          description: [selection.elementClass, selection.material, selection.level, selection.quantitySummary].filter(Boolean).join(" · "),
-          sourceLabel: "Model element",
-          count: 1,
-          mode: "single",
-          execute: (pick) => actions.createLineItemFromElement(selection.elementId, pick),
-        });
-      } else if (selection.kind === "cad-entity") {
-        handleRequestCompose({
-          id: `selection:cad:${selection.entityId}`,
-          title: selection.label || selection.entityType || "CAD entity",
-          description: [selection.layer, selection.summary].filter(Boolean).join(" · "),
-          sourceLabel: "CAD entity",
-          count: 1,
-          mode: "single",
-          execute: (pick) => actions.createLineItemFromDwgEntity(selection.entityId, pick),
-        });
-      } else if (selection.kind === "model-selection" && selection.selectedNodeIds.length > 0) {
-        handleRequestCompose({
-          id: `selection:model-group:${selection.selectedNodeIds.join(",")}`,
-          title: `${selection.selectedCount} selected model objects`,
-          description: selection.fileName,
-          sourceLabel: "3D model selection",
-          count: selection.selectedCount,
-          mode: "group",
-          execute: (pick) => actions.createLineItemFromElementGroup(selection.selectedNodeIds, `${selection.selectedCount} selected model objects`, pick),
-        });
-      }
+  }, []);
+
+  const lineItemPickerRequest = useMemo<WorksheetLineItemPickerRequest | null>(() => {
+    if (!composeRequest || !lineItemPickerOpen) return null;
+    return {
+      id: `${composeRequest.id}:${lineItemPickerNonce}`,
+      title: `Price ${composeRequest.title}`,
+      description: `${composeRequest.sourceLabel} · Choose the exact worksheet item that should price this takeoff scope.`,
+      sourceLabel: composeRequest.sourceLabel,
+      selectionCount: composeRequest.count,
+      creationMode: composeRequest.mode,
+      anchorRef: lineItemPickerAnchorRef,
+      onSelect: async (template) => {
+        if (!template.categoryId) {
+          onError("That worksheet item does not resolve to an enabled estimate category.");
+          return;
+        }
+        setSelectedLineItemTemplate(template);
+        setLineItemPickerOpen(false);
+      },
+      onCancel: () => setLineItemPickerOpen(false),
+    };
+  }, [composeRequest, lineItemPickerNonce, lineItemPickerOpen, onError]);
+
+  const quantityOptions = useMemo(
+    () => composeRequest ? quantityOptionsForSelection(composeRequest, takeoffSelection, inspectSnapshot) : [],
+    [composeRequest, inspectSnapshot, takeoffSelection],
+  );
+  useEffect(() => {
+    if (!composeRequest || quantityOptions.length === 0) return;
+    if (!quantityOptions.some((option) => option.id === quantityOptionId)) {
+      setQuantityOptionId(quantityOptions[0].id);
     }
-  }, [composeRequest, handleRequestCompose, inspectSnapshot, takeoffSelection]);
+  }, [composeRequest, quantityOptionId, quantityOptions]);
+  const openLineItemPicker = useCallback(() => {
+    if (!composeRequest) {
+      requestComposeForCurrentSelection();
+      return;
+    }
+    setLineItemPickerOpen(true);
+    setLineItemPickerNonce((value) => value + 1);
+  }, [composeRequest, requestComposeForCurrentSelection]);
+  const clearComposeRequest = useCallback(() => {
+    setComposeRequest(null);
+    setSelectedLineItemTemplate(null);
+    setLineItemPickerOpen(false);
+    setQuantityOptionId("");
+    setQuantityMultiplier(1);
+    setQuantityWastePercent(0);
+  }, []);
+  const addStagedLineItem = useCallback(async () => {
+    if (!composeRequest || !selectedLineItemTemplate?.categoryId) return;
+    const option = quantityOptions.find((candidate) => candidate.id === quantityOptionId) ?? quantityOptions[0];
+    if (!option) {
+      onError("Choose a quantity source before adding this pickup.");
+      return;
+    }
+    const multiplier = Number.isFinite(quantityMultiplier) ? Math.max(0, quantityMultiplier) : 1;
+    const wastePercent = Number.isFinite(quantityWastePercent) ? Math.max(0, quantityWastePercent) : 0;
+    const quantityOverride: InspectQuantitySelection | undefined = option.id === "native-per-pickup" ? undefined : {
+      ...option,
+      uom: option.uom || selectedLineItemTemplate.uom || "EA",
+      multiplier,
+      wastePercent,
+      result: option.value * multiplier * (1 + wastePercent / 100),
+    };
+    setAddingToWorksheet(true);
+    try {
+      await composeRequest.execute({
+        categoryId: selectedLineItemTemplate.categoryId,
+        rateScheduleItemId: selectedLineItemTemplate.rateScheduleItemId ?? undefined,
+        rateScheduleItemName: selectedLineItemTemplate.entityName,
+        rateScheduleItemUnit: selectedLineItemTemplate.uom,
+        tierUnits: selectedLineItemTemplate.tierUnits,
+        lineItemTemplate: selectedLineItemTemplate,
+        quantityOverride,
+      });
+      clearComposeRequest();
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not add the staged takeoff item to the worksheet.");
+    } finally {
+      setAddingToWorksheet(false);
+    }
+  }, [clearComposeRequest, composeRequest, onError, quantityMultiplier, quantityOptionId, quantityOptions, quantityWastePercent, selectedLineItemTemplate]);
 
   const toggleFullscreen = useCallback(() => {
     if (typeof document === "undefined") return;
@@ -307,8 +564,6 @@ export function ComboView({
       onAnnotationsChange={handleAnnotationsChange}
       linksReloadSignal={linksReloadSignal}
       onLinksMutated={handleLinksMutated}
-      modelSendToEstimateRef={modelSendToEstimateRef}
-      modelElementCreateLineItemRef={modelElementCreateLineItemRef}
       inspectActionsRef={inspectActionsRef}
       onOpenInspectEntities={() => setRightPanelTab("pickups")}
       onInspectSnapshotChange={handleInspectSnapshotChange}
@@ -363,6 +618,7 @@ export function ComboView({
                 onOpenTakeoffLink={onOpenTakeoffLink}
                 revisionImpactByItem={revisionImpactByItem}
                 onOpenRevisionDiff={onOpenRevisionDiff}
+                lineItemPickerRequest={lineItemPickerRequest}
               />
             </div>
           </Panel>
@@ -378,22 +634,30 @@ export function ComboView({
                 activeWorksheetId={activeWorksheetId}
                 tab={rightPanelTab}
                 onTabChange={handleRightPanelTabChange}
-                onOpenAgentChat={onOpenAgentChat}
                 fullscreen={fullscreen}
                 onToggleFullscreen={toggleFullscreen}
                 takeoffSelection={takeoffSelection}
                 annotationsCache={annotationsCache}
                 onLinksMutated={handleLinksMutated}
-                onSendModelSelectionToEstimate={handleModelSendToEstimate}
-                onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
                 inspectSnapshot={inspectSnapshot}
                 inspectActionsRef={inspectActionsRef}
-                inspectDrawerOpen={inspectDrawerOpen}
-                onInspectDrawerOpenChange={setInspectDrawerOpen}
-                composeRequest={composeRequest}
                 onRequestCompose={handleRequestCompose}
-                onCloseComposer={() => { setComposeRequest(null); setRightPanelTab(inspectDrawerOpen ? "inspect" : "pickups"); }}
-                onActiveWorksheetChange={onActiveWorksheetChange}
+                onRequestSelectionCompose={requestComposeForCurrentSelection}
+                lineItemPickerAnchorRef={lineItemPickerAnchorRef}
+                composeRequest={composeRequest}
+                selectedLineItemTemplate={selectedLineItemTemplate}
+                lineItemPickerOpen={lineItemPickerOpen}
+                quantityOptions={quantityOptions}
+                quantityOptionId={quantityOptionId}
+                quantityMultiplier={quantityMultiplier}
+                quantityWastePercent={quantityWastePercent}
+                addingToWorksheet={addingToWorksheet}
+                onOpenLineItemPicker={openLineItemPicker}
+                onQuantityOptionChange={setQuantityOptionId}
+                onQuantityMultiplierChange={setQuantityMultiplier}
+                onQuantityWastePercentChange={setQuantityWastePercent}
+                onAddStagedLineItem={addStagedLineItem}
+                onClearComposeRequest={clearComposeRequest}
               />
             </div>
           </Panel>
@@ -446,22 +710,30 @@ export function ComboView({
                   activeWorksheetId={activeWorksheetId}
                   tab={rightPanelTab}
                   onTabChange={handleRightPanelTabChange}
-                  onOpenAgentChat={onOpenAgentChat}
                   fullscreen={fullscreen}
                   onToggleFullscreen={toggleFullscreen}
                   takeoffSelection={takeoffSelection}
                   annotationsCache={annotationsCache}
                   onLinksMutated={handleLinksMutated}
-                  onSendModelSelectionToEstimate={handleModelSendToEstimate}
-                  onCreateLineItemFromModelElement={handleCreateLineItemFromModelElement}
                   inspectSnapshot={inspectSnapshot}
                   inspectActionsRef={inspectActionsRef}
-                  inspectDrawerOpen={inspectDrawerOpen}
-                  onInspectDrawerOpenChange={setInspectDrawerOpen}
-                  composeRequest={composeRequest}
                   onRequestCompose={handleRequestCompose}
-                  onCloseComposer={() => { setComposeRequest(null); setRightPanelTab(inspectDrawerOpen ? "inspect" : "pickups"); }}
-                  onActiveWorksheetChange={onActiveWorksheetChange}
+                  onRequestSelectionCompose={requestComposeForCurrentSelection}
+                  lineItemPickerAnchorRef={lineItemPickerAnchorRef}
+                  composeRequest={composeRequest}
+                  selectedLineItemTemplate={selectedLineItemTemplate}
+                  lineItemPickerOpen={lineItemPickerOpen}
+                  quantityOptions={quantityOptions}
+                  quantityOptionId={quantityOptionId}
+                  quantityMultiplier={quantityMultiplier}
+                  quantityWastePercent={quantityWastePercent}
+                  addingToWorksheet={addingToWorksheet}
+                  onOpenLineItemPicker={openLineItemPicker}
+                  onQuantityOptionChange={setQuantityOptionId}
+                  onQuantityMultiplierChange={setQuantityMultiplier}
+                  onQuantityWastePercentChange={setQuantityWastePercent}
+                  onAddStagedLineItem={addStagedLineItem}
+                  onClearComposeRequest={clearComposeRequest}
                 />
               </div>
             </Panel>
@@ -500,7 +772,16 @@ export function ComboView({
                 return worksheet ? (
                   <>
                     <span className="text-fg/20">/</span>
-                    <span className="min-w-0 truncate text-xs font-medium text-fg/75">{worksheet.name}</span>
+                    <select
+                      aria-label="Active worksheet"
+                      value={worksheet.id}
+                      onChange={(event) => onActiveWorksheetChange?.(event.target.value)}
+                      className="h-6 min-w-0 max-w-[260px] rounded-md border border-transparent bg-transparent px-1 text-xs font-medium text-fg/75 outline-none hover:border-line hover:bg-bg/40 focus:border-accent"
+                    >
+                      {workspace.worksheets.map((candidate) => (
+                        <option key={candidate.id} value={candidate.id}>{candidate.name}</option>
+                      ))}
+                    </select>
                     <span className="shrink-0 rounded-full border border-line bg-bg/40 px-1.5 py-0.5 font-mono text-[9px] tabular-nums text-fg/40">
                       {(worksheet.items ?? []).length.toLocaleString()} lines
                     </span>
@@ -530,6 +811,8 @@ export function ComboView({
                 onOpenTakeoffLink={onOpenTakeoffLink}
                 revisionImpactByItem={revisionImpactByItem}
                 onOpenRevisionDiff={onOpenRevisionDiff}
+                lineItemPickerRequest={lineItemPickerRequest}
+                dockMode
               />
             </div>
           </div>
@@ -539,56 +822,199 @@ export function ComboView({
   );
 }
 
+function SelectionInspectPanel({
+  selection,
+  snapshot,
+  workspace,
+  annotations,
+  activeWorksheetId,
+  onLinksMutated,
+  onStage,
+}: {
+  selection: TakeoffSelection | null;
+  snapshot: InspectSnapshot | null;
+  workspace: ProjectWorkspaceData;
+  annotations: Pickup[];
+  activeWorksheetId?: string;
+  onLinksMutated: () => void;
+  onStage: () => void;
+}) {
+  const [propertyQuery, setPropertyQuery] = useState("");
+  const element = selection?.kind === "model-element"
+    ? snapshot?.modelElements.find((candidate) => candidate.id === selection.elementId) ?? null
+    : null;
+  const elementGroup = selection?.kind === "model-element-group" ? selection : null;
+  const properties = useMemo(() => {
+    if (!element) return [];
+    const query = propertyQuery.trim().toLowerCase();
+    return Object.entries(element.properties)
+      .filter(([key, value]) => !query || `${key} ${String(value)}`.toLowerCase().includes(query))
+      .sort(([left], [right]) => left.localeCompare(right, undefined, { numeric: true }))
+      .slice(0, 120);
+  }, [element, propertyQuery]);
+
+  if (!selection) {
+    return <div className="flex h-full items-center justify-center px-5 text-center text-[11px] leading-relaxed text-fg/40">Select a pickup or model object, then open Inspect. Browsing never opens this panel automatically.</div>;
+  }
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="min-h-0 flex-1 overflow-y-auto p-2">
+        {element && (
+          <div className="space-y-2">
+            <div className="rounded-lg border border-line bg-bg/45 p-2.5">
+              <p className="text-[9px] font-semibold uppercase tracking-wider text-fg/35">Active model object</p>
+              <p className="mt-1 text-[12px] font-semibold text-fg/85">{element.name || element.externalId}</p>
+              <p className="mt-0.5 text-[10px] text-fg/45">{[element.elementClass, element.elementType, element.system, element.level].filter(Boolean).join(" · ")}</p>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px]">
+                {[["Material", element.material], ["Model ID", element.externalId], ["LOD", element.lod || "Not specified"], ["Quantity", element.quantitySummary]].map(([label, value]) => (
+                  <div key={label} className="rounded-md border border-line/60 bg-panel/60 px-2 py-1.5">
+                    <p className="text-[8px] uppercase tracking-wide text-fg/30">{label}</p>
+                    <p className="mt-0.5 truncate text-fg/65" title={value || ""}>{value || "—"}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <section className="rounded-lg border border-line bg-bg/45 p-2">
+              <p className="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-fg/35">Measured quantities</p>
+              <div className="space-y-1">
+                {element.quantities.length > 0 ? element.quantities.map((quantity) => (
+                  <div key={quantity.id} className="flex items-center justify-between gap-2 rounded-md bg-panel/70 px-2 py-1.5 text-[10px]">
+                    <span className="min-w-0 truncate text-fg/55">{humanizeQuantityLabel(quantity.quantityType)}</span>
+                    <span className="shrink-0 font-mono font-semibold tabular-nums text-fg/75">{quantity.value.toLocaleString(undefined, { maximumFractionDigits: 4 })} {quantity.unit}</span>
+                  </div>
+                )) : <p className="py-2 text-center text-[10px] text-fg/35">No native model quantities were indexed.</p>}
+              </div>
+            </section>
+            <section className="rounded-lg border border-line bg-bg/45 p-2">
+              <div className="mb-1.5 flex items-center gap-2">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-fg/35">Source properties</p>
+                <Input value={propertyQuery} onChange={(event) => setPropertyQuery(event.target.value)} placeholder="Filter properties" className="ml-auto h-6 w-32 px-1.5 text-[9px]" />
+              </div>
+              <div className="divide-y divide-line/50">
+                {properties.map(([key, value]) => (
+                  <div key={key} className="grid grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)] gap-2 py-1 text-[9px]">
+                    <span className="truncate text-fg/35" title={key}>{key}</span>
+                    <span className="break-words text-right text-fg/60">{String(value)}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        )}
+        {elementGroup && (
+          <div className="space-y-2">
+            <div className="rounded-lg border border-accent/25 bg-accent/5 p-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-accent">Selected {humanizeQuantityLabel(elementGroup.groupKind)}</p>
+                <span className="font-mono text-[9px] text-fg/40">{Math.round(elementGroup.confidence * 100)}%</span>
+              </div>
+              <p className="mt-1 text-[12px] font-semibold text-fg/85">{elementGroup.groupName}</p>
+              <p className="mt-0.5 text-[10px] text-fg/45">{elementGroup.elementCount.toLocaleString()} highlighted model objects · {elementGroup.source}</p>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px]">
+                <div className="rounded-md border border-line/60 bg-panel/60 px-2 py-1.5">
+                  <p className="text-[8px] uppercase tracking-wide text-fg/30">Quantity</p>
+                  <p className="mt-0.5 font-mono font-semibold text-fg/70">{elementGroup.quantity.toLocaleString(undefined, { maximumFractionDigits: 4 })} {elementGroup.unit}</p>
+                </div>
+                <div className="rounded-md border border-line/60 bg-panel/60 px-2 py-1.5">
+                  <p className="text-[8px] uppercase tracking-wide text-fg/30">Measurement</p>
+                  <p className="mt-0.5 text-fg/65">{humanizeQuantityLabel(elementGroup.measurementType)}</p>
+                </div>
+              </div>
+            </div>
+            {elementGroup.warnings.length > 0 && (
+              <div className="rounded-lg border border-warning/25 bg-warning/5 p-2 text-[10px] text-warning">
+                {elementGroup.warnings.map((warning) => <p key={warning}>· {warning}</p>)}
+              </div>
+            )}
+          </div>
+        )}
+        {!element && !elementGroup && (
+          <TakeoffLinkView workspace={workspace} selection={selection} annotations={annotations} activeWorksheetId={activeWorksheetId} onLinksMutated={onLinksMutated} showLinkComposer={false} />
+        )}
+      </div>
+      <div className="shrink-0 border-t border-line bg-panel/95 p-2">
+        <Button type="button" onClick={onStage} className="h-8 w-full text-[10px]">
+          <ArrowRight className="mr-1.5 h-3.5 w-3.5" />
+          Continue to Add to worksheet
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 function RightPanel({
   workspace,
   activeWorksheetId,
   tab,
   onTabChange,
-  onOpenAgentChat,
   fullscreen,
   onToggleFullscreen,
   takeoffSelection,
   annotationsCache,
   onLinksMutated,
-  onSendModelSelectionToEstimate,
-  onCreateLineItemFromModelElement,
   inspectSnapshot,
   inspectActionsRef,
-  inspectDrawerOpen,
-  onInspectDrawerOpenChange,
-  composeRequest,
   onRequestCompose,
-  onCloseComposer,
-  onActiveWorksheetChange,
+  onRequestSelectionCompose,
+  lineItemPickerAnchorRef,
+  composeRequest,
+  selectedLineItemTemplate,
+  lineItemPickerOpen,
+  quantityOptions,
+  quantityOptionId,
+  quantityMultiplier,
+  quantityWastePercent,
+  addingToWorksheet,
+  onOpenLineItemPicker,
+  onQuantityOptionChange,
+  onQuantityMultiplierChange,
+  onQuantityWastePercentChange,
+  onAddStagedLineItem,
+  onClearComposeRequest,
 }: {
   workspace: ProjectWorkspaceData;
   activeWorksheetId?: string;
   tab: RightPanelTab;
   onTabChange: (tab: RightPanelTab) => void;
-  onOpenAgentChat?: (prefill?: string) => void;
   fullscreen: boolean;
   onToggleFullscreen: () => void;
   takeoffSelection: TakeoffSelection | null;
   annotationsCache: Pickup[];
   onLinksMutated: () => void;
-  onSendModelSelectionToEstimate: (selection: BidwrightModelSelectionMessage) => Promise<void> | void;
-  onCreateLineItemFromModelElement: (elementId: string) => Promise<void> | void;
   inspectSnapshot: InspectSnapshot | null;
   inspectActionsRef: React.MutableRefObject<InspectActions | null>;
-  inspectDrawerOpen: boolean;
-  onInspectDrawerOpenChange: (open: boolean) => void;
-  composeRequest: TakeoffComposeRequest | null;
   onRequestCompose: (request: TakeoffComposeRequest) => void;
-  onCloseComposer: () => void;
-  onActiveWorksheetChange?: (worksheetId: string) => void;
+  onRequestSelectionCompose: () => void;
+  lineItemPickerAnchorRef: React.MutableRefObject<HTMLElement | null>;
+  composeRequest: TakeoffComposeRequest | null;
+  selectedLineItemTemplate: CreateWorksheetItemInput | null;
+  lineItemPickerOpen: boolean;
+  quantityOptions: InspectQuantityOption[];
+  quantityOptionId: string;
+  quantityMultiplier: number;
+  quantityWastePercent: number;
+  addingToWorksheet: boolean;
+  onOpenLineItemPicker: () => void;
+  onQuantityOptionChange: (id: string) => void;
+  onQuantityMultiplierChange: (value: number) => void;
+  onQuantityWastePercentChange: (value: number) => void;
+  onAddStagedLineItem: () => void;
+  onClearComposeRequest: () => void;
 }) {
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "pickups", label: "Pickups", icon: Layers },
     { id: "inspect", label: "Inspect", icon: Compass },
-    { id: "add", label: "Add", icon: ListPlus },
+    { id: "add", label: "Add", icon: TableProperties },
   ];
 
   const FsIcon = fullscreen ? Minimize2 : Maximize2;
+  const selectedQuantityOption = quantityOptions.find((option) => option.id === quantityOptionId) ?? quantityOptions[0] ?? null;
+  const mappedQuantity = selectedQuantityOption
+    ? selectedQuantityOption.value * quantityMultiplier * (1 + quantityWastePercent / 100)
+    : 0;
+  const mappedUom = selectedQuantityOption?.uom || selectedLineItemTemplate?.uom || "EA";
+  const usesNativeBatchQuantities = selectedQuantityOption?.id === "native-per-pickup";
 
   return (
     <>
@@ -623,314 +1049,163 @@ function RightPanel({
         </button>
       </div>
 
-      <div className="shrink-0 border-b border-line/70 bg-bg/25 px-3 py-2">
-        <p className="text-[10px] font-semibold text-fg/70">Find, group, and stage measurable scope</p>
-        <p className="mt-0.5 text-[9px] leading-relaxed text-fg/40">Click a row to inspect it. Check several rows to build a batch. Use a group action for one summed estimate line.</p>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-hidden p-2">
-        <TakeoffInspectView
+      {tab === "pickups" ? (
+        <div className="min-h-0 flex-1 overflow-hidden p-1.5">
+          <TakeoffInspectView
+            snapshot={inspectSnapshot}
+            actions={inspectActionsRef.current}
+            onRequestCompose={onRequestCompose}
+          />
+        </div>
+      ) : tab === "inspect" ? (
+        <SelectionInspectPanel
+          selection={takeoffSelection}
           snapshot={inspectSnapshot}
-          actions={inspectActionsRef.current}
-          onRequestCompose={onRequestCompose}
+          workspace={workspace}
+          annotations={annotationsCache}
+          activeWorksheetId={activeWorksheetId}
+          onLinksMutated={onLinksMutated}
+          onStage={onRequestSelectionCompose}
         />
-      </div>
+      ) : (
+        <div className="flex min-h-0 flex-1 flex-col">
+          <div className="shrink-0 border-b border-line bg-panel/45 p-2">
+            <div className="mb-1.5 flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-fg/40">Add to worksheet</p>
+                <p className="truncate text-[10px] text-fg/55">
+                  {composeRequest ? `${composeRequest.sourceLabel} · ${composeRequest.title}` : "Stage the selected pickup before adding it"}
+                </p>
+              </div>
+              {composeRequest && (
+                <button
+                  type="button"
+                  onClick={onClearComposeRequest}
+                  className="rounded p-0.5 text-fg/30 hover:bg-panel2 hover:text-fg/65"
+                  aria-label="Clear staged pickup"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
 
-      <Drawer
-        open={inspectDrawerOpen}
-        onClose={() => {
-          onInspectDrawerOpenChange(false);
-          if (!composeRequest) onTabChange("pickups");
-        }}
-        title="Inspect pickup"
-        description="Verify source geometry, quantities, properties, and existing worksheet links."
-        size="md"
-        bodyClassName="min-h-0 overflow-hidden p-4"
-        footer={takeoffSelection ? (
-          <div className="flex w-full items-center justify-between gap-3">
-            <p className="text-xs text-fg/45">Ready to place this pickup in the estimate?</p>
-            <Button size="sm" onClick={() => onTabChange("add")}>
-              Add to estimate <ArrowRight className="h-3.5 w-3.5" />
-            </Button>
+            <p className="mb-1 text-[9px] font-medium text-fg/45">Estimate item</p>
+            <button
+              ref={(node) => { lineItemPickerAnchorRef.current = node; }}
+              type="button"
+              onClick={composeRequest ? onOpenLineItemPicker : onRequestSelectionCompose}
+              disabled={(!takeoffSelection && !composeRequest) || addingToWorksheet}
+              aria-expanded={lineItemPickerOpen}
+              className={cn(
+                "flex h-9 w-full items-center gap-2 rounded-md border bg-bg px-2.5 text-left transition-colors",
+                lineItemPickerOpen ? "border-accent/50 ring-2 ring-accent/10" : "border-line hover:border-accent/40",
+                "disabled:cursor-not-allowed disabled:opacity-45",
+              )}
+            >
+              {selectedLineItemTemplate ? <Check className="h-3.5 w-3.5 shrink-0 text-positive" /> : <Search className="h-3.5 w-3.5 shrink-0 text-fg/35" />}
+              <span className="min-w-0 flex-1">
+                <span className={cn("block truncate text-[11px]", selectedLineItemTemplate ? "font-medium text-fg/85" : "text-fg/40")}>
+                  {selectedLineItemTemplate?.entityName ?? "Search ratebooks, catalogues, labour units…"}
+                </span>
+                {selectedLineItemTemplate && (
+                  <span className="block truncate text-[9px] text-fg/35">
+                    {[selectedLineItemTemplate.category, selectedLineItemTemplate.uom].filter(Boolean).join(" · ")}
+                  </span>
+                )}
+              </span>
+              <ChevronDown className="h-3.5 w-3.5 shrink-0 text-fg/30" />
+            </button>
+
+            {composeRequest && (
+              <div className="mt-2 rounded-md border border-line bg-bg/45 p-2">
+                <div className="grid grid-cols-[minmax(0,1fr)_58px_58px] gap-1.5">
+                  <label className="min-w-0">
+                    <span className="mb-1 block text-[9px] font-medium text-fg/45">Quantity from</span>
+                    <select
+                      value={selectedQuantityOption?.id ?? ""}
+                      onChange={(event) => onQuantityOptionChange(event.target.value)}
+                      disabled={addingToWorksheet || quantityOptions.length === 0}
+                      className="h-7 w-full rounded-md border border-line bg-bg px-1.5 text-[10px] text-fg/75 outline-none focus:border-accent"
+                    >
+                      {quantityOptions.map((option) => (
+                        <option key={option.id} value={option.id}>
+                          {option.label} — {option.value.toLocaleString(undefined, { maximumFractionDigits: 3 })}{option.uom ? ` ${option.uom}` : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    <span className="mb-1 block text-[9px] font-medium text-fg/45">Multiplier</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={quantityMultiplier}
+                      onChange={(event) => onQuantityMultiplierChange(Number(event.target.value))}
+                      disabled={addingToWorksheet || usesNativeBatchQuantities}
+                      className="h-7 px-1.5 text-[10px]"
+                    />
+                  </label>
+                  <label>
+                    <span className="mb-1 block text-[9px] font-medium text-fg/45">Waste %</span>
+                    <Input
+                      type="number"
+                      min={0}
+                      step="any"
+                      value={quantityWastePercent}
+                      onChange={(event) => onQuantityWastePercentChange(Number(event.target.value))}
+                      disabled={addingToWorksheet || usesNativeBatchQuantities}
+                      className="h-7 px-1.5 text-[10px]"
+                    />
+                  </label>
+                </div>
+                <div className="mt-1.5 flex items-center justify-between gap-2 text-[9px]">
+                  <span className="min-w-0 truncate text-fg/35" title={selectedQuantityOption?.detail}>
+                    {selectedQuantityOption?.detail || selectedQuantityOption?.source.replace(/-/g, " ") || "Choose a measured field"}
+                  </span>
+                  <span className="shrink-0 font-mono font-semibold tabular-nums text-fg/70">
+                    {selectedQuantityOption
+                      ? usesNativeBatchQuantities
+                        ? `${selectedQuantityOption.value.toLocaleString()} lines · native quantities preserved`
+                        : `${selectedQuantityOption.value.toLocaleString(undefined, { maximumFractionDigits: 3 })} × ${quantityMultiplier || 0}${quantityWastePercent ? ` × ${(1 + quantityWastePercent / 100).toFixed(3)}` : ""} = ${mappedQuantity.toLocaleString(undefined, { maximumFractionDigits: 3 })} ${mappedUom}`
+                      : "No quantity available"}
+                  </span>
+                </div>
+                {selectedQuantityOption?.coverage && selectedQuantityOption.coverage.matched < selectedQuantityOption.coverage.total && (
+                  <p className="mt-1 text-[9px] text-warning">
+                    Available on {selectedQuantityOption.coverage.matched} of {selectedQuantityOption.coverage.total} selected objects.
+                  </p>
+                )}
+              </div>
+            )}
+
           </div>
-        ) : undefined}
-      >
-        <div className="flex h-full min-h-0 flex-col gap-3">
-          <DocumentSummaryCard snapshot={inspectSnapshot} />
-          <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain rounded-lg border border-line bg-panel/35 p-3">
+          <div className="min-h-0 flex-1 overflow-y-auto p-2">
             <TakeoffLinkView
               workspace={workspace}
               selection={takeoffSelection}
               annotations={annotationsCache}
               activeWorksheetId={activeWorksheetId}
               onLinksMutated={onLinksMutated}
-              onSendModelSelectionToEstimate={onSendModelSelectionToEstimate}
-              onCreateLineItemFromModelElement={onCreateLineItemFromModelElement}
+              showLinkComposer={false}
             />
           </div>
-        </div>
-      </Drawer>
-
-      <TakeoffComposerDrawer
-        request={composeRequest}
-        workspace={workspace}
-        activeWorksheetId={activeWorksheetId}
-        snapshot={inspectSnapshot}
-        actions={inspectActionsRef.current}
-        stacked={inspectDrawerOpen}
-        onClose={onCloseComposer}
-        onActiveWorksheetChange={onActiveWorksheetChange}
-      />
-    </>
-  );
-}
-
-function TakeoffComposerDrawer({
-  request,
-  workspace,
-  activeWorksheetId,
-  snapshot,
-  actions,
-  stacked,
-  onClose,
-  onActiveWorksheetChange,
-}: {
-  request: TakeoffComposeRequest | null;
-  workspace: ProjectWorkspaceData;
-  activeWorksheetId?: string;
-  snapshot: InspectSnapshot | null;
-  actions: InspectActions | null;
-  stacked: boolean;
-  onClose: () => void;
-  onActiveWorksheetChange?: (worksheetId: string) => void;
-}) {
-  const defaultWorksheetId = activeWorksheetId ?? workspace.worksheets[0]?.id ?? "";
-  const [worksheetId, setWorksheetId] = useState(defaultWorksheetId);
-  const [categoryPick, setCategoryPick] = useState<InspectCategoryPick | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    setWorksheetId(activeWorksheetId ?? workspace.worksheets[0]?.id ?? "");
-    const lastCategoryId = snapshot?.takeoffCategoryId;
-    const lastCategory = snapshot?.availableCategories.find((category) => category.id === lastCategoryId);
-    setCategoryPick(lastCategory && lastCategory.itemSource !== "rate_schedule" ? { categoryId: lastCategory.id } : null);
-    setSubmitting(false);
-  }, [activeWorksheetId, request?.id, snapshot?.takeoffCategoryId, workspace.worksheets[0]?.id]);
-
-  const submit = async () => {
-    if (!request || !categoryPick || submitting) return;
-    setSubmitting(true);
-    try {
-      if (worksheetId && worksheetId !== activeWorksheetId) {
-        onActiveWorksheetChange?.(worksheetId);
-        await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      }
-      await request.execute(categoryPick);
-      onClose();
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const targetWorksheet = workspace.worksheets.find((worksheet) => worksheet.id === worksheetId);
-  return (
-    <Drawer
-      open={Boolean(request)}
-      onClose={onClose}
-      title="Add to estimate"
-      description="Turn verified takeoff scope into traceable worksheet pricing."
-      size="lg"
-      stacked={stacked}
-      bodyClassName="p-0"
-      footer={(
-        <div className="flex w-full items-center justify-between gap-3">
-          <div className="min-w-0 text-xs text-fg/45">
-            <span className="font-medium text-fg/70">{targetWorksheet?.name ?? "Worksheet"}</span>
-            <span> · {request?.mode === "batch" ? `${request.count} lines` : "1 line"}</span>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
-            <Button variant="ghost" size="sm" onClick={onClose}>Cancel</Button>
-            <Button size="sm" onClick={() => void submit()} disabled={!categoryPick || !worksheetId || submitting}>
-              {submitting ? "Adding…" : "Add to estimate"}
-              {!submitting && <ArrowRight className="h-3.5 w-3.5" />}
+          <div className="shrink-0 border-t border-line bg-panel/95 p-2 shadow-[0_-8px_20px_rgba(0,0,0,0.08)] backdrop-blur">
+            <Button
+              type="button"
+              onClick={onAddStagedLineItem}
+              disabled={!composeRequest || !selectedLineItemTemplate || !selectedQuantityOption || addingToWorksheet}
+              className="h-9 w-full text-[11px] shadow-sm"
+            >
+              {addingToWorksheet ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
+              {addingToWorksheet ? "Adding…" : `Add to worksheet${mappedQuantity ? usesNativeBatchQuantities ? ` · ${mappedQuantity.toLocaleString()} lines` : ` · ${mappedQuantity.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${mappedUom}` : ""}`}
             </Button>
+            <p className="mt-1 text-center text-[9px] leading-3 text-fg/30">
+              Nothing is written until this button is clicked.
+            </p>
           </div>
         </div>
       )}
-    >
-      <div className="flex min-h-full flex-col">
-        <div className="border-b border-line bg-panel/30 px-5 py-4">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-accent/12 text-accent">
-              {request?.mode === "group" ? <Sparkles className="h-5 w-5" /> : request?.mode === "batch" ? <ListPlus className="h-5 w-5" /> : <Check className="h-5 w-5" />}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="truncate text-sm font-semibold text-fg">{request?.title ?? "Pickup"}</h3>
-                <span className="rounded-full border border-line bg-bg/50 px-2 py-0.5 text-[10px] font-medium text-fg/50">{request?.sourceLabel}</span>
-                {request && request.count > 1 && <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium text-accent">{request.count.toLocaleString()} pickups</span>}
-              </div>
-              {request?.description && <p className="mt-1 text-xs leading-relaxed text-fg/50">{request.description}</p>}
-            </div>
-          </div>
-        </div>
-
-        <div className="grid min-h-0 flex-1 lg:grid-cols-[220px_minmax(0,1fr)]">
-          <aside className="border-b border-line bg-bg/30 p-4 lg:border-b-0 lg:border-r">
-            <p className="text-[10px] font-semibold uppercase tracking-wider text-fg/40">Destination</p>
-            <label className="mt-3 block text-xs font-medium text-fg/70" htmlFor="takeoff-target-worksheet">Worksheet</label>
-            <select
-              id="takeoff-target-worksheet"
-              value={worksheetId}
-              onChange={(event) => setWorksheetId(event.target.value)}
-              className="mt-1.5 h-9 w-full rounded-md border border-line bg-panel px-2.5 text-xs text-fg outline-none focus:border-accent focus:ring-2 focus:ring-accent/15"
-            >
-              {workspace.worksheets.map((worksheet) => <option key={worksheet.id} value={worksheet.id}>{worksheet.name}</option>)}
-            </select>
-            <div className="mt-4 rounded-lg border border-line bg-panel/45 p-3">
-              <p className="text-[10px] font-semibold text-fg/65">Creation mode</p>
-              <p className="mt-1 text-[11px] leading-relaxed text-fg/45">
-                {request?.mode === "group"
-                  ? "One summed worksheet line with every source pickup linked for revision traceability."
-                  : request?.mode === "batch"
-                    ? "One worksheet line per staged pickup, all placed into the same category."
-                    : "One worksheet line linked back to this source pickup."}
-              </p>
-            </div>
-          </aside>
-          <main className="min-h-0 p-5">
-            <div className="mb-3">
-              <p className="text-sm font-semibold text-fg">Price as</p>
-              <p className="mt-0.5 text-xs text-fg/45">Choose the estimate category and, when required, the exact ratebook item.</p>
-            </div>
-            <TakeoffCategoryChooser snapshot={snapshot} actions={actions} value={categoryPick} onChange={setCategoryPick} />
-          </main>
-        </div>
-      </div>
-    </Drawer>
-  );
-}
-
-/** Document summary header pinned at the top of the Inspect tab. For BIM /
- *  3D model documents this carries the full KPI block (BIM / Editable badges
- *  plus Objects / Qty / Links / Issues stats); for PDF / DWG it falls back to
- *  a compact filename + counts row. The block used to live inside the
- *  Entities list; surfacing it here gives the list its vertical space back. */
-function DocumentSummaryCard({ snapshot }: { snapshot: InspectSnapshot | null }) {
-  if (!snapshot || snapshot.mode === "empty") {
-    return (
-      <div className="shrink-0 rounded-md border border-line bg-panel/50 px-3 py-2">
-        <div className="flex items-center gap-2 text-[11px] text-fg/45">
-          <FileText className="h-3.5 w-3.5 text-fg/30" />
-          <span>No document open</span>
-        </div>
-      </div>
-    );
-  }
-
-  const isModelMode = snapshot.mode === "bim" || snapshot.mode === "model";
-  const isBim = snapshot.mode === "bim";
-
-  if (isModelMode && snapshot.modelAsset) {
-    return (
-      <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <p className="min-w-0 truncate text-[11px] font-semibold text-fg" title={snapshot.modelAsset.fileName}>
-            {snapshot.modelAsset.fileName}
-          </p>
-          <div className="flex shrink-0 items-center gap-1">
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
-                isBim ? "bg-violet-500/15 text-violet-500" : "bg-rose-500/15 text-rose-500",
-              )}
-              title={isBim ? "Building Information Model" : "Geometry-only model"}
-            >
-              {isBim ? "BIM" : "3D"}
-            </span>
-            <span
-              className={cn(
-                "shrink-0 rounded-full px-1.5 py-0.5 text-[9px] font-medium",
-                snapshot.modelAsset.isEditable ? "bg-success/15 text-success" : "bg-warning/15 text-warning",
-              )}
-            >
-              {snapshot.modelAsset.isEditable ? "Editable" : "Preview"}
-            </span>
-          </div>
-        </div>
-        <div className="mt-1 grid grid-cols-4 gap-1 text-center text-[10px]">
-          <CardStat label="Objects" value={snapshot.modelAsset.counts.elements} />
-          <CardStat label="Qty" value={snapshot.modelAsset.counts.quantities} />
-          <CardStat label="Links" value={snapshot.modelAsset.counts.links} />
-          <CardStat label="Issues" value={snapshot.modelAsset.counts.issues} />
-        </div>
-      </div>
-    );
-  }
-
-  if (snapshot.mode === "spreadsheet") {
-    const ss = snapshot.spreadsheet;
-    return (
-      <div className="shrink-0 rounded-md border border-line bg-panel/50 px-2.5 py-1.5 text-xs">
-        <div className="flex items-center justify-between gap-2">
-          <p className="min-w-0 truncate text-[11px] font-semibold text-fg" title={ss?.sourceName}>
-            {ss?.sourceName ?? "Spreadsheet"}
-          </p>
-          <span className="shrink-0 rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9px] font-medium text-emerald-600">
-            Spreadsheet
-          </span>
-        </div>
-        {ss ? (
-          <div className="mt-1 grid grid-cols-3 gap-1 text-center text-[10px]">
-            <CardStat label="Rows" value={ss.rowCount} />
-            <CardStat label="Columns" value={ss.columnCount} />
-            <CardStat label="Mapped" value={[ss.mapping.name, ss.mapping.quantity, ss.mapping.uom, ss.mapping.cost].filter(Boolean).length} />
-          </div>
-        ) : (
-          <p className="mt-1 text-[10px] text-fg/45">Loading preview…</p>
-        )}
-      </div>
-    );
-  }
-
-  // PDF / DWG fallback — no modelAsset to lean on.
-  const modeLabel =
-    snapshot.mode === "pdf" ? "PDF takeoff"
-      : snapshot.mode === "dwg" ? "DWG / DXF takeoff"
-      : "Document";
-  const fileName = snapshot.modelAsset?.fileName;
-  const annotationCount = snapshot.annotations.length;
-  const linkCount = snapshot.pickupLinks.length;
-
-  return (
-    <div className="shrink-0 rounded-md border border-line bg-panel/50 px-3 py-2 text-[11px]">
-      <div className="flex items-center gap-2">
-        <FileText className="h-3.5 w-3.5 shrink-0 text-fg/40" />
-        <span className="min-w-0 truncate font-semibold text-fg/80" title={fileName ?? undefined}>
-          {fileName ?? modeLabel}
-        </span>
-      </div>
-      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-fg/55">
-        <span className="font-medium text-fg/70">{modeLabel}</span>
-        <span className="tabular-nums">{annotationCount.toLocaleString()} marks</span>
-        {linkCount > 0 && (
-          <span className="tabular-nums">{linkCount.toLocaleString()} linked</span>
-        )}
-        <span className="tabular-nums">
-          {snapshot.annotations.filter((a) => a.visible).length} visible
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/** Tiny KPI cell — same shape as ModelInspect's old Stat helper, kept local
- *  to DocumentSummaryCard so the inspect-view rewrite can drop its copy. */
-function CardStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div className="rounded-md bg-bg/30 py-1">
-      <p className="text-[9px] uppercase tracking-wider text-fg/40">{label}</p>
-      <p className="text-[12px] font-semibold tabular-nums text-fg">{value.toLocaleString()}</p>
-    </div>
+    </>
   );
 }

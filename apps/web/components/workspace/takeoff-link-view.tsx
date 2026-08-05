@@ -56,6 +56,21 @@ export type TakeoffSelection =
       quantitySummary?: string;
     }
   | {
+      kind: "model-element-group";
+      assetId: string;
+      groupSignature: string;
+      groupName: string;
+      groupKind: "system" | "run" | "estimate";
+      elementIds: string[];
+      elementCount: number;
+      measurementType: string;
+      quantity: number;
+      unit: string;
+      confidence: number;
+      source: string;
+      warnings: string[];
+    }
+  | {
       kind: "cad-entity";
       documentId: string;
       entityId: string;
@@ -77,6 +92,9 @@ interface TakeoffLinkViewProps {
    *  panel hands back the elementId; TakeoffTab looks up the element and
    *  drives the create+link sequence. */
   onCreateLineItemFromModelElement?: (elementId: string) => Promise<void> | void;
+  /** Inspect surfaces can provide the worksheet's shared entity-name picker
+   *  instead of repeating the older bespoke link composers below. */
+  showLinkComposer?: boolean;
 }
 
 const QUANTITY_FIELDS = [
@@ -105,6 +123,7 @@ export function TakeoffLinkView({
   onLinksMutated,
   onSendModelSelectionToEstimate,
   onCreateLineItemFromModelElement,
+  showLinkComposer = true,
 }: TakeoffLinkViewProps) {
   if (!selection) {
     return (
@@ -125,6 +144,7 @@ export function TakeoffLinkView({
         annotations={annotations}
         activeWorksheetId={activeWorksheetId}
         onLinksMutated={onLinksMutated}
+        showLinkComposer={showLinkComposer}
       />
     );
   }
@@ -136,6 +156,7 @@ export function TakeoffLinkView({
         selection={selection}
         onLinksMutated={onLinksMutated}
         onSendToEstimate={onSendModelSelectionToEstimate}
+        compact={!showLinkComposer}
       />
     );
   }
@@ -147,7 +168,20 @@ export function TakeoffLinkView({
         selection={selection}
         onLinksMutated={onLinksMutated}
         onCreateLineItem={onCreateLineItemFromModelElement}
+        showLinkComposer={showLinkComposer}
       />
+    );
+  }
+
+  if (selection.kind === "model-element-group") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+        <Link2 className="h-5 w-5 text-fg/20" />
+        <p className="text-[11px] font-medium text-fg/60">{selection.groupName}</p>
+        <p className="text-[10px] leading-relaxed text-fg/40">
+          Group links are created for all {selection.elementCount.toLocaleString()} member objects when this scope is added to the worksheet.
+        </p>
+      </div>
     );
   }
 
@@ -157,6 +191,7 @@ export function TakeoffLinkView({
       selection={selection}
       activeWorksheetId={activeWorksheetId}
       onLinksMutated={onLinksMutated}
+      showLinkComposer={showLinkComposer}
     />
   );
 }
@@ -166,11 +201,13 @@ function ModelSelectionLinkPane({
   selection,
   onLinksMutated,
   onSendToEstimate,
+  compact,
 }: {
   workspace: ProjectWorkspaceData;
   selection: Extract<TakeoffSelection, { kind: "model-selection" }>;
   onLinksMutated: () => void;
   onSendToEstimate?: (selection: BidwrightModelSelectionMessage) => Promise<void> | void;
+  compact: boolean;
 }) {
   const projectId = workspace.project.id;
   const [links, setLinks] = useState<ModelPickupLinkRecord[]>([]);
@@ -238,10 +275,12 @@ function ModelSelectionLinkPane({
 
   return (
     <div className="flex h-full flex-col gap-3 text-xs">
-      <SelectionHeader
-        title={selection.fileName ?? "3D model selection"}
-        subtitle={`${selection.selectedCount} node${selection.selectedCount === 1 ? "" : "s"} · ${selection.totals.solidCount} solids · ${selection.totals.faceCount} faces`}
-      />
+      {!compact && (
+        <SelectionHeader
+          title={selection.fileName ?? "3D model selection"}
+          subtitle={`${selection.selectedCount} node${selection.selectedCount === 1 ? "" : "s"} · ${selection.totals.solidCount} solids · ${selection.totals.faceCount} faces`}
+        />
+      )}
 
       <Section label={`Model links (${visibleLinks.length}${selectedNodeSet.size > 0 && visibleLinks.length === links.length ? " — showing all" : ""})`}>
         {loading && visibleLinks.length === 0 ? (
@@ -355,11 +394,13 @@ function ModelElementLinkPane({
   selection,
   onLinksMutated,
   onCreateLineItem,
+  showLinkComposer,
 }: {
   workspace: ProjectWorkspaceData;
   selection: Extract<TakeoffSelection, { kind: "model-element" }>;
   onLinksMutated: () => void;
   onCreateLineItem?: (elementId: string) => Promise<void> | void;
+  showLinkComposer: boolean;
 }) {
   const projectId = workspace.project.id;
   const [links, setLinks] = useState<ModelPickupLinkRecord[]>([]);
@@ -423,9 +464,11 @@ function ModelElementLinkPane({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 text-xs">
-      <div className="shrink-0">
-        <SelectionHeader title={selection.elementName} subtitle={subtitle || undefined} />
-      </div>
+      {showLinkComposer && (
+        <div className="shrink-0">
+          <SelectionHeader title={selection.elementName} subtitle={subtitle || undefined} />
+        </div>
+      )}
 
       {/* Primary action is anchored high so it stays visible without scrolling
           when the linked-items list grows long. The list itself scrolls
@@ -440,7 +483,7 @@ function ModelElementLinkPane({
         </div>
       )}
 
-      {projectId && (
+      {showLinkComposer && projectId && (
         <div className="shrink-0">
           <CreateModelElementLinkForm
             projectId={projectId}
@@ -653,11 +696,13 @@ function CadEntityLinkPane({
   selection,
   activeWorksheetId,
   onLinksMutated,
+  showLinkComposer,
 }: {
   workspace: ProjectWorkspaceData;
   selection: Extract<TakeoffSelection, { kind: "cad-entity" }>;
   activeWorksheetId?: string;
   onLinksMutated: () => void;
+  showLinkComposer: boolean;
 }) {
   const projectId = workspace.project.id;
   const [links, setLinks] = useState<DwgEntityLinkRecord[]>([]);
@@ -724,10 +769,12 @@ function CadEntityLinkPane({
 
   return (
     <div className="flex h-full flex-col gap-3 text-xs">
-      <SelectionHeader
-        title={selection.label ?? `CAD entity ${selection.entityId.slice(0, 8)}`}
-        subtitle={subtitle || selection.entityId}
-      />
+      {showLinkComposer && (
+        <SelectionHeader
+          title={selection.label ?? `CAD entity ${selection.entityId.slice(0, 8)}`}
+          subtitle={subtitle || selection.entityId}
+        />
+      )}
 
       <Section label={`Linked items (${links.length})`}>
         {loading && links.length === 0 ? (
@@ -770,7 +817,7 @@ function CadEntityLinkPane({
         {error && <p className="text-[11px] text-danger">{error}</p>}
       </Section>
 
-      {projectId && (
+      {showLinkComposer && projectId && (
         <CreateDwgEntityLinkForm
           projectId={projectId}
           selection={selection}
@@ -959,12 +1006,14 @@ function AnnotationLinkPane({
   annotations,
   activeWorksheetId,
   onLinksMutated,
+  showLinkComposer,
 }: {
   workspace: ProjectWorkspaceData;
   pickupId: string;
   annotations: Pickup[];
   activeWorksheetId?: string;
   onLinksMutated: () => void;
+  showLinkComposer: boolean;
 }) {
   const projectId = workspace.project.id;
   const annotation = annotations.find((a) => a.id === pickupId);
@@ -1025,11 +1074,13 @@ function AnnotationLinkPane({
 
   return (
     <div className="flex h-full flex-col gap-3 text-xs">
-      <SelectionHeader
-        title={annotation?.label || annotation?.type || "Annotation"}
-        subtitle={annotation ? formatAnnotationMeasurement(annotation) : undefined}
-        accent={annotation?.color}
-      />
+      {showLinkComposer && (
+        <SelectionHeader
+          title={annotation?.label || annotation?.type || "Annotation"}
+          subtitle={annotation ? formatAnnotationMeasurement(annotation) : undefined}
+          accent={annotation?.color}
+        />
+      )}
 
       <Section label={`Linked items (${links.length})`}>
         {loading && links.length === 0 ? (
@@ -1072,7 +1123,7 @@ function AnnotationLinkPane({
         {error && <p className="text-[11px] text-danger">{error}</p>}
       </Section>
 
-      {annotation && projectId && (
+      {showLinkComposer && annotation && projectId && (
         <CreateLinkForm
           projectId={projectId}
           annotation={annotation}
@@ -1082,7 +1133,7 @@ function AnnotationLinkPane({
         />
       )}
 
-      {annotation && projectId && (
+      {showLinkComposer && annotation && projectId && (
         <SuggestSection
           projectId={projectId}
           annotation={annotation}

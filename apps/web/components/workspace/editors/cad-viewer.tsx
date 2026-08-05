@@ -41,6 +41,11 @@ export interface CadViewerActions {
   setDisplayMode: (mode: CadViewerDisplayMode) => void;
   setAutoRotate: (enabled: boolean) => void;
   selectElement: (externalId: string | null) => void;
+  focusElement: (externalId: string) => void;
+  selectElements: (externalIds: string[]) => void;
+  focusElements: (externalIds: string[]) => void;
+  orbitElements: (externalIds: string[]) => void;
+  stopOrbit: () => void;
 }
 
 /* ─── Supported format detection ─── */
@@ -223,6 +228,7 @@ async function createScene(container: HTMLDivElement) {
   }
 
   const highlightedMaterials = new Map<any, any>();
+  let scopeOrbitFrame = 0;
   const externalIdForObject = (object: any): string | null => {
     let current = object;
     while (current) {
@@ -234,22 +240,44 @@ async function createScene(container: HTMLDivElement) {
   };
 
   function clearElementHighlight() {
+    const replacements = new Set<any>();
     for (const [object, originalMaterial] of highlightedMaterials) {
       const active = Array.isArray(object.material) ? object.material : [object.material];
       active.forEach((material: any) => {
-        if (material !== originalMaterial && typeof material?.dispose === "function") material.dispose();
+        const originals = Array.isArray(originalMaterial) ? originalMaterial : [originalMaterial];
+        if (!originals.includes(material)) replacements.add(material);
       });
       object.material = originalMaterial;
     }
     highlightedMaterials.clear();
+    replacements.forEach((material) => material?.dispose?.());
   }
 
-  function selectElement(externalId: string | null) {
+  function stopOrbit() {
+    if (scopeOrbitFrame) cancelAnimationFrame(scopeOrbitFrame);
+    scopeOrbitFrame = 0;
+  }
+
+  function selectElements(externalIds: string[]) {
     clearElementHighlight();
-    if (!externalId) return;
+    const selected = new Set(externalIds.filter(Boolean));
+    if (selected.size === 0) return;
+    const dimmedMaterial = new THREE.MeshBasicMaterial({
+      color: 0x64748b,
+      transparent: true,
+      opacity: 0.12,
+      depthWrite: false,
+    });
     scene.traverse((object: any) => {
-      if (!object.isMesh || externalIdForObject(object) !== externalId || !object.material) return;
+      if (!object.isMesh || !externalIdForObject(object) || !object.material) return;
       const originalMaterial = object.material;
+      highlightedMaterials.set(object, originalMaterial);
+      if (!selected.has(externalIdForObject(object) ?? "")) {
+        object.material = Array.isArray(originalMaterial)
+          ? originalMaterial.map(() => dimmedMaterial)
+          : dimmedMaterial;
+        return;
+      }
       const originals = Array.isArray(originalMaterial) ? originalMaterial : [originalMaterial];
       const highlighted = originals.map((material: any) => {
         const clone = material.clone();
@@ -262,9 +290,79 @@ async function createScene(container: HTMLDivElement) {
         clone.needsUpdate = true;
         return clone;
       });
-      highlightedMaterials.set(object, originalMaterial);
       object.material = Array.isArray(originalMaterial) ? highlighted : highlighted[0];
     });
+  }
+
+  function selectElement(externalId: string | null) {
+    selectElements(externalId ? [externalId] : []);
+  }
+
+  function focusElements(externalIds: string[]) {
+    stopOrbit();
+    const selected = new Set(externalIds.filter(Boolean));
+    selectElements(Array.from(selected));
+    const box = new THREE.Box3();
+    let found = false;
+    scene.traverse((object: any) => {
+      if (!object.isMesh || !selected.has(externalIdForObject(object) ?? "")) return;
+      box.expandByObject(object);
+      found = true;
+    });
+    if (!found || box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const maxDim = Math.max(size.x, size.y, size.z, 0.1);
+    const direction = camera.position.clone().sub(controls.target);
+    if (direction.lengthSq() < 0.0001) direction.set(1, 0.65, 1);
+    direction.normalize();
+    const endTarget = center.clone();
+    const endPosition = center.clone().add(direction.multiplyScalar(maxDim * 2.4));
+    const startTarget = controls.target.clone();
+    const startPosition = camera.position.clone();
+    const startedAt = performance.now();
+    const duration = 420;
+    const animate = (now: number) => {
+      const progress = Math.min(1, (now - startedAt) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      controls.target.lerpVectors(startTarget, endTarget, eased);
+      camera.position.lerpVectors(startPosition, endPosition, eased);
+      camera.lookAt(controls.target);
+      controls.update();
+      if (progress < 1) requestAnimationFrame(animate);
+    };
+    requestAnimationFrame(animate);
+  }
+
+  function focusElement(externalId: string) {
+    focusElements([externalId]);
+  }
+
+  function orbitElements(externalIds: string[]) {
+    focusElements(externalIds);
+    const selected = new Set(externalIds.filter(Boolean));
+    const box = new THREE.Box3();
+    let found = false;
+    scene.traverse((object: any) => {
+      if (!object.isMesh || !selected.has(externalIdForObject(object) ?? "")) return;
+      box.expandByObject(object);
+      found = true;
+    });
+    if (!found || box.isEmpty()) return;
+    const center = box.getCenter(new THREE.Vector3());
+    const size = box.getSize(new THREE.Vector3());
+    const radius = Math.max(size.x, size.z, size.y * 0.6, 0.5) * 2.2;
+    const height = center.y + Math.max(size.y, radius * 0.25);
+    const startedAt = performance.now();
+    const step = (now: number) => {
+      const angle = ((now - startedAt) / 12_000) * Math.PI * 2;
+      controls.target.copy(center);
+      camera.position.set(center.x + Math.cos(angle) * radius, height, center.z + Math.sin(angle) * radius);
+      camera.lookAt(center);
+      controls.update();
+      scopeOrbitFrame = requestAnimationFrame(step);
+    };
+    scopeOrbitFrame = requestAnimationFrame(step);
   }
 
   return {
@@ -303,9 +401,15 @@ async function createScene(container: HTMLDivElement) {
       controls.autoRotateSpeed = 1.4;
     },
     selectElement,
+    focusElement,
+    selectElements,
+    focusElements,
+    orbitElements,
+    stopOrbit,
     externalIdForObject,
     dispose: () => {
       clearElementHighlight();
+      stopOrbit();
       cancelAnimationFrame(animId);
       ro.disconnect();
       controls.dispose();
@@ -720,7 +824,13 @@ export function CadViewer({
     let cancelled = false;
     let detachPicker: (() => void) | null = null;
     let detachApsSelection: (() => void) | null = null;
+    let detachApsViewportResize: (() => void) | null = null;
     let apsViewer: any = null;
+    let apsResizeObserver: ResizeObserver | null = null;
+    let suppressProgrammaticSelection = false;
+    let selectionSuppressionTimer: ReturnType<typeof setTimeout> | null = null;
+    let apsOrbitFrame = 0;
+    let apsScopeActive = false;
     const abortController = new AbortController();
     const container = canvasContainerRef.current;
     setState("loading");
@@ -782,13 +892,32 @@ export function CadViewer({
               if (startCode > 0) return reject(new Error(`Autodesk Viewer failed to start (${startCode}).`));
               Viewing.Document.load(
                 `urn:${session.urn}`,
-                async (document: any) => {
+                async (apsDocument: any) => {
                   try {
-                    const geometry = document.getRoot().getDefaultGeometry();
+                    const geometry = apsDocument.getRoot().getDefaultGeometry();
                     if (!geometry) throw new Error("The translated model has no viewable geometry.");
-                    await apsViewer.loadDocumentNode(document, geometry);
+                    await apsViewer.loadDocumentNode(apsDocument, geometry);
+                    const resizeApsViewport = () => {
+                      // Autodesk Viewer owns an internal canvas whose pixel
+                      // dimensions do not follow CSS layout changes. Resize on
+                      // both observed container changes and fullscreen/window
+                      // transitions, after the browser has committed layout.
+                      requestAnimationFrame(() => {
+                        if (!cancelled) apsViewer?.resize?.();
+                      });
+                    };
+                    apsResizeObserver = new ResizeObserver(resizeApsViewport);
+                    apsResizeObserver.observe(container);
+                    globalThis.document.addEventListener("fullscreenchange", resizeApsViewport);
+                    window.addEventListener("resize", resizeApsViewport);
+                    detachApsViewportResize = () => {
+                      globalThis.document.removeEventListener("fullscreenchange", resizeApsViewport);
+                      window.removeEventListener("resize", resizeApsViewport);
+                    };
+                    resizeApsViewport();
                     const selectionEvent = Viewing.SELECTION_CHANGED_EVENT;
                     const handleSelection = (event: unknown) => {
+                      if (suppressProgrammaticSelection) return;
                       const dbId = firstAutodeskSelectedDbId(event);
                       onModelElementSelectRef.current?.(dbId == null ? null : { externalId: String(dbId) });
                     };
@@ -805,17 +934,164 @@ export function CadViewer({
           });
 
           if (cancelled) return;
+          const suppressSelectionEventBriefly = () => {
+            suppressProgrammaticSelection = true;
+            if (selectionSuppressionTimer) clearTimeout(selectionSuppressionTimer);
+            selectionSuppressionTimer = setTimeout(() => { suppressProgrammaticSelection = false; }, 100);
+          };
+          const numericDbIds = (externalIds: string[]) => Array.from(new Set(externalIds
+            .map(Number)
+            .filter((dbId) => Number.isInteger(dbId) && dbId > 0)));
+          const stopApsOrbit = () => {
+            if (apsOrbitFrame) cancelAnimationFrame(apsOrbitFrame);
+            apsOrbitFrame = 0;
+          };
+          const restoreApsModel = () => {
+            apsScopeActive = false;
+            apsViewer?.showAll?.();
+            apsViewer?.setGhosting?.(false);
+          };
+          const measureApsScope = (dbIds: number[]) => {
+            try {
+              const model = apsViewer?.model;
+              const instanceTree = model?.getInstanceTree?.();
+              const fragmentList = model?.getFragmentList?.();
+              const templateBounds = apsViewer?.getVisibleBounds?.();
+              if (!instanceTree || !fragmentList || !templateBounds?.clone) return null;
+              const union = templateBounds.clone();
+              union.makeEmpty?.();
+              const seenFragments = new Set<number>();
+              let weightedX = 0;
+              let weightedY = 0;
+              let weightedZ = 0;
+              let totalWeight = 0;
+              for (const dbId of dbIds) {
+                instanceTree.enumNodeFragments(dbId, (fragmentId: number) => {
+                  if (seenFragments.has(fragmentId)) return;
+                  seenFragments.add(fragmentId);
+                  const bounds = templateBounds.clone();
+                  bounds.makeEmpty?.();
+                  fragmentList.getWorldBounds(fragmentId, bounds);
+                  if (bounds.isEmpty?.()) return;
+                  union.union?.(bounds);
+                  const centerX = (bounds.min.x + bounds.max.x) / 2;
+                  const centerY = (bounds.min.y + bounds.max.y) / 2;
+                  const centerZ = (bounds.min.z + bounds.max.z) / 2;
+                  // Weight fragment centers by their bounding diagonal. For
+                  // pipe/duct runs this approximates length-weighted center
+                  // of mass instead of the often-wrong camera target left by
+                  // an asynchronous fitToView transition.
+                  const weight = Math.max(Math.hypot(
+                    bounds.max.x - bounds.min.x,
+                    bounds.max.y - bounds.min.y,
+                    bounds.max.z - bounds.min.z,
+                  ), 0.001);
+                  weightedX += centerX * weight;
+                  weightedY += centerY * weight;
+                  weightedZ += centerZ * weight;
+                  totalWeight += weight;
+                }, true);
+              }
+              if (totalWeight <= 0 || union.isEmpty?.()) return null;
+              return {
+                center: { x: weightedX / totalWeight, y: weightedY / totalWeight, z: weightedZ / totalWeight },
+                radius: Math.max(Math.hypot(
+                  union.max.x - union.min.x,
+                  union.max.y - union.min.y,
+                  union.max.z - union.min.z,
+                ) / 2, 0.5),
+              };
+            } catch {
+              return null;
+            }
+          };
+          const focusApsScope = (dbIds: number[], fit = true) => {
+            if (dbIds.length === 0) return;
+            apsScopeActive = true;
+            suppressSelectionEventBriefly();
+            // Isolate + ghosting keeps context visible but subdued, making
+            // the active run/system read immediately without painting a
+            // separate material onto hundreds of fragments.
+            apsViewer?.setGhosting?.(true);
+            apsViewer?.isolate?.(dbIds);
+            apsViewer?.select?.(dbIds);
+            if (fit) apsViewer?.fitToView?.(dbIds);
+          };
+          const setApsStandardView = (view: CadViewerStandardView) => {
+            const bounds = apsViewer?.model?.getBoundingBox?.() ?? apsViewer?.getVisibleBounds?.();
+            const navigation = apsViewer?.navigation;
+            if (!bounds?.min || !bounds?.max || !navigation?.setView) return;
+            const center = {
+              x: (bounds.min.x + bounds.max.x) / 2,
+              y: (bounds.min.y + bounds.max.y) / 2,
+              z: (bounds.min.z + bounds.max.z) / 2,
+            };
+            const extent = Math.max(Math.hypot(
+              bounds.max.x - bounds.min.x,
+              bounds.max.y - bounds.min.y,
+              bounds.max.z - bounds.min.z,
+            ) / 2, 0.5);
+            const rawUp = navigation.getWorldUpVector?.() ?? { x: 0, y: 0, z: 1 };
+            const upLength = Math.hypot(rawUp.x, rawUp.y, rawUp.z) || 1;
+            const up = { x: rawUp.x / upLength, y: rawUp.y / upLength, z: rawUp.z / upLength };
+            const reference = Math.abs(up.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 0, y: 1, z: 0 };
+            const rightRaw = {
+              x: reference.y * up.z - reference.z * up.y,
+              y: reference.z * up.x - reference.x * up.z,
+              z: reference.x * up.y - reference.y * up.x,
+            };
+            const rightLength = Math.hypot(rightRaw.x, rightRaw.y, rightRaw.z) || 1;
+            const right = { x: rightRaw.x / rightLength, y: rightRaw.y / rightLength, z: rightRaw.z / rightLength };
+            const front = {
+              x: up.y * right.z - up.z * right.y,
+              y: up.z * right.x - up.x * right.z,
+              z: up.x * right.y - up.y * right.x,
+            };
+            const rawDirection = view === "top"
+              ? up
+              : view === "front"
+                ? front
+                : view === "right"
+                  ? right
+                  : { x: right.x + front.x + up.x * 0.85, y: right.y + front.y + up.y * 0.85, z: right.z + front.z + up.z * 0.85 };
+            const directionLength = Math.hypot(rawDirection.x, rawDirection.y, rawDirection.z) || 1;
+            const distance = extent * 2.8;
+            const position = {
+              x: center.x + rawDirection.x / directionLength * distance,
+              y: center.y + rawDirection.y / directionLength * distance,
+              z: center.z + rawDirection.z / directionLength * distance,
+            };
+            const cameraUp = view === "top" ? front : up;
+            navigation.setCameraUpVector?.(cameraUp);
+            navigation.setPivotPoint?.(center);
+            navigation.setView(position, center);
+            apsViewer?.impl?.syncCamera?.(true);
+            apsViewer?.impl?.invalidate?.(true, true, true);
+          };
           const apsActions: CadViewerActions = {
-            fitToContent: () => apsViewer?.fitToView(),
-            resetView: () => apsViewer?.navigation?.setRequestHomeView?.(true),
-            setStandardView: (view) => apsViewer?.setViewCube?.(view === "iso" ? "home" : view),
+            fitToContent: () => {
+              stopApsOrbit();
+              restoreApsModel();
+              apsViewer?.fitToView();
+            },
+            resetView: () => {
+              stopApsOrbit();
+              restoreApsModel();
+              apsViewer?.navigation?.setRequestHomeView?.(true);
+            },
+            setStandardView: (view) => {
+              stopApsOrbit();
+              setApsStandardView(view);
+            },
             setGridVisible: () => undefined,
             setDisplayMode: (mode) => {
               apsViewer?.setDisplayEdges?.(mode === "wireframe");
-              apsViewer?.setGhosting?.(mode === "xray");
+              apsViewer?.setGhosting?.(apsScopeActive || mode === "xray");
             },
             setAutoRotate: () => undefined,
             selectElement: (externalId) => {
+              stopApsOrbit();
+              restoreApsModel();
               const dbId = externalId == null ? null : Number(externalId);
               if (dbId != null && Number.isInteger(dbId) && dbId > 0) {
                 apsViewer?.select?.([dbId]);
@@ -823,6 +1099,79 @@ export function CadViewer({
                 apsViewer?.clearSelection?.();
               }
             },
+            focusElement: (externalId) => {
+              stopApsOrbit();
+              restoreApsModel();
+              const dbId = Number(externalId);
+              if (!Number.isInteger(dbId) || dbId <= 0) return;
+              apsViewer?.select?.([dbId]);
+              apsViewer?.fitToView?.([dbId]);
+            },
+            selectElements: (externalIds) => {
+              const dbIds = numericDbIds(externalIds);
+              if (dbIds.length > 0) {
+                focusApsScope(dbIds);
+              } else {
+                restoreApsModel();
+                apsViewer?.clearSelection?.();
+              }
+            },
+            focusElements: (externalIds) => {
+              stopApsOrbit();
+              const dbIds = numericDbIds(externalIds);
+              focusApsScope(dbIds);
+            },
+            orbitElements: (externalIds) => {
+              stopApsOrbit();
+              const dbIds = numericDbIds(externalIds);
+              if (dbIds.length === 0) return;
+              const scope = measureApsScope(dbIds);
+              focusApsScope(dbIds, false);
+              const navigation = apsViewer?.navigation;
+              const target = scope?.center ?? navigation?.getTarget?.();
+              const position = navigation?.getPosition?.();
+              if (!target || !position) return;
+              const rawUp = navigation?.getWorldUpVector?.() ?? { x: 0, y: 0, z: 1 };
+              const upLength = Math.hypot(rawUp.x, rawUp.y, rawUp.z) || 1;
+              const up = { x: rawUp.x / upLength, y: rawUp.y / upLength, z: rawUp.z / upLength };
+              const offset = { x: position.x - target.x, y: position.y - target.y, z: position.z - target.z };
+              const alongUp = offset.x * up.x + offset.y * up.y + offset.z * up.z;
+              let radial = {
+                x: offset.x - up.x * alongUp,
+                y: offset.y - up.y * alongUp,
+                z: offset.z - up.z * alongUp,
+              };
+              let radialLength = Math.hypot(radial.x, radial.y, radial.z);
+              if (radialLength < 0.001) {
+                radial = Math.abs(up.z) < 0.9
+                  ? { x: -up.y, y: up.x, z: 0 }
+                  : { x: 1, y: 0, z: 0 };
+                radialLength = Math.hypot(radial.x, radial.y, radial.z) || 1;
+              }
+              const basisA = { x: radial.x / radialLength, y: radial.y / radialLength, z: radial.z / radialLength };
+              const basisB = {
+                x: up.y * basisA.z - up.z * basisA.y,
+                y: up.z * basisA.x - up.x * basisA.z,
+                z: up.x * basisA.y - up.y * basisA.x,
+              };
+              const radius = Math.max((scope?.radius ?? radialLength) * 2.2, 1);
+              const elevation = (scope?.radius ?? radius * 0.45) * 0.45;
+              const startedAt = performance.now();
+              const step = (now: number) => {
+                const angle = ((now - startedAt) / 12_000) * Math.PI * 2;
+                navigation?.setView?.(
+                  {
+                    x: target.x + basisA.x * Math.cos(angle) * radius + basisB.x * Math.sin(angle) * radius + up.x * elevation,
+                    y: target.y + basisA.y * Math.cos(angle) * radius + basisB.y * Math.sin(angle) * radius + up.y * elevation,
+                    z: target.z + basisA.z * Math.cos(angle) * radius + basisB.z * Math.sin(angle) * radius + up.z * elevation,
+                  },
+                  target,
+                );
+                apsOrbitFrame = requestAnimationFrame(step);
+              };
+              apsOrbitFrame = requestAnimationFrame(step);
+            },
+            stopOrbit: stopApsOrbit,
           };
           viewerActionsRef.current = apsActions;
           if (actionsRef) actionsRef.current = apsActions;
@@ -843,6 +1192,11 @@ export function CadViewer({
           setDisplayMode: sceneCtx.setDisplayMode,
           setAutoRotate: sceneCtx.setAutoRotate,
           selectElement: sceneCtx.selectElement,
+          focusElement: sceneCtx.focusElement,
+          selectElements: sceneCtx.selectElements,
+          focusElements: sceneCtx.focusElements,
+          orbitElements: sceneCtx.orbitElements,
+          stopOrbit: sceneCtx.stopOrbit,
         };
         if (actionsRef) actionsRef.current = viewerActionsRef.current;
         sceneCtx.setDisplayMode(displayMode);
@@ -889,6 +1243,10 @@ export function CadViewer({
       abortController.abort();
       detachPicker?.();
       detachApsSelection?.();
+      detachApsViewportResize?.();
+      apsResizeObserver?.disconnect();
+      if (selectionSuppressionTimer) clearTimeout(selectionSuppressionTimer);
+      if (apsOrbitFrame) cancelAnimationFrame(apsOrbitFrame);
       apsViewer?.finish?.();
       sceneRef.current?.dispose();
       sceneRef.current = null;

@@ -1,20 +1,21 @@
 "use client";
 
 import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
-import { Check, CheckSquare2, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pencil, Plus, RefreshCw, ScanSearch, Search, Settings2, Sigma, Trash2, X } from "lucide-react";
+import { Check, CheckSquare2, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pause, Pencil, Play, Plus, RefreshCw, ScanSearch, Search, Settings2, Sigma, Trash2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import {
   Input,
 } from "@appkit/ui";
 import { cn } from "@/lib/utils";
-import { groupModelElements, type ModelElementGroupAxis } from "@/lib/model-element-groups";
 import { groupCadEntities, type CadEntityGroupAxis } from "@/lib/cad-entity-groups";
 import type { Pickup } from "@/components/workspace/takeoff/annotation-canvas";
 import type {
+  CreateWorksheetItemInput,
   DrawingAnalysisPreset,
   DrawingGeometryAnalysisResult,
   DrawingGeometrySource,
   DrawingPrimitive,
+  ModelTakeoffTopology,
   PickupLinkRecord,
 } from "@/lib/api";
 import { isRasterCircleCoveredByVector, measurePdfPrimitive, type PixelCircle } from "@bidwright/domain";
@@ -304,6 +305,22 @@ export interface InspectModelElement {
    *  the LOD was determined and warn before re-ingest could clobber it. */
   lodSource?: string | null;
   quantitySummary: string;
+  /** Native model unit used when APS exposes a numeric quantity property
+   *  without attaching units to that individual property. */
+  modelUnit?: string;
+  /** Every indexed model quantity remains available to the Inspect composer
+   *  so the estimator can deliberately map count, length, area, volume, or a
+   *  source-specific BIM quantity before anything is written. */
+  quantities: Array<{
+    id: string;
+    quantityType: string;
+    value: number;
+    unit: string;
+    method: string;
+    confidence: number;
+  }>;
+  /** Raw source properties are exposed for numeric property mapping. */
+  properties: Record<string, unknown>;
   isLinked: boolean;
 }
 
@@ -337,6 +354,30 @@ export interface InspectCategoryPick {
   rateScheduleItemName?: string;
   rateScheduleItemUnit?: string;
   tierUnits?: Record<string, number>;
+  /** Full pricing/source template selected from the worksheet's universal
+   *  line-item picker. Takeoff remains authoritative for measured quantity
+   *  and provenance while this supplies the catalog/rate/labour identity. */
+  lineItemTemplate?: CreateWorksheetItemInput;
+  quantityOverride?: InspectQuantitySelection;
+}
+
+export interface InspectQuantityOption {
+  id: string;
+  label: string;
+  value: number;
+  uom: string;
+  source: "derived" | "measurement" | "model-quantity" | "model-property";
+  detail?: string;
+  quantityType?: string;
+  modelQuantityId?: string | null;
+  propertyPath?: string;
+  coverage?: { matched: number; total: number };
+}
+
+export interface InspectQuantitySelection extends InspectQuantityOption {
+  multiplier: number;
+  wastePercent: number;
+  result: number;
 }
 
 export interface InspectAssetSummary {
@@ -366,8 +407,13 @@ export interface InspectSnapshot {
   modelSyncing: boolean;
   modelSearch: string;
   modelBasis: InspectModelBasis;
+  modelTopology: ModelTakeoffTopology | null;
+  modelTopologyLoading: boolean;
   modelAsset: InspectAssetSummary | null;
   selectedModelElementId: string | null;
+  selectedModelElementIds: string[];
+  selectedModelGroupSignature: string | null;
+  modelOrbitingGroupSignature: string | null;
   // Spreadsheet — populated only when mode === "spreadsheet"
   spreadsheet: InspectSpreadsheet | null;
   // Photo-derived BOM — populated when the photo intake just finished an
@@ -445,6 +491,30 @@ export interface InspectActions {
   setModelSearch: (s: string) => void;
   setModelBasis: (b: InspectModelBasis) => void;
   selectModelElement: (id: string | null) => void;
+  selectModelElementGroup: (group: {
+    signature: string;
+    name: string;
+    kind: "system" | "run" | "estimate";
+    elementIds: string[];
+    measurementType: string;
+    quantity: number;
+    unit: string;
+    confidence: number;
+    source: string;
+    warnings: string[];
+  }) => void;
+  toggleModelElementGroupOrbit: (group: {
+    signature: string;
+    name: string;
+    kind: "system" | "run" | "estimate";
+    elementIds: string[];
+    measurementType: string;
+    quantity: number;
+    unit: string;
+    confidence: number;
+    source: string;
+    warnings: string[];
+  }) => void;
   /** "+ Add" for a model element. The categoryId comes from the popover
    *  the user just clicked — each + Add fires its own picker so the
    *  estimator can switch categories every row without leaving the
@@ -476,6 +546,15 @@ export interface InspectActions {
    *  pre-highlights it. Persisted per-project on the takeoff-tab side. */
   setTakeoffCategoryId: (categoryId: string | null) => void;
   refreshModel: () => void;
+  rebuildModelTopology: () => Promise<void> | void;
+  applyModelTopologyOverride: (input: {
+    kind: "rename" | "exclude" | "merge" | "split";
+    targetSignature: string;
+    payload?: Record<string, unknown>;
+  }) => Promise<void> | void;
+  removeModelTopologyOverride: (overrideId: string) => Promise<void> | void;
+  saveModelTopologyRecipe: (input: { id?: string; name: string; trade: string; rules: Record<string, unknown>; isDefault?: boolean }) => Promise<void> | void;
+  removeModelTopologyRecipe: (recipeId: string) => Promise<void> | void;
 }
 
 export interface TakeoffComposeRequest {
@@ -485,6 +564,7 @@ export interface TakeoffComposeRequest {
   sourceLabel: string;
   count: number;
   mode: "single" | "group" | "batch";
+  quantityOptions?: InspectQuantityOption[];
   execute: (pick: InspectCategoryPick) => Promise<void> | void;
 }
 
@@ -792,6 +872,51 @@ function partitionAnnotations(annotations: Pickup[]) {
   return { autoCount, manual };
 }
 
+function annotationQuantityOptions(annotation: Pickup): InspectQuantityOption[] {
+  const measurement = annotation.measurement;
+  const metadata = annotation.metadata ?? {};
+  const isCount = annotation.type === "count" || metadata.source === "auto-count";
+  const countedValue = isCount && typeof measurement?.value === "number" ? measurement.value : 1;
+  return [
+    {
+      id: "count",
+      label: isCount ? "Detected count" : "Count",
+      value: countedValue,
+      uom: "EA",
+      source: "derived",
+      detail: isCount ? "Included detected matches" : "One pickup",
+      quantityType: "count",
+    },
+    ...(typeof measurement?.value === "number" && !isCount ? [{
+      id: "measurement:value",
+      label: "Measured value",
+      value: measurement.value,
+      uom: measurement.unit || "EA",
+      source: "measurement" as const,
+      detail: annotation.type,
+      quantityType: "value",
+    }] : []),
+    ...(typeof measurement?.area === "number" ? [{
+      id: "measurement:area",
+      label: "Measured area",
+      value: measurement.area,
+      uom: measurement.unit || "SF",
+      source: "measurement" as const,
+      detail: annotation.type,
+      quantityType: "area",
+    }] : []),
+    ...(typeof measurement?.volume === "number" ? [{
+      id: "measurement:volume",
+      label: "Measured volume",
+      value: measurement.volume,
+      uom: measurement.unit || "CF",
+      source: "measurement" as const,
+      detail: annotation.type,
+      quantityType: "volume",
+    }] : []),
+  ];
+}
+
 function AutoCountGroup({
   snapshot,
   actions,
@@ -835,6 +960,7 @@ function AutoCountGroup({
         excludedSet.size > 0 ? ` · ${excludedSet.size} excluded` : ""
       }`,
       value: `×${effectiveCount.toLocaleString()}`,
+      quantityOptions: annotationQuantityOptions(ann),
       selected: selectedPickupId === ann.id,
       saving: false,
       savedCount: linkCount,
@@ -900,6 +1026,7 @@ function ManualAnnotationsGroup({
       source: "manual" as const,
       title: ann.label || typeLabel,
       subtitle: typeLabel + (ann.measurement?.value ? ` · ${ann.measurement.value} ${ann.measurement.unit ?? ""}` : ""),
+      quantityOptions: annotationQuantityOptions(ann),
       selected: selectedPickupId === ann.id,
       saving: false,
       savedCount: linkCount,
@@ -1288,6 +1415,15 @@ function DwgEntitiesInspect({
             title: cleanSystemLabel(system.label, [system.layer], idx + 1),
             subtitle: `${system.segmentCount} segments · layer ${system.layer}`,
             detail: `${system.quantity.toFixed(system.quantity >= 100 ? 0 : 2)} ${system.uom}`,
+            quantityOptions: [{
+              id: `cad-system:${system.id}`,
+              label: "Measured system quantity",
+              value: system.quantity,
+              uom: system.uom,
+              source: "measurement" as const,
+              detail: `${system.segmentCount.toLocaleString()} connected segments`,
+              quantityType: "length",
+            }],
             selected: Boolean(system.sourceEntityIds.includes(intel.selectedEntityId ?? "")),
             saving: intel.savingEntityId === system.id,
             savedCount: system.linkCount,
@@ -1314,6 +1450,15 @@ function DwgEntitiesInspect({
             source: "auto-count" as const,
             title: row.label,
             subtitle: `${row.count.toLocaleString()} found · ${row.type} · layer ${row.layer}`,
+            quantityOptions: [{
+              id: `cad-count:${row.id}`,
+              label: "Detected count",
+              value: row.count,
+              uom: "EA",
+              source: "derived" as const,
+              detail: `${row.sourceEntityIds.length.toLocaleString()} source entities`,
+              quantityType: "count",
+            }],
             selected: Boolean(row.sourceEntityIds.includes(intel.selectedEntityId ?? "")),
             saving: intel.savingEntityId === row.id,
             savedCount: row.linkCount,
@@ -1343,6 +1488,15 @@ function DwgEntitiesInspect({
               title: entity.label,
               subtitle: `${entity.type} · layer ${entity.layer} · ${entity.layoutName}`,
               value: entity.measurementLabel,
+              quantityOptions: [{
+                id: `cad:${entity.id}`,
+                label: entity.measurementLabel || "Measured quantity",
+                value: entity.quantity,
+                uom: entity.uom,
+                source: "measurement" as const,
+                detail: `${entity.type} · ${entity.layer}`,
+                quantityType: entity.type,
+              }],
               selected: intel.selectedEntityId === entity.id,
               saving: false,
               savedCount: entity.linkCount,
@@ -1376,6 +1530,15 @@ function DwgEntitiesInspect({
               title: entity.label,
               subtitle: `${entity.type} · layer ${entity.layer} · ${entity.layoutName}`,
               value: entity.measurementLabel,
+              quantityOptions: [{
+                id: `cad:${entity.id}`,
+                label: entity.measurementLabel || "Measured quantity",
+                value: entity.quantity,
+                uom: entity.uom,
+                source: "measurement" as const,
+                detail: `${entity.type} · ${entity.layer}`,
+                quantityType: entity.type,
+              }],
               selected: intel.selectedEntityId === entity.id,
               saving: false,
               savedCount: entity.linkCount,
@@ -1975,7 +2138,7 @@ function EntitiesPanel({
   emptyState,
 }: EntitiesPanelProps) {
   return (
-    <div className="flex h-full min-h-0 flex-col rounded-md border border-line bg-panel">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-md border border-line bg-panel">
       <div className="shrink-0 border-b border-line/40 p-1.5">
         <div className="flex items-center gap-1.5">
           {statusTooltip && (
@@ -1988,7 +2151,7 @@ function EntitiesPanel({
             </span>
           )}
           <Input
-            className="h-7 flex-1 text-xs"
+            className="h-7 min-w-0 flex-1 text-xs"
             value={query}
             onChange={(event) => onQueryChange(event.target.value)}
             placeholder={queryPlaceholder}
@@ -2029,13 +2192,13 @@ function EntitiesPanel({
              (overlay toggles, sliders, classification axis grids, etc).
              Previously this expanded indefinitely and overflowed the
              column. */
-          <div className="mt-1.5 max-h-[50vh] overflow-auto rounded-md border border-line/70 bg-bg/35 p-2">
+          <div className="mt-1.5 max-h-[50vh] overflow-y-auto overflow-x-hidden rounded-md border border-line/70 bg-bg/35 p-2">
             {settingsContent}
           </div>
         )}
         {belowSearchContent}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-2">
+      <div className="min-h-0 min-w-0 flex-1 overflow-y-auto overflow-x-hidden p-2">
         {children ?? emptyState}
       </div>
     </div>
@@ -2136,6 +2299,7 @@ type DetectionRow = {
   linkCount: number;
   color: string;
   value?: string;
+  quantityOptions?: InspectQuantityOption[];
   symbolIds?: string[];
   requiresCalibration?: boolean;
   /** Optional preview image (data URI or remote URL) rendered as a small
@@ -2160,6 +2324,186 @@ type DetectionRow = {
   };
 };
 
+function modelElementQuantityOptions(element: InspectModelElement): InspectQuantityOption[] {
+  const nativeOptions: InspectQuantityOption[] = [{
+    id: "count",
+    label: "Count",
+    value: 1,
+    uom: "EA",
+    source: "derived",
+    detail: "One model object",
+    quantityType: "count",
+  }];
+  for (const quantity of element.quantities) {
+    if (!Number.isFinite(quantity.value)) continue;
+    nativeOptions.push({
+      id: `model-quantity:${quantity.id}`,
+      label: quantity.quantityType.replace(/[_-]+/g, " ").replace(/^./, (letter) => letter.toUpperCase()),
+      value: quantity.value,
+      uom: quantity.unit,
+      source: "model-quantity",
+      detail: [quantity.method, `${Math.round(quantity.confidence * 100)}% confidence`].filter(Boolean).join(" · "),
+      quantityType: quantity.quantityType,
+      modelQuantityId: quantity.id,
+    });
+  }
+  const propertyOptions: InspectQuantityOption[] = [];
+  const strictNumericValue = (value: unknown) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value !== "string") return null;
+    const trimmed = value.trim();
+    if (!/^[-+]?(?:\d+(?:,\d{3})*|\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(trimmed)) return null;
+    const parsed = Number(trimmed.replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  };
+  const propertyUnit = (key: string, explicitUnit = "") => {
+    if (explicitUnit) return explicitUnit;
+    const lower = key.toLowerCase();
+    const siblingUnitKey = key.replace(/_(nominaldiameter|matchingpipeod|engagementlength)$/i, "_LengthUnit");
+    const siblingUnit = siblingUnitKey !== key ? element.properties[siblingUnitKey] : null;
+    if (typeof siblingUnit === "string" && siblingUnit.trim()) return siblingUnit.trim();
+    const modelUnit = element.modelUnit || "";
+    if (lower.includes("area")) return modelUnit ? `${modelUnit}²` : "";
+    if (lower.includes("volume")) return modelUnit ? `${modelUnit}³` : "";
+    if (/length|width|height|depth|diameter|radius|perimeter|circumference|thickness|offset|elevation|\.(?:bop|top)$/i.test(lower)) return modelUnit;
+    const weightUnit = element.properties[`${key.split(".")[0]}.WeightUnit`];
+    if (lower.includes("weight") && typeof weightUnit === "string") return weightUnit;
+    return "";
+  };
+  const propertyScore = (key: string) => {
+    const lower = key.toLowerCase();
+    if (/(^|\.)length$|gross length|net length/.test(lower)) return 120;
+    if (/area|volume/.test(lower)) return 110;
+    if (/diameter|radius|perimeter|circumference/.test(lower)) return 100;
+    if (/width|height|depth|thickness/.test(lower)) return 90;
+    if (/weight|count|quantity/.test(lower)) return 70;
+    if (/position|cog|coordinate|\.x$|\.y$|\.z$/.test(lower)) return -20;
+    return -10;
+  };
+  const propertyQuantityType = (key: string) => {
+    const lower = key.toLowerCase();
+    if (/length|perimeter|circumference/.test(lower)) return "length";
+    if (/area/.test(lower)) return "area";
+    if (/volume/.test(lower)) return "volume";
+    if (/diameter/.test(lower)) return "diameter";
+    if (/weight/.test(lower)) return "weight";
+    return undefined;
+  };
+  const propertyLabel = (key: string) => {
+    const parts = key.split(".");
+    const field = parts.pop() ?? key;
+    const label = field.replace(/([a-z0-9])([A-Z])/g, "$1 $2").replace(/[_:-]+/g, " ").replace(/^./, (letter) => letter.toUpperCase());
+    return parts.length > 0 ? `${label} — ${parts.join(" · ")}` : label;
+  };
+  const visit = (value: unknown, path: string[], depth: number) => {
+    if (propertyOptions.length >= 120 || depth > 3) return;
+    const directValue = strictNumericValue(value);
+    if (directValue != null) {
+      const key = path.join(".");
+      if (
+        !key
+        || directValue <= 0
+        || propertyScore(key) <= 0
+        || /(?:^|[._\s-])(?:id|guid|handle|index|revision|timestamp|line number|element number|object number|color index)(?:$|[._\s-])/i.test(key)
+        || /pnp(?:id|guid)|uniqueid|objectid|ownerid|port\d*[_\s-]*(?:id|guid)/i.test(key)
+      ) return;
+      propertyOptions.push({ id: `property:${key}`, label: propertyLabel(key), value: directValue, uom: propertyUnit(key), source: "model-property", detail: `Model property · ${key}`, propertyPath: key, quantityType: propertyQuantityType(key) });
+      return;
+    }
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const record = value as Record<string, unknown>;
+    const recordValue = strictNumericValue(record.value);
+    if (recordValue != null) {
+      const key = path.join(".");
+      if (recordValue <= 0 || propertyScore(key) <= 0) return;
+      propertyOptions.push({
+        id: `property:${key}`,
+        label: propertyLabel(key),
+        value: recordValue,
+        uom: propertyUnit(key, typeof record.unit === "string" ? record.unit : typeof record.uom === "string" ? record.uom : ""),
+        source: "model-property",
+        detail: `Model property · ${key}`,
+        propertyPath: key,
+        quantityType: propertyQuantityType(key),
+      });
+      return;
+    }
+    Object.entries(record).forEach(([key, child]) => visit(child, [...path, key], depth + 1));
+  };
+  Object.entries(element.properties).forEach(([key, value]) => visit(value, [key], 0));
+  propertyOptions.sort((left, right) => propertyScore(right.propertyPath ?? "") - propertyScore(left.propertyPath ?? "") || left.label.localeCompare(right.label));
+  const allOptions = [...nativeOptions.slice(1), ...propertyOptions.slice(0, 36)];
+  const elementSemantics = [element.name, element.elementClass, element.elementType, element.system, String(element.properties["AutoCAD.Class"] ?? "")].join(" ").toLowerCase();
+  const preferredType = /pipe|duct|cable|conduit|tray|linear|run/.test(elementSemantics)
+    ? "length"
+    : /slab|floor|wall|ceiling|roof|panel|sheet/.test(elementSemantics)
+      ? "area"
+      : null;
+  const preferredIndex = preferredType ? allOptions.findIndex((option) => option.quantityType === preferredType) : -1;
+  if (preferredIndex >= 0) {
+    const [preferred] = allOptions.splice(preferredIndex, 1);
+    return [preferred, nativeOptions[0], ...allOptions];
+  }
+  return [nativeOptions[0], ...allOptions];
+}
+
+function semanticModelElementValue(
+  element: InspectModelElement,
+  axis: "elementType" | "material" | "level" | "system",
+) {
+  const value = (...keys: string[]) => keys
+    .map((key) => element.properties[key])
+    .find((candidate) => candidate != null && String(candidate).trim() && String(candidate).toLowerCase() !== "none");
+  if (axis === "system") return String(value("AutoCAD.PipeLineNumber", "AutoCAD.Pipe Line Number", "Identity.System Name") ?? element.system ?? "").trim();
+  if (axis === "material") {
+    const material = String(value("AutoCAD.Plant Material", "AutoCAD.Material Code", "Identity.Structural Material") ?? element.material ?? "").trim();
+    return /^(?:autocad color index\s+\d+|bylayer|byblock)$/i.test(material) ? "" : material;
+  }
+  if (axis === "elementType") return String(value("AutoCAD.Class", "Identity.Type") ?? element.elementType ?? element.elementClass ?? "").trim();
+  return element.level?.trim() ?? "";
+}
+
+function aggregateQuantityOptions(rows: DetectionRow[]): InspectQuantityOption[] {
+  const options: InspectQuantityOption[] = [{
+    id: "count",
+    label: "Selected object count",
+    value: rows.length,
+    uom: "EA",
+    source: "derived",
+    detail: `${rows.length.toLocaleString()} selected objects`,
+    quantityType: "count",
+    coverage: { matched: rows.length, total: rows.length },
+  }];
+  const aggregates = new Map<string, { option: InspectQuantityOption; matched: number; value: number }>();
+  for (const row of rows) {
+    const rowKeys = new Set<string>();
+    for (const option of row.quantityOptions ?? []) {
+      if (option.id === "count") continue;
+      const key = `${option.source}:${option.quantityType || option.id}:${option.uom}`;
+      if (rowKeys.has(key)) continue;
+      rowKeys.add(key);
+      const aggregate = aggregates.get(key);
+      if (aggregate) {
+        aggregate.value += option.value;
+        aggregate.matched += 1;
+      } else {
+        aggregates.set(key, { option, matched: 1, value: option.value });
+      }
+    }
+  }
+  for (const [key, aggregate] of aggregates) {
+    options.push({
+      ...aggregate.option,
+      id: `group:${key}`,
+      value: aggregate.value,
+      modelQuantityId: null,
+      detail: `Summed across ${aggregate.matched.toLocaleString()} model objects`,
+      coverage: { matched: aggregate.matched, total: rows.length },
+    });
+  }
+  return options;
+}
+
 function DetectionGroup({
   title,
   count,
@@ -2172,6 +2516,14 @@ function DetectionGroup({
   onAdd,
   onDelete,
   groupAction,
+  headerDetail,
+  groupSelected = false,
+  onToggleGroupSelection,
+  groupFocused = false,
+  onGroupFocus,
+  groupOrbiting = false,
+  onToggleGroupOrbit,
+  autoExpandSelection = true,
   initialCollapsed = false,
 }: {
   /** Short type label — "Linear", "Counts", "Arcs", etc. NOT "X candidates"
@@ -2199,7 +2551,16 @@ function DetectionGroup({
   groupAction?: {
     triggerTitle: string;
     onPick: (pick: InspectCategoryPick) => Promise<void> | void;
+    composeMode?: "group" | "batch";
   };
+  headerDetail?: ReactNode;
+  groupSelected?: boolean;
+  onToggleGroupSelection?: () => void;
+  groupFocused?: boolean;
+  onGroupFocus?: () => void;
+  groupOrbiting?: boolean;
+  onToggleGroupOrbit?: () => void;
+  autoExpandSelection?: boolean;
   /** Large model/CAD groups start collapsed so thousands of indexed elements
    *  don't become thousands of mounted DOM rows. Selecting an element opens
    *  its containing group automatically. */
@@ -2209,8 +2570,8 @@ function DetectionGroup({
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   const containsSelection = rows.some((row) => row.selected);
   useEffect(() => {
-    if (containsSelection) setCollapsed(false);
-  }, [containsSelection]);
+    if (autoExpandSelection && containsSelection && !groupFocused) setCollapsed(false);
+  }, [autoExpandSelection, containsSelection, groupFocused]);
   // Per-row expansion state for the match-detail panel (Auto Count). Stored
   // here so toggling an expand chevron only affects that one row — multiple
   // rows can be expanded simultaneously which is what an estimator wants
@@ -2234,22 +2595,56 @@ function DetectionGroup({
       sourceLabel: SOURCE_PILL_TEXT[row.source],
       count: 1,
       mode: "single",
+      quantityOptions: row.quantityOptions,
       execute: (pick) => onAdd(row.id, row.kind, pick),
     };
   }, [onAdd]);
   return (
-    <section>
+    <section className="min-w-0 overflow-hidden">
       {/* Section header reads as a TYPE LABEL inside the panel's "Potential
           line items" identity, not as a competing heading. Uppercase tiny
           caps + low-contrast color keep the panel header dominant; the
           colored dot lines up with each row's dot below. */}
-      <div className="group/grouphdr flex items-stretch">
+      <div className="group/grouphdr flex min-w-0 items-stretch">
+        {onToggleGroupSelection && (
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={groupSelected}
+            onClick={onToggleGroupSelection}
+            className={cn(
+              "mr-0.5 inline-flex w-5 shrink-0 items-center justify-center rounded-sm border transition-colors",
+              groupSelected ? "border-accent bg-accent text-accent-fg" : "border-line/70 bg-bg/40 text-transparent hover:border-accent/50",
+            )}
+            title={groupSelected ? "Remove group from management selection" : "Select group to rename, split, merge or exclude"}
+          >
+            <Check className="h-2.5 w-2.5" />
+          </button>
+        )}
+        {onGroupFocus && (
+          <button
+            type="button"
+            onClick={() => setCollapsed((value) => !value)}
+            className="mr-0.5 inline-flex w-4 shrink-0 items-center justify-center rounded-sm text-fg/35 transition-colors hover:bg-panel2/50 hover:text-fg/65"
+            title={collapsed ? "Expand group" : "Collapse group"}
+            aria-label={collapsed ? "Expand group" : "Collapse group"}
+          >
+            {collapsed ? <ChevronRight className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />}
+          </button>
+        )}
         <button
           type="button"
-          onClick={() => setCollapsed((value) => !value)}
-          className="flex flex-1 items-center gap-1.5 rounded-sm px-1 py-0.5 text-left text-[9px] font-medium uppercase tracking-wider text-fg/45 hover:bg-panel2/50"
+          onClick={() => {
+            if (onGroupFocus) onGroupFocus();
+            else setCollapsed((value) => !value);
+          }}
+          title={title}
+          className={cn(
+            "flex min-w-0 flex-1 items-center gap-1 rounded-sm border px-1 py-0.5 text-left text-[9px] font-medium uppercase tracking-wider transition-colors",
+            groupFocused ? "border-accent/35 bg-accent/10 text-accent" : "border-transparent text-fg/45 hover:bg-panel2/50",
+          )}
         >
-          {collapsed ? <ChevronRight className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />}
+          {!onGroupFocus && (collapsed ? <ChevronRight className="h-2.5 w-2.5" /> : <ChevronDown className="h-2.5 w-2.5" />)}
           {accentColor && (
             <span
               className="h-1.5 w-1.5 shrink-0 rounded-full"
@@ -2259,10 +2654,27 @@ function DetectionGroup({
           )}
           {icon}
           <span className="min-w-0 flex-1 truncate">{title}</span>
+          {headerDetail}
           <span className="font-mono text-[9px] tabular-nums text-fg/30">
             {shownCount === count ? count.toLocaleString() : `${shownCount.toLocaleString()}/${count.toLocaleString()}`}
           </span>
         </button>
+        {onToggleGroupOrbit && (groupFocused || groupOrbiting) && (
+          <button
+            type="button"
+            onClick={onToggleGroupOrbit}
+            className={cn(
+              "order-3 ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border transition-colors",
+              groupOrbiting
+                ? "border-accent/40 bg-accent text-accent-fg"
+                : "border-transparent text-fg/40 hover:border-accent/25 hover:bg-accent/10 hover:text-accent",
+            )}
+            title={groupOrbiting ? "Stop orbiting this scope" : "Orbit around this scope"}
+            aria-label={groupOrbiting ? "Stop orbit" : "Orbit around scope"}
+          >
+            {groupOrbiting ? <Pause className="h-2.5 w-2.5" /> : <Play className="h-2.5 w-2.5" />}
+          </button>
+        )}
         {groupAction && (
           compose.requestCompose ? (
             <button
@@ -2270,25 +2682,29 @@ function DetectionGroup({
               onClick={() => compose.requestCompose?.({
                 id: `group:${title}:${rows.length}:${rows[0]?.id ?? "empty"}:${rows[rows.length - 1]?.id ?? "empty"}`,
                 title,
-                description: `Create one summed worksheet line from all ${rows.length.toLocaleString()} pickups in this group.`,
+                description: groupAction.composeMode === "batch"
+                  ? `Create one worksheet line per pickup while preserving each source quantity.`
+                  : `Create one summed worksheet line from all ${rows.length.toLocaleString()} pickups in this group.`,
                 sourceLabel: rows[0] ? SOURCE_PILL_TEXT[rows[0].source] : "Pickup group",
                 count: rows.length,
-                mode: "group",
+                mode: groupAction.composeMode ?? "group",
+                quantityOptions: aggregateQuantityOptions(rows),
                 execute: groupAction.onPick,
               })}
-              className="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm border border-transparent px-1.5 text-[9px] font-medium text-fg/50 transition-colors hover:border-accent/25 hover:bg-accent/10 hover:text-accent"
+              className="order-2 ml-0.5 inline-flex h-6 w-12 shrink-0 items-center justify-center gap-1 rounded-sm border border-accent/25 bg-accent/10 text-[9px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15"
               title={groupAction.triggerTitle}
+              aria-label="Add group to estimate"
             >
               <Sigma className="h-2.5 w-2.5" />
-              Add group
+              Add
             </button>
           ) : (
             <AddToCategoryPopover
               snapshot={snapshot}
               actions={actions}
               onPick={groupAction.onPick}
-              triggerLabel="Add group"
-              triggerClassName="ml-1 inline-flex shrink-0 items-center gap-1 rounded-sm border border-transparent px-1.5 text-[9px] font-medium text-fg/50 transition-colors hover:border-accent/25 hover:bg-accent/10 hover:text-accent"
+              triggerLabel="Add"
+              triggerClassName="order-2 ml-0.5 inline-flex h-6 w-12 shrink-0 items-center justify-center gap-1 rounded-sm border border-accent/25 bg-accent/10 text-[9px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15"
               triggerTitle={groupAction.triggerTitle}
               triggerIcon={<Sigma className="h-2.5 w-2.5" />}
             />
@@ -2296,20 +2712,21 @@ function DetectionGroup({
         )}
       </div>
       {!collapsed && (
-        <div className="ml-2 space-y-0.5">
+        <div className="ml-2 min-w-0 space-y-0.5 overflow-hidden">
           {rows.length === 0 ? (
             <p className="rounded-md border border-line bg-bg/25 px-2 py-2 text-center text-[10px] text-fg/35">None found</p>
           ) : rows.map((row) => {
             const expanded = expandedRowIds.has(row.id);
             const composeRequest = requestForRow(row);
             const staged = composeRequest ? compose.basketIds.has(composeRequest.id) : false;
+            const activeModelScope = row.kind === "model" && (row.selected || groupFocused);
             return (
             <Fragment key={row.id}>
             <div
               onClick={() => onSelect(row.id)}
               className={cn(
-                "group flex cursor-pointer items-center gap-2 rounded-md border px-1.5 py-1.5 transition-colors",
-                row.selected
+                "group flex w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border px-1 py-1.5 transition-colors",
+                activeModelScope || row.selected
                   ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
                   : row.linkCount > 0
                     ? "border-success/25 bg-success/5 hover:bg-panel2/35"
@@ -2335,7 +2752,15 @@ function DetectionGroup({
               ) : (
                 <div className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: row.color }} />
               )}
-              {composeRequest && compose.requestCompose && (
+              {activeModelScope ? (
+                <span
+                  className="inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border border-accent bg-accent text-accent-fg"
+                  title="Included in the active model scope"
+                  aria-label="Included in active model scope"
+                >
+                  <Check className="h-2.5 w-2.5" />
+                </span>
+              ) : composeRequest && compose.requestCompose && (
                 <button
                   type="button"
                   role="checkbox"
@@ -2367,12 +2792,12 @@ function DetectionGroup({
                   {/* Source pill — tells the estimator whether the row was
                       derived from analyzer, auto-counted, smart-counted,
                       hand-drawn, or read from a CAD layer. */}
-                  <span
+                  {row.kind !== "model" && <span
                     className="inline-flex shrink-0 items-center rounded-full border border-line/60 bg-bg/40 px-1 py-0.5 text-[8.5px] font-medium uppercase tracking-wide text-fg/45"
                     title={`Source: ${SOURCE_PILL_TEXT[row.source]}`}
                   >
                     {SOURCE_PILL_TEXT[row.source]}
-                  </span>
+                  </span>}
                   {row.linkCount > 0 ? (
                     <span className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-accent/10 px-1 py-0.5 text-[9px] font-medium text-accent">
                       <Link2 className="h-2 w-2" />
@@ -2387,7 +2812,7 @@ function DetectionGroup({
                 <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>
                 {row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
               </div>
-              {row.value && <span className="shrink-0 font-mono text-[10px] text-fg/50">{row.value}</span>}
+              {row.value && <span className="max-w-[28%] shrink truncate font-mono text-[10px] text-fg/50" title={row.value}>{row.value}</span>}
               <div className="flex items-center gap-0.5">
                 {row.matchExpansion && (
                   <button
@@ -2408,31 +2833,32 @@ function DetectionGroup({
                       type="button"
                       disabled
                       title="Set drawing scale before adding linear detections to a worksheet"
-                      className="inline-flex h-6 items-center gap-1 rounded-md border border-warning/25 bg-warning/10 px-1.5 text-[10px] font-medium text-warning/70 disabled:cursor-not-allowed"
+                      aria-label="Add after setting drawing scale"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-warning/25 bg-warning/10 text-warning/70 disabled:cursor-not-allowed"
                     >
                       <Plus className="h-3 w-3" />
-                      Add
                     </button>
                   ) : composeRequest && compose.requestCompose ? (
                     <button
                       type="button"
                       onClick={(event) => {
                         event.stopPropagation();
+                        if (!row.selected) onSelect(row.id);
                         compose.requestCompose?.(composeRequest);
                       }}
-                      className="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      aria-label="Review and add this pickup"
+                      className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
                       title="Review and add this pickup to the estimate"
                     >
                       <Plus className="h-3 w-3" />
-                      Add
                     </button>
                   ) : (
                     <AddToCategoryPopover
                       snapshot={snapshot}
                       actions={actions}
                       onPick={(pick) => onAdd(row.id, row.kind, pick)}
-                      triggerLabel="Add"
-                      triggerClassName="inline-flex h-6 items-center gap-1 rounded-md border border-line bg-bg/50 px-1.5 text-[10px] font-medium text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      triggerLabel=""
+                      triggerClassName="inline-flex h-6 w-6 items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
                       triggerTitle="Add this line item to a worksheet"
                       triggerIcon={<Plus className="h-3 w-3" />}
                     />
@@ -2831,20 +3257,11 @@ export function TakeoffCategoryChooser({
 }
 
 
-/** Grouping axes for the BIM element list. Reuses the same construction-
- *  classification primitive that powers the estimate summary rollups, so the
- *  element grouping is consistent with how the line items those elements
- *  back will appear in the quote summary. */
-const GROUP_BY_OPTIONS: { id: ModelElementGroupAxis; label: string }[] = [
-  { id: "uniformat",    label: "Uniformat" },
-  { id: "masterformat", label: "MasterFormat" },
-  { id: "elementClass", label: "Class" },
-  { id: "elementType",  label: "Type" },
-  { id: "system",       label: "System" },
-  { id: "level",        label: "Level" },
-  { id: "material",     label: "Material" },
-];
-
+/**
+ * Graph-backed BIM pickup browser. Property buckets are intentionally not used
+ * here: every surfaced rollup is a persisted authored system, connected
+ * network, branch/run, or estimating group from the topology index.
+ */
 function ModelInspect({
   snapshot,
   actions,
@@ -2852,225 +3269,444 @@ function ModelInspect({
   snapshot: InspectSnapshot;
   actions: InspectActions | null;
 }) {
-  const { modelElements, modelElementCount, modelElementsLoading, modelError, modelSyncing, modelSearch, modelBasis, modelAsset, selectedModelElementId } = snapshot;
-  // Native object type is the most useful first rollup across BIM and generic
-  // 3D sources (Pipe, Valve, Beam, Solid, Surface, etc.) and typically turns
-  // thousands of objects into a few dozen pickup groups immediately.
-  const [groupBy, setGroupBy] = useState<ModelElementGroupAxis[]>(["elementType"]);
+  const {
+    modelElements,
+    modelElementCount,
+    modelElementsLoading,
+    modelError,
+    modelSyncing,
+    modelTopology,
+    modelTopologyLoading,
+    modelSearch,
+    modelAsset,
+    selectedModelElementId,
+    selectedModelElementIds,
+    selectedModelGroupSignature,
+    modelOrbitingGroupSignature,
+  } = snapshot;
+  const [groupKind, setGroupKind] = useState<"estimate" | "system" | "run">("estimate");
   const [showSettings, setShowSettings] = useState(false);
-  const [flatVisibleCount, setFlatVisibleCount] = useState(250);
-
-  const groupedElements = useMemo(
-    () => groupModelElements(modelElements, groupBy),
-    [modelElements, groupBy],
-  );
-
+  const [selectedGroupSignatures, setSelectedGroupSignatures] = useState<Set<string>>(() => new Set());
+  const [managementName, setManagementName] = useState("");
+  const [managementBusy, setManagementBusy] = useState(false);
+  const [managementError, setManagementError] = useState<string | null>(null);
+  const [recipeName, setRecipeName] = useState("");
+  type EstimateGroupingAxis = "trade" | "role" | "specification" | "material" | "size" | "system" | "level" | "elementClass" | "elementType";
+  const defaultGroupingAxes: EstimateGroupingAxis[] = ["trade", "role", "specification", "material", "size"];
+  const [groupingAxes, setGroupingAxes] = useState<EstimateGroupingAxis[]>(defaultGroupingAxes);
+  const elementsById = useMemo(() => new Map(modelElements.map((element) => [element.id, element])), [modelElements]);
+  const linkedCount = modelElements.filter((element) => element.isLinked).length;
+  const groups = useMemo(() => {
+    const query = modelSearch.trim().toLowerCase();
+    return (modelTopology?.groups ?? [])
+    .filter((group) => group.kind === groupKind)
+    .map((group) => ({
+      ...group,
+      elements: group.memberElementIds.map((id) => elementsById.get(id)).filter((element): element is InspectModelElement => Boolean(element)),
+    }))
+    .filter((group) => group.elements.length > 0)
+    .filter((group) => !query || [
+      group.name,
+      group.trade,
+      group.measurementType,
+      group.unit,
+      ...group.warnings,
+      ...group.elements.flatMap((element) => [element.name, element.externalId, element.elementClass, element.elementType, element.system, element.material, element.level]),
+    ].some((value) => String(value ?? "").toLowerCase().includes(query)))
+    .sort((left, right) => right.memberCount - left.memberCount || left.name.localeCompare(right.name));
+  }, [elementsById, groupKind, modelSearch, modelTopology]);
+  const selectedGroups = useMemo(() => groups.filter((group) => selectedGroupSignatures.has(group.signature)), [groups, selectedGroupSignatures]);
   useEffect(() => {
-    setFlatVisibleCount(250);
-  }, [modelSearch, groupBy]);
+    setSelectedGroupSignatures(new Set());
+    setManagementName("");
+    setManagementError(null);
+  }, [groupKind, modelAsset?.id]);
+  useEffect(() => {
+    const configured = modelTopology?.diagnostics?.estimateGroupBy;
+    const allowed = new Set<EstimateGroupingAxis>(["trade", "role", "specification", "material", "size", "system", "level", "elementClass", "elementType"]);
+    const next = Array.isArray(configured)
+      ? configured.map(String).filter((axis): axis is EstimateGroupingAxis => allowed.has(axis as EstimateGroupingAxis))
+      : [];
+    setGroupingAxes(next.length > 0 ? next : defaultGroupingAxes);
+  }, [modelAsset?.id, modelTopology?.diagnostics?.estimateGroupBy]);
 
-  const toggleGroupAxis = (axis: ModelElementGroupAxis) => {
-    setGroupBy((current) => {
-      if (current.includes(axis)) return current.filter((candidate) => candidate !== axis);
-      // Three ordered dimensions are enough to form highly-specific pickup
-      // groups while keeping the resulting labels and controls intelligible.
-      return [...current, axis].slice(-3);
+  const toggleManagedGroup = (groupSignature: string) => {
+    setSelectedGroupSignatures((current) => {
+      const next = new Set(current);
+      if (next.has(groupSignature)) next.delete(groupSignature);
+      else next.add(groupSignature);
+      return next;
     });
   };
 
-  const settingsBody = (
-    <div className="grid gap-2">
-      <div>
-        <p className="mb-1 text-[10px] font-medium uppercase tracking-wider text-fg/40">Basis</p>
-        <div className="flex items-center gap-0.5 rounded-md border border-line bg-panel p-0.5">
-          {(["count", "area", "volume"] as InspectModelBasis[]).map((basis) => (
-            <button
-              key={basis}
-              type="button"
-              onClick={() => actions?.setModelBasis(basis)}
-              className={cn(
-                "flex-1 rounded px-1.5 py-1 text-[10px] font-medium capitalize transition-colors",
-                modelBasis === basis ? "bg-accent/15 text-accent" : "text-fg/45 hover:text-fg/70",
-              )}
-            >
-              {basis}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-
-  const groupBuilder = (
-    <div className="mt-1.5 rounded-md border border-line/70 bg-bg/35 p-1.5">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <p className="text-[10px] font-semibold text-fg/65">Group pickups</p>
-          <p className="text-[9px] text-fg/35">Choose up to 3 fields in order, then add any group as one worksheet line.</p>
-        </div>
-        <span className="shrink-0 font-mono text-[9px] tabular-nums text-fg/40">
-          {groupBy.length === 0 ? "Flat list" : `${groupedElements.length.toLocaleString()} groups`}
-        </span>
-      </div>
-      <div className="mt-1.5 flex flex-wrap gap-1">
-        {GROUP_BY_OPTIONS.map((option) => {
-          const order = groupBy.indexOf(option.id);
-          return (
-            <button
-              key={option.id}
-              type="button"
-              onClick={() => toggleGroupAxis(option.id)}
-              className={cn(
-                "inline-flex h-6 items-center gap-1 rounded-md border px-1.5 text-[9px] font-medium transition-colors",
-                order >= 0
-                  ? "border-violet-500/35 bg-violet-500/10 text-violet-500"
-                  : "border-line bg-panel text-fg/45 hover:text-fg/70",
-              )}
-            >
-              {order >= 0 && (
-                <span className="inline-flex h-3.5 w-3.5 items-center justify-center rounded-full bg-violet-500/15 font-mono text-[8px]">
-                  {order + 1}
-                </span>
-              )}
-              {option.label}
-            </button>
-          );
-        })}
-        {groupBy.length > 0 && (
-          <button
-            type="button"
-            onClick={() => setGroupBy([])}
-            className="h-6 rounded-md px-1.5 text-[9px] font-medium text-fg/40 hover:bg-panel2 hover:text-fg/65"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-    </div>
-  );
-
-  const rowFor = (element: InspectModelElement): DetectionRow => {
-    const uniformat = element.classification?.uniformat?.trim();
-    const masterformat = element.classification?.masterformat?.trim();
-    const lod = element.lod?.trim();
-    const classification = [
-      uniformat ? `UF ${uniformat}` : "",
-      masterformat ? `MF ${masterformat}` : "",
-      lod ? `LOD ${lod}` : "",
-    ].filter(Boolean).join(" · ");
-    return {
-      id: element.id,
-      kind: "model" as const,
-      source: "bim" as const,
-      title: element.name || element.externalId,
-      subtitle: [element.elementClass, element.material, element.level].filter(Boolean).join(" · ") || "Model element",
-      detail: classification || undefined,
-      value: element.quantitySummary,
-      selected: selectedModelElementId === element.id,
-      saving: false,
-      savedCount: element.isLinked ? 1 : 0,
-      linkCount: element.isLinked ? 1 : 0,
-      color: "#a78bfa",
-    };
+  const applyOverride = async (input: Parameters<NonNullable<InspectActions>["applyModelTopologyOverride"]>[0]) => {
+    setManagementBusy(true);
+    setManagementError(null);
+    try {
+      await actions?.applyModelTopologyOverride(input);
+      setSelectedGroupSignatures(new Set());
+      setManagementName("");
+    } catch (error) {
+      setManagementError(error instanceof Error ? error.message : "Could not update the takeoff grouping.");
+    } finally {
+      setManagementBusy(false);
+    }
   };
 
-  const onSelect = (id: string) => actions?.selectModelElement(selectedModelElementId === id ? null : id);
-  const onAdd = (id: string, _kind: DetectionRow["kind"], pick: InspectCategoryPick) =>
-    actions?.createLineItemFromElement(id, pick);
+  const saveAndUseRecipe = async (input: Parameters<NonNullable<InspectActions>["saveModelTopologyRecipe"]>[0]) => {
+    setManagementBusy(true);
+    setManagementError(null);
+    try {
+      await actions?.saveModelTopologyRecipe(input);
+      setRecipeName("");
+    } catch (error) {
+      setManagementError(error instanceof Error ? error.message : "Could not save the takeoff recipe.");
+    } finally {
+      setManagementBusy(false);
+    }
+  };
 
-  const totalCount = modelElementCount;
-  const linkedCount = modelElements.filter((e) => e.isLinked).length;
-  const flatRows = modelElements.slice(0, flatVisibleCount);
+  const removeTopologySetting = async (action: () => Promise<void> | void, fallbackMessage: string) => {
+    setManagementBusy(true);
+    setManagementError(null);
+    try {
+      await action();
+    } catch (error) {
+      setManagementError(error instanceof Error ? error.message : fallbackMessage);
+    } finally {
+      setManagementBusy(false);
+    }
+  };
+
+  const splitSelectedGroup = async (axis: "elementType" | "material" | "level" | "system") => {
+    const target = selectedGroups[0];
+    if (!target) return;
+    const buckets = new Map<string, string[]>();
+    for (const element of target.elements) {
+      const rawValue = semanticModelElementValue(element, axis) || `No ${axis.replace(/([A-Z])/g, " $1").toLowerCase()}`;
+      const bucket = buckets.get(rawValue) ?? [];
+      bucket.push(element.id);
+      buckets.set(rawValue, bucket);
+    }
+    if (buckets.size < 2) {
+      setManagementError(`This group has only one ${axis.replace(/([A-Z])/g, " $1").toLowerCase()} value.`);
+      return;
+    }
+    const splitGroups = Array.from(buckets, ([name, elementIds]) => {
+      const quantity = elementIds.reduce((sum, elementId) => {
+        const element = elementsById.get(elementId);
+        if (!element) return sum;
+        const option = modelElementQuantityOptions(element).find((candidate) => {
+          const normalized = candidate.quantityType?.toLowerCase() ?? "";
+          return candidate.uom === target.unit && (
+            normalized === target.measurementType
+            || (target.measurementType === "length" && /length|perimeter|circumference/.test(normalized))
+            || (target.measurementType === "count" && normalized === "count")
+          );
+        });
+        return sum + (option?.value ?? 0);
+      }, 0);
+      return {
+        name: `${target.name} · ${name}`,
+        elementExternalIds: elementIds.map((elementId) => elementsById.get(elementId)?.externalId).filter(Boolean),
+        quantity,
+      };
+    });
+    await applyOverride({
+      kind: "split",
+      targetSignature: target.signature,
+      payload: { groups: splitGroups },
+    });
+  };
+
+  const rowFor = (element: InspectModelElement): DetectionRow => ({
+    id: element.id,
+    kind: "model",
+    source: "bim",
+    title: element.name || element.externalId,
+    subtitle: [element.elementClass, semanticModelElementValue(element, "elementType"), semanticModelElementValue(element, "material"), element.level].filter(Boolean).join(" · ") || "Model element",
+    detail: [semanticModelElementValue(element, "system") ? `System ${semanticModelElementValue(element, "system")}` : "", element.lod ? `LOD ${element.lod}` : ""].filter(Boolean).join(" · ") || undefined,
+    value: element.quantitySummary,
+    quantityOptions: modelElementQuantityOptions(element),
+    selected: selectedModelElementIds.includes(element.id),
+    saving: false,
+    savedCount: element.isLinked ? 1 : 0,
+    linkCount: element.isLinked ? 1 : 0,
+    color: "#8b5cf6",
+  });
+  const onSelect = (id: string) => actions?.selectModelElement(selectedModelElementId === id ? null : id);
+  const onAdd = (id: string, _kind: DetectionRow["kind"], pick: InspectCategoryPick) => actions?.createLineItemFromElement(id, pick);
+  const diagnostics = modelTopology?.diagnostics ?? {};
+  const settingsBody = (
+    <div className="space-y-2 text-[10px]">
+      <div className="grid grid-cols-2 gap-1.5">
+        {[
+          ["Estimating objects", Number(diagnostics.elementCount ?? 0).toLocaleString()],
+          ["Connected", Number(diagnostics.connectedElementCount ?? 0).toLocaleString()],
+          ["Connections", (modelTopology?.connectionCount ?? 0).toLocaleString()],
+          ["Authored systems", Number(diagnostics.authoredSystemCount ?? 0).toLocaleString()],
+          ["Inferred edges", Number(diagnostics.inferredConnectionCount ?? 0).toLocaleString()],
+          ["Worksheet groups", (modelTopology?.groups.filter((group) => group.kind === "estimate").length ?? 0).toLocaleString()],
+        ].map(([label, value]) => (
+          <div key={label} className="rounded-md border border-line/70 bg-bg/40 px-2 py-1.5">
+            <p className="text-[9px] uppercase tracking-wide text-fg/35">{label}</p>
+            <p className="font-mono font-semibold text-fg/70">{value}</p>
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={() => actions?.rebuildModelTopology()}
+        disabled={modelTopologyLoading}
+        className="inline-flex h-7 w-full items-center justify-center gap-1.5 rounded-md border border-line bg-panel text-[10px] font-medium text-fg/60 hover:border-accent/35 hover:text-accent disabled:opacity-50"
+      >
+        {modelTopologyLoading ? <Loader2 className="h-3 w-3 animate-spin" /> : <GitBranch className="h-3 w-3" />}
+        Rebuild systems and runs
+      </button>
+      <div className="rounded-md border border-line/70 bg-bg/35 p-1.5">
+        <div className="flex items-center justify-between gap-2">
+          <div>
+            <p className="text-[9px] font-semibold text-fg/65">Worksheet rollup recipe</p>
+            <p className="text-[8px] text-fg/35">Measurement and unit always remain hard boundaries.</p>
+          </div>
+          <span className="max-w-[45%] truncate text-[8px] text-accent">{String(diagnostics.recipeName ?? "Default estimating rollup")}</span>
+        </div>
+        <div className="mt-1.5 flex flex-wrap gap-1">
+          {([
+            ["trade", "Trade"], ["role", "Item type"], ["specification", "Spec"], ["material", "Material"], ["size", "Size"],
+            ["system", "System / line"], ["level", "Level"], ["elementClass", "Class"], ["elementType", "Model type"],
+          ] as Array<[EstimateGroupingAxis, string]>).map(([axis, label]) => {
+            const selected = groupingAxes.includes(axis);
+            return (
+              <button
+                key={axis}
+                type="button"
+                disabled={selected && groupingAxes.length === 1}
+                onClick={() => setGroupingAxes((current) => selected ? current.filter((candidate) => candidate !== axis) : [...current, axis])}
+                className={cn(
+                  "h-5 rounded border px-1.5 text-[8px] font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-60",
+                  selected ? "border-accent/35 bg-accent/10 text-accent" : "border-line bg-panel text-fg/40 hover:text-fg/65",
+                )}
+              >{label}</button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="flex items-center gap-1">
+        <Input value={recipeName} onChange={(event) => setRecipeName(event.target.value)} placeholder="Recipe name" className="h-7 min-w-0 flex-1 px-1.5 text-[9px]" />
+        <button
+          type="button"
+          disabled={!recipeName.trim() || managementBusy}
+          onClick={() => void saveAndUseRecipe({
+              name: recipeName.trim(),
+              trade: groups[0]?.trade ?? "general",
+              isDefault: true,
+              rules: { groupBy: groupingAxes, defaultView: groupKind, hierarchy: ["system", "network", "run", "estimate"], authoredSystemsFirst: true, inferCompatibleEndpoints: true },
+            })}
+          className="h-7 rounded-md border border-line px-2 text-[9px] font-medium text-fg/55 hover:border-accent/35 hover:text-accent disabled:opacity-40"
+        >Save &amp; use</button>
+      </div>
+      {(modelTopology?.recipes?.length ?? 0) > 0 && (
+        <div className="space-y-1">
+          {modelTopology!.recipes.map((recipe) => (
+            <div key={recipe.id} className="flex items-center gap-1 rounded border border-line/60 bg-bg/30 px-1.5 py-1">
+              <span className="min-w-0 flex-1 truncate text-[8px] text-fg/50">{recipe.name}</span>
+              {recipe.id === diagnostics.recipeId ? (
+                <span className="text-[8px] text-success">Active</span>
+              ) : (
+                <button
+                  type="button"
+                  disabled={managementBusy}
+                  onClick={() => void saveAndUseRecipe({ id: recipe.id, name: recipe.name, trade: recipe.trade, rules: recipe.rules, isDefault: true })}
+                  className="rounded px-1 text-[8px] text-fg/40 hover:bg-panel hover:text-accent disabled:opacity-40"
+                >Use</button>
+              )}
+              <button
+                type="button"
+                disabled={managementBusy}
+                onClick={() => void removeTopologySetting(() => actions?.removeModelTopologyRecipe(recipe.id), "Could not delete the takeoff recipe.")}
+                className="inline-flex h-4 w-4 items-center justify-center rounded text-fg/25 hover:bg-danger/10 hover:text-danger disabled:opacity-40"
+                title={`Delete ${recipe.name}`}
+              ><Trash2 className="h-2.5 w-2.5" /></button>
+            </div>
+          ))}
+        </div>
+      )}
+      {(modelTopology?.overrides?.length ?? 0) > 0 && (
+        <div className="rounded-md border border-line/60 bg-bg/30 p-1.5">
+          <p className="mb-1 text-[8px] font-semibold uppercase tracking-wide text-fg/35">Manual corrections</p>
+          <div className="space-y-1">
+            {modelTopology!.overrides.map((override) => (
+              <div key={override.id} className="flex items-center gap-1 text-[8px]">
+                <span className="rounded bg-panel px-1 py-0.5 font-medium capitalize text-fg/50">{override.kind}</span>
+                <span className="min-w-0 flex-1 truncate text-fg/35">{String(override.payload?.name ?? override.targetSignature)}</span>
+                <button
+                  type="button"
+                  disabled={managementBusy}
+                  onClick={() => void removeTopologySetting(() => actions?.removeModelTopologyOverride(override.id), "Could not undo the correction.")}
+                  className="rounded px-1 py-0.5 text-fg/35 hover:bg-panel hover:text-accent disabled:opacity-40"
+                >Undo</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      <p className="leading-relaxed text-fg/35">Authored connectors and system identifiers are authoritative. Compatible endpoint proximity fills only missing physical edges.</p>
+    </div>
+  );
 
   return (
     <EntitiesPanel
-      statusTooltip={`${modelAsset?.fileName || "Model"} · ${totalCount.toLocaleString()} element${totalCount === 1 ? "" : "s"}${linkedCount > 0 ? ` · ${linkedCount.toLocaleString()} linked` : ""}`}
+      statusTooltip={`${modelAsset?.fileName || "Model"} · ${modelElementCount.toLocaleString()} objects · ${linkedCount.toLocaleString()} linked`}
       query={modelSearch}
       onQueryChange={(value) => actions?.setModelSearch(value)}
-      queryPlaceholder="Search objects, classes, materials..."
-      primaryAction={{
-        label: "Sync",
-        onClick: () => actions?.refreshModel(),
-        busy: modelSyncing,
-        title: "Sync the model index from disk",
-        icon: <RefreshCw className="h-3 w-3" />,
-      }}
+      queryPlaceholder="Search systems, runs, objects, materials..."
+      primaryAction={{ label: "Sync", onClick: () => actions?.refreshModel(), busy: modelSyncing, title: "Re-index model and rebuild topology", icon: <RefreshCw className="h-3 w-3" /> }}
       settingsContent={settingsBody}
       settingsOpen={showSettings}
       onToggleSettings={() => setShowSettings((value) => !value)}
       belowSearchContent={(
         <>
-          {groupBuilder}
-          {modelError && (
-            <p className="mt-2 rounded-md border border-danger/30 bg-danger/5 px-2 py-1.5 text-[10px] text-danger">
-              {modelError}
-            </p>
-          )}
-          {modelElementsLoading && modelElements.length > 0 && (
-            <p className="mt-1.5 flex items-center gap-1 text-[9px] text-fg/40">
-              <Loader2 className="h-2.5 w-2.5 animate-spin" /> Loading all {modelElementCount.toLocaleString()} indexed objects…
-            </p>
+          <div className="mt-1.5 flex rounded-md border border-line bg-bg/45 p-0.5">
+            {([
+              ["estimate", "Estimate groups"],
+              ["system", "Systems"],
+              ["run", "Runs"],
+            ] as const).map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setGroupKind(id)}
+                className={cn("h-6 flex-1 rounded px-1 text-[9px] font-medium", groupKind === id ? "bg-panel2 text-fg/75 shadow-sm" : "text-fg/40 hover:text-fg/65")}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          {modelError && <p className="mt-1.5 rounded-md border border-danger/30 bg-danger/5 px-2 py-1.5 text-[10px] text-danger">{modelError}</p>}
+          {selectedGroups.length > 0 && (
+            <div className="mt-1.5 rounded-md border border-accent/25 bg-accent/5 p-1.5">
+              <div className="flex items-center gap-1.5">
+                <span className="shrink-0 text-[9px] font-semibold text-accent">{selectedGroups.length} selected</span>
+                <Input
+                  value={managementName}
+                  onChange={(event) => setManagementName(event.target.value)}
+                  placeholder={selectedGroups.length > 1 ? "Merged group name" : "New group name"}
+                  className="h-6 min-w-0 flex-1 px-1.5 text-[9px]"
+                  disabled={managementBusy}
+                />
+                {selectedGroups.length === 1 ? (
+                  <button type="button" disabled={!managementName.trim() || managementBusy} onClick={() => void applyOverride({ kind: "rename", targetSignature: selectedGroups[0].signature, payload: { name: managementName.trim() } })} className="h-6 rounded border border-line px-1.5 text-[9px] text-fg/60 hover:border-accent/40 hover:text-accent disabled:opacity-40">Rename</button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={!managementName.trim() || managementBusy || new Set(selectedGroups.map((group) => `${group.measurementType}:${group.unit}`)).size > 1}
+                    onClick={() => void applyOverride({ kind: "merge", targetSignature: selectedGroups[0].signature, payload: { name: managementName.trim(), sourceSignatures: selectedGroups.map((group) => group.signature) } })}
+                    className="h-6 rounded border border-line px-1.5 text-[9px] text-fg/60 hover:border-accent/40 hover:text-accent disabled:opacity-40"
+                    title="Groups can merge only when their measurement type and unit match"
+                  >Merge</button>
+                )}
+              </div>
+              {selectedGroups.length === 1 && (
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  <span className="text-[8px] uppercase tracking-wide text-fg/30">Split by</span>
+                  {(["elementType", "material", "level", "system"] as const).map((axis) => (
+                    <button key={axis} type="button" disabled={managementBusy} onClick={() => void splitSelectedGroup(axis)} className="h-5 rounded bg-panel px-1.5 text-[8px] text-fg/50 hover:text-accent disabled:opacity-40">{axis.replace(/([A-Z])/g, " $1")}</button>
+                  ))}
+                  <button type="button" disabled={managementBusy} onClick={() => void applyOverride({ kind: "exclude", targetSignature: selectedGroups[0].signature })} className="ml-auto h-5 rounded px-1.5 text-[8px] text-danger/70 hover:bg-danger/10 hover:text-danger disabled:opacity-40">Exclude</button>
+                </div>
+              )}
+              {managementError && <p className="mt-1 text-[9px] text-danger">{managementError}</p>}
+            </div>
           )}
         </>
       )}
-      emptyState={
-        modelElementsLoading && modelElements.length === 0 ? (
-          <div className="flex items-center justify-center gap-2 py-4 text-[11px] text-fg/40">
-            <Loader2 className="h-3 w-3 animate-spin" /> Loading…
-          </div>
-        ) : (
-          <p className="rounded-md border border-line bg-bg/30 px-3 py-4 text-center text-[11px] text-fg/40">
-            {modelAsset ? "No model objects match this search." : "Sync the model index to list model objects."}
-          </p>
-        )
-      }
+      emptyState={modelElementsLoading || modelTopologyLoading ? (
+        <div className="flex items-center justify-center gap-2 py-5 text-[11px] text-fg/40"><Loader2 className="h-3 w-3 animate-spin" /> Building systems, runs and quantity rollups…</div>
+      ) : (
+        <div className="rounded-md border border-line bg-bg/30 px-3 py-4 text-center">
+          <p className="text-[11px] font-medium text-fg/60">No {groupKind} groups found</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-fg/35">Rebuild the topology index after the model has finished syncing.</p>
+        </div>
+      )}
     >
-      {modelElements.length === 0 ? null : groupBy.length > 0 ? (
-        <div className="space-y-1.5">
-          {groupedElements.map((group) => (
+      <div className="space-y-1.5">
+        {groups.map((group) => {
+          const quantityLabel = group.quantity > 0 ? `${numericFormat(group.quantity)} ${group.unit || group.measurementType}` : "";
+          const warningLabel = group.warnings.length > 0 ? `${group.warnings.length} review` : "";
+          return (
             <DetectionGroup
-              key={group.key}
-              title={group.label}
-              accentColor="#a78bfa"
-              count={group.elements.length}
+              key={group.id}
+              title={`${group.name}${quantityLabel ? ` · ${quantityLabel}` : ""}${warningLabel ? ` · ${warningLabel}` : ""}`}
+              accentColor={group.source === "authored" ? "#22c55e" : group.source === "detected" ? "#8b5cf6" : "#f59e0b"}
+              count={group.memberCount}
               rows={group.elements.map(rowFor)}
               snapshot={snapshot}
               actions={actions}
               onSelect={onSelect}
               onAdd={onAdd}
-              initialCollapsed={!group.elements.some((element) => element.id === selectedModelElementId)}
+              initialCollapsed
+              autoExpandSelection={false}
               groupAction={{
-                triggerTitle: `Add one summed line item from all ${group.elements.length} elements in ${group.label}`,
-                onPick: (pick) => actions?.createLineItemFromElementGroup(
-                  group.elements.map((el) => el.id),
-                  group.label,
-                  pick,
-                ),
+                triggerTitle: `Review and add ${group.name} as one worksheet line`,
+                onPick: (pick) => actions?.createLineItemFromElementGroup(group.memberElementIds, group.name, pick),
+              }}
+              groupSelected={selectedGroupSignatures.has(group.signature)}
+              onToggleGroupSelection={() => {
+                const alreadySelected = selectedGroupSignatures.has(group.signature);
+                toggleManagedGroup(group.signature);
+                if (!alreadySelected) actions?.selectModelElementGroup({
+                  signature: group.signature,
+                  name: group.name,
+                  kind: group.kind as "system" | "run" | "estimate",
+                  elementIds: group.memberElementIds,
+                  measurementType: group.measurementType,
+                  quantity: group.quantity,
+                  unit: group.unit,
+                  confidence: group.confidence,
+                  source: group.source,
+                  warnings: group.warnings,
+                });
+                else if (selectedModelGroupSignature === group.signature) actions?.selectModelElement(null);
+              }}
+              groupFocused={selectedModelGroupSignature === group.signature}
+              onGroupFocus={() => {
+                setSelectedGroupSignatures((current) => current.has(group.signature) ? current : new Set([group.signature]));
+                actions?.selectModelElementGroup({
+                  signature: group.signature,
+                  name: group.name,
+                  kind: group.kind as "system" | "run" | "estimate",
+                  elementIds: group.memberElementIds,
+                  measurementType: group.measurementType,
+                  quantity: group.quantity,
+                  unit: group.unit,
+                  confidence: group.confidence,
+                  source: group.source,
+                  warnings: group.warnings,
+                });
+              }}
+              groupOrbiting={modelOrbitingGroupSignature === group.signature}
+              onToggleGroupOrbit={() => {
+                if (modelOrbitingGroupSignature !== group.signature) {
+                  setSelectedGroupSignatures(new Set([group.signature]));
+                }
+                actions?.toggleModelElementGroupOrbit({
+                  signature: group.signature,
+                  name: group.name,
+                  kind: group.kind as "system" | "run" | "estimate",
+                  elementIds: group.memberElementIds,
+                  measurementType: group.measurementType,
+                  quantity: group.quantity,
+                  unit: group.unit,
+                  confidence: group.confidence,
+                  source: group.source,
+                  warnings: group.warnings,
+                });
               }}
             />
-          ))}
-        </div>
-      ) : (
-        <DetectionGroup
-          title="Ungrouped model elements"
-          accentColor="#a78bfa"
-          count={modelElements.length}
-          rows={flatRows.map(rowFor)}
-          snapshot={snapshot}
-          actions={actions}
-          onSelect={onSelect}
-          onAdd={onAdd}
-        />
-      )}
-      {groupBy.length === 0 && flatVisibleCount < modelElements.length && (
-        <button
-          type="button"
-          onClick={() => setFlatVisibleCount((count) => Math.min(modelElements.length, count + 250))}
-          className="mt-2 h-7 w-full rounded-md border border-line bg-bg/35 text-[10px] font-medium text-fg/55 hover:bg-panel2 hover:text-fg/75"
-        >
-          Show 250 more · {flatVisibleCount.toLocaleString()} of {modelElements.length.toLocaleString()}
-        </button>
-      )}
+          );
+        })}
+      </div>
     </EntitiesPanel>
   );
 }
@@ -3168,6 +3804,7 @@ function SpreadsheetInspect({
     const qtyVal = mapping.quantity ? row.values[mapping.quantity] : "";
     const uomVal = mapping.uom ? row.values[mapping.uom] : "";
     const costVal = mapping.cost ? row.values[mapping.cost] : "";
+    const numericQuantity = Number(String(qtyVal ?? "").replace(/[$,\s]/g, ""));
     const pivot = row.pivot;
     const subtitle = pivot
       ? [
@@ -3186,6 +3823,15 @@ function SpreadsheetInspect({
       title: (displayName || `Row ${row.index + 1}`).toString().trim(),
       subtitle,
       value: qtyVal && uomVal ? `${qtyVal} ${uomVal}` : (qtyVal || undefined),
+      quantityOptions: Number.isFinite(numericQuantity) && numericQuantity > 0 ? [{
+        id: `spreadsheet:${row.id}`,
+        label: pivot ? "Pivot total" : "Mapped spreadsheet quantity",
+        value: numericQuantity,
+        uom: String(uomVal || "EA"),
+        source: "measurement" as const,
+        detail: pivot ? `${pivot.sourceRowCount.toLocaleString()} source rows` : mapping.quantity ? `Column ${mapping.quantity}` : "Spreadsheet row",
+        quantityType: pivot ? "aggregate" : "quantity",
+      }] : undefined,
       selected: false,
       saving: false,
       savedCount: 0,
@@ -3227,6 +3873,7 @@ function SpreadsheetInspect({
               ? "Create one worksheet line item per pivot group"
               : "Import every row as its own worksheet line item",
             onPick: (pick) => actions?.createLineItemsFromAllSpreadsheetRows(pick),
+            composeMode: "batch",
           }}
         />
       )}
@@ -3276,6 +3923,15 @@ function PhotoBomInspect({
         ? (row.notes.length > 110 ? `${row.notes.slice(0, 108)}…` : row.notes)
         : undefined,
       value: `${row.quantity} ${row.uom}`,
+      quantityOptions: [{
+        id: `photo-bom:${row.id}`,
+        label: "Vision BOM quantity",
+        value: row.quantity,
+        uom: row.uom || "EA",
+        source: "measurement" as const,
+        detail: `${confPct}% confidence`,
+        quantityType: "quantity",
+      }],
       selected: false,
       saving: false,
       savedCount: row.isLinked ? 1 : 0,
@@ -3352,6 +4008,7 @@ function PhotoBomInspect({
           groupAction={{
             triggerTitle: `Add all ${unlinkedCount} unlinked rows under one category`,
             onPick: (pick) => actions?.createLineItemsFromAllPhotoBomRows(pick),
+            composeMode: "batch",
           }}
         />
       )}

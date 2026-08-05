@@ -143,10 +143,15 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
         properties: Object.keys(obj.properties).length > 0 ? obj.properties : undefined,
       };
     });
+    const elementIdByExternalId = new Map(elements.map((element) => [element.externalId, element.id]));
 
     const quantities: CanonicalModelQuantity[] = [];
     for (const obj of modelData.objects) {
-      const elementId = String(obj.objectid);
+      // Canonical quantities must point at the persisted element id, not the
+      // APS dbId. The dbId remains ModelElement.externalId for viewer focus.
+      // Using the dbId here previously caused every APS quantity to be
+      // detached during persistence, which is why pipes fell back to count.
+      const elementId = elementIdByExternalId.get(String(obj.objectid)) ?? null;
       for (const q of obj.quantities) {
         quantities.push({
           id: createId("mq"),

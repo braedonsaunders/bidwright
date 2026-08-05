@@ -76,6 +76,7 @@ import type {
   ModelElement,
   ModelQuantity,
   ModelPickupLinkRecord,
+  ModelTakeoffTopology,
   DrawingAnalysisPreset,
   DrawingGeometryAnalysisResult,
   DrawingPrimitive,
@@ -113,6 +114,12 @@ import {
   getEntityCategories,
   listModelTakeoffLinks,
   queryModelElements,
+  getModelTakeoffTopology,
+  rebuildModelTakeoffTopology,
+  createModelTakeoffOverride,
+  deleteModelTakeoffOverride,
+  saveModelTakeoffRecipe,
+  deleteModelTakeoffRecipe,
   listModelAssets,
   syncModelAssets,
   updateWorksheetItem,
@@ -138,6 +145,7 @@ import {
   Card,
   Input,
   Label,
+  Select as AppkitSelect,
   Separator,
   WorkspaceLauncher,
   type WorkspaceLaunchItem,
@@ -155,7 +163,6 @@ import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-s
 import type { Calibration, Point } from "@/lib/takeoff-math";
 import { parseConstructionDimensionToUnit } from "@/lib/construction-dimension";
 import {
-  TAKEOFF_SHORTCUT_PRESET_OPTIONS,
   resolveTakeoffShortcut,
   takeoffShortcutLabel,
   type TakeoffShortcutPreset,
@@ -376,10 +383,6 @@ function isSpreadsheetFile(fileName: string): boolean {
 
 function isPhotoFile(fileName: string): boolean {
   return PHOTO_EXTENSIONS.has(getFileExtension(fileName));
-}
-
-function isTakeoffShortcutPreset(value: string | null): value is TakeoffShortcutPreset {
-  return value === "bidwright" || value === "planswift";
 }
 
 function isTextEditingTarget(target: EventTarget | null): boolean {
@@ -970,119 +973,6 @@ function SpreadsheetAiMenu({
   );
 }
 
-function ModelViewMenu({
-  currentView,
-  onView,
-}: {
-  currentView: CadViewerStandardView;
-  onView: (view: CadViewerStandardView) => void;
-}) {
-  const views: Array<{ id: CadViewerStandardView; label: string }> = [
-    { id: "iso", label: "Isometric" },
-    { id: "top", label: "Top" },
-    { id: "front", label: "Front" },
-    { id: "right", label: "Right" },
-  ];
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model view">
-          <Box className="h-3.5 w-3.5" />
-          <span>View</span>
-          <ChevronDown className="h-3 w-3 text-fg/40" />
-        </Button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content align="start" sideOffset={6} className="z-[1000] w-48 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
-          {views.map((view) => (
-            <Popover.Close asChild key={view.id}>
-              <button
-                type="button"
-                onClick={() => onView(view.id)}
-                className={cn(
-                  "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors",
-                  currentView === view.id ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg",
-                )}
-              >
-                <Scan className="h-3.5 w-3.5 shrink-0" />
-                <span className="min-w-0 flex-1 truncate font-medium">{view.label}</span>
-                {currentView === view.id && <Check className="h-3 w-3" />}
-              </button>
-            </Popover.Close>
-          ))}
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-
-function ModelDisplayMenu({
-  mode,
-  gridVisible,
-  autoRotate,
-  onMode,
-  onGrid,
-  onAutoRotate,
-}: {
-  mode: CadViewerDisplayMode;
-  gridVisible: boolean;
-  autoRotate: boolean;
-  onMode: (mode: CadViewerDisplayMode) => void;
-  onGrid: () => void;
-  onAutoRotate: () => void;
-}) {
-  const modes: Array<{ id: CadViewerDisplayMode; label: string; icon: typeof Eye }> = [
-    { id: "shaded", label: "Shaded", icon: Eye },
-    { id: "wireframe", label: "Wireframe", icon: GitBranch },
-    { id: "xray", label: "X-Ray", icon: Sparkles },
-  ];
-  return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <Button variant={mode !== "shaded" || !gridVisible || autoRotate ? "secondary" : "ghost"} size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model display">
-          <SlidersHorizontal className="h-3.5 w-3.5" />
-          <span>Display</span>
-          <ChevronDown className="h-3 w-3 text-fg/40" />
-        </Button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content align="start" sideOffset={6} className="z-[1000] w-56 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
-          {modes.map((item) => {
-            const Icon = item.icon;
-            return (
-              <Popover.Close asChild key={item.id}>
-                <button
-                  type="button"
-                  onClick={() => onMode(item.id)}
-                  className={cn(
-                    "flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] transition-colors",
-                    mode === item.id ? "bg-accent/10 text-accent" : "text-fg/70 hover:bg-panel2 hover:text-fg",
-                  )}
-                >
-                  <Icon className="h-3.5 w-3.5 shrink-0" />
-                  <span className="min-w-0 flex-1 truncate font-medium">{item.label}</span>
-                  {mode === item.id && <Check className="h-3 w-3" />}
-                </button>
-              </Popover.Close>
-            );
-          })}
-          <div className="my-1 h-px bg-line/70" />
-          <button type="button" onClick={onGrid} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
-            <Table2 className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate font-medium">Reference Grid</span>
-            {gridVisible && <Check className="h-3 w-3 text-accent" />}
-          </button>
-          <button type="button" onClick={onAutoRotate} className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg">
-            <RotateCcw className="h-3.5 w-3.5 shrink-0" />
-            <span className="min-w-0 flex-1 truncate font-medium">Auto Rotate</span>
-            {autoRotate && <Check className="h-3 w-3 text-accent" />}
-          </button>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
-  );
-}
-
 /* ─── Unified document entry for the takeoff selector ─── */
 
 interface TakeoffDocument {
@@ -1590,6 +1480,71 @@ function getModelElementTakeoffQuantity(element: ModelElementWithQuantities, bas
   return { quantity: 1, uom: "EA", label: "Count", quantityType: "count", quantityId: null as string | null };
 }
 
+function getMappedModelElementQuantity(
+  element: ModelElementWithQuantities,
+  selection: InspectCategoryPick["quantityOverride"],
+) {
+  if (!selection) return null;
+  if (selection.quantityType === "count" || selection.id === "count") {
+    const factor = selection.multiplier * (1 + selection.wastePercent / 100);
+    return {
+      quantity: factor,
+      uom: selection.uom || "EA",
+      label: selection.label,
+      quantityType: "count",
+      quantityId: null as string | null,
+    };
+  }
+  if (selection.source === "model-property" && selection.propertyPath) {
+    // APS serializes property groups as flattened dotted keys (for example
+    // "AutoCAD.Length"), while IFC and other adapters can retain nested
+    // objects. Resolve the exact flattened key first, then the nested path.
+    let propertyValue: unknown = element.properties[selection.propertyPath];
+    if (propertyValue === undefined) {
+      propertyValue = element.properties;
+      for (const segment of selection.propertyPath.split(".")) {
+        if (!propertyValue || typeof propertyValue !== "object" || Array.isArray(propertyValue)) {
+          propertyValue = undefined;
+          break;
+        }
+        propertyValue = (propertyValue as Record<string, unknown>)[segment];
+      }
+    }
+    if (propertyValue && typeof propertyValue === "object" && !Array.isArray(propertyValue)) {
+      propertyValue = (propertyValue as Record<string, unknown>).value;
+    }
+    if (typeof propertyValue === "string" && /^[-+]?(?:\d+(?:,\d{3})*|\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(propertyValue.trim())) {
+      propertyValue = Number(propertyValue.trim().replace(/,/g, ""));
+    }
+    if (typeof propertyValue === "number" && Number.isFinite(propertyValue)) {
+      const factor = selection.multiplier * (1 + selection.wastePercent / 100);
+      return {
+        quantity: propertyValue * factor,
+        uom: selection.uom || "EA",
+        label: selection.label,
+        quantityType: `property:${selection.propertyPath}`,
+        quantityId: null as string | null,
+      };
+    }
+  }
+  const source = (element.quantities ?? []).find((quantity) =>
+    quantity.id === selection.modelQuantityId
+      || (
+        quantity.quantityType === selection.quantityType
+        && (!selection.uom || quantity.unit === selection.uom)
+      ),
+  );
+  if (!source) return null;
+  const factor = selection.multiplier * (1 + selection.wastePercent / 100);
+  return {
+    quantity: source.value * factor,
+    uom: selection.uom || source.unit || "EA",
+    label: selection.label,
+    quantityType: source.quantityType,
+    quantityId: source.id,
+  };
+}
+
 function formatElementQuantity(element: ModelElementWithQuantities, basis: ModelQuantityBasis) {
   const primary = getModelElementTakeoffQuantity(element, basis);
   return formatModelSelectionQuantity(primary.quantity, primary.uom);
@@ -1882,9 +1837,58 @@ export function TakeoffTab({
     pickInput: string | InspectCategoryPick,
   ): CreateWorksheetItemInput | null {
     const pick = normalizeTakeoffCategoryPick(pickInput);
-    if (category.itemSource !== "rate_schedule") return payload;
+    const template = pick.lineItemTemplate;
+    const mergedPayload: CreateWorksheetItemInput = template
+      ? {
+          ...payload,
+          categoryId: template.categoryId ?? payload.categoryId,
+          category: template.category || payload.category,
+          entityType: template.entityType || payload.entityType,
+          entityName: template.entityName || payload.entityName,
+          classification: template.classification ?? payload.classification,
+          costCode: template.costCode ?? payload.costCode,
+          vendor: template.vendor ?? payload.vendor,
+          description: template.description || payload.description,
+          // The estimator deliberately chose this pricing item. Its unit and
+          // pricing identity win; the takeoff remains authoritative for the
+          // measured quantity and source links.
+          uom: template.uom || payload.uom,
+          cost: template.cost,
+          markup: template.markup,
+          price: template.price,
+          rateScheduleItemId: template.rateScheduleItemId ?? null,
+          itemId: template.itemId ?? null,
+          costResourceId: template.costResourceId ?? null,
+          effectiveCostId: template.effectiveCostId ?? null,
+          laborUnitId: template.laborUnitId ?? null,
+          tierUnits: template.tierUnits ?? {},
+          sourceNotes: [payload.sourceNotes, template.sourceNotes]
+            .map((value) => value?.trim())
+            .filter(Boolean)
+            .join("\n"),
+          resourceComposition: template.resourceComposition ?? payload.resourceComposition,
+          sourceEvidence: template.sourceEvidence ?? payload.sourceEvidence,
+        }
+      : payload;
+    const quantityMappedPayload: CreateWorksheetItemInput = pick.quantityOverride
+      ? {
+          ...mergedPayload,
+          quantity: pick.quantityOverride.result,
+          uom: pick.quantityOverride.uom || mergedPayload.uom,
+          sourceNotes: [
+            mergedPayload.sourceNotes,
+            `Quantity mapped from ${pick.quantityOverride.label}: ${pick.quantityOverride.value} ${pick.quantityOverride.uom}`,
+            pick.quantityOverride.multiplier !== 1 ? `multiplier ${pick.quantityOverride.multiplier}` : "",
+            pick.quantityOverride.wastePercent > 0 ? `waste ${pick.quantityOverride.wastePercent}%` : "",
+          ].filter(Boolean).join("\n"),
+        }
+      : mergedPayload;
+    if (category.itemSource !== "rate_schedule") return quantityMappedPayload;
 
-    const selection = findRateScheduleSelection(pick);
+    const selection = findRateScheduleSelection({
+      ...pick,
+      rateScheduleItemId: pick.rateScheduleItemId ?? template?.rateScheduleItemId ?? undefined,
+    });
     if (!selection) {
       setToastType("error");
       setToastMessage(`Choose an imported ${category.name} ratebook item before adding this row.`);
@@ -1892,13 +1896,14 @@ export function TakeoffTab({
     }
 
     const fallback = defaultRateTier(selection.schedule, selection.item);
-    const tierUnits = hasPositiveTierUnits(pick.tierUnits) && pick.tierUnits
-      ? pick.tierUnits
+    const requestedTierUnits = pick.tierUnits ?? template?.tierUnits;
+    const tierUnits = hasPositiveTierUnits(requestedTierUnits) && requestedTierUnits
+      ? requestedTierUnits
       : fallback.tierUnits;
     return {
-      ...payload,
-      entityName: pick.rateScheduleItemName || selection.item.name || payload.entityName,
-      uom: pick.rateScheduleItemUnit || selection.item.unit || payload.uom,
+      ...quantityMappedPayload,
+      entityName: pick.rateScheduleItemName || template?.entityName || selection.item.name || payload.entityName,
+      uom: pick.quantityOverride?.uom || pick.rateScheduleItemUnit || template?.uom || selection.item.unit || payload.uom,
       cost: 0,
       markup: 0,
       price: 0,
@@ -1998,16 +2003,7 @@ export function TakeoffTab({
   const [zoom, setZoom] = useState(safeInitialZoom);
   const [totalPages, setTotalPages] = useState(1);
   const [activeTool, setActiveTool] = useState<ToolId>("select");
-  const [shortcutPreset, setShortcutPreset] = useState<TakeoffShortcutPreset>("bidwright");
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem("bidwright.takeoff.shortcutPreset");
-    if (isTakeoffShortcutPreset(saved)) setShortcutPreset(saved);
-  }, []);
-
-  useEffect(() => {
-    window.localStorage.setItem("bidwright.takeoff.shortcutPreset", shortcutPreset);
-  }, [shortcutPreset]);
+  const shortcutPreset: TakeoffShortcutPreset = "bidwright";
 
   /* Annotation state */
   const [annotations, setAnnotations] = useState<Pickup[]>([]);
@@ -2291,9 +2287,13 @@ export function TakeoffTab({
   const [modelElementCount, setModelElementCount] = useState(0);
   const [modelElementSearch, setModelElementSearch] = useState("");
   const [modelElementsLoading, setModelElementsLoading] = useState(false);
+  const [modelTopology, setModelTopology] = useState<ModelTakeoffTopology | null>(null);
+  const [modelTopologyLoading, setModelTopologyLoading] = useState(false);
   const modelElementsRequestRef = useRef(0);
   const [modelLedgerBasis, setModelLedgerBasis] = useState<ModelQuantityBasis>("count");
   const [selectedModelElementIds, setSelectedModelElementIds] = useState<Set<string>>(() => new Set());
+  const [selectedModelGroupSignature, setSelectedModelGroupSignature] = useState<string | null>(null);
+  const [modelOrbitingGroupSignature, setModelOrbitingGroupSignature] = useState<string | null>(null);
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const modelViewerActionsRef = useRef<CadViewerActions | null>(null);
@@ -2469,12 +2469,8 @@ export function TakeoffTab({
     setModelElementsLoading(true);
     try {
       const modelId = selectedModelAsset.id;
-      const filters = {
-        text: modelElementSearch.trim() || undefined,
-      };
       const pageSize = 1000;
       const first = await queryModelElements(projectId, modelId, {
-        ...filters,
         limit: pageSize,
         offset: 0,
       });
@@ -2488,7 +2484,6 @@ export function TakeoffTab({
       );
       const remaining = await Promise.all(
         offsets.map((offset) => queryModelElements(projectId, modelId, {
-          ...filters,
           limit: pageSize,
           offset,
         })),
@@ -2506,7 +2501,7 @@ export function TakeoffTab({
     } finally {
       if (requestId === modelElementsRequestRef.current) setModelElementsLoading(false);
     }
-  }, [modelElementSearch, projectId, selectedModelAsset?.id]);
+  }, [projectId, selectedModelAsset?.id]);
 
   useEffect(() => {
     if (!selectedModelAsset?.id) {
@@ -2521,17 +2516,50 @@ export function TakeoffTab({
     return () => window.clearTimeout(timeout);
   }, [refreshModelElements, selectedModelAsset?.id]);
 
+  const refreshModelTopology = useCallback(async (rebuild = false) => {
+    if (!projectId || !selectedModelAsset?.id) {
+      setModelTopology(null);
+      return;
+    }
+    setModelTopologyLoading(true);
+    try {
+      const topology = rebuild
+        ? await rebuildModelTakeoffTopology(projectId, selectedModelAsset.id)
+        : await getModelTakeoffTopology(projectId, selectedModelAsset.id);
+      setModelTopology(!rebuild && topology.groups.length === 0 && modelElements.length > 0
+        ? await rebuildModelTakeoffTopology(projectId, selectedModelAsset.id)
+        : topology);
+    } catch (error) {
+      console.error("[takeoff] Failed to load model topology:", error);
+      setModelTopology(null);
+    } finally {
+      setModelTopologyLoading(false);
+    }
+  }, [modelElements.length, projectId, selectedModelAsset?.id]);
+
+  useEffect(() => {
+    void refreshModelTopology(false);
+  }, [refreshModelTopology]);
+
   useEffect(() => {
     setModelSelection(null);
     setModelTakeoffLinks([]);
     setModelElements([]);
     setModelElementCount(0);
+    setModelTopology(null);
     setSelectedModelElementIds(new Set());
+    setSelectedModelGroupSignature(null);
+    setModelOrbitingGroupSignature(null);
+    modelViewerActionsRef.current?.stopOrbit();
   }, [selectedDocId]);
 
   const linkedModelElementIds = useMemo(
     () => new Set(modelTakeoffLinks.map((link) => link.modelElementId).filter((id): id is string => Boolean(id))),
     [modelTakeoffLinks],
+  );
+  const modelElementsById = useMemo(
+    () => new Map(modelElements.map((element) => [element.id, element])),
+    [modelElements],
   );
 
   const selectedModelElements = useMemo(
@@ -2545,17 +2573,23 @@ export function TakeoffTab({
     (element: ModelElementWithQuantities | null, syncViewer = false) => {
       if (!element || !selectedModelAsset) {
         setSelectedModelElementIds(new Set());
+        setSelectedModelGroupSignature(null);
+        setModelOrbitingGroupSignature(null);
+        modelViewerActionsRef.current?.stopOrbit();
         if (syncViewer) modelViewerActionsRef.current?.selectElement(null);
-        if (selection?.kind === "model-element" || !onSelectionChange) publishTakeoffSelection(null);
+        if (selection?.kind === "model-element" || selection?.kind === "model-element-group" || !onSelectionChange) publishTakeoffSelection(null);
         return;
       }
       setSelectedModelElementIds(new Set([element.id]));
+      setSelectedModelGroupSignature(null);
+      setModelOrbitingGroupSignature(null);
+      modelViewerActionsRef.current?.stopOrbit();
       if (syncViewer) {
         const properties = (element.properties as Record<string, unknown> | null) ?? {};
         const viewerExternalId = typeof properties.expressId === "string" && properties.expressId
           ? properties.expressId
           : element.externalId;
-        modelViewerActionsRef.current?.selectElement(viewerExternalId);
+        modelViewerActionsRef.current?.focusElement(viewerExternalId);
       }
       publishTakeoffSelection({
         kind: "model-element",
@@ -2570,6 +2604,101 @@ export function TakeoffTab({
     },
     [modelLedgerBasis, onSelectionChange, selectedModelAsset, selection],
   );
+
+  const publishIndexedModelGroupSelection = useCallback((group: {
+    signature: string;
+    name: string;
+    kind: "system" | "run" | "estimate";
+    elementIds: string[];
+    measurementType: string;
+    quantity: number;
+    unit: string;
+    confidence: number;
+    source: string;
+    warnings: string[];
+  }) => {
+    if (!selectedModelAsset) return;
+    const members = group.elementIds
+      .map((id) => modelElementsById.get(id))
+      .filter((element): element is ModelElementWithQuantities => Boolean(element));
+    if (members.length === 0) return;
+    // Keep group scope as one compact state value. Expanding this into every
+    // child id forced a full 1,292-row snapshot rebuild on every click.
+    setSelectedModelElementIds(new Set());
+    setSelectedModelGroupSignature(group.signature);
+    setModelOrbitingGroupSignature(null);
+    modelViewerActionsRef.current?.stopOrbit();
+    const viewerExternalIds = members.map((element) => {
+      const properties = (element.properties as Record<string, unknown> | null) ?? {};
+      return typeof properties.expressId === "string" && properties.expressId
+        ? properties.expressId
+        : element.externalId;
+    });
+    requestAnimationFrame(() => modelViewerActionsRef.current?.focusElements(viewerExternalIds));
+    publishTakeoffSelection({
+      kind: "model-element-group",
+      assetId: selectedModelAsset.id,
+      groupSignature: group.signature,
+      groupName: group.name,
+      groupKind: group.kind,
+      elementIds: members.map((element) => element.id),
+      elementCount: members.length,
+      measurementType: group.measurementType,
+      quantity: group.quantity,
+      unit: group.unit,
+      confidence: group.confidence,
+      source: group.source,
+      warnings: group.warnings,
+    });
+  }, [modelElementsById, selectedModelAsset]);
+
+  const toggleIndexedModelGroupOrbit = useCallback((group: {
+    signature: string;
+    name: string;
+    kind: "system" | "run" | "estimate";
+    elementIds: string[];
+    measurementType: string;
+    quantity: number;
+    unit: string;
+    confidence: number;
+    source: string;
+    warnings: string[];
+  }) => {
+    if (modelOrbitingGroupSignature === group.signature) {
+      modelViewerActionsRef.current?.stopOrbit();
+      setModelOrbitingGroupSignature(null);
+      return;
+    }
+    const members = group.elementIds
+      .map((id) => modelElementsById.get(id))
+      .filter((element): element is ModelElementWithQuantities => Boolean(element));
+    if (members.length === 0 || !selectedModelAsset) return;
+    const viewerExternalIds = members.map((element) => {
+      const properties = (element.properties as Record<string, unknown> | null) ?? {};
+      return typeof properties.expressId === "string" && properties.expressId
+        ? properties.expressId
+        : element.externalId;
+    });
+    setSelectedModelElementIds(new Set());
+    setSelectedModelGroupSignature(group.signature);
+    setModelOrbitingGroupSignature(group.signature);
+    publishTakeoffSelection({
+      kind: "model-element-group",
+      assetId: selectedModelAsset.id,
+      groupSignature: group.signature,
+      groupName: group.name,
+      groupKind: group.kind,
+      elementIds: members.map((element) => element.id),
+      elementCount: members.length,
+      measurementType: group.measurementType,
+      quantity: group.quantity,
+      unit: group.unit,
+      confidence: group.confidence,
+      source: group.source,
+      warnings: group.warnings,
+    });
+    requestAnimationFrame(() => modelViewerActionsRef.current?.orbitElements(viewerExternalIds));
+  }, [modelElementsById, modelOrbitingGroupSignature, selectedModelAsset]);
 
   const handleHostedModelElementSelect = useCallback(
     (selected: { externalId: string } | null) => {
@@ -3017,6 +3146,12 @@ export function TakeoffTab({
           if (!element) return;
           publishIndexedModelElementSelection(element, true);
         },
+        selectModelElementGroup: (group) => {
+          publishIndexedModelGroupSelection(group);
+        },
+        toggleModelElementGroupOrbit: (group) => {
+          toggleIndexedModelGroupOrbit(group);
+        },
         createLineItemFromElement: async (id, pick) => {
           // The pick is selected in the per-click popover that wraps each
           // + Add button — see AddToCategoryPopover. We don't fall back to
@@ -3131,7 +3266,32 @@ export function TakeoffTab({
         setTakeoffCategoryId: (categoryId) => {
           setTakeoffCategoryId(categoryId);
         },
-        refreshModel: () => void refreshModelAssets(true),
+        refreshModel: () => void (async () => {
+          await refreshModelAssets(true);
+          await refreshModelTopology(false);
+        })(),
+        rebuildModelTopology: async () => {
+          await refreshModelTopology(true);
+        },
+        applyModelTopologyOverride: async (input) => {
+          if (!selectedModelAsset?.id) return;
+          const result = await createModelTakeoffOverride(projectId, selectedModelAsset.id, input);
+          setModelTopology(result.topology);
+        },
+        removeModelTopologyOverride: async (overrideId) => {
+          if (!selectedModelAsset?.id) return;
+          const result = await deleteModelTakeoffOverride(projectId, selectedModelAsset.id, overrideId);
+          setModelTopology(result.topology);
+        },
+        saveModelTopologyRecipe: async (input) => {
+          await saveModelTakeoffRecipe(projectId, { ...input, modelId: selectedModelAsset?.id ?? null });
+          await refreshModelTopology(false);
+        },
+        removeModelTopologyRecipe: async (recipeId) => {
+          const result = await deleteModelTakeoffRecipe(projectId, recipeId);
+          if (result.topology) setModelTopology(result.topology);
+          else await refreshModelTopology(false);
+        },
       };
     }
   });
@@ -6099,12 +6259,36 @@ export function TakeoffTab({
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
   }
 
+  const inspectModelElementsForSnapshot = useMemo<InspectModelElement[]>(() => (
+    modelElements.map((element) => ({
+      id: element.id,
+      name: element.name || element.externalId,
+      externalId: element.externalId,
+      elementClass: element.elementClass ?? null,
+      elementType: element.elementType ?? null,
+      system: element.system ?? null,
+      material: element.material ?? null,
+      level: element.level ?? null,
+      classification: (element as { classification?: Record<string, string> }).classification ?? null,
+      lod: (element as { lod?: string }).lod ?? null,
+      lodSource: (element as { lodSource?: string }).lodSource ?? null,
+      quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+      modelUnit: selectedModelAsset?.units || "",
+      quantities: (element.quantities ?? []).map((quantity) => ({
+        id: quantity.id,
+        quantityType: quantity.quantityType,
+        value: quantity.value,
+        unit: quantity.unit,
+        method: quantity.method,
+        confidence: quantity.confidence,
+      })),
+      properties: element.properties ?? {},
+      isLinked: linkedModelElementIds.has(element.id),
+    }))
+  ), [linkedModelElementIds, modelElements, modelLedgerBasis, selectedModelAsset?.units]);
+
   // Publish a snapshot of inspect-relevant state to the parent so the
   // side-panel Inspect tab can render the appropriate browse view.
-  // Idempotent: skip the parent setState if the rendered snapshot is byte-equal
-  // to the last one we published. Without this guard, a fresh object literal
-  // each call defeated React's bailout and looped through parent re-renders.
-  const lastPublishedSnapshotRef = useRef<string | null>(null);
   useEffect(() => {
     if (!onInspectSnapshotChange) return;
     // selectedDocId defaults to the first project PDF on mount so the
@@ -6137,26 +6321,7 @@ export function TakeoffTab({
     // Both BIM and 3D-geometry modes carry model elements; PDF/DWG don't.
     const isModelMode = mode === "bim" || mode === "model";
     const inspectModelElements: InspectModelElement[] =
-      isModelMode
-        ? modelElements.map((element) => ({
-            id: element.id,
-            name: element.name || element.externalId,
-            externalId: element.externalId,
-            elementClass: element.elementClass ?? null,
-            elementType: element.elementType ?? null,
-            system: element.system ?? null,
-            material: element.material ?? null,
-            level: element.level ?? null,
-            // Phase 2 BIM fields. classification is the typed record; lod/lodSource
-            // come from the per-element schema columns. Use ?? to surface "" as null
-            // so the UI can `lod ?? null` without falsy-vs-empty confusion.
-            classification: (element as { classification?: Record<string, string> }).classification ?? null,
-            lod: (element as { lod?: string }).lod ?? null,
-            lodSource: (element as { lodSource?: string }).lodSource ?? null,
-            quantitySummary: formatElementQuantity(element, modelLedgerBasis),
-            isLinked: linkedModelElementIds.has(element.id),
-          }))
-        : [];
+      isModelMode ? inspectModelElementsForSnapshot : [];
     // Spreadsheet rows surfaced as entities. Only populated when the active
     // doc is a spreadsheet AND its preview has loaded; otherwise null so the
     // side panel falls back to its empty state.
@@ -6236,6 +6401,8 @@ export function TakeoffTab({
       modelSyncing,
       modelSearch: modelElementSearch,
       modelBasis: modelLedgerBasis,
+      modelTopology,
+      modelTopologyLoading,
       modelAsset:
         isModelMode && selectedModelAsset
           ? {
@@ -6254,6 +6421,9 @@ export function TakeoffTab({
           : null,
       selectedModelElementId:
         selection?.kind === "model-element" ? selection.elementId : null,
+      selectedModelElementIds: Array.from(selectedModelElementIds),
+      selectedModelGroupSignature,
+      modelOrbitingGroupSignature,
       spreadsheet: inspectSpreadsheet,
       photoBom: photoBomResult
         ? {
@@ -6296,9 +6466,6 @@ export function TakeoffTab({
         .sort((a, b) => a.order - b.order),
       takeoffCategoryId: takeoffCategory?.id ?? null,
     };
-    const serialized = JSON.stringify(nextSnapshot);
-    if (serialized === lastPublishedSnapshotRef.current) return;
-    lastPublishedSnapshotRef.current = serialized;
     onInspectSnapshotChange(nextSnapshot);
   }, [
     onInspectSnapshotChange,
@@ -6336,13 +6503,18 @@ export function TakeoffTab({
     canvasSize.width,
     canvasSize.height,
     zoom,
-    modelElements,
+    inspectModelElementsForSnapshot,
     modelElementCount,
     modelElementsLoading,
     modelError,
     modelSyncing,
     modelElementSearch,
     modelLedgerBasis,
+    modelTopology,
+    modelTopologyLoading,
+    selectedModelElementIds,
+    selectedModelGroupSignature,
+    modelOrbitingGroupSignature,
     selectedModelAsset,
     selectedModelIsEditable,
     linkedModelElementIds,
@@ -6480,7 +6652,8 @@ export function TakeoffTab({
       return null;
     }
 
-    const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+    const primary = getMappedModelElementQuantity(element, pick.quantityOverride)
+      ?? getModelElementTakeoffQuantity(element, modelLedgerBasis);
     const basePayload = buildModelElementLineItem(element, primary, {
       fileName: selectedDoc?.fileName,
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
@@ -6507,7 +6680,7 @@ export function TakeoffTab({
         elementName: element.name,
         elementClass: element.elementClass,
         material: element.material,
-        quantityBasis: modelLedgerBasis,
+        quantityBasis: pick.quantityOverride?.id ?? modelLedgerBasis,
         quantityType: primary.quantityType,
         quantities: element.quantities ?? [],
         lineItemDraft: payload,
@@ -7101,7 +7274,8 @@ export function TakeoffTab({
     let primaryQuantityType: string | undefined;
     const uomCounts = new Map<string, number>();
     for (const element of elements) {
-      const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+      const primary = getMappedModelElementQuantity(element, pick.quantityOverride)
+        ?? getModelElementTakeoffQuantity(element, modelLedgerBasis);
       if (!primary) continue;
       totalQty += primary.quantity;
       if (!primaryQuantityType) primaryQuantityType = primary.quantityType;
@@ -7144,7 +7318,8 @@ export function TakeoffTab({
     // class can contain thousands of objects and one HTTP request per object
     // made the otherwise-correct group workflow unusable on real models.
     const linkInputs = elements.map((element) => {
-      const primary = getModelElementTakeoffQuantity(element, modelLedgerBasis);
+      const primary = getMappedModelElementQuantity(element, pick.quantityOverride)
+        ?? getModelElementTakeoffQuantity(element, modelLedgerBasis);
       return {
         modelElementId: element.id,
         modelQuantityId: primary?.quantityId,
@@ -7160,7 +7335,7 @@ export function TakeoffTab({
           elementName: element.name,
           elementClass: element.elementClass,
           material: element.material,
-          quantityBasis: modelLedgerBasis,
+          quantityBasis: pick.quantityOverride?.id ?? modelLedgerBasis,
           quantityType: primary?.quantityType ?? primaryQuantityType,
         },
       };
@@ -8273,61 +8448,43 @@ export function TakeoffTab({
               >
                 <Scan className="h-3.5 w-3.5" />
               </Button>
+              <AppkitSelect
+                value={modelStandardView}
+                onChange={(event) => handleModelStandardView(event.target.value as CadViewerStandardView)}
+                aria-label="Model view"
+                title="Model view"
+                searchable={false}
+                triggerClassName="h-7 min-h-7 w-[94px] px-2 text-[10px]"
+                className="h-7 w-[94px] text-[10px]"
+              >
+                <option value="iso">Isometric</option>
+                <option value="top">Top</option>
+                <option value="front">Front</option>
+                <option value="right">Right</option>
+              </AppkitSelect>
+              <AppkitSelect
+                value={modelDisplayMode === "xray" ? "shaded" : modelDisplayMode}
+                onChange={(event) => handleModelDisplayMode(event.target.value as CadViewerDisplayMode)}
+                aria-label="Model display"
+                title="Model display"
+                searchable={false}
+                triggerClassName="h-7 min-h-7 w-[82px] px-2 text-[10px]"
+                className="h-7 w-[82px] text-[10px]"
+              >
+                <option value="shaded">Shaded</option>
+                <option value="wireframe">Edges</option>
+              </AppkitSelect>
               <Button
                 variant="ghost"
                 size="sm"
-                onClick={handleModelResetView}
-                title="Reset model view"
-                aria-label="Reset model view"
+                onClick={() => void refreshModelAssets(true)}
+                disabled={modelSyncing}
+                title="Sync model index"
+                aria-label="Sync model index"
                 className="h-7 w-7 shrink-0 px-0"
               >
-                <RotateCcw className="h-3.5 w-3.5" />
+                <RefreshCw className={cn("h-3.5 w-3.5", modelSyncing && "animate-spin")} />
               </Button>
-              <ModelViewMenu currentView={modelStandardView} onView={handleModelStandardView} />
-              <ModelDisplayMenu
-                mode={modelDisplayMode}
-                gridVisible={modelGridVisible}
-                autoRotate={modelAutoRotate}
-                onMode={handleModelDisplayMode}
-                onGrid={handleModelGridToggle}
-                onAutoRotate={handleModelAutoRotateToggle}
-              />
-              <Popover.Root>
-                <Popover.Trigger asChild>
-                  <Button variant="ghost" size="sm" className="h-7 shrink-0 gap-1.5 px-2 text-[11px]" title="Model takeoff">
-                    <Boxes className="h-3.5 w-3.5" />
-                    <span>Takeoff</span>
-                    <ChevronDown className="h-3 w-3 text-fg/40" />
-                  </Button>
-                </Popover.Trigger>
-                <Popover.Portal>
-                  <Popover.Content align="start" sideOffset={6} className="z-[1000] w-64 rounded-lg border border-line bg-panel p-1.5 shadow-xl outline-none">
-                    <Popover.Close asChild>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onOpenInspectEntities?.();
-                          postTakeoffMessage({ type: "open-inspect-entities" });
-                        }}
-                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg"
-                      >
-                        <Boxes className="h-3.5 w-3.5 shrink-0" />
-                        <span className="min-w-0 flex-1 truncate font-medium">Review Entities</span>
-                      </button>
-                    </Popover.Close>
-                    <Popover.Close asChild>
-                      <button
-                        type="button"
-                        onClick={() => void refreshModelAssets(true)}
-                        className="flex h-8 w-full items-center gap-2 rounded-md px-2 text-left text-[11px] text-fg/70 transition-colors hover:bg-panel2 hover:text-fg"
-                      >
-                        <RefreshCw className={cn("h-3.5 w-3.5 shrink-0", modelSyncing && "animate-spin")} />
-                        <span className="min-w-0 flex-1 truncate font-medium">Sync Model Index</span>
-                      </button>
-                    </Popover.Close>
-                  </Popover.Content>
-                </Popover.Portal>
-              </Popover.Root>
               {selectedModelIsEditable && (
                 <Button
                   variant="secondary"
@@ -8350,14 +8507,6 @@ export function TakeoffTab({
 
         {isPdfDocument && (
           <>
-            <Select
-              value={shortcutPreset}
-              onValueChange={(value) => {
-                if (isTakeoffShortcutPreset(value)) setShortcutPreset(value);
-              }}
-              options={TAKEOFF_SHORTCUT_PRESET_OPTIONS}
-              className="h-7 w-[112px] shrink-0 text-[11px]"
-            />
             <Button
               variant="ghost"
               size="sm"
@@ -8839,71 +8988,6 @@ export function TakeoffTab({
             >
               <Crosshair className="h-3.5 w-3.5" />
             </button>
-          </div>
-        )}
-
-        {isCadDocument && (
-          <div className="flex w-9 shrink-0 flex-col items-center gap-0.5 overflow-y-auto overflow-x-hidden border-r border-line bg-panel p-0.5">
-            <button
-              type="button"
-              title={isBimDocument ? "Select BIM elements" : "Inspect model"}
-              className="flex h-7 w-7 items-center justify-center rounded-md bg-accent/15 text-accent transition-colors"
-              onClick={() => {
-                onOpenInspectEntities?.();
-                postTakeoffMessage({ type: "open-inspect-entities" });
-              }}
-            >
-              <MousePointer2 className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={handleModelFitView}
-              title="Fit model"
-              className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 transition-colors hover:bg-panel2 hover:text-fg/75"
-            >
-              <Scan className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={() => handleModelDisplayMode(modelDisplayMode === "xray" ? "shaded" : "xray")}
-              title="Toggle X-Ray"
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
-                modelDisplayMode === "xray" ? "bg-violet-500/10 text-violet-500" : "text-fg/45 hover:bg-panel2 hover:text-fg/75",
-              )}
-            >
-              <Sparkles className="h-3.5 w-3.5" />
-            </button>
-            <button
-              type="button"
-              onClick={handleModelGridToggle}
-              title="Toggle reference grid"
-              className={cn(
-                "flex h-7 w-7 items-center justify-center rounded-md transition-colors",
-                modelGridVisible ? "bg-sky-500/10 text-sky-500" : "text-fg/45 hover:bg-panel2 hover:text-fg/75",
-              )}
-            >
-              <Table2 className="h-3.5 w-3.5" />
-            </button>
-            <div className="my-0.5 h-px w-full bg-line/60" />
-            <button
-              type="button"
-              onClick={() => void refreshModelAssets(true)}
-              title="Sync model index"
-              className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 transition-colors hover:bg-panel2 hover:text-fg/75"
-            >
-              <RefreshCw className={cn("h-3.5 w-3.5", modelSyncing && "animate-spin")} />
-            </button>
-            {selectedModelIsEditable && (
-              <button
-                type="button"
-                onClick={handleOpenModelEditor}
-                title="Open model editor in new tab"
-                className="flex h-7 w-7 items-center justify-center rounded-md text-fg/45 transition-colors hover:bg-panel2 hover:text-fg/75"
-              >
-                <Edit3 className="h-3.5 w-3.5" />
-              </button>
-            )}
           </div>
         )}
 

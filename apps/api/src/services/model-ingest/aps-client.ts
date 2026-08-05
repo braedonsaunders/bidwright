@@ -337,11 +337,22 @@ export class ApsClient {
 
     const mapped = flatObjects.map((obj) => {
       const props = obj.properties ?? {};
-      const classVal = firstStringValue(props, "Category", "Layer", "__category__", "Item Class", "Class") || "";
-      const typeVal = firstStringValue(props, "Type", "Family and Type", "Element Type", "Family", "Entity Type") || "";
+      const classVal = firstStringValue(props, "Class", "Item Class", "__category__", "Category", "Layer") || "";
+      const typeVal = firstStringValue(props, "Entity Type", "Element Type", "Family and Type", "Type", "Family") || "";
       const levelVal = firstStringValue(props, "Level", "Story", "Elevation", "Level Name", "Base Level", "Story Name") || "";
-      const materialVal = firstStringValue(props, "Material", "Material Name", "Structural Material") || "";
-      const systemVal = firstStringValue(props, "System", "System Type", "System Name", "MEP System") || "";
+      const materialVal = firstStringValue(props, "Plant Material", "Material Code", "Structural Material", "Material Name", "Material") || "";
+      const systemVal = firstStringValue(
+        props,
+        "PipeLineNumber",
+        "Pipe Line Number",
+        "Pipeline Tag",
+        "Line Number Tag",
+        "Line Number",
+        "System Name",
+        "MEP System",
+        "System Type",
+        "System",
+      ) || "";
 
       const quantities = extractQuantities(props);
 
@@ -379,8 +390,11 @@ function firstStringValue(
   props: Record<string, Record<string, unknown>>,
   ...keys: string[]
 ): string | null {
-  for (const group of Object.values(props)) {
-    for (const key of keys) {
+  // Property priority must win over property-group iteration order. Plant3D
+  // exposes both AutoCAD.Class and General.Layer; searching groups first made
+  // the layer accidentally become the element class.
+  for (const key of keys) {
+    for (const group of Object.values(props)) {
       const value = apsPropertyValue(group[key]);
       if (value != null && value !== "" && value !== "none") {
         return String(value);
@@ -404,8 +418,17 @@ function extractQuantities(
 
   for (const group of Object.values(props)) {
     for (const [key, entry] of Object.entries(group)) {
-      const value = apsPropertyValue(entry);
-      if (typeof value !== "number" || !isFinite(value) || value === 0) continue;
+      const rawValue = apsPropertyValue(entry);
+      const value = typeof rawValue === "number"
+        ? rawValue
+        : typeof rawValue === "string" && /^[-+]?(?:\d+(?:,\d{3})*|\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?$/.test(rawValue.trim())
+          ? Number(rawValue.trim().replace(/,/g, ""))
+          : Number.NaN;
+      // Navisworks/AutoCAD properties frequently serialize numeric property
+      // values as strings (for example AutoCAD.Length: "9.043757"). Those
+      // are still native BIM quantities and must not be discarded merely
+      // because APS chose the display-value representation.
+      if (!Number.isFinite(value) || value === 0) continue;
       const lowerKey = key.toLowerCase().trim();
       if (quantityHints.has(lowerKey) || lowerKey.includes("area") || lowerKey.includes("volume") || lowerKey.includes("length")) {
         quantities.push({

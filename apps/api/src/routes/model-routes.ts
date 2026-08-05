@@ -3,10 +3,14 @@ import { z } from "zod";
 import {
   createModelTakeoffLink,
   createModelTakeoffLinks,
+  createModelTakeoffOverride,
   createProjectFederation,
   deleteModelTakeoffLink,
+  deleteModelTakeoffOverride,
+  deleteModelTakeoffRecipe,
   deleteProjectFederation,
   getModelBom,
+  getModelTakeoffTopology,
   getProjectFederation,
   getProjectModelAsset,
   getProjectModelIngestCapabilities,
@@ -15,6 +19,8 @@ import {
   listProjectModelAssets,
   prepareProjectModelViewer,
   queryModelElements,
+  rebuildPersistedModelTopology,
+  saveModelTakeoffRecipe,
   removeFederationMember,
   syncProjectModelAssets,
   updateModelElement,
@@ -63,6 +69,29 @@ const createModelTakeoffLinksSchema = z.object({
     derivedQuantity: z.coerce.number().finite(),
     selection: z.unknown().optional(),
   })).min(1).max(500),
+});
+
+const takeoffRecipeAxisSchema = z.enum(["trade", "role", "specification", "material", "size", "system", "level", "elementClass", "elementType"]);
+
+const takeoffRecipeSchema = z.object({
+  id: z.string().min(1).optional(),
+  modelId: z.string().min(1).nullable().optional(),
+  name: z.string().trim().min(1).max(160),
+  trade: z.string().trim().min(1).max(80).optional(),
+  isDefault: z.boolean().optional(),
+  rules: z.object({
+    groupBy: z.array(takeoffRecipeAxisSchema).min(1).max(9).optional(),
+    defaultView: z.enum(["estimate", "system", "run"]).optional(),
+    hierarchy: z.array(z.enum(["system", "network", "run", "estimate"])).optional(),
+    authoredSystemsFirst: z.boolean().optional(),
+    inferCompatibleEndpoints: z.boolean().optional(),
+  }).passthrough().optional(),
+});
+
+const takeoffOverrideSchema = z.object({
+  kind: z.enum(["rename", "exclude", "merge", "split"]),
+  targetSignature: z.string().min(1),
+  payload: z.record(z.string(), z.unknown()).optional(),
 });
 
 // ── Element classification/LOD update ──────────────────────────────────
@@ -237,6 +266,66 @@ export async function modelRoutes(app: FastifyInstance) {
     try {
       const bom = await getModelBom(projectId, modelId);
       return { ...bom, rowCount: bom.rows.length };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.get("/api/models/:projectId/assets/:modelId/topology", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    const query = request.query as { includeConnections?: string };
+    try {
+      return await getModelTakeoffTopology(projectId, modelId, { includeConnections: query.includeConnections === "1" || query.includeConnections === "true" });
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/assets/:modelId/topology/rebuild", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    try {
+      return await rebuildPersistedModelTopology(projectId, modelId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/takeoff-recipes", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = takeoffRecipeSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
+    try {
+      const recipe = await saveModelTakeoffRecipe(projectId, parsed.data);
+      return reply.code(parsed.data.id ? 200 : 201).send({ recipe });
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.delete("/api/models/:projectId/takeoff-recipes/:recipeId", async (request, reply) => {
+    const { projectId, recipeId } = request.params as { projectId: string; recipeId: string };
+    try {
+      return await deleteModelTakeoffRecipe(projectId, recipeId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.post("/api/models/:projectId/assets/:modelId/topology/overrides", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    const parsed = takeoffOverrideSchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
+    try {
+      return reply.code(201).send(await createModelTakeoffOverride(projectId, modelId, parsed.data));
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.delete("/api/models/:projectId/assets/:modelId/topology/overrides/:overrideId", async (request, reply) => {
+    const { projectId, modelId, overrideId } = request.params as { projectId: string; modelId: string; overrideId: string };
+    try {
+      return await deleteModelTakeoffOverride(projectId, modelId, overrideId);
     } catch (error) {
       return routeError(reply, error);
     }
