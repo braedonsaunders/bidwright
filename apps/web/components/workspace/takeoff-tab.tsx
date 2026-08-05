@@ -160,6 +160,10 @@ import dynamic from "next/dynamic";
 import { isPrimitiveClosed, samplePdfPrimitive } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
+import {
+  acceptTakeoffSyncMessage,
+  replayDetachedViewerCommand,
+} from "@/lib/takeoff-detached-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
 import { parseConstructionDimensionToUnit } from "@/lib/construction-dimension";
 import {
@@ -1078,6 +1082,7 @@ interface TakeoffTabProps {
 interface TakeoffSyncBase {
   originId: string;
   projectId: string;
+  messageId: string;
 }
 
 type TakeoffModelViewerCommand =
@@ -1098,6 +1103,7 @@ type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "files-mutated" })
   | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null })
   | (TakeoffSyncBase & { type: "open-inspect-entities" })
+  | (TakeoffSyncBase & { type: "detached-viewer-ready" })
   | (TakeoffSyncBase & { type: "model-viewer-command"; command: TakeoffModelViewerCommand })
   | (TakeoffSyncBase & { type: "drawing-analysis-result"; docId: string; page: number; analysis: DrawingGeometryAnalysisResult | null })
   | (TakeoffSyncBase & { type: "drawing-detection-selection"; docId: string; page: number; detectionId: string | null });
@@ -1111,6 +1117,7 @@ type TakeoffSyncPayload =
   | { type: "files-mutated" }
   | { type: "calibration-change"; calibration: Calibration | null }
   | { type: "open-inspect-entities" }
+  | { type: "detached-viewer-ready" }
   | { type: "model-viewer-command"; command: TakeoffModelViewerCommand }
   | { type: "drawing-analysis-result"; docId: string; page: number; analysis: DrawingGeometryAnalysisResult | null }
   | { type: "drawing-detection-selection"; docId: string; page: number; detectionId: string | null };
@@ -2284,12 +2291,19 @@ export function TakeoffTab({
   const fitOnLoadRef = useRef(true);
   const broadcastRef = useRef<BroadcastChannel | null>(null);
   const syncOriginRef = useRef(`takeoff-${Math.random().toString(36).slice(2)}`);
+  const syncMessageSerialRef = useRef(0);
+  const latestModelViewerCommandRef = useRef<TakeoffModelViewerCommand | null>(null);
+  const replayLatestModelViewerCommandRef = useRef<() => void>(() => {});
   const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
     if (!projectId) return;
+    if (payload.type === "model-viewer-command") {
+      latestModelViewerCommandRef.current = payload.command;
+    }
     const message: TakeoffSyncMessage = {
       ...payload,
       originId: syncOriginRef.current,
       projectId,
+      messageId: `${syncOriginRef.current}:${Date.now().toString(36)}:${++syncMessageSerialRef.current}`,
     } as TakeoffSyncMessage;
     if (
       payload.type === "model-viewer-command" &&
@@ -2300,10 +2314,30 @@ export function TakeoffTab({
         source: "bidwright-takeoff-sync",
         message,
       }, window.location.origin);
-      return;
+    } else if (
+      payload.type === "detached-viewer-ready" &&
+      window.opener &&
+      !window.opener.closed
+    ) {
+      window.opener.postMessage({
+        source: "bidwright-takeoff-sync",
+        message,
+      }, window.location.origin);
     }
+    // Always retain BroadcastChannel as the second transport. Direct window
+    // messages cover popup-startup races; the channel covers stale opener
+    // handles and normal cross-window updates. messageId deduplicates both.
     broadcastRef.current?.postMessage(message);
   }, [detachedTargetWindow, projectId]);
+  useEffect(() => {
+    replayLatestModelViewerCommandRef.current = () => {
+      replayDetachedViewerCommand(
+        isDetachedMirror,
+        latestModelViewerCommandRef.current,
+        (command) => postTakeoffMessage({ type: "model-viewer-command", command }),
+      );
+    };
+  }, [isDetachedMirror, postTakeoffMessage]);
   const selectedDocIdRef = useRef(selectedDocId);
   const pageRef = useRef(page);
   const zoomRef = useRef(zoom);
@@ -3586,9 +3620,11 @@ export function TakeoffTab({
       ? null
       : new BroadcastChannel(takeoffChannelName(projectId));
     if (channel) broadcastRef.current = channel;
+    const handledMessageIds = new Set<string>();
 
     const handleSyncMessage = (msg: TakeoffSyncMessage) => {
       if (!msg || msg.projectId !== projectId || msg.originId === syncOriginRef.current) return;
+      if (!acceptTakeoffSyncMessage(handledMessageIds, msg.messageId)) return;
 
       if (msg.type === "view-change") {
         if (msg.docId && msg.docId !== selectedDocIdRef.current) {
@@ -3614,6 +3650,11 @@ export function TakeoffTab({
 
       if (msg.type === "model-viewer-command") {
         applyExternalModelViewerCommandRef.current(msg.command);
+        return;
+      }
+
+      if (msg.type === "detached-viewer-ready") {
+        replayLatestModelViewerCommandRef.current();
         return;
       }
 
@@ -3684,6 +3725,13 @@ export function TakeoffTab({
       handleSyncMessage(envelope.message as TakeoffSyncMessage);
     };
     window.addEventListener("message", handleWindowMessage);
+
+    // The detached window owns a fresh TakeoffTab and a fresh Autodesk
+    // viewer. Announce readiness only after both sync transports are listening
+    // so the hidden controller can replay the current isolate/ghost scope.
+    if (detached && !isDetachedMirror) {
+      postTakeoffMessage({ type: "detached-viewer-ready" });
+    }
 
     return () => {
       if (broadcastRef.current === channel) {
