@@ -2720,14 +2720,17 @@ function DetectionGroup({
             const composeRequest = requestForRow(row);
             const staged = composeRequest ? compose.basketIds.has(composeRequest.id) : false;
             const activeModelScope = row.kind === "model" && (row.selected || groupFocused);
-            const compactModelRow = row.kind === "model";
+            // Ordinary pickup children use the exact same 24px row contract
+            // as their group header. Thumbnail and match-review rows retain
+            // the richer layout because their visual evidence needs height.
+            const compactPickupRow = !row.thumbnail && !row.matchExpansion;
             return (
             <Fragment key={row.id}>
             <div
               onClick={() => onSelect(row.id)}
               className={cn(
                 "group flex w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border px-1 transition-colors",
-                compactModelRow ? "py-0.5" : "py-1.5",
+                compactPickupRow ? "h-6 py-0" : "py-1.5",
                 activeModelScope || row.selected
                   ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
                   : row.linkCount > 0
@@ -2791,7 +2794,7 @@ function DetectionGroup({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
                   <p className="truncate text-[11px] font-medium text-fg/80">{row.title}</p>
-                  {compactModelRow && (row.subtitle || row.detail) && (
+                  {compactPickupRow && (row.subtitle || row.detail) && (
                     <span className="min-w-0 flex-1 truncate text-[9px] text-fg/35">
                       {[row.subtitle, row.detail].filter(Boolean).join(" · ")}
                     </span>
@@ -2816,8 +2819,8 @@ function DetectionGroup({
                     </span>
                   ) : null}
                 </div>
-                {!compactModelRow && <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>}
-                {!compactModelRow && row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
+                {!compactPickupRow && <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>}
+                {!compactPickupRow && row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
               </div>
               {row.value && <span className="max-w-[28%] shrink truncate font-mono text-[10px] text-fg/50" title={row.value}>{row.value}</span>}
               <div className="flex items-center gap-0.5">
@@ -2841,7 +2844,10 @@ function DetectionGroup({
                       disabled
                       title="Set drawing scale before adding linear detections to a worksheet"
                       aria-label="Add after setting drawing scale"
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-warning/25 bg-warning/10 text-warning/70 disabled:cursor-not-allowed"
+                      className={cn(
+                        "inline-flex items-center justify-center rounded-md border border-warning/25 bg-warning/10 text-warning/70 disabled:cursor-not-allowed",
+                        compactPickupRow ? "h-5 w-5" : "h-6 w-6",
+                      )}
                     >
                       <Plus className="h-3 w-3" />
                     </button>
@@ -2854,7 +2860,10 @@ function DetectionGroup({
                         compose.requestCompose?.(composeRequest);
                       }}
                       aria-label="Review and add this pickup"
-                      className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      className={cn(
+                        "inline-flex items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent",
+                        compactPickupRow ? "h-5 w-5" : "h-6 w-6",
+                      )}
                       title="Review and add this pickup to the estimate"
                     >
                       <Plus className="h-3 w-3" />
@@ -2865,7 +2874,10 @@ function DetectionGroup({
                       actions={actions}
                       onPick={(pick) => onAdd(row.id, row.kind, pick)}
                       triggerLabel=""
-                      triggerClassName="inline-flex h-6 w-6 items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+                      triggerClassName={cn(
+                        "inline-flex items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent",
+                        compactPickupRow ? "h-5 w-5" : "h-6 w-6",
+                      )}
                       triggerTitle="Add this line item to a worksheet"
                       triggerIcon={<Plus className="h-3 w-3" />}
                     />
@@ -2879,7 +2891,10 @@ function DetectionGroup({
                     onDelete(row.id, row.kind);
                   }}
                   title="Delete this pickup"
-                  className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger"
+                  className={cn(
+                    "inline-flex shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger",
+                    compactPickupRow ? "h-5 w-5" : "h-6 w-6",
+                  )}
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
