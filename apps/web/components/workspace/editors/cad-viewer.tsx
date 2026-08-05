@@ -943,6 +943,16 @@ export function CadViewer({
           });
 
           if (cancelled) return;
+          const { Vector4 } = await import("three");
+          // Theming is deliberately separate from the Viewer selection
+          // overlay. On dense Navisworks models the default blue outline can
+          // be almost invisible, especially while orbiting, whereas theming
+          // remains painted on every selected fragment.
+          const apsScopeColor = new Vector4(0.12, 0.62, 1, 0.88);
+          const apsFadeMaterial = apsViewer?.impl?.fadeMaterial;
+          const defaultApsFadeOpacity = typeof apsFadeMaterial?.opacity === "number"
+            ? apsFadeMaterial.opacity
+            : null;
           const suppressSelectionEventBriefly = () => {
             suppressProgrammaticSelection = true;
             if (selectionSuppressionTimer) clearTimeout(selectionSuppressionTimer);
@@ -955,10 +965,24 @@ export function CadViewer({
             if (apsOrbitFrame) cancelAnimationFrame(apsOrbitFrame);
             apsOrbitFrame = 0;
           };
+          const clearApsScopeTheme = () => {
+            const model = apsViewer?.model;
+            if (model) apsViewer?.clearThemingColors?.(model);
+          };
+          const setApsGhostOpacity = (opacity: number | null) => {
+            if (!apsFadeMaterial || opacity == null) return;
+            apsFadeMaterial.transparent = opacity < 1;
+            apsFadeMaterial.opacity = opacity;
+            apsFadeMaterial.needsUpdate = true;
+          };
           const restoreApsModel = () => {
             apsScopeActive = false;
+            clearApsScopeTheme();
             apsViewer?.showAll?.();
             apsViewer?.setGhosting?.(false);
+            setApsGhostOpacity(defaultApsFadeOpacity);
+            apsViewer?.clearSelection?.();
+            apsViewer?.impl?.invalidate?.(true, true, true);
           };
           const measureApsScope = (dbIds: number[]) => {
             try {
@@ -1018,12 +1042,21 @@ export function CadViewer({
             if (dbIds.length === 0) return;
             apsScopeActive = true;
             suppressSelectionEventBriefly();
-            // Isolate + ghosting keeps context visible but subdued, making
-            // the active run/system read immediately without painting a
-            // separate material onto hundreds of fragments.
+            clearApsScopeTheme();
+            // Isolate + ghosting keeps context visible but subdued. Some APS
+            // profiles render the stock selection outline too softly, so the
+            // selected scope also receives an explicit deferred theming pass.
             apsViewer?.setGhosting?.(true);
+            setApsGhostOpacity(0.1);
             apsViewer?.isolate?.(dbIds);
             apsViewer?.select?.(dbIds);
+            const model = apsViewer?.model;
+            if (model?.setThemingColor) {
+              for (const dbId of dbIds) model.setThemingColor(dbId, apsScopeColor, true);
+            } else {
+              for (const dbId of dbIds) apsViewer?.setThemingColor?.(dbId, apsScopeColor, model, true);
+            }
+            apsViewer?.impl?.invalidate?.(true, true, true);
             if (fit) apsViewer?.fitToView?.(dbIds);
           };
           const setApsStandardView = (view: CadViewerStandardView) => {
