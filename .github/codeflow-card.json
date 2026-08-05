@@ -2,108 +2,6 @@
   "version": 1,
   "runs": [
     {
-      "at": "2026-07-28T20:12:00.430Z",
-      "sha": "cd0f44d72f02cf3ab661c2bf4168e6db8678088f",
-      "pr": null,
-      "actor": "braedonsaunders",
-      "files": 1175,
-      "functions": 7224,
-      "loc": 456658,
-      "languages": 24,
-      "topLanguages": [
-        {
-          "ext": "ts",
-          "pct": 42,
-          "lines": 191561
-        },
-        {
-          "ext": "tsx",
-          "pct": 25,
-          "lines": 115706
-        },
-        {
-          "ext": "json",
-          "pct": 24,
-          "lines": 111355
-        },
-        {
-          "ext": "yaml",
-          "pct": 3,
-          "lines": 15115
-        },
-        {
-          "ext": "sql",
-          "pct": 1,
-          "lines": 3423
-        }
-      ],
-      "dead": 183,
-      "deadPct": 2.5,
-      "circular": 1,
-      "godObjects": 1,
-      "avgCoupling": 5.9,
-      "securityIssues": 97,
-      "patterns": 11,
-      "duplicates": 45,
-      "layerViolations": 1549,
-      "connections": 6918,
-      "avgFnLines": 15.6,
-      "longestFn": 16,
-      "testFiles": 114,
-      "testRatio": 9.7,
-      "topFolders": [
-        {
-          "name": "apps",
-          "count": 924
-        },
-        {
-          "name": "packages",
-          "count": 202
-        },
-        {
-          "name": "scripts",
-          "count": 29
-        },
-        {
-          "name": "root",
-          "count": 13
-        },
-        {
-          "name": "docs",
-          "count": 4
-        }
-      ],
-      "folders": 5,
-      "grade": "D",
-      "score": 64,
-      "topBlast": {
-        "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
-        "direct": 276,
-        "transitive": 802,
-        "total": 1078
-      },
-      "fragility": [
-        {
-          "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
-          "direct": 276,
-          "transitive": 802,
-          "total": 1078
-        },
-        {
-          "path": "apps/model-editor/packages/core/src/config.ts",
-          "direct": 190,
-          "transitive": 794,
-          "total": 984
-        },
-        {
-          "path": "apps/model-editor/packages/core/src/i18n/i18n.ts",
-          "direct": 179,
-          "transitive": 795,
-          "total": 974
-        }
-      ]
-    },
-    {
       "at": "2026-07-28T20:19:51.905Z",
       "sha": "e9cde4e2be870a10beac0ef0a4a1bff381b2508b",
       "pr": null,
@@ -3058,6 +2956,108 @@
           "direct": 182,
           "transitive": 817,
           "total": 999
+        }
+      ]
+    },
+    {
+      "at": "2026-08-05T03:05:45.111Z",
+      "sha": "ea949ae46e0ae4412e8214e0311454bbe29a6fe0",
+      "pr": null,
+      "actor": "braedonsaunders",
+      "files": 1206,
+      "functions": 7329,
+      "loc": 465091,
+      "languages": 24,
+      "topLanguages": [
+        {
+          "ext": "ts",
+          "pct": 42,
+          "lines": 195492
+        },
+        {
+          "ext": "tsx",
+          "pct": 26,
+          "lines": 119724
+        },
+        {
+          "ext": "json",
+          "pct": 24,
+          "lines": 111355
+        },
+        {
+          "ext": "yaml",
+          "pct": 3,
+          "lines": 15115
+        },
+        {
+          "ext": "sql",
+          "pct": 1,
+          "lines": 3679
+        }
+      ],
+      "dead": 188,
+      "deadPct": 2.6,
+      "circular": 1,
+      "godObjects": 1,
+      "avgCoupling": 5.9,
+      "securityIssues": 106,
+      "patterns": 11,
+      "duplicates": 46,
+      "layerViolations": 1593,
+      "connections": 7083,
+      "avgFnLines": 15.6,
+      "longestFn": 16,
+      "testFiles": 132,
+      "testRatio": 10.9,
+      "topFolders": [
+        {
+          "name": "apps",
+          "count": 946
+        },
+        {
+          "name": "packages",
+          "count": 211
+        },
+        {
+          "name": "scripts",
+          "count": 29
+        },
+        {
+          "name": "root",
+          "count": 13
+        },
+        {
+          "name": "docs",
+          "count": 4
+        }
+      ],
+      "folders": 5,
+      "grade": "D",
+      "score": 64,
+      "topBlast": {
+        "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
+        "direct": 284,
+        "transitive": 823,
+        "total": 1107
+      },
+      "fragility": [
+        {
+          "path": "apps/api/src/services/schedule-import/mpxj-bridge/BidwrightMpxjJson.java",
+          "direct": 284,
+          "transitive": 823,
+          "total": 1107
+        },
+        {
+          "path": "apps/model-editor/packages/core/src/config.ts",
+          "direct": 189,
+          "transitive": 814,
+          "total": 1003
+        },
+        {
+          "path": "apps/model-editor/packages/core/src/foundation/logger.ts",
+          "direct": 188,
+          "transitive": 812,
+          "total": 1000
         }
       ]
     }
