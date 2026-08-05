@@ -21,6 +21,10 @@ interface CadViewerProps {
    *  to the indexed ModelElement.externalId. null means the selection cleared. */
   onModelElementSelect?: (selection: { externalId: string } | null) => void;
   actionsRef?: MutableRefObject<CadViewerActions | null>;
+  /** Fires once the active viewer has loaded enough geometry to accept
+   *  navigation commands. Detached takeoff windows use this to replay a
+   *  focus/orbit command that arrived while the model was still loading. */
+  onActionsReady?: (actions: CadViewerActions) => void;
   displayMode?: CadViewerDisplayMode;
   showGrid?: boolean;
   autoRotate?: boolean;
@@ -768,6 +772,7 @@ export function CadViewer({
   onIfcElementSelect,
   onModelElementSelect,
   actionsRef,
+  onActionsReady,
   displayMode = "shaded",
   showGrid = true,
   autoRotate = false,
@@ -792,6 +797,10 @@ export function CadViewer({
   useEffect(() => {
     onModelElementSelectRef.current = onModelElementSelect;
   }, [onModelElementSelect]);
+  const onActionsReadyRef = useRef<typeof onActionsReady>(undefined);
+  useEffect(() => {
+    onActionsReadyRef.current = onActionsReady;
+  }, [onActionsReady]);
 
   const handleFitView = useCallback(() => {
     viewerActionsRef.current?.fitToContent();
@@ -1177,6 +1186,7 @@ export function CadViewer({
           if (actionsRef) actionsRef.current = apsActions;
           apsActions.setDisplayMode(displayMode);
           setState("ready");
+          onActionsReadyRef.current?.(apsActions);
           return;
         }
 
@@ -1229,7 +1239,10 @@ export function CadViewer({
           throw new Error(`Unsupported format: .${ext}`);
         }
 
-        if (!cancelled) setState("ready");
+        if (!cancelled) {
+          setState("ready");
+          if (viewerActionsRef.current) onActionsReadyRef.current?.(viewerActionsRef.current);
+        }
       } catch (err) {
         if (!cancelled) {
           setErrorMessage(err instanceof Error ? err.message : "Failed to load model");

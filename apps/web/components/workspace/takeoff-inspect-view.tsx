@@ -2664,7 +2664,7 @@ function DetectionGroup({
             type="button"
             onClick={onToggleGroupOrbit}
             className={cn(
-              "order-3 ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border transition-colors",
+              "order-2 ml-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-sm border transition-colors",
               groupOrbiting
                 ? "border-accent/40 bg-accent text-accent-fg"
                 : "border-transparent text-fg/40 hover:border-accent/25 hover:bg-accent/10 hover:text-accent",
@@ -2691,7 +2691,7 @@ function DetectionGroup({
                 quantityOptions: aggregateQuantityOptions(rows),
                 execute: groupAction.onPick,
               })}
-              className="order-2 ml-0.5 inline-flex h-6 w-12 shrink-0 items-center justify-center gap-1 rounded-sm border border-accent/25 bg-accent/10 text-[9px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15"
+              className="order-3 ml-0.5 inline-flex h-6 w-12 shrink-0 items-center justify-center gap-1 rounded-sm border border-accent/25 bg-accent/10 text-[9px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15"
               title={groupAction.triggerTitle}
               aria-label="Add group to estimate"
             >
@@ -2704,7 +2704,7 @@ function DetectionGroup({
               actions={actions}
               onPick={groupAction.onPick}
               triggerLabel="Add"
-              triggerClassName="order-2 ml-0.5 inline-flex h-6 w-12 shrink-0 items-center justify-center gap-1 rounded-sm border border-accent/25 bg-accent/10 text-[9px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15"
+              triggerClassName="order-3 ml-0.5 inline-flex h-6 w-12 shrink-0 items-center justify-center gap-1 rounded-sm border border-accent/25 bg-accent/10 text-[9px] font-semibold text-accent transition-colors hover:border-accent/45 hover:bg-accent/15"
               triggerTitle={groupAction.triggerTitle}
               triggerIcon={<Sigma className="h-2.5 w-2.5" />}
             />

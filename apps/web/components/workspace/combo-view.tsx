@@ -264,6 +264,7 @@ export function ComboView({
   const [addingToWorksheet, setAddingToWorksheet] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [takeoffDetached, setTakeoffDetached] = useState(false);
+  const [resumeTakeoffEditor, setResumeTakeoffEditor] = useState(false);
   const [takeoffSelection, setTakeoffSelection] = useState<TakeoffSelection | null>(null);
   const [takeoffViewState, setTakeoffViewState] = useState<TakeoffViewState | null>(
     initialDocumentId ? { documentId: initialDocumentId, page: 1, zoom: 1 } : null,
@@ -495,7 +496,10 @@ export function ComboView({
   const handleDetachedWindowChange = useCallback((open: boolean, win?: Window | null) => {
     detachedTakeoffWindowRef.current = open ? win ?? detachedTakeoffWindowRef.current : null;
     setTakeoffDetached(open);
-    if (open) setRightPanelTab("pickups");
+    if (open) {
+      setResumeTakeoffEditor(true);
+      setRightPanelTab("pickups");
+    }
   }, []);
 
   const handleMergeDetachedTakeoff = useCallback(() => {
@@ -504,6 +508,7 @@ export function ComboView({
       win.close();
     }
     detachedTakeoffWindowRef.current = null;
+    setResumeTakeoffEditor(true);
     setTakeoffDetached(false);
   }, []);
 
@@ -513,6 +518,7 @@ export function ComboView({
       const win = detachedTakeoffWindowRef.current;
       if (win && win.closed) {
         detachedTakeoffWindowRef.current = null;
+        setResumeTakeoffEditor(true);
         setTakeoffDetached(false);
       }
     }, 900);
@@ -553,6 +559,7 @@ export function ComboView({
       onOpenRevisionDiff={onOpenRevisionDiff}
       onWorkspaceMutated={onWorkspaceMutated}
       detached={takeoffDetached}
+      initialEditorOpen={resumeTakeoffEditor}
       workspaceSyncOriginId={takeoffOriginId}
       selectedWorksheetId={selectedWorksheetId ?? null}
       initialDocumentId={takeoffViewState?.documentId ?? initialDocumentId}

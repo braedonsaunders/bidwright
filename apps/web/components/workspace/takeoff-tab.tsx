@@ -1032,6 +1032,9 @@ interface TakeoffTabProps {
   initialPage?: number;
   initialZoom?: number;
   detached?: boolean;
+  /** Open the current source directly on this mount. Used only when the
+   *  combined workspace remounts after merging a detached viewer. */
+  initialEditorOpen?: boolean;
   workspaceSyncOriginId?: string;
   selectedWorksheetId?: string | null;
   /** Externally-controlled selection (e.g. when a parent renders the link UI). */
@@ -1073,6 +1076,15 @@ interface TakeoffSyncBase {
   projectId: string;
 }
 
+type TakeoffModelViewerCommand =
+  | {
+      action: "focus-elements" | "orbit-elements";
+      assetId: string;
+      externalIds: string[];
+      groupSignature?: string;
+    }
+  | { action: "stop-orbit"; assetId?: string };
+
 type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "view-change"; docId: string; page: number; zoom: number })
   | (TakeoffSyncBase & { type: "selection-change"; selection: TakeoffSelection | null })
@@ -1082,6 +1094,7 @@ type TakeoffSyncMessage =
   | (TakeoffSyncBase & { type: "files-mutated" })
   | (TakeoffSyncBase & { type: "calibration-change"; calibration: Calibration | null })
   | (TakeoffSyncBase & { type: "open-inspect-entities" })
+  | (TakeoffSyncBase & { type: "model-viewer-command"; command: TakeoffModelViewerCommand })
   | (TakeoffSyncBase & { type: "drawing-analysis-result"; docId: string; page: number; analysis: DrawingGeometryAnalysisResult | null })
   | (TakeoffSyncBase & { type: "drawing-detection-selection"; docId: string; page: number; detectionId: string | null });
 
@@ -1094,6 +1107,7 @@ type TakeoffSyncPayload =
   | { type: "files-mutated" }
   | { type: "calibration-change"; calibration: Calibration | null }
   | { type: "open-inspect-entities" }
+  | { type: "model-viewer-command"; command: TakeoffModelViewerCommand }
   | { type: "drawing-analysis-result"; docId: string; page: number; analysis: DrawingGeometryAnalysisResult | null }
   | { type: "drawing-detection-selection"; docId: string; page: number; detectionId: string | null };
 
@@ -1704,6 +1718,7 @@ export function TakeoffTab({
   initialPage = 1,
   initialZoom = 1,
   detached = false,
+  initialEditorOpen = false,
   workspaceSyncOriginId,
   selectedWorksheetId,
   selection,
@@ -1966,7 +1981,7 @@ export function TakeoffTab({
   // Remembering the last document is useful once the user chooses a takeoff
   // source, but it must not silently bypass the launcher on a fresh estimate
   // visit. Detached viewers remain direct-document surfaces.
-  const [showLanding, setShowLanding] = useState(!detached);
+  const [showLanding, setShowLanding] = useState(!detached && !initialEditorOpen);
   type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "photo";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
@@ -2264,6 +2279,14 @@ export function TakeoffTab({
   const fitOnLoadRef = useRef(true);
   const broadcastRef = useRef<BroadcastChannel | null>(null);
   const syncOriginRef = useRef(`takeoff-${Math.random().toString(36).slice(2)}`);
+  const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
+    if (!broadcastRef.current || !projectId) return;
+    broadcastRef.current.postMessage({
+      ...payload,
+      originId: syncOriginRef.current,
+      projectId,
+    });
+  }, [projectId]);
   const selectedDocIdRef = useRef(selectedDocId);
   const pageRef = useRef(page);
   const zoomRef = useRef(zoom);
@@ -2297,6 +2320,11 @@ export function TakeoffTab({
   const [modelSyncing, setModelSyncing] = useState(false);
   const [modelError, setModelError] = useState<string | null>(null);
   const modelViewerActionsRef = useRef<CadViewerActions | null>(null);
+  const pendingModelViewerCommandRef = useRef<TakeoffModelViewerCommand | null>(null);
+  const applyExternalModelViewerCommandRef = useRef<(
+    command: TakeoffModelViewerCommand,
+    readyActions?: CadViewerActions,
+  ) => void>(() => {});
   const [modelDisplayMode, setModelDisplayMode] = useState<CadViewerDisplayMode>("shaded");
   const [modelGridVisible, setModelGridVisible] = useState(true);
   const [modelAutoRotate, setModelAutoRotate] = useState(false);
@@ -2562,6 +2590,75 @@ export function TakeoffTab({
     [modelElements],
   );
 
+  /** Apply navigation in whichever window actually owns the visible model.
+   *  A command may arrive before the detached viewer has selected the model
+   *  document or finished loading APS/Three.js, so retain the latest command
+   *  and replay it from CadViewer.onActionsReady. */
+  const applyExternalModelViewerCommand = useCallback((
+    command: TakeoffModelViewerCommand,
+    readyActions?: CadViewerActions,
+  ) => {
+    if (command.action === "stop-orbit") {
+      const actions = readyActions ?? modelViewerActionsRef.current;
+      if (!actions) {
+        pendingModelViewerCommandRef.current = command;
+        return;
+      }
+      pendingModelViewerCommandRef.current = null;
+      actions.stopOrbit();
+      setModelOrbitingGroupSignature(null);
+      return;
+    }
+
+    const targetDocument = takeoffDocuments.find((doc) => doc.modelAssetId === command.assetId);
+    if (!targetDocument) {
+      pendingModelViewerCommandRef.current = command;
+      return;
+    }
+    if (targetDocument.id !== selectedDocIdRef.current) {
+      pendingModelViewerCommandRef.current = command;
+      // Do not let the command accidentally hit the viewer for the document
+      // that React is about to unmount.
+      modelViewerActionsRef.current = null;
+      selectedDocIdRef.current = targetDocument.id;
+      pageRef.current = 1;
+      setSelectedDocId(targetDocument.id);
+      setPage(1);
+      fitOnLoadRef.current = true;
+      return;
+    }
+
+    const actions = readyActions ?? modelViewerActionsRef.current;
+    if (!actions) {
+      pendingModelViewerCommandRef.current = command;
+      return;
+    }
+
+    pendingModelViewerCommandRef.current = null;
+    if (command.groupSignature) setSelectedModelGroupSignature(command.groupSignature);
+    if (command.action === "orbit-elements") {
+      setModelOrbitingGroupSignature(command.groupSignature ?? null);
+      actions.orbitElements(command.externalIds);
+    } else {
+      setModelOrbitingGroupSignature(null);
+      actions.focusElements(command.externalIds);
+    }
+  }, [takeoffDocuments]);
+
+  useEffect(() => {
+    applyExternalModelViewerCommandRef.current = applyExternalModelViewerCommand;
+  }, [applyExternalModelViewerCommand]);
+
+  useEffect(() => {
+    const pending = pendingModelViewerCommandRef.current;
+    if (pending) applyExternalModelViewerCommand(pending);
+  }, [applyExternalModelViewerCommand, selectedDocId, selectedModelAsset?.id]);
+
+  const handleModelViewerActionsReady = useCallback((actions: CadViewerActions) => {
+    const pending = pendingModelViewerCommandRef.current;
+    if (pending) applyExternalModelViewerCommand(pending, actions);
+  }, [applyExternalModelViewerCommand]);
+
   const selectedModelElements = useMemo(
     () => modelElements.filter((element) => selectedModelElementIds.has(element.id)),
     [modelElements, selectedModelElementIds],
@@ -2576,7 +2673,10 @@ export function TakeoffTab({
         setSelectedModelGroupSignature(null);
         setModelOrbitingGroupSignature(null);
         modelViewerActionsRef.current?.stopOrbit();
-        if (syncViewer) modelViewerActionsRef.current?.selectElement(null);
+        if (syncViewer) {
+          modelViewerActionsRef.current?.selectElement(null);
+          postTakeoffMessage({ type: "model-viewer-command", command: { action: "stop-orbit", assetId: selectedModelAsset?.id } });
+        }
         if (selection?.kind === "model-element" || selection?.kind === "model-element-group" || !onSelectionChange) publishTakeoffSelection(null);
         return;
       }
@@ -2590,6 +2690,14 @@ export function TakeoffTab({
           ? properties.expressId
           : element.externalId;
         modelViewerActionsRef.current?.focusElement(viewerExternalId);
+        postTakeoffMessage({
+          type: "model-viewer-command",
+          command: {
+            action: "focus-elements",
+            assetId: selectedModelAsset.id,
+            externalIds: [viewerExternalId],
+          },
+        });
       }
       publishTakeoffSelection({
         kind: "model-element",
@@ -2602,7 +2710,7 @@ export function TakeoffTab({
         quantitySummary: formatElementQuantity(element, modelLedgerBasis),
       });
     },
-    [modelLedgerBasis, onSelectionChange, selectedModelAsset, selection],
+    [modelLedgerBasis, onSelectionChange, postTakeoffMessage, selectedModelAsset, selection],
   );
 
   const publishIndexedModelGroupSelection = useCallback((group: {
@@ -2635,6 +2743,15 @@ export function TakeoffTab({
         : element.externalId;
     });
     requestAnimationFrame(() => modelViewerActionsRef.current?.focusElements(viewerExternalIds));
+    postTakeoffMessage({
+      type: "model-viewer-command",
+      command: {
+        action: "focus-elements",
+        assetId: selectedModelAsset.id,
+        externalIds: viewerExternalIds,
+        groupSignature: group.signature,
+      },
+    });
     publishTakeoffSelection({
       kind: "model-element-group",
       assetId: selectedModelAsset.id,
@@ -2650,7 +2767,7 @@ export function TakeoffTab({
       source: group.source,
       warnings: group.warnings,
     });
-  }, [modelElementsById, selectedModelAsset]);
+  }, [modelElementsById, postTakeoffMessage, selectedModelAsset]);
 
   const toggleIndexedModelGroupOrbit = useCallback((group: {
     signature: string;
@@ -2666,6 +2783,10 @@ export function TakeoffTab({
   }) => {
     if (modelOrbitingGroupSignature === group.signature) {
       modelViewerActionsRef.current?.stopOrbit();
+      postTakeoffMessage({
+        type: "model-viewer-command",
+        command: { action: "stop-orbit", assetId: selectedModelAsset?.id },
+      });
       setModelOrbitingGroupSignature(null);
       return;
     }
@@ -2698,7 +2819,16 @@ export function TakeoffTab({
       warnings: group.warnings,
     });
     requestAnimationFrame(() => modelViewerActionsRef.current?.orbitElements(viewerExternalIds));
-  }, [modelElementsById, modelOrbitingGroupSignature, selectedModelAsset]);
+    postTakeoffMessage({
+      type: "model-viewer-command",
+      command: {
+        action: "orbit-elements",
+        assetId: selectedModelAsset.id,
+        externalIds: viewerExternalIds,
+        groupSignature: group.signature,
+      },
+    });
+  }, [modelElementsById, modelOrbitingGroupSignature, postTakeoffMessage, selectedModelAsset]);
 
   const handleHostedModelElementSelect = useCallback(
     (selected: { externalId: string } | null) => {
@@ -2849,15 +2979,6 @@ export function TakeoffTab({
     dwgActionsRef.current?.selectEntity(null);
     fitOnLoadRef.current = true;
   }, [selectedDocId]);
-
-  const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
-    if (!broadcastRef.current || !projectId) return;
-    broadcastRef.current.postMessage({
-      ...payload,
-      originId: syncOriginRef.current,
-      projectId,
-    });
-  }, [projectId]);
 
   /* ─── Load annotations from API ─── */
 
@@ -3398,6 +3519,25 @@ export function TakeoffTab({
       return;
     }
 
+    if (next.kind === "model-element-group") {
+      const matched = takeoffDocuments.find((doc) => doc.modelAssetId === next.assetId);
+      if (matched && matched.id !== selectedDocIdRef.current) {
+        selectedDocIdRef.current = matched.id;
+        pageRef.current = 1;
+        setSelectedDocId(matched.id);
+        setPage(1);
+        fitOnLoadRef.current = true;
+      }
+      setSelectedPickupId(null);
+      setSelectedDrawingDetectionId(null);
+      setSelectedSmartCountItemId(null);
+      setDwgIntelligence((current) => (current ? { ...current, selectedEntityId: null } : current));
+      dwgActionsRef.current?.selectEntity(null);
+      setSelectedModelElementIds(new Set());
+      setSelectedModelGroupSignature(next.groupSignature);
+      return;
+    }
+
     if (next.kind === "model-selection") {
       const matched = next.modelDocumentId
         ? takeoffDocuments.find((doc) => doc.id === next.modelDocumentId || doc.modelAssetId === next.modelId)
@@ -3451,6 +3591,11 @@ export function TakeoffTab({
 
       if (msg.type === "selection-change") {
         applyExternalTakeoffSelectionRef.current(msg.selection);
+        return;
+      }
+
+      if (msg.type === "model-viewer-command") {
+        applyExternalModelViewerCommandRef.current(msg.command);
         return;
       }
 
@@ -9024,6 +9169,7 @@ export function TakeoffTab({
                 onIfcElementSelect={handleIfcElementSelect}
                 onModelElementSelect={handleHostedModelElementSelect}
                 actionsRef={modelViewerActionsRef}
+                onActionsReady={handleModelViewerActionsReady}
                 displayMode={modelDisplayMode}
                 showGrid={modelGridVisible}
                 autoRotate={modelAutoRotate}
