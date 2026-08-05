@@ -400,7 +400,10 @@ jobs:
           echo "Triggering Dokploy redeploy…"
           # The webhook returns almost immediately and runs compose-up async, so
           # its response does NOT mean the deploy worked — verified below.
-          response=$(curl -sf -X GET --max-time 300 \
+          response=$(curl -sf -X POST --max-time 300 \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Event: push' \
+            --data "{\"ref\":\"refs/heads/main\",\"head_commit\":{\"id\":\"${GITHUB_SHA}\",\"message\":\"Deploy ${NEW_TAG}\"}}" \
             "http://dokploy:3000/api/deploy/compose/${REFRESH_TOKEN}")
           echo "Dokploy response: $response"
 
