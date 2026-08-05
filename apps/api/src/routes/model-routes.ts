@@ -36,6 +36,7 @@ import {
 } from "../services/revision-diff-service.js";
 
 const elementQuerySchema = z.object({
+  ids: z.string().max(20_000).optional(),
   text: z.string().optional(),
   class: z.string().optional(),
   type: z.string().optional(),

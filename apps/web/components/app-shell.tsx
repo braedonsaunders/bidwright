@@ -483,14 +483,17 @@ function BidwrightShell({ children }: { children: ReactNode }) {
 
 function BrandHomeLink() {
   return (
-    <Link
-      href="/"
-      aria-label="Bidwright home"
-      className="inline-flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
-    >
-      <BidwrightMark className="size-8" />
-      <span className="text-sm font-semibold tracking-tight text-fg">Bidwright</span>
-    </Link>
+    <div className="flex h-14 items-center gap-3">
+      <Link
+        href="/"
+        aria-label="Bidwright home"
+        className="flex items-center gap-2 rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+      >
+        <BidwrightMark className="size-8" />
+        <span className="translate-y-px text-sm font-semibold leading-5 tracking-tight text-fg">Bidwright</span>
+      </Link>
+      <span aria-hidden="true" className="h-6 w-px shrink-0 bg-border/70" />
+    </div>
   );
 }
 

@@ -1653,6 +1653,10 @@ export async function queryModelElements(projectId: string, modelId: string, fil
   if (!model) throw new Error(`Model ${modelId} not found`);
 
   const where: any = { modelId };
+  const ids = typeof filters.ids === "string"
+    ? Array.from(new Set(filters.ids.split(",").map((id) => id.trim()).filter(Boolean))).slice(0, 500)
+    : [];
+  if (ids.length > 0) where.id = { in: ids };
   for (const key of ["elementClass", "elementType", "system", "level", "material", "name"] as const) {
     const value = filters[key];
     if (typeof value === "string" && value.trim()) {

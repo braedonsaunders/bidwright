@@ -1,6 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { apiDelete, apiGet, apiPost, getProjectId } from "../api-client.js";
+import { apiDelete, apiGet, apiPost, getProjectId, projectPath } from "../api-client.js";
 
 function modelEditorPath(asset: any) {
   const sourcePath = asset.sourceDocumentId
@@ -75,6 +75,41 @@ function issuePreview(issues: any[], limit = 6) {
       message: compactValue(record.message ?? record.description ?? issue, 180),
     };
   });
+}
+
+function normalizedKey(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function quantityForTakeoffGroup(element: any, group: any) {
+  const quantities = asArray(element.quantities);
+  const measurement = normalizedKey(group.measurementType);
+  const unit = normalizedKey(group.unit);
+  const ranked = quantities
+    .map((quantity) => {
+      const quantityType = normalizedKey(quantity.quantityType);
+      const quantityUnit = normalizedKey(quantity.unit);
+      let score = 0;
+      if (measurement && quantityType === measurement) score += 10;
+      else if (measurement && quantityType.includes(measurement)) score += 6;
+      if (unit && quantityUnit === unit) score += 8;
+      score += Math.max(0, Math.min(1, Number(quantity.confidence) || 0));
+      return { quantity, score };
+    })
+    .sort((a, b) => b.score - a.score);
+  const preferred = ranked[0]?.score > 0 ? ranked[0].quantity : quantities[0];
+  if (preferred && Number.isFinite(Number(preferred.value))) {
+    return {
+      quantityId: preferred.id as string | undefined,
+      quantityType: preferred.quantityType ?? group.measurementType ?? "count",
+      value: Number(preferred.value),
+      unit: preferred.unit ?? group.unit ?? "",
+    };
+  }
+  if (measurement === "count") {
+    return { quantityId: undefined, quantityType: "count", value: 1, unit: group.unit || "EA" };
+  }
+  return { quantityId: undefined, quantityType: group.measurementType ?? "count", value: 0, unit: group.unit ?? "" };
 }
 
 function summarizeModelAsset(asset: any) {
@@ -299,6 +334,117 @@ This tool returns only extracted data. It does not infer or fabricate model elem
   );
 
   server.tool(
+    "getModelElementDetails",
+    `Return exact BIM/CAD element records, native properties, extracted quantities, and the system/run/estimate groups that contain them.
+
+Use this after queryModelElements or queryModelTakeoffGroups when you need to inspect object properties, verify length/area/volume/count, or understand where an object sits in the detected topology. Element ids are Bidwright model-element ids, not viewer dbIds.`,
+    {
+      modelId: z.string().describe("Model asset id returned by listModels"),
+      elementIds: z.array(z.string()).min(1).max(200).describe("Exact model element ids returned by queryModelElements or a takeoff group's memberElementIds"),
+      includeProperties: z.boolean().default(true).describe("Include the complete native property bag. Disable for a smaller response."),
+      includeGroups: z.boolean().default(true).describe("Attach matching system, network, run, and estimate group summaries."),
+    },
+    async ({ modelId, elementIds, includeProperties, includeGroups }) => {
+      const projectId = getProjectId();
+      const params = new URLSearchParams({
+        ids: Array.from(new Set(elementIds)).join(","),
+        limit: String(Math.min(500, elementIds.length)),
+      });
+      const [elementResult, topology] = await Promise.all([
+        apiGet<any>(`/api/models/${projectId}/assets/${modelId}/elements?${params.toString()}`),
+        includeGroups
+          ? apiGet<any>(`/api/models/${projectId}/assets/${modelId}/topology`)
+          : Promise.resolve({ groups: [] }),
+      ]);
+      const groups = asArray(topology.groups);
+      const groupsByElement = new Map<string, any[]>();
+      for (const group of groups) {
+        for (const elementId of asArray(group.memberElementIds)) {
+          const compactGroup = {
+            id: group.id,
+            signature: group.signature,
+            parentId: group.parentId ?? null,
+            kind: group.kind,
+            name: group.name,
+            source: group.source,
+            confidence: group.confidence,
+            measurementType: group.measurementType,
+            quantity: group.quantity,
+            unit: group.unit,
+            warnings: group.warnings,
+          };
+          groupsByElement.set(String(elementId), [...(groupsByElement.get(String(elementId)) ?? []), compactGroup]);
+        }
+      }
+      const elements = asArray(elementResult.elements).map((element) => ({
+        ...element,
+        properties: includeProperties ? element.properties : undefined,
+        takeoffGroups: includeGroups ? groupsByElement.get(String(element.id)) ?? [] : undefined,
+      }));
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({ modelId, requested: elementIds.length, returned: elements.length, elements }, null, 2),
+        }],
+      };
+    },
+  );
+
+  server.tool(
+    "queryModelTakeoffGroups",
+    `Query the same persisted model topology used by Bidwright Takeoff Studio.
+
+Returns authored and inferred systems, connected runs, networks, and estimator-facing rollups with member object ids, measurement type, quantity, unit, confidence, warnings, and hierarchy. Use this instead of inventing groupings from a truncated element list.`,
+    {
+      modelId: z.string().describe("Model asset id returned by listModels"),
+      kind: z.enum(["system", "network", "run", "estimate"]).optional(),
+      text: z.string().optional().describe("Case-insensitive match against group name, signature, trade, source, measurement type, or unit"),
+      signature: z.string().optional().describe("Return one exact persisted group signature"),
+      includeMemberIds: z.boolean().default(true),
+      includeConnections: z.boolean().default(false).describe("Include the model connection graph when diagnosing topology"),
+      limit: z.coerce.number().int().min(1).max(500).default(100),
+      offset: z.coerce.number().int().min(0).default(0),
+    },
+    async ({ modelId, kind, text, signature, includeMemberIds, includeConnections, limit, offset }) => {
+      const projectId = getProjectId();
+      const topology = await apiGet<any>(
+        `/api/models/${projectId}/assets/${modelId}/topology?includeConnections=${includeConnections ? "1" : "0"}`,
+      );
+      const needle = normalizedKey(text);
+      const groups = asArray(topology.groups).filter((group) => {
+        if (kind && group.kind !== kind) return false;
+        if (signature && group.signature !== signature) return false;
+        if (!needle) return true;
+        return [group.name, group.signature, group.trade, group.source, group.measurementType, group.unit]
+          .some((value) => normalizedKey(value).includes(needle));
+      });
+      const page = paginate(groups, { limit, offset }, 100, 500);
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            modelId,
+            version: topology.version,
+            diagnostics: topology.diagnostics,
+            total: groups.length,
+            offset: page.offset,
+            limit: page.limit,
+            hasMore: page.hasMore,
+            groups: page.rows.map((group: any) => ({
+              ...group,
+              memberElementIds: includeMemberIds ? group.memberElementIds : undefined,
+            })),
+            connectionCount: topology.connectionCount ?? 0,
+            connections: includeConnections ? topology.connections ?? [] : undefined,
+            recipes: topology.recipes ?? [],
+            overrides: topology.overrides ?? [],
+          }, null, 2),
+        }],
+      };
+    },
+  );
+
+  server.tool(
     "extractModelBom",
     `Return the persisted model BOM/quantity rows for estimating.
 
@@ -365,6 +511,179 @@ Use this to understand which model elements/quantities already drive estimate ro
             ),
           },
         ],
+      };
+    },
+  );
+
+  server.tool(
+    "addModelTakeoffGroupToWorksheet",
+    `Create one worksheet line from a persisted BIM/CAD system, run, network, or estimate group and bulk-link every source object for 5D traceability.
+
+This is the agent equivalent of Takeoff Studio's explicit Add group action. It uses the topology's measured quantity and unit, preserves the group signature and native object provenance, and rolls the new worksheet item back if linking fails. Call queryModelTakeoffGroups first and use an exact signature.`,
+    {
+      modelId: z.string().describe("Model asset id returned by listModels"),
+      groupSignature: z.string().describe("Exact signature returned by queryModelTakeoffGroups"),
+      worksheetId: z.string().describe("Target worksheet id"),
+      categoryId: z.string().nullable().optional().describe("Configured entity category id from getEntityCategories/quote item config"),
+      category: z.string().min(1).describe("Worksheet category label"),
+      entityType: z.string().min(1).describe("Configured category entity type"),
+      entityName: z.string().optional().describe("Override the group name used for the worksheet row"),
+      description: z.string().default(""),
+      phaseId: z.string().nullable().optional(),
+      quantityMultiplier: z.coerce.number().positive().default(1),
+      cost: z.coerce.number().finite().default(0),
+      markup: z.coerce.number().finite().default(0.2),
+      price: z.coerce.number().finite().optional(),
+      rateScheduleItemId: z.string().nullable().optional(),
+      itemId: z.string().nullable().optional(),
+      sourceNotes: z.string().optional(),
+    },
+    async (input) => {
+      const projectId = getProjectId();
+      const topology = await apiGet<any>(`/api/models/${projectId}/assets/${input.modelId}/topology`);
+      const group = asArray(topology.groups).find((candidate) => candidate.signature === input.groupSignature);
+      if (!group) {
+        return {
+          content: [{ type: "text" as const, text: `No takeoff group with signature ${input.groupSignature} exists on model ${input.modelId}. Call queryModelTakeoffGroups again.` }],
+          isError: true,
+        };
+      }
+      const memberElementIds = Array.from(new Set(asArray(group.memberElementIds).map(String)));
+      if (memberElementIds.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `Takeoff group ${input.groupSignature} has no source elements and cannot be added.` }],
+          isError: true,
+        };
+      }
+
+      const elements: any[] = [];
+      for (let offset = 0; offset < memberElementIds.length; offset += 500) {
+        const ids = memberElementIds.slice(offset, offset + 500);
+        const params = new URLSearchParams({ ids: ids.join(","), limit: String(ids.length) });
+        const result = await apiGet<any>(`/api/models/${projectId}/assets/${input.modelId}/elements?${params.toString()}`);
+        elements.push(...asArray(result.elements));
+      }
+      if (elements.length !== memberElementIds.length) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Takeoff group ${input.groupSignature} references ${memberElementIds.length} objects but only ${elements.length} could be loaded. Rebuild the model topology before adding it.`,
+          }],
+          isError: true,
+        };
+      }
+
+      const multiplier = input.quantityMultiplier;
+      const groupQuantity = Number(group.quantity) || (normalizedKey(group.measurementType) === "count" ? elements.length : 0);
+      const quantity = groupQuantity * multiplier;
+      const lineItemBody = {
+        phaseId: input.phaseId,
+        categoryId: input.categoryId,
+        category: input.category,
+        entityType: input.entityType,
+        entityName: input.entityName?.trim() || group.name || `${elements.length} model elements`,
+        description: input.description,
+        quantity,
+        uom: String(group.unit || (normalizedKey(group.measurementType) === "count" ? "EA" : group.measurementType || "EA")),
+        cost: input.cost,
+        markup: input.markup,
+        price: input.price ?? input.cost * (1 + input.markup),
+        rateScheduleItemId: input.rateScheduleItemId,
+        itemId: input.itemId,
+        sourceNotes: [
+          input.sourceNotes,
+          `${group.kind} group: ${group.name}`,
+          `${elements.length} model object${elements.length === 1 ? "" : "s"}`,
+          `model: ${input.modelId}`,
+          `signature: ${group.signature}`,
+        ].filter(Boolean).join(" · "),
+        sourceEvidence: {
+          kind: "model_takeoff",
+          modelId: input.modelId,
+          groupId: group.id,
+          groupSignature: group.signature,
+          groupKind: group.kind,
+          source: group.source,
+          confidence: group.confidence,
+          measurementType: group.measurementType,
+          nativeQuantity: groupQuantity,
+          quantityMultiplier: multiplier,
+          unit: group.unit,
+          memberElementIds,
+          warnings: group.warnings ?? [],
+        },
+      };
+      const createdResult = await apiPost<any>(
+        `${projectPath(`/worksheets/${input.worksheetId}/items`)}?response=delta`,
+        lineItemBody,
+      );
+      const createdItem = createdResult.item;
+      if (!createdItem?.id) throw new Error("Worksheet item creation succeeded without returning a created item id.");
+
+      const quantityRows = elements.map((element) => ({ element, resolved: quantityForTakeoffGroup(element, group) }));
+      const resolvedTotal = quantityRows.reduce((sum, row) => sum + Math.max(0, Number(row.resolved.value) || 0), 0);
+      const quantityScale = resolvedTotal > 0 && groupQuantity > 0 ? groupQuantity / resolvedTotal : 1;
+      const links = quantityRows.map(({ element, resolved }) => {
+        const baseValue = Number(resolved.value) || (groupQuantity > 0 ? groupQuantity / elements.length : 0);
+        const derivedQuantity = baseValue * quantityScale * multiplier;
+        return {
+          modelElementId: element.id,
+          modelQuantityId: resolved.quantityId,
+          quantityField: "quantity",
+          multiplier: quantityScale * multiplier,
+          derivedQuantity,
+          selection: {
+            mode: "model-takeoff-group",
+            groupId: group.id,
+            groupSignature: group.signature,
+            groupKind: group.kind,
+            groupName: group.name,
+            modelElementId: element.id,
+            externalId: element.externalId,
+            elementName: element.name,
+            elementClass: element.elementClass,
+            elementType: element.elementType,
+            system: element.system,
+            material: element.material,
+            level: element.level,
+            quantityType: resolved.quantityType,
+            unit: resolved.unit,
+          },
+        };
+      });
+      try {
+        for (let offset = 0; offset < links.length; offset += 500) {
+          await apiPost(`/api/models/${projectId}/assets/${input.modelId}/takeoff-links/bulk`, {
+            worksheetItemId: createdItem.id,
+            links: links.slice(offset, offset + 500),
+          });
+        }
+      } catch (error) {
+        await apiDelete(projectPath(`/worksheet-items/${createdItem.id}`)).catch(() => undefined);
+        throw error;
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: JSON.stringify({
+            created: true,
+            worksheetItemId: createdItem.id,
+            worksheetId: input.worksheetId,
+            modelId: input.modelId,
+            group: {
+              id: group.id,
+              signature: group.signature,
+              kind: group.kind,
+              name: group.name,
+              measurementType: group.measurementType,
+              quantity,
+              unit: group.unit,
+              memberCount: elements.length,
+            },
+            linksCreated: links.length,
+            worksheetItem: createdItem,
+          }, null, 2),
+        }],
       };
     },
   );
