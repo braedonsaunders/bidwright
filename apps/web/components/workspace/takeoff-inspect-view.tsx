@@ -2712,7 +2712,7 @@ function DetectionGroup({
         )}
       </div>
       {!collapsed && (
-        <div className="ml-2 min-w-0 space-y-0.5 overflow-hidden">
+        <div className="ml-5 min-w-0 space-y-px overflow-hidden border-l border-line/45 pl-1">
           {rows.length === 0 ? (
             <p className="rounded-md border border-line bg-bg/25 px-2 py-2 text-center text-[10px] text-fg/35">None found</p>
           ) : rows.map((row) => {
@@ -2720,12 +2720,14 @@ function DetectionGroup({
             const composeRequest = requestForRow(row);
             const staged = composeRequest ? compose.basketIds.has(composeRequest.id) : false;
             const activeModelScope = row.kind === "model" && (row.selected || groupFocused);
+            const compactModelRow = row.kind === "model";
             return (
             <Fragment key={row.id}>
             <div
               onClick={() => onSelect(row.id)}
               className={cn(
-                "group flex w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border px-1 py-1.5 transition-colors",
+                "group flex w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border px-1 transition-colors",
+                compactModelRow ? "py-0.5" : "py-1.5",
                 activeModelScope || row.selected
                   ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
                   : row.linkCount > 0
@@ -2789,6 +2791,11 @@ function DetectionGroup({
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1">
                   <p className="truncate text-[11px] font-medium text-fg/80">{row.title}</p>
+                  {compactModelRow && (row.subtitle || row.detail) && (
+                    <span className="min-w-0 flex-1 truncate text-[9px] text-fg/35">
+                      {[row.subtitle, row.detail].filter(Boolean).join(" · ")}
+                    </span>
+                  )}
                   {/* Source pill — tells the estimator whether the row was
                       derived from analyzer, auto-counted, smart-counted,
                       hand-drawn, or read from a CAD layer. */}
@@ -2809,8 +2816,8 @@ function DetectionGroup({
                     </span>
                   ) : null}
                 </div>
-                <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>
-                {row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
+                {!compactModelRow && <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>}
+                {!compactModelRow && row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
               </div>
               {row.value && <span className="max-w-[28%] shrink truncate font-mono text-[10px] text-fg/50" title={row.value}>{row.value}</span>}
               <div className="flex items-center gap-0.5">
