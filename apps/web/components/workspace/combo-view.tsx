@@ -575,6 +575,7 @@ export function ComboView({
       onOpenInspectEntities={() => setRightPanelTab("pickups")}
       onInspectSnapshotChange={handleInspectSnapshotChange}
       onDetachedWindowChange={handleDetachedWindowChange}
+      detachedTargetWindow={detachedTakeoffWindowRef.current}
     />
   );
 

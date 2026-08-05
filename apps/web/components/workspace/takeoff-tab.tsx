@@ -1069,6 +1069,10 @@ interface TakeoffTabProps {
   onInspectSnapshotChange?: (snapshot: InspectSnapshot) => void;
   /** Signals the combo shell that this takeoff surface is currently popped out. */
   onDetachedWindowChange?: (open: boolean, win?: Window | null) => void;
+  /** Direct handle to the visible popup. Viewer navigation uses postMessage
+   *  through this handle because the controller remounts when detached and a
+   *  BroadcastChannel-only command can be emitted before the popup subscribes. */
+  detachedTargetWindow?: Window | null;
 }
 
 interface TakeoffSyncBase {
@@ -1733,6 +1737,7 @@ export function TakeoffTab({
   onOpenInspectEntities,
   onInspectSnapshotChange,
   onDetachedWindowChange,
+  detachedTargetWindow,
 }: TakeoffTabProps) {
   const projectId = workspace.project.id;
   const isDetachedMirror = detached && Boolean(onDetachedWindowChange);
@@ -2280,13 +2285,25 @@ export function TakeoffTab({
   const broadcastRef = useRef<BroadcastChannel | null>(null);
   const syncOriginRef = useRef(`takeoff-${Math.random().toString(36).slice(2)}`);
   const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
-    if (!broadcastRef.current || !projectId) return;
-    broadcastRef.current.postMessage({
+    if (!projectId) return;
+    const message: TakeoffSyncMessage = {
       ...payload,
       originId: syncOriginRef.current,
       projectId,
-    });
-  }, [projectId]);
+    } as TakeoffSyncMessage;
+    if (
+      payload.type === "model-viewer-command" &&
+      detachedTargetWindow &&
+      !detachedTargetWindow.closed
+    ) {
+      detachedTargetWindow.postMessage({
+        source: "bidwright-takeoff-sync",
+        message,
+      }, window.location.origin);
+      return;
+    }
+    broadcastRef.current?.postMessage(message);
+  }, [detachedTargetWindow, projectId]);
   const selectedDocIdRef = useRef(selectedDocId);
   const pageRef = useRef(page);
   const zoomRef = useRef(zoom);
@@ -3563,13 +3580,14 @@ export function TakeoffTab({
   });
 
   useEffect(() => {
-    if (!projectId || typeof BroadcastChannel === "undefined") return;
+    if (!projectId) return;
 
-    const channel = new BroadcastChannel(takeoffChannelName(projectId));
-    broadcastRef.current = channel;
+    const channel = typeof BroadcastChannel === "undefined"
+      ? null
+      : new BroadcastChannel(takeoffChannelName(projectId));
+    if (channel) broadcastRef.current = channel;
 
-    channel.onmessage = (event: MessageEvent<TakeoffSyncMessage>) => {
-      const msg = event.data;
+    const handleSyncMessage = (msg: TakeoffSyncMessage) => {
       if (!msg || msg.projectId !== projectId || msg.originId === syncOriginRef.current) return;
 
       if (msg.type === "view-change") {
@@ -3654,11 +3672,25 @@ export function TakeoffTab({
       }
     };
 
+    if (channel) {
+      channel.onmessage = (event: MessageEvent<TakeoffSyncMessage>) => {
+        handleSyncMessage(event.data);
+      };
+    }
+    const handleWindowMessage = (event: MessageEvent<unknown>) => {
+      if (event.origin !== window.location.origin) return;
+      const envelope = event.data as { source?: unknown; message?: unknown } | null;
+      if (envelope?.source !== "bidwright-takeoff-sync" || !envelope.message) return;
+      handleSyncMessage(envelope.message as TakeoffSyncMessage);
+    };
+    window.addEventListener("message", handleWindowMessage);
+
     return () => {
       if (broadcastRef.current === channel) {
         broadcastRef.current = null;
       }
-      channel.close();
+      channel?.close();
+      window.removeEventListener("message", handleWindowMessage);
     };
   }, [projectId]);
 
