@@ -139,7 +139,7 @@ export function RichTextEditor({
   return (
     <div
       className={cn(
-        "rounded-lg border border-line bg-bg focus-within:border-accent/60 transition-colors",
+        "min-h-0 rounded-lg border border-line bg-bg focus-within:border-accent/60 transition-colors",
         className,
       )}
     >
@@ -165,7 +165,7 @@ export function RichTextEditor({
       </div>
 
       {/* Editor area */}
-      <div className="relative flex-1 flex flex-col">
+      <div className="relative flex-1 min-h-0 flex flex-col">
         {isEmpty && placeholder && (
           <div
             className="pointer-events-none absolute inset-0 px-3 py-2 text-sm text-fg/30"
