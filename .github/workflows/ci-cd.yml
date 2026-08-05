@@ -281,11 +281,12 @@ jobs:
       - name: Pin tag in Dokploy env + trigger redeploy
         env:
           PGPASSWORD: ${{ secrets.DOKPLOY_PG_PASSWORD }}
-          REFRESH_TOKEN: ${{ secrets.DOKPLOY_REFRESH_TOKEN }}
+          DOKPLOY_API_KEY: ${{ secrets.DOKPLOY_API_KEY }}
           INTEGRATIONS_ENCRYPTION_KEY: ${{ secrets.BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY }}
           INTEGRATIONS_ENCRYPTION_KEY_PROBE: ${{ secrets.BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY_PROBE }}
         run: |
           set -euo pipefail
+          : "${DOKPLOY_API_KEY:?DOKPLOY_API_KEY is not configured}"
           : "${INTEGRATIONS_ENCRYPTION_KEY:?BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY is not configured}"
           : "${INTEGRATIONS_ENCRYPTION_KEY_PROBE:?BIDWRIGHT_INTEGRATIONS_ENCRYPTION_KEY_PROBE is not configured}"
           INTEGRATIONS_ENCRYPTION_KEY="$(
@@ -398,13 +399,15 @@ jobs:
           PREV_DEPLOY="$(dq "SELECT \"deploymentId\" FROM deployment WHERE \"composeId\"='${COMPOSE_ID}' ORDER BY \"createdAt\" DESC LIMIT 1;")"
 
           echo "Triggering Dokploy redeploy…"
-          # The webhook returns almost immediately and runs compose-up async, so
-          # its response does NOT mean the deploy worked — verified below.
+          # Use Dokploy's authenticated compose API. Refresh-token webhooks can
+          # acknowledge a request without creating a deployment when the
+          # control-plane queue is unhealthy; the supported API also gives us
+          # a stable authorization boundary for GitHub Actions.
           response=$(curl -sf -X POST --max-time 300 \
+            -H "x-api-key: ${DOKPLOY_API_KEY}" \
             -H 'Content-Type: application/json' \
-            -H 'X-GitHub-Event: push' \
-            --data "{\"ref\":\"refs/heads/main\",\"head_commit\":{\"id\":\"${GITHUB_SHA}\",\"message\":\"Deploy ${NEW_TAG}\"}}" \
-            "http://dokploy:3000/api/deploy/compose/${REFRESH_TOKEN}")
+            --data "{\"composeId\":\"${COMPOSE_ID}\",\"title\":\"Deploy Bidwright ${NEW_TAG}\",\"description\":\"GitHub Actions ${GITHUB_RUN_ID}\"}" \
+            "http://dokploy:3000/api/compose.deploy")
           echo "Dokploy response: $response"
 
           # ── Verify the deploy actually applied ──────────────────────────────
