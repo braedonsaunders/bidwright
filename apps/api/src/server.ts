@@ -1989,6 +1989,7 @@ export function buildServer() {
   app.get("/health", async () => ({
     status: "ok",
     service: "bidwright-api",
+    deploymentTag: process.env.BIDWRIGHT_DEPLOYMENT_TAG ?? "development",
     dataRoot: resolveApiPath(),
     integrationsKeyProbe: validateIntegrationsEncryptionKey().probeVerified
       ? "verified"

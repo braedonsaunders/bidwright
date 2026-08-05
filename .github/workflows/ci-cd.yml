@@ -405,11 +405,11 @@ jobs:
           echo "Dokploy response: $response"
 
           # ── Verify the deploy actually applied ──────────────────────────────
-          # Poll Dokploy's deployment record until THIS run's deployment reaches
-          # a terminal state; fail the job on error/timeout. Without this, a stuck
-          # deploy (e.g. an expired registry token → "denied" image pull) is
-          # silent-green in CI while prod keeps running the previous image — which
-          # is exactly how a stale prod hid for two days.
+          # Prove the new API image is actually serving production traffic. Raw
+          # compose webhooks can reuse Dokploy's last `done` deployment record,
+          # so a new deployment id is not a reliable success signal. The API
+          # exposes the immutable compose tag in /health; keep watching Dokploy
+          # for a newly-recorded error while polling that runtime proof.
           echo "Verifying ${NEW_TAG} actually deployed…"
           DEADLINE=$(( $(date +%s) + 360 ))
           FINAL=""
@@ -418,16 +418,19 @@ jobs:
             ROW="$(dq "SELECT \"deploymentId\" || ':' || status FROM deployment WHERE \"composeId\"='${COMPOSE_ID}' ORDER BY \"createdAt\" DESC LIMIT 1;")"
             DEP_ID="${ROW%%:*}"; DEP_ST="${ROW##*:}"
             echo "  latest deployment: ${DEP_ST:-<none>} (${DEP_ID:-none})"
-            # Only trust a deployment created by THIS trigger.
-            if [ -n "${DEP_ID}" ] && [ "${DEP_ID}" != "${PREV_DEPLOY}" ]; then
-              case "${DEP_ST}" in
-                done)  FINAL="done";  break ;;
-                error) FINAL="error"; break ;;
-              esac
+            if [ -n "${DEP_ID}" ] && [ "${DEP_ID}" != "${PREV_DEPLOY}" ] && [ "${DEP_ST}" = "error" ]; then
+              FINAL="error"
+              break
+            fi
+            HEALTH="$(curl -fsS --max-time 30 https://bidwright.rassaun.com/proxy/health 2>/dev/null || true)"
+            if printf '%s' "${HEALTH}" | grep -q "\"deploymentTag\":\"${NEW_TAG}\"" \
+              && printf '%s' "${HEALTH}" | grep -q '"integrationsKeyProbe":"verified"'; then
+              FINAL="done"
+              break
             fi
           done
           if [ "${FINAL}" = "done" ]; then
-            echo "::notice title=Deploy verified::Bidwright deployed ${NEW_TAG} (status=done). UI: https://cloud.rassaun.com"
+            echo "::notice title=Deploy verified::Bidwright production is serving ${NEW_TAG}. UI: https://cloud.rassaun.com"
           elif [ "${FINAL}" = "error" ]; then
             echo "Dokploy deployment metadata:"
             psql -h dokploy-postgres -U dokploy -d dokploy \
@@ -435,7 +438,7 @@ jobs:
             echo "::error title=Deploy FAILED::Dokploy compose-up errored for ${NEW_TAG} — prod is still on the previous image. Check /etc/dokploy/logs/${COMPOSE_NAME} on dokploy-mgr."
             exit 1
           else
-            echo "::error title=Deploy NOT confirmed::${NEW_TAG} did not reach a terminal deploy state within 6 min — treating as failed so prod isn't silently stale."
+            echo "::error title=Deploy NOT confirmed::Production did not report ${NEW_TAG} within 6 min — treating as failed so prod isn't silently stale."
             exit 1
           fi
 
