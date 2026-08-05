@@ -162,7 +162,10 @@ import { cn } from "@/lib/utils";
 import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
 import {
   acceptTakeoffSyncMessage,
+  deliverDetachedTakeoffCommand,
+  DETACHED_TAKEOFF_COMMAND_RECEIVER,
   replayDetachedViewerCommand,
+  resolveDetachedModelCommandTarget,
 } from "@/lib/takeoff-detached-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
 import { parseConstructionDimensionToUnit } from "@/lib/construction-dimension";
@@ -2293,6 +2296,7 @@ export function TakeoffTab({
   const syncOriginRef = useRef(`takeoff-${Math.random().toString(36).slice(2)}`);
   const syncMessageSerialRef = useRef(0);
   const latestModelViewerCommandRef = useRef<TakeoffModelViewerCommand | null>(null);
+  const detachedViewerReadyRef = useRef(false);
   const replayLatestModelViewerCommandRef = useRef<() => void>(() => {});
   const postTakeoffMessage = useCallback((payload: TakeoffSyncPayload) => {
     if (!projectId) return;
@@ -2305,12 +2309,27 @@ export function TakeoffTab({
       projectId,
       messageId: `${syncOriginRef.current}:${Date.now().toString(36)}:${++syncMessageSerialRef.current}`,
     } as TakeoffSyncMessage;
+    const popupTarget = detachedWindowRef.current ?? detachedTargetWindow;
+    const deliveredDirectly = payload.type === "model-viewer-command"
+      && popupTarget
+      && !popupTarget.closed
+      && deliverDetachedTakeoffCommand(popupTarget, payload.command);
+    if (
+      payload.type === "model-viewer-command"
+      && isDetachedMirror
+      && detachedViewerReadyRef.current
+      && !deliveredDirectly
+    ) {
+      setToastType("error");
+      setToastMessage("The detached viewer did not accept the selection command. Merge it and detach again.");
+    }
     if (
       payload.type === "model-viewer-command" &&
-      detachedTargetWindow &&
-      !detachedTargetWindow.closed
+      popupTarget &&
+      !popupTarget.closed &&
+      !deliveredDirectly
     ) {
-      detachedTargetWindow.postMessage({
+      popupTarget.postMessage({
         source: "bidwright-takeoff-sync",
         message,
       }, window.location.origin);
@@ -2324,11 +2343,11 @@ export function TakeoffTab({
         message,
       }, window.location.origin);
     }
-    // Always retain BroadcastChannel as the second transport. Direct window
-    // messages cover popup-startup races; the channel covers stale opener
-    // handles and normal cross-window updates. messageId deduplicates both.
-    broadcastRef.current?.postMessage(message);
-  }, [detachedTargetWindow, projectId]);
+    // Direct same-origin RPC is authoritative once the popup has registered
+    // its receiver. Before that point, retain postMessage + BroadcastChannel
+    // as startup fallbacks; the ready handshake replays the latest command.
+    if (!deliveredDirectly) broadcastRef.current?.postMessage(message);
+  }, [detachedTargetWindow, isDetachedMirror, projectId]);
   useEffect(() => {
     replayLatestModelViewerCommandRef.current = () => {
       replayDetachedViewerCommand(
@@ -2375,7 +2394,7 @@ export function TakeoffTab({
   const applyExternalModelViewerCommandRef = useRef<(
     command: TakeoffModelViewerCommand,
     readyActions?: CadViewerActions,
-  ) => void>(() => {});
+  ) => boolean>(() => false);
   const [modelDisplayMode, setModelDisplayMode] = useState<CadViewerDisplayMode>("shaded");
   const [modelGridVisible, setModelGridVisible] = useState(true);
   const [modelAutoRotate, setModelAutoRotate] = useState(false);
@@ -2648,41 +2667,46 @@ export function TakeoffTab({
   const applyExternalModelViewerCommand = useCallback((
     command: TakeoffModelViewerCommand,
     readyActions?: CadViewerActions,
-  ) => {
+  ): boolean => {
     if (command.action === "stop-orbit") {
       const actions = readyActions ?? modelViewerActionsRef.current;
       if (!actions) {
         pendingModelViewerCommandRef.current = command;
-        return;
+        return false;
       }
       pendingModelViewerCommandRef.current = null;
       actions.stopOrbit();
       setModelOrbitingGroupSignature(null);
-      return;
+      return true;
     }
 
-    const targetDocument = takeoffDocuments.find((doc) => doc.modelAssetId === command.assetId);
-    if (!targetDocument) {
+    const target = resolveDetachedModelCommandTarget(
+      command.assetId,
+      selectedDocIdRef.current,
+      selectedModelAsset?.id ?? null,
+      takeoffDocuments,
+    );
+    if (!target) {
       pendingModelViewerCommandRef.current = command;
-      return;
+      return false;
     }
-    if (targetDocument.id !== selectedDocIdRef.current) {
+    if (target.kind === "switch") {
       pendingModelViewerCommandRef.current = command;
       // Do not let the command accidentally hit the viewer for the document
       // that React is about to unmount.
       modelViewerActionsRef.current = null;
-      selectedDocIdRef.current = targetDocument.id;
+      selectedDocIdRef.current = target.documentId;
       pageRef.current = 1;
-      setSelectedDocId(targetDocument.id);
+      setSelectedDocId(target.documentId);
       setPage(1);
       fitOnLoadRef.current = true;
-      return;
+      return false;
     }
 
     const actions = readyActions ?? modelViewerActionsRef.current;
     if (!actions) {
       pendingModelViewerCommandRef.current = command;
-      return;
+      return false;
     }
 
     pendingModelViewerCommandRef.current = null;
@@ -2694,7 +2718,8 @@ export function TakeoffTab({
       setModelOrbitingGroupSignature(null);
       actions.focusElements(command.externalIds);
     }
-  }, [takeoffDocuments]);
+    return true;
+  }, [selectedModelAsset?.id, takeoffDocuments]);
 
   useEffect(() => {
     applyExternalModelViewerCommandRef.current = applyExternalModelViewerCommand;
@@ -2708,7 +2733,26 @@ export function TakeoffTab({
   const handleModelViewerActionsReady = useCallback((actions: CadViewerActions) => {
     const pending = pendingModelViewerCommandRef.current;
     if (pending) applyExternalModelViewerCommand(pending, actions);
-  }, [applyExternalModelViewerCommand]);
+    if (detached && !isDetachedMirror) {
+      postTakeoffMessage({ type: "detached-viewer-ready" });
+    }
+  }, [applyExternalModelViewerCommand, detached, isDetachedMirror, postTakeoffMessage]);
+
+  useEffect(() => {
+    if (!detached || isDetachedMirror) return;
+    const detachedWindow = window as Window & {
+      [DETACHED_TAKEOFF_COMMAND_RECEIVER]?: (command: TakeoffModelViewerCommand) => boolean;
+    };
+    const receiveCommand = (command: TakeoffModelViewerCommand) => {
+      return applyExternalModelViewerCommandRef.current(command);
+    };
+    detachedWindow[DETACHED_TAKEOFF_COMMAND_RECEIVER] = receiveCommand;
+    return () => {
+      if (detachedWindow[DETACHED_TAKEOFF_COMMAND_RECEIVER] === receiveCommand) {
+        delete detachedWindow[DETACHED_TAKEOFF_COMMAND_RECEIVER];
+      }
+    };
+  }, [detached, isDetachedMirror]);
 
   const selectedModelElements = useMemo(
     () => modelElements.filter((element) => selectedModelElementIds.has(element.id)),
@@ -3654,6 +3698,7 @@ export function TakeoffTab({
       }
 
       if (msg.type === "detached-viewer-ready") {
+        if (isDetachedMirror) detachedViewerReadyRef.current = true;
         replayLatestModelViewerCommandRef.current();
         return;
       }
@@ -3726,13 +3771,6 @@ export function TakeoffTab({
     };
     window.addEventListener("message", handleWindowMessage);
 
-    // The detached window owns a fresh TakeoffTab and a fresh Autodesk
-    // viewer. Announce readiness only after both sync transports are listening
-    // so the hidden controller can replay the current isolate/ghost scope.
-    if (detached && !isDetachedMirror) {
-      postTakeoffMessage({ type: "detached-viewer-ready" });
-    }
-
     return () => {
       if (broadcastRef.current === channel) {
         broadcastRef.current = null;
@@ -3799,6 +3837,7 @@ export function TakeoffTab({
       const win = detachedWindowRef.current;
       if (win && win.closed) {
         detachedWindowRef.current = null;
+        detachedViewerReadyRef.current = false;
         onDetachedWindowChange(false);
       }
     }, 900);
@@ -4080,6 +4119,7 @@ export function TakeoffTab({
       onDetachedWindowChange?.(true, detachedWindowRef.current);
       return;
     }
+    detachedViewerReadyRef.current = false;
     const src = selectedDoc?.source ?? "project";
     const url = `/takeoff-viewer?projectId=${encodeURIComponent(projectId)}&docId=${encodeURIComponent(selectedDocId)}&source=${encodeURIComponent(src)}&page=${page}&zoom=${zoom}`;
     const nextWindow = window.open(url, `bw-takeoff-${projectId}`, "width=1400,height=900,resizable=yes");

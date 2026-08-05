@@ -112,6 +112,8 @@ jobs:
           packages/mcp-server/src/api-client.test.ts
           packages/domain/src/worksheet-hours.test.ts
           apps/web/lib/autodesk-viewer-selection.test.ts
+          apps/web/components/workspace/persistent-takeoff-controller.test.tsx
+          apps/web/lib/live-action-bridge.test.ts
           apps/web/lib/takeoff-detached-sync.test.ts
           apps/web/lib/cad-entity-groups.test.ts
           apps/web/lib/model-element-groups.test.ts

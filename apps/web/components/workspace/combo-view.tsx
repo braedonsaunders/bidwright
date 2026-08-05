@@ -5,12 +5,14 @@ import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "r
 import { ArrowRight, Check, ChevronDown, Compass, GripHorizontal, Layers, Loader2, Maximize2, Minimize2, PanelRightClose, Search, TableProperties, X } from "lucide-react";
 import { Button, Input } from "@appkit/ui";
 import type { CreateWorksheetItemInput, ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
+import { createLiveActionBridge } from "@/lib/live-action-bridge";
 import { cn } from "@/lib/utils";
 import { TakeoffTab } from "./takeoff-tab";
 import { EstimateGrid, type WorksheetLineItemPickerRequest } from "./estimate-grid";
 import { TakeoffLinkView, type TakeoffSelection } from "./takeoff-link-view";
 import { TakeoffInspectView, type InspectActions, type InspectQuantityOption, type InspectQuantitySelection, type InspectSnapshot, type TakeoffComposeRequest } from "./takeoff-inspect-view";
 import type { Pickup } from "./takeoff/annotation-canvas";
+import { PersistentTakeoffController } from "./persistent-takeoff-controller";
 
 type PluginToolsTarget = { pluginId?: string; pluginSlug?: string; toolId?: string };
 /** Browse, inspect and worksheet composition are independent states. */
@@ -579,34 +581,24 @@ export function ComboView({
     />
   );
 
-  if (takeoffDetached) {
-    return (
-      <div
-        ref={containerRef}
-        className={cn(
-          "relative flex flex-col flex-1 min-h-0",
-          fullscreen && "bg-bg p-2",
-        )}
-      >
-        <div className="fixed -left-[10000px] top-0 h-[720px] w-[1024px] overflow-hidden opacity-0 pointer-events-none" aria-hidden="true">
-          {takeoffSurface}
+  const detachedWorkspace = takeoffDetached ? (
+    <>
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel/80 px-3 py-1.5">
+        <div className="min-w-0 text-xs">
+          <span className="font-medium text-fg/75">Takeoff popped out</span>
+          <span className="ml-2 text-fg/40">Worksheets left, entities right</span>
         </div>
-        <div className="flex shrink-0 items-center justify-between gap-3 border-b border-line bg-panel/80 px-3 py-1.5">
-          <div className="min-w-0 text-xs">
-            <span className="font-medium text-fg/75">Takeoff popped out</span>
-            <span className="ml-2 text-fg/40">Worksheets left, entities right</span>
-          </div>
-          <button
-            type="button"
-            onClick={handleMergeDetachedTakeoff}
-            className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-line bg-bg/40 px-2 text-[11px] font-medium text-fg/65 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
-            title="Close the detached takeoff window and restore the full workspace layout"
-          >
-            <PanelRightClose className="h-3.5 w-3.5" />
-            Merge back
-          </button>
-        </div>
-        <Group
+        <button
+          type="button"
+          onClick={handleMergeDetachedTakeoff}
+          className="inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md border border-line bg-bg/40 px-2 text-[11px] font-medium text-fg/65 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
+          title="Close the detached takeoff window and restore the full workspace layout"
+        >
+          <PanelRightClose className="h-3.5 w-3.5" />
+          Merge back
+        </button>
+      </div>
+      <Group
           orientation="horizontal"
           className="flex-1 min-h-0"
           defaultLayout={detachedLayout.defaultLayout}
@@ -669,26 +661,27 @@ export function ComboView({
               />
             </div>
           </Panel>
-        </Group>
-      </div>
-    );
-  }
+      </Group>
+    </>
+  ) : null;
 
   return (
     <div
       ref={containerRef}
       className={cn(
-        "flex flex-col flex-1 min-h-0",
+        "relative flex flex-col flex-1 min-h-0",
         fullscreen && "bg-bg p-2",
       )}
     >
-      <Group
-        orientation="vertical"
-        className="flex-1 min-h-0"
-        defaultLayout={verticalLayout.defaultLayout}
-        onLayoutChanged={verticalLayout.onLayoutChanged}
-      >
-        <Panel id="combo-top" defaultSize="67%" minSize="45%">
+      {detachedWorkspace}
+      <PersistentTakeoffController detached={takeoffDetached}>
+        <Group
+          orientation="vertical"
+          className="h-full min-h-0"
+          defaultLayout={verticalLayout.defaultLayout}
+          onLayoutChanged={verticalLayout.onLayoutChanged}
+        >
+          <Panel id="combo-top" defaultSize="67%" minSize="45%">
           <Group
             orientation="horizontal"
             className="h-full"
@@ -825,7 +818,8 @@ export function ComboView({
             </div>
           </div>
         </Panel>
-      </Group>
+        </Group>
+      </PersistentTakeoffController>
     </div>
   );
 }
@@ -1010,6 +1004,10 @@ function RightPanel({
   onAddStagedLineItem: () => void;
   onClearComposeRequest: () => void;
 }) {
+  const liveInspectActions = useMemo(
+    () => createLiveActionBridge<InspectActions>(() => inspectActionsRef.current),
+    [inspectActionsRef],
+  );
   const tabs: Array<{ id: RightPanelTab; label: string; icon: typeof Compass }> = [
     { id: "pickups", label: "Pickups", icon: Layers },
     { id: "inspect", label: "Inspect", icon: Compass },
@@ -1061,7 +1059,7 @@ function RightPanel({
         <div className="min-h-0 flex-1 overflow-hidden p-1.5">
           <TakeoffInspectView
             snapshot={inspectSnapshot}
-            actions={inspectActionsRef.current}
+            actions={liveInspectActions}
             onRequestCompose={onRequestCompose}
           />
         </div>
