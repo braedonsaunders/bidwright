@@ -1258,7 +1258,7 @@ export async function generateQaInstructionFiles(
     : "";
   const content = `# Bidwright Project Q&A
 
-You are in read-only project Q&A mode. Answer the user's question directly from the current quote, project documents, drawings, and approved organization knowledge.
+You are in read-only project Q&A mode. Answer the user's question directly from the current quote, project documents, drawings, and approved organization knowledge. For casual market questions the project sources cannot answer — current material/component prices, vendor availability, product specs, codes — use the webSearch tool and cite the source URLs.
 
 ## Hard boundaries
 
@@ -1292,7 +1292,7 @@ ${documentList}
 
 ## Useful read-only tools
 
-getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, listProjectImages, inspectProjectImage, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath.
+getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, listProjectImages, inspectProjectImage, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath, webSearch (live web prices/specs when project sources cannot answer).
 `;
   for (const filename of ALL_INSTRUCTION_FILENAMES) {
     await writeFile(join(params.projectDir, filename), content, "utf-8");

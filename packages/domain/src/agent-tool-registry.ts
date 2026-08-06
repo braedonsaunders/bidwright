@@ -151,6 +151,7 @@ export const AGENT_TOOL_REGISTRY = {
   getProjectSummary: { id: "getProjectSummary", displayName: "Read project summary", category: "system" },
   reportProgress: { id: "reportProgress", displayName: "Report progress", category: "system" },
   calculateMath: { id: "calculateMath", displayName: "Calculate math", category: "system" },
+  webSearch: { id: "webSearch", displayName: "Search the web", category: "system" },
 
   listIntegrations: { id: "listIntegrations", displayName: "List integrations", category: "integration" },
   describeIntegration: { id: "describeIntegration", displayName: "Describe integration", category: "integration" },

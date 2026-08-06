@@ -28,6 +28,7 @@ import { registerFileIngestTools } from "./tools/file-ingest-tools.js";
 import { registerIntegrationTools } from "./tools/integration-tools.js";
 import { registerResourceTools } from "./tools/resource-tools.js";
 import { registerCalculatorTools } from "./tools/calculator-tools.js";
+import { registerWebTools } from "./tools/web-tools.js";
 
 const server = new McpServer({
   name: "bidwright",
@@ -60,6 +61,7 @@ registerReviewTools(server);
 registerEstimateTools(server);
 registerResourceTools(server);
 registerCalculatorTools(server);
+registerWebTools(server);
 if (!readOnlyMode) {
   await registerIntegrationTools(server);
 }

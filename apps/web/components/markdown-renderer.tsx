@@ -1,7 +1,9 @@
 "use client";
 
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import type { Components } from "react-markdown";
 import { cn, decodeHtmlEntities } from "@/lib/utils";
 
 interface MarkdownRendererProps {
@@ -9,14 +11,10 @@ interface MarkdownRendererProps {
   className?: string;
 }
 
-export function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
-  const decodedContent = decodeHtmlEntities(content);
-
-  return (
-    <div className={cn("prose prose-sm max-w-none dark:prose-invert", className)}>
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
+// Hoisted: a fresh components object per render forces react-markdown to
+// re-parse and rebuild the DOM on every parent render, which (besides the
+// wasted work) destroys any text selection inside a rendered message.
+const MARKDOWN_COMPONENTS: Components = {
         h1: ({ children }) => <h1 className="text-base font-bold mt-3 mb-1.5">{children}</h1>,
         h2: ({ children }) => <h2 className="text-sm font-bold mt-2.5 mb-1">{children}</h2>,
         h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>,
@@ -63,11 +61,17 @@ export function MarkdownRenderer({ content, className }: MarkdownRendererProps) 
             {children}
           </a>
         ),
-        hr: () => <hr className="border-line/50 my-2" />,
-      }}
-    >
-      {decodedContent}
-    </ReactMarkdown>
+  hr: () => <hr className="border-line/50 my-2" />,
+};
+
+export const MarkdownRenderer = memo(function MarkdownRenderer({ content, className }: MarkdownRendererProps) {
+  const decodedContent = decodeHtmlEntities(content);
+
+  return (
+    <div className={cn("prose prose-sm max-w-none dark:prose-invert", className)}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={MARKDOWN_COMPONENTS}>
+        {decodedContent}
+      </ReactMarkdown>
     </div>
   );
-}
+});

@@ -1310,6 +1310,8 @@ function splitOpenUI(text: string, streaming = false): { type: "text" | "openui"
 
 function StreamingMarkdown({ content, streamKey, active = false }: { content: string; streamKey: string; active?: boolean }) {
   const [visible, setVisible] = useState(active ? "" : content);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
 
   useEffect(() => {
     if (!active) {
@@ -1317,8 +1319,14 @@ function StreamingMarkdown({ content, streamKey, active = false }: { content: st
       return;
     }
 
-    setVisible("");
-    let index = 0;
+    // Continue the reveal from wherever it already is instead of restarting.
+    // The effect re-fires whenever `active` flips or a poll refreshes the
+    // event array; resetting to "" rebuilds this message's DOM from scratch,
+    // which (besides the flicker) destroys any text selection inside it.
+    const already = visibleRef.current;
+    let index = content.startsWith(already) ? already.length : 0;
+    if (index >= content.length) return;
+    if (index === 0) setVisible("");
     const step = Math.max(3, Math.ceil(content.length / 120));
     const timer = window.setInterval(() => {
       index = Math.min(content.length, index + step);
@@ -2684,8 +2692,15 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     }
   }, [autoStartIntake]);
 
-  // Auto-scroll only when user hasn't manually scrolled up
+  // Auto-scroll only when user hasn't manually scrolled up, and only when the
+  // transcript actually grew — scrolling on every 5s poll tick interrupts an
+  // in-progress drag-selection even when nothing changed.
+  const lastAutoScrollSignatureRef = useRef("");
   useEffect(() => {
+    const eventCount = ((intakeStatus as any)?.events?.length ?? 0) as number;
+    const signature = `${messages.length}|${liveToolCalls.length}|${eventCount}|${cliPendingQuestion ? 1 : 0}`;
+    if (signature === lastAutoScrollSignatureRef.current) return;
+    lastAutoScrollSignatureRef.current = signature;
     if (!isUserScrolledUp) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
@@ -3300,8 +3315,15 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           // not have landed by the time the next 5s poll runs. Wholesale
           // replacing here would cause the inline widget to flicker out
           // and then back in. Adopt the polled list only when it has caught
-          // up; otherwise keep the local optimistic state.
-          setLiveToolCalls((prev) => (tools.length >= prev.length ? tools : prev));
+          // up; otherwise keep the local optimistic state. When nothing
+          // actually changed, keep the previous array identity — every new
+          // identity re-renders the transcript and clears the user's text
+          // selection on the next poll tick.
+          setLiveToolCalls((prev) => {
+            if (tools.length < prev.length) return prev;
+            const fingerprint = (list: ToolCallEntry[]) => list.map((tool) => `${tool.id}${tool.status}`).join("|");
+            return fingerprint(prev) === fingerprint(tools) ? prev : tools;
+          });
 
           const msgs = events.filter((e: any) => e.type === "message");
           const polled: ChatMessage[] = msgs.map((e: any, i: number) => ({
@@ -3316,15 +3338,30 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           // wholesale would cause the just-rendered message to flicker out
           // and then back in on the next poll. Only adopt the polled list
           // when it has caught up with (or surpassed) what we already show.
-          setMessages((prev) => (polled.length >= prev.length ? polled : prev));
+          setMessages((prev) => {
+            if (polled.length < prev.length) return prev;
+            const unchanged = polled.length === prev.length
+              && prev.every((message, i) => message.role === polled[i].role && message.content === polled[i].content);
+            return unchanged ? prev : polled;
+          });
 
-          setIntakeStatus((prev) => prev ? {
-            ...prev,
-            status: data.status as any,
-            toolCallCount: toolEvents.length,
-            messageCount: msgs.length,
-            events,
-          } : prev);
+          setIntakeStatus((prev) => {
+            if (!prev) return prev;
+            const prevEvents: any[] = (prev as any).events ?? [];
+            const prevTail = prevEvents[prevEvents.length - 1];
+            const nextTail = events[events.length - 1];
+            const unchanged = prev.status === (data.status as any)
+              && prevEvents.length === events.length
+              && JSON.stringify(prevTail ?? null) === JSON.stringify(nextTail ?? null);
+            if (unchanged) return prev;
+            return {
+              ...prev,
+              status: data.status as any,
+              toolCallCount: toolEvents.length,
+              messageCount: msgs.length,
+              events,
+            };
+          });
 
           // Refresh workspace if there are new mutating tool calls since last poll
           const mutatingTools = tools.filter((tool) => isAgentToolMutating(tool.toolId) || (tool.result.sideEffects?.length ?? 0) > 0);
@@ -3474,13 +3511,25 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     let pendingTools: ToolCallEntry[] = [];
     let pendingStartIndex = -1;
 
+    // Keys must be stable as the list grows: index-based keys shift whenever
+    // an earlier event (run divider, newly surfaced run) is inserted, which
+    // remounts every downstream message node and destroys the user's text
+    // selection. Derive keys from event identity, disambiguating duplicates
+    // by occurrence order.
+    const keyCounts = new Map<string, number>();
+    const stableKey = (base: string) => {
+      const count = keyCounts.get(base) ?? 0;
+      keyCounts.set(base, count + 1);
+      return count === 0 ? base : `${base}-${count}`;
+    };
+
     const flushTools = () => {
       if (pendingTools.length === 0) return;
       items.push({
         type: "tool_group",
         tools: pendingTools,
         index: pendingStartIndex,
-        key: `tool-group-${pendingStartIndex}-${pendingTools.length}`,
+        key: stableKey(`tool-group-${pendingTools[0]?.id ?? pendingStartIndex}`),
       });
       pendingTools = [];
       pendingStartIndex = -1;
@@ -3501,12 +3550,26 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       }
 
       flushTools();
-      items.push({ type: "event", event, index, key: `evt-${index}` });
+      items.push({ type: "event", event, index, key: stableKey(`evt-${event?.timestamp ?? index}-${eventType ?? "e"}`) });
     });
 
     flushTools();
     return items;
   }, [timelineEvents, toolById]);
+  // Locally-appended messages (the just-typed question, send errors) that the
+  // persisted timeline does not carry yet. Rendering only the timeline made a
+  // follow-up question invisible until the server's next poll — and forever
+  // when the send failed, because the error bubble lived in `messages` while
+  // the transcript rendered `timelineEvents` exclusively.
+  const pendingLocalMessages = useMemo(() => {
+    if (timelineEvents.length === 0) return messages;
+    const timelineContents = new Set(
+      timelineEvents
+        .filter((event) => event?.type === "message")
+        .map((event) => `${event?.data?.role ?? "assistant"}${String(event?.data?.content ?? "").trim()}`),
+    );
+    return messages.filter((message) => !timelineContents.has(`${message.role}${message.content.trim()}`));
+  }, [messages, timelineEvents]);
   const statusToolCount = Math.max(intakeStatus?.toolCallCount ?? 0, activityTools.length);
   const statusMessageCount = Math.max(
     intakeStatus?.messageCount ?? 0,
@@ -3957,7 +4020,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               }).filter(Boolean);
             })()}
 
-            {!showBlockingAgentPanel && timelineEvents.length === 0 && messages.map((message) => (
+            {!showBlockingAgentPanel && pendingLocalMessages.map((message) => (
               <div key={message.id} className={cn("flex", message.role === "user" ? "justify-end" : "justify-start")}>
                 <div className={cn(
                   "text-sm leading-relaxed",

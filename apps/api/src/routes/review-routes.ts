@@ -328,11 +328,23 @@ export function registerReviewRoutes(app: FastifyInstance) {
       model?: string;
     };
 
-    const runtime: AgentRuntime = isRegisteredRuntime(body.runtime) ? body.runtime : "claude-code";
-    const adapter = getAdapter(runtime);
-    let model = adapter.normalizeModel(body.model ?? null);
-
     const store = request.store!;
+
+    // User-overlaid integrations: org admin's defaults + this estimator's
+    // personal OAuth / API key, so the review CLI spawn picks up subscription
+    // billing when the user has connected one. Resolved before runtime
+    // selection — the review must honour the configured agentRuntime rather
+    // than assuming claude-code, which may have no credentials on the server.
+    const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
+    const runtime: AgentRuntime = isRegisteredRuntime(body.runtime)
+      ? body.runtime
+      : isRegisteredRuntime(integrations.agentRuntime)
+        ? integrations.agentRuntime
+        : "claude-code";
+    const adapter = getAdapter(runtime);
+    let model = adapter.normalizeModel(
+      body.model ?? (typeof integrations.agentModel === "string" && integrations.agentModel ? integrations.agentModel : null),
+    );
 
     // Get project context
     const workspace = await store.getWorkspace(projectId);
@@ -390,11 +402,6 @@ export function registerReviewRoutes(app: FastifyInstance) {
       store,
     });
 
-    // User-overlaid integrations: org admin's defaults + this estimator's
-    // personal OAuth / API key, so the review CLI spawn picks up subscription
-    // billing when the user has connected one.
-    const integrationsEarly = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
-
     // Generate review-specific instruction files for the active runtime
     await generateReviewInstructionFiles(runtime, {
       projectDir,
@@ -408,7 +415,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
       knowledgeBookFiles: linkedBookNames,
       knowledgeDocumentFiles: linkedKnowledgePageNames,
       librarySnapshot,
-      maxConcurrentSubAgents: integrationsEarly.maxConcurrentSubAgents ?? 2,
+      maxConcurrentSubAgents: integrations.maxConcurrentSubAgents ?? 2,
     });
 
     // Create QuoteReview record
@@ -440,7 +447,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
         revisionId: revision.id || "",
         kind: "cli-review",
         status: "running",
-        model: model || "sonnet",
+        model: model || "",
         input: { runtime, reviewId, documentCount: documents.length } as any,
         output: { events: [] } as any,
       },
@@ -471,7 +478,6 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
 CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or delete any line items. Only ANALYZE and REPORT via the saveReview* tools. Be thorough — read every page of every document. Missing scope = missing findings.`;
 
-    const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
     const reasoningEffort = typeof integrations.agentReasoningEffort === "string" && integrations.agentReasoningEffort
       ? integrations.agentReasoningEffort
       : "extra_high";
