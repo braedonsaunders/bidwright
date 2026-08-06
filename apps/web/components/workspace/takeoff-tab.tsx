@@ -168,6 +168,7 @@ import {
   resolveDetachedModelCommandTarget,
 } from "@/lib/takeoff-detached-sync";
 import type { Calibration, Point } from "@/lib/takeoff-math";
+import { computeMeasurement } from "@/lib/takeoff-math";
 import { parseConstructionDimensionToUnit } from "@/lib/construction-dimension";
 import {
   resolveTakeoffShortcut,
@@ -4308,6 +4309,10 @@ export function TakeoffTab({
       groupName: annotation.groupName || "",
       points: annotation.points || [],
       measurement: annotation.measurement ?? {},
+      // Record the scale this pickup was measured under. null is honest for
+      // an uncalibrated page (px values); remeasureAnnotationsForCalibration
+      // stamps the real calibration once the page is calibrated.
+      calibration: calibration ?? null,
       metadata,
     };
   }
@@ -4397,6 +4402,9 @@ export function TakeoffTab({
         redoStackRef.current.push(command);
       } else if (command.kind === "calibration") {
         applyCalibrationDocCacheSnapshot(command.docId, command.beforeDocCache);
+        if (command.docId === selectedDocId) {
+          void remeasureAnnotationsForCalibration(lookupCalibrationFromCache(command.docId, page));
+        }
         redoStackRef.current.push(command);
       }
     } finally {
@@ -4424,6 +4432,9 @@ export function TakeoffTab({
         undoStackRef.current.push(command);
       } else if (command.kind === "calibration") {
         applyCalibrationDocCacheSnapshot(command.docId, command.afterDocCache);
+        if (command.docId === selectedDocId) {
+          void remeasureAnnotationsForCalibration(lookupCalibrationFromCache(command.docId, page));
+        }
         undoStackRef.current.push(command);
       }
     } finally {
@@ -6372,9 +6383,70 @@ export function TakeoffTab({
           beforeDocCache,
           afterDocCache,
         });
+        void remeasureAnnotationsForCalibration(next);
       }
     }
     setActiveTool("select");
+  }
+
+  /** Annotation types whose measurement depends on the drawing scale.
+   *  Plain `count` is deliberately absent — a count is scale-invariant
+   *  (six doors are six doors at any scale), and smart-count rows store a
+   *  value that is NOT points.length, so re-deriving would clobber it.
+   *  Markups measure nothing. */
+  const CALIBRATION_DEPENDENT_TYPES = new Set([
+    "linear",
+    "linear-polyline",
+    "linear-drop",
+    "area-rectangle",
+    "area-polygon",
+    "area-triangle",
+    "area-ellipse",
+    "area-vertical-wall",
+    "count-by-distance",
+  ]);
+
+  /** Re-derive measurements for the loaded page's pickups after the scale
+   *  changes, and stamp the calibration they were measured under. Without
+   *  this, anything drawn before calibration keeps `px` values forever and
+   *  a scale correction never reaches existing pickups (or the estimate —
+   *  the server cascades linked line items when measurement changes).
+   *
+   *  Points are stored in the canvas-pixel space captured at draw time
+   *  (annotation.canvasWidth), so the zoom-1-normalised calibration is
+   *  rescaled into each annotation's own space instead of rescaling points. */
+  async function remeasureAnnotationsForCalibration(cal: Calibration | null) {
+    if (!cal || !projectId) return;
+    const baseWidth = canvasSize.width / Math.max(zoom, 0.0001);
+    if (!Number.isFinite(baseWidth) || baseWidth <= 0) return;
+
+    const updates: Pickup[] = [];
+    for (const a of annotations) {
+      if (!CALIBRATION_DEPENDENT_TYPES.has(a.type)) continue;
+      if (!Array.isArray(a.points) || a.points.length < 2) continue;
+      const annotationZoom = (a.canvasWidth ?? canvasSize.width) / baseWidth;
+      if (!Number.isFinite(annotationZoom) || annotationZoom <= 0) continue;
+      const effectiveCal: Calibration = {
+        pixelsPerUnit: cal.pixelsPerUnit * annotationZoom,
+        unit: cal.unit,
+      };
+      const measurement = computeMeasurement(a.type, a.points, effectiveCal, a.opts ?? {});
+      const prev = a.measurement;
+      if (prev && prev.value === measurement.value && prev.unit === measurement.unit
+        && prev.area === measurement.area && prev.volume === measurement.volume) continue;
+      updates.push({ ...a, measurement });
+    }
+    if (updates.length === 0) return;
+
+    setAnnotations((prev) => prev.map((a) => updates.find((u) => u.id === a.id) ?? a));
+    await Promise.all(
+      updates.map((u) =>
+        updatePickup(projectId, u.id, { measurement: u.measurement, calibration: cal }).catch(() => {
+          /* Local state already updated; server reconciles on next save/reload. */
+        }),
+      ),
+    );
+    notifyAnnotationsMutated();
   }
 
   /* Annotation CRUD */
@@ -9332,6 +9404,7 @@ export function TakeoffTab({
                         : activeColor
                     }
                     activeThickness={isRectSelectTool ? 2 : activeThickness}
+                    activeOpts={activeOpts}
                     onAnnotationComplete={
                       isAutoCountActive
                         ? handleAutoCountSelection

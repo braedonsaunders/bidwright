@@ -1865,7 +1865,9 @@ export async function deleteModelTakeoffLink(projectId: string, modelId: string,
   const link = await prisma.modelTakeoffLink.findFirst({ where: { id: linkId, projectId, modelId } });
   if (!link) throw new Error(`Model takeoff link ${linkId} not found`);
   await prisma.modelTakeoffLink.delete({ where: { id: linkId } });
-  return { deleted: true };
+  // worksheetItemId lets the route cascade a quantity recalc for the item
+  // that just lost this link.
+  return { deleted: true, worksheetItemId: link.worksheetItemId };
 }
 
 // ── Per-element classification/LOD updates ────────────────────────────────

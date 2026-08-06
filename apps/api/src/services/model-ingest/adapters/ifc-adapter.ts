@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { readFile } from "node:fs/promises";
+import { open, readFile } from "node:fs/promises";
 import type { CanonicalModelElement, CanonicalModelQuantity, ModelIngestCapability } from "@bidwright/domain";
 import { classificationDefaultsToRecord, defaultClassificationForIfcClass } from "@bidwright/domain";
 import type { ModelAdapterIngestResult, ModelIngestAdapter, ModelIngestContext, ModelIngestSource } from "../types.js";
@@ -424,6 +424,19 @@ function fallbackIfcEntityIndex(text: string, source: ModelIngestSource, context
   };
 }
 
+/** First 64 KB of the file — plenty for the STEP header (FILE_SCHEMA lives in
+ *  the first few lines) without pulling a multi-hundred-MB model into a string. */
+async function readIfcHeader(absPath: string): Promise<string> {
+  const handle = await open(absPath, "r");
+  try {
+    const buf = Buffer.alloc(64 * 1024);
+    const { bytesRead } = await handle.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, bytesRead).toString("latin1");
+  } finally {
+    await handle.close();
+  }
+}
+
 export const ifcAdapter: ModelIngestAdapter = {
   id: ADAPTER_ID,
   version: ADAPTER_VERSION,
@@ -439,11 +452,16 @@ export const ifcAdapter: ModelIngestAdapter = {
   },
   async ingest(source: ModelIngestSource, context: ModelIngestContext): Promise<ModelAdapterIngestResult> {
     const activeCapability = await this.capability(context.format);
+    // Full text is only needed for the regex fallback index — web-ifc parses
+    // bytes and has no such size limit. Requiring the text up front made
+    // every IFC over MAX_TEXT_BYTES fail ingest outright; real plant models
+    // are routinely far larger. `text` stays null for big files and the
+    // fallback paths handle that explicitly.
     const text = await readTextIfReasonable(context.absPath, context.size);
-    if (!text) {
-      throw new Error("IFC is too large for synchronous text fallback indexing.");
-    }
     if (activeCapability.status !== "available") {
+      if (!text) {
+        throw new Error("web-ifc is unavailable and the IFC is too large for the text fallback index.");
+      }
       return fallbackIfcEntityIndex(text, source, context, activeCapability, activeCapability.message ?? "web-ifc is unavailable.");
     }
 
@@ -541,7 +559,7 @@ export const ifcAdapter: ModelIngestAdapter = {
       }] : [];
       const summary = {
         parser: "web-ifc",
-        schema: text.match(/FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'/i)?.[1] ?? "",
+        schema: (text ?? await readIfcHeader(context.absPath)).match(/FILE_SCHEMA\s*\(\s*\(\s*'([^']+)'/i)?.[1] ?? "",
         estimateClassCounts: topCounts(counts, 100),
         indexedElementCount: elements.length,
         geometryElementCount: geometryByExpressId.size,
@@ -590,6 +608,11 @@ export const ifcAdapter: ModelIngestAdapter = {
         artifacts: [],
       };
     } catch (error) {
+      if (!text) {
+        // Too large for the regex fallback — surface the real web-ifc error
+        // rather than a misleading size complaint.
+        throw error instanceof Error ? error : new Error(String(error));
+      }
       return fallbackIfcEntityIndex(
         text,
         source,

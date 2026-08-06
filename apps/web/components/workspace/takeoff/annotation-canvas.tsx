@@ -50,6 +50,11 @@ interface AnnotationCanvasProps {
   zoom: number;
   activeColor: string;
   activeThickness: number;
+  /** Measurement options from the create-annotation modal (wall height,
+   *  drop distance, volume height, count spacing). Must reach
+   *  computeMeasurement or vertical walls fall back to the hard-coded 8,
+   *  spacing to 1, and volume is never derived. */
+  activeOpts?: Pickup["opts"];
   onAnnotationComplete: (data: Partial<Pickup>) => void;
   onCalibrationRequest?: (points: [Point, Point]) => void;
   /** Source canvas the loupe samples from when calibrating. */
@@ -457,6 +462,7 @@ export function AnnotationCanvas({
   zoom,
   activeColor,
   activeThickness,
+  activeOpts,
   onAnnotationComplete,
   onCalibrationRequest,
   pdfCanvas,
@@ -625,7 +631,7 @@ export function AnnotationCanvas({
 
       /* Live measurement preview */
       if (effectiveCalibration && allPts.length >= 2) {
-        const m = computeMeasurement(activeTool, allPts, effectiveCalibration);
+        const m = computeMeasurement(activeTool, allPts, effectiveCalibration, activeOpts ?? {});
         if (m.value > 0) {
           const midX = allPts.reduce((s, p) => s + p.x, 0) / allPts.length;
           const midY = allPts.reduce((s, p) => s + p.y, 0) / allPts.length;
@@ -672,6 +678,7 @@ export function AnnotationCanvas({
     activeTool,
     activeColor,
     activeThickness,
+    activeOpts,
     calibration,
     snapEnabled,
     snapPoint,
@@ -1121,7 +1128,7 @@ export function AnnotationCanvas({
 
   function finishAnnotation(points: Point[]) {
     const cal = effectiveCalibration ?? { pixelsPerUnit: 1, unit: "px" };
-    const measurement = computeMeasurement(activeTool!, points, cal);
+    const measurement = computeMeasurement(activeTool!, points, cal, activeOpts ?? {});
 
     onAnnotationComplete({
       type: activeTool!,

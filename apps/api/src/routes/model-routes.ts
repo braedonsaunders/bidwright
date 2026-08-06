@@ -349,6 +349,7 @@ export async function modelRoutes(app: FastifyInstance) {
     }
     try {
       const link = await createModelTakeoffLink(projectId, { ...parsed.data, modelId });
+      await request.store!.recalcWorksheetItemFromLinks(projectId, parsed.data.worksheetItemId);
       reply.code(201);
       return { link };
     } catch (error) {
@@ -364,6 +365,7 @@ export async function modelRoutes(app: FastifyInstance) {
     }
     try {
       const result = await createModelTakeoffLinks(projectId, { ...parsed.data, modelId });
+      await request.store!.recalcWorksheetItemFromLinks(projectId, parsed.data.worksheetItemId);
       reply.code(201);
       return result;
     } catch (error) {
@@ -374,7 +376,9 @@ export async function modelRoutes(app: FastifyInstance) {
   app.delete("/api/models/:projectId/assets/:modelId/takeoff-links/:linkId", async (request, reply) => {
     const { projectId, modelId, linkId } = request.params as { projectId: string; modelId: string; linkId: string };
     try {
-      return await deleteModelTakeoffLink(projectId, modelId, linkId);
+      const result = await deleteModelTakeoffLink(projectId, modelId, linkId);
+      await request.store!.recalcWorksheetItemFromLinks(projectId, result.worksheetItemId);
+      return result;
     } catch (error) {
       return routeError(reply, error);
     }

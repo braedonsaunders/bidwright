@@ -15631,6 +15631,8 @@ export class PrismaApiStore {
       },
     });
 
+    await this.recalcLinkedItemQuantity(input.worksheetItemId, projectId);
+
     return mapDwgEntityLink(link);
   }
 
@@ -15690,6 +15692,9 @@ export class PrismaApiStore {
       }),
       skipDuplicates: true,
     });
+
+    await this.recalcLinkedItemQuantity(worksheetItemIds[0], projectId);
+
     return { created: result.count };
   }
 
@@ -15697,7 +15702,15 @@ export class PrismaApiStore {
     const link = await this.db.dwgEntityLink.findFirst({ where: { id: linkId } });
     if (!link) throw new Error(`DWG entity link ${linkId} not found`);
     await this.db.dwgEntityLink.delete({ where: { id: linkId } });
+    await this.recalcLinkedItemQuantity(link.worksheetItemId, link.projectId);
     return { deleted: true };
+  }
+
+  /** Public entry for callers outside the store (model routes) to re-derive a
+   *  worksheet item's quantity after a ModelTakeoffLink mutation — those rows
+   *  are owned by model-service, which has no pricing context. */
+  async recalcWorksheetItemFromLinks(projectId: string, worksheetItemId: string) {
+    await this.recalcLinkedItemQuantity(worksheetItemId, projectId);
   }
 
   /** Recompute all TakeoffLinks for an annotation and cascade to affected line items */
@@ -15726,10 +15739,20 @@ export class PrismaApiStore {
     }
   }
 
-  /** Sum all TakeoffLink.derivedQuantity for a WorksheetItem and recalculate its cost/price */
+  /** Sum every takeoff link's derivedQuantity for a WorksheetItem and recalculate its cost/price.
+   *  Covers all three link kinds — 2D pickups, CAD entities, and BIM elements.
+   *  Summing only PickupLinks left the CAD/BIM paths write-once: their
+   *  derivedQuantity moved but the item silently kept a stale quantity. */
   private async recalcLinkedItemQuantity(worksheetItemId: string, projectId: string) {
-    const links = await this.db.pickupLink.findMany({ where: { worksheetItemId } });
-    const totalQuantity = links.reduce((sum, l) => sum + l.derivedQuantity, 0);
+    const [pickupLinks, dwgLinks, modelLinks] = await Promise.all([
+      this.db.pickupLink.findMany({ where: { worksheetItemId } }),
+      this.db.dwgEntityLink.findMany({ where: { worksheetItemId } }),
+      this.db.modelTakeoffLink.findMany({ where: { worksheetItemId } }),
+    ]);
+    const totalQuantity =
+      pickupLinks.reduce((sum, l) => sum + l.derivedQuantity, 0) +
+      dwgLinks.reduce((sum, l) => sum + l.derivedQuantity, 0) +
+      modelLinks.reduce((sum, l) => sum + l.derivedQuantity, 0);
 
     const item = await this.db.worksheetItem.findFirst({ where: { id: worksheetItemId } });
     if (!item) return;
