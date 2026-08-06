@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Info,
   Loader2,
+  Maximize2,
   PencilLine,
   Play,
   ShieldAlert,
@@ -21,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   Button,
+  Drawer,
   Input,
   Textarea,
 } from "@appkit/ui";
@@ -241,6 +243,34 @@ function TablePanel({
     <div className={cn("flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-panel", className)}>
       <div className="min-h-0 flex-1 overflow-auto">{children}</div>
       {footer}
+    </div>
+  );
+}
+
+/* Master/detail split used by the Gaps, Recommendations and Quality sub-tabs.
+   Below xl the two panes stack into a fixed-height container, so the grid
+   itself has to scroll — otherwise the rows are squeezed to fractions of
+   their content and visibly overlap. At xl each pane scrolls internally. */
+const SPLIT_GRID_CLASS = "grid min-h-0 flex-1 gap-3 overflow-y-auto xl:overflow-hidden";
+const SPLIT_PANE_CLASS = "flex min-h-[320px] flex-col overflow-hidden rounded-lg border border-line bg-panel xl:min-h-0";
+const SPLIT_DETAIL_CLASS = "min-h-[320px] overflow-y-auto rounded-lg border border-line bg-panel2/15 p-4 xl:min-h-0";
+
+/** Labelled block inside a detail Drawer. Text wraps and is never truncated. */
+function DrawerField({
+  label,
+  children,
+  mono,
+}: {
+  label: string;
+  children: ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <div>
+      <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">{label}</div>
+      <div className={cn("whitespace-pre-wrap break-words text-xs leading-5 text-fg/75", mono && "font-mono")}>
+        {children}
+      </div>
     </div>
   );
 }
@@ -731,9 +761,9 @@ function GapsRisksSubTab({
       {filtered.length === 0 ? (
         <EmptyReviewState>{findings.length === 0 ? "No findings yet" : "No findings match this filter"}</EmptyReviewState>
       ) : (
-        <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]">
-          <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
-            <div className="min-h-0 flex-1 space-y-1.5 p-2">
+        <div className={SPLIT_GRID_CLASS + " xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]"}>
+          <div className={SPLIT_PANE_CLASS}>
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
               {paged.pageItems.map((finding) => {
                 const selected = selectedFinding?.id === finding.id;
                 const state = finding.status || "open";
@@ -778,11 +808,11 @@ function GapsRisksSubTab({
             />
           </div>
 
-          <div className="min-h-0 overflow-hidden rounded-lg border border-line bg-panel2/15 p-4">
+          <div className={SPLIT_DETAIL_CLASS}>
             {!selectedFinding ? (
               <EmptyReviewState>Select a finding to inspect it.</EmptyReviewState>
             ) : editable ? (
-              <div className="grid h-full min-h-0 content-start gap-3">
+              <div className="grid min-h-0 content-start gap-3">
                 <div className="grid gap-3 md:grid-cols-[140px_140px_160px_1fr]">
                   <div>
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">Severity</div>
@@ -841,7 +871,7 @@ function GapsRisksSubTab({
                 </div>
               </div>
             ) : (
-              <div className="grid h-full content-start gap-3">
+              <div className="grid content-start gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={severityTone(selectedFinding.severity)}>{selectedFinding.severity}</Badge>
                   <Badge tone={itemStateTone(selectedFinding.status || "open")} className="capitalize">{selectedFinding.status || "open"}</Badge>
@@ -850,12 +880,12 @@ function GapsRisksSubTab({
                 </div>
                 <div>
                   <div className="text-sm font-semibold text-fg">{selectedFinding.title || "Untitled finding"}</div>
-                  <p className="mt-2 line-clamp-6 whitespace-pre-wrap text-xs leading-5 text-fg/60">{selectedFinding.description || "No description."}</p>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-fg/60">{selectedFinding.description || "No description."}</p>
                 </div>
                 {selectedFinding.resolutionNote ? (
                   <div className="rounded-md border border-line/40 bg-bg/30 px-3 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/35">Resolution Note</div>
-                    <p className="line-clamp-4 whitespace-pre-wrap text-xs text-fg/50">{selectedFinding.resolutionNote}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50">{selectedFinding.resolutionNote}</p>
                   </div>
                 ) : null}
               </div>
@@ -867,7 +897,175 @@ function GapsRisksSubTab({
   );
 }
 
-function CompetitivenessSubTab({
+type CompetitivenessKind = "over" | "under";
+
+type CompetitivenessEntry = {
+  id: string;
+  impact: "HIGH" | "MEDIUM" | "LOW";
+  area: string;
+  analysis: string;
+  status?: ReviewItemState;
+  resolutionNote?: string;
+  currentValue?: string;
+  benchmarkValue?: string;
+  savingsRange?: string;
+  riskRange?: string;
+};
+
+function CompetitivenessTable({
+  kind,
+  editable,
+  busy,
+  paged,
+  onPatch,
+  onRemove,
+  onOpenDetail,
+}: {
+  kind: CompetitivenessKind;
+  editable: boolean;
+  busy: boolean;
+  paged: ReturnType<typeof usePagedItems<CompetitivenessEntry>>;
+  onPatch: (index: number, patch: Partial<CompetitivenessEntry>) => void;
+  onRemove: (index: number) => void;
+  onOpenDetail: (entry: CompetitivenessEntry) => void;
+}) {
+  const isOver = kind === "over";
+  const valueKey = isOver ? "savingsRange" : "riskRange";
+
+  return (
+    <TablePanel
+      footer={
+        <PaginationBar
+          label={isOver ? "overestimates" : "underestimates"}
+          page={paged.page}
+          pageSize={paged.pageSize}
+          total={paged.total}
+          totalPages={paged.totalPages}
+          onPageChange={paged.setPage}
+        />
+      }
+    >
+      <table className="w-full min-w-[560px] text-xs">
+        <thead className="sticky top-0 z-10">
+          <tr className="border-b border-line bg-panel2/90">
+            <th className="w-20 px-3 py-2 text-left font-medium text-fg/50">Impact</th>
+            <th className="w-24 px-3 py-2 text-left font-medium text-fg/50">State</th>
+            <th className="w-36 px-3 py-2 text-left font-medium text-fg/50">Area</th>
+            <th className="min-w-[200px] px-3 py-2 text-left font-medium text-fg/50">Analysis</th>
+            <th className="w-28 px-3 py-2 text-left font-medium text-fg/50">{isOver ? "Savings" : "Risk"}</th>
+            <th className="w-9 px-2 py-2" />
+            {editable ? <th className="w-12 px-3 py-2" /> : null}
+          </tr>
+        </thead>
+        <tbody>
+          {paged.pageItems.map((entry, pageIndex) => {
+            const index = paged.startIndex + pageIndex;
+            return (
+              <tr
+                key={entry.id}
+                // The analysis column is necessarily truncated to keep the two
+                // tables side by side; the row opens the full record instead of
+                // letting long prose either overflow or stay unreadable.
+                onClick={editable ? undefined : () => onOpenDetail(entry)}
+                className={cn(
+                  "border-b border-line/50 align-top last:border-0",
+                  entry.status && entry.status !== "open" && "opacity-70",
+                  !editable && "cursor-pointer transition-colors hover:bg-panel2/35",
+                )}
+              >
+                <td className="px-3 py-2">
+                  {editable ? (
+                    <Select
+                      value={entry.impact}
+                      onValueChange={(v) => onPatch(index, { impact: v as CompetitivenessEntry["impact"] })}
+                      disabled={busy}
+                      size="sm"
+                      options={[
+                        { value: "HIGH", label: "High" },
+                        { value: "MEDIUM", label: "Medium" },
+                        { value: "LOW", label: "Low" },
+                      ]}
+                    />
+                  ) : (
+                    <Badge tone={priorityTone(entry.impact)} className="text-[9px]">{entry.impact}</Badge>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {editable ? (
+                    <Select
+                      value={entry.status || "open"}
+                      onValueChange={(v) => onPatch(index, { status: v as ReviewItemState })}
+                      disabled={busy}
+                      size="sm"
+                      options={[
+                        { value: "open", label: "Open" },
+                        { value: "resolved", label: "Resolved" },
+                        { value: "dismissed", label: "Dismissed" },
+                      ]}
+                    />
+                  ) : (
+                    <Badge tone={itemStateTone(entry.status)} className="text-[9px] capitalize">{entry.status || "open"}</Badge>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {editable ? (
+                    <CommitInput value={entry.area} onCommit={(value) => onPatch(index, { area: value })} disabled={busy} className="h-8 text-xs" />
+                  ) : (
+                    <span className="block break-words font-medium text-fg/70">{entry.area}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {editable ? (
+                    <CommitTextarea value={entry.analysis} onCommit={(value) => onPatch(index, { analysis: value })} disabled={busy} className="min-h-[60px] text-xs" />
+                  ) : (
+                    <span className="line-clamp-3 whitespace-pre-wrap break-words text-fg/55">{entry.analysis}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  {editable ? (
+                    <CommitInput
+                      value={(entry[valueKey] as string) || ""}
+                      onCommit={(value) => onPatch(index, { [valueKey]: value } as Partial<CompetitivenessEntry>)}
+                      disabled={busy}
+                      className="h-8 text-xs"
+                    />
+                  ) : (
+                    <span className={cn("block break-words font-mono font-medium", isOver ? "text-success" : "text-danger")}>
+                      {(entry[valueKey] as string) || "—"}
+                    </span>
+                  )}
+                </td>
+                <td className="px-2 py-2 text-right">
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onOpenDetail(entry);
+                    }}
+                    className="rounded-md p-1 text-fg/35 transition-colors hover:bg-panel2 hover:text-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/35"
+                    aria-label="Open full analysis"
+                    title="Open full analysis"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                  </button>
+                </td>
+                {editable ? (
+                  <td className="px-3 py-2 text-right">
+                    <Button type="button" size="sm" variant="ghost" onClick={() => onRemove(index)} disabled={busy}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </td>
+                ) : null}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </TablePanel>
+  );
+}
+
+export function CompetitivenessSubTab({
   data,
   editable,
   busy,
@@ -878,10 +1076,18 @@ function CompetitivenessSubTab({
   busy: boolean;
   onChange: (next: ReviewCompetitiveness) => void;
 }) {
-  const overestimates = data.overestimates || [];
-  const underestimates = data.underestimates || [];
+  const overestimates = (data.overestimates || []) as CompetitivenessEntry[];
+  const underestimates = (data.underestimates || []) as CompetitivenessEntry[];
   const overPaged = usePagedItems(overestimates, 5);
   const underPaged = usePagedItems(underestimates, 5);
+  const [detail, setDetail] = useState<{ kind: CompetitivenessKind; id: string } | null>(null);
+
+  // Resolve from current props so the drawer reflects live edits (and closes
+  // itself if the entry is deleted while open).
+  const detailEntry = detail
+    ? (detail.kind === "over" ? overestimates : underestimates).find((entry) => entry.id === detail.id) ?? null
+    : null;
+  const detailIsOver = detail?.kind === "over";
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
@@ -906,8 +1112,8 @@ function CompetitivenessSubTab({
         </div>
       </div>
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
-        <div className="flex min-h-0 flex-col gap-2">
+      <div className={SPLIT_GRID_CLASS + " xl:grid-cols-2"}>
+        <div className="flex min-h-[320px] flex-col gap-2 xl:min-h-0">
           <SectionToolbar
             title="Potential Overestimates"
             editable={editable}
@@ -918,115 +1124,28 @@ function CompetitivenessSubTab({
               onChange({
                 ...data,
                 overestimates: [
-                  ...overestimates,
+                  ...(data.overestimates || []),
                   { id: makeLocalId("over"), impact: "MEDIUM", area: "", analysis: "", savingsRange: "", status: "open", currentValue: "", benchmarkValue: "", resolutionNote: "" },
                 ],
               });
             }}
           />
           {overestimates.length > 0 ? (
-            <TablePanel
-              footer={
-                <PaginationBar
-                  label="overestimates"
-                  page={overPaged.page}
-                  pageSize={overPaged.pageSize}
-                  total={overPaged.total}
-                  totalPages={overPaged.totalPages}
-                  onPageChange={overPaged.setPage}
-                />
-              }
-            >
-              <table className="w-full min-w-[900px] text-xs">
-                <thead className="sticky top-0 z-10">
-                  <tr className="border-b border-line bg-panel2/90">
-                    <th className="w-24 px-3 py-2 text-left font-medium text-fg/50">Impact</th>
-                    <th className="w-24 px-3 py-2 text-left font-medium text-fg/50">State</th>
-                    <th className="w-44 px-3 py-2 text-left font-medium text-fg/50">Area</th>
-                    <th className="min-w-[300px] px-3 py-2 text-left font-medium text-fg/50">Analysis</th>
-                    <th className="w-32 px-3 py-2 text-left font-medium text-fg/50">Savings</th>
-                    {editable ? <th className="w-12 px-3 py-2" /> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {overPaged.pageItems.map((entry, pageIndex) => {
-                    const index = overPaged.startIndex + pageIndex;
-                    return (
-                      <tr key={entry.id} className={cn("border-b border-line/50 last:border-0 align-top", entry.status && entry.status !== "open" && "opacity-70")}>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <Select
-                              value={entry.impact}
-                              onValueChange={(v) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { impact: v as typeof entry.impact }) })}
-                              disabled={busy}
-                              size="sm"
-                              options={[
-                                { value: "HIGH", label: "High" },
-                                { value: "MEDIUM", label: "Medium" },
-                                { value: "LOW", label: "Low" },
-                              ]}
-                            />
-                          ) : (
-                            <Badge tone={priorityTone(entry.impact)} className="text-[9px]">{entry.impact}</Badge>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <Select
-                              value={entry.status || "open"}
-                              onValueChange={(v) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { status: v as ReviewItemState }) })}
-                              disabled={busy}
-                              size="sm"
-                              options={[
-                                { value: "open", label: "Open" },
-                                { value: "resolved", label: "Resolved" },
-                                { value: "dismissed", label: "Dismissed" },
-                              ]}
-                            />
-                          ) : (
-                            <Badge tone={itemStateTone(entry.status)} className="text-[9px] capitalize">{entry.status || "open"}</Badge>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <CommitInput value={entry.area} onCommit={(value) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { area: value }) })} disabled={busy} className="h-8 text-xs" />
-                          ) : (
-                            <span className="font-medium text-fg/70">{entry.area}</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <CommitTextarea value={entry.analysis} onCommit={(value) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { analysis: value }) })} disabled={busy} className="min-h-[60px] text-xs" />
-                          ) : (
-                            <span className="line-clamp-3 whitespace-pre-wrap text-fg/55">{entry.analysis}</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <CommitInput value={entry.savingsRange} onCommit={(value) => onChange({ ...data, overestimates: updateAtIndex(overestimates, index, { savingsRange: value }) })} disabled={busy} className="h-8 text-xs" />
-                          ) : (
-                            <span className="font-mono font-medium text-success">{entry.savingsRange}</span>
-                          )}
-                        </td>
-                        {editable ? (
-                          <td className="px-3 py-2 text-right">
-                            <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...data, overestimates: removeAtIndex(overestimates, index) })} disabled={busy}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </td>
-                        ) : null}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </TablePanel>
+            <CompetitivenessTable
+              kind="over"
+              editable={editable}
+              busy={busy}
+              paged={overPaged}
+              onPatch={(index, patch) => onChange({ ...data, overestimates: updateAtIndex(data.overestimates || [], index, patch as any) })}
+              onRemove={(index) => onChange({ ...data, overestimates: removeAtIndex(data.overestimates || [], index) })}
+              onOpenDetail={(entry) => setDetail({ kind: "over", id: entry.id })}
+            />
           ) : (
             <EmptyReviewState>No overestimate entries yet</EmptyReviewState>
           )}
         </div>
 
-        <div className="flex min-h-0 flex-col gap-2">
+        <div className="flex min-h-[320px] flex-col gap-2 xl:min-h-0">
           <SectionToolbar
             title="Potential Underestimates"
             editable={editable}
@@ -1037,114 +1156,68 @@ function CompetitivenessSubTab({
               onChange({
                 ...data,
                 underestimates: [
-                  ...underestimates,
+                  ...(data.underestimates || []),
                   { id: makeLocalId("under"), impact: "MEDIUM", area: "", analysis: "", riskRange: "", status: "open", resolutionNote: "" },
                 ],
               });
             }}
           />
           {underestimates.length > 0 ? (
-            <TablePanel
-              footer={
-                <PaginationBar
-                  label="underestimates"
-                  page={underPaged.page}
-                  pageSize={underPaged.pageSize}
-                  total={underPaged.total}
-                  totalPages={underPaged.totalPages}
-                  onPageChange={underPaged.setPage}
-                />
-              }
-            >
-              <table className="w-full min-w-[900px] text-xs">
-                <thead className="sticky top-0 z-10">
-                  <tr className="border-b border-line bg-panel2/90">
-                    <th className="w-24 px-3 py-2 text-left font-medium text-fg/50">Impact</th>
-                    <th className="w-24 px-3 py-2 text-left font-medium text-fg/50">State</th>
-                    <th className="w-44 px-3 py-2 text-left font-medium text-fg/50">Area</th>
-                    <th className="min-w-[300px] px-3 py-2 text-left font-medium text-fg/50">Analysis</th>
-                    <th className="w-32 px-3 py-2 text-left font-medium text-fg/50">Risk</th>
-                    {editable ? <th className="w-12 px-3 py-2" /> : null}
-                  </tr>
-                </thead>
-                <tbody>
-                  {underPaged.pageItems.map((entry, pageIndex) => {
-                    const index = underPaged.startIndex + pageIndex;
-                    return (
-                      <tr key={entry.id} className={cn("border-b border-line/50 last:border-0 align-top", entry.status && entry.status !== "open" && "opacity-70")}>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <Select
-                              value={entry.impact}
-                              onValueChange={(v) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { impact: v as typeof entry.impact }) })}
-                              disabled={busy}
-                              size="sm"
-                              options={[
-                                { value: "HIGH", label: "High" },
-                                { value: "MEDIUM", label: "Medium" },
-                                { value: "LOW", label: "Low" },
-                              ]}
-                            />
-                          ) : (
-                            <Badge tone={priorityTone(entry.impact)} className="text-[9px]">{entry.impact}</Badge>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <Select
-                              value={entry.status || "open"}
-                              onValueChange={(v) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { status: v as ReviewItemState }) })}
-                              disabled={busy}
-                              size="sm"
-                              options={[
-                                { value: "open", label: "Open" },
-                                { value: "resolved", label: "Resolved" },
-                                { value: "dismissed", label: "Dismissed" },
-                              ]}
-                            />
-                          ) : (
-                            <Badge tone={itemStateTone(entry.status)} className="text-[9px] capitalize">{entry.status || "open"}</Badge>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <CommitInput value={entry.area} onCommit={(value) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { area: value }) })} disabled={busy} className="h-8 text-xs" />
-                          ) : (
-                            <span className="font-medium text-fg/70">{entry.area}</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <CommitTextarea value={entry.analysis} onCommit={(value) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { analysis: value }) })} disabled={busy} className="min-h-[60px] text-xs" />
-                          ) : (
-                            <span className="line-clamp-3 whitespace-pre-wrap text-fg/55">{entry.analysis}</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-2">
-                          {editable ? (
-                            <CommitInput value={entry.riskRange} onCommit={(value) => onChange({ ...data, underestimates: updateAtIndex(underestimates, index, { riskRange: value }) })} disabled={busy} className="h-8 text-xs" />
-                          ) : (
-                            <span className="font-mono font-medium text-danger">{entry.riskRange}</span>
-                          )}
-                        </td>
-                        {editable ? (
-                          <td className="px-3 py-2 text-right">
-                            <Button type="button" size="sm" variant="ghost" onClick={() => onChange({ ...data, underestimates: removeAtIndex(underestimates, index) })} disabled={busy}>
-                              <Trash2 className="h-3.5 w-3.5" />
-                            </Button>
-                          </td>
-                        ) : null}
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </TablePanel>
+            <CompetitivenessTable
+              kind="under"
+              editable={editable}
+              busy={busy}
+              paged={underPaged}
+              onPatch={(index, patch) => onChange({ ...data, underestimates: updateAtIndex(data.underestimates || [], index, patch as any) })}
+              onRemove={(index) => onChange({ ...data, underestimates: removeAtIndex(data.underestimates || [], index) })}
+              onOpenDetail={(entry) => setDetail({ kind: "under", id: entry.id })}
+            />
           ) : (
             <EmptyReviewState>No underestimate entries yet</EmptyReviewState>
           )}
         </div>
       </div>
+
+      <Drawer
+        open={!!detailEntry}
+        onClose={() => setDetail(null)}
+        title={detailEntry?.area || (detailIsOver ? "Potential overestimate" : "Potential underestimate")}
+        description={detailIsOver ? "Potential overestimate" : "Potential underestimate"}
+        size="md"
+      >
+        {detailEntry ? (
+          <div className="space-y-4">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <Badge tone={priorityTone(detailEntry.impact)}>{detailEntry.impact}</Badge>
+              <Badge tone={itemStateTone(detailEntry.status)} className="capitalize">{detailEntry.status || "open"}</Badge>
+              {(detailIsOver ? detailEntry.savingsRange : detailEntry.riskRange) ? (
+                <span className={cn("font-mono text-xs font-medium", detailIsOver ? "text-success" : "text-danger")}>
+                  {detailIsOver ? detailEntry.savingsRange : detailEntry.riskRange}
+                </span>
+              ) : null}
+            </div>
+            <DrawerField label="Analysis">
+              {detailEntry.analysis || "No analysis recorded."}
+            </DrawerField>
+            {detailIsOver && (detailEntry.currentValue || detailEntry.benchmarkValue) ? (
+              <div className="grid gap-3 sm:grid-cols-2">
+                {detailEntry.currentValue ? (
+                  <DrawerField label="Current Value" mono>{detailEntry.currentValue}</DrawerField>
+                ) : null}
+                {detailEntry.benchmarkValue ? (
+                  <DrawerField label="Benchmark Value" mono>{detailEntry.benchmarkValue}</DrawerField>
+                ) : null}
+              </div>
+            ) : null}
+            <DrawerField label={detailIsOver ? "Savings Range" : "Risk Range"} mono>
+              {(detailIsOver ? detailEntry.savingsRange : detailEntry.riskRange) || "—"}
+            </DrawerField>
+            {detailEntry.resolutionNote ? (
+              <DrawerField label="Resolution Note">{detailEntry.resolutionNote}</DrawerField>
+            ) : null}
+          </div>
+        ) : null}
+      </Drawer>
     </div>
   );
 }
@@ -1455,9 +1528,9 @@ function RecommendationsSubTab({
       ) : visibleRecommendations.length === 0 ? (
         <EmptyReviewState>No recommendations match this view</EmptyReviewState>
       ) : (
-        <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]">
-          <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
-            <div className="min-h-0 flex-1 space-y-1.5 p-2">
+        <div className={SPLIT_GRID_CLASS + " xl:grid-cols-[minmax(320px,0.8fr)_minmax(0,1.2fr)]"}>
+          <div className={SPLIT_PANE_CLASS}>
+            <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
               {paged.pageItems.map((recommendation) => {
                 const status = recommendation.status || "open";
                 const selected = selectedRecommendation?.id === recommendation.id;
@@ -1503,11 +1576,11 @@ function RecommendationsSubTab({
             />
           </div>
 
-          <div className="min-h-0 overflow-hidden rounded-lg border border-line bg-panel2/15 p-4">
+          <div className={SPLIT_DETAIL_CLASS}>
             {!selectedRecommendation ? (
               <EmptyReviewState>Select a recommendation to inspect it.</EmptyReviewState>
             ) : editable ? (
-              <div className="grid h-full min-h-0 content-start gap-3">
+              <div className="grid min-h-0 content-start gap-3">
                 <div className="grid gap-3 md:grid-cols-[140px_140px_180px_minmax(0,1fr)]">
                   <div>
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/40">Priority</div>
@@ -1599,7 +1672,7 @@ function RecommendationsSubTab({
                 </div>
               </div>
             ) : (
-              <div className="grid h-full content-start gap-3">
+              <div className="grid content-start gap-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={priorityTone(selectedRecommendation.priority)}>{selectedRecommendation.priority}</Badge>
                   <Badge tone={itemStateTone(selectedRecommendation.status || "open")} className="capitalize">{selectedRecommendation.status || "open"}</Badge>
@@ -1608,18 +1681,18 @@ function RecommendationsSubTab({
                 </div>
                 <div>
                   <div className="text-sm font-semibold text-fg">{selectedRecommendation.title || "Untitled recommendation"}</div>
-                  <p className="mt-2 line-clamp-6 whitespace-pre-wrap text-xs leading-5 text-fg/60">{selectedRecommendation.description || "No description."}</p>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-fg/60">{selectedRecommendation.description || "No description."}</p>
                 </div>
                 {selectedRecommendation.reviewerNote ? (
                   <div className="rounded-md border border-line/40 bg-bg/30 px-3 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/35">Reviewer Note</div>
-                    <p className="line-clamp-3 whitespace-pre-wrap text-xs text-fg/50">{selectedRecommendation.reviewerNote}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50">{selectedRecommendation.reviewerNote}</p>
                   </div>
                 ) : null}
                 {selectedRecommendation.resolution?.summary ? (
                   <div className="rounded-md border border-line/40 bg-bg/30 px-3 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/35">Resolution Summary</div>
-                    <p className="line-clamp-3 whitespace-pre-wrap text-xs text-fg/50">{selectedRecommendation.resolution.summary}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50">{selectedRecommendation.resolution.summary}</p>
                   </div>
                 ) : null}
               </div>
@@ -1715,8 +1788,8 @@ function QualityReviewSubTab({
         <MetricTile label="Resource Cost" value={formatMoney(totalResourceCost, 2)} />
       </div>
 
-      <div className="grid min-h-0 flex-1 gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]">
-        <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
+      <div className={SPLIT_GRID_CLASS + " xl:grid-cols-[minmax(0,1fr)_minmax(360px,0.72fr)]"}>
+        <div className={SPLIT_PANE_CLASS}>
           <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-fg/45">Estimate Quality</div>
@@ -1776,7 +1849,7 @@ function QualityReviewSubTab({
           />
         </div>
 
-        <div className="flex min-h-0 flex-col overflow-hidden rounded-lg border border-line bg-panel">
+        <div className={SPLIT_PANE_CLASS}>
           <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.16em] text-fg/45">Resource Summary</div>
@@ -1784,7 +1857,7 @@ function QualityReviewSubTab({
             </div>
             <Badge tone="info">{referencedPositions.toLocaleString()} positions</Badge>
           </div>
-          <div className="min-h-0 flex-1 space-y-2 p-3">
+          <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
             {resources.length === 0 ? (
               <EmptyReviewState>No resource composition has been captured yet.</EmptyReviewState>
             ) : (
