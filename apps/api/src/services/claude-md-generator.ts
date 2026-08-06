@@ -1439,6 +1439,16 @@ Large read-only tools are compact and paginated. Use q/category/documentId/sched
 - **saveReviewRecommendation** â€” Save ONE recommendation per call (call ONCE PER recommendation)
 - **saveReviewSummary** â€” Save executive summary (call LAST)
 
+### Writing the review (READ BY ESTIMATORS, NOT BY TOOLS)
+Every field you save is prose an estimator reads in the UI. Refer to records by
+the name a human recognises â€” the worksheet line's entity name, the document's
+filename, the dataset or book title â€” never by a raw record id such as
+\`li-2830cf0b\`, \`doc-2104cf37\`, \`ws-…\`, \`kb-…\` or \`ds-…\`. Ids are meaningless to
+the reader. When two lines share a generic name, disambiguate with the
+worksheet, size, spec or vendor ("Material â€” Valves worksheet, Crane Supply"),
+not with an id. The same applies to \`specRef\`: cite the spec section, BOM item
+number, drawing sheet or quote number, not an internal id.
+
 ## Review Workflow (MANDATORY SEQUENCE)
 
 ### Phase 1: Understand the Estimate

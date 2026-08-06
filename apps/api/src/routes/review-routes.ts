@@ -476,7 +476,9 @@ export function registerReviewRoutes(app: FastifyInstance) {
 11. Call saveReviewRecommendation for EACH recommendation individually
 12. Call saveReviewSummary with executive summary including quote total, key statistics, and critical findings
 
-CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or delete any line items. Only ANALYZE and REPORT via the saveReview* tools. Be thorough — read every page of every document. Missing scope = missing findings.`;
+CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or delete any line items. Only ANALYZE and REPORT via the saveReview* tools. Be thorough — read every page of every document. Missing scope = missing findings.
+
+WRITING STYLE: everything you save is read by an estimator in the UI. Name records the way a human would — the worksheet line's entity name, the document filename, the dataset or book title — and never paste raw record ids (li-…, doc-…, ws-…, kb-…, ds-…) into titles, descriptions, analysis or specRef. Disambiguate similar lines by worksheet, size, spec or vendor instead.`;
 
     const reasoningEffort = typeof integrations.agentReasoningEffort === "string" && integrations.agentReasoningEffort
       ? integrations.agentReasoningEffort

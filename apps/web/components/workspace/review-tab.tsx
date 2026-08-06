@@ -1,7 +1,7 @@
 "use client";
 
 import type { ComponentProps, ReactNode } from "react";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   AlertTriangle,
@@ -48,7 +48,9 @@ import {
   type ReviewSummary,
   type WorkspaceResponse,
 } from "@/lib/api";
+import { listDatasets, listKnowledgeBooks } from "@/lib/api";
 import { formatMoney } from "@/lib/format";
+import { buildReviewLabelIndex, segmentReviewText, type ReviewLabel } from "@/lib/review-labels";
 import { cn } from "@/lib/utils";
 import type { QualityFinding, QualityPanelSummary } from "./quality-panel";
 import type { ResourceSummaryRow } from "./resource-summary-panel";
@@ -254,6 +256,35 @@ function TablePanel({
 const SPLIT_GRID_CLASS = "grid min-h-0 flex-1 gap-3 overflow-y-auto xl:overflow-hidden";
 const SPLIT_PANE_CLASS = "flex min-h-[320px] flex-col overflow-hidden rounded-lg border border-line bg-panel xl:min-h-0";
 const SPLIT_DETAIL_CLASS = "min-h-[320px] overflow-y-auto rounded-lg border border-line bg-panel2/15 p-4 xl:min-h-0";
+
+/* The review agent cites records by their raw id ("carried on li-2830cf0b").
+   Resolving those to record names at render time keeps saved reviews readable
+   without rewriting stored text. */
+const ReviewLabelContext = createContext<Map<string, ReviewLabel>>(new Map());
+
+function ReviewText({ value, fallback = "" }: { value?: string | null; fallback?: string }) {
+  const index = useContext(ReviewLabelContext);
+  const text = value ?? "";
+  const segments = useMemo(() => segmentReviewText(text, index), [text, index]);
+  if (!text) return <>{fallback}</>;
+  return (
+    <>
+      {segments.map((segment, position) => (
+        segment.type === "text" ? (
+          <span key={position}>{segment.value}</span>
+        ) : (
+          <span
+            key={position}
+            title={segment.label.id}
+            className="rounded bg-accent/10 px-1 py-px font-medium text-accent/90"
+          >
+            {segment.label.label}
+          </span>
+        )
+      ))}
+    </>
+  );
+}
 
 /** Labelled block inside a detail Drawer. Text wraps and is never truncated. */
 function DrawerField({
@@ -466,7 +497,7 @@ function SummaryCard({
           </div>
           {editable ? null : (
             <p className="line-clamp-2 text-xs leading-5 text-fg/55">
-              {summary.overallAssessment || "No executive assessment yet."}
+              <ReviewText value={summary.overallAssessment} fallback="No executive assessment yet." />
             </p>
           )}
           <div className="mt-1 flex flex-wrap gap-3 text-[10px] text-fg/35">
@@ -620,7 +651,7 @@ function CoverageSubTab({
                         className="min-h-[64px] text-xs"
                       />
                     ) : (
-                      <span className="text-fg/80 whitespace-pre-wrap">{item.requirement}</span>
+                      <span className="text-fg/80 whitespace-pre-wrap"><ReviewText value={item.requirement} /></span>
                     )}
                   </td>
                   <td className="px-3 py-2">
@@ -649,7 +680,7 @@ function CoverageSubTab({
                         className="min-h-[64px] text-xs"
                       />
                     ) : (
-                      <span className="text-fg/50 whitespace-pre-wrap">{item.notes || item.worksheetName || "—"}</span>
+                      <span className="text-fg/50 whitespace-pre-wrap"><ReviewText value={item.notes || item.worksheetName} fallback="—" /></span>
                     )}
                   </td>
                   {editable ? (
@@ -789,9 +820,9 @@ function GapsRisksSubTab({
                       <div className="flex min-w-0 items-center gap-1.5">
                         <Badge tone={severityTone(finding.severity)} className="text-[9px]">{finding.severity}</Badge>
                         <Badge tone={itemStateTone(state)} className="text-[9px] capitalize">{state}</Badge>
-                        <span className="truncate text-xs font-medium text-fg/80">{finding.title || "Untitled finding"}</span>
+                        <span className="truncate text-xs font-medium text-fg/80"><ReviewText value={finding.title} fallback="Untitled finding" /></span>
                       </div>
-                      <p className="mt-1 line-clamp-1 text-[11px] text-fg/40">{finding.description || finding.specRef || "No description"}</p>
+                      <p className="mt-1 line-clamp-1 text-[11px] text-fg/40"><ReviewText value={finding.description || finding.specRef} fallback="No description" /></p>
                     </div>
                     {finding.estimatedImpact ? <span className="shrink-0 text-[10px] font-mono text-fg/35">{finding.estimatedImpact}</span> : null}
                   </button>
@@ -875,17 +906,17 @@ function GapsRisksSubTab({
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge tone={severityTone(selectedFinding.severity)}>{selectedFinding.severity}</Badge>
                   <Badge tone={itemStateTone(selectedFinding.status || "open")} className="capitalize">{selectedFinding.status || "open"}</Badge>
-                  {selectedFinding.specRef ? <span className="font-mono text-[11px] text-fg/35">{selectedFinding.specRef}</span> : null}
+                  {selectedFinding.specRef ? <span className="text-[11px] text-fg/35"><ReviewText value={selectedFinding.specRef} /></span> : null}
                   {selectedFinding.estimatedImpact ? <span className="ml-auto font-mono text-xs text-fg/45">{selectedFinding.estimatedImpact}</span> : null}
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-fg">{selectedFinding.title || "Untitled finding"}</div>
-                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-fg/60">{selectedFinding.description || "No description."}</p>
+                  <div className="text-sm font-semibold text-fg"><ReviewText value={selectedFinding.title} fallback="Untitled finding" /></div>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-fg/60"><ReviewText value={selectedFinding.description} fallback="No description." /></p>
                 </div>
                 {selectedFinding.resolutionNote ? (
                   <div className="rounded-md border border-line/40 bg-bg/30 px-3 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/35">Resolution Note</div>
-                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50">{selectedFinding.resolutionNote}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50"><ReviewText value={selectedFinding.resolutionNote} /></p>
                   </div>
                 ) : null}
               </div>
@@ -1011,14 +1042,14 @@ function CompetitivenessTable({
                   {editable ? (
                     <CommitInput value={entry.area} onCommit={(value) => onPatch(index, { area: value })} disabled={busy} className="h-8 text-xs" />
                   ) : (
-                    <span className="block break-words font-medium text-fg/70">{entry.area}</span>
+                    <span className="block break-words font-medium text-fg/70"><ReviewText value={entry.area} /></span>
                   )}
                 </td>
                 <td className="px-3 py-2">
                   {editable ? (
                     <CommitTextarea value={entry.analysis} onCommit={(value) => onPatch(index, { analysis: value })} disabled={busy} className="min-h-[60px] text-xs" />
                   ) : (
-                    <span className="line-clamp-3 whitespace-pre-wrap break-words text-fg/55">{entry.analysis}</span>
+                    <span className="line-clamp-3 whitespace-pre-wrap break-words text-fg/55"><ReviewText value={entry.analysis} /></span>
                   )}
                 </td>
                 <td className="px-3 py-2">
@@ -1091,23 +1122,25 @@ export function CompetitivenessSubTab({
 
   return (
     <div className="flex h-full min-h-0 flex-col gap-3 overflow-hidden">
-      <div className="grid shrink-0 gap-3 xl:grid-cols-[minmax(0,1fr)_280px]">
+      {/* Single row: the savings figure is one number, so it sits inline with
+          the heading instead of claiming a stacked card's worth of height. */}
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3">
         <SectionToolbar
           title="Competitiveness"
           description="Tune over/under calls without rerunning the AI review."
           editable={false}
         />
-        <div className="rounded-lg border border-success/20 bg-success/[0.04] px-3 py-2">
-          <div className="mb-1 text-[10px] font-medium uppercase tracking-[0.16em] text-success/70">Potential Savings</div>
+        <div className="flex items-center gap-2 rounded-md border border-success/20 bg-success/[0.04] px-2.5 py-1">
+          <span className="text-[10px] font-medium uppercase tracking-[0.16em] text-success/70">Potential Savings</span>
           {editable ? (
             <CommitInput
               value={data.totalSavingsRange || ""}
               onCommit={(value) => onChange({ ...data, totalSavingsRange: value })}
               disabled={busy}
-              className="h-8 text-sm font-semibold text-success"
+              className="h-7 w-36 text-xs font-semibold text-success"
             />
           ) : (
-            <div className="text-base font-bold tabular-nums text-success">{data.totalSavingsRange || "—"}</div>
+            <span className="text-sm font-bold tabular-nums text-success">{data.totalSavingsRange || "—"}</span>
           )}
         </div>
       </div>
@@ -1197,7 +1230,7 @@ export function CompetitivenessSubTab({
               ) : null}
             </div>
             <DrawerField label="Analysis">
-              {detailEntry.analysis || "No analysis recorded."}
+              <ReviewText value={detailEntry.analysis} fallback="No analysis recorded." />
             </DrawerField>
             {detailIsOver && (detailEntry.currentValue || detailEntry.benchmarkValue) ? (
               <div className="grid gap-3 sm:grid-cols-2">
@@ -1213,7 +1246,7 @@ export function CompetitivenessSubTab({
               {(detailIsOver ? detailEntry.savingsRange : detailEntry.riskRange) || "—"}
             </DrawerField>
             {detailEntry.resolutionNote ? (
-              <DrawerField label="Resolution Note">{detailEntry.resolutionNote}</DrawerField>
+              <DrawerField label="Resolution Note"><ReviewText value={detailEntry.resolutionNote} /></DrawerField>
             ) : null}
           </div>
         ) : null}
@@ -1557,9 +1590,9 @@ function RecommendationsSubTab({
                         <Badge tone={priorityTone(recommendation.priority)} className="text-[9px]">{recommendation.priority}</Badge>
                         <Badge tone={itemStateTone(status)} className="text-[9px] capitalize">{status}</Badge>
                         {recommendation.category ? <span className="truncate text-[10px] text-fg/30">{recommendation.category}</span> : null}
-                        <span className={cn("truncate text-xs font-medium", status !== "open" ? "text-fg/45 line-through" : "text-fg/80")}>{recommendation.title || "Untitled recommendation"}</span>
+                        <span className={cn("truncate text-xs font-medium", status !== "open" ? "text-fg/45 line-through" : "text-fg/80")}><ReviewText value={recommendation.title} fallback="Untitled recommendation" /></span>
                       </div>
-                      <p className="mt-1 line-clamp-1 text-[11px] text-fg/40">{recommendation.description || recommendation.impact || "No description"}</p>
+                      <p className="mt-1 line-clamp-1 text-[11px] text-fg/40"><ReviewText value={recommendation.description || recommendation.impact} fallback="No description" /></p>
                     </div>
                     <span className="shrink-0 text-[10px] font-mono text-fg/35">{recommendation.impact || "—"}</span>
                   </button>
@@ -1680,19 +1713,19 @@ function RecommendationsSubTab({
                   {selectedRecommendation.impact ? <span className="ml-auto font-mono text-xs text-fg/45">{selectedRecommendation.impact}</span> : null}
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-fg">{selectedRecommendation.title || "Untitled recommendation"}</div>
-                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-fg/60">{selectedRecommendation.description || "No description."}</p>
+                  <div className="text-sm font-semibold text-fg"><ReviewText value={selectedRecommendation.title} fallback="Untitled recommendation" /></div>
+                  <p className="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-fg/60"><ReviewText value={selectedRecommendation.description} fallback="No description." /></p>
                 </div>
                 {selectedRecommendation.reviewerNote ? (
                   <div className="rounded-md border border-line/40 bg-bg/30 px-3 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/35">Reviewer Note</div>
-                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50">{selectedRecommendation.reviewerNote}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50"><ReviewText value={selectedRecommendation.reviewerNote} /></p>
                   </div>
                 ) : null}
                 {selectedRecommendation.resolution?.summary ? (
                   <div className="rounded-md border border-line/40 bg-bg/30 px-3 py-2">
                     <div className="mb-1 text-[10px] uppercase tracking-[0.14em] text-fg/35">Resolution Summary</div>
-                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50">{selectedRecommendation.resolution.summary}</p>
+                    <p className="whitespace-pre-wrap break-words text-xs text-fg/50"><ReviewText value={selectedRecommendation.resolution.summary} /></p>
                   </div>
                 ) : null}
               </div>
@@ -1920,6 +1953,34 @@ export function ReviewTab({
   const currentRevisionUpdatedAt = workspace.currentRevision?.updatedAt;
   const currentQuoteUpdatedAt = workspace.quote?.updatedAt;
 
+  // Knowledge books and datasets are cited by the review but are not part of
+  // the workspace payload, so they are fetched once, best-effort — an
+  // unresolved id simply renders as the agent wrote it.
+  const [knowledgeBooks, setKnowledgeBooks] = useState<Array<{ id: string; name?: string }>>([]);
+  const [datasets, setDatasets] = useState<Array<{ id: string; name?: string }>>([]);
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all([
+      listKnowledgeBooks(projectId).catch(() => []),
+      listDatasets(projectId).catch(() => []),
+    ]).then(([books, sets]) => {
+      if (cancelled) return;
+      setKnowledgeBooks(books as Array<{ id: string; name?: string }>);
+      setDatasets(sets as Array<{ id: string; name?: string }>);
+    });
+    return () => { cancelled = true; };
+  }, [projectId]);
+
+  const reviewLabelIndex = useMemo(() => buildReviewLabelIndex({
+    worksheets: workspace.worksheets,
+    sourceDocuments: workspace.sourceDocuments,
+    phases: workspace.phases,
+    worksheetFolders: workspace.worksheetFolders,
+    rateSchedules: workspace.rateSchedules,
+    knowledgeBooks,
+    datasets,
+  }), [workspace.worksheets, workspace.sourceDocuments, workspace.phases, workspace.worksheetFolders, workspace.rateSchedules, knowledgeBooks, datasets]);
+
   const loadReview = useCallback(async () => {
     try {
       const { review: nextReview } = await getLatestReview(projectId);
@@ -2060,6 +2121,7 @@ export function ReviewTab({
   const reviewActionLabel = review?.isOutdated ? "Mark Current" : review?.reviewState === "resolved" ? "Reopen Review" : "Resolve Review";
 
   return (
+    <ReviewLabelContext.Provider value={reviewLabelIndex}>
     <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-hidden rounded-lg border border-line bg-panel/35 p-3">
       <div className="flex flex-wrap items-center gap-3 shrink-0">
         <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -2157,5 +2219,6 @@ export function ReviewTab({
         )}
       </div>
     </div>
+    </ReviewLabelContext.Provider>
   );
 }
