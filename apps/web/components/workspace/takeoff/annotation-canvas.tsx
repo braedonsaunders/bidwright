@@ -19,13 +19,19 @@ export interface Pickup {
   /** Canvas dimensions when this annotation was created — used to scale points on zoom */
   canvasWidth?: number;
   canvasHeight?: number;
+  /** PDF page size in PDF points, captured at draw time. Because the canvas
+   *  renders at `points × zoom`, this makes the stored canvas-pixel geometry
+   *  exactly resolvable to PDF space (pdf = px × pdfPageWidth / canvasWidth)
+   *  — page-independent re-derivation and markup interop both need it. */
+  pdfPageWidth?: number;
+  pdfPageHeight?: number;
   opts?: {
     dropDistance?: number;
     wallHeight?: number;
     height?: number;
     spacing?: number;
   };
-  measurement?: { value: number; unit: string; area?: number; volume?: number };
+  measurement?: { value: number; unit: string; area?: number; volume?: number; raw?: number; rawUnit?: string };
   /** Per-annotation extras (source provenance, AI metadata, bbox thumbnail
    *  data URIs, match counts, etc). The DB column already exists; this
    *  surfaces it on the TS type so consumers can read it without an
@@ -1173,6 +1179,7 @@ export function AnnotationCanvas({
   return (
     <>
       <canvas
+        data-annotation-canvas=""
         ref={canvasRef}
         className="absolute left-0 top-0"
         style={{ cursor: cursorStyle, width, height }}

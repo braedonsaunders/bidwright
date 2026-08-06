@@ -437,7 +437,7 @@ export async function takeoffRoutes(app: FastifyInstance) {
     const { linkId } = request.params as { projectId: string; linkId: string };
     const body = request.body as Record<string, unknown>;
     try {
-      return await request.store!.updateTakeoffLink(linkId, body as any);
+      return await request.store!.updatePickupLink(linkId, body as any);
     } catch (error) {
       return reply.code(404).send({ message: error instanceof Error ? error.message : "Not found" });
     }

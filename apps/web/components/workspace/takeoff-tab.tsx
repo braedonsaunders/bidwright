@@ -1676,20 +1676,35 @@ function normalizeAnnotationMeasurement(value: unknown): Pickup["measurement"] |
   const volume = finiteNumberValue(record.volume);
   if (area !== undefined) measurement.area = area;
   if (volume !== undefined) measurement.volume = volume;
+  const raw = finiteNumberValue(record.raw);
+  if (raw !== undefined) measurement.raw = raw;
+  if (typeof record.rawUnit === "string" && record.rawUnit) measurement.rawUnit = record.rawUnit;
   if (measurement.value === 0 && !measurement.unit && area === undefined && volume === undefined) {
     return undefined;
   }
   return measurement;
 }
 
-function canvasDimensionFromMetadata(metadata: Record<string, unknown>, key: "canvasWidth" | "canvasHeight") {
+function canvasDimensionFromMetadata(
+  metadata: Record<string, unknown>,
+  key: "canvasWidth" | "canvasHeight" | "pdfPageWidth" | "pdfPageHeight",
+) {
   const value = finiteNumberValue(metadata[key]);
   return value && value > 0 ? value : undefined;
 }
 
+const ANNOTATION_OPT_KEYS = ["dropDistance", "wallHeight", "height", "spacing"] as const;
+
 function annotationOptsFromMetadata(metadata: Record<string, unknown>): Pickup["opts"] | undefined {
-  const { canvasWidth: _canvasWidth, canvasHeight: _canvasHeight, ...opts } = metadata;
-  return Object.keys(opts).length > 0 ? opts as Pickup["opts"] : undefined;
+  // Pick the known measurement opts rather than excluding known-other keys —
+  // metadata also carries provenance (source/method/measuredBy), page-space
+  // dims and AI match blobs, none of which belong in opts.
+  const opts: NonNullable<Pickup["opts"]> = {};
+  for (const key of ANNOTATION_OPT_KEYS) {
+    const value = finiteNumberValue(metadata[key]);
+    if (value !== undefined) opts[key] = value;
+  }
+  return Object.keys(opts).length > 0 ? opts : undefined;
 }
 
 /* ─── JSON Export Helper ─── */
@@ -4292,9 +4307,21 @@ export function TakeoffTab({
   }
 
   function annotationToApiPayload(annotation: Pickup) {
-    const metadata: Record<string, unknown> = { ...(annotation.opts ?? {}) };
+    // Start from the annotation's existing metadata so a re-created pickup
+    // (undo/redo) keeps its AI provenance (source, matches, thumbnails)
+    // instead of silently degrading to a bare manual row.
+    const metadata: Record<string, unknown> = { ...(annotation.metadata ?? {}), ...(annotation.opts ?? {}) };
     if (Number.isFinite(annotation.canvasWidth)) metadata.canvasWidth = annotation.canvasWidth;
     if (Number.isFinite(annotation.canvasHeight)) metadata.canvasHeight = annotation.canvasHeight;
+    if (Number.isFinite(annotation.pdfPageWidth)) metadata.pdfPageWidth = annotation.pdfPageWidth;
+    if (Number.isFinite(annotation.pdfPageHeight)) metadata.pdfPageHeight = annotation.pdfPageHeight;
+    // Provenance: a pickup saved through this payload with no AI source was
+    // drawn by the person at the keyboard. AI paths carry their own source
+    // and the server derives agent provenance from it.
+    if (typeof metadata.source !== "string" || !metadata.source) {
+      if (metadata.method == null) metadata.method = "traced";
+      if (metadata.measuredBy == null) metadata.measuredBy = "person";
+    }
     const annotationDocumentId = selectedDoc?.source === "knowledge" && selectedDoc.bookId
       ? selectedDoc.bookId
       : selectedDocId;
@@ -4333,6 +4360,8 @@ export function TakeoffTab({
       opts: annotationOptsFromMetadata(metadata) ?? fallback.opts,
       canvasWidth: canvasDimensionFromMetadata(metadata, "canvasWidth") ?? fallback.canvasWidth,
       canvasHeight: canvasDimensionFromMetadata(metadata, "canvasHeight") ?? fallback.canvasHeight,
+      pdfPageWidth: canvasDimensionFromMetadata(metadata, "pdfPageWidth") ?? fallback.pdfPageWidth,
+      pdfPageHeight: canvasDimensionFromMetadata(metadata, "pdfPageHeight") ?? fallback.pdfPageHeight,
     };
   }
 
@@ -4457,6 +4486,11 @@ export function TakeoffTab({
       measurement: data.measurement,
       canvasWidth: canvasSize.width,
       canvasHeight: canvasSize.height,
+      // Canvas renders at PDF-points × zoom, so this recovers the page size
+      // in PDF points — the anchor that makes stored pixel geometry
+      // page-independent (see Pickup.pdfPageWidth).
+      pdfPageWidth: canvasSize.width / Math.max(zoom, 0.0001),
+      pdfPageHeight: canvasSize.height / Math.max(zoom, 0.0001),
     };
 
     setAnnotations((prev) => [...prev, newAnnotation]);
@@ -6449,6 +6483,53 @@ export function TakeoffTab({
     notifyAnnotationsMutated();
   }
 
+  /* ─── E2E test hook ───
+     Playwright cannot reach into React state, so the takeoff surface exposes
+     a small driving handle: arm a tool (bypassing the config modal), inject
+     clicks/commits as real DOM events on the annotation canvas, and read
+     back annotations/calibration. Kept in production builds deliberately —
+     it only drives interactions a user could perform. */
+  useEffect(() => {
+    const canvasEl = () =>
+      document.querySelector<HTMLCanvasElement>("canvas[data-annotation-canvas]");
+    const fire = (type: string, x: number, y: number) => {
+      const el = canvasEl();
+      if (!el) return false;
+      const rect = el.getBoundingClientRect();
+      el.dispatchEvent(new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        clientX: rect.left + x,
+        clientY: rect.top + y,
+      }));
+      return true;
+    };
+    const handle = {
+      setTool: (tool: string, opts?: Pickup["opts"]) => {
+        setActiveTool(tool as ToolId);
+        if (opts) setActiveOpts(opts);
+        setShowCreateModal(false);
+      },
+      getTool: () => activeTool,
+      click: (x: number, y: number) => fire("mousedown", x, y) && fire("mouseup", x, y) && fire("click", x, y),
+      dblclick: (x: number, y: number) => fire("dblclick", x, y),
+      escape: () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })),
+      getAnnotations: () => annotations,
+      getCalibration: () => calibration,
+      calibrated: () => Boolean(calibration),
+      applyCalibration: (pixelsPerUnit: number, unit: string) => {
+        if (!selectedDocId) return false;
+        applyCalibrationSnapshot(selectedDocId, page, { pixelsPerUnit, unit }, false);
+        return true;
+      },
+    };
+    (window as unknown as Record<string, unknown>).__takeoff = handle;
+    return () => {
+      const w = window as unknown as Record<string, unknown>;
+      if (w.__takeoff === handle) delete w.__takeoff;
+    };
+  });
+
   /* Annotation CRUD */
   function handleToggleVisibility(id: string) {
     const nextAnnotations = annotations.map((a) => (a.id === id ? { ...a, visible: !a.visible } : a));
@@ -7741,6 +7822,17 @@ export function TakeoffTab({
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       price: cost * quantity * (1 + (workspace.currentRevision.defaultMarkup ?? 0.2)),
       sourceNotes: `From spreadsheet ${spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? ""}`.trim(),
+      // Machine-readable provenance — spreadsheet promotions used to create
+      // line items with no attribution at all, so nothing could trace a
+      // number back to the cell it came from.
+      sourceEvidence: {
+        kind: "spreadsheet-row",
+        documentId: selectedDocId ?? null,
+        sourceName: spreadsheetPreview?.sourceName ?? selectedDoc?.fileName ?? "",
+        headers,
+        row,
+        importedAt: new Date().toISOString(),
+      },
     };
   }
 
@@ -7794,6 +7886,17 @@ export function TakeoffTab({
         `Pivot total: ${numericFormat(row.total)}`,
         sourceRows.length > 0 ? `Unit/cost inferred from ${sourceRows.length} preview row${sourceRows.length === 1 ? "" : "s"}.` : "",
       ].filter(Boolean).join("\n"),
+      sourceEvidence: {
+        kind: "spreadsheet-pivot",
+        documentId: selectedDocId ?? null,
+        sourceName,
+        groupBy: summary.groupBy,
+        measure: summary.measure,
+        label: row.label,
+        sourceRowCount: row.count,
+        pivotTotal: row.total,
+        importedAt: new Date().toISOString(),
+      },
     };
   }
 
@@ -7942,6 +8045,18 @@ export function TakeoffTab({
       markup: workspace.currentRevision.defaultMarkup ?? 0.2,
       price: 0,
       sourceNotes,
+      sourceEvidence: {
+        kind: "photo-bom",
+        measuredBy: "agent",
+        description: row.description,
+        quantity: row.quantity,
+        uom: row.uom || "",
+        confidence: row.confidence,
+        sourcePhotoNames,
+        sourceImageIndexes: row.sourceImageIndexes,
+        notes: row.notes ?? "",
+        importedAt: new Date().toISOString(),
+      },
     };
     const payload = applyCategoryPickToPayload(basePayload, category, pick);
     if (!payload) return;

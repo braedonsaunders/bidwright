@@ -4754,7 +4754,7 @@ export async function createPickupLink(
   });
 }
 
-export async function updateTakeoffLink(
+export async function updatePickupLink(
   projectId: string,
   linkId: string,
   data: { quantityField?: string; multiplier?: number },
@@ -5869,10 +5869,40 @@ export async function listModelAssets(projectId: string, refresh = false) {
   return apiRequest<{ assets: ModelAsset[]; syncedIds?: string[]; sourceCount?: number }>(`/api/models/${projectId}/assets${qs}`);
 }
 
+export interface ModelScanState {
+  status: "idle" | "running" | "complete" | "failed";
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  syncedIds: string[];
+  sourceCount: number;
+}
+
+/** Kick off a model scan and wait for it to finish. The server runs the
+ *  scan in the background (ingest can take minutes and used to block the
+ *  HTTP request for the whole run); this helper polls the status route so
+ *  existing callers keep the same resolved shape as before. */
 export async function syncModelAssets(projectId: string) {
-  return apiRequest<{ assets: ModelAsset[]; syncedIds: string[]; sourceCount: number }>(`/api/models/${projectId}/assets/scan`, {
-    method: "POST",
-  });
+  const started = await apiRequest<{ scan: ModelScanState; assets: ModelAsset[]; syncedIds: string[]; sourceCount: number }>(
+    `/api/models/${projectId}/assets/scan`,
+    { method: "POST" },
+  );
+  // Older servers ran synchronously and return no scan state — done already.
+  if (!started.scan || started.scan.status === "complete" || started.scan.status === "failed") {
+    if (started.scan?.status === "failed") throw new Error(started.scan.error ?? "Model scan failed");
+    return started;
+  }
+  const deadline = Date.now() + 15 * 60 * 1000;
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const { scan } = await apiRequest<{ scan: ModelScanState }>(`/api/models/${projectId}/assets/scan/status`);
+    if (scan.status === "failed") throw new Error(scan.error ?? "Model scan failed");
+    if (scan.status === "complete" || scan.status === "idle") {
+      const { assets } = await listModelAssets(projectId);
+      return { assets, syncedIds: scan.syncedIds, sourceCount: scan.sourceCount };
+    }
+    if (Date.now() > deadline) throw new Error("Model scan timed out after 15 minutes");
+  }
 }
 
 export type ModelViewerSession =

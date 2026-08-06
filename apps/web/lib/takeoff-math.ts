@@ -74,46 +74,64 @@ export function countByDistance(points: Point[], spacing: number, cal: Calibrati
   return Math.max(1, Math.floor(totalDist / spacing) + 1);
 }
 
+export interface Measurement {
+  value: number;
+  unit: string;
+  area?: number;
+  volume?: number;
+  /** Un-calibrated magnitude of the base geometry in the annotation's own
+   *  pixel space (length in px, area in px\u00B2) \u2014 retained so a re-calibration
+   *  can re-derive the value without re-tracing, and so the measurement is
+   *  auditable against the geometry it came from. For `area-vertical-wall`
+   *  the raw is the PERIMETER in px (the height factor is real-world). */
+  raw?: number;
+  rawUnit?: "px" | "px2" | "ea";
+}
+
+/** Identity calibration \u2014 used to compute the raw pixel-space magnitude. */
+const PX_CAL: Calibration = { pixelsPerUnit: 1, unit: "px" };
+
 export function computeMeasurement(
   annotationType: string,
   points: Point[],
   cal: Calibration,
   opts: { dropDistance?: number; wallHeight?: number; height?: number; spacing?: number } = {}
-): { value: number; unit: string; area?: number; volume?: number } {
+): Measurement {
   switch (annotationType) {
     case "linear":
-      return { value: linearDistance(points, cal), unit: cal.unit };
+      return { value: linearDistance(points, cal), unit: cal.unit, raw: linearDistance(points, PX_CAL), rawUnit: "px" };
     case "linear-polyline":
-      return { value: polylineDistance(points, cal), unit: cal.unit };
+      return { value: polylineDistance(points, cal), unit: cal.unit, raw: polylineDistance(points, PX_CAL), rawUnit: "px" };
     case "linear-drop":
-      return { value: linearDropDistance(points, cal, opts.dropDistance ?? 0), unit: cal.unit };
+      // Raw excludes the drops \u2014 dropDistance is a real-world add-on, not geometry.
+      return { value: linearDropDistance(points, cal, opts.dropDistance ?? 0), unit: cal.unit, raw: polylineDistance(points, PX_CAL), rawUnit: "px" };
     case "count":
-      return { value: points.length, unit: "count" };
+      return { value: points.length, unit: "count", raw: points.length, rawUnit: "ea" };
     case "count-by-distance":
-      return { value: countByDistance(points, opts.spacing ?? 1, cal), unit: "count" };
+      return { value: countByDistance(points, opts.spacing ?? 1, cal), unit: "count", raw: polylineDistance(points, PX_CAL), rawUnit: "px" };
     case "area-vertical-wall": {
       const a = verticalWallArea(points, opts.wallHeight ?? 8, cal);
-      return { value: a, unit: `${cal.unit}\u00B2`, area: a };
+      return { value: a, unit: `${cal.unit}\u00B2`, area: a, raw: polylineDistance([...points, points[0]], PX_CAL), rawUnit: "px" };
     }
     case "area-rectangle": {
       const a = rectangleArea(points, cal);
       const v = opts.height ? volume(a, opts.height) : undefined;
-      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v };
+      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v, raw: rectangleArea(points, PX_CAL), rawUnit: "px2" };
     }
     case "area-triangle": {
       const a = triangleArea(points, cal);
       const v = opts.height ? volume(a, opts.height) : undefined;
-      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v };
+      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v, raw: triangleArea(points, PX_CAL), rawUnit: "px2" };
     }
     case "area-ellipse": {
       const a = ellipseArea(points, cal);
       const v = opts.height ? volume(a, opts.height) : undefined;
-      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v };
+      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v, raw: ellipseArea(points, PX_CAL), rawUnit: "px2" };
     }
     case "area-polygon": {
       const a = polygonArea(points, cal);
       const v = opts.height ? volume(a, opts.height) : undefined;
-      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v };
+      return { value: a, unit: `${cal.unit}\u00B2`, area: a, volume: v, raw: polygonArea(points, PX_CAL), rawUnit: "px2" };
     }
     case "markup-note":
     case "markup-cloud":

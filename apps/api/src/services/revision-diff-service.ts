@@ -17,6 +17,15 @@ import { createLLMAdapter } from "@bidwright/agent";
 
 export interface DiffElementChange {
   changeType: "added" | "removed" | "modified";
+  /** Causal bucket for `modified` rows — what kind of change this actually
+   *  is, so a dollar delta can be attributed to a cause:
+   *  - `requantified`: quantities moved, metadata identical — the DESIGN
+   *    changed (something got bigger/smaller).
+   *  - `respecified`: metadata moved (material/spec/level/…), quantities
+   *    identical — the element was re-described, not re-shaped.
+   *  - `both`: reported as one change rather than split into two half-truths.
+   *  Absent on added/removed rows. */
+  cause?: "requantified" | "respecified" | "both";
   externalId: string;
   baseElementId: string | null;
   headElementId: string | null;
@@ -27,6 +36,30 @@ export interface DiffElementChange {
   beforeQuantities: Array<{ quantityType: string; value: number; unit: string }>;
   afterQuantities: Array<{ quantityType: string; value: number; unit: string }>;
   propertyChanges: Array<{ key: string; before: unknown; after: unknown }>;
+}
+
+/** Quantities compare with their own RELATIVE tolerance — 0.001 m³ is a real
+ *  change to a 0.01 m³ element and float noise on a 900 m³ pour, so a fixed
+ *  decimal cut-off (the old `toFixed(6)` signature compare) is wrong at both
+ *  ends of the scale. */
+const QTY_REL_TOL = 1e-6;
+const QTY_ABS_TOL = 1e-9;
+
+function quantitiesDiffer(
+  before: Array<{ quantityType: string; value: number; unit: string }>,
+  after: Array<{ quantityType: string; value: number; unit: string }>,
+): boolean {
+  const key = (q: { quantityType: string; unit: string }) => `${q.quantityType}|${q.unit}`;
+  const beforeByKey = new Map(before.map((q) => [key(q), q.value]));
+  const afterByKey = new Map(after.map((q) => [key(q), q.value]));
+  if (beforeByKey.size !== afterByKey.size) return true;
+  for (const [k, a] of beforeByKey) {
+    const b = afterByKey.get(k);
+    if (b === undefined) return true;
+    const tolerance = Math.max(QTY_ABS_TOL, QTY_REL_TOL * Math.max(Math.abs(a), Math.abs(b)));
+    if (Math.abs(a - b) > tolerance) return true;
+  }
+  return false;
 }
 
 export interface ImpactedWorksheetItem {
@@ -171,8 +204,7 @@ export async function computeRevisionDiff(
     // Compare quantities and key properties.
     const beforeQs = baseQty.get(baseEl.id) ?? [];
     const afterQs = headQty.get(headEl.id) ?? [];
-    const qSig = (qs: typeof beforeQs) => qs.map((q) => `${q.quantityType}:${q.value.toFixed(6)}:${q.unit}`).sort().join("|");
-    const quantitiesChanged = qSig(beforeQs) !== qSig(afterQs);
+    const quantitiesChanged = quantitiesDiffer(beforeQs, afterQs);
 
     const beforeProps: Record<string, unknown> = {};
     const afterProps: Record<string, unknown> = {};
@@ -185,6 +217,11 @@ export async function computeRevisionDiff(
     if (quantitiesChanged || propertyChanges.length > 0) {
       rows.push({
         changeType: "modified",
+        cause: quantitiesChanged && propertyChanges.length > 0
+          ? "both"
+          : quantitiesChanged
+            ? "requantified"
+            : "respecified",
         externalId,
         baseElementId: baseEl.id,
         headElementId: headEl.id,
@@ -203,6 +240,9 @@ export async function computeRevisionDiff(
     elementsAdded: rows.filter((r) => r.changeType === "added").length,
     elementsRemoved: rows.filter((r) => r.changeType === "removed").length,
     elementsModified: rows.filter((r) => r.changeType === "modified").length,
+    elementsRequantified: rows.filter((r) => r.cause === "requantified").length,
+    elementsRespecified: rows.filter((r) => r.cause === "respecified").length,
+    elementsRequantifiedAndRespecified: rows.filter((r) => r.cause === "both").length,
     affectedItems: 0,
     totalCostDelta: 0,
     totalPriceDelta: 0,

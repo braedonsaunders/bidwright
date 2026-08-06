@@ -1484,6 +1484,90 @@ export async function syncProjectModelAssets(projectId: string, ingestSettings: 
   };
 }
 
+// ── Background model scan ────────────────────────────────────────────────
+//
+// Ingest can take minutes (WASM parses, APS translation polling), and running
+// it inside the HTTP request blocked the scan endpoint for the duration — a
+// proxy timeout then read as failure while ingest kept running server-side.
+// The scan route now enqueues here and returns immediately; clients poll
+// `getProjectModelScanStatus`.
+//
+// Deliberately an in-process bounded queue rather than a Redis/BullMQ hop:
+// the worker runtime is optional in the desktop and dev deployment shapes,
+// and the durable state already lives on ModelAsset.status
+// (pending/processing/indexed/partial/failed) — a scan that dies mid-run
+// leaves honest per-asset statuses and the next scan re-syncs every source.
+// One scan runs at a time process-wide: ingest is CPU/WASM-bound, so
+// parallel scans only slow each other down.
+
+export interface ModelScanState {
+  status: "idle" | "running" | "complete" | "failed";
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+  syncedIds: string[];
+  sourceCount: number;
+}
+
+const scanStates = new Map<string, ModelScanState>();
+const runningScans = new Map<string, Promise<void>>();
+let scanChain: Promise<void> = Promise.resolve();
+
+export function getProjectModelScanStatus(projectId: string): ModelScanState {
+  return scanStates.get(projectId) ?? {
+    status: "idle",
+    startedAt: null,
+    finishedAt: null,
+    error: null,
+    syncedIds: [],
+    sourceCount: 0,
+  };
+}
+
+export function startProjectModelScan(projectId: string, ingestSettings: ModelIngestSettings): ModelScanState {
+  const existing = runningScans.get(projectId);
+  if (existing) return scanStates.get(projectId)!;
+
+  const state: ModelScanState = {
+    status: "running",
+    startedAt: new Date().toISOString(),
+    finishedAt: null,
+    error: null,
+    syncedIds: [],
+    sourceCount: 0,
+  };
+  scanStates.set(projectId, state);
+
+  const run = scanChain.then(async () => {
+    try {
+      const project = await prisma.project.findUnique({ where: { id: projectId } });
+      if (!project) throw new Error(`Project ${projectId} not found`);
+      const sources = await collectProjectModelSources(projectId);
+      state.sourceCount = sources.length;
+      for (const source of sources) {
+        // Mark the shell row processing so asset lists show live progress.
+        const shell = await existingSourceAsset(source);
+        if (shell) {
+          await prisma.modelAsset.update({ where: { id: shell.id }, data: { status: "processing" } }).catch(() => {});
+        }
+        const { asset } = await syncProjectModelSource(source, ingestSettings);
+        state.syncedIds.push(asset.id);
+      }
+      state.status = "complete";
+    } catch (error) {
+      state.status = "failed";
+      state.error = error instanceof Error ? error.message : String(error);
+    } finally {
+      state.finishedAt = new Date().toISOString();
+      runningScans.delete(projectId);
+    }
+  });
+  // The chain must survive a failed scan — swallow so the next enqueue runs.
+  scanChain = run.catch(() => {});
+  runningScans.set(projectId, run);
+  return state;
+}
+
 function integrationString(settings: ModelIngestSettings, key: string): string {
   const value = settings.integrations?.[key];
   return typeof value === "string" ? value.trim() : "";

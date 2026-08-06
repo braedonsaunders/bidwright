@@ -22,7 +22,8 @@ import {
   rebuildPersistedModelTopology,
   saveModelTakeoffRecipe,
   removeFederationMember,
-  syncProjectModelAssets,
+  startProjectModelScan,
+  getProjectModelScanStatus,
   updateModelElement,
   updateProjectFederation,
   upsertFederationMember,
@@ -194,8 +195,11 @@ export async function modelRoutes(app: FastifyInstance) {
     try {
       if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
       if (query.refresh === "1" || query.refresh === "true") {
+        // Refresh kicks off a background scan; the response carries the
+        // current assets plus the scan state so callers can poll.
         const settings = await request.store!.getSettings();
-        return await syncProjectModelAssets(projectId, { integrations: settings.integrations });
+        const scan = startProjectModelScan(projectId, { integrations: settings.integrations });
+        return { assets: await listProjectModelAssets(projectId), scan };
       }
       return { assets: await listProjectModelAssets(projectId) };
     } catch (error) {
@@ -203,12 +207,31 @@ export async function modelRoutes(app: FastifyInstance) {
     }
   });
 
+  // Scans run in the background (ingest can take minutes — see
+  // startProjectModelScan). 202 + poll the status route.
   app.post("/api/models/:projectId/assets/scan", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     try {
       if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
       const settings = await request.store!.getSettings();
-      return await syncProjectModelAssets(projectId, { integrations: settings.integrations });
+      const scan = startProjectModelScan(projectId, { integrations: settings.integrations });
+      reply.code(202);
+      return {
+        scan,
+        assets: await listProjectModelAssets(projectId, { discover: false }),
+        syncedIds: scan.syncedIds,
+        sourceCount: scan.sourceCount,
+      };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.get("/api/models/:projectId/assets/scan/status", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    try {
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+      return { scan: getProjectModelScanStatus(projectId) };
     } catch (error) {
       return routeError(reply, error);
     }

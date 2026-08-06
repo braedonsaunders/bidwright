@@ -1477,7 +1477,7 @@ export interface CreatePickupLinkInput {
   multiplier?: number;     // defaults to 1.0
 }
 
-export interface UpdateTakeoffLinkInput {
+export interface UpdatePickupLinkInput {
   quantityField?: string;
   multiplier?: number;
 }
@@ -15277,6 +15277,26 @@ export class PrismaApiStore {
     return rows.map(mapPickup);
   }
 
+  /** Fill measurement provenance when the caller didn't state it. An
+   *  AI-sourced pickup (auto-count, drawing intelligence, CAD extraction…)
+   *  is stamped `agent`; anything else defaults to `unrecorded` — never
+   *  `person`. An agent-measured quantity and a hand-traced one carry
+   *  different weight in an estimate, and absence of provenance must not
+   *  quietly read as a person having measured it. */
+  private normalizePickupProvenance(metadata: Record<string, unknown>): Record<string, unknown> {
+    const source = typeof metadata.source === "string" ? metadata.source : "";
+    const isAgentSource =
+      source.startsWith("cad-") ||
+      ["auto-count", "smart-count", "symbol-library", "drawing-intelligence", "drawing-evidence", "bidwright-takeoff-sync"].includes(source);
+    if (typeof metadata.method !== "string" || !metadata.method) {
+      metadata.method = isAgentSource ? source : "unrecorded";
+    }
+    if (typeof metadata.measuredBy !== "string" || !metadata.measuredBy) {
+      metadata.measuredBy = isAgentSource ? "agent" : "unrecorded";
+    }
+    return metadata;
+  }
+
   async createPickup(projectId: string, input: CreatePickupInput) {
     await this.requireProject(projectId);
     if (!input.documentId) throw new Error("documentId is required");
@@ -15296,7 +15316,7 @@ export class PrismaApiStore {
         points: (input.points ?? []) as any,
         measurement: (input.measurement ?? {}) as any,
         calibration: input.calibration !== undefined ? (input.calibration as any) : undefined,
-        metadata: (input.metadata ?? {}) as any,
+        metadata: this.normalizePickupProvenance({ ...(input.metadata ?? {}) }) as any,
         createdBy: input.createdBy ?? undefined,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -15455,6 +15475,63 @@ export class PrismaApiStore {
 
   // ── Takeoff Links ─────────────────────────────────────────────────────────
 
+  /** Dimension of a link's quantity: the explicit field wins; "value" derives
+   *  from the annotation type (a linear pickup's value is a length, an area
+   *  pickup's is an area). Unknown → "" (no check possible). */
+  private linkQuantityDimension(quantityField: string, annotationType: string): string {
+    if (quantityField === "area") return "area";
+    if (quantityField === "volume") return "volume";
+    if (quantityField === "count") return "count";
+    if (annotationType.startsWith("linear")) return "length";
+    if (annotationType.startsWith("area")) return "area";
+    if (annotationType.startsWith("count")) return "count";
+    return "";
+  }
+
+  /** Dimension implied by a worksheet item's UoM, or "" when ambiguous. */
+  private uomDimension(uom: string): string {
+    const u = uom.trim().toUpperCase().replace(/[.\s]/g, "");
+    if (["EA", "EACH", "PC", "PCS", "CT", "COUNT", "UN", "UNIT", "UNITS"].includes(u)) return "count";
+    if (["LF", "LM", "FT", "M", "MM", "CM", "IN", "YD", "FT'", "'"].includes(u)) return "length";
+    if (["SF", "SM", "SY", "FT2", "FT²", "M2", "M²", "SQFT", "SQM"].includes(u)) return "area";
+    if (["CF", "CY", "FT3", "FT³", "M3", "M³", "CUFT", "CUM"].includes(u)) return "volume";
+    return "";
+  }
+
+  /** Refuse a link whose quantity cannot mean what the line item's unit says
+   *  it means. Two guards: the requested measurement field must actually
+   *  exist (the old behavior silently fell back to `value`, so linking
+   *  "volume" on a pickup that never computed one billed a plausible-looking
+   *  wrong number), and an unambiguous dimension mismatch (an area into an
+   *  EA item) is an error, not a silent unit pun. Ambiguous UoMs skip the
+   *  second check — refusing on a guess would block legitimate links. */
+  private assertLinkQuantityCompatible(args: {
+    quantityField: string;
+    explicitField: boolean;
+    measurement: Record<string, unknown>;
+    annotationType: string;
+    itemUom: string;
+  }) {
+    const raw = args.measurement[args.quantityField];
+    if (args.explicitField && (typeof raw !== "number" || !Number.isFinite(raw))) {
+      throw new Error(
+        `Pickup has no "${args.quantityField}" measurement — available fields: ${
+          Object.entries(args.measurement)
+            .filter(([, v]) => typeof v === "number" && Number.isFinite(v))
+            .map(([k]) => k)
+            .join(", ") || "none"
+        }`,
+      );
+    }
+    const linkDim = this.linkQuantityDimension(args.quantityField, args.annotationType);
+    const itemDim = this.uomDimension(args.itemUom);
+    if (linkDim && itemDim && linkDim !== itemDim) {
+      throw new Error(
+        `Cannot link a ${linkDim} quantity to a line item measured in ${args.itemUom} (${itemDim}) — pick a matching quantity field or change the item's unit`,
+      );
+    }
+  }
+
   async listPickupLinks(projectId: string, pickupId?: string, worksheetItemId?: string) {
     await this.requireProject(projectId);
     const where: any = { projectId };
@@ -15498,8 +15575,16 @@ export class PrismaApiStore {
     const quantityField = input.quantityField ?? "value";
     const multiplier = input.multiplier ?? 1.0;
 
-    // Extract measurement value
+    // Extract measurement value — after refusing a field the pickup never
+    // measured or a dimension that contradicts the item's unit.
     const measurement = (annotation.measurement as Record<string, unknown>) ?? {};
+    this.assertLinkQuantityCompatible({
+      quantityField,
+      explicitField: input.quantityField != null && input.quantityField !== "value",
+      measurement,
+      annotationType: annotation.annotationType ?? "",
+      itemUom: (item as any).uom ?? "",
+    });
     const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
     const derivedQuantity = rawValue * multiplier;
 
@@ -15522,7 +15607,7 @@ export class PrismaApiStore {
     return mapPickupLink(link);
   }
 
-  async updateTakeoffLink(linkId: string, patch: UpdateTakeoffLinkInput) {
+  async updatePickupLink(linkId: string, patch: UpdatePickupLinkInput) {
     const link = await this.db.pickupLink.findFirst({ where: { id: linkId } });
     if (!link) throw new Error(`Takeoff link ${linkId} not found`);
 
@@ -15532,6 +15617,16 @@ export class PrismaApiStore {
     // Re-fetch annotation to get current measurement
     const annotation = await this.db.pickup.findFirst({ where: { id: link.pickupId } });
     const measurement = (annotation?.measurement as Record<string, unknown>) ?? {};
+    if (patch.quantityField != null && patch.quantityField !== "value") {
+      const item = await this.db.worksheetItem.findFirst({ where: { id: link.worksheetItemId } });
+      this.assertLinkQuantityCompatible({
+        quantityField,
+        explicitField: true,
+        measurement,
+        annotationType: annotation?.annotationType ?? "",
+        itemUom: (item as any)?.uom ?? "",
+      });
+    }
     const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
     const derivedQuantity = rawValue * multiplier;
 
