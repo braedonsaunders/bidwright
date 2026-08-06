@@ -86,6 +86,127 @@ test("buildModelTopology recovers native property lengths when legacy quantities
   assert.equal(linear?.unit, "ft");
 });
 
+test("buildModelTopology converts hinted inch lengths into the model's display feet", () => {
+  // Mirrors an imperial Plant3D NWD: AutoCAD.Length serialized in drawing
+  // units (inches) with a sibling Port1_LengthUnit hint, while the model's
+  // display units report feet.
+  const pipe = (id: string, inches: string) => ({
+    id,
+    externalId: id,
+    name: "ACPPPIPE",
+    elementClass: "9002",
+    elementType: "ACPPPIPE",
+    properties: {
+      estimateRelevant: true,
+      "AutoCAD.Class": "Pipe",
+      "AutoCAD.Length": inches,
+      "AutoCAD.PipeLineNumber": "3\"P-150S1-9002",
+      "AutoCAD.Spec": "150S1",
+      "AutoCAD.Size": "3\"",
+      "AutoCAD.Port1_LengthUnit": "in",
+      "AutoCAD.Port2_LengthUnit": "in",
+    },
+  });
+  const result = buildModelTopology([pipe("pipe-1", "60"), pipe("pipe-2", "84")], { units: "ft" });
+  const linear = result.groups.find((group) => group.kind === "estimate" && group.measurementType === "length");
+  assert.ok(linear);
+  assert.ok(Math.abs(linear.quantity - 12) < 1e-9, `expected 12 ft, got ${linear.quantity}`);
+  assert.equal(linear.unit, "ft");
+});
+
+test("buildModelTopology disambiguates unitless lengths via the weight cross-check", () => {
+  // No unit hint at all: the only signal is total weight vs weight-per-length
+  // (3.158643 LB at 7.58 LB/FT implies 0.4167 ft = 5.0 in, so the raw 5.00049
+  // must be inches, not feet).
+  const result = buildModelTopology([{
+    id: "pipe-1",
+    externalId: "pipe-1",
+    name: "ACPPPIPE",
+    elementClass: "9002",
+    properties: {
+      estimateRelevant: true,
+      "AutoCAD.Class": "Pipe",
+      "AutoCAD.Length": "5.00049",
+      "AutoCAD.Weight": "3.158643",
+      "AutoCAD.WeightUnit": "LB",
+      "AutoCAD.LinearWeight": "7.58",
+      "AutoCAD.LinearWeightUnit": "LB/FT",
+    },
+  }], { units: "ft" });
+  const linear = result.groups.find((group) => group.kind === "estimate" && group.measurementType === "length");
+  assert.ok(linear);
+  assert.ok(Math.abs(linear.quantity - 5.00049 / 12) < 1e-6, `expected ~0.4167 ft, got ${linear.quantity}`);
+  assert.equal(linear.unit, "ft");
+});
+
+test("buildModelTopology converts explicit metric quantities into imperial display units", () => {
+  const result = buildModelTopology([{
+    id: "duct-1",
+    externalId: "duct-1",
+    name: "Duct segment",
+    elementClass: "IfcDuctSegment",
+    quantities: [{ id: "q-1", elementId: "duct-1", quantityType: "Length", value: 3048, unit: "mm" }],
+  }], { units: "feet" });
+  const linear = result.groups.find((group) => group.kind === "estimate" && group.measurementType === "length");
+  assert.ok(linear);
+  assert.ok(Math.abs(linear.quantity - 10) < 1e-9, `expected 10 ft, got ${linear.quantity}`);
+  assert.equal(linear.unit, "ft");
+});
+
+test("buildModelTopology sums mixed-unit member lengths in one canonical unit", () => {
+  const result = buildModelTopology([
+    {
+      id: "a",
+      externalId: "a",
+      name: "Pipe A",
+      elementClass: "PipeSegment",
+      system: "L-1",
+      quantities: [{ id: "q-a", elementId: "a", quantityType: "Length", value: 2, unit: "m" }],
+    },
+    {
+      id: "b",
+      externalId: "b",
+      name: "Pipe B",
+      elementClass: "PipeSegment",
+      system: "L-1",
+      quantities: [{ id: "q-b", elementId: "b", quantityType: "Length", value: 500, unit: "mm" }],
+    },
+  ], { units: "m" });
+  const linear = result.groups.find((group) => group.kind === "estimate" && group.measurementType === "length");
+  assert.ok(linear);
+  assert.ok(Math.abs(linear.quantity - 2.5) < 1e-9, `expected 2.5 m, got ${linear.quantity}`);
+  assert.equal(linear.unit, "m");
+});
+
+test("buildModelTopology infers proximity connections in the coordinate space the hints declare", () => {
+  // Coordinates and lengths in inches, display units feet. Without following
+  // the hinted unit, the ft-scaled tolerance (0.04) can never bridge inch
+  // coordinate gaps and every pipeline collapses to one unsplit run.
+  const element = (id: string, elementClass: string, min: number[], max: number[], extra: Record<string, unknown> = {}) => ({
+    id,
+    externalId: id,
+    name: elementClass,
+    elementClass: "9002",
+    elementType: elementClass,
+    system: "P-9002",
+    bbox: { min, max },
+    properties: {
+      estimateRelevant: true,
+      "AutoCAD.Port1_LengthUnit": "in",
+      ...extra,
+    },
+  });
+  const result = buildModelTopology([
+    element("left", "ACPPPIPE", [0, 0, 0], [60, 3.5, 3.5], { "AutoCAD.Class": "Pipe", "AutoCAD.Length": "60" }),
+    element("tee", "ACPPPIPEINLINEASSET", [60.2, 0, 0], [66, 3.5, 3.5], { "AutoCAD.Class": "Tee" }),
+    element("right", "ACPPPIPE", [66.2, 0, 0], [126, 3.5, 3.5], { "AutoCAD.Class": "Pipe", "AutoCAD.Length": "60" }),
+  ], { units: "ft" });
+  assert.equal(result.connections.length, 2);
+  const linear = result.groups.find((group) => group.kind === "estimate" && group.measurementType === "length");
+  assert.ok(linear);
+  assert.ok(Math.abs(linear.quantity - 10) < 1e-9, `expected 10 ft, got ${linear.quantity}`);
+});
+
 test("buildModelTopology understands Plant3D pipeline semantics without treating IDs as quantities", () => {
   const pipe = (id: string, length: string) => ({
     id,

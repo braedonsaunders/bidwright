@@ -92,6 +92,8 @@ interface SemanticElement extends ModelTopologyElementInput {
   size: string;
   endpoints: Point3[];
   flatProperties: Array<[string, unknown]>;
+  authoredLinearUnit: LinearUnit | null;
+  impliedLength: { value: number; unit: LinearUnit } | null;
 }
 
 function stableHash(value: string) {
@@ -281,6 +283,8 @@ function semanticElement(element: ModelTopologyElementInput): SemanticElement {
       ? explicitEndpoints.slice(0, 8)
       : bboxEndpoints(element.bbox, ["junction", "fitting", "control", "equipment", "terminal"].includes(role)),
     flatProperties,
+    authoredLinearUnit: authoredLinearUnitHint(flatProperties),
+    impliedLength: impliedLengthFromWeight(flatProperties),
   };
 }
 
@@ -478,34 +482,167 @@ function compactUnit(units: string, type: string) {
     : /centimet|\bcm\b/.test(lower) ? "cm"
       : /inch|\bin\b/.test(lower) ? "in"
         : /foot|feet|\bft\b/.test(lower) ? "ft"
-          : /metre|meter|\bm\b/.test(lower) ? "m"
-            : units.trim();
+          : /yard|\byd\b/.test(lower) ? "yd"
+            : /metre|meter|\bm\b/.test(lower) ? "m"
+              : units.trim();
   if (type === "area" && base && !/[²2]$/.test(base)) return `${base}²`;
   if (type === "volume" && base && !/[³3]$/.test(base)) return `${base}³`;
   return base;
 }
 
-function propertyMeasurementCandidates(element: SemanticElement, defaultUnits: string) {
+type LinearUnit = "mm" | "cm" | "m" | "in" | "ft" | "yd";
+
+const METERS_PER_LINEAR_UNIT: Record<LinearUnit, number> = {
+  mm: 0.001,
+  cm: 0.01,
+  m: 1,
+  in: 0.0254,
+  ft: 0.3048,
+  yd: 0.9144,
+};
+
+const LINEAR_UNITS = Object.keys(METERS_PER_LINEAR_UNIT) as LinearUnit[];
+
+function normalizeLinearUnit(units: string | null | undefined): LinearUnit | null {
+  const lower = (units ?? "").trim().toLowerCase().replace(/[²³]|\^\d$/g, "").trim();
+  if (!lower) return null;
+  if (/millimet|\bmm\b/.test(lower)) return "mm";
+  if (/centimet|\bcm\b/.test(lower)) return "cm";
+  if (/inch|\bin\b|^"$/.test(lower)) return "in";
+  if (/foot|feet|\bft\b|^'$/.test(lower)) return "ft";
+  if (/yard|\byd\b/.test(lower)) return "yd";
+  if (/metre|meter|\bm\b/.test(lower)) return "m";
+  return null;
+}
+
+function convertLinearValue(value: number, from: LinearUnit, to: LinearUnit, type: string) {
+  if (from === to) return value;
+  const power = type === "volume" ? 3 : type === "area" ? 2 : 1;
+  return value * Math.pow(METERS_PER_LINEAR_UNIT[from] / METERS_PER_LINEAR_UNIT[to], power);
+}
+
+/**
+ * Authored numeric properties frequently omit units: Plant3D/Navisworks emit
+ * drawing-unit magnitudes (an imperial DWG serializes AutoCAD.Length in
+ * inches) while the model's display units say feet. Sibling unit-hint
+ * properties ("Port1_LengthUnit": "in") declare the drawing unit directly.
+ */
+function authoredLinearUnitHint(rows: Array<[string, unknown]>): LinearUnit | null {
+  const hints = new Set<LinearUnit>();
+  for (const [key, value] of rows) {
+    if (!/(?:length|linear)[ ._-]?units?$/i.test(key)) continue;
+    const unit = normalizeLinearUnit(String(value ?? ""));
+    if (unit) hints.add(unit);
+  }
+  // Conflicting hints mean we cannot trust either; fall through to other signals.
+  return hints.size === 1 ? hints.values().next().value! : null;
+}
+
+function normalizeMassUnit(text: string) {
+  if (/lb|pound/i.test(text)) return "lb";
+  if (/kg|kilo/i.test(text)) return "kg";
+  if (/\bg\b|gram/i.test(text)) return "g";
+  return "";
+}
+
+/**
+ * Total weight ÷ weight-per-length independently implies the element's length
+ * in the linear-weight denominator unit (LB and LB/FT ⇒ length in ft). That
+ * cross-check disambiguates a unitless authored length no matter which unit
+ * the source system serialized it in.
+ */
+function impliedLengthFromWeight(rows: Array<[string, unknown]>): { value: number; unit: LinearUnit } | null {
+  let weight: number | null = null;
+  let weightUnitText = "";
+  let linearWeight: number | null = null;
+  let linearWeightUnitText = "";
+  for (const [key, raw] of rows) {
+    if (/linear[ ._-]?weight[ ._-]?units?$/i.test(key)) linearWeightUnitText = String(raw ?? "");
+    else if (/linear[ ._-]?weight$/i.test(key)) linearWeight = finiteNumber(raw);
+    else if (/(?:^|[._\s-])weight[ ._-]?units?$/i.test(key)) weightUnitText = String(raw ?? "");
+    else if (/(?:^|[._\s-])weight$/i.test(key)) weight = finiteNumber(raw);
+  }
+  if (weight == null || weight <= 0 || linearWeight == null || linearWeight <= 0) return null;
+  const [massText, perText] = linearWeightUnitText.split("/");
+  const perUnit = normalizeLinearUnit(perText ?? "");
+  if (!perUnit) return null;
+  const mass = normalizeMassUnit(weightUnitText);
+  const linearMass = normalizeMassUnit(massText ?? "");
+  if (!mass || !linearMass || mass !== linearMass) return null;
+  return { value: weight / linearWeight, unit: perUnit };
+}
+
+function resolveLinearSourceUnit(
+  element: SemanticElement,
+  type: string,
+  explicitUnitText: string,
+  value: number,
+  defaultLinear: LinearUnit | null,
+): LinearUnit | null {
+  const explicit = normalizeLinearUnit(explicitUnitText);
+  if (explicit) return explicit;
+  if (element.authoredLinearUnit) return element.authoredLinearUnit;
+  if (type === "length" && element.impliedLength && value > 0) {
+    let best: { unit: LinearUnit; error: number } | null = null;
+    for (const unit of LINEAR_UNITS) {
+      const candidate = convertLinearValue(value, unit, element.impliedLength.unit, "length");
+      const error = Math.abs(candidate - element.impliedLength.value) / element.impliedLength.value;
+      if (!best || error < best.error) best = { unit, error };
+    }
+    if (best && best.error <= 0.2) return best.unit;
+  }
+  return defaultLinear;
+}
+
+function propertyMeasurementCandidates(element: SemanticElement) {
   return element.flatProperties.flatMap(([key, rawValue]) => {
     const type = normalizedMeasurementType(key);
     // Counts are never inferred from arbitrary numeric properties. IDs such as
     // PnPID and element numbers are common in Plant3D/Navisworks and are not
     // estimating quantities. A real native count may still arrive through the
     // normalized quantity table; otherwise non-linear elements fall back to 1 EA.
-    if (!type || type === "count" || /diameter|radius|width|height|depth|thickness|elevation|offset/i.test(key)) return [];
+    if (!type || type === "count" || /diameter|radius|width|height|depth|thickness|elevation|offset|units?$/i.test(key)) return [];
     const value = finiteNumber(rawValue);
     if (value == null || value <= 0) return [];
     const unitMatch = typeof rawValue === "string"
       ? rawValue.trim().match(/[-+]?\d[\d,]*(?:\.\d+)?(?:[eE][-+]?\d+)?\s+([a-zA-Z°'"²³^/]+.*)$/)
       : null;
-    const unit = compactUnit(unitMatch?.[1]?.trim() || defaultUnits, type);
     const exact = new RegExp(`(?:^|[._\\s-])(?:gross |net )?${type}$`, "i").test(key);
     return [{
-      quantity: { id: `property:${key}`, value, unit, confidence: exact ? 0.82 : 0.72 },
+      quantity: { id: `property:${key}`, value, unit: unitMatch?.[1]?.trim() ?? "", confidence: exact ? 0.82 : 0.72 },
       type,
       propertyScore: exact ? 20 : 0,
     }];
   });
+}
+
+/**
+ * Resolve the measurement's real source unit and convert to the model's
+ * canonical linear unit so member measurements always sum coherently.
+ * Precedence: explicit unit on the value > per-element authored unit hint >
+ * weight ÷ linear-weight cross-check > the model's display units.
+ */
+function finalizeMeasurement(
+  element: SemanticElement,
+  selected: { quantity: { id: string; value: number; unit: string; confidence?: number }; type: string },
+  defaultUnits: string,
+) {
+  const type = selected.type;
+  const rawUnitText = selected.quantity.unit ?? "";
+  const confidence = selected.quantity.confidence ?? 1;
+  if (type === "length" || type === "area" || type === "volume") {
+    const defaultLinear = normalizeLinearUnit(defaultUnits);
+    const source = resolveLinearSourceUnit(element, type, rawUnitText, selected.quantity.value, defaultLinear);
+    const canonical = defaultLinear ?? source;
+    const value = source && canonical
+      ? convertLinearValue(selected.quantity.value, source, canonical, type)
+      : selected.quantity.value;
+    const unit = canonical ? compactUnit(canonical, type) : compactUnit(rawUnitText || defaultUnits, type);
+    return { type, value, unit, confidence, quantityId: selected.quantity.id };
+  }
+  // Non-dimensional measurements (weight, counts routed here) must never
+  // inherit the model's linear display units.
+  return { type, value: selected.quantity.value, unit: compactUnit(rawUnitText, type), confidence, quantityId: selected.quantity.id };
 }
 
 function elementMeasurement(element: SemanticElement, defaultUnits: string) {
@@ -513,7 +650,7 @@ function elementMeasurement(element: SemanticElement, defaultUnits: string) {
   const nativeCandidates = (element.quantities ?? [])
     .filter((quantity) => Number.isFinite(quantity.value) && quantity.value > 0)
     .map((quantity) => ({ quantity, type: normalizedMeasurementType(quantity.quantityType), propertyScore: 30 }));
-  const candidates = [...nativeCandidates, ...propertyMeasurementCandidates(element, defaultUnits)]
+  const candidates = [...nativeCandidates, ...propertyMeasurementCandidates(element)]
     .filter((candidate) => candidate.type)
     .sort((left, right) => {
       const leftScore = (left.type === preferred ? 100 : left.type === "count" ? 0 : 30) + left.propertyScore;
@@ -522,9 +659,9 @@ function elementMeasurement(element: SemanticElement, defaultUnits: string) {
     });
   const selected = candidates[0];
   if (selected && (selected.type === preferred || preferred !== "count")) {
-    return { type: selected.type, value: selected.quantity.value, unit: selected.quantity.unit || compactUnit(defaultUnits, selected.type), confidence: selected.quantity.confidence ?? 1, quantityId: selected.quantity.id };
+    return finalizeMeasurement(element, selected, defaultUnits);
   }
-  return { type: "count", value: 1, unit: "EA", confidence: 1, quantityId: null };
+  return { type: "count", value: 1, unit: "EA", confidence: 1, quantityId: null as string | null };
 }
 
 function groupQuality(members: SemanticElement[], connections: ModelTopologyConnectionResult[], measurementCoverage: number, expectConnectivity = true) {
@@ -550,7 +687,17 @@ export function buildModelTopology(
   const defaultUnits = options.units ?? "";
   const byId = new Map(elements.map((element) => [element.id, element]));
   const connectionMap = explicitConnections(elements);
-  inferredConnections(elements, options.units ?? "", connectionMap);
+  // Endpoint coordinates live in the source drawing's units, which authored
+  // unit hints describe; the display units can disagree (imperial Plant3D NWDs
+  // report feet while serializing inch coordinates). Proximity tolerance must
+  // follow the coordinate space or inference silently finds nothing.
+  const hintCounts = new Map<LinearUnit, number>();
+  for (const element of elements) {
+    if (!element.authoredLinearUnit) continue;
+    hintCounts.set(element.authoredLinearUnit, (hintCounts.get(element.authoredLinearUnit) ?? 0) + 1);
+  }
+  const geometryUnits = Array.from(hintCounts.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ?? defaultUnits;
+  inferredConnections(elements, geometryUnits, connectionMap);
   const connections = Array.from(connectionMap.values()).sort((left, right) => left.signature.localeCompare(right.signature));
   const { adjacency, components } = connectedComponents(elements.map((element) => element.id), connections);
   const componentIndex = new Map<string, number>();

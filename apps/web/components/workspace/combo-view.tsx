@@ -272,7 +272,13 @@ export function ComboView({
     initialDocumentId ? { documentId: initialDocumentId, page: 1, zoom: 1 } : null,
   );
   const [annotationsCache, setAnnotationsCache] = useState<Pickup[]>([]);
-  const lineItemPickerAnchorRef = useRef<HTMLElement | null>(null);
+  // One anchor ref per RightPanel instance. While the takeoff is popped out,
+  // the standby studio layout stays mounted offscreen with its own copy of the
+  // "Estimate item" button — a single shared ref ends up pointing at whichever
+  // copy committed last (the hidden one), and the picker dropdown then clamps
+  // to the top-left corner of the viewport.
+  const mainLineItemPickerAnchorRef = useRef<HTMLElement | null>(null);
+  const detachedLineItemPickerAnchorRef = useRef<HTMLElement | null>(null);
   const [linksReloadSignal, setLinksReloadSignal] = useState(0);
   const handleLinksMutated = useCallback(() => setLinksReloadSignal((k) => k + 1), []);
   const handleTakeoffSelectionChange = useCallback((next: TakeoffSelection | null) => {
@@ -403,7 +409,7 @@ export function ComboView({
       sourceLabel: composeRequest.sourceLabel,
       selectionCount: composeRequest.count,
       creationMode: composeRequest.mode,
-      anchorRef: lineItemPickerAnchorRef,
+      anchorRef: takeoffDetached ? detachedLineItemPickerAnchorRef : mainLineItemPickerAnchorRef,
       onSelect: async (template) => {
         if (!template.categoryId) {
           onError("That worksheet item does not resolve to an enabled estimate category.");
@@ -414,7 +420,7 @@ export function ComboView({
       },
       onCancel: () => setLineItemPickerOpen(false),
     };
-  }, [composeRequest, lineItemPickerNonce, lineItemPickerOpen, onError]);
+  }, [composeRequest, lineItemPickerNonce, lineItemPickerOpen, onError, takeoffDetached]);
 
   const quantityOptions = useMemo(
     () => composeRequest ? quantityOptionsForSelection(composeRequest, takeoffSelection, inspectSnapshot) : [],
@@ -618,7 +624,7 @@ export function ComboView({
                 onOpenTakeoffLink={onOpenTakeoffLink}
                 revisionImpactByItem={revisionImpactByItem}
                 onOpenRevisionDiff={onOpenRevisionDiff}
-                lineItemPickerRequest={lineItemPickerRequest}
+                lineItemPickerRequest={takeoffDetached ? lineItemPickerRequest : null}
               />
             </div>
           </Panel>
@@ -643,7 +649,7 @@ export function ComboView({
                 inspectActionsRef={inspectActionsRef}
                 onRequestCompose={handleRequestCompose}
                 onRequestSelectionCompose={requestComposeForCurrentSelection}
-                lineItemPickerAnchorRef={lineItemPickerAnchorRef}
+                lineItemPickerAnchorRef={detachedLineItemPickerAnchorRef}
                 composeRequest={composeRequest}
                 selectedLineItemTemplate={selectedLineItemTemplate}
                 lineItemPickerOpen={lineItemPickerOpen}
@@ -720,7 +726,7 @@ export function ComboView({
                   inspectActionsRef={inspectActionsRef}
                   onRequestCompose={handleRequestCompose}
                   onRequestSelectionCompose={requestComposeForCurrentSelection}
-                  lineItemPickerAnchorRef={lineItemPickerAnchorRef}
+                  lineItemPickerAnchorRef={mainLineItemPickerAnchorRef}
                   composeRequest={composeRequest}
                   selectedLineItemTemplate={selectedLineItemTemplate}
                   lineItemPickerOpen={lineItemPickerOpen}
@@ -812,7 +818,7 @@ export function ComboView({
                 onOpenTakeoffLink={onOpenTakeoffLink}
                 revisionImpactByItem={revisionImpactByItem}
                 onOpenRevisionDiff={onOpenRevisionDiff}
-                lineItemPickerRequest={lineItemPickerRequest}
+                lineItemPickerRequest={takeoffDetached ? null : lineItemPickerRequest}
                 dockMode
               />
             </div>

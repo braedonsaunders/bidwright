@@ -2751,7 +2751,19 @@ export function EstimateGrid({
     });
   }, [applyMutationError, onApply, workspace.project.id]);
 
+  const findEntityCellAnchor = useCallback((rowId: string | null | undefined) => {
+    if (!rowId || typeof document === "undefined") return null;
+    // Scope to this grid instance: multiple mounted grids (worksheet dock plus
+    // the detached-layout copy) can both hold a row with the same id, and a
+    // global query may return the hidden copy's cell.
+    const root: ParentNode = gridWidthRef.current ?? document;
+    return root.querySelector<HTMLTableCellElement>(
+      `[data-cell-row="${rowId}"][data-cell-col="entityName"]`,
+    );
+  }, []);
+
   const positionEntityDropdown = useCallback((anchorEl?: HTMLElement | null, rowId?: string | null) => {
+    if (typeof window === "undefined") return;
     const lookupRowId = rowId ?? entityDropdownRowId ?? entityDropdownClosingRowId;
     const externalAnchor =
       lookupRowId && externalPickerDraftRowIdRef.current === lookupRowId
@@ -2760,18 +2772,28 @@ export function EstimateGrid({
     const refAnchor = entityCellRef.current;
     const refAnchorMatchesRow =
       !!refAnchor &&
-      refAnchor.isConnected &&
       (!lookupRowId || refAnchor.dataset.cellRow === lookupRowId);
-    const anchor =
-      anchorEl ??
-      externalAnchor ??
-      (refAnchorMatchesRow ? refAnchor : null) ??
-      (lookupRowId
-        ? document.querySelector<HTMLTableCellElement>(
-            `[data-cell-row="${lookupRowId}"][data-cell-col="entityName"]`,
-          )
-        : null);
-    if (!anchor || typeof window === "undefined") return;
+    // An anchor is only usable when it actually occupies the viewport. Hidden
+    // layout copies (the detached-takeoff standby tree parks the whole studio
+    // at -10000px), collapsed panels, and not-yet-laid-out draft rows all
+    // report zero/offscreen rects; clamping those pins the dropdown to the
+    // top-left corner of the screen.
+    const anchorIsUsable = (candidate: HTMLElement | null | undefined): candidate is HTMLElement => {
+      if (!candidate || !candidate.isConnected) return false;
+      const candidateRect = candidate.getBoundingClientRect();
+      if (candidateRect.width <= 0 && candidateRect.height <= 0) return false;
+      return candidateRect.right > 0
+        && candidateRect.bottom > 0
+        && candidateRect.left < window.innerWidth
+        && candidateRect.top < window.innerHeight;
+    };
+    const anchor = [
+      anchorEl ?? null,
+      externalAnchor,
+      refAnchorMatchesRow ? refAnchor : null,
+      lookupRowId ? findEntityCellAnchor(lookupRowId) : null,
+    ].find(anchorIsUsable) ?? null;
+    if (!anchor) return;
 
     const rect = anchor.getBoundingClientRect();
     const viewportHeight = window.innerHeight;
@@ -2821,7 +2843,7 @@ export function EstimateGrid({
       listMaxHeight,
       placement,
     });
-  }, [entityDropdownClosingRowId, entityDropdownRowId, lineItemPickerRequest]);
+  }, [entityDropdownClosingRowId, entityDropdownRowId, findEntityCellAnchor, lineItemPickerRequest]);
 
   const resetEntityDropdownState = useCallback(() => {
     setEntityDropdownVisible(false);
@@ -2856,13 +2878,6 @@ export function EstimateGrid({
     window.requestAnimationFrame(() => {
       gridWidthRef.current?.focus({ preventScroll: true });
     });
-  }, []);
-
-  const findEntityCellAnchor = useCallback((rowId: string | null | undefined) => {
-    if (!rowId || typeof document === "undefined") return null;
-    return document.querySelector<HTMLTableCellElement>(
-      `[data-cell-row="${rowId}"][data-cell-col="entityName"]`,
-    );
   }, []);
 
   const closeEntityDropdown = useCallback((
