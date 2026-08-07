@@ -209,3 +209,56 @@ test("rollupWorksheetUnits keeps equipment duration out of labour hours and exte
     ["Weekly", 3],
   ]);
 });
+
+test("tier hours resolve to the ratebook's names and sortOrder, not the tierUnits key order", () => {
+  // Production shape: tierUnits keyed by persisted RateScheduleTier ids, in
+  // whatever order the JSON blob happens to hold them.
+  const schedules = [{
+    tiers: [
+      { id: "rst-f77e654e", name: "Double Time", multiplier: 2, sortOrder: 2, uom: "HR" },
+      { id: "rst-bd3f22d9", name: "Regular", multiplier: 1, sortOrder: 0, uom: "HR" },
+      { id: "rst-1f1df26d", name: "Overtime", multiplier: 1.5, sortOrder: 1, uom: "HR" },
+    ],
+    items: [{ id: "rsi-d516a099", name: "MECH:Trade Labour" }],
+  }];
+  const breakdown = getWorksheetHourBreakdown(
+    {
+      rateScheduleItemId: "rsi-d516a099",
+      tierUnits: { "rst-1f1df26d": 10, "rst-bd3f22d9": 40, "rst-f77e654e": 10 },
+    },
+    schedules,
+  );
+
+  assert.deepEqual(
+    breakdown.tiers.map((tier) => [tier.name, tier.hours]),
+    [["Regular", 40], ["Overtime", 10], ["Double Time", 10]],
+  );
+  assert.equal(breakdown.total, 60);
+});
+
+test("unresolved alias tiers keep a deterministic labour order instead of key order", () => {
+  // Equipment schedules carry no Overtime/Double Time tier, so these aliases
+  // resolve to labels only. They must still read Reg -> OT -> DT.
+  const breakdown = getWorksheetHourBreakdown(
+    { tierUnits: { __dt: 2, __ot: 5, __reg: 8 } },
+    [],
+  );
+  assert.deepEqual(
+    breakdown.tiers.map((tier) => tier.name),
+    ["Regular", "Overtime", "Double Time"],
+  );
+  // Finite so the summary comparator cannot produce NaN.
+  assert.ok(breakdown.tiers.every((tier) => Number.isFinite(tier.sortOrder)));
+});
+
+test("authored ratebook tiers sort ahead of unresolved alias tiers", () => {
+  const schedules = [{
+    tiers: [{ id: "rst-daily", name: "Daily", multiplier: 1, sortOrder: 0, uom: "DAY" }],
+    items: [{ id: "rsi-lift", name: "Lift" }],
+  }];
+  const breakdown = getWorksheetHourBreakdown(
+    { rateScheduleItemId: "rsi-lift", tierUnits: { __dt: 4, "rst-daily": 60 } },
+    schedules,
+  );
+  assert.deepEqual(breakdown.tiers.map((tier) => tier.name), ["Daily", "Double Time"]);
+});

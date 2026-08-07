@@ -722,11 +722,23 @@ export function generatePdfHtml(
     const showWorksheetColumn = backupCol && groupBy !== "worksheet";
     const descriptorColumnCount = showWorksheetColumn ? 6 : 5;
     const getItemUnits = (item: PdfDataPackage["lineItems"][0]) => item.itemTotalUnits;
-    const formatItemUnits = (item: PdfDataPackage["lineItems"][0]) =>
-      item.unitTiers
-        .filter((tier) => tier.units > 0)
-        .map((tier) => `${tier.name}: ${tier.units.toLocaleString()}${item.unitKind === "labour_hours" ? " h" : tier.uom ? ` ${tier.uom}` : ""}`)
-        .join("<br>");
+    // One line per tier stacked with <br> made every labour row three lines
+    // tall. Lead with the total and abbreviate the split onto one line; the
+    // Labour Hours Summary spells the tier names out in full.
+    const formatItemUnits = (item: PdfDataPackage["lineItems"][0]) => {
+      const tiers = item.unitTiers.filter((tier) => tier.units > 0);
+      if (tiers.length === 0) return "";
+      const isLabour = item.unitKind === "labour_hours";
+      const suffix = (tier: (typeof tiers)[0]) => (isLabour ? " h" : tier.uom ? ` ${escapeHtml(tier.uom)}` : "");
+      if (tiers.length === 1) {
+        return `${tiers[0].units.toLocaleString()}${suffix(tiers[0])}`;
+      }
+      const total = tiers.reduce((sum, tier) => sum + tier.units, 0);
+      const split = tiers
+        .map((tier) => `${tier.units.toLocaleString()}&nbsp;${escapeHtml(tierAbbreviation(tier.name))}`)
+        .join(" · ");
+      return `${total.toLocaleString()}${isLabour ? " h" : ""}<span class="tier-split">${split}</span>`;
+    };
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
       let row = `<tr>
@@ -1256,6 +1268,9 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
   .line-no { width: 28px; color: #777; }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .muted { margin-top: 2px; color: #666; font-size: 9.5px; }
+  /* Tier split under a line's unit total. Wrapping is allowed so a tenant with
+     many tiers reflows instead of widening the column. */
+  .tier-split { display: block; color: #666; font-size: 8px; white-space: normal; }
   .empty { text-align: center; color: #777; padding: 18px; }
   .snap-footer { margin-top: auto; display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 20px; align-items: end; padding-top: 14px; }
   .footer-note { color: #777; font-size: 9px; }
@@ -1368,6 +1383,37 @@ function escapeHtml(str: string): string {
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#039;");
+}
+
+/** Common labour tier names, so the usual tenant setup reads naturally. */
+const TIER_ABBREVIATIONS: Record<string, string> = {
+  regular: "Reg",
+  overtime: "OT",
+  doubletime: "DT",
+  double: "DT",
+  straighttime: "ST",
+  straight: "ST",
+  premium: "Prem",
+  standard: "Std",
+  daily: "Day",
+  hourly: "Hr",
+};
+
+/**
+ * Short tier tag for the line-item units column, where the full tenant-defined
+ * name would blow the column out. Multi-word names reduce to their initials
+ * ("Double Time" -> "DT"); the full names remain in the labour summaries.
+ */
+export function tierAbbreviation(name: string): string {
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) return "";
+  const known = TIER_ABBREVIATIONS[trimmed.toLowerCase().replace(/[^a-z]/g, "")];
+  if (known) return known;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  if (words.length > 1) {
+    return words.map((word) => word[0]!.toUpperCase()).join("").slice(0, 4);
+  }
+  return trimmed.length <= 4 ? trimmed : `${trimmed.slice(0, 3)}.`;
 }
 
 function escapeForCssContent(str: string): string {

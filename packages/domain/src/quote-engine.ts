@@ -13,6 +13,9 @@ import type {
   ProjectWorkspace,
   Quote,
   QuoteRevision,
+  RateSchedule,
+  RateScheduleItem,
+  RateScheduleTier,
   RevisionTotals,
   SourceTotalEntry,
   SummaryBuilderConfig,
@@ -316,10 +319,16 @@ function getWorksheetFolders(store: BidwrightStore, revisionId: string) {
     });
 }
 
+/**
+ * Revision rate schedules with their tiers and items nested. The schedule
+ * identity is carried through as well: consumers (notably the PDF) need to
+ * resolve a line's tier hours to the tenant's tier names and ordering, and a
+ * tier-less schedule silently degrades every tier to an unnamed placeholder.
+ */
 function getRevisionRateSchedules(
   store: BidwrightStore,
   revisionId: string,
-): WorksheetHourRateScheduleLike[] {
+): Array<RateSchedule & { tiers: RateScheduleTier[]; items: RateScheduleItem[] }> {
   const revisionScheduleIds = new Set(
     store.rateSchedules
       .filter((schedule) => schedule.revisionId === revisionId)
@@ -329,6 +338,7 @@ function getRevisionRateSchedules(
   return store.rateSchedules
     .filter((schedule) => revisionScheduleIds.has(schedule.id))
     .map((schedule) => ({
+      ...schedule,
       tiers: store.rateScheduleTiers.filter((tier) => tier.scheduleId === schedule.id),
       items: store.rateScheduleItems.filter((item) => item.scheduleId === schedule.id),
     }));
@@ -2245,6 +2255,10 @@ export function buildProjectWorkspace(store: BidwrightStore, projectId: string):
       scheduleTaskIds.has(assignment.taskId),
     ),
     pickupLinks: (store.pickupLinks || []).filter((link) => link.projectId === projectId),
+    // Consumers that read the workspace directly (the PDF renderer) resolve
+    // tier hours through these; without them every tier renders unnamed and
+    // unordered.
+    rateSchedules: revisionSchedules,
     entityCategories: store.entityCategories ?? [],
     estimateStrategy,
     estimateFeedback,

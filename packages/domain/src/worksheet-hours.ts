@@ -171,6 +171,26 @@ function findTierByAlias(tiers: WorksheetHourTierLike[], rawTierId: string) {
   return tiers.find((tier) => normalizeToken(tier.name) === expected) ?? null;
 }
 
+/** Natural progression for legacy alias keys that match no ratebook tier. */
+const TIER_KEY_FALLBACK_ORDER: Record<string, number> = {
+  unit: 0, units: 0,
+  reg: 1, regular: 1,
+  ot: 2, overtime: 2,
+  dt: 3, doubletime: 3,
+};
+
+// Ordered after every real ratebook tier, but deterministically among
+// themselves — an unresolved tier has no authored sortOrder to honour, and
+// leaving these at Infinity made the comparator return NaN.
+const UNRESOLVED_TIER_SORT_BASE = 1_000_000;
+
+function fallbackTierSortOrder(rawTierId: string) {
+  const known = TIER_KEY_FALLBACK_ORDER[normalizeToken(rawTierId)];
+  return known === undefined
+    ? UNRESOLVED_TIER_SORT_BASE + 100
+    : UNRESOLVED_TIER_SORT_BASE + known;
+}
+
 function safeTierLabel(rawTierId: string) {
   const known = TIER_KEY_LABELS[normalizeToken(rawTierId)];
   if (known) return known;
@@ -229,7 +249,9 @@ export function getWorksheetHourBreakdown(
       tierId: tier?.id ?? rawTierId,
       name: tier?.name ?? safeTierLabel(rawTierId),
       multiplier: toNumber(tier?.multiplier) || 1,
-      sortOrder: Number.isFinite(tier?.sortOrder ?? null) ? Number(tier?.sortOrder) : Number.POSITIVE_INFINITY,
+      sortOrder: Number.isFinite(tier?.sortOrder ?? null)
+        ? Number(tier?.sortOrder)
+        : fallbackTierSortOrder(rawTierId),
       uom: String(tier?.uom ?? "").trim(),
       hours: roundHours(hours),
     });

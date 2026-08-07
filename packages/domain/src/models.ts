@@ -2258,6 +2258,9 @@ export interface ProjectWorkspace {
   scheduleResources: ScheduleResource[];
   scheduleTaskAssignments: ScheduleTaskAssignment[];
   pickupLinks: PickupLink[];
+  /** Revision rate schedules with tiers and items nested, so tier hours on a
+   *  line resolve to the tenant's tier names and ordering. */
+  rateSchedules: Array<RateSchedule & { tiers: RateScheduleTier[]; items: RateScheduleItem[] }>;
   estimateStrategy?: EstimateStrategy | null;
   estimateFeedback?: EstimateCalibrationFeedback[];
   estimate: {

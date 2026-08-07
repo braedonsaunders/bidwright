@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPdfDataPackage, generatePdfHtml } from "./pdf-service";
+import { buildPdfDataPackage, generatePdfHtml, tierAbbreviation } from "./pdf-service";
 
 export function workspaceFixture() {
   const pricingLadder = {
@@ -187,4 +187,114 @@ test("site copy honours dynamic labour tiers and excludes equipment duration fro
   assert.doesNotMatch(html, /Double Time/);
   assert.doesNotMatch(html, /\$200/);
   assert.doesNotMatch(html, /Daily<\/th>/);
+});
+
+/**
+ * Mirrors the real tenant shape: tierUnits keyed by persisted RateScheduleTier
+ * UUIDs, resolved through the schedule the line's rateScheduleItemId belongs
+ * to. Production handed the PDF tier-less schedules, so every tier collapsed to
+ * the "Standard" placeholder and lost its sort order.
+ */
+function tenantLabourWorkspace() {
+  return {
+    quote: { quoteNumber: "BW-1", title: "Tiered Labour" },
+    currentRevision: { revisionNumber: 1, subtotal: 0, cost: 0, totalHours: 60 },
+    project: {},
+    entityCategories: [
+      { id: "cat-labour", name: "Labour", entityType: "Labour", analyticsBucket: "labour", calculationType: "tiered_rate" },
+    ],
+    rateSchedules: [{
+      id: "rs-1",
+      name: "Birla Carbon 2026 (MECH)",
+      // Deliberately not in display order — sortOrder is what must win.
+      tiers: [
+        { id: "rst-f77e654e", name: "Double Time", multiplier: 2, sortOrder: 2, uom: "HR" },
+        { id: "rst-bd3f22d9", name: "Regular", multiplier: 1, sortOrder: 0, uom: "HR" },
+        { id: "rst-1f1df26d", name: "Overtime", multiplier: 1.5, sortOrder: 1, uom: "HR" },
+      ],
+      items: [{ id: "rsi-d516a099", name: "MECH:Trade Labour" }],
+    }],
+    worksheets: [{
+      name: "Mechanical",
+      items: [{
+        lineOrder: 1,
+        categoryId: "cat-labour",
+        category: "Labour",
+        entityType: "Labour",
+        entityName: "MECH:Trade Labour",
+        rateScheduleItemId: "rsi-d516a099",
+        // Key order here is the JSON blob's order, not the tier order.
+        tierUnits: { "rst-1f1df26d": 10, "rst-bd3f22d9": 40, "rst-f77e654e": 10 },
+        quantity: 1,
+        uom: "HR",
+        cost: 100,
+        markup: 0.2,
+        price: 120,
+      }],
+    }],
+    phases: [],
+    estimate: { totals: {} },
+    summaryRows: [],
+    adjustments: [],
+    conditions: [],
+    reportSections: [],
+    scheduleTasks: [],
+  };
+}
+
+test("labour tiers use the tenant's tier names, never the Standard placeholder", () => {
+  const data = buildPdfDataPackage(tenantLabourWorkspace());
+  const names = data.lineItems[0].unitTiers.map((tier) => tier.name);
+  assert.deepEqual(names, ["Regular", "Overtime", "Double Time"]);
+  assert.ok(!names.includes("Standard"), "tier names must resolve from the rate schedule");
+});
+
+test("labour tiers follow rate schedule sortOrder, not tierUnits key order", () => {
+  const data = buildPdfDataPackage(tenantLabourWorkspace());
+  assert.deepEqual(
+    data.lineItems[0].unitTiers.map((tier) => [tier.name, tier.units]),
+    [["Regular", 40], ["Overtime", 10], ["Double Time", 10]],
+  );
+
+  const html = generatePdfHtml(data, "backup", {
+    sections: {
+      coverPage: false, scopeOfWork: false, leadLetter: false, lineItems: true,
+      phases: false, conditions: false, terms: false, pricingSummary: false,
+      hoursSummary: true, labourSummary: true, notes: false, reportSections: false, schedule: false,
+    },
+  });
+  assert.doesNotMatch(html, /Standard/, "no placeholder tier label reaches the PDF");
+  // Summary headers must read left-to-right in tier order.
+  const headerOrder = ["Regular", "Overtime (1.5x)", "Double Time (2x)"].map((label) => html.indexOf(label));
+  assert.ok(headerOrder.every((position) => position >= 0), `all tier headers render: ${headerOrder}`);
+  assert.deepEqual([...headerOrder].sort((a, b) => a - b), headerOrder, "headers ordered by tier sortOrder");
+});
+
+test("a multi-tier line renders one compact units cell instead of a stacked row", () => {
+  const data = buildPdfDataPackage(tenantLabourWorkspace());
+  const html = generatePdfHtml(data, "backup", {
+    sections: {
+      coverPage: false, scopeOfWork: false, leadLetter: false, lineItems: true,
+      phases: false, conditions: false, terms: false, pricingSummary: false,
+      hoursSummary: false, labourSummary: false, notes: false, reportSections: false, schedule: false,
+    },
+  });
+  const row = html.slice(html.indexOf("MECH:Trade Labour"));
+  const cell = row.slice(0, row.indexOf("</tr>"));
+  // The old format stacked "Name: n h" per tier with <br>, tripling row height.
+  assert.doesNotMatch(cell, /<br>\s*[^<]*:\s*\d/, "tiers are not stacked one per line");
+  assert.match(cell, /60 h/, "leads with the line's total hours");
+  assert.match(cell, /40&nbsp;Reg · 10&nbsp;OT · 10&nbsp;DT/, "abbreviated split on a single line");
+});
+
+test("tierAbbreviation keeps tenant-defined tier names short and distinct", () => {
+  assert.equal(tierAbbreviation("Regular"), "Reg");
+  assert.equal(tierAbbreviation("Overtime"), "OT");
+  assert.equal(tierAbbreviation("Double Time"), "DT");
+  // Unknown tenant names still shorten deterministically.
+  assert.equal(tierAbbreviation("Night Shift"), "NS");
+  assert.equal(tierAbbreviation("Sunday Premium Rate"), "SPR");
+  assert.equal(tierAbbreviation("Holiday"), "Hol.");
+  assert.equal(tierAbbreviation("Day"), "Day");
+  assert.equal(tierAbbreviation(""), "");
 });
