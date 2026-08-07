@@ -283,8 +283,10 @@ test("a multi-tier line renders one compact units cell instead of a stacked row"
   const cell = row.slice(0, row.indexOf("</tr>"));
   // The old format stacked "Name: n h" per tier with <br>, tripling row height.
   assert.doesNotMatch(cell, /<br>\s*[^<]*:\s*\d/, "tiers are not stacked one per line");
-  assert.match(cell, /60 h/, "leads with the line's total hours");
-  assert.match(cell, /40&nbsp;Reg · 10&nbsp;OT · 10&nbsp;DT/, "abbreviated split on a single line");
+  assert.match(cell, />40&nbsp;Reg · 10&nbsp;OT · 10&nbsp;DT</, "only the per-tier totals, on one line");
+  // The grand total is the sum of what is already shown, and printing it too
+  // pushed the cell onto a second line.
+  assert.doesNotMatch(cell, /60 h/, "no redundant grand total on a tiered line");
 });
 
 test("tierAbbreviation keeps tenant-defined tier names short and distinct", () => {
@@ -297,4 +299,79 @@ test("tierAbbreviation keeps tenant-defined tier names short and distinct", () =
   assert.equal(tierAbbreviation("Holiday"), "Hol.");
   assert.equal(tierAbbreviation("Day"), "Day");
   assert.equal(tierAbbreviation(""), "");
+});
+
+/** Price Build fixture driven by the pricing ladder (no summary builder). */
+function ladderWorkspace(adjustmentRows: any[], grandTotal: number) {
+  const pricingLadder = {
+    version: 1 as const,
+    directCost: 600,
+    lineSubtotal: 1000,
+    adjustmentTotal: grandTotal - 1000,
+    netTotal: grandTotal,
+    grandTotal,
+    internalProfit: grandTotal - 600,
+    internalMargin: 0.4,
+    rows: [
+      { id: "line_subtotal", label: "Line Sell Subtotal", rowType: "base", financialCategory: "line_subtotal", baseAmount: 1000, value: 1000, cost: 600, margin: 0.4, runningTotal: 1000, affectsTotal: true, visible: true, active: true },
+      ...adjustmentRows,
+      { id: "grand_total", label: "Customer Total", rowType: "total", financialCategory: "total", baseAmount: grandTotal, value: grandTotal, cost: 600, margin: 0.4, runningTotal: grandTotal, affectsTotal: true, visible: true, active: true },
+    ],
+  };
+  return {
+    quote: { quoteNumber: "Q-2", title: "Adjustment Visibility" },
+    currentRevision: { revisionNumber: 1, subtotal: grandTotal, cost: 600, totalHours: 0, pricingLadder },
+    project: {},
+    entityCategories: [],
+    rateSchedules: [],
+    worksheets: [],
+    phases: [],
+    estimate: { totals: { pricingLadder } },
+    summaryRows: [],
+    adjustments: [],
+    conditions: [],
+    reportSections: [],
+    scheduleTasks: [],
+  };
+}
+
+const adjustmentRow = (id: string, label: string, value: number, visible: boolean) => ({
+  id: `adjustment:${id}`, label, rowType: "adjustment", financialCategory: "other",
+  baseAmount: 1000, value, cost: 0, margin: 1, runningTotal: 1000 + value,
+  affectsTotal: true, visible, active: true,
+});
+
+test("a hidden adjustment is absorbed into the rollup instead of being itemized", () => {
+  // $1000 of lines + a $100 shown surcharge + a $50 hidden one = $1150.
+  const data = buildPdfDataPackage(ladderWorkspace(
+    [adjustmentRow("fuel", "Fuel Adjustment", 100, true), adjustmentRow("secret", "Internal Contingency", 50, false)],
+    1150,
+  ));
+  const html = generatePdfHtml(data, "main");
+
+  assert.doesNotMatch(html, /Internal Contingency/, "a hidden adjustment is never named");
+  assert.match(html, /Fuel Adjustment/);
+  // Rollup carries the hidden $50 so the printed column still reconciles:
+  // 1050 + 100 = 1150.
+  assert.match(html, /<td>Rollup<\/td><td class="num">\$1,050\.00<\/td>/);
+  assert.match(html, /Price Build<\/td><td class="num">\$1,150\.00<\/td>/);
+});
+
+test("with no visible adjustments the Price Build prints one total, not a rollup plus total", () => {
+  const data = buildPdfDataPackage(ladderWorkspace(
+    [adjustmentRow("secret", "Internal Contingency", 50, false)],
+    1050,
+  ));
+  const html = generatePdfHtml(data, "main");
+
+  assert.doesNotMatch(html, /<td>Rollup<\/td>/, "no separate rollup row when it equals the total");
+  assert.doesNotMatch(html, /Internal Contingency/);
+  assert.match(html, /Price Build<\/td><td class="num">\$1,050\.00<\/td>/, "just the price total");
+});
+
+test("a quote with no adjustments at all prints a single Price Build total", () => {
+  const data = buildPdfDataPackage(ladderWorkspace([], 1000));
+  const html = generatePdfHtml(data, "main");
+  assert.doesNotMatch(html, /<td>Rollup<\/td>/);
+  assert.match(html, /Price Build<\/td><td class="num">\$1,000\.00<\/td>/);
 });

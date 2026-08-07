@@ -1,7 +1,9 @@
 import {
   PDF_DOCUMENT_PROFILES,
   PDF_SECTION_KEYS,
+  buildPriceBuildView,
   getExtendedWorksheetUnitBreakdown,
+  scalePriceBuildAmount,
   normalizePdfDocumentType,
   type PricingLadderSnapshot,
   type WorksheetUnitKind,
@@ -558,12 +560,27 @@ export function generatePdfHtml(
         return null;
       };
       const pairKey = (leftId: string | null | undefined, rightId: string | null | undefined) => `${leftId ?? "__unphased__"}::${rightId ?? ""}`;
-      const adjustmentTotals = summaryTotals.adjustmentTotals.filter((entry) =>
-        entry.active && entry.show !== "No" && entry.affectsSubtotal
-      );
-      const lineSubtotal = ladder?.lineSubtotal
-        ?? data.subtotal - adjustmentTotals.reduce((sum, entry) => sum + entry.value, 0);
       const priceBuild = ladder?.grandTotal ?? data.subtotal;
+      // Basis for scaling is what the displayed rows actually sum to, which is
+      // not the ladder's line subtotal when a modifier is priced into the
+      // lines themselves.
+      const displayedRowsSubtotal = [...builder.rows]
+        .filter((row) => row.visible)
+        .reduce((sum, row) => sum + (axisTotal(builder.rowDimension, row.sourceId)?.value ?? 0), 0);
+      const priceBuildView = buildPriceBuildView({
+        // "total" mode prints no dimension rows, so the rollup line itself is
+        // the only basis.
+        rowsSubtotal: builder.mode === "total"
+          ? (ladder?.lineSubtotal ?? data.subtotal)
+          : displayedRowsSubtotal,
+        grandTotal: priceBuild,
+        adjustments: summaryTotals.adjustmentTotals,
+      });
+      const adjustmentTotals = priceBuildView.visibleAdjustments;
+      const lineSubtotal = priceBuildView.rollupAmount;
+      // Hidden adjustments are absorbed into the rollup, so every displayed
+      // row scales with it and the printed column still sums to the rollup.
+      const rowAmount = (value: number | null | undefined) => scalePriceBuildAmount(value, priceBuildView.rowScale);
 
       if (builder.mode === "pivot") {
         const rows = [...builder.rows].filter((row) => row.visible).sort((a, b) => a.order - b.order);
@@ -606,19 +623,19 @@ export function generatePdfHtml(
           const total = axisTotal(builder.rowDimension, row.sourceId);
           result += `<tr><td>${escapeHtml(row.label)}</td>`;
           for (const column of columns) {
-            result += `<td class="num">${formatMoney(resolveCell(row.sourceId, column.sourceId).value)}</td>`;
+            result += `<td class="num">${formatMoney(rowAmount(resolveCell(row.sourceId, column.sourceId).value))}</td>`;
           }
           if (showCost) {
             result += `<td class="num">${formatMoney(total?.cost ?? 0)}</td>`;
           }
-          result += `<td class="num">${formatMoney(total?.value ?? 0)}</td></tr>`;
+          result += `<td class="num">${formatMoney(rowAmount(total?.value ?? 0))}</td></tr>`;
         }
 
-        if (builder.totals.visible) {
+        if (builder.totals.visible && priceBuildView.showRollup) {
           result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Rollup</td>`;
           for (const column of columns) {
             const total = axisTotal(builder.columnDimension, column.sourceId);
-            result += `<td class="num">${formatMoney(total?.value ?? 0)}</td>`;
+            result += `<td class="num">${formatMoney(rowAmount(total?.value ?? 0))}</td>`;
           }
           if (showCost) {
             result += `<td class="num">${formatMoney(data.cost)}</td>`;
@@ -641,10 +658,10 @@ export function generatePdfHtml(
 
         for (const row of rows) {
           const total = axisTotal(builder.rowDimension, row.sourceId);
-          result += `<tr><td>${escapeHtml(row.label)}</td>${showCost ? `<td class="num">${formatMoney(total?.cost ?? 0)}</td>` : ""}<td class="num">${formatMoney(total?.value ?? 0)}</td></tr>`;
+          result += `<tr><td>${escapeHtml(row.label)}</td>${showCost ? `<td class="num">${formatMoney(total?.cost ?? 0)}</td>` : ""}<td class="num">${formatMoney(rowAmount(total?.value ?? 0))}</td></tr>`;
         }
 
-        if (builder.totals.visible) {
+        if (builder.totals.visible && priceBuildView.showRollup) {
           result += `<tr style="font-weight:700;border-top:2px solid #333"><td>Rollup</td>${showCost ? `<td class="num">${formatMoney(data.cost)}</td>` : ""}<td class="num">${formatMoney(lineSubtotal)}</td></tr>`;
         }
 
@@ -659,7 +676,9 @@ export function generatePdfHtml(
 
       if (builder.mode === "total") {
         let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">Description</th><th class="num">Amount</th></tr></thead><tbody>`;
-        result += `<tr><td>Rollup</td><td class="num">${formatMoney(lineSubtotal)}</td></tr>`;
+        if (priceBuildView.showRollup) {
+          result += `<tr><td>Rollup</td><td class="num">${formatMoney(lineSubtotal)}</td></tr>`;
+        }
         for (const adjustment of adjustmentTotals) {
           result += `<tr><td>${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
         }
@@ -672,8 +691,15 @@ export function generatePdfHtml(
       const adjustments = ladder.rows.filter((row) =>
         row.rowType === "adjustment" && row.active && row.visible && row.affectsTotal
       );
+      // Same reconciliation rule as the builder path: whatever is not shown as
+      // its own line belongs inside the rollup.
+      const ladderRollup = formatMoney(
+        ladder.grandTotal - adjustments.reduce((sum, adjustment) => sum + adjustment.value, 0),
+      );
       let result = `<h2>Price Build</h2><table><thead><tr><th style="text-align:left">Description</th><th class="num">Amount</th></tr></thead><tbody>`;
-      result += `<tr><td>Rollup</td><td class="num">${formatMoney(ladder.lineSubtotal)}</td></tr>`;
+      if (adjustments.length > 0) {
+        result += `<tr><td>Rollup</td><td class="num">${ladderRollup}</td></tr>`;
+      }
       for (const adjustment of adjustments) {
         result += `<tr><td>${escapeHtml(adjustment.label)}</td><td class="num">${formatMoney(adjustment.value)}</td></tr>`;
       }
@@ -733,11 +759,12 @@ export function generatePdfHtml(
       if (tiers.length === 1) {
         return `${tiers[0].units.toLocaleString()}${suffix(tiers[0])}`;
       }
-      const total = tiers.reduce((sum, tier) => sum + tier.units, 0);
-      const split = tiers
+      // Tiered lines show only their per-tier totals: the grand total is the
+      // sum of what is already on the line, and printing it as well forced a
+      // second row of text.
+      return tiers
         .map((tier) => `${tier.units.toLocaleString()}&nbsp;${escapeHtml(tierAbbreviation(tier.name))}`)
         .join(" · ");
-      return `${total.toLocaleString()}${isLabour ? " h" : ""}<span class="tier-split">${split}</span>`;
     };
 
     const renderItemRow = (item: PdfDataPackage["lineItems"][0]) => {
@@ -750,7 +777,7 @@ export function generatePdfHtml(
         <td>${escapeHtml(item.uom)}</td>
         ${showCost ? `<td class="num">${formatMoney(item.cost)}</td>` : ""}
         ${showMarkup ? `<td class="num">${formatPct(item.markup)}</td>` : ""}
-        ${showUnits ? `<td class="num">${formatItemUnits(item)}</td>` : ""}
+        ${showUnits ? `<td class="num units-cell">${formatItemUnits(item)}</td>` : ""}
         ${showPrice ? `<td class="num"><strong>${formatMoney(item.price)}</strong></td>` : ""}
       </tr>`;
       return row;
@@ -1268,9 +1295,9 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
   .line-no { width: 28px; color: #777; }
   .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .muted { margin-top: 2px; color: #666; font-size: 9.5px; }
-  /* Tier split under a line's unit total. Wrapping is allowed so a tenant with
-     many tiers reflows instead of widening the column. */
-  .tier-split { display: block; color: #666; font-size: 8px; white-space: normal; }
+  /* Per-tier units stay on one compact line so a tiered labour row is no
+     taller than any other row. */
+  .units-cell { white-space: nowrap; font-size: 8.5px; }
   .empty { text-align: center; color: #777; padding: 18px; }
   .snap-footer { margin-top: auto; display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 20px; align-items: end; padding-top: 14px; }
   .footer-note { color: #777; font-size: 9px; }

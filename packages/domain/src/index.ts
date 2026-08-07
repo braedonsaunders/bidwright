@@ -10,6 +10,7 @@ export * from "./plugin-calculators";
 export * from "./plugin-output-templates";
 export * from "./first-party-plugins";
 export * from "./summary-builder";
+export * from "./price-build";
 export * from "./construction-classification";
 export * from "./bim-classification";
 export * from "./worksheet-hours";

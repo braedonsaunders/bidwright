@@ -13,7 +13,6 @@ import {
   EyeOff,
   Filter,
   MoreHorizontal,
-  Power,
   Plus,
   Search,
   Sigma,
@@ -46,6 +45,7 @@ import {
   updateAdjustment,
 } from "@/lib/api";
 import { formatMoney, formatPercent } from "@/lib/format";
+import { buildPriceBuildView, scalePriceBuildAmount } from "@bidwright/domain";
 import {
   Button,
   Input,
@@ -1506,9 +1506,22 @@ function PricingLadderPanel({
   const ladder = totals.pricingLadder;
   const visibleRows = rows.filter((row) => row.visible);
   const visibleColumns = builder.mode === "pivot" ? columns.filter((column) => column.visible) : [];
-  const adjustments = totals.adjustmentTotals.filter((entry) => entry.active && entry.show !== "No" && entry.affectsSubtotal);
-  const lineSubtotal = ladder?.lineSubtotal ?? totals.subtotal - adjustments.reduce((sum, entry) => sum + entry.value, 0);
   const priceBuild = ladder?.grandTotal ?? totals.subtotal;
+  // Scale against what the displayed rows actually sum to — a modifier priced
+  // into the line items is already inside every dimension total.
+  const displayedRowsSubtotal = visibleRows.reduce(
+    (sum, row) => sum + (resolveAxisTotal(builder.rowDimension, row.sourceId, totals)?.value ?? 0),
+    0,
+  );
+  const priceBuildView = buildPriceBuildView({
+    rowsSubtotal: builder.mode === "total" ? (ladder?.lineSubtotal ?? totals.subtotal) : displayedRowsSubtotal,
+    grandTotal: priceBuild,
+    adjustments: totals.adjustmentTotals,
+  });
+  const adjustments = priceBuildView.visibleAdjustments;
+  const lineSubtotal = priceBuildView.rollupAmount;
+  // Hidden adjustments live inside the rollup, so displayed rows scale with it.
+  const rowAmount = (value: number | null | undefined) => scalePriceBuildAmount(value, priceBuildView.rowScale);
 
   return (
     <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border border-line bg-panel">
@@ -1539,17 +1552,19 @@ function PricingLadderPanel({
                     <td className="px-3 py-2 font-medium text-fg/80">{row.label}</td>
                     {visibleColumns.map((column) => (
                       <td key={`${row.key}:${column.key}`} className="px-3 py-2 text-right font-mono text-[11px] text-fg/70">
-                        {formatMoney(resolvePivotCell(builder, row, column, totals).value)}
+                        {formatMoney(rowAmount(resolvePivotCell(builder, row, column, totals).value))}
                       </td>
                     ))}
-                    <td className="px-3 py-2 text-right font-mono text-[11px] text-fg/80">{formatMoney(total?.value ?? 0)}</td>
+                    <td className="px-3 py-2 text-right font-mono text-[11px] text-fg/80">{formatMoney(rowAmount(total?.value ?? 0))}</td>
                   </tr>
                 );
               }) : null}
-              <tr className="border-t border-line bg-panel2/35 font-semibold">
-                <td colSpan={visibleColumns.length + 1} className="px-3 py-2">Rollup</td>
-                <td className="px-3 py-2 text-right font-mono">{formatMoney(lineSubtotal)}</td>
-              </tr>
+              {priceBuildView.showRollup ? (
+                <tr className="border-t border-line bg-panel2/35 font-semibold">
+                  <td colSpan={visibleColumns.length + 1} className="px-3 py-2">Rollup</td>
+                  <td className="px-3 py-2 text-right font-mono">{formatMoney(lineSubtotal)}</td>
+                </tr>
+              ) : null}
               {adjustments.map((adjustment) => (
                 <tr key={adjustment.id} className="border-t border-line/60">
                   <td colSpan={visibleColumns.length + 1} className="px-3 py-2 text-fg/80">{adjustment.label}</td>
@@ -1565,7 +1580,12 @@ function PricingLadderPanel({
         </div>
 
         {adjustments.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-line px-3 py-4 text-center text-xs text-fg/45">No visible quote adjustments. Price Build currently equals the rollup.</div>
+          <div className="rounded-xl border border-dashed border-line px-3 py-4 text-center text-xs text-fg/45">
+            No visible quote adjustments. Price Build currently equals the rollup.
+            {priceBuildView.hiddenAdjustmentTotal !== 0
+              ? " Hidden adjustments are included in the amounts above."
+              : ""}
+          </div>
         ) : null}
       </div>
     </section>
@@ -2899,17 +2919,6 @@ function AdjustmentTableRow({
       <MetricCell value={formatPercent(totals?.margin ?? 0)} />
       <td className="px-3 py-2 text-right">
         <div className="flex justify-end gap-1">
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className={cn("h-7 w-7 px-0", adjustment.active === false && "text-fg/40")}
-            onClick={() => onPatch(adjustment.id, { active: adjustment.active === false })}
-            disabled={busy}
-            title={adjustment.active === false ? "Activate" : "Deactivate"}
-          >
-            <Power className="h-3.5 w-3.5" />
-          </Button>
           <IconToggleButton active={adjustment.show === "Yes"} onClick={() => onPatch(adjustment.id, { show: adjustment.show === "Yes" ? "No" : "Yes" })} disabled={busy} />
         </div>
       </td>
