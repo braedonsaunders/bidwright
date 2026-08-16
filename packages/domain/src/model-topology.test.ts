@@ -174,7 +174,7 @@ test("buildModelTopology re-units display-stamped quantity rows via the modal au
         estimateRelevant: true,
         "AutoCAD Geometry.Length": "258.213",
       },
-      quantities: [{ quantityType: "Length", value: 258.213, unit: "ft", method: "aps_model_derivative_property", confidence: 0.8 }],
+      quantities: [{ id: "q-stamped-ft", quantityType: "Length", value: 258.213, unit: "ft", method: "aps_model_derivative_property", confidence: 0.8 }],
     },
   ], { units: "ft" });
   const linear = result.groups
@@ -212,7 +212,7 @@ test("buildModelTopology keeps genuinely-authored explicit units despite a modal
       name: "Line",
       elementClass: "Pipe",
       properties: { estimateRelevant: true },
-      quantities: [{ quantityType: "Length", value: 2, unit: "m", method: "native", confidence: 1 }],
+      quantities: [{ id: "q-authored-m", quantityType: "Length", value: 2, unit: "m", method: "native", confidence: 1 }],
     },
   ], { units: "ft" });
   const linear = result.groups
