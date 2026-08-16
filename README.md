@@ -200,3 +200,9 @@ Bidwright is a working platform for AI-assisted construction estimating. Core es
 Bidwright is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (`AGPL-3.0-only`).
 
 Copyright (C) 2026 Braedon Saunders.
+
+---
+
+## Also in this suite
+
+BidWright is estimating. [OpenBooks](https://github.com/braedonsaunders/openbooks) is the books. [BeaconHS](https://github.com/braedonsaunders/beaconhs) is safety. Built to work together for project-based companies. Same design language. Same self-host posture. Each repo is still its own install today.
