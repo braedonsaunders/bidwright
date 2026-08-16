@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, apiPatch, apiDelete, projectPath, getRevisionId } from "../api-client.js";
+import { rollupWorksheetUnits } from "@bidwright/domain";
 
 /**
  * Convert plain text with newlines to HTML paragraphs.
@@ -1145,7 +1146,25 @@ export function registerQuoteTools(server: McpServer) {
     return parts.join(" / ");
   }
 
-  function worksheetTreeSummary(ws: any) {
+  /**
+ * Resolved labour hours for a worksheet, split by the ratebook's own tier
+ * names. Exposed because the raw payload only carries tier-id keyed maps, and
+ * a caller without these ends up deriving hours from cost — which produces
+ * invented numbers.
+ */
+function worksheetLabourHours(ws: any, worksheet: any) {
+  const rollup = rollupWorksheetUnits(
+    (worksheet.items || []).map((item: any) => ({ ...item, quantity: item.quantity ?? 1 })),
+    ws.rateSchedules ?? [],
+    ws.entityCategories ?? [],
+  );
+  return {
+    total: rollup.labourHours.total,
+    tiers: rollup.labourHours.tiers.map((tier: any) => ({ name: tier.name, hours: tier.total })),
+  };
+}
+
+function worksheetTreeSummary(ws: any) {
     const folders = ws.worksheetFolders || [];
     const worksheets = ws.worksheets || [];
     return {
@@ -1343,6 +1362,7 @@ export function registerQuoteTools(server: McpServer) {
           folderId: w.folderId ?? null,
           path: [folderPath(ws, w.folderId), w.name].filter(Boolean).join(" / "),
           itemCount: (w.items || []).length,
+          labourHours: worksheetLabourHours(ws, w),
           structuredSourceCount: (w.items || []).filter((item: any) =>
             item.rateScheduleItemId ||
             item.itemId ||
@@ -2475,7 +2495,7 @@ export function registerQuoteTools(server: McpServer) {
   // ── searchItems ───────────────────────────────────────────
   server.tool(
     "searchItems",
-    "Search existing line items across all worksheets. Returns compact paginated summaries; use a focused query/category/worksheetId for detail.",
+    "Search existing line items across all worksheets. Returns compact paginated summaries; use a focused query/category/worksheetId for detail. Each row carries `units` = the resolved labour hours / equipment duration for that row, broken down by the ratebook's own tier names. Read hours from `units.total` and `units.tiers`; `quantity` is a multiplier (commonly 1), NOT the hour count, and hours must never be inferred by dividing cost by an assumed rate.",
     {
       query: z.string().optional(),
       category: z.string().optional(),
@@ -2508,6 +2528,9 @@ export function registerQuoteTools(server: McpServer) {
           rateScheduleItemId: item.rateScheduleItemId ?? null,
           itemId: item.itemId ?? null,
           laborUnitId: item.laborUnitId ?? null,
+          // Authoritative resolved hours/duration. `quantity` is a multiplier,
+          // NOT the hour count — read hours from here, never from cost/rate.
+          units: item.units ?? null,
           sourceNotes: compactText(item.sourceNotes, 220),
         };
       });

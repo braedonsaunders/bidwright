@@ -79,6 +79,7 @@ import {
   type LineItemSearchSourceType,
 } from "./prisma-store.js";
 import { prisma } from "@bidwright/db";
+import { getExtendedWorksheetUnitBreakdown } from "@bidwright/domain";
 import {
   relativePackageArchivePath,
   relativeProjectFilePath,
@@ -3301,8 +3302,34 @@ export function buildServer() {
     const totalMatches = items.length;
     const limit = parsed.data.limit ?? 50;
 
+    // Resolved labour/duration units per row. Without these a caller can only
+    // see `quantity: 1 HR` plus a cost and is left to reverse-engineer hours
+    // from an assumed rate — which is how agents end up inventing them.
+    const schedules = workspace.rateSchedules ?? [];
+    const categories = workspace.entityCategories ?? [];
+    const withUnits = items.slice(0, limit).map((item) => {
+      const breakdown = getExtendedWorksheetUnitBreakdown(
+        item as any,
+        schedules as any,
+        categories as any,
+        Number(item.quantity ?? 1),
+      );
+      return {
+        ...item,
+        units: {
+          kind: breakdown.kind,
+          total: breakdown.total,
+          tiers: breakdown.tiers.map((tier) => ({
+            name: tier.name,
+            units: tier.hours,
+            uom: tier.uom || (breakdown.kind === "labour_hours" ? "HR" : ""),
+          })),
+        },
+      };
+    });
+
     return {
-      items: items.slice(0, limit),
+      items: withUnits,
       totalMatches,
     };
   });
