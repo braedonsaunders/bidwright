@@ -277,15 +277,26 @@ async function buildImpactRows(
     if (r.headElementId) allElementIds.add(r.headElementId);
   }
 
-  const links = allElementIds.size > 0
-    ? await prisma.modelTakeoffLink.findMany({
-        where: { modelElementId: { in: Array.from(allElementIds) } },
+  // Links live on the unified Pickup + PickupLink tables; the pickup carries
+  // the model element/quantity refs.
+  const rawLinks = allElementIds.size > 0
+    ? await prisma.pickupLink.findMany({
+        where: { pickup: { modelElementId: { in: Array.from(allElementIds) } } },
         include: {
+          pickup: { select: { modelElementId: true, modelQuantityId: true } },
           worksheetItem: { select: { id: true, worksheetId: true, entityName: true, category: true, uom: true, cost: true, price: true, quantity: true } },
-          modelQuantity: true,
         },
       })
     : [];
+  const quantityIds = Array.from(new Set(rawLinks.map((l) => l.pickup?.modelQuantityId).filter((id): id is string => Boolean(id))));
+  const quantityById = quantityIds.length
+    ? new Map((await prisma.modelQuantity.findMany({ where: { id: { in: quantityIds } } })).map((q) => [q.id, q]))
+    : new Map();
+  const links = rawLinks.map((l) => ({
+    ...l,
+    modelElementId: l.pickup?.modelElementId ?? null,
+    modelQuantity: l.pickup?.modelQuantityId ? quantityById.get(l.pickup.modelQuantityId) ?? null : null,
+  }));
 
   const linksByElement = new Map<string, typeof links>();
   for (const link of links) {
@@ -459,7 +470,7 @@ export async function applyRevisionRetakeoff(
         where: { id: impact.worksheetItemId },
         data: { quantity: impact.newQuantity },
       });
-      await prisma.modelTakeoffLink.update({
+      await prisma.pickupLink.update({
         where: { id: impact.linkId },
         data: { derivedQuantity: impact.newQuantity },
       });

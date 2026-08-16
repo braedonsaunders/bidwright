@@ -1216,7 +1216,15 @@ export interface FileNode {
 export type PickupType =
   | "linear" | "linear-polyline" | "linear-drop"
   | "count" | "count-by-distance"
-  | "area-vertical-wall" | "area-rectangle" | "area-triangle" | "area-ellipse" | "area-polygon";
+  | "area-vertical-wall" | "area-rectangle" | "area-triangle" | "area-ellipse" | "area-polygon"
+  // Unified link-carrier types: a CAD entity or BIM model element promoted
+  // into the pickup table by the takeoff-link unification.
+  | "cad-entity" | "model-element";
+
+/** Where a pickup's quantity came from. "annotation" = drawn on a 2D PDF
+ *  (the default); the rest are the unified CAD / BIM / scan sources. */
+export type PickupSourceKind =
+  | "annotation" | "cad-entity" | "model" | "scan-measurement" | "scan-segment";
 
 export interface Pickup {
   id: string;
@@ -1229,10 +1237,19 @@ export interface Pickup {
   lineThickness: number;
   visible: boolean;
   groupName: string;
-  points: Array<{ x: number; y: number }>;
+  /** 2D canvas px for annotations; model-space meters (with z) for scans. */
+  points: Array<{ x: number; y: number; z?: number }>;
   measurement: { value?: number; unit?: string; area?: number; volume?: number; height?: number };
   calibration?: { pixelsPerUnit: number; unit: string } | null;
   metadata: Record<string, unknown>;
+  sourceKind?: PickupSourceKind;
+  modelId?: string | null;
+  modelElementId?: string | null;
+  modelQuantityId?: string | null;
+  cadEntityId?: string | null;
+  cadEntityType?: string;
+  cadLayer?: string;
+  selection?: Record<string, unknown>;
   createdBy?: string;
   createdAt: string;
   updatedAt: string;

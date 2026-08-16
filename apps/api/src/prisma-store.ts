@@ -239,7 +239,6 @@ import {
   mapSummaryRow,
   mapPickup,
   mapPickupLink,
-  mapDwgEntityLink,
   mapSymbolTemplate,
   mapUser,
   mapWorksheet,
@@ -1451,10 +1450,19 @@ export interface CreatePickupInput {
   lineThickness?: number;
   visible?: boolean;
   groupName?: string;
-  points?: Array<{ x: number; y: number }>;
+  points?: Array<{ x: number; y: number; z?: number }>;
   measurement?: Record<string, unknown>;
   calibration?: { pixelsPerUnit: number; unit: string } | null;
   metadata?: Record<string, unknown>;
+  // Unified provenance (defaults to "annotation" — a 2D PDF pickup).
+  sourceKind?: string;
+  modelId?: string | null;
+  modelElementId?: string | null;
+  modelQuantityId?: string | null;
+  cadEntityId?: string | null;
+  cadEntityType?: string;
+  cadLayer?: string;
+  selection?: Record<string, unknown>;
   createdBy?: string;
 }
 
@@ -15317,6 +15325,14 @@ export class PrismaApiStore {
         measurement: (input.measurement ?? {}) as any,
         calibration: input.calibration !== undefined ? (input.calibration as any) : undefined,
         metadata: this.normalizePickupProvenance({ ...(input.metadata ?? {}) }) as any,
+        sourceKind: input.sourceKind ?? "annotation",
+        modelId: input.modelId ?? null,
+        modelElementId: input.modelElementId ?? null,
+        modelQuantityId: input.modelQuantityId ?? null,
+        cadEntityId: input.cadEntityId ?? null,
+        cadEntityType: input.cadEntityType ?? "",
+        cadLayer: input.cadLayer ?? "",
+        selection: (input.selection ?? {}) as any,
         createdBy: input.createdBy ?? undefined,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -15658,21 +15674,113 @@ export class PrismaApiStore {
     return { deleted: true };
   }
 
-  // ── DWG Entity Links ────────────────────────────────────────────────
-  // Direct CAD-entity-to-line-item links. Quantity is user-supplied
-  // (DWG entities don't carry intrinsic measurement the way annotations do).
+  // ── DWG Entity Links (unified onto Pickup + PickupLink) ─────────────
+  // A CAD entity's takeoff quantity lives on one sourceKind="cad-entity"
+  // Pickup per entity; links to line items are ordinary PickupLinks. These
+  // methods keep the legacy DwgEntityLink route/response shapes so the CAD
+  // surface and MCP tools are unaffected by the storage unification.
+  //
+  // Semantic note: the legacy table stored a quantity PER LINK; the unified
+  // model stores it once on the entity's pickup (measurement.value), which
+  // is the physically honest shape — an entity has one measured quantity,
+  // per-item variation belongs in the link multiplier. Creating a link with
+  // a new quantity updates the shared measurement and resyncs sibling links.
+
+  private mapCadLinkRow(link: any, pickup: any) {
+    const measurement = (pickup?.measurement as Record<string, unknown>) ?? {};
+    const raw = Number(measurement[link.quantityField] ?? measurement.value ?? 0) || 0;
+    return {
+      id: link.id,
+      projectId: link.projectId,
+      pickupId: link.pickupId,
+      documentId: pickup?.documentId ?? "",
+      entityId: pickup?.cadEntityId ?? "",
+      entityType: pickup?.cadEntityType ?? "",
+      layer: pickup?.cadLayer ?? "",
+      worksheetItemId: link.worksheetItemId,
+      quantity: raw,
+      multiplier: link.multiplier ?? 1.0,
+      derivedQuantity: link.derivedQuantity ?? 0,
+      selection: (pickup?.selection as Record<string, unknown>) ?? {},
+      createdAt: link.createdAt instanceof Date ? link.createdAt.toISOString() : link.createdAt,
+      updatedAt: link.updatedAt instanceof Date ? link.updatedAt.toISOString() : link.updatedAt,
+    };
+  }
+
+  /** Find or create the single cad-entity pickup for (documentId, entityId),
+   *  refreshing its measured quantity and display context. Returns the pickup
+   *  and whether the measurement changed (callers must resync sibling links). */
+  private async upsertCadEntityPickup(
+    projectId: string,
+    input: {
+      documentId: string;
+      entityId: string;
+      entityType?: string;
+      layer?: string;
+      quantity: number;
+      selection?: Record<string, unknown>;
+    },
+  ) {
+    const quantity = Number.isFinite(input.quantity) ? input.quantity : 0;
+    const existing = await this.db.pickup.findFirst({
+      where: { projectId, sourceKind: "cad-entity", documentId: input.documentId, cadEntityId: input.entityId },
+    });
+    if (!existing) {
+      const pickup = await this.db.pickup.create({
+        data: {
+          id: createId("takeoff"),
+          projectId,
+          documentId: input.documentId,
+          pageNumber: 0,
+          annotationType: "cad-entity",
+          label: `${input.entityType || "entity"} ${input.entityId}`.trim(),
+          color: "#3b82f6",
+          points: [] as any,
+          measurement: { value: quantity } as any,
+          metadata: { source: "cad", method: "cad-entity-link", measuredBy: "agent" } as any,
+          sourceKind: "cad-entity",
+          cadEntityId: input.entityId,
+          cadEntityType: input.entityType ?? "",
+          cadLayer: input.layer ?? "",
+          selection: (input.selection ?? {}) as any,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        },
+      });
+      return { pickup, measurementChanged: false };
+    }
+
+    const measurement = (existing.measurement as Record<string, unknown>) ?? {};
+    const measurementChanged = Number(measurement.value ?? 0) !== quantity;
+    const pickup = await this.db.pickup.update({
+      where: { id: existing.id },
+      data: {
+        measurement: { ...measurement, value: quantity } as any,
+        cadEntityType: input.entityType ?? existing.cadEntityType,
+        cadLayer: input.layer ?? existing.cadLayer,
+        selection: (input.selection ?? existing.selection ?? {}) as any,
+        updatedAt: new Date(),
+      },
+    });
+    return { pickup, measurementChanged };
+  }
 
   async listDwgEntityLinks(
     projectId: string,
     filters: { documentId?: string; entityId?: string; worksheetItemId?: string } = {},
   ) {
     await this.requireProject(projectId);
-    const where: any = { projectId };
-    if (filters.documentId) where.documentId = filters.documentId;
-    if (filters.entityId) where.entityId = filters.entityId;
+    const pickupWhere: any = { sourceKind: "cad-entity" };
+    if (filters.documentId) pickupWhere.documentId = filters.documentId;
+    if (filters.entityId) pickupWhere.cadEntityId = filters.entityId;
+    const where: any = { projectId, pickup: pickupWhere };
     if (filters.worksheetItemId) where.worksheetItemId = filters.worksheetItemId;
-    const rows = await this.db.dwgEntityLink.findMany({ where, orderBy: { createdAt: "asc" } });
-    return rows.map(mapDwgEntityLink);
+    const rows = await this.db.pickupLink.findMany({
+      where,
+      include: { pickup: true },
+      orderBy: { createdAt: "asc" },
+    });
+    return rows.map((r: any) => this.mapCadLinkRow(r, r.pickup));
   }
 
   async createDwgEntityLink(
@@ -15708,27 +15816,28 @@ export class PrismaApiStore {
     const multiplier = input.multiplier ?? 1.0;
     const derivedQuantity = quantity * multiplier;
 
-    const link = await this.db.dwgEntityLink.create({
-      data: {
-        id: createId("dlink"),
+    const { pickup, measurementChanged } = await this.upsertCadEntityPickup(projectId, input);
+    if (measurementChanged) await this.syncPickupLinks(projectId, pickup.id);
+
+    const link = await this.db.pickupLink.upsert({
+      where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } },
+      create: {
+        id: createId("tlink"),
         projectId,
-        documentId: input.documentId,
-        entityId: input.entityId,
-        entityType: input.entityType ?? "",
-        layer: input.layer ?? "",
+        pickupId: pickup.id,
         worksheetItemId: input.worksheetItemId,
-        quantity,
+        quantityField: "value",
         multiplier,
         derivedQuantity,
-        selection: (input.selection ?? {}) as any,
         createdAt: new Date(),
         updatedAt: new Date(),
       },
+      update: { multiplier, derivedQuantity, updatedAt: new Date() },
     });
 
     await this.recalcLinkedItemQuantity(input.worksheetItemId, projectId);
 
-    return mapDwgEntityLink(link);
+    return this.mapCadLinkRow(link, pickup);
   }
 
   async createDwgEntityLinks(
@@ -15765,38 +15874,44 @@ export class PrismaApiStore {
     }
 
     const now = new Date();
-    const result = await this.db.dwgEntityLink.createMany({
-      data: inputs.map((input) => {
-        const quantity = Number.isFinite(input.quantity) ? input.quantity : 0;
-        const multiplier = Number.isFinite(input.multiplier) ? Number(input.multiplier) : 1;
-        return {
-          id: createId("dlink"),
+    let created = 0;
+    for (const input of inputs) {
+      const quantity = Number.isFinite(input.quantity) ? input.quantity : 0;
+      const multiplier = Number.isFinite(input.multiplier) ? Number(input.multiplier) : 1;
+      const { pickup, measurementChanged } = await this.upsertCadEntityPickup(projectId, input);
+      if (measurementChanged) await this.syncPickupLinks(projectId, pickup.id);
+      const result = await this.db.pickupLink.createMany({
+        data: [{
+          id: createId("tlink"),
           projectId,
-          documentId: input.documentId,
-          entityId: input.entityId,
-          entityType: input.entityType ?? "",
-          layer: input.layer ?? "",
+          pickupId: pickup.id,
           worksheetItemId: input.worksheetItemId,
-          quantity,
+          quantityField: "value",
           multiplier,
           derivedQuantity: quantity * multiplier,
-          selection: (input.selection ?? {}) as any,
           createdAt: now,
           updatedAt: now,
-        };
-      }),
-      skipDuplicates: true,
-    });
+        }],
+        skipDuplicates: true,
+      });
+      created += result.count;
+    }
 
     await this.recalcLinkedItemQuantity(worksheetItemIds[0], projectId);
 
-    return { created: result.count };
+    return { created };
   }
 
   async deleteDwgEntityLink(linkId: string) {
-    const link = await this.db.dwgEntityLink.findFirst({ where: { id: linkId } });
+    const link = await this.db.pickupLink.findFirst({ where: { id: linkId }, include: { pickup: true } });
     if (!link) throw new Error(`DWG entity link ${linkId} not found`);
-    await this.db.dwgEntityLink.delete({ where: { id: linkId } });
+    await this.db.pickupLink.delete({ where: { id: linkId } });
+    // The cad-entity pickup only exists to carry links; drop it when the
+    // last link goes so orphaned entity rows don't pile up in the panel.
+    if (link.pickup?.sourceKind === "cad-entity") {
+      const remaining = await this.db.pickupLink.count({ where: { pickupId: link.pickupId } });
+      if (remaining === 0) await this.db.pickup.delete({ where: { id: link.pickupId } });
+    }
     await this.recalcLinkedItemQuantity(link.worksheetItemId, link.projectId);
     return { deleted: true };
   }
@@ -15834,20 +15949,13 @@ export class PrismaApiStore {
     }
   }
 
-  /** Sum every takeoff link's derivedQuantity for a WorksheetItem and recalculate its cost/price.
-   *  Covers all three link kinds — 2D pickups, CAD entities, and BIM elements.
-   *  Summing only PickupLinks left the CAD/BIM paths write-once: their
-   *  derivedQuantity moved but the item silently kept a stale quantity. */
+  /** Sum every PickupLink's derivedQuantity for a WorksheetItem and
+   *  recalculate its cost/price. Since the takeoff-link unification, every
+   *  source (2D pickups, CAD entities, BIM elements, scan measurements and
+   *  segments) links through this one table. */
   private async recalcLinkedItemQuantity(worksheetItemId: string, projectId: string) {
-    const [pickupLinks, dwgLinks, modelLinks] = await Promise.all([
-      this.db.pickupLink.findMany({ where: { worksheetItemId } }),
-      this.db.dwgEntityLink.findMany({ where: { worksheetItemId } }),
-      this.db.modelTakeoffLink.findMany({ where: { worksheetItemId } }),
-    ]);
-    const totalQuantity =
-      pickupLinks.reduce((sum, l) => sum + l.derivedQuantity, 0) +
-      dwgLinks.reduce((sum, l) => sum + l.derivedQuantity, 0) +
-      modelLinks.reduce((sum, l) => sum + l.derivedQuantity, 0);
+    const pickupLinks = await this.db.pickupLink.findMany({ where: { worksheetItemId } });
+    const totalQuantity = pickupLinks.reduce((sum, l) => sum + l.derivedQuantity, 0);
 
     const item = await this.db.worksheetItem.findFirst({ where: { id: worksheetItemId } });
     if (!item) return;

@@ -53,6 +53,7 @@ import {
   Box,
   Boxes,
   Camera,
+  ScanLine,
   Undo2,
   Redo2,
   GitBranch,
@@ -194,6 +195,10 @@ const CadViewer = dynamic(
   () => import("./editors/cad-viewer").then((m) => ({ default: m.CadViewer })),
   { ssr: false }
 );
+const ScanTakeoffSurface = dynamic(
+  () => import("./scan-takeoff-surface").then((m) => ({ default: m.ScanTakeoffSurface })),
+  { ssr: false },
+);
 const CadTakeoffSurface = dynamic(
   () => import("./cad-takeoff-surface").then((m) => ({ default: m.CadTakeoffSurface })),
   { ssr: false }
@@ -224,6 +229,10 @@ const MESH_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl", "o
 const MODEL_EXTENSIONS = new Set([...BIM_EXTENSIONS, ...MESH_EXTENSIONS]);
 const CAD_EXTENSIONS = new Set([...MODEL_EXTENSIONS, ...DWG_EXTENSIONS]);
 const SPREADSHEET_EXTENSIONS = new Set(["csv", "tsv", "xls", "xlsx", "xlsm"]);
+/** LiDAR / laser-scan point clouds (iOS scan app exports, terrestrial
+ *  scanners). Ingested by the scan model adapter into a streamable binary
+ *  and taken off in the 3D point-cloud surface. */
+const SCAN_EXTENSIONS = new Set(["e57", "las", "laz", "ply", "xyz", "pts"]);
 /** Image file extensions usable for the Site Photos intake. Mirrors what
  *  the photo-takeoff service accepts (JPG / PNG / WebP / HEIC / HEIF / TIFF)
  *  so the count on the intake card matches the number of photos a user could
@@ -387,6 +396,10 @@ function isPdfSource(fileName: string, fileType?: string | null): boolean {
 
 function isSpreadsheetFile(fileName: string): boolean {
   return SPREADSHEET_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isScanFile(fileName: string): boolean {
+  return SCAN_EXTENSIONS.has(getFileExtension(fileName));
 }
 
 function isPhotoFile(fileName: string): boolean {
@@ -987,7 +1000,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet";
+  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet" | "scan";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -1133,6 +1146,7 @@ function takeoffChannelName(projectId: string): string {
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
   if (isDwgFile(fileName)) return "dwg";
   if (isBimFile(fileName)) return "bim";
+  if (isScanFile(fileName)) return "scan";
   if (isMeshFile(fileName)) return "model";
   if (isSpreadsheetFile(fileName)) return "spreadsheet";
   return "pdf";
@@ -1145,7 +1159,7 @@ function takeoffDisplayFileName(fileName: string) {
 function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDocument | null {
   if (
     node.type !== "file" ||
-    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name))
+    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name) && !isScanFile(node.name))
   ) {
     return null;
   }
@@ -1164,6 +1178,7 @@ function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
   if (kind === "dwg") return "DWG/DXF";
   if (kind === "bim") return "BIM";
   if (kind === "model") return "3D";
+  if (kind === "scan") return "Scan";
   if (kind === "spreadsheet") return "Spreadsheet";
   return "PDF";
 }
@@ -1965,7 +1980,7 @@ export function TakeoffTab({
    * downstream re-fire every render, calling parent setState and looping. */
   const projectPdfs: TakeoffDocument[] = useMemo(
     () => (workspace.sourceDocuments ?? [])
-      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName))
+      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName) || isScanFile(d.fileName))
       .map((d) => ({
         id: d.id,
         label: takeoffDisplayFileName(d.fileName),
@@ -2013,7 +2028,7 @@ export function TakeoffTab({
   // source, but it must not silently bypass the launcher on a fresh estimate
   // visit. Detached viewers remain direct-document surfaces.
   const [showLanding, setShowLanding] = useState(!detached && !initialEditorOpen);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "photo";
+  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
@@ -2493,8 +2508,9 @@ export function TakeoffTab({
   // for both BIM and mesh files. Branch on `isBimDocument` for BIM-specific UI.
   const isCadDocument = selectedDocumentKind === "model" || selectedDocumentKind === "bim";
   const isDwgDocument = selectedDocumentKind === "dwg";
+  const isScanDocument = selectedDocumentKind === "scan";
   const selectedModelIsEditable = isCadDocument && isBidwrightEditableModel(selectedDoc?.fileName);
-  const selectedModelAsset = isCadDocument
+  const selectedModelAsset = (isCadDocument || isScanDocument)
     ? modelAssets.find((asset) =>
         (selectedDoc?.modelAssetId && asset.id === selectedDoc.modelAssetId) ||
         (selectedDoc?.fileNodeId && asset.fileNodeId === selectedDoc.fileNodeId) ||
@@ -8336,6 +8352,7 @@ export function TakeoffTab({
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
   const bimDocuments = takeoffDocuments.filter((doc) => doc.kind === "bim");
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
+  const scanDocuments = takeoffDocuments.filter((doc) => doc.kind === "scan");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
   // Site Photos draws from both upload paths: FileNodes (Documents tab
@@ -8505,6 +8522,16 @@ export function TakeoffTab({
       ghostIcon: true,
     },
     {
+      id: "scan",
+      title: "LiDAR Scan",
+      description: "Point clouds captured in the field — measure runs, areas, and counts in 3D, or auto-detect pipe geometry.",
+      metric: scanDocuments.length.toLocaleString(),
+      metricLabel: "scans",
+      icon: ScanLine,
+      tone: "indigo",
+      ghostIcon: true,
+    },
+    {
       id: "photo",
       title: "Site Photos",
       description: "Drop photos from the field — AI scaffolds a Bill of Materials grouped by your category taxonomy.",
@@ -8549,15 +8576,23 @@ export function TakeoffTab({
                 docs: modelDocuments,
                 icon: Boxes,
               }
-            : activeIntakeOption === "spreadsheet"
+            : activeIntakeOption === "scan"
               ? {
-                  title: "Spreadsheet sources",
-                  detail: sourceCountText(spreadsheetDocuments.length, "spreadsheet", "spreadsheets") || "CSV, XLS, and workbook files ready to preview and import",
-                  emptyLabel: "No spreadsheet sources",
-                  docs: spreadsheetDocuments,
-                  icon: FileSpreadsheet,
+                  title: "LiDAR scans",
+                  detail: sourceCountText(scanDocuments.length, "scan") || "Point clouds from iOS scanning apps or laser scanners (PLY, E57, LAS/LAZ)",
+                  emptyLabel: "No scans — capture with a LiDAR app (Scaniverse, Polycam, SiteScape) and upload the export to project files",
+                  docs: scanDocuments,
+                  icon: ScanLine,
                 }
-              : null;
+              : activeIntakeOption === "spreadsheet"
+                ? {
+                    title: "Spreadsheet sources",
+                    detail: sourceCountText(spreadsheetDocuments.length, "spreadsheet", "spreadsheets") || "CSV, XLS, and workbook files ready to preview and import",
+                    emptyLabel: "No spreadsheet sources",
+                    docs: spreadsheetDocuments,
+                    icon: FileSpreadsheet,
+                  }
+                : null;
 
   /* ─── Render ─── */
 
@@ -9288,6 +9323,57 @@ export function TakeoffTab({
               </div>
             )}
           </div>
+        ) : isScanDocument ? (
+          selectedModelAsset ? (
+            <ScanTakeoffSurface
+              projectId={projectId}
+              modelAssetId={selectedModelAsset.id}
+              fileName={selectedDoc?.fileName ?? ""}
+              selectedWorksheetId={selectedWorksheet?.id}
+              defaultEstimateCategory={takeoffCategory ? { id: takeoffCategory.id, name: takeoffCategory.name, entityType: takeoffCategory.entityType } : null}
+              defaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
+              onWorkspaceMutated={notifyWorkspaceMutated}
+              toolbarStart={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowLanding(true)}
+                  title="Back to takeoff intake"
+                  aria-label="Back to takeoff intake"
+                  className="h-7 w-7 shrink-0 px-0"
+                >
+                  <FolderOpen className="h-3.5 w-3.5" />
+                </Button>
+              }
+              toolbarEnd={
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleFullscreen}
+                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                  className="h-7 w-7 shrink-0 px-0"
+                >
+                  {isFullscreen ? (
+                    <Shrink className="h-3.5 w-3.5" />
+                  ) : (
+                    <Expand className="h-3.5 w-3.5" />
+                  )}
+                </Button>
+              }
+            />
+          ) : (
+            <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
+              <p className="text-[12px] text-fg/60">
+                This scan hasn&apos;t been indexed yet — run model indexing to prepare the point cloud.
+              </p>
+              <Button size="sm" onClick={() => void refreshModelAssets(true)} disabled={modelSyncing}>
+                {modelSyncing ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                {modelSyncing ? "Indexing…" : "Index scan"}
+              </Button>
+              {modelError && <p className="text-[11px] text-red-500">{modelError}</p>}
+            </div>
+          )
         ) : isDwgDocument ? (
           <CadTakeoffSurface
             projectId={projectId}

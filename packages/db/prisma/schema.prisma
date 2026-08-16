@@ -206,10 +206,8 @@ model Project {
   pluginExecutions            PluginExecution[]
   pickups                     Pickup[]
   pickupLinks                 PickupLink[]
-  dwgEntityLinks              DwgEntityLink[]
   symbolTemplates             SymbolTemplate[]
   modelAssets                 ModelAsset[]
-  modelTakeoffLinks           ModelTakeoffLink[]
   modelTakeoffRecipes         ModelTakeoffRecipe[]
   modelRevisionDiffs          ModelRevisionDiff[]
   modelFederations            ModelFederation[]
@@ -425,8 +423,6 @@ model WorksheetItem {
   assemblyInstance   AssemblyInstance? @relation(fields: [assemblyInstanceId], references: [id], onDelete: SetNull)
 
   pickupLinks       PickupLink[]
-  modelTakeoffLinks ModelTakeoffLink[]
-  dwgEntityLinks    DwgEntityLink[]
 
   @@index([worksheetId])
   @@index([phaseId])
@@ -935,13 +931,14 @@ model FileNode {
 // ── Pickups (everything in the takeoff Pickups panel) ───────────────────
 //
 // A Pickup is anything the estimator can promote into a worksheet line
-// item: hand-drawn annotations, Auto Count bundles, Smart Count items, and
-// any future source that produces a measurable mark on a drawing. The
-// concept replaces the older "TakeoffAnnotation" framing — the table /
-// model / API / UI all read "Pickup" end-to-end now. Schema shape stays
-// identical to TakeoffAnnotation; the `annotationType` column kept its
-// name so cached enum values ("linear", "count", "area-rectangle", …)
-// keep working without a data migration.
+// item — the single unified takeoff-quantity record. Hand-drawn PDF
+// annotations, Auto Count bundles, Smart Count items, CAD entities, BIM
+// model elements, and 3D scan measurements/segments all live here, tagged
+// by `sourceKind`; PickupLink is the only path from a measured quantity
+// into a WorksheetItem. (The former DwgEntityLink and ModelTakeoffLink
+// tables were folded in by 20260816000000_unify_takeoff_links.)
+// `annotationType` kept its column name from the TakeoffAnnotation era so
+// cached enum values ("linear", "count", "area-rectangle", …) keep working.
 
 model Pickup {
   id             String   @id @default(cuid())
@@ -949,16 +946,34 @@ model Pickup {
   project        Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
   documentId     String
   pageNumber     Int
-  annotationType String // linear, linear-polyline, linear-drop, count, count-by-distance, area-vertical-wall, area-rectangle, area-triangle, area-ellipse, area-polygon
+  annotationType String // linear, linear-polyline, linear-drop, count, count-by-distance, area-vertical-wall, area-rectangle, area-triangle, area-ellipse, area-polygon, cad-entity, model-element
   label          String   @default("")
   color          String   @default("#3b82f6")
   lineThickness  Float    @default(4)
   visible        Boolean  @default(true)
   groupName      String   @default("")
-  points         Json     @default("[]")
+  points         Json     @default("[]") // Array<{x,y}> canvas px for 2D; Array<{x,y,z}> model-space meters for scans
   measurement    Json     @default("{}")
   calibration    Json?
   metadata       Json     @default("{}")
+  // Unified provenance. "annotation" = 2D PDF pickup (default), "cad-entity"
+  // = DXF/DWG entity, "model" = BIM element/quantity, "scan-measurement" =
+  // hand measurement in the point-cloud viewer, "scan-segment" = geometry
+  // detected by scan segmentation.
+  sourceKind      String  @default("annotation")
+  cadEntityId     String?
+  cadEntityType   String  @default("")
+  cadLayer        String  @default("")
+  // FK so deleting a ModelAsset removes its pickups; element/quantity ids are
+  // plain strings because re-ingest replaces those rows wholesale (refs are
+  // nulled by replaceModelChildren, matching the old SetNull behavior).
+  modelId         String?
+  model           ModelAsset? @relation(fields: [modelId], references: [id], onDelete: Cascade)
+  modelElementId  String?
+  modelQuantityId String?
+  // Display context carried from the source surface (geometry summary,
+  // layer/color, group label…), formerly per-link `selection` JSON.
+  selection       Json    @default("{}")
   createdBy      String?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -967,6 +982,10 @@ model Pickup {
 
   @@index([projectId])
   @@index([documentId])
+  @@index([sourceKind])
+  @@index([modelId])
+  @@index([modelElementId])
+  @@index([cadEntityId])
 }
 
 // ── Pickup Links (M:N junction: Pickup ↔ WorksheetItem) ──────────────────
@@ -989,35 +1008,6 @@ model PickupLink {
   @@index([pickupId])
   @@index([worksheetItemId])
   @@index([projectId])
-}
-
-// ── DWG Entity Links ──────────────────────────────────────────────────────
-// Direct link from a CAD entity (DXF/DWG) to a worksheet line item, without
-// requiring an intermediate annotation. Useful for tagging native CAD
-// geometry (a wall, a duct, a fixture) to its estimate row.
-
-model DwgEntityLink {
-  id              String        @id @default(cuid())
-  projectId       String
-  project         Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  documentId      String        // takeoff document id (file-<fileNodeId> or doc-<sourceDocumentId>)
-  entityId        String        // CAD entity id from the DXF/DWG parser
-  entityType      String        @default("") // "line" | "circle" | "polyline" | etc.
-  layer           String        @default("")
-  worksheetItemId String
-  worksheetItem   WorksheetItem @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
-  quantity        Float         @default(0) // user-supplied (DWG entities lack intrinsic measurement)
-  multiplier      Float         @default(1.0)
-  derivedQuantity Float         @default(0) // cached: quantity * multiplier
-  selection       Json          @default("{}") // entity context for display (geometry summary, layer, color)
-  createdAt       DateTime      @default(now())
-  updatedAt       DateTime      @updatedAt
-
-  @@unique([documentId, entityId, worksheetItemId])
-  @@index([projectId])
-  @@index([documentId])
-  @@index([entityId])
-  @@index([worksheetItemId])
 }
 
 // ── Symbol Library (Few-Shot from Legend) ────────────────────────────────
@@ -1107,7 +1097,7 @@ model ModelAsset {
   quantities        ModelQuantity[]
   boms              ModelBom[]
   issues            ModelIssue[]
-  takeoffLinks      ModelTakeoffLink[]
+  pickups           Pickup[]
   revisionDiffsBase ModelRevisionDiff[] @relation("ModelRevisionBase")
   revisionDiffsHead ModelRevisionDiff[] @relation("ModelRevisionHead")
   federationMemberships ModelFederationMember[]
@@ -1160,7 +1150,6 @@ model ModelElement {
   updatedAt    DateTime       @updatedAt
 
   quantities   ModelQuantity[]
-  takeoffLinks ModelTakeoffLink[]
   issues       ModelIssue[]
   topologyConnectionsFrom ModelElementConnection[] @relation("ModelConnectionFrom")
   topologyConnectionsTo   ModelElementConnection[] @relation("ModelConnectionTo")
@@ -1187,8 +1176,6 @@ model ModelQuantity {
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
-  takeoffLinks ModelTakeoffLink[]
-
   @@index([modelId])
   @@index([elementId])
   @@index([quantityType])
@@ -1205,32 +1192,6 @@ model ModelBom {
   createdAt DateTime   @default(now())
 
   @@index([modelId])
-}
-
-model ModelTakeoffLink {
-  id              String         @id @default(cuid())
-  projectId       String
-  project         Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  modelId         String
-  model           ModelAsset     @relation(fields: [modelId], references: [id], onDelete: Cascade)
-  modelElementId  String?
-  modelElement    ModelElement?  @relation(fields: [modelElementId], references: [id], onDelete: SetNull)
-  modelQuantityId String?
-  modelQuantity   ModelQuantity? @relation(fields: [modelQuantityId], references: [id], onDelete: SetNull)
-  worksheetItemId String
-  worksheetItem   WorksheetItem  @relation(fields: [worksheetItemId], references: [id], onDelete: Cascade)
-  quantityField   String         @default("quantity")
-  multiplier      Float          @default(1.0)
-  derivedQuantity Float          @default(0)
-  selection       Json           @default("{}")
-  createdAt       DateTime       @default(now())
-  updatedAt       DateTime       @updatedAt
-
-  @@index([projectId])
-  @@index([modelId])
-  @@index([modelElementId])
-  @@index([modelQuantityId])
-  @@index([worksheetItemId])
 }
 
 /// One auditable physical or semantic edge in the model's takeoff graph.

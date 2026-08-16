@@ -28,3 +28,16 @@ export {
   type DrawingTextRegion,
   type DrawingTracedSystem,
 } from "./geometry-analyzer.js";
+export {
+  runPointCloudIngest,
+  runPointCloudSegmentation,
+  type PointCloudBBox,
+  type PointCloudIngestRequest,
+  type PointCloudIngestResult,
+  type PointCloudPlaneDetail,
+  type PointCloudSegment,
+  type PointCloudSegmentKind,
+  type PointCloudSegmentationRequest,
+  type PointCloudSegmentationResult,
+  type PointCloudSegmentationStats,
+} from "./pointcloud.js";

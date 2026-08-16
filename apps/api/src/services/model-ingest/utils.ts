@@ -14,7 +14,15 @@ import { resolveApiPath, sanitizeFileName } from "../../paths.js";
 import type { GeneratedIssue, ModelIngestSource } from "./types.js";
 
 export const MAX_TEXT_BYTES = 12 * 1024 * 1024;
-export const MAX_GEOMETRY_BYTES = 80 * 1024 * 1024;
+
+function envByteLimit(name: string, fallback: number) {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : fallback;
+}
+
+// Matches the 1 GB multipart upload ceiling — anything the API accepts as an
+// upload should also be ingestable. Override with MODEL_MAX_GEOMETRY_BYTES.
+export const MAX_GEOMETRY_BYTES = envByteLimit("MODEL_MAX_GEOMETRY_BYTES", 1024 * 1024 * 1024);
 
 export function createId(prefix: string) {
   return `${prefix}-${randomUUID()}`;

@@ -10,13 +10,14 @@ import {
 } from "@bidwright/domain";
 import { ApsClient } from "./model-ingest/aps-client.js";
 import { generateModelIngestManifest, getModelIngestCapabilities } from "./model-ingest/orchestrator.js";
+import { MAX_GEOMETRY_BYTES as INGEST_MAX_GEOMETRY_BYTES } from "./model-ingest/utils.js";
 import { MODEL_INGEST_FORMATS, isModelIngestFileName } from "./model-ingest/registry.js";
 import type { ModelIngestSettings } from "./model-ingest/types.js";
 
 const MODEL_EXTENSIONS = MODEL_INGEST_FORMATS;
 const MODEL_EDITOR_EDITABLE_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep", "stl"]);
 const MAX_TEXT_BYTES = 12 * 1024 * 1024;
-const MAX_GEOMETRY_BYTES = 80 * 1024 * 1024;
+const MAX_GEOMETRY_BYTES = INGEST_MAX_GEOMETRY_BYTES;
 const CAD_GEOMETRY_EXTENSIONS = new Set(["step", "stp", "iges", "igs", "brep"]);
 const OCCT_LINEAR_UNIT = "foot";
 const require = createRequire(import.meta.url);
@@ -952,6 +953,10 @@ async function replaceModelChildren(modelId: string, generated: GeneratedManifes
     prisma.modelTakeoffGroup.deleteMany({ where: { modelId } }),
     prisma.modelQuantity.deleteMany({ where: { modelId } }),
     prisma.modelElement.deleteMany({ where: { modelId } }),
+    // Element/quantity ids are recreated per ingest; null stale pickup refs so
+    // linked line items keep their quantities (the old ModelTakeoffLink FK was
+    // SetNull — this preserves that behavior on the unified table).
+    prisma.pickup.updateMany({ where: { modelId }, data: { modelElementId: null, modelQuantityId: null } }),
   ]);
 
   if (generated.elements.length > 0) {
@@ -1700,7 +1705,7 @@ export async function listProjectModelAssets(projectId: string, options: { disco
   if (options.discover !== false) {
     await discoverProjectModelAssets(projectId);
   }
-  return prisma.modelAsset.findMany({
+  const assets = await prisma.modelAsset.findMany({
     where: { projectId },
     orderBy: [{ updatedAt: "desc" }, { fileName: "asc" }],
     include: {
@@ -1709,15 +1714,18 @@ export async function listProjectModelAssets(projectId: string, options: { disco
           elements: true,
           quantities: true,
           issues: true,
-          // ModelAsset's relation field is named `takeoffLinks` because it
-          // points at ModelTakeoffLink[], a different model from PickupLink.
-          // Do not rename — that join is BIM-element-to-worksheet, distinct
-          // from the Pickup-to-worksheet rename we did elsewhere.
-          takeoffLinks: true,
+          // Since the takeoff-link unification, a model's worksheet links
+          // are its sourceKind="model" pickups.
+          pickups: true,
         },
       },
     },
   });
+  // Clients still read `_count.takeoffLinks`; keep the response name stable.
+  return assets.map((asset) => ({
+    ...asset,
+    _count: { ...asset._count, takeoffLinks: asset._count.pickups },
+  }));
 }
 
 export async function getProjectModelAsset(projectId: string, modelId: string) {
@@ -1823,16 +1831,102 @@ function mapModelTakeoffLink(link: any) {
   };
 }
 
+// The model→worksheet linkage lives on the unified Pickup + PickupLink
+// tables: one sourceKind="model" pickup per (element, quantity) source,
+// PickupLink rows into line items. These functions keep the legacy
+// ModelTakeoffLink response shapes so routes/UI/MCP tools are unchanged.
+
+const MODEL_PICKUP_SOURCE_KINDS = ["model", "scan-segment"];
+
+async function findOrCreateModelPickup(args: {
+  projectId: string;
+  modelId: string;
+  modelElementId: string | null;
+  modelQuantityId: string | null;
+  measurementPatch: Record<string, number>;
+  selection?: unknown;
+  sourceKind?: string;
+}) {
+  const existing = await prisma.pickup.findFirst({
+    where: {
+      projectId: args.projectId,
+      modelId: args.modelId,
+      sourceKind: { in: MODEL_PICKUP_SOURCE_KINDS },
+      modelElementId: args.modelElementId,
+      modelQuantityId: args.modelQuantityId,
+    },
+  });
+  if (existing) {
+    const measurement = { ...((existing.measurement as Record<string, unknown>) ?? {}), ...args.measurementPatch };
+    return prisma.pickup.update({
+      where: { id: existing.id },
+      data: {
+        measurement: measurement as any,
+        selection: (args.selection ?? existing.selection ?? {}) as any,
+        updatedAt: new Date(),
+      },
+    });
+  }
+
+  const element = args.modelElementId
+    ? await prisma.modelElement.findFirst({ where: { id: args.modelElementId } })
+    : null;
+  const quantity = args.modelQuantityId
+    ? await prisma.modelQuantity.findFirst({ where: { id: args.modelQuantityId } })
+    : null;
+  const label =
+    element?.name || element?.elementClass || (quantity ? `${quantity.quantityType} quantity` : "Model element");
+  return prisma.pickup.create({
+    data: {
+      id: createId("takeoff"),
+      projectId: args.projectId,
+      documentId: `model-${args.modelId}`,
+      pageNumber: 0,
+      annotationType: "model-element",
+      label,
+      color: "#8b5cf6",
+      points: [] as any,
+      measurement: args.measurementPatch as any,
+      metadata: { source: "bim", method: "model-takeoff-link", measuredBy: "agent" } as any,
+      sourceKind: args.sourceKind ?? "model",
+      modelId: args.modelId,
+      modelElementId: args.modelElementId,
+      modelQuantityId: args.modelQuantityId,
+      selection: (args.selection ?? {}) as any,
+    },
+  });
+}
+
+/** Compose a legacy ModelTakeoffLink row from a PickupLink + its pickup. */
+function composeModelLinkRow(link: any, pickup: any, extras?: { modelElement?: any; modelQuantity?: any; worksheetItem?: any }) {
+  return mapModelTakeoffLink({
+    id: link.id,
+    projectId: link.projectId,
+    modelId: pickup?.modelId ?? "",
+    modelElementId: pickup?.modelElementId ?? null,
+    modelQuantityId: pickup?.modelQuantityId ?? null,
+    worksheetItemId: link.worksheetItemId,
+    quantityField: link.quantityField,
+    multiplier: link.multiplier,
+    derivedQuantity: link.derivedQuantity,
+    selection: pickup?.selection ?? {},
+    createdAt: link.createdAt,
+    updatedAt: link.updatedAt,
+    modelElement: extras?.modelElement ?? null,
+    modelQuantity: extras?.modelQuantity ?? null,
+    worksheetItem: extras?.worksheetItem ?? null,
+  });
+}
+
 export async function listModelTakeoffLinks(projectId: string, modelId: string) {
   const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId } });
   if (!model) throw new Error(`Model ${modelId} not found`);
 
-  const links = await prisma.modelTakeoffLink.findMany({
-    where: { projectId, modelId },
+  const links = await prisma.pickupLink.findMany({
+    where: { projectId, pickup: { modelId, sourceKind: { in: MODEL_PICKUP_SOURCE_KINDS } } },
     orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
     include: {
-      modelElement: true,
-      modelQuantity: true,
+      pickup: true,
       worksheetItem: {
         include: {
           worksheet: {
@@ -1847,7 +1941,22 @@ export async function listModelTakeoffLinks(projectId: string, modelId: string) 
     },
   });
 
-  return links.map(mapModelTakeoffLink);
+  const elementIds = Array.from(new Set(links.map((l) => l.pickup?.modelElementId).filter((id): id is string => Boolean(id))));
+  const quantityIds = Array.from(new Set(links.map((l) => l.pickup?.modelQuantityId).filter((id): id is string => Boolean(id))));
+  const [elements, quantities] = await Promise.all([
+    elementIds.length ? prisma.modelElement.findMany({ where: { id: { in: elementIds } } }) : Promise.resolve([]),
+    quantityIds.length ? prisma.modelQuantity.findMany({ where: { id: { in: quantityIds } } }) : Promise.resolve([]),
+  ]);
+  const elementById = new Map(elements.map((e) => [e.id, e]));
+  const quantityById = new Map(quantities.map((q) => [q.id, q]));
+
+  return links.map((link) =>
+    composeModelLinkRow(link, link.pickup, {
+      modelElement: link.pickup?.modelElementId ? elementById.get(link.pickup.modelElementId) ?? null : null,
+      modelQuantity: link.pickup?.modelQuantityId ? quantityById.get(link.pickup.modelQuantityId) ?? null : null,
+      worksheetItem: link.worksheetItem,
+    }),
+  );
 }
 
 export async function createModelTakeoffLink(projectId: string, input: {
@@ -1877,22 +1986,36 @@ export async function createModelTakeoffLink(projectId: string, input: {
   const multiplier = typeof input.multiplier === "number" && Number.isFinite(input.multiplier)
     ? input.multiplier
     : 1;
+  const quantityField = input.quantityField ?? "quantity";
+  const derivedQuantity = typeof input.derivedQuantity === "number" && Number.isFinite(input.derivedQuantity)
+    ? input.derivedQuantity
+    : (quantity?.value ?? item.quantity ?? 0) * multiplier;
+  const rawValue = multiplier !== 0 ? derivedQuantity / multiplier : derivedQuantity;
 
-  return prisma.modelTakeoffLink.create({
-    data: {
-      projectId,
-      modelId: input.modelId,
-      modelElementId: input.modelElementId ?? null,
-      modelQuantityId: input.modelQuantityId ?? null,
-      worksheetItemId: input.worksheetItemId,
-      quantityField: input.quantityField ?? "quantity",
-      multiplier,
-      derivedQuantity: typeof input.derivedQuantity === "number" && Number.isFinite(input.derivedQuantity)
-        ? input.derivedQuantity
-        : (quantity?.value ?? item.quantity ?? 0) * multiplier,
-      selection: (input.selection ?? {}) as any,
-    },
+  const pickup = await findOrCreateModelPickup({
+    projectId,
+    modelId: input.modelId,
+    modelElementId: input.modelElementId ?? null,
+    modelQuantityId: input.modelQuantityId ?? null,
+    measurementPatch: { [quantityField]: rawValue, value: rawValue },
+    selection: input.selection,
   });
+
+  const link = await prisma.pickupLink.upsert({
+    where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } },
+    create: {
+      id: createId("tlink"),
+      projectId,
+      pickupId: pickup.id,
+      worksheetItemId: input.worksheetItemId,
+      quantityField,
+      multiplier,
+      derivedQuantity,
+    },
+    update: { quantityField, multiplier, derivedQuantity, updatedAt: new Date() },
+  });
+
+  return composeModelLinkRow(link, pickup);
 }
 
 export async function createModelTakeoffLinks(projectId: string, input: {
@@ -1920,7 +2043,7 @@ export async function createModelTakeoffLinks(projectId: string, input: {
   const elementIds = Array.from(new Set(input.links.map((link) => link.modelElementId)));
   const quantityIds = Array.from(new Set(input.links.map((link) => link.modelQuantityId).filter((id): id is string => Boolean(id))));
   const [validElements, validQuantities] = await Promise.all([
-    prisma.modelElement.findMany({ where: { modelId: input.modelId, id: { in: elementIds } }, select: { id: true } }),
+    prisma.modelElement.findMany({ where: { modelId: input.modelId, id: { in: elementIds } }, select: { id: true, name: true, elementClass: true } }),
     quantityIds.length > 0
       ? prisma.modelQuantity.findMany({ where: { modelId: input.modelId, id: { in: quantityIds } }, select: { id: true } })
       : Promise.resolve([]),
@@ -1928,27 +2051,79 @@ export async function createModelTakeoffLinks(projectId: string, input: {
   if (validElements.length !== elementIds.length || validQuantities.length !== quantityIds.length) {
     throw new Error("One or more BIM pickup links do not belong to this model");
   }
+  const elementById = new Map(validElements.map((e) => [e.id, e]));
 
-  const result = await prisma.modelTakeoffLink.createMany({
-    data: input.links.map((link) => ({
+  // One pickup per (element, quantity) source; create the missing ones in
+  // bulk, then attach links. skipDuplicates keeps re-sends idempotent (the
+  // legacy table silently accepted duplicate rows, double-counting them).
+  const sourceKey = (elementId: string | null, quantityId: string | null) => `${elementId ?? ""}|${quantityId ?? ""}`;
+  const existingPickups = await prisma.pickup.findMany({
+    where: {
       projectId,
+      modelId: input.modelId,
+      sourceKind: { in: MODEL_PICKUP_SOURCE_KINDS },
+      modelElementId: { in: elementIds },
+    },
+  });
+  const pickupByKey = new Map(existingPickups.map((p) => [sourceKey(p.modelElementId, p.modelQuantityId), p]));
+
+  const toCreate: any[] = [];
+  for (const link of input.links) {
+    const key = sourceKey(link.modelElementId, link.modelQuantityId ?? null);
+    if (pickupByKey.has(key) || toCreate.some((p) => sourceKey(p.modelElementId, p.modelQuantityId) === key)) continue;
+    const multiplier = typeof link.multiplier === "number" && Number.isFinite(link.multiplier) ? link.multiplier : 1;
+    const rawValue = multiplier !== 0 ? link.derivedQuantity / multiplier : link.derivedQuantity;
+    const element = elementById.get(link.modelElementId);
+    toCreate.push({
+      id: createId("takeoff"),
+      projectId,
+      documentId: `model-${input.modelId}`,
+      pageNumber: 0,
+      annotationType: "model-element",
+      label: element?.name || element?.elementClass || "Model element",
+      color: "#8b5cf6",
+      points: [] as any,
+      measurement: { [link.quantityField ?? "quantity"]: rawValue, value: rawValue } as any,
+      metadata: { source: "bim", method: "model-takeoff-link", measuredBy: "agent" } as any,
+      sourceKind: "model",
       modelId: input.modelId,
       modelElementId: link.modelElementId,
       modelQuantityId: link.modelQuantityId ?? null,
-      worksheetItemId: input.worksheetItemId,
-      quantityField: link.quantityField ?? "quantity",
-      multiplier: typeof link.multiplier === "number" && Number.isFinite(link.multiplier) ? link.multiplier : 1,
-      derivedQuantity: link.derivedQuantity,
       selection: (link.selection ?? {}) as any,
-    })),
+    });
+  }
+  if (toCreate.length > 0) await prisma.pickup.createMany({ data: toCreate });
+  for (const p of toCreate) pickupByKey.set(sourceKey(p.modelElementId, p.modelQuantityId), p);
+
+  const result = await prisma.pickupLink.createMany({
+    data: input.links.map((link) => {
+      const pickup = pickupByKey.get(sourceKey(link.modelElementId, link.modelQuantityId ?? null))!;
+      return {
+        id: createId("tlink"),
+        projectId,
+        pickupId: pickup.id,
+        worksheetItemId: input.worksheetItemId,
+        quantityField: link.quantityField ?? "quantity",
+        multiplier: typeof link.multiplier === "number" && Number.isFinite(link.multiplier) ? link.multiplier : 1,
+        derivedQuantity: link.derivedQuantity,
+      };
+    }),
+    skipDuplicates: true,
   });
   return { count: result.count };
 }
 
 export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {
-  const link = await prisma.modelTakeoffLink.findFirst({ where: { id: linkId, projectId, modelId } });
+  const link = await prisma.pickupLink.findFirst({
+    where: { id: linkId, projectId, pickup: { modelId } },
+    include: { pickup: true },
+  });
   if (!link) throw new Error(`Model takeoff link ${linkId} not found`);
-  await prisma.modelTakeoffLink.delete({ where: { id: linkId } });
+  await prisma.pickupLink.delete({ where: { id: linkId } });
+  // Model pickups exist only to carry links; drop the orphan so it doesn't
+  // linger in pickup listings.
+  const remaining = await prisma.pickupLink.count({ where: { pickupId: link.pickupId } });
+  if (remaining === 0) await prisma.pickup.delete({ where: { id: link.pickupId } });
   // worksheetItemId lets the route cascade a quantity recalc for the item
   // that just lost this link.
   return { deleted: true, worksheetItemId: link.worksheetItemId };

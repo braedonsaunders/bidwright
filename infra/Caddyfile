@@ -35,7 +35,9 @@
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options    "nosniff"
 		Referrer-Policy           "strict-origin-when-cross-origin"
-		Permissions-Policy        "geolocation=(), microphone=(), camera=()"
+		# Camera stays first-party enabled: the takeoff photo intake captures
+		# jobsite photos straight from the browser on phones/tablets.
+		Permissions-Policy        "geolocation=(self), microphone=(), camera=(self)"
 		# We don't trust intermediaries; let the upstream set its own
 		# Cache-Control on dynamic responses.
 		-Server

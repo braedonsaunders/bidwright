@@ -72,7 +72,7 @@ export interface ModelIngestArtifact {
 
 export interface ModelGeometryArtifact {
   id: string;
-  format: "native" | "dae" | "glb" | "gltf" | "obj" | "stl" | "mesh-json";
+  format: "native" | "dae" | "glb" | "gltf" | "obj" | "stl" | "mesh-json" | "pointcloud";
   path?: string;
   checksum?: string;
   meshRefs: string[];

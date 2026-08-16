@@ -1,5 +1,14 @@
 import type { FastifyInstance } from "fastify";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
 import { z } from "zod";
+import {
+  getScanCloudInfo,
+  identifyScanSegments,
+  readScanSegments,
+  runScanSegmentation,
+} from "../services/scan-takeoff-service.js";
+import { requireRequestAiConfig } from "../services/request-ai-config.js";
 import {
   createModelTakeoffLink,
   createModelTakeoffLinks,
@@ -579,6 +588,98 @@ export async function modelRoutes(app: FastifyInstance) {
     try {
       const result = await applyRevisionRetakeoff(projectId, diffId, { onlyLinkIds: body.onlyLinkIds });
       return result;
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  // ── LiDAR scan surface (point clouds) ─────────────────────────────────
+
+  /** Stream metadata the viewer needs before fetching the binary. */
+  app.get("/api/models/:projectId/assets/:modelId/pointcloud/info", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    try {
+      const info = await getScanCloudInfo(projectId, modelId);
+      return {
+        pointsUrl: `/api/models/${projectId}/assets/${modelId}/pointcloud`,
+        pointCount: info.pointCount,
+        stride: info.stride,
+        bbox: info.bbox,
+        offset: info.offset,
+        hasColor: info.hasColor,
+        units: info.units,
+      };
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  /** The normalized stride-16 binary, streamed for progressive rendering. */
+  app.get("/api/models/:projectId/assets/:modelId/pointcloud", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    try {
+      const info = await getScanCloudInfo(projectId, modelId);
+      const fileStat = await stat(info.pointsPath);
+      reply.header("content-type", "application/octet-stream");
+      reply.header("content-length", String(fileStat.size));
+      reply.header("cache-control", "private, max-age=3600");
+      return reply.send(createReadStream(info.pointsPath));
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  /** Run RANSAC segmentation and persist detections as ModelElements. */
+  app.post("/api/models/:projectId/assets/:modelId/segment", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    const body = (request.body ?? {}) as { voxel?: number };
+    try {
+      const result = await runScanSegmentation(projectId, modelId, {
+        voxel: typeof body.voxel === "number" && Number.isFinite(body.voxel) ? body.voxel : undefined,
+      });
+      return result;
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  app.get("/api/models/:projectId/assets/:modelId/segments", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    try {
+      return await readScanSegments(projectId, modelId);
+    } catch (error) {
+      return routeError(reply, error);
+    }
+  });
+
+  /** Photo fusion: identify segments (material / service / size) from site
+   *  photos via the tenant's vision LLM. */
+  app.post("/api/models/:projectId/assets/:modelId/segments/identify", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    const bodySchema = z.object({
+      images: z.array(z.object({
+        data: z.string().min(8),
+        mimeType: z.string().min(3),
+        caption: z.string().max(500).optional(),
+      })).min(1).max(8),
+      segmentIds: z.array(z.string()).max(500).optional(),
+      focusPrompt: z.string().max(2000).optional(),
+    });
+    const parsed = bodySchema.safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
+    try {
+      const aiConfig = await requireRequestAiConfig(request);
+      const images = parsed.data.images.map((image) => ({
+        ...image,
+        // Accept data-URL or raw base64; adapters want the raw payload.
+        data: image.data.includes(",") && image.data.startsWith("data:") ? image.data.split(",")[1] : image.data,
+      }));
+      return await identifyScanSegments(projectId, modelId, {
+        images,
+        segmentIds: parsed.data.segmentIds,
+        focusPrompt: parsed.data.focusPrompt,
+        llm: { provider: aiConfig.provider, apiKey: aiConfig.apiKey, model: aiConfig.model },
+      });
     } catch (error) {
       return routeError(reply, error);
     }

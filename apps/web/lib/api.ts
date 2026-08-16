@@ -4,6 +4,7 @@ export * from "./api/auth";
 export * from "./api/integrations";
 
 import { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
+import { uploadFileChunked } from "./chunked-upload";
 
 export interface ProjectQuoteSummary {
   id: string;
@@ -3810,6 +3811,14 @@ export async function uploadFile(
   file: File,
   parentId?: string | null
 ): Promise<FileNode> {
+  // Large files (LiDAR scans etc.) go through the chunked, resumable upload
+  // path — a single-shot FormData POST restarts from zero whenever a flaky
+  // jobsite connection drops mid-transfer.
+  const CHUNKED_UPLOAD_THRESHOLD_BYTES = 100 * 1024 * 1024;
+  if (file.size > CHUNKED_UPLOAD_THRESHOLD_BYTES) {
+    return uploadFileChunked(projectId, file, { parentId: parentId ?? undefined });
+  }
+
   const formData = new FormData();
   formData.append("file", file);
   if (parentId) formData.append("parentId", parentId);
@@ -7703,4 +7712,95 @@ export async function recomputeEffectiveCost(input: {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(input),
   });
+}
+
+// ── LiDAR Scan Surface (point clouds) ─────────────────────────────────────
+
+export interface ScanPointCloudInfoResponse {
+  /** API path — resolve with getScanPointCloudUrl for fetching. */
+  pointsUrl: string;
+  pointCount: number;
+  stride: number;
+  bbox: { min: [number, number, number]; max: [number, number, number] };
+  offset: [number, number, number];
+  hasColor: boolean;
+  units: string;
+}
+
+export interface ScanSegmentRecord {
+  id: string;
+  kind: "pipe-run" | "plane" | "cluster";
+  label: string;
+  confidence: number;
+  pointCount: number;
+  polyline?: Array<[number, number, number]>;
+  radius?: number;
+  length?: number;
+  area?: number;
+  normal?: [number, number, number];
+  kindDetail?: "floor" | "ceiling" | "wall" | "";
+  centroid?: [number, number, number];
+  bbox?: { min: [number, number, number]; max: [number, number, number] };
+  sampleIndices?: number[];
+  identification?: {
+    material?: string;
+    service?: string;
+    insulated?: boolean;
+    nominalSize?: string;
+    notes?: string;
+    confidence?: number;
+  };
+}
+
+export interface ScanSegmentElementRecord {
+  id: string;
+  externalId: string;
+  name: string;
+  elementClass: string;
+  properties: Record<string, unknown>;
+  quantities: Array<{ id: string; quantityType: string; value: number; unit: string; method: string; confidence: number }>;
+}
+
+export async function getScanPointCloudInfo(projectId: string, modelId: string) {
+  return apiRequest<ScanPointCloudInfoResponse>(`/api/models/${projectId}/assets/${modelId}/pointcloud/info`);
+}
+
+export function getScanPointCloudUrl(projectId: string, modelId: string): string {
+  return resolveApiUrl(`/api/models/${projectId}/assets/${modelId}/pointcloud`);
+}
+
+export async function getScanSegments(projectId: string, modelId: string) {
+  return apiRequest<{ segments: ScanSegmentRecord[]; stats?: Record<string, unknown> }>(
+    `/api/models/${projectId}/assets/${modelId}/segments`,
+  );
+}
+
+export async function runScanSegmentation(projectId: string, modelId: string, opts?: { voxel?: number }) {
+  return apiRequest<{ segments: ScanSegmentRecord[]; stats: Record<string, unknown>; elements: ScanSegmentElementRecord[] }>(
+    `/api/models/${projectId}/assets/${modelId}/segment`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(opts ?? {}),
+    },
+  );
+}
+
+export async function identifyScanSegments(
+  projectId: string,
+  modelId: string,
+  input: {
+    images: Array<{ data: string; mimeType: string; caption?: string }>;
+    segmentIds?: string[];
+    focusPrompt?: string;
+  },
+) {
+  return apiRequest<{ identifications: Array<Record<string, unknown>>; matchedCount: number; segmentCount: number }>(
+    `/api/models/${projectId}/assets/${modelId}/segments/identify`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    },
+  );
 }

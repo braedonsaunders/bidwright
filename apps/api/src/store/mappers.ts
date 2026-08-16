@@ -930,10 +930,18 @@ export function mapPickup(a: any) {
     lineThickness: a.lineThickness ?? 4,
     visible: a.visible ?? true,
     groupName: a.groupName ?? "",
-    points: (a.points as Array<{ x: number; y: number }>) ?? [],
+    points: (a.points as Array<{ x: number; y: number; z?: number }>) ?? [],
     measurement: (a.measurement as Record<string, unknown>) ?? {},
     calibration: a.calibration ?? null,
     metadata: (a.metadata as Record<string, unknown>) ?? {},
+    sourceKind: a.sourceKind ?? "annotation",
+    modelId: a.modelId ?? null,
+    modelElementId: a.modelElementId ?? null,
+    modelQuantityId: a.modelQuantityId ?? null,
+    cadEntityId: a.cadEntityId ?? null,
+    cadEntityType: a.cadEntityType ?? "",
+    cadLayer: a.cadLayer ?? "",
+    selection: (a.selection as Record<string, unknown>) ?? {},
     createdBy: a.createdBy ?? undefined,
     createdAt: toISO(a.createdAt),
     updatedAt: toISO(a.updatedAt),
@@ -975,24 +983,6 @@ export function mapSymbolTemplate(t: any): SymbolTemplate {
     createdBy: t.createdBy ?? undefined,
     createdAt: toISO(t.createdAt),
     updatedAt: toISO(t.updatedAt),
-  };
-}
-
-export function mapDwgEntityLink(l: any) {
-  return {
-    id: l.id,
-    projectId: l.projectId,
-    documentId: l.documentId,
-    entityId: l.entityId,
-    entityType: l.entityType ?? "",
-    layer: l.layer ?? "",
-    worksheetItemId: l.worksheetItemId,
-    quantity: l.quantity ?? 0,
-    multiplier: l.multiplier ?? 1.0,
-    derivedQuantity: l.derivedQuantity ?? 0,
-    selection: (l.selection as Record<string, unknown>) ?? {},
-    createdAt: toISO(l.createdAt),
-    updatedAt: toISO(l.updatedAt),
   };
 }
 

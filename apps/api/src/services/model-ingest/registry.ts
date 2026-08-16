@@ -4,6 +4,7 @@ import { dxfAdapter } from "./adapters/dxf-adapter.js";
 import { ifcAdapter } from "./adapters/ifc-adapter.js";
 import { meshAdapter } from "./adapters/mesh-adapter.js";
 import { occtAdapter } from "./adapters/occt-adapter.js";
+import { scanAdapter } from "./adapters/scan-adapter.js";
 import type { ModelIngestAdapter, ModelIngestSettings } from "./types.js";
 
 export const MODEL_INGEST_FORMATS = new Set([
@@ -26,6 +27,13 @@ export const MODEL_INGEST_FORMATS = new Set([
   "nwd",
   "nwf",
   "nwc",
+  // LiDAR / laser-scan point clouds (scan-adapter)
+  "e57",
+  "las",
+  "laz",
+  "ply",
+  "xyz",
+  "pts",
 ]);
 
 const ADAPTERS: ModelIngestAdapter[] = [
@@ -33,6 +41,7 @@ const ADAPTERS: ModelIngestAdapter[] = [
   occtAdapter,
   dxfAdapter,
   meshAdapter,
+  scanAdapter,
   autodeskApsAdapter,
 ].sort((a, b) => b.priority - a.priority || a.id.localeCompare(b.id));
 

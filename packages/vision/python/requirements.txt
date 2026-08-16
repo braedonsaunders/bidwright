@@ -5,3 +5,7 @@ numpy
 scipy
 Pillow
 scikit-learn
+laspy[lazrs]
+plyfile
+# pye57 intentionally not pinned here: E57 ingest is optional and
+# pointcloud_ingest.py reports {"code": "missing-dependency"} when absent.
