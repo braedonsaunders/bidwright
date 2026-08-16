@@ -2396,7 +2396,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
           startTransition(async () => {
             try {
               await deleteProject(workspace.project.id);
-              router.push("/");
+              // Back to the list the quote was opened from, not the dashboard.
+              router.push("/quotes");
             } catch (e) { setError(e instanceof Error ? e.message : "Delete failed"); }
           });
         }} isPending={isPending} />
