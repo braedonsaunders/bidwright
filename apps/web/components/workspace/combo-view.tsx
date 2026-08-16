@@ -25,6 +25,8 @@ export interface ComboViewProps {
   onRefresh: () => void;
   onOpenAgentChat?: (prefill?: string) => void;
   onOpenRevisionDiff?: () => void;
+  /** Navigate the workspace to the Documents tab (takeoff "Project Files" card). */
+  onOpenDocuments?: () => void;
   onOpenPluginTools?: (target?: PluginToolsTarget) => void;
   onOpenTakeoffLink?: (worksheetItemId: string) => void;
   onWorkspaceMutated?: () => void;
@@ -244,6 +246,7 @@ export function ComboView({
   onRefresh,
   onOpenAgentChat,
   onOpenRevisionDiff,
+  onOpenDocuments,
   onOpenPluginTools,
   onOpenTakeoffLink,
   onWorkspaceMutated,
@@ -565,6 +568,7 @@ export function ComboView({
       workspace={workspace}
       onOpenAgentChat={onOpenAgentChat}
       onOpenRevisionDiff={onOpenRevisionDiff}
+      onOpenDocuments={onOpenDocuments}
       onWorkspaceMutated={onWorkspaceMutated}
       detached={takeoffDetached}
       initialEditorOpen={resumeTakeoffEditor}

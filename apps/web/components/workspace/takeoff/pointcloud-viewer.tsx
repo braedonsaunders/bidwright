@@ -16,6 +16,7 @@ import type {
 } from "@/lib/scan-types";
 import {
   SpatialPointIndex,
+  choosePickHit,
   dedupeConsecutivePoints,
   distance3,
   fitPlaneToPoints,
@@ -25,6 +26,7 @@ import {
   polylineLength,
   subsampleStride,
   type PcVec3,
+  type PickHitKind,
 } from "@/lib/pointcloud-viewer-utils";
 
 /* ─── Constants ─── */
@@ -43,11 +45,14 @@ interface PointCloudViewerProps {
   segments?: ScanSegment[];
   /** null/undefined = all segments visible. */
   visibleSegmentIds?: string[] | null;
-  selectedSegmentId?: string | null;
-  onSelectSegment?: (id: string | null) => void;
+  /** Multiselect: every listed segment renders highlighted. Empty/null = none. */
+  selectedSegmentIds?: string[] | null;
+  onSelectSegment?: (id: string | null, opts?: { additive?: boolean }) => void;
   tool: ScanMeasureTool;
   onMeasurement?: (draft: ScanMeasurementDraft) => void;
   measurements?: ScanMeasurementDisplay[];
+  selectedMeasurementId?: string | null;
+  onSelectMeasurement?: (id: string | null) => void;
   /** Point size in world meters (sizeAttenuation). */
   pointSize?: number;
   onReady?: (api: PointCloudViewerApi) => void;
@@ -61,9 +66,11 @@ interface ViewerHooks {
   getTool(): ScanMeasureTool;
   getSegments(): ScanSegment[];
   getVisibleSegmentIds(): string[] | null | undefined;
-  getSelectedSegmentId(): string | null | undefined;
+  getSelectedSegmentIds(): string[] | null | undefined;
   getMeasurements(): ScanMeasurementDisplay[];
-  onSelectSegment(id: string | null): void;
+  getSelectedMeasurementId(): string | null | undefined;
+  onSelectSegment(id: string | null, opts?: { additive?: boolean }): void;
+  onSelectMeasurement(id: string | null): void;
   onMeasurement(draft: ScanMeasurementDraft): void;
   onLoadProgress(loaded: number, total: number): void;
   setReadout(text: string | null, clientX: number, clientY: number): void;
@@ -215,6 +222,9 @@ async function createPointCloudViewer(
       const materials = Array.isArray(material) ? material : [material];
       for (const item of materials) {
         if (item === draftMarkerMaterial || item === draftLineMaterial || item === hoverMarkerMaterial) continue;
+        // Label sprites own a CanvasTexture — material.dispose() doesn't free it.
+        const map = (item as THREE.Material & { map?: THREE.Texture | null }).map;
+        if (map) map.dispose();
         item.dispose();
       }
     });
@@ -345,6 +355,9 @@ async function createPointCloudViewer(
   /* ── Ray picking against the point index ── */
 
   const raycaster = new T.Raycaster();
+  // Lines (measurement polylines) need a pick tolerance in world units — at
+  // least 5 cm so they stay clickable in small scans at typical zoom.
+  raycaster.params.Line = { threshold: Math.max(markerRadius, 0.05) };
   const ndc = new T.Vector2();
 
   function setRayFromEvent(event: { clientX: number; clientY: number }): number {
@@ -463,6 +476,13 @@ async function createPointCloudViewer(
       hooks.onMeasurement({ type: "count", points: [{ ...snapped }], value: 1, unit: "count" });
       return;
     }
+    // Reject degenerate vertices: a click that lands (or a double-click that
+    // re-fires) within a couple point-sizes of the previous vertex would
+    // otherwise complete an invisible 0.000 m measurement.
+    const previous = draftPoints[draftPoints.length - 1];
+    if (previous && distance3(previous, snapped) < Math.max(2 * pointsMaterial.size, 0.02)) {
+      return;
+    }
     if (tool === "measure-line") {
       draftPoints.push(snapped);
       if (draftPoints.length >= 2) {
@@ -484,12 +504,15 @@ async function createPointCloudViewer(
     refreshDraft();
   }
 
-  /* ── Orbit-mode segment selection ── */
+  /* ── Orbit-mode selection (measurements + segment overlays) ── */
 
-  function segmentIdForObject(object: THREE.Object3D | null): string | null {
+  function userDataIdForObject(
+    object: THREE.Object3D | null,
+    key: "segmentId" | "measurementId",
+  ): string | null {
     let current: THREE.Object3D | null = object;
     while (current) {
-      const id = current.userData?.segmentId;
+      const id = current.userData?.[key];
       if (typeof id === "string" && id) return id;
       current = current.parent;
     }
@@ -498,15 +521,45 @@ async function createPointCloudViewer(
 
   function handleOrbitClick(event: PointerEvent) {
     setRayFromEvent(event);
-    const hits = raycaster.intersectObjects(segmentGroup.children, true);
+    // One combined cast over measurements + segment overlays, then class-
+    // priority resolution (choosePickHit) so the big translucent plane patches
+    // can't occlude the pipes/markers right behind them.
+    const hits = raycaster.intersectObjects(
+      [...measurementGroup.children, ...segmentGroup.children],
+      true,
+    );
+    const segmentKindById = new Map(hooks.getSegments().map((s) => [s.id, s.kind]));
+    const additive = event.ctrlKey || event.metaKey || event.shiftKey;
+    const candidates: Array<{ distance: number; kind: PickHitKind; select: () => void }> = [];
     for (const hit of hits) {
-      const id = segmentIdForObject(hit.object);
-      if (id) {
-        hooks.onSelectSegment(id);
-        return;
+      const measurementId = userDataIdForObject(hit.object, "measurementId");
+      if (measurementId) {
+        candidates.push({
+          distance: hit.distance,
+          kind: "measurement",
+          select: () => hooks.onSelectMeasurement(measurementId),
+        });
+        continue;
+      }
+      const segmentId = userDataIdForObject(hit.object, "segmentId");
+      if (segmentId) {
+        candidates.push({
+          distance: hit.distance,
+          kind: segmentKindById.get(segmentId) ?? "cluster",
+          select: () => hooks.onSelectSegment(segmentId, { additive }),
+        });
       }
     }
-    hooks.onSelectSegment(null);
+    const winner = choosePickHit(candidates);
+    if (winner >= 0) {
+      // Only one thing is selected at a time — picking one kind clears the other.
+      const choice = candidates[winner];
+      if (choice.kind === "measurement") hooks.onSelectSegment(null);
+      else hooks.onSelectMeasurement(null);
+      choice.select();
+    }
+    // Empty click keeps the current selection — Escape is the deselect gesture
+    // (matches the BIM viewer and the surface's status hint).
   }
 
   /* ── Pointer / keyboard wiring ── */
@@ -551,7 +604,14 @@ async function createPointCloudViewer(
   };
   const onKeyDown = (event: KeyboardEvent) => {
     const tool = hooks.getTool();
-    if (tool === "orbit") return;
+    if (tool === "orbit") {
+      // Escape is the deselect gesture in orbit mode.
+      if (event.key === "Escape") {
+        hooks.onSelectMeasurement(null);
+        hooks.onSelectSegment(null);
+      }
+      return;
+    }
     if (event.key === "Escape") {
       if (draftPoints.length > 0 || hoverPoint) {
         event.preventDefault();
@@ -572,9 +632,41 @@ async function createPointCloudViewer(
   canvas.addEventListener("dblclick", onDoubleClick);
   window.addEventListener("keydown", onKeyDown);
 
+  /* ── Focus dimming (AutoCAD-style: selection dims + desaturates the rest) ── */
+
+  function focusDimActive(): boolean {
+    const segmentIds = hooks.getSelectedSegmentIds();
+    return (
+      (hooks.getSelectedMeasurementId() ?? null) !== null ||
+      (segmentIds != null && segmentIds.length > 0)
+    );
+  }
+
+  /** Mutates the shared points material — no rebuilds. With vertexColors the
+   *  gray multiplies per-point color, darkening and flattening it (acceptable
+   *  desaturation approximation). depthWrite stays true so the dimmed cloud
+   *  still occludes correctly. */
+  function updateCloudDim() {
+    const dimmed = focusDimActive();
+    pointsMaterial.transparent = dimmed;
+    pointsMaterial.opacity = dimmed ? 0.3 : 1;
+    pointsMaterial.depthWrite = true;
+    if (cloud.hasColor) {
+      pointsMaterial.color.setHex(dimmed ? 0x7a7a7a : 0xffffff);
+    } else {
+      pointsMaterial.color.setHex(dimmed ? 0x6b7078 : 0xb8c2cf);
+    }
+    pointsMaterial.needsUpdate = true;
+  }
+
   /* ── Segment overlays ── */
 
-  function buildPipeOverlay(segment: ScanSegment, selected: boolean, color: number): THREE.Object3D | null {
+  function buildPipeOverlay(
+    segment: ScanSegment,
+    selected: boolean,
+    dimmed: boolean,
+    color: number,
+  ): THREE.Object3D | null {
     const polyline = segment.polyline;
     if (!polyline || polyline.length < 2) return null;
     const group = new T.Group();
@@ -592,7 +684,7 @@ async function createPointCloudViewer(
       new T.MeshLambertMaterial({
         color,
         transparent: true,
-        opacity: selected ? 0.95 : 0.35,
+        opacity: selected ? 0.95 : dimmed ? 0.15 : 0.35,
         depthWrite: false,
         emissive: selected ? color : 0x000000,
         emissiveIntensity: selected ? 0.45 : 0,
@@ -601,16 +693,32 @@ async function createPointCloudViewer(
     tube.userData.segmentId = segment.id;
     group.add(tube);
 
+    // Invisible, fatter pick tube so thin pipes are easy to click in orbit
+    // mode. material.visible=false keeps the mesh raycastable (unlike
+    // object.visible=false) while drawing nothing.
+    const pickRadius = Math.max(radius * 1.6, 0.06);
+    const pickTube = new T.Mesh(
+      new T.TubeGeometry(path, tubularSegments, pickRadius, 8, false),
+      new T.MeshBasicMaterial({ visible: false }),
+    );
+    pickTube.userData.segmentId = segment.id;
+    group.add(pickTube);
+
     const centerline = new T.Line(
       new T.BufferGeometry().setFromPoints(vertices),
-      new T.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : 0.7 }),
+      new T.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : dimmed ? 0.15 : 0.7 }),
     );
     centerline.raycast = () => undefined;
     group.add(centerline);
     return group;
   }
 
-  function buildPlaneOverlay(segment: ScanSegment, selected: boolean, color: number): THREE.Object3D | null {
+  function buildPlaneOverlay(
+    segment: ScanSegment,
+    selected: boolean,
+    dimmed: boolean,
+    color: number,
+  ): THREE.Object3D | null {
     const normal = segment.normal
       ? new T.Vector3(...segment.normal).normalize()
       : new T.Vector3(0, 0, 1);
@@ -652,7 +760,7 @@ async function createPointCloudViewer(
       new T.MeshLambertMaterial({
         color,
         transparent: true,
-        opacity: selected ? 0.55 : 0.22,
+        opacity: selected ? 0.55 : dimmed ? 0.08 : 0.22,
         depthWrite: false,
         side: T.DoubleSide,
         emissive: selected ? color : 0x000000,
@@ -665,14 +773,19 @@ async function createPointCloudViewer(
 
     const outline = new T.LineSegments(
       new T.EdgesGeometry(geometry),
-      new T.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : 0.6 }),
+      new T.LineBasicMaterial({ color, transparent: true, opacity: selected ? 1 : dimmed ? 0.15 : 0.6 }),
     );
     outline.raycast = () => undefined;
     patch.add(outline);
     return patch;
   }
 
-  function buildClusterOverlay(segment: ScanSegment, selected: boolean, color: number): THREE.Object3D | null {
+  function buildClusterOverlay(
+    segment: ScanSegment,
+    selected: boolean,
+    dimmed: boolean,
+    color: number,
+  ): THREE.Object3D | null {
     if (!segment.bbox) return null;
     const box = new T.Box3(
       new T.Vector3(...segment.bbox.min),
@@ -688,7 +801,7 @@ async function createPointCloudViewer(
       new T.MeshLambertMaterial({
         color,
         transparent: true,
-        opacity: selected ? 0.3 : 0.1,
+        opacity: selected ? 0.3 : dimmed ? 0.05 : 0.1,
         depthWrite: false,
         emissive: selected ? color : 0x000000,
         emissiveIntensity: selected ? 0.4 : 0,
@@ -699,67 +812,171 @@ async function createPointCloudViewer(
     group.add(fill);
 
     const helper = new T.Box3Helper(box, new T.Color(color));
+    if (dimmed && !selected) {
+      const helperMaterial = helper.material as THREE.LineBasicMaterial;
+      helperMaterial.transparent = true;
+      helperMaterial.opacity = 0.15;
+    }
     helper.raycast = () => undefined;
     group.add(helper);
     return group;
   }
 
   function updateSegments() {
+    updateCloudDim();
     clearGroup(segmentGroup);
     const segments = hooks.getSegments();
     const visibleIds = hooks.getVisibleSegmentIds();
     const visibleSet = visibleIds == null ? null : new Set(visibleIds);
-    const selectedId = hooks.getSelectedSegmentId() ?? null;
+    const selectedSet = new Set(hooks.getSelectedSegmentIds() ?? []);
+    const dimmed = focusDimActive();
     for (const segment of segments) {
       if (visibleSet && !visibleSet.has(segment.id)) continue;
-      const selected = segment.id === selectedId;
+      const selected = selectedSet.has(segment.id);
       const color = SEGMENT_COLORS[segment.kind];
       let object: THREE.Object3D | null = null;
-      if (segment.kind === "pipe-run") object = buildPipeOverlay(segment, selected, color);
-      else if (segment.kind === "plane") object = buildPlaneOverlay(segment, selected, color);
-      else object = buildClusterOverlay(segment, selected, color);
+      if (segment.kind === "pipe-run") object = buildPipeOverlay(segment, selected, dimmed, color);
+      else if (segment.kind === "plane") object = buildPlaneOverlay(segment, selected, dimmed, color);
+      else object = buildClusterOverlay(segment, selected, dimmed, color);
       if (object) segmentGroup.add(object);
     }
   }
 
   /* ── Persisted measurements ── */
 
+  /** Point halfway along the polyline path (by arc length, not vertex index). */
+  function midpointAlongPath(points: Array<{ x: number; y: number; z: number }>): PcVec3 {
+    const total = polylineLength(points);
+    if (points.length < 2 || total <= 0) return { ...points[0] };
+    let remaining = total / 2;
+    for (let i = 1; i < points.length; i += 1) {
+      const a = points[i - 1];
+      const b = points[i];
+      const seg = distance3(a, b);
+      if (seg >= remaining && seg > 0) {
+        const t = remaining / seg;
+        return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t, z: a.z + (b.z - a.z) * t };
+      }
+      remaining -= seg;
+    }
+    return { ...points[points.length - 1] };
+  }
+
+  /** Always-visible BIM-style value pill rendered to a canvas-textured sprite. */
+  function buildMeasurementLabel(
+    text: string,
+    measurementId: string,
+    dimmed: boolean,
+  ): THREE.Sprite | null {
+    const dpr = 2;
+    const fontPx = 22 * dpr;
+    const padX = 9 * dpr;
+    const padY = 5 * dpr;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    const font = `600 ${fontPx}px ui-sans-serif, system-ui, sans-serif`;
+    ctx.font = font;
+    canvas.width = Math.max(Math.ceil(ctx.measureText(text).width + padX * 2), 1);
+    canvas.height = fontPx + padY * 2;
+    ctx.font = font; // resizing the canvas resets context state
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillStyle = "rgba(24, 24, 37, 0.88)";
+    ctx.beginPath();
+    const rounded = ctx as CanvasRenderingContext2D & {
+      roundRect?: (x: number, y: number, w: number, h: number, r: number) => void;
+    };
+    if (rounded.roundRect) rounded.roundRect(0, 0, canvas.width, canvas.height, 7 * dpr);
+    else ctx.rect(0, 0, canvas.width, canvas.height);
+    ctx.fill();
+    ctx.fillStyle = "#f4f4f5";
+    ctx.fillText(text, canvas.width / 2, canvas.height / 2);
+    const texture = new T.CanvasTexture(canvas);
+    texture.colorSpace = T.SRGBColorSpace;
+    const sprite = new T.Sprite(
+      new T.SpriteMaterial({
+        map: texture,
+        transparent: true,
+        opacity: dimmed ? 0.35 : 1,
+        depthTest: false,
+        depthWrite: false,
+      }),
+    );
+    const height = Math.max(markerRadius * 5, 0.12);
+    sprite.scale.set(height * (canvas.width / canvas.height), height, 1);
+    sprite.userData.measurementId = measurementId;
+    sprite.renderOrder = 10;
+    return sprite;
+  }
+
   function updateMeasurements() {
+    updateCloudDim();
     clearGroup(measurementGroup);
+    const selectedMeasurementId = hooks.getSelectedMeasurementId() ?? null;
+    const focusActive = focusDimActive();
     for (const measurement of hooks.getMeasurements()) {
       if (!measurement.visible || measurement.points.length === 0) continue;
-      const color = new T.Color(measurement.color || "#f97316");
+      const selected = measurement.id === selectedMeasurementId;
+      // Any active selection dims every measurement that is not the selection.
+      const dimmed = focusActive && !selected;
+      const baseColor = new T.Color(measurement.color || "#f97316");
+      // Selected → brighter, full-opacity tint of the measurement color.
+      const color = selected ? baseColor.clone().lerp(new T.Color(0xffffff), 0.35) : baseColor;
+      const markerScale = selected ? 1.5 : 1;
       const group = new T.Group();
       group.userData.measurementId = measurement.id;
       const vertices = measurement.points.map((p) => new T.Vector3(p.x, p.y, p.z));
 
       if (measurement.type === "count") {
-        const material = new T.MeshBasicMaterial({ color });
+        const material = new T.MeshBasicMaterial({ color, transparent: dimmed, opacity: dimmed ? 0.35 : 1 });
         for (const vertex of vertices) {
           const marker = new T.Mesh(sharedCountGeometry, material);
           marker.position.copy(vertex);
+          marker.scale.setScalar(markerScale);
+          marker.userData.measurementId = measurement.id;
           group.add(marker);
         }
         measurementGroup.add(group);
         continue;
       }
 
-      const markerMaterial = new T.MeshBasicMaterial({ color });
+      // Endpoint/vertex markers run slightly larger than count markers so the
+      // measurement geometry reads clearly against the cloud.
+      const vertexMarkerScale = selected ? 1.75 : 1.25;
+      const markerMaterial = new T.MeshBasicMaterial({ color, transparent: dimmed, opacity: dimmed ? 0.35 : 1 });
       for (const vertex of vertices) {
         const marker = new T.Mesh(sharedMarkerGeometry, markerMaterial);
         marker.position.copy(vertex);
+        marker.scale.setScalar(vertexMarkerScale);
+        marker.userData.measurementId = measurement.id;
         group.add(marker);
       }
 
       if (vertices.length >= 2) {
         const lineGeometry = new T.BufferGeometry().setFromPoints(vertices);
-        const lineMaterial = new T.LineBasicMaterial({ color });
+        const lineMaterial = new T.LineBasicMaterial({
+          color,
+          transparent: true,
+          opacity: selected ? 1 : dimmed ? 0.35 : 1,
+        });
         const line =
           measurement.type === "area-polygon"
             ? new T.LineLoop(lineGeometry, lineMaterial)
             : new T.Line(lineGeometry, lineMaterial);
-        line.raycast = () => undefined;
+        // Raycastable so orbit-mode clicks along the line select it.
+        line.userData.measurementId = measurement.id;
         group.add(line);
+
+        if (selected && (measurement.type === "linear" || measurement.type === "linear-polyline")) {
+          // Second, slightly-thicker overlay line to emphasize the selection.
+          const overlay = new T.Line(
+            lineGeometry.clone(),
+            new T.LineBasicMaterial({ color, linewidth: 3, transparent: true, opacity: 0.85 }),
+          );
+          overlay.raycast = () => undefined;
+          group.add(overlay);
+        }
       }
 
       if (measurement.type === "area-polygon" && vertices.length >= 3) {
@@ -781,13 +998,41 @@ async function createPointCloudViewer(
           new T.MeshBasicMaterial({
             color,
             transparent: true,
-            opacity: 0.15,
+            opacity: dimmed ? 0.06 : 0.15,
             depthWrite: false,
             side: T.DoubleSide,
           }),
         );
         fill.raycast = () => undefined;
         group.add(fill);
+      }
+
+      // Always-visible value label (BIM/AutoCAD-style): length at the path
+      // midpoint for lines/polylines, area at the centroid for polygons.
+      if (measurement.type === "area-polygon" && vertices.length >= 3) {
+        const centroid = vertices
+          .reduce((sum, vertex) => sum.add(vertex), new T.Vector3())
+          .divideScalar(vertices.length);
+        const label = buildMeasurementLabel(
+          formatMeasureValue(planarPolygonArea(measurement.points), "m2"),
+          measurement.id,
+          dimmed,
+        );
+        if (label) {
+          label.position.set(centroid.x, centroid.y, centroid.z + markerRadius * 2);
+          group.add(label);
+        }
+      } else if (vertices.length >= 2) {
+        const mid = midpointAlongPath(measurement.points);
+        const label = buildMeasurementLabel(
+          formatMeasureValue(polylineLength(measurement.points), "m"),
+          measurement.id,
+          dimmed,
+        );
+        if (label) {
+          label.position.set(mid.x, mid.y, mid.z + markerRadius * 2);
+          group.add(label);
+        }
       }
 
       measurementGroup.add(group);
@@ -876,11 +1121,13 @@ export function PointCloudViewer({
   cloud,
   segments,
   visibleSegmentIds,
-  selectedSegmentId,
+  selectedSegmentIds,
   onSelectSegment,
   tool,
   onMeasurement,
   measurements,
+  selectedMeasurementId,
+  onSelectMeasurement,
   pointSize = DEFAULT_POINT_SIZE,
   onReady,
   onLoadProgress,
@@ -902,10 +1149,12 @@ export function PointCloudViewer({
     tool,
     segments: segments ?? [],
     visibleSegmentIds,
-    selectedSegmentId,
+    selectedSegmentIds,
     measurements: measurements ?? [],
+    selectedMeasurementId,
     pointSize,
     onSelectSegment,
+    onSelectMeasurement,
     onMeasurement,
     onReady,
     onLoadProgress,
@@ -916,10 +1165,12 @@ export function PointCloudViewer({
       tool,
       segments: segments ?? [],
       visibleSegmentIds,
-      selectedSegmentId,
+      selectedSegmentIds,
       measurements: measurements ?? [],
+      selectedMeasurementId,
       pointSize,
       onSelectSegment,
+      onSelectMeasurement,
       onMeasurement,
       onReady,
       onLoadProgress,
@@ -947,9 +1198,11 @@ export function PointCloudViewer({
       getTool: () => latest.current.tool,
       getSegments: () => latest.current.segments,
       getVisibleSegmentIds: () => latest.current.visibleSegmentIds,
-      getSelectedSegmentId: () => latest.current.selectedSegmentId,
+      getSelectedSegmentIds: () => latest.current.selectedSegmentIds,
       getMeasurements: () => latest.current.measurements,
-      onSelectSegment: (id) => latest.current.onSelectSegment?.(id),
+      getSelectedMeasurementId: () => latest.current.selectedMeasurementId,
+      onSelectSegment: (id, opts) => latest.current.onSelectSegment?.(id, opts),
+      onSelectMeasurement: (id) => latest.current.onSelectMeasurement?.(id),
       onMeasurement: (draft) => latest.current.onMeasurement?.(draft),
       onLoadProgress: () => undefined, // replaced below (needs setState in scope)
       setReadout,
@@ -1019,13 +1272,15 @@ export function PointCloudViewer({
     viewerRef.current?.resetDraft();
   }, [tool]);
 
+  // Both update paths also refresh the focus dim, which depends on BOTH
+  // selections — so each effect watches the other selection too.
   useEffect(() => {
     viewerRef.current?.updateSegments();
-  }, [segments, visibleSegmentIds, selectedSegmentId]);
+  }, [segments, visibleSegmentIds, selectedSegmentIds, selectedMeasurementId]);
 
   useEffect(() => {
     viewerRef.current?.updateMeasurements();
-  }, [measurements]);
+  }, [measurements, selectedMeasurementId, selectedSegmentIds]);
 
   useEffect(() => {
     viewerRef.current?.setPointSize(pointSize);
@@ -1072,7 +1327,7 @@ export function PointCloudViewer({
       )}
 
       {streaming && (
-        <div className="absolute right-3 top-3 z-10 flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/80 px-2.5 py-1.5 backdrop-blur-sm">
+        <div className="pointer-events-none absolute right-3 top-3 z-10 flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900/80 px-2.5 py-1.5 backdrop-blur-sm">
           <Loader2 className="h-3.5 w-3.5 animate-spin text-indigo-400" />
           <span className="text-[11px] font-medium text-zinc-300">
             Streaming points… {progressPct}%
@@ -1081,7 +1336,7 @@ export function PointCloudViewer({
       )}
 
       {state === "ready" && measuring && (
-        <div className="absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-1.5 backdrop-blur-sm">
+        <div className="pointer-events-none absolute bottom-3 left-1/2 z-10 -translate-x-1/2 rounded-md border border-zinc-800 bg-zinc-900/70 px-3 py-1.5 backdrop-blur-sm">
           <p className="text-[11px] text-zinc-500">
             {tool === "count"
               ? "Click a point to add a count marker"

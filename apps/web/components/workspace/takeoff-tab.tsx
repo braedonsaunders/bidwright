@@ -70,6 +70,7 @@ import type {
   FileNode,
   ImportPreviewResponse,
   ProjectWorkspaceData,
+  ScanSegmentRecord,
   VisionMatch,
   VisionBoundingBox,
   PickupLinkRecord,
@@ -1048,6 +1049,9 @@ interface TakeoffTabProps {
   workspace: ProjectWorkspaceData;
   onOpenAgentChat?: (prefill?: string) => void;
   onOpenRevisionDiff?: () => void;
+  /** Navigate the workspace to the Documents tab (the "Project Files" intake
+   *  card). Absent in detached windows, where the card is hidden. */
+  onOpenDocuments?: () => void;
   onWorkspaceMutated?: () => void;
   initialDocumentId?: string | null;
   initialPage?: number;
@@ -1758,6 +1762,7 @@ export function TakeoffTab({
   workspace,
   onOpenAgentChat,
   onOpenRevisionDiff,
+  onOpenDocuments,
   onWorkspaceMutated,
   initialDocumentId,
   initialPage = 1,
@@ -2028,7 +2033,7 @@ export function TakeoffTab({
   // source, but it must not silently bypass the launcher on a fresh estimate
   // visit. Detached viewers remain direct-document surfaces.
   const [showLanding, setShowLanding] = useState(!detached && !initialEditorOpen);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo";
+  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo" | "files";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
@@ -2070,6 +2075,19 @@ export function TakeoffTab({
   const [annotations, setAnnotations] = useState<Pickup[]>([]);
   const [selectedPickupId, setSelectedPickupId] = useState<string | null>(null);
   const [dwgAnnotationsCache, setDwgAnnotationsCache] = useState<Pickup[]>([]);
+  // ── LiDAR scan surface state (lists render in the Pickups/Inspect rail;
+  // the 3D surface is a pure viewer mirrored through these) ──
+  const [scanAnnotationsCache, setScanAnnotationsCache] = useState<Pickup[]>([]);
+  const [scanSegments, setScanSegments] = useState<ScanSegmentRecord[]>([]);
+  const [scanElementIdMap, setScanElementIdMap] = useState<Record<string, string>>({});
+  const [scanSegmentStats, setScanSegmentStats] = useState<Record<string, unknown> | undefined>(undefined);
+  const [scanHiddenSegmentIds, setScanHiddenSegmentIds] = useState<Set<string>>(new Set());
+  // BIM-parity multiselect: plain click replaces the set, modifier-click
+  // toggles membership, group-header click selects the whole group. The
+  // selection logic (publishing + mutual exclusion with pickups) lives
+  // further down, after selectedModelAsset is derived.
+  const [selectedScanSegmentIds, setSelectedScanSegmentIds] = useState<string[]>([]);
+  const scanActionsRef = useRef<import("./scan-takeoff-surface").ScanSurfaceActions | null>(null);
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [pendingConfig, setPendingConfig] = useState<AnnotationConfig | null>(null);
   const [snapEnabled, setSnapEnabled] = useState(true);
@@ -2521,6 +2539,142 @@ export function TakeoffTab({
   const linkedModelLineItems = modelTakeoffLinks
     .map(toLinkedModelLineItem)
     .filter((item): item is BidwrightModelLinkedLineItem => Boolean(item));
+
+  /** Scan segments presented as model elements so the Inspect tab renders
+   *  them with the exact BIM metadata panel (they are persisted
+   *  ModelElements once Detect Geometry has run). */
+  const scanInspectElements = useMemo<InspectModelElement[]>(() => {
+    if (!isScanDocument) return [];
+    return scanSegments.flatMap((segment) => {
+      const elementId = scanElementIdMap[segment.id];
+      if (!elementId) return [];
+      const quantity = segment.kind === "pipe-run" ? segment.length ?? 0 : segment.kind === "plane" ? segment.area ?? 0 : 1;
+      const unit = segment.kind === "pipe-run" ? "m" : segment.kind === "plane" ? "m²" : "EA";
+      const quantityType = segment.kind === "pipe-run" ? "length" : segment.kind === "plane" ? "area" : "count";
+      const identification = segment.identification;
+      return [{
+        id: elementId,
+        name: segment.label,
+        externalId: segment.id,
+        elementClass: segment.kind === "pipe-run" ? "ScanPipeRun" : segment.kind === "plane" ? "ScanPlane" : "ScanCluster",
+        elementType: segment.kindDetail || segment.kind,
+        system: identification?.service ?? null,
+        material: identification?.material ?? null,
+        level: null,
+        classification: null,
+        lod: null,
+        lodSource: null,
+        quantitySummary: `${quantity.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${unit}`,
+        quantities: [{
+          id: `${segment.id}:${quantityType}`,
+          quantityType,
+          value: quantity,
+          unit,
+          method: segment.kind === "pipe-run" ? "scan_cylinder_fit" : segment.kind === "plane" ? "scan_plane_fit" : "scan_cluster",
+          confidence: segment.confidence,
+        }],
+        properties: {
+          Confidence: `${Math.round(segment.confidence * 100)}%`,
+          Points: segment.pointCount.toLocaleString(),
+          ...(segment.radius ? { Diameter: `${Math.round(segment.radius * 2000)} mm` } : {}),
+          ...(segment.length ? { Length: `${segment.length.toFixed(2)} m` } : {}),
+          ...(segment.area ? { Area: `${segment.area.toFixed(1)} m²` } : {}),
+          ...(segment.kindDetail ? { Surface: segment.kindDetail } : {}),
+          ...(identification?.nominalSize ? { "Nominal size": identification.nominalSize } : {}),
+          ...(identification?.material ? { Material: identification.material } : {}),
+          ...(identification?.service ? { Service: identification.service } : {}),
+          ...(identification?.insulated != null ? { Insulated: identification.insulated ? "Yes" : "No" } : {}),
+        },
+        isLinked: false,
+      }];
+    });
+  }, [isScanDocument, scanSegments, scanElementIdMap]);
+
+  /** Apply a scan segment selection set: local state for viewer/panel
+   *  highlight, published workspace selection so the Inspect tab renders the
+   *  BIM metadata panel, and mutual exclusion with pickup selections. */
+  function applyScanSegmentSelection(next: string[]) {
+    setSelectedScanSegmentIds(next);
+    const assetId = selectedModelAsset?.id;
+    if (next.length === 0) {
+      if (selection?.kind === "model-element" || selection?.kind === "model-element-group" || !onSelectionChange) {
+        publishTakeoffSelection(null);
+      }
+      return;
+    }
+    // Segments and pickups are mutually exclusive selections. The publishes
+    // below replace an annotation selection when they fire, but they bail
+    // when the segment's ModelElement hasn't been resolved yet — an active
+    // pickup highlight must still drop so both never glow at once.
+    const clearStaleAnnotationSelection = () => {
+      if (selection?.kind === "annotation") publishTakeoffSelection(null);
+    };
+    if (!assetId) {
+      clearStaleAnnotationSelection();
+      return;
+    }
+    if (next.length === 1) {
+      const element = scanInspectElements.find((candidate) => candidate.externalId === next[0]);
+      if (!element) {
+        clearStaleAnnotationSelection();
+        return;
+      }
+      publishTakeoffSelection({
+        kind: "model-element",
+        assetId,
+        elementId: element.id,
+        elementName: element.name,
+        elementClass: element.elementClass ?? undefined,
+        material: element.material ?? undefined,
+        level: undefined,
+        quantitySummary: element.quantitySummary,
+      });
+      return;
+    }
+    const members = scanInspectElements.filter((candidate) => next.includes(candidate.externalId));
+    if (members.length === 0) {
+      clearStaleAnnotationSelection();
+      return;
+    }
+    const measurementTypes = new Set(members.map((member) => member.quantities[0]?.quantityType ?? "count"));
+    const uniform = measurementTypes.size === 1;
+    const quantity = uniform ? members.reduce((sum, member) => sum + (member.quantities[0]?.value ?? 0), 0) : members.length;
+    const unit = uniform ? members[0].quantities[0]?.unit ?? "EA" : "EA";
+    const confidence = members.reduce((sum, member) => sum + (member.quantities[0]?.confidence ?? 1), 0) / members.length;
+    publishTakeoffSelection({
+      kind: "model-element-group",
+      assetId,
+      groupSignature: `scan-selection:${[...next].sort().join("|")}`,
+      groupName: `${members.length} scan segments`,
+      groupKind: "estimate",
+      elementIds: members.map((member) => member.id),
+      elementCount: members.length,
+      measurementType: uniform ? (members[0].quantities[0]?.quantityType ?? "count") : "count",
+      quantity,
+      unit,
+      confidence,
+      source: "scan-segmentation",
+      warnings: [],
+    });
+  }
+
+  function selectScanSegment(segmentId: string | null, opts?: { additive?: boolean }) {
+    const prev = selectedScanSegmentIds;
+    let next: string[];
+    if (!segmentId) next = [];
+    else if (opts?.additive) {
+      next = prev.includes(segmentId) ? prev.filter((id) => id !== segmentId) : [...prev, segmentId];
+    } else {
+      next = prev.length === 1 && prev[0] === segmentId ? [] : [segmentId];
+    }
+    applyScanSegmentSelection(next);
+  }
+
+  function selectScanSegmentGroup(segmentIds: string[]) {
+    const prev = selectedScanSegmentIds;
+    const allSelected = segmentIds.length > 0 && segmentIds.every((id) => prev.includes(id));
+    applyScanSegmentSelection(allSelected ? [] : segmentIds);
+  }
 
   const refreshModelAssets = useCallback(async (forceSync = false) => {
     if (!projectId) return;
@@ -3190,11 +3344,12 @@ export function TakeoffTab({
     void loadPickupLinks();
   }, [linksReloadSignal, loadPickupLinks]);
 
-  // Publish annotations (PDF + DWG merged) to the parent so the side panel can
-  // look them up by id regardless of which viewer drew them.
+  // Publish annotations (PDF + DWG + scan merged) to the parent so the side
+  // panel can look them up by id regardless of which viewer drew them — the
+  // link/"Add" pane resolves the selected pickup from this mirror.
   useEffect(() => {
-    onAnnotationsChange?.([...annotations, ...dwgAnnotationsCache]);
-  }, [annotations, dwgAnnotationsCache, onAnnotationsChange]);
+    onAnnotationsChange?.([...annotations, ...dwgAnnotationsCache, ...scanAnnotationsCache]);
+  }, [annotations, dwgAnnotationsCache, scanAnnotationsCache, onAnnotationsChange]);
 
   // Mirror externally-controlled annotation selection into local state. Clearing
   // is done by updateAnnotationSelection so local clicks cannot race a stale
@@ -3290,16 +3445,48 @@ export function TakeoffTab({
     }
     if (inspectActionsRef) {
       const isDwg = isDwgDocument;
+      const isScan = isScanDocument;
       inspectActionsRef.current = {
         selectAnnotation: (id) => {
-          // For CAD, route through onSelectionChange so CadTakeoffSurface picks
-          // it up through the editor bridge; for PDF, mutate local state directly.
-          if (isDwg) {
+          // For CAD and scan, route through onSelectionChange so the surface
+          // picks it up (and highlights in 3D); for PDF, mutate local state.
+          if (isDwg || isScan) {
+            // Pickup and segment selections are mutually exclusive.
+            if (isScan && id) setSelectedScanSegmentIds([]);
             if (id) publishTakeoffSelection({ kind: "annotation", pickupId: id });
             else if (selection?.kind === "annotation" || !onSelectionChange) publishTakeoffSelection(null);
           } else {
             updateAnnotationSelection(id);
           }
+        },
+        onSelectScanSegment: (segmentId, opts) => {
+          selectScanSegment(segmentId, opts);
+        },
+        onSelectScanSegmentGroup: (segmentIds) => {
+          selectScanSegmentGroup(segmentIds);
+        },
+        onFocusScanSegment: (segmentId) => {
+          selectScanSegment(segmentId);
+          scanActionsRef.current?.focusSegment(segmentId);
+        },
+        onToggleScanSegmentVisible: (segmentId) => {
+          setScanHiddenSegmentIds((prev) => {
+            const next = new Set(prev);
+            if (next.has(segmentId)) next.delete(segmentId);
+            else next.add(segmentId);
+            return next;
+          });
+        },
+        onAddScanSegmentToWorksheet: async (segmentId) => {
+          await addScanSegmentToWorksheet(segmentId);
+        },
+        onAddScanSegmentGroupToWorksheet: async (segmentIds) => {
+          for (const segmentId of segmentIds) {
+            if (scanElementIdMap[segmentId]) await addScanSegmentToWorksheet(segmentId);
+          }
+        },
+        onAddAllScanPipeRuns: async () => {
+          await addAllScanPipeRuns();
         },
         toggleAnnotationVisibility: (id) => {
           // Visibility toggle is a PDF-only feature today (DWG annotations are
@@ -3311,6 +3498,8 @@ export function TakeoffTab({
         deleteAnnotation: (id) => {
           if (annotations.some((a) => a.id === id)) {
             void handleDeleteAnnotation(id);
+          } else if (scanAnnotationsCache.some((a) => a.id === id)) {
+            void scanActionsRef.current?.deletePickup(id);
           } else {
             void dwgActionsRef.current?.deleteAnnotation(id);
           }
@@ -3416,13 +3605,13 @@ export function TakeoffTab({
           await handleCreateElementGroupLineItem(targets, groupLabel, pick);
         },
         createLineItemFromAnnotation: async (id, pick) => {
-          const allAnnotations = [...annotations, ...dwgAnnotationsCache];
+          const allAnnotations = [...annotations, ...dwgAnnotationsCache, ...scanAnnotationsCache];
           const annotation = allAnnotations.find((a) => a.id === id);
           if (!annotation) return;
           await handleCreateAnnotationLineItem(annotation, pick);
         },
         createLineItemFromAnnotationGroup: async (ids, groupLabel, pick) => {
-          const allAnnotations = [...annotations, ...dwgAnnotationsCache];
+          const allAnnotations = [...annotations, ...dwgAnnotationsCache, ...scanAnnotationsCache];
           const targets = ids
             .map((id) => allAnnotations.find((a) => a.id === id))
             .filter((a): a is Pickup => Boolean(a));
@@ -6737,17 +6926,19 @@ export function TakeoffTab({
       ? "empty"
       : isDwgDocument
         ? "dwg"
-        : isBimDocument
-          ? "bim"
-          : isCadDocument
-            ? "model"
-            : isSpreadsheetDocument
-              ? "spreadsheet"
-              : "pdf";
+        : isScanDocument
+          ? "scan"
+          : isBimDocument
+            ? "bim"
+            : isCadDocument
+              ? "model"
+              : isSpreadsheetDocument
+                ? "spreadsheet"
+                : "pdf";
     const inspectAnnotations =
-      mode === "dwg" ? dwgAnnotationsCache : mode === "pdf" ? annotations : [];
+      mode === "dwg" ? dwgAnnotationsCache : mode === "scan" ? scanAnnotationsCache : mode === "pdf" ? annotations : [];
     const inspectSelectedPickupId =
-      mode === "dwg"
+      mode === "dwg" || mode === "scan"
         ? selection?.kind === "annotation"
           ? selection.pickupId
           : null
@@ -6755,7 +6946,7 @@ export function TakeoffTab({
     // Both BIM and 3D-geometry modes carry model elements; PDF/DWG don't.
     const isModelMode = mode === "bim" || mode === "model";
     const inspectModelElements: InspectModelElement[] =
-      isModelMode ? inspectModelElementsForSnapshot : [];
+      isModelMode ? inspectModelElementsForSnapshot : mode === "scan" ? scanInspectElements : [];
     // Spreadsheet rows surfaced as entities. Only populated when the active
     // doc is a spreadsheet AND its preview has loaded; otherwise null so the
     // side panel falls back to its empty state.
@@ -6858,6 +7049,27 @@ export function TakeoffTab({
       selectedModelElementIds: Array.from(selectedModelElementIds),
       selectedModelGroupSignature,
       modelOrbitingGroupSignature,
+      scan: mode === "scan" && selectedModelAsset
+        ? {
+            modelAssetId: selectedModelAsset.id,
+            segments: scanSegments.map((segment) => ({
+              id: segment.id,
+              kind: segment.kind,
+              label: segment.label,
+              confidence: segment.confidence,
+              quantity: segment.kind === "pipe-run" ? segment.length ?? 0 : segment.kind === "plane" ? segment.area ?? 0 : 1,
+              uom: segment.kind === "pipe-run" ? "m" : segment.kind === "plane" ? "m²" : "EA",
+              detail: segment.kind === "pipe-run"
+                ? `Ø${Math.round((segment.radius ?? 0) * 2000)}mm`
+                : segment.kindDetail || undefined,
+              identification: segment.identification ?? null,
+              elementId: scanElementIdMap[segment.id] ?? null,
+              visible: !scanHiddenSegmentIds.has(segment.id),
+            })),
+            selectedSegmentIds: selectedScanSegmentIds,
+            segmentedAt: typeof scanSegmentStats?.segmentedAt === "string" ? scanSegmentStats.segmentedAt : null,
+          }
+        : null,
       spreadsheet: inspectSpreadsheet,
       photoBom: photoBomResult
         ? {
@@ -6910,8 +7122,16 @@ export function TakeoffTab({
     isBimDocument,
     isCadDocument,
     isSpreadsheetDocument,
+    isScanDocument,
     annotations,
     dwgAnnotationsCache,
+    scanAnnotationsCache,
+    scanSegments,
+    scanElementIdMap,
+    scanSegmentStats,
+    scanHiddenSegmentIds,
+    selectedScanSegmentIds,
+    scanInspectElements,
     selection,
     page,
     selectedPickupId,
@@ -7215,6 +7435,79 @@ export function TakeoffTab({
       worksheetItemId: createdItem.id,
     });
     return { createdItem };
+  }
+
+  /** Promote a detected scan segment (pipe run / surface / object) into a
+   *  worksheet line item, linked through the segment's persisted
+   *  ModelElement so re-segmentation and recalc behave like BIM links. */
+  async function addScanSegmentToWorksheet(segmentId: string) {
+    const segment = scanSegments.find((s) => s.id === segmentId);
+    const modelAssetId = selectedModelAsset?.id;
+    if (!segment || !modelAssetId) return;
+    const elementId = scanElementIdMap[segmentId];
+    if (!elementId) {
+      setToastType("error");
+      setToastMessage("Run Detect Geometry first so this segment is persisted as a model element.");
+      return;
+    }
+    const ws = selectedWorksheetRef.current;
+    if (!ws) {
+      setToastType("error");
+      setToastMessage("Pick a worksheet before adding scan geometry.");
+      return;
+    }
+    if (!takeoffCategory) {
+      setToastType("error");
+      setToastMessage("Pick a takeoff category in the Entities panel before adding line items.");
+      return;
+    }
+    const quantity = segment.kind === "pipe-run" ? segment.length ?? 0 : segment.kind === "plane" ? segment.area ?? 0 : 1;
+    const uom = segment.kind === "pipe-run" ? "m" : segment.kind === "plane" ? "m²" : "EA";
+    const identification = segment.identification;
+    const entityName = identification?.service
+      ? `${segment.label} — ${identification.service}`
+      : segment.label;
+    try {
+      const result = await createWorksheetItemFast(projectId, ws.id, {
+        categoryId: takeoffCategory.id,
+        category: takeoffCategory.name,
+        entityType: takeoffCategory.entityType,
+        entityName,
+        description: identification?.nominalSize
+          ? `${identification.nominalSize}${identification.material ? ` · ${identification.material}` : ""}`
+          : "",
+        quantity,
+        uom,
+        cost: 0,
+        markup: workspace.currentRevision.defaultMarkup ?? 0.2,
+        price: 0,
+        sourceNotes: `From LiDAR scan (${selectedDoc?.fileName ?? "scan"}) · ${segment.kind} · confidence ${(segment.confidence * 100).toFixed(0)}%`,
+      });
+      const createdItem = result.item;
+      if (!createdItem) return;
+      await createModelTakeoffLink(projectId, modelAssetId, {
+        worksheetItemId: createdItem.id,
+        modelElementId: elementId,
+        quantityField: "quantity",
+        multiplier: 1,
+        derivedQuantity: quantity,
+        selection: { mode: "scan-segment", segmentId, label: segment.label, kind: segment.kind },
+      });
+      notifyWorkspaceMutated();
+      onLinksMutated?.();
+      setToastType("success");
+      setToastMessage(`Added ${entityName} to ${ws.name}.`);
+    } catch (error) {
+      setToastType("error");
+      setToastMessage(takeoffApiErrorMessage(error, "Failed to add scan segment to the worksheet."));
+    }
+  }
+
+  async function addAllScanPipeRuns() {
+    const runs = scanSegments.filter((s) => s.kind === "pipe-run" && scanElementIdMap[s.id]);
+    for (const run of runs) {
+      await addScanSegmentToWorksheet(run.id);
+    }
   }
 
   type DwgInspectableRowType = "entity" | "autoCount" | "system";
@@ -8524,7 +8817,7 @@ export function TakeoffTab({
     {
       id: "scan",
       title: "LiDAR Scan",
-      description: "Point clouds captured in the field — measure runs, areas, and counts in 3D, or auto-detect pipe geometry.",
+      description: "Field point clouds — measure in 3D or auto-detect pipe runs.",
       metric: scanDocuments.length.toLocaleString(),
       metricLabel: "scans",
       icon: ScanLine,
@@ -8541,6 +8834,20 @@ export function TakeoffTab({
       tone: "cyan",
       ghostIcon: true,
     },
+    // Fills the 8th grid slot: jump to the Documents tab to upload/manage
+    // sources. Hidden in detached windows (no workspace tabs to switch).
+    ...(onOpenDocuments
+      ? [{
+          id: "files" as const,
+          title: "Project Files",
+          description: "Upload and manage drawings, models, scans, and photos.",
+          metric: fileTreeNodes.filter((n) => n.type === "file").length.toLocaleString(),
+          metricLabel: "files",
+          icon: FolderOpen,
+          tone: "teal" as const,
+          ghostIcon: true,
+        }]
+      : []),
   ];
 
   const activeSourcePanel =
@@ -8615,14 +8922,20 @@ export function TakeoffTab({
               >
                 <WorkspaceLauncher
                   framed={false}
-                  density="comfortable"
+                  density="compact"
                   layout="fit"
                   showBreakdowns={false}
                   showSummaries={false}
                   className="flex-1"
-                  gridClassName="grid-cols-2 gap-2.5 lg:grid-cols-3"
+                  // 7 intake cards: 4-across on desktop keeps two rows that fill
+                  // the panel; the minmax floor + scroll fallback means cards can
+                  // never clip on short viewports (fit-mode clips by default).
+                  gridClassName="grid-cols-2 gap-2.5 lg:grid-cols-4 auto-rows-[minmax(150px,1fr)] overflow-y-auto"
                   items={intakeOptions}
-                  onSelect={(id) => setActiveIntakeOption(id)}
+                  onSelect={(id) => {
+                    if (id === "files") onOpenDocuments?.();
+                    else setActiveIntakeOption(id);
+                  }}
                 />
               </motion.div>
             ) : (
@@ -8728,8 +9041,9 @@ export function TakeoffTab({
         detached ? "rounded-none border-0" : "rounded-lg border border-line"
       )}
     >
-      {!isDwgDocument && (
-      /* ─── Top Toolbar ─── */
+      {!isDwgDocument && !isScanDocument && (
+      /* ─── Top Toolbar ─── (DWG and scan surfaces render their own single
+         toolbar with the back/fullscreen/detach controls passed through) */
       <div className="flex min-w-0 items-center gap-1 overflow-hidden border-b border-line bg-panel px-1.5 py-1.5 shrink-0">
         <Button
           variant="ghost"
@@ -9329,10 +9643,30 @@ export function TakeoffTab({
               projectId={projectId}
               modelAssetId={selectedModelAsset.id}
               fileName={selectedDoc?.fileName ?? ""}
-              selectedWorksheetId={selectedWorksheet?.id}
-              defaultEstimateCategory={takeoffCategory ? { id: takeoffCategory.id, name: takeoffCategory.name, entityType: takeoffCategory.entityType } : null}
-              defaultMarkup={workspace.currentRevision.defaultMarkup ?? 0.2}
-              onWorkspaceMutated={notifyWorkspaceMutated}
+              onAnnotationsChange={setScanAnnotationsCache}
+              selectedPickupId={selection?.kind === "annotation" ? selection.pickupId : null}
+              onSelectedPickupChange={(pickupId) => {
+                if (pickupId) {
+                  // Pickup and segment selections are mutually exclusive.
+                  setSelectedScanSegmentIds([]);
+                  publishTakeoffSelection({ kind: "annotation", pickupId });
+                } else if (selection?.kind === "annotation" || !onSelectionChange) {
+                  publishTakeoffSelection(null);
+                }
+              }}
+              onSegmentsChange={({ segments, elementIdBySegmentId, stats }) => {
+                setScanSegments(segments);
+                setScanElementIdMap(elementIdBySegmentId);
+                setScanSegmentStats(stats);
+              }}
+              visibleSegmentIds={
+                scanHiddenSegmentIds.size > 0
+                  ? scanSegments.filter((s) => !scanHiddenSegmentIds.has(s.id)).map((s) => s.id)
+                  : null
+              }
+              selectedSegmentIds={selectedScanSegmentIds}
+              onSelectSegment={selectScanSegment}
+              actionsRef={scanActionsRef}
               toolbarStart={
                 <Button
                   variant="ghost"
@@ -9346,20 +9680,36 @@ export function TakeoffTab({
                 </Button>
               }
               toolbarEnd={
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={handleFullscreen}
-                  title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                  aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-                  className="h-7 w-7 shrink-0 px-0"
-                >
-                  {isFullscreen ? (
-                    <Shrink className="h-3.5 w-3.5" />
-                  ) : (
-                    <Expand className="h-3.5 w-3.5" />
+                <>
+                  <Separator className="hidden !h-6 !w-px shrink-0 md:block" />
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleFullscreen}
+                    title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    aria-label={isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+                    className="h-7 w-7 shrink-0 px-0"
+                  >
+                    {isFullscreen ? (
+                      <Shrink className="h-3.5 w-3.5" />
+                    ) : (
+                      <Expand className="h-3.5 w-3.5" />
+                    )}
+                  </Button>
+                  {!detached && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={handleDetach}
+                      title="Open in new window"
+                      aria-label="Open in new window"
+                      disabled={!selectedDocId}
+                      className="h-7 w-7 shrink-0 px-0"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </Button>
                   )}
-                </Button>
+                </>
               }
             />
           ) : (

@@ -578,9 +578,16 @@ function resolveLinearSourceUnit(
   explicitUnitText: string,
   value: number,
   defaultLinear: LinearUnit | null,
+  modalAuthoredUnit: LinearUnit | null = null,
 ): LinearUnit | null {
   const explicit = normalizeLinearUnit(explicitUnitText);
-  if (explicit) return explicit;
+  // An explicit unit that DIFFERS from the model's display unit is genuinely
+  // authored — trust it outright. An explicit unit EQUAL to the display unit
+  // is suspect: the APS adapter stamps guessUnits() (always "ft") onto raw
+  // property magnitudes, so an imperial Plant3D NWD arrives with inch values
+  // labelled "ft". Demote that case below the per-element hint, the weight
+  // cross-check, and the model-wide modal hint.
+  if (explicit && explicit !== defaultLinear) return explicit;
   if (element.authoredLinearUnit) return element.authoredLinearUnit;
   if (type === "length" && element.impliedLength && value > 0) {
     let best: { unit: LinearUnit; error: number } | null = null;
@@ -591,6 +598,11 @@ function resolveLinearSourceUnit(
     }
     if (best && best.error <= 0.2) return best.unit;
   }
+  // Hint-less elements (Navisworks pipes often carry a bare geometry length
+  // with no sibling unit props) inherit the drawing unit declared by the
+  // overwhelming majority of their hinted siblings.
+  if (modalAuthoredUnit) return modalAuthoredUnit;
+  if (explicit) return explicit;
   return defaultLinear;
 }
 
@@ -626,13 +638,14 @@ function finalizeMeasurement(
   element: SemanticElement,
   selected: { quantity: { id: string; value: number; unit: string; confidence?: number }; type: string },
   defaultUnits: string,
+  modalAuthoredUnit: LinearUnit | null = null,
 ) {
   const type = selected.type;
   const rawUnitText = selected.quantity.unit ?? "";
   const confidence = selected.quantity.confidence ?? 1;
   if (type === "length" || type === "area" || type === "volume") {
     const defaultLinear = normalizeLinearUnit(defaultUnits);
-    const source = resolveLinearSourceUnit(element, type, rawUnitText, selected.quantity.value, defaultLinear);
+    const source = resolveLinearSourceUnit(element, type, rawUnitText, selected.quantity.value, defaultLinear, modalAuthoredUnit);
     const canonical = defaultLinear ?? source;
     const value = source && canonical
       ? convertLinearValue(selected.quantity.value, source, canonical, type)
@@ -645,7 +658,7 @@ function finalizeMeasurement(
   return { type, value: selected.quantity.value, unit: compactUnit(rawUnitText, type), confidence, quantityId: selected.quantity.id };
 }
 
-function elementMeasurement(element: SemanticElement, defaultUnits: string) {
+function elementMeasurement(element: SemanticElement, defaultUnits: string, modalAuthoredUnit: LinearUnit | null = null) {
   const preferred = element.role === "linear" ? "length" : element.role === "planar" ? "area" : "count";
   const nativeCandidates = (element.quantities ?? [])
     .filter((quantity) => Number.isFinite(quantity.value) && quantity.value > 0)
@@ -659,7 +672,7 @@ function elementMeasurement(element: SemanticElement, defaultUnits: string) {
     });
   const selected = candidates[0];
   if (selected && (selected.type === preferred || preferred !== "count")) {
-    return finalizeMeasurement(element, selected, defaultUnits);
+    return finalizeMeasurement(element, selected, defaultUnits, modalAuthoredUnit);
   }
   return { type: "count", value: 1, unit: "EA", confidence: 1, quantityId: null as string | null };
 }
@@ -697,6 +710,17 @@ export function buildModelTopology(
     hintCounts.set(element.authoredLinearUnit, (hintCounts.get(element.authoredLinearUnit) ?? 0) + 1);
   }
   const geometryUnits = Array.from(hintCounts.entries()).sort((left, right) => right[1] - left[1])[0]?.[0] ?? defaultUnits;
+  // Model-wide drawing unit consensus: when an overwhelming majority of
+  // hinted elements declare one unit, hint-less siblings (Navisworks pipes
+  // whose only datum is a bare geometry length stamped with the display
+  // unit) measure in that same drawing unit. Requires a real majority — a
+  // couple of stray hints must not re-unit the whole model.
+  const hintedTotal = Array.from(hintCounts.values()).reduce((sum, count) => sum + count, 0);
+  const modalHintEntry = Array.from(hintCounts.entries()).sort((left, right) => right[1] - left[1])[0];
+  const modalAuthoredUnit: LinearUnit | null =
+    modalHintEntry && modalHintEntry[1] >= 3 && modalHintEntry[1] / hintedTotal >= 0.8
+      ? modalHintEntry[0]
+      : null;
   inferredConnections(elements, geometryUnits, connectionMap);
   const connections = Array.from(connectionMap.values()).sort((left, right) => left.signature.localeCompare(right.signature));
   const { adjacency, components } = connectedComponents(elements.map((element) => element.id), connections);
@@ -785,7 +809,7 @@ export function buildModelTopology(
         const path = paths[pathIndex];
         const pathMembers = path.map((id) => byId.get(id)!).filter(Boolean);
         const runSignature = signature("run", [networkSignature, ...pathMembers.map((member) => member.externalId || member.id)]);
-        const measurements = pathMembers.map((member) => elementMeasurement(member, defaultUnits));
+        const measurements = pathMembers.map((member) => elementMeasurement(member, defaultUnits, modalAuthoredUnit));
         const linearMeasurements = measurements.filter((measurement) => measurement.type === "length");
         const runMeasurement = linearMeasurements.length > 0 ? linearMeasurements : measurements;
         const unit = runMeasurement[0]?.unit || (linearMeasurements.length > 0 ? "" : "EA");
@@ -821,7 +845,7 @@ export function buildModelTopology(
     : DEFAULT_MODEL_TOPOLOGY_ESTIMATE_AXES));
   const estimateBuckets = new Map<string, { members: SemanticElement[]; measurements: ReturnType<typeof elementMeasurement>[] }>();
   for (const member of elements) {
-    const measurement = elementMeasurement(member, defaultUnits);
+    const measurement = elementMeasurement(member, defaultUnits, modalAuthoredUnit);
     const estimatingRole = member.role === "linear" ? "linear" : ["junction", "fitting"].includes(member.role) ? "fittings" : member.role;
     const axisValue = (axis: ModelTopologyEstimateAxis) => axis === "trade" ? member.trade
       : axis === "role" ? estimatingRole

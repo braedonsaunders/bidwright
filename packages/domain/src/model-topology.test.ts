@@ -139,6 +139,91 @@ test("buildModelTopology disambiguates unitless lengths via the weight cross-che
   assert.equal(linear.unit, "ft");
 });
 
+test("buildModelTopology re-units display-stamped quantity rows via the modal authored hint", () => {
+  // Mirrors the E-012 NWD failure: most elements carry inch hints
+  // (Port1_LengthUnit), but Navisworks pipes arrive as bare geometry lengths
+  // pre-normalized into ModelQuantity rows whose unit was hard-stamped "ft"
+  // by the APS adapter's guessUnits(). The stamped "ft" must lose to the
+  // model-wide inch consensus (258.213 in = 21.518 ft, not 258 ft).
+  const hintedFitting = (id: string) => ({
+    id,
+    externalId: id,
+    name: "ACPPPIPEFITTING",
+    elementClass: "9002",
+    elementType: "ACPPPIPEFITTING",
+    properties: {
+      estimateRelevant: true,
+      "AutoCAD.Class": "Pipe",
+      "AutoCAD.Length": "4.709668",
+      "AutoCAD.Spec": "150S1",
+      "AutoCAD.Size": "3\"",
+      "AutoCAD.Port1_LengthUnit": "in",
+      "AutoCAD.Port2_LengthUnit": "in",
+    },
+  });
+  const result = buildModelTopology([
+    hintedFitting("fit-1"),
+    hintedFitting("fit-2"),
+    hintedFitting("fit-3"),
+    {
+      id: "pipe-1",
+      externalId: "pipe-1",
+      name: "Line",
+      elementClass: "Pipe",
+      properties: {
+        estimateRelevant: true,
+        "AutoCAD Geometry.Length": "258.213",
+      },
+      quantities: [{ quantityType: "Length", value: 258.213, unit: "ft", method: "aps_model_derivative_property", confidence: 0.8 }],
+    },
+  ], { units: "ft" });
+  const linear = result.groups
+    .filter((group) => group.kind === "estimate" && group.measurementType === "length")
+    .reduce((sum, group) => sum + group.quantity, 0);
+  // Fittings measure as counts; the pipe's stamped-"ft" 258.213 must re-unit
+  // to inches via the modal hint → 21.518 ft.
+  const expected = 258.213 / 12;
+  assert.ok(Math.abs(linear - expected) < 1e-6, `expected ${expected} ft, got ${linear}`);
+});
+
+test("buildModelTopology keeps genuinely-authored explicit units despite a modal hint", () => {
+  // An explicit unit that differs from the display unit is authored data and
+  // must never be overridden by the majority hint.
+  const hintedFitting = (id: string) => ({
+    id,
+    externalId: id,
+    name: "ACPPPIPEFITTING",
+    elementClass: "9002",
+    properties: {
+      estimateRelevant: true,
+      "AutoCAD.Class": "Pipe",
+      "AutoCAD.Length": "12",
+      "AutoCAD.Port1_LengthUnit": "in",
+      "AutoCAD.Port2_LengthUnit": "in",
+    },
+  });
+  const result = buildModelTopology([
+    hintedFitting("fit-1"),
+    hintedFitting("fit-2"),
+    hintedFitting("fit-3"),
+    {
+      id: "pipe-metric",
+      externalId: "pipe-metric",
+      name: "Line",
+      elementClass: "Pipe",
+      properties: { estimateRelevant: true },
+      quantities: [{ quantityType: "Length", value: 2, unit: "m", method: "native", confidence: 1 }],
+    },
+  ], { units: "ft" });
+  const linear = result.groups
+    .filter((group) => group.kind === "estimate" && group.measurementType === "length")
+    .reduce((sum, group) => sum + group.quantity, 0);
+  // Fittings measure as counts; the metric pipe's authored "m" beats the
+  // modal inch hint → 2 m = 6.5617 ft.
+  const expected = 2 / 0.3048;
+  assert.ok(Math.abs(linear - expected) < 1e-6, `expected ${expected} ft, got ${linear}`);
+});
+
 test("buildModelTopology converts explicit metric quantities into imperial display units", () => {
   const result = buildModelTopology([{
     id: "duct-1",

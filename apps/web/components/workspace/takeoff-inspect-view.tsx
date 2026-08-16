@@ -24,8 +24,10 @@ import { isRasterCircleCoveredByVector, measurePdfPrimitive, type PixelCircle } 
  *  inspect surface; `model` is geometry-only (STEP/glTF/OBJ/STL) and degrades
  *  to a metric summary without element semantics; `spreadsheet` treats each
  *  row as an entity that can be imported into a worksheet one click at a
- *  time, using a column-mapping heuristic. */
-export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "spreadsheet" | "photo-bom" | "empty";
+ *  time, using a column-mapping heuristic; `scan` is a LiDAR point-cloud
+ *  scan whose Detect Geometry segments surface via `snapshot.scan` (scan
+ *  measurement pickups remain ordinary Pickup annotations). */
+export type InspectMode = "pdf" | "dwg" | "bim" | "model" | "spreadsheet" | "photo-bom" | "scan" | "empty";
 
 /** Detection kinds the right-hand inspect panel renders as candidate rows.
  *  `system` / `line` / `symbol` / `circle` / `text` are the legacy raster +
@@ -389,6 +391,33 @@ export interface InspectAssetSummary {
   counts: { elements: number; quantities: number; links: number; issues: number };
 }
 
+/** One detected segment from a LiDAR scan's Detect Geometry pass. `pipe-run`
+ *  rows carry a length, `plane` rows an area, and `cluster` rows count as a
+ *  single object. `elementId` stays null until Detect Geometry has persisted
+ *  the segment as a ModelElement — the "→ Item" promotion needs that id. */
+export interface InspectScanSegmentRow {
+  id: string;
+  kind: "pipe-run" | "plane" | "cluster";
+  label: string;
+  confidence: number;            // 0..1
+  quantity: number;              // pipe-run: length m; plane: area m²; cluster: 1
+  uom: string;                   // "m" | "m²" | "EA"
+  detail?: string;               // e.g. "Ø101mm", "floor", bbox dims
+  identification?: { material?: string; service?: string; nominalSize?: string; insulated?: boolean; confidence?: number } | null;
+  elementId?: string | null;     // ModelElement id; null until Detect Geometry has persisted it
+  visible: boolean;
+  linkedItemCount?: number;
+}
+
+export interface InspectScanSnapshot {
+  modelAssetId: string;
+  segments: InspectScanSegmentRow[];
+  /** Multi-select set — a row renders selected when its id is in the array.
+   *  Empty array = nothing selected. */
+  selectedSegmentIds: string[];
+  segmentedAt?: string | null;
+}
+
 export interface InspectSnapshot {
   mode: InspectMode;
   // PDF / DWG annotations
@@ -414,6 +443,10 @@ export interface InspectSnapshot {
   selectedModelElementIds: string[];
   selectedModelGroupSignature: string | null;
   modelOrbitingGroupSignature: string | null;
+  /** LiDAR scan detected-geometry state — populated when the active takeoff
+   *  document is a point-cloud scan (mode === "scan"). Absent/null for every
+   *  other source. */
+  scan?: InspectScanSnapshot | null;
   // Spreadsheet — populated only when mode === "spreadsheet"
   spreadsheet: InspectSpreadsheet | null;
   // Photo-derived BOM — populated when the photo intake just finished an
@@ -555,6 +588,25 @@ export interface InspectActions {
   removeModelTopologyOverride: (overrideId: string) => Promise<void> | void;
   saveModelTopologyRecipe: (input: { id?: string; name: string; trade: string; rules: Record<string, unknown>; isDefault?: boolean }) => Promise<void> | void;
   removeModelTopologyRecipe: (recipeId: string) => Promise<void> | void;
+  // LiDAR scan detected-geometry handlers — wired by takeoff-tab when the
+  // active document is a scan. Optional so non-scan surfaces need no stubs.
+  /** Select a segment. Plain call replaces the selection with just this id
+   *  (or clears it when null). `additive: true` toggles the id's membership
+   *  in the current multi-select set (Ctrl / Cmd / Shift click). */
+  onSelectScanSegment?: (segmentId: string | null, opts?: { additive?: boolean }) => void;
+  /** Select exactly this set of segments (group-header click). Pass [] to
+   *  clear the selection. */
+  onSelectScanSegmentGroup?: (segmentIds: string[]) => void;
+  onToggleScanSegmentVisible?: (segmentId: string) => void;
+  onFocusScanSegment?: (segmentId: string) => void;
+  onAddScanSegmentToWorksheet?: (segmentId: string) => Promise<void> | void;
+  /** "Σ Add" for a whole detected-geometry group (Pipe runs / Surfaces /
+   *  Objects) — same group-add idiom as the BIM section. Receives the
+   *  group's currently-listed (filter-respecting) member segment ids. */
+  onAddScanSegmentGroupToWorksheet?: (segmentIds: string[]) => Promise<void> | void;
+  /** @deprecated kept for wiring compat — the UI now uses
+   *  onAddScanSegmentGroupToWorksheet for every group. */
+  onAddAllScanPipeRuns?: () => Promise<void> | void;
 }
 
 export interface TakeoffComposeRequest {
@@ -611,6 +663,7 @@ export function TakeoffInspectView({
     return [
       snapshot.mode,
       snapshot.modelAsset?.id,
+      snapshot.scan?.modelAssetId,
       snapshot.dwgIntelligence?.documentId,
       snapshot.drawingAnalysis?.documentId,
       snapshot.smartCount?.documentId,
@@ -713,6 +766,14 @@ function TakeoffInspectContent({
         </p>
       </div>
     );
+  }
+
+  // LiDAR scans get the detected-geometry surface (pipe runs, planes,
+  // clusters) in place of the BIM/model element browser. Scan measurement
+  // pickups are ordinary Pickup annotations, so the standard pickup groups
+  // keep rendering inside ScanInspect exactly as they do for PDF / DWG.
+  if (snapshot.mode === "scan") {
+    return <ScanInspect snapshot={snapshot} actions={actions} />;
   }
 
   if (snapshot.mode === "bim" || snapshot.mode === "model") {
@@ -966,6 +1027,8 @@ function AutoCountGroup({
       savedCount: linkCount,
       linkCount,
       color: ann.color || "#22c55e",
+      hidden: !ann.visible,
+      onToggleVisible: () => actions?.toggleAnnotationVisibility(ann.id),
       thumbnail: templateImage,
       // Only surface the expansion panel when we actually have per-match
       // thumbnails to show (page-scope runs). Document/all scope runs
@@ -1025,13 +1088,20 @@ function ManualAnnotationsGroup({
       kind: "manual" as const,
       source: "manual" as const,
       title: ann.label || typeLabel,
-      subtitle: typeLabel + (ann.measurement?.value ? ` · ${ann.measurement.value} ${ann.measurement.unit ?? ""}` : ""),
+      subtitle: typeLabel,
+      // Measurement rides in the right-aligned mono/tabular quantity slot
+      // (same position as scan segment quantities) instead of subtitle text.
+      value: ann.measurement?.value
+        ? `${ann.measurement.value} ${ann.measurement.unit ?? ""}`.trim()
+        : undefined,
       quantityOptions: annotationQuantityOptions(ann),
       selected: selectedPickupId === ann.id,
       saving: false,
       savedCount: linkCount,
       linkCount,
       color: ann.color || "#64748b",
+      hidden: !ann.visible,
+      onToggleVisible: () => actions?.toggleAnnotationVisibility(ann.id),
     };
   });
   const filteredRows = matchesQuery ? rows.filter(matchesQuery) : rows;
@@ -1095,7 +1165,12 @@ function SmartCountGroup({
     kind: "smart" as const,
     source: "smart-count" as const,
     title: item.label || "Count candidate",
-    subtitle: `${item.count.toLocaleString()} found · confidence ${item.confidence}${item.included ? "" : " · excluded"}`,
+    subtitle: `${item.count.toLocaleString()} found${item.included ? "" : " · excluded"}`,
+    // Categorical confidence keeps its wording on the shared chip; the
+    // numeric value only drives the tier color (high/medium/low map to
+    // the emerald/amber/gray bands).
+    confidence: item.confidence === "high" ? 0.85 : item.confidence === "medium" ? 0.6 : 0.3,
+    confidenceLabel: item.confidence,
     value: `×${item.count.toLocaleString()}`,
     selected: smart.selectedItemId === item.id,
     saving: false,
@@ -1414,7 +1489,7 @@ function DwgEntitiesInspect({
             // run N" / "Linear run N" prefix from cached labels.
             title: cleanSystemLabel(system.label, [system.layer], idx + 1),
             subtitle: `${system.segmentCount} segments · layer ${system.layer}`,
-            detail: `${system.quantity.toFixed(system.quantity >= 100 ? 0 : 2)} ${system.uom}`,
+            value: `${system.quantity.toFixed(system.quantity >= 100 ? 0 : 2)} ${system.uom}`,
             quantityOptions: [{
               id: `cad-system:${system.id}`,
               label: "Measured system quantity",
@@ -1859,7 +1934,8 @@ function DrawingAnalysisInspect({
                 // the user flagged. Use the first layer name if present,
                 // otherwise just the run number.
                 title: cleanSystemLabel(system.label, system.layers, idx),
-                subtitle: `${system.segmentCount} segments · ${formatDetectedLength(system.lengthPx)} · ${Math.round(system.confidence * 100)}%`,
+                subtitle: `${system.segmentCount} segments · ${formatDetectedLength(system.lengthPx)}`,
+                confidence: system.confidence,
                 detail: [
                   `${system.counts.openEnds} ends`,
                   `${system.counts.tees} tees`,
@@ -1892,7 +1968,8 @@ function DrawingAnalysisInspect({
                 kind: "symbol" as const,
                 source: "auto-count" as const,
                 title: group.label,
-                subtitle: `${group.count.toLocaleString()} found · ${Math.round(group.avgWidth)} x ${Math.round(group.avgHeight)} px · ${Math.round(group.avgConfidence * 100)}%`,
+                subtitle: `${group.count.toLocaleString()} found · ${Math.round(group.avgWidth)} x ${Math.round(group.avgHeight)} px`,
+                confidence: group.avgConfidence,
                 detail: group.source,
                 value: `x${group.count.toLocaleString()}`,
                 selected: group.symbolIds.includes(selectedDetectionId ?? ""),
@@ -1930,7 +2007,8 @@ function DrawingAnalysisInspect({
                   kind: "circle" as const,
                   source: "drawing-intelligence" as const,
                   title: circle.id,
-                  subtitle: `R ${Math.round(circle.radius)} px · ${Math.round(circle.confidence * 100)}%`,
+                  subtitle: `R ${Math.round(circle.radius)} px`,
+                  confidence: circle.confidence,
                   selected: selectedDetectionId === circle.id,
                   saving: savingId === circle.id,
                   color: "#ec4899",
@@ -1956,7 +2034,8 @@ function DrawingAnalysisInspect({
                   kind: "line" as const,
                   source: "drawing-intelligence" as const,
                   title: line.id,
-                  subtitle: `${formatDetectedLength(line.lengthPx)} · ${Math.round(line.confidence * 100)}%`,
+                  subtitle: formatDetectedLength(line.lengthPx),
+                  confidence: line.confidence,
                   selected: selectedDetectionId === line.id,
                   saving: savingId === line.id,
                   color: "#38bdf8",
@@ -2268,6 +2347,7 @@ type LineItemSource =
   | "manual"
   | "cad"
   | "bim"
+  | "scan"
   | "spreadsheet"
   | "photo-bom";
 
@@ -2278,6 +2358,7 @@ const SOURCE_PILL_TEXT: Record<LineItemSource, string> = {
   manual: "Manual",
   cad: "CAD",
   bim: "BIM",
+  scan: "Scan",
   spreadsheet: "Spreadsheet",
   "photo-bom": "Photo BOM",
 };
@@ -2288,7 +2369,7 @@ const SOURCE_PILL_TEXT: Record<LineItemSource, string> = {
  *  itself just trusts the caller-bound `onAdd` / `onDelete`. */
 type DetectionRow = {
   id: string;
-  kind: InspectDrawingDetectionKind | "manual" | "smart" | "cad-entity" | "model" | "spreadsheet-row" | "photo-bom-row";
+  kind: InspectDrawingDetectionKind | "manual" | "smart" | "cad-entity" | "model" | "scan-segment" | "spreadsheet-row" | "photo-bom-row";
   source: LineItemSource;
   title: string;
   subtitle: string;
@@ -2302,6 +2383,28 @@ type DetectionRow = {
   quantityOptions?: InspectQuantityOption[];
   symbolIds?: string[];
   requiresCalibration?: boolean;
+  /** Detection confidence in [0, 1] — rendered as the shared tiered chip
+   *  (≥0.7 emerald / ≥0.5 amber / else gray) so every surface presents
+   *  confidence the same way instead of burying it in subtitle text. */
+  confidence?: number;
+  /** Display override for the confidence chip — Smart Count's categorical
+   *  high/medium/low keeps its original wording instead of a fabricated
+   *  percent, while still color-tiering off `confidence`. */
+  confidenceLabel?: string;
+  /** Visibility state + toggle. Rows that supply `onToggleVisible` get the
+   *  eye button in the action cluster and dim to 40% opacity when hidden,
+   *  matching the scan detected-geometry rows. */
+  hidden?: boolean;
+  onToggleVisible?: () => void;
+  /** When set, the trailing locate glyph becomes an actual focus button
+   *  (scan rows focus the segment in the 3D viewer). Rows without it keep
+   *  the decorative hover glyph — identical visual either way. */
+  onFocus?: () => void;
+  /** Row-specific reason the add affordance is disabled (e.g. a scan
+   *  segment whose ModelElement hasn't been persisted yet). Rendered with
+   *  the same disabled warning-Plus idiom as `requiresCalibration`, using
+   *  this text as the tooltip. */
+  addDisabledReason?: string;
   /** Optional preview image (data URI or remote URL) rendered as a small
    *  thumbnail on the left of the row. Used today by Auto Count rows to
    *  surface the user-drawn template, by Smart Count rows for the AI's
@@ -2504,6 +2607,30 @@ function aggregateQuantityOptions(rows: DetectionRow[]): InspectQuantityOption[]
   return options;
 }
 
+/** Shared confidence chip — the single way confidence is presented across
+ *  every takeoff surface (scan segments, drawing analysis, smart count,
+ *  photo BOM). Numeric confidences render as a percent; a `label` override
+ *  keeps categorical wording (high/medium/low) while reusing the same
+ *  color tiers: ≥0.7 emerald, ≥0.5 amber, below gray. */
+function ConfidenceChip({ value, label }: { value: number; label?: string }) {
+  const text = label ?? `${Math.round(value * 100)}%`;
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full px-1 py-0.5 text-[9px] font-medium tabular-nums",
+        value >= 0.7
+          ? "bg-emerald-500/12 text-emerald-600"
+          : value >= 0.5
+            ? "bg-amber-500/12 text-amber-600"
+            : "bg-fg/5 text-fg/40",
+      )}
+      title={`Detection confidence ${text}`}
+    >
+      {text}
+    </span>
+  );
+}
+
 function DetectionGroup({
   title,
   count,
@@ -2538,7 +2665,10 @@ function DetectionGroup({
   accentColor?: string;
   snapshot: InspectSnapshot;
   actions: InspectActions | null;
-  onSelect: (id: string) => void;
+  /** Row click. `opts.additive` is true for Ctrl / Cmd / Shift clicks so
+   *  multi-select surfaces (scan segments) can toggle membership; callers
+   *  without multi-select simply ignore the second argument. */
+  onSelect: (id: string, opts?: { additive?: boolean }) => void;
   /** kind passed to onAdd / onDelete is the row's own — callers can ignore
    *  it when their data source has a single fixed action. Widened to
    *  string so manual / smart / cad-entity row kinds flow through. */
@@ -2587,7 +2717,7 @@ function DetectionGroup({
   };
   const shownCount = rows.length;
   const requestForRow = useCallback((row: DetectionRow): TakeoffComposeRequest | null => {
-    if (!onAdd || row.kind === "text" || row.linkCount > 0 || row.requiresCalibration) return null;
+    if (!onAdd || row.kind === "text" || row.linkCount > 0 || row.requiresCalibration || row.addDisabledReason) return null;
     return {
       id: `pickup:${row.source}:${row.id}`,
       title: row.title,
@@ -2720,22 +2850,24 @@ function DetectionGroup({
             const composeRequest = requestForRow(row);
             const staged = composeRequest ? compose.basketIds.has(composeRequest.id) : false;
             const activeModelScope = row.kind === "model" && (row.selected || groupFocused);
-            // Ordinary pickup children use the exact same 24px row contract
-            // as their group header. Thumbnail and match-review rows retain
-            // the richer layout because their visual evidence needs height.
-            const compactPickupRow = !row.thumbnail && !row.matchExpansion;
             return (
             <Fragment key={row.id}>
+            {/* Unified pickup row idiom (shared with the scan detected-
+                geometry rows): dot · label · inline muted detail ·
+                confidence chip · badges | tabular quantity | action
+                cluster, with an optional tiny metadata line below. */}
             <div
-              onClick={() => onSelect(row.id)}
+              onClick={(event) => onSelect(row.id, {
+                additive: event.metaKey || event.ctrlKey || event.shiftKey,
+              })}
               className={cn(
-                "group flex w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border px-1 transition-colors",
-                compactPickupRow ? "h-6 py-0" : "py-1.5",
+                "group flex w-full min-w-0 cursor-pointer items-center gap-1 overflow-hidden rounded-md border px-1 py-1 transition-colors",
                 activeModelScope || row.selected
                   ? "border-accent/40 bg-accent/10 ring-1 ring-accent/30"
                   : row.linkCount > 0
                     ? "border-success/25 bg-success/5 hover:bg-panel2/35"
                     : "border-transparent hover:border-line hover:bg-panel2/35",
+                row.hidden && "opacity-40",
               )}
             >
               {row.thumbnail ? (
@@ -2792,17 +2924,24 @@ function DetectionGroup({
                 </button>
               )}
               <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-1">
-                  <p className="truncate text-[11px] font-medium text-fg/80">{row.title}</p>
-                  {compactPickupRow && (row.subtitle || row.detail) && (
-                    <span className="min-w-0 flex-1 truncate text-[9px] text-fg/35">
-                      {[row.subtitle, row.detail].filter(Boolean).join(" · ")}
+                <div className="flex min-w-0 items-center gap-1">
+                  <p className="min-w-0 shrink truncate text-[11px] font-medium text-fg/80" title={row.title}>{row.title}</p>
+                  {row.subtitle && (
+                    /* Subtitle yields before the label (higher shrink
+                       factor) so narrow panels drop the detail text first
+                       instead of crowding the chip / quantity. */
+                    <span className="min-w-0 shrink-[4] truncate text-[9px] text-fg/35" title={row.subtitle}>
+                      {row.subtitle}
                     </span>
+                  )}
+                  {typeof row.confidence === "number" && (
+                    <ConfidenceChip value={row.confidence} label={row.confidenceLabel} />
                   )}
                   {/* Source pill — tells the estimator whether the row was
                       derived from analyzer, auto-counted, smart-counted,
-                      hand-drawn, or read from a CAD layer. */}
-                  {row.kind !== "model" && <span
+                      hand-drawn, or read from a CAD layer. Hidden for the
+                      single-source model/scan surfaces, matching BIM. */}
+                  {row.kind !== "model" && row.kind !== "scan-segment" && <span
                     className="inline-flex shrink-0 items-center rounded-full border border-line/60 bg-bg/40 px-1 py-0.5 text-[8.5px] font-medium uppercase tracking-wide text-fg/45"
                     title={`Source: ${SOURCE_PILL_TEXT[row.source]}`}
                   >
@@ -2819,11 +2958,12 @@ function DetectionGroup({
                     </span>
                   ) : null}
                 </div>
-                {!compactPickupRow && <p className="truncate text-[10px] text-fg/40">{row.subtitle}</p>}
-                {!compactPickupRow && row.detail && <p className="truncate text-[10px] text-fg/35">{row.detail}</p>}
+                {row.detail && (
+                  <p className="truncate text-[9px] text-fg/35" title={row.detail}>{row.detail}</p>
+                )}
               </div>
-              {row.value && <span className="max-w-[28%] shrink truncate font-mono text-[10px] text-fg/50" title={row.value}>{row.value}</span>}
-              <div className="flex items-center gap-0.5">
+              {row.value && <span className="max-w-[40%] shrink-0 truncate whitespace-nowrap font-mono text-[10px] tabular-nums text-fg/50" title={row.value}>{row.value}</span>}
+              <div className="flex shrink-0 items-center gap-0.5">
                 {row.matchExpansion && (
                   <button
                     type="button"
@@ -2832,22 +2972,33 @@ function DetectionGroup({
                       toggleRowExpansion(row.id);
                     }}
                     title={expanded ? "Hide individual matches" : "Show individual matches"}
-                    className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-accent/10 hover:text-accent"
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg/40 transition-colors hover:bg-accent/10 hover:text-accent"
                   >
                     {expanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
                   </button>
                 )}
+                {row.onToggleVisible && (
+                  <button
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      row.onToggleVisible?.();
+                    }}
+                    title={row.hidden ? "Show this pickup" : "Hide this pickup"}
+                    aria-label={row.hidden ? `Show ${row.title}` : `Hide ${row.title}`}
+                    className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-panel2 hover:text-fg/70"
+                  >
+                    {row.hidden ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                  </button>
+                )}
                 {onAdd && row.kind !== "text" && row.linkCount === 0 && (
-                  row.requiresCalibration ? (
+                  row.requiresCalibration || row.addDisabledReason ? (
                     <button
                       type="button"
                       disabled
-                      title="Set drawing scale before adding linear detections to a worksheet"
-                      aria-label="Add after setting drawing scale"
-                      className={cn(
-                        "inline-flex items-center justify-center rounded-md border border-warning/25 bg-warning/10 text-warning/70 disabled:cursor-not-allowed",
-                        compactPickupRow ? "h-5 w-5" : "h-6 w-6",
-                      )}
+                      title={row.addDisabledReason ?? "Set drawing scale before adding linear detections to a worksheet"}
+                      aria-label={row.addDisabledReason ?? "Add after setting drawing scale"}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-warning/25 bg-warning/10 text-warning/70 disabled:cursor-not-allowed"
                     >
                       <Plus className="h-3 w-3" />
                     </button>
@@ -2860,10 +3011,7 @@ function DetectionGroup({
                         compose.requestCompose?.(composeRequest);
                       }}
                       aria-label="Review and add this pickup"
-                      className={cn(
-                        "inline-flex items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent",
-                        compactPickupRow ? "h-5 w-5" : "h-6 w-6",
-                      )}
+                      className="inline-flex h-5 w-5 items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
                       title="Review and add this pickup to the estimate"
                     >
                       <Plus className="h-3 w-3" />
@@ -2874,10 +3022,7 @@ function DetectionGroup({
                       actions={actions}
                       onPick={(pick) => onAdd(row.id, row.kind, pick)}
                       triggerLabel=""
-                      triggerClassName={cn(
-                        "inline-flex items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent",
-                        compactPickupRow ? "h-5 w-5" : "h-6 w-6",
-                      )}
+                      triggerClassName="inline-flex h-5 w-5 items-center justify-center rounded-md border border-line bg-bg/50 text-fg/70 transition-colors hover:border-accent/40 hover:bg-accent/10 hover:text-accent"
                       triggerTitle="Add this line item to a worksheet"
                       triggerIcon={<Plus className="h-3 w-3" />}
                     />
@@ -2891,15 +3036,27 @@ function DetectionGroup({
                     onDelete(row.id, row.kind);
                   }}
                   title="Delete this pickup"
-                  className={cn(
-                    "inline-flex shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger",
-                    compactPickupRow ? "h-5 w-5" : "h-6 w-6",
-                  )}
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg/35 transition-colors hover:bg-danger/10 hover:text-danger"
                 >
                   <Trash2 className="h-3 w-3" />
                 </button>
               )}
-              <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
+              {row.onFocus ? (
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    row.onFocus?.();
+                  }}
+                  title="Focus this pickup in the viewer"
+                  aria-label={`Focus ${row.title}`}
+                  className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-fg/25 transition-colors hover:bg-accent/10 hover:text-accent group-hover:text-accent"
+                >
+                  <LocateFixed className="h-3 w-3" />
+                </button>
+              ) : (
+                <LocateFixed className="h-3 w-3 shrink-0 text-fg/25 group-hover:text-accent" />
+              )}
               </div>
             </div>
             {row.matchExpansion && expanded && (
@@ -3739,6 +3896,223 @@ function numericFormat(value: number) {
   return Intl.NumberFormat(undefined, { maximumFractionDigits: Math.abs(value) >= 100 ? 0 : 2 }).format(value);
 }
 
+/** Kind-color for scan segment dots — pipes amber, surfaces blue, objects
+ *  emerald. Group header dots reuse the same colors so the grouping reads
+ *  at a glance, mirroring the DetectionGroup convention. */
+const SCAN_KIND_COLORS: Record<InspectScanSegmentRow["kind"], string> = {
+  "pipe-run": "#f59e0b",
+  plane: "#3b82f6",
+  cluster: "#10b981",
+};
+
+/** Detected-geometry surface for LiDAR scan documents (mode === "scan").
+ *  Surfaces the segments the Detect Geometry pass found — pipe runs
+ *  (length), planar surfaces (area) and object clusters (count) — with
+ *  per-row select / focus / visibility and "→ Item" worksheet promotion,
+ *  structured like the BIM/model inspect sections. Scan measurement
+ *  pickups are ordinary Pickup annotations, so the standard Auto count /
+ *  Manual groups render below the detected geometry exactly as they do
+ *  for PDF / DWG. */
+function ScanInspect({
+  snapshot,
+  actions,
+}: {
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  const scan = snapshot.scan;
+  const [query, setQuery] = useState("");
+  if (!scan) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
+        <p className="text-[11px] leading-relaxed text-fg/45">
+          Open a takeoff document to browse its annotations or model objects here.
+        </p>
+      </div>
+    );
+  }
+
+  const segments = scan.segments;
+  const selectedSegmentIds = scan.selectedSegmentIds;
+  const q = query.trim().toLowerCase();
+  const matchesSegment = (segment: InspectScanSegmentRow) => {
+    if (!q) return true;
+    return [
+      segment.label,
+      segment.detail,
+      segment.kind,
+      segment.uom,
+      segment.identification?.material,
+      segment.identification?.service,
+      segment.identification?.nominalSize,
+    ].some((value) => String(value ?? "").toLowerCase().includes(q));
+  };
+  // Same row-level filter the PDF panel hands its pickup groups so the one
+  // search box covers measurements and detected geometry alike.
+  const matchesPickupRow = (row: DetectionRow) => {
+    if (!q) return true;
+    return [row.title, row.subtitle, row.detail, row.value].some((value) => String(value ?? "").toLowerCase().includes(q));
+  };
+  // Scan segments ride through the SAME DetectionRow shape + DetectionGroup
+  // renderer as the BIM model rows, so both surfaces are pixel-identical —
+  // same group header (chevron, checkbox, colored dot, count, Σ Add), same
+  // per-row + Add / eye / focus affordances.
+  const rowFor = (segment: InspectScanSegmentRow): DetectionRow => {
+    const identification = segment.identification;
+    const identificationLine = identification
+      ? [identification.nominalSize, identification.material, identification.service].filter(Boolean).join(" · ")
+      : "";
+    const linkedItemCount = segment.linkedItemCount ?? 0;
+    return {
+      id: segment.id,
+      kind: "scan-segment",
+      source: "scan",
+      title: segment.label,
+      subtitle: segment.detail ?? "",
+      detail: identificationLine || undefined,
+      confidence: segment.confidence,
+      value: `${numericFormat(segment.quantity)} ${segment.uom}`,
+      quantityOptions: [{
+        id: `scan:${segment.id}`,
+        label: segment.kind === "pipe-run"
+          ? "Detected run length"
+          : segment.kind === "plane"
+            ? "Detected surface area"
+            : "Detected object count",
+        value: segment.quantity,
+        uom: segment.uom,
+        source: "measurement" as const,
+        detail: `${Math.round(segment.confidence * 100)}% confidence`,
+        quantityType: segment.kind === "pipe-run" ? "length" : segment.kind === "plane" ? "area" : "count",
+      }],
+      selected: selectedSegmentIds.includes(segment.id),
+      saving: false,
+      savedCount: linkedItemCount,
+      linkCount: linkedItemCount,
+      color: SCAN_KIND_COLORS[segment.kind],
+      hidden: !segment.visible,
+      onToggleVisible: () => actions?.onToggleScanSegmentVisible?.(segment.id),
+      onFocus: () => actions?.onFocusScanSegment?.(segment.id),
+      addDisabledReason: segment.elementId ? undefined : "Run Detect Geometry first",
+    };
+  };
+
+  const onSelectRow = (id: string, opts?: { additive?: boolean }) => {
+    // Ctrl / Cmd / Shift toggles the row's membership in the multi-select
+    // set; a plain click replaces the selection (and clicking the sole
+    // selected row toggles the selection off).
+    if (opts?.additive) {
+      actions?.onSelectScanSegment?.(id, { additive: true });
+      return;
+    }
+    const solelySelected = selectedSegmentIds.length === 1 && selectedSegmentIds[0] === id;
+    actions?.onSelectScanSegment?.(solelySelected ? null : id);
+  };
+
+  const groups = ([
+    ["pipe-run", "Pipe runs"],
+    ["plane", "Surfaces"],
+    ["cluster", "Objects"],
+  ] as Array<[InspectScanSegmentRow["kind"], string]>).map(([kind, title]) => {
+    const members = segments.filter((segment) => segment.kind === kind);
+    return {
+      key: kind,
+      title,
+      accent: SCAN_KIND_COLORS[kind],
+      total: members.length,
+      rows: members.filter(matchesSegment).map(rowFor),
+    };
+  });
+  const segmentedAtLabel = scan.segmentedAt ? new Date(scan.segmentedAt).toLocaleString() : "";
+
+  // EntitiesPanel supplies the exact panel chrome + scroll chain the BIM /
+  // DWG / PDF surfaces use (shrink-0 toolbar, min-h-0 flex-1 overflow-y-auto
+  // list). ScanInspect previously duplicated that markup by hand and the
+  // scan panel ended up without a working scroll container, clipping the
+  // measurement groups at the bottom — rendering through the shared panel
+  // guarantees the identical, known-good height chain.
+  return (
+    <EntitiesPanel
+      statusTooltip={`LiDAR scan · ${segments.length.toLocaleString()} detected segment${segments.length === 1 ? "" : "s"}${segmentedAtLabel ? ` · segmented ${segmentedAtLabel}` : ""}`}
+      query={query}
+      onQueryChange={setQuery}
+      queryPlaceholder="Filter measurements and detected geometry..."
+    >
+      <div className="space-y-1.5">
+        {/* Measurements first — the user's own pickups are the primary
+            content in scan mode and must be visible without scrolling.
+            Scan measurement pickups are ordinary Pickup annotations, so
+            the standard groups render exactly as they do for PDF / DWG. */}
+        <ManualAnnotationsGroup snapshot={snapshot} actions={actions} matchesQuery={matchesPickupRow} />
+        <AutoCountGroup snapshot={snapshot} actions={actions} matchesQuery={matchesPickupRow} />
+
+        {/* Detected geometry — the Detect Geometry pass output. */}
+        <div className="flex min-w-0 items-center gap-1.5 border-t border-line/40 pt-2">
+          <p className="min-w-0 flex-1 truncate text-[10px] font-semibold uppercase tracking-wider text-fg/55">
+            Detected geometry · {segments.length.toLocaleString()}
+          </p>
+          {selectedSegmentIds.length > 1 && (
+            <span
+              className="shrink-0 rounded-full bg-accent/10 px-1.5 py-0.5 text-[9px] font-medium tabular-nums text-accent"
+              title={`${selectedSegmentIds.length.toLocaleString()} segments selected`}
+            >
+              {selectedSegmentIds.length.toLocaleString()} selected
+            </span>
+          )}
+          {segmentedAtLabel && (
+            <span
+              className="shrink-0 text-[9px] text-fg/35"
+              title={`Last Detect Geometry run · ${segmentedAtLabel}`}
+            >
+              {segmentedAtLabel}
+            </span>
+          )}
+        </div>
+        {segments.length === 0 ? (
+          <p className="rounded-md border border-line bg-bg/30 px-3 py-4 text-center text-[11px] leading-relaxed text-fg/40">
+            Run Detect Geometry in the scan toolbar to find pipe runs, surfaces and objects.
+          </p>
+        ) : (
+          groups
+            .filter((group) => group.total > 0)
+            .map((group) => {
+              const allSelected = group.rows.length > 0
+                && group.rows.every((row) => selectedSegmentIds.includes(row.id));
+              const memberIds = group.rows.map((row) => row.id);
+              // Header click = select-all toggle (scan's established
+              // contract) surfaced through the SAME group header controls
+              // BIM uses: checkbox toggle + focusable header + Σ Add.
+              const toggleGroupSelection = () =>
+                actions?.onSelectScanSegmentGroup?.(allSelected ? [] : memberIds);
+              return (
+                <DetectionGroup
+                  key={group.key}
+                  title={group.title}
+                  accentColor={group.accent}
+                  count={group.total}
+                  rows={group.rows}
+                  snapshot={snapshot}
+                  actions={actions}
+                  onSelect={onSelectRow}
+                  onAdd={(id) => actions?.onAddScanSegmentToWorksheet?.(id)}
+                  groupAction={{
+                    triggerTitle: `Review and add ${group.title.toLowerCase()} as one worksheet line`,
+                    onPick: () => actions?.onAddScanSegmentGroupToWorksheet?.(memberIds),
+                  }}
+                  groupSelected={allSelected}
+                  onToggleGroupSelection={toggleGroupSelection}
+                  groupFocused={allSelected}
+                  onGroupFocus={toggleGroupSelection}
+                  autoExpandSelection={false}
+                />
+              );
+            })
+        )}
+      </div>
+    </EntitiesPanel>
+  );
+}
+
 /** Spreadsheet rows as entities. Each row gets a "+ Add" that creates a
  *  worksheet line item using the heuristic column mapping; the group header
  *  has a "Σ Add" that imports every row in one batch. The mapping is shown
@@ -3939,8 +4313,8 @@ function PhotoBomInspect({
       subtitle: [
         `${row.quantity} ${row.uom}`,
         row.sourcePhotoNames.length > 0 ? `from ${row.sourcePhotoNames.join(", ")}` : "",
-        `confidence ${confPct}%`,
       ].filter(Boolean).join(" · "),
+      confidence: row.confidence,
       detail: row.notes
         ? (row.notes.length > 110 ? `${row.notes.slice(0, 108)}…` : row.notes)
         : undefined,

@@ -2288,6 +2288,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                   onRefresh={refreshWorkspace}
                   onOpenAgentChat={openAgentChat}
                   onOpenRevisionDiff={() => setRevisionDiffOpen(true)}
+                  onOpenDocuments={() => handleTabChange("documents")}
                   onOpenPluginTools={openPluginTools}
                   onOpenTakeoffLink={handleOpenTakeoffForLineItem}
                   onWorkspaceMutated={refreshWorkspace}

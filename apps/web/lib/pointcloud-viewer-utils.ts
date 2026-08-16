@@ -284,6 +284,47 @@ export function planarPolygonArea(points: readonly PcVec3[]): number {
   return Math.abs(twice) / 2;
 }
 
+/* ── Orbit-click pick priority ── */
+
+export type PickHitKind = "measurement" | "pipe-run" | "cluster" | "plane";
+
+export interface ClassedPickHit {
+  /** Ray distance from the camera to the hit. */
+  distance: number;
+  kind: PickHitKind;
+}
+
+/**
+ * Choose the winning raycast hit by class priority — measurement > pipe-run /
+ * cluster > plane — so the large translucent wall/floor/ceiling patches can't
+ * occlude the thin pipes and markers behind them. A non-plane hit wins when it
+ * lies within max(2.5 × nearest, nearest + slack) of the overall nearest hit;
+ * otherwise the nearest hit (usually the plane that was genuinely clicked)
+ * wins. Returns the winning index into `hits`, or -1 when the list is empty.
+ */
+export function choosePickHit(hits: readonly ClassedPickHit[], slack = 0.75): number {
+  if (hits.length === 0) return -1;
+  let nearest = 0;
+  for (let i = 1; i < hits.length; i += 1) {
+    if (hits[i].distance < hits[nearest].distance) nearest = i;
+  }
+  const tolerance = Math.max(hits[nearest].distance * 2.5, hits[nearest].distance + slack);
+  let bestMeasurement = -1;
+  let bestSolid = -1; // pipe-run or cluster
+  for (let i = 0; i < hits.length; i += 1) {
+    const hit = hits[i];
+    if (hit.distance > tolerance) continue;
+    if (hit.kind === "measurement") {
+      if (bestMeasurement < 0 || hit.distance < hits[bestMeasurement].distance) bestMeasurement = i;
+    } else if (hit.kind !== "plane") {
+      if (bestSolid < 0 || hit.distance < hits[bestSolid].distance) bestSolid = i;
+    }
+  }
+  if (bestMeasurement >= 0) return bestMeasurement;
+  if (bestSolid >= 0) return bestSolid;
+  return nearest;
+}
+
 /** Human-readable readout for the floating measurement overlay. */
 export function formatMeasureValue(value: number, unit: "m" | "m2" | "count"): string {
   if (unit === "count") return `${Math.round(value)}`;

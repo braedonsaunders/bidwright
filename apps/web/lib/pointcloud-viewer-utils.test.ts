@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   SpatialPointIndex,
+  choosePickHit,
   dedupeConsecutivePoints,
   distance3,
   fitPlaneToPoints,
@@ -196,6 +197,69 @@ test("planarPolygonArea returns 0 for degenerate polygons", () => {
     ]),
     0,
   );
+});
+
+test("choosePickHit lets a pipe behind a plane win within tolerance", () => {
+  // Translucent wall patch at 4.0 m in front of the pipe at 4.6 m — the pipe
+  // is what the user aimed at, so it wins.
+  const winner = choosePickHit([
+    { distance: 4.0, kind: "plane" },
+    { distance: 4.6, kind: "pipe-run" },
+  ]);
+  assert.equal(winner, 1);
+});
+
+test("choosePickHit lets a cluster behind a plane win within tolerance", () => {
+  const winner = choosePickHit([
+    { distance: 3.0, kind: "plane" },
+    { distance: 3.4, kind: "cluster" },
+  ]);
+  assert.equal(winner, 1);
+});
+
+test("choosePickHit selects a lone plane", () => {
+  assert.equal(choosePickHit([{ distance: 5.0, kind: "plane" }]), 0);
+});
+
+test("choosePickHit prefers a measurement over a nearer pipe", () => {
+  const winner = choosePickHit([
+    { distance: 5.0, kind: "pipe-run" },
+    { distance: 5.5, kind: "measurement" },
+  ]);
+  assert.equal(winner, 1);
+});
+
+test("choosePickHit falls back to the plane when the pipe is beyond tolerance", () => {
+  // Nearest hit at 2.0 m → tolerance max(5.0, 2.75) = 5.0 m; a pipe way back
+  // at 8.0 m is not what was clicked.
+  const winner = choosePickHit([
+    { distance: 2.0, kind: "plane" },
+    { distance: 8.0, kind: "pipe-run" },
+  ]);
+  assert.equal(winner, 0);
+});
+
+test("choosePickHit uses the absolute slack floor close to the camera", () => {
+  // Nearest at 0.2 m → 2.5× is only 0.5 m, but the +0.75 m slack keeps a pipe
+  // at 0.9 m selectable.
+  const winner = choosePickHit([
+    { distance: 0.2, kind: "plane" },
+    { distance: 0.9, kind: "pipe-run" },
+  ]);
+  assert.equal(winner, 1);
+});
+
+test("choosePickHit picks the nearest hit within each class", () => {
+  const winner = choosePickHit([
+    { distance: 4.0, kind: "plane" },
+    { distance: 4.8, kind: "pipe-run" },
+    { distance: 4.2, kind: "pipe-run" },
+  ]);
+  assert.equal(winner, 2);
+});
+
+test("choosePickHit returns -1 for an empty hit list", () => {
+  assert.equal(choosePickHit([]), -1);
 });
 
 test("formatMeasureValue picks precision by magnitude and unit", () => {
