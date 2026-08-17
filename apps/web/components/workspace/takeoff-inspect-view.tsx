@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { Fragment, createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Check, CheckSquare2, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch, Link2, Loader2, LocateFixed, Pause, Pencil, Play, Plus, RefreshCw, ScanSearch, Search, Settings2, Sigma, Trash2, X } from "lucide-react";
 import * as Popover from "@radix-ui/react-popover";
 import {
@@ -754,58 +754,86 @@ function TakeoffInspectContent({
   snapshot: InspectSnapshot | null;
   actions: InspectActions | null;
 }) {
-  // Photo-derived BOM has its own priority — when an analysis just landed,
-  // it stays visible in the panel even if the takeoff surface is on
-  // another document. The estimator can dismiss it from the panel header.
-  if (snapshot?.photoBom && snapshot.photoBom.rows.length > 0) {
-    return <PhotoBomInspect snapshot={snapshot} actions={actions} />;
+  // Every takeoff type's browser stays mounted once visited, with the
+  // inactive ones hidden. Switching document or takeoff type used to unmount
+  // the previous panel outright, so returning to it meant re-expanding groups
+  // and re-entering searches. Each retained panel keeps the last snapshot it
+  // was active for — feeding a BIM panel a PDF snapshot would blank it.
+  const retainedRef = useRef<Map<string, { snapshot: InspectSnapshot; actions: InspectActions | null }>>(new Map());
+  const activeKey = inspectPanelKey(snapshot);
+
+  if (activeKey && snapshot) {
+    const retained = retainedRef.current;
+    // Re-insert so iteration order is least-recently-used first.
+    retained.delete(activeKey);
+    retained.set(activeKey, { snapshot, actions });
+    // Bound the retention: a long session can visit many documents, and each
+    // panel holds its own rendered list.
+    while (retained.size > MAX_RETAINED_INSPECT_PANELS) {
+      const oldest = retained.keys().next().value;
+      if (oldest === undefined) break;
+      retained.delete(oldest);
+    }
   }
 
-  if (!snapshot || snapshot.mode === "empty") {
+  if (!activeKey) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
         <p className="text-[11px] leading-relaxed text-fg/45">
-          Open a takeoff document to browse its annotations or model objects here.
+          {snapshot && snapshot.mode !== "empty"
+            ? "Open a takeoff document to browse its line items here."
+            : "Open a takeoff document to browse its annotations or model objects here."}
         </p>
       </div>
     );
   }
 
-  // LiDAR scans get the detected-geometry surface (pipe runs, planes,
-  // clusters) in place of the BIM/model element browser. Scan measurement
-  // pickups are ordinary Pickup annotations, so the standard pickup groups
-  // keep rendering inside ScanInspect exactly as they do for PDF / DWG.
-  if (snapshot.mode === "scan") {
-    return <ScanInspect snapshot={snapshot} actions={actions} />;
-  }
-
-  if (snapshot.mode === "bim" || snapshot.mode === "model") {
-    return <ModelInspect snapshot={snapshot} actions={actions} />;
-  }
-
-  if (snapshot.mode === "spreadsheet") {
-    return <SpreadsheetInspect snapshot={snapshot} actions={actions} />;
-  }
-
-  // PDF / DWG: every line-item source (drawing intelligence, smart count,
-  // manual annotations) flows through their unified EntitiesPanel. Both
-  // require the per-mode state object to be populated (drawingAnalysis /
-  // dwgIntelligence) — if it isn't, no document is loaded and the panel
-  // shows the empty state.
-  if (snapshot.mode === "pdf" && snapshot.drawingAnalysis) {
-    return <PdfEntitiesInspect snapshot={snapshot} actions={actions} />;
-  }
-  if (snapshot.mode === "dwg" && snapshot.dwgIntelligence) {
-    return <DwgEntitiesInspect snapshot={snapshot} actions={actions} />;
-  }
-
   return (
-    <div className="flex h-full flex-col items-center justify-center gap-2 px-4 text-center">
-      <p className="text-[11px] leading-relaxed text-fg/45">
-        Open a takeoff document to browse its line items here.
-      </p>
-    </div>
+    <>
+      {[...retainedRef.current.entries()].map(([key, entry]) => (
+        <div key={key} className={cn("h-full min-h-0", key !== activeKey && "hidden")}>
+          <InspectPanelForKey panelKey={key} snapshot={entry.snapshot} actions={entry.actions} />
+        </div>
+      ))}
+    </>
   );
+}
+
+const MAX_RETAINED_INSPECT_PANELS = 6;
+
+/**
+ * Stable identity for a takeoff browser panel: the takeoff type plus the
+ * document it is showing, so returning to a document restores its own
+ * navigation rather than another document's.
+ */
+function inspectPanelKey(snapshot: InspectSnapshot | null): string | null {
+  if (!snapshot) return null;
+  if (snapshot.photoBom && snapshot.photoBom.rows.length > 0) return "photo-bom";
+  if (snapshot.mode === "empty") return null;
+  if (snapshot.mode === "scan") return `scan:${snapshot.scan?.modelAssetId ?? ""}`;
+  if (snapshot.mode === "bim" || snapshot.mode === "model") return `model:${snapshot.modelAsset?.id ?? ""}`;
+  if (snapshot.mode === "spreadsheet") return `spreadsheet:${snapshot.spreadsheet?.sourceName ?? ""}`;
+  if (snapshot.mode === "pdf" && snapshot.drawingAnalysis) return `pdf:${snapshot.drawingAnalysis.documentId ?? ""}`;
+  if (snapshot.mode === "dwg" && snapshot.dwgIntelligence) return `dwg:${snapshot.dwgIntelligence.documentId ?? ""}`;
+  return null;
+}
+
+function InspectPanelForKey({
+  panelKey,
+  snapshot,
+  actions,
+}: {
+  panelKey: string;
+  snapshot: InspectSnapshot;
+  actions: InspectActions | null;
+}) {
+  if (panelKey === "photo-bom") return <PhotoBomInspect snapshot={snapshot} actions={actions} />;
+  if (panelKey.startsWith("scan:")) return <ScanInspect snapshot={snapshot} actions={actions} />;
+  if (panelKey.startsWith("model:")) return <ModelInspect snapshot={snapshot} actions={actions} />;
+  if (panelKey.startsWith("spreadsheet:")) return <SpreadsheetInspect snapshot={snapshot} actions={actions} />;
+  if (panelKey.startsWith("pdf:")) return <PdfEntitiesInspect snapshot={snapshot} actions={actions} />;
+  if (panelKey.startsWith("dwg:")) return <DwgEntitiesInspect snapshot={snapshot} actions={actions} />;
+  return null;
 }
 
 const DRAWING_PRESETS: Array<{ value: DrawingAnalysisPreset; label: string }> = [
