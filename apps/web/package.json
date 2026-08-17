@@ -17,8 +17,8 @@
   "dependencies": {
     "@appkit/dashboard": "file:../../vendor/appkit/appkit-dashboard-1.0.2.tgz",
     "@appkit/iam": "file:../../vendor/appkit/appkit-iam-1.0.0.tgz",
-    "@appkit/tokens": "file:../../vendor/appkit/appkit-tokens-0.1.1.tgz",
-    "@appkit/ui": "file:../../vendor/appkit/appkit-ui-0.1.10.tgz",
+    "@appkit/tokens": "file:../../vendor/appkit/appkit-tokens-0.1.2.tgz",
+    "@appkit/ui": "file:../../vendor/appkit/appkit-ui-0.1.11.tgz",
     "@bidwright/domain": "workspace:*",
     "@excalidraw/excalidraw": "^0.18.0",
     "@next/env": "^16.2.1",

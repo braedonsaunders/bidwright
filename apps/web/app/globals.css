@@ -265,20 +265,3 @@ table {
   -moz-appearance: textfield;
   appearance: textfield;
 }
-
-/* Takeoff intake cards.
-   The launcher's `tone` prop only resolves to the five semantic accents
-   (primary / info / success / warning / danger), so its nine tone names
-   collapse onto repeats — three of the eight source cards rendered the same
-   colour as another. Re-point the token each card's tone consumes so every
-   card carries its own hue; the card's icon chip, border, ghost glyph, hover
-   and accent text all derive from that one variable, so they stay coherent.
-   Order matches the intake card order in takeoff-tab.tsx. */
-.takeoff-intake-grid > *:nth-child(1) { --ch-success: 16 185 129; }  /* Spreadsheet — emerald */
-.takeoff-intake-grid > *:nth-child(2) { --ch-success: 59 130 246; }  /* PDF — blue */
-.takeoff-intake-grid > *:nth-child(3) { --ch-warning: 245 158 11; }  /* 2D CAD — amber */
-.takeoff-intake-grid > *:nth-child(4) { --ch-info: 139 92 246; }     /* BIM — violet */
-.takeoff-intake-grid > *:nth-child(5) { --ch-danger: 244 63 94; }    /* 3D Geometry — rose */
-.takeoff-intake-grid > *:nth-child(6) { --ch-info: 6 182 212; }      /* LiDAR Scan — cyan */
-.takeoff-intake-grid > *:nth-child(7) { --ch-info: 217 70 239; }     /* Site Photos — fuchsia */
-.takeoff-intake-grid > *:nth-child(8) { --ch-primary: 132 204 22; }  /* Project Files — lime */

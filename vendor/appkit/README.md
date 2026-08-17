@@ -6,8 +6,8 @@ repository after its package checks pass.
 
 Current packages:
 
-- `@appkit/tokens` `0.1.1`
-- `@appkit/ui` `0.1.10`
+- `@appkit/tokens` `0.1.2`
+- `@appkit/ui` `0.1.11`
 - `@appkit/dashboard` `1.0.2`
 - `@appkit/iam` `1.0.0`
 - `@appkit/crypto` `0.3.0`
