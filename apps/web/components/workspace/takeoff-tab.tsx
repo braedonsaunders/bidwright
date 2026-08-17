@@ -8987,7 +8987,7 @@ export function TakeoffTab({
                   // 7 intake cards: 4-across on desktop keeps two rows that fill
                   // the panel; the minmax floor + scroll fallback means cards can
                   // never clip on short viewports (fit-mode clips by default).
-                  gridClassName="grid-cols-2 gap-2.5 lg:grid-cols-4 auto-rows-[minmax(150px,1fr)] overflow-y-auto"
+                  gridClassName="takeoff-intake-grid grid-cols-2 gap-2.5 lg:grid-cols-4 auto-rows-[minmax(150px,1fr)] overflow-y-auto"
                   items={intakeOptions}
                   onSelect={(id) => {
                     if (id === "files") onOpenDocuments?.();
