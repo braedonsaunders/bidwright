@@ -3289,7 +3289,7 @@ export class PrismaApiStore {
     const estimateFactors = await this.db.estimateFactor.findMany({ where: { revisionId: { in: revisionIds } } });
     const adjustments = await this.db.adjustment.findMany({ where: { revisionId: { in: revisionIds } } });
     const summaryRows = await this.db.summaryRow.findMany({ where: { revisionId: { in: revisionIds } }, orderBy: { order: "asc" } });
-    const conditions = await this.db.condition.findMany({ where: { revisionId: { in: revisionIds } } });
+    const conditions = await this.db.condition.findMany({ where: { revisionId: { in: revisionIds } }, orderBy: { order: "asc" } });
     const reportSections = await this.db.reportSection.findMany({ where: { revisionId: { in: revisionIds } } });
     const sourceDocuments = await this.db.sourceDocument.findMany({ where: { projectId } });
     const aiRuns = await this.db.aiRun.findMany({ where: { projectId } });

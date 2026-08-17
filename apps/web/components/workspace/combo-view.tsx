@@ -185,7 +185,12 @@ function quantityOptionsForSelection(
         quantityType: quantity.quantityType,
         modelQuantityId: quantity.id,
       })),
-      ...numericPropertyQuantityOptions(element.properties, element.modelUnit),
+      // The element's own drawing unit, not the model's display unit: an
+              // imperial Plant3D model reports feet while stamping inches.
+              ...numericPropertyQuantityOptions(
+                element.properties,
+                element.authoredLinearUnit || element.modelUnit,
+              ),
     ]);
     const semantics = [element.name, element.elementClass, element.elementType, element.system, String(element.properties["AutoCAD.Class"] ?? "")].join(" ").toLowerCase();
     const preferredType = /pipe|duct|cable|conduit|tray|linear|run/.test(semantics) ? "length" : null;
@@ -1065,15 +1070,19 @@ function RightPanel({
         </button>
       </div>
 
-      {tab === "pickups" ? (
-        <div className="min-h-0 flex-1 overflow-hidden p-1.5">
-          <TakeoffInspectView
-            snapshot={inspectSnapshot}
-            actions={liveInspectActions}
-            onRequestCompose={onRequestCompose}
-          />
-        </div>
-      ) : tab === "inspect" ? (
+      {/* The pickups browser stays mounted across tab switches. Unmounting it
+          threw away every bit of navigation state — expanded groups, search,
+          the system/run filter — so returning from Inspect meant starting the
+          hunt for a component over again. */}
+      <div className={cn("min-h-0 flex-1 overflow-hidden p-1.5", tab !== "pickups" && "hidden")}>
+        <TakeoffInspectView
+          snapshot={inspectSnapshot}
+          actions={liveInspectActions}
+          onRequestCompose={onRequestCompose}
+        />
+      </div>
+
+      {tab === "pickups" ? null : tab === "inspect" ? (
         <SelectionInspectPanel
           selection={takeoffSelection}
           snapshot={inspectSnapshot}

@@ -112,6 +112,7 @@ jobs:
           packages/mcp-server/src/api-client.test.ts
           packages/domain/src/worksheet-hours.test.ts
           packages/domain/src/price-build.test.ts
+          packages/domain/src/measurement-format.test.ts
           apps/web/lib/autodesk-viewer-selection.test.ts
           apps/web/components/workspace/persistent-takeoff-controller.test.tsx
           apps/web/lib/live-action-bridge.test.ts

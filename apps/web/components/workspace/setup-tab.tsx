@@ -58,6 +58,7 @@ import {
   reorderConditions,
   updateCondition,
   updateProjectRateScheduleItem,
+  updateProject,
   updateQuote,
   updateRevision,
 } from "@/lib/api";
@@ -106,10 +107,10 @@ type RevisionDraft = {
 
 export interface SetupTabProps {
   workspace: ProjectWorkspaceData;
+  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   revDraft: RevisionDraft;
   setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
   isPending: boolean;
-  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   onError: (msg: string) => void;
   highlightField?: string;
 }
@@ -464,6 +465,7 @@ export function SetupTab({
         {subTab === "general" && (
           <GeneralSubTab
             workspace={workspace}
+            onApply={onApply}
             revDraft={revDraft}
             setRevDraft={setRevDraft}
             saveRevision={saveRevision}
@@ -525,6 +527,7 @@ export function SetupTab({
 
 function GeneralSubTab({
   workspace,
+  onApply,
   revDraft,
   setRevDraft,
   saveRevision,
@@ -534,6 +537,7 @@ function GeneralSubTab({
   onError,
 }: {
   workspace: ProjectWorkspaceData;
+  onApply: (next: WorkspaceResponse | ((prev: WorkspaceResponse) => WorkspaceResponse)) => void;
   revDraft: RevisionDraft;
   setRevDraft: React.Dispatch<React.SetStateAction<RevisionDraft>>;
   saveRevision: (patch?: Partial<RevisionPatchInput>) => void;
@@ -558,6 +562,9 @@ function GeneralSubTab({
   const [dateQuote, setDateQuote] = useState(toDateInput(rev.dateQuote));
   const [dateDue, setDateDue] = useState(toDateInput(rev.dateDue));
   const [quoteTitle, setQuoteTitle] = useState(quote.title);
+  // Site location is a project-level field, shared by every quote in the
+  // container project — the same value the intake form collects.
+  const [location, setLocation] = useState(workspace.project.location ?? "");
 
   // Loaded dropdown options
   const [customerOptions, setCustomerOptions] = useState<Customer[]>([]);
@@ -589,6 +596,7 @@ function GeneralSubTab({
     setDateQuote(toDateInput(rev.dateQuote));
     setDateDue(toDateInput(rev.dateDue));
     setQuoteTitle(quote.title);
+    setLocation(workspace.project.location ?? "");
   }, [
     quote.customerId,
     quote.customerContactId,
@@ -615,6 +623,17 @@ function GeneralSubTab({
   stateRef.current = { customerId, customerContactId, departmentId, quoteType, dateQuote, dateDue };
   const optionsRef = useRef({ customerOptions, contactOptions });
   optionsRef.current = { customerOptions, contactOptions };
+
+  async function saveLocation(next: string) {
+    const trimmed = next.trim();
+    if (trimmed === (workspace.project.location ?? "")) return;
+    try {
+      onApply(await updateProject(workspace.project.id, { location: trimmed || "TBD" }));
+    } catch (error) {
+      onError(error instanceof Error ? error.message : "Could not save location");
+      setLocation(workspace.project.location ?? "");
+    }
+  }
 
   const doSave = useCallback((overrides: Partial<typeof stateRef.current> = {}, customerOverride?: Customer, contactOverride?: CustomerContact) => {
     const s = { ...stateRef.current, ...overrides };
@@ -825,8 +844,8 @@ function GeneralSubTab({
             </div>
           </div>
 
-          {/* Dates */}
-          <div className="grid gap-4 md:grid-cols-2">
+          {/* Dates + site location */}
+          <div className="grid gap-4 md:grid-cols-3">
             <div>
               <Label>Quote Date</Label>
               <Input
@@ -847,6 +866,15 @@ function GeneralSubTab({
                   setDateDue(e.target.value);
                   doSave({ dateDue: e.target.value });
                 }}
+              />
+            </div>
+            <div>
+              <Label>Location</Label>
+              <Input
+                value={location}
+                onChange={(e) => setLocation(e.target.value)}
+                onBlur={() => saveLocation(location)}
+                placeholder="Site / city"
               />
             </div>
           </div>

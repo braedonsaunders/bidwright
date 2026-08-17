@@ -677,6 +677,50 @@ function elementMeasurement(element: SemanticElement, defaultUnits: string, moda
   return { type: "count", value: 1, unit: "EA", confidence: 1, quantityId: null as string | null };
 }
 
+/**
+ * Resolve one element's estimating measurement with the same unit handling the
+ * topology rollups use — authored unit hints, the weight cross-check and the
+ * model-wide drawing-unit consensus. Element lists must not re-derive this:
+ * reading a bare `AutoCAD.Length` and stamping the model's display unit on it
+ * is what made inch values render as feet.
+ */
+export function resolveElementMeasurement(
+  element: ModelTopologyElementInput,
+  options: { units?: string; modalAuthoredUnit?: string | null } = {},
+) {
+  return elementMeasurement(
+    semanticElement(element),
+    options.units ?? "",
+    normalizeLinearUnit(options.modalAuthoredUnit ?? null),
+  );
+}
+
+/**
+ * The drawing unit this element's own properties declare (Plant3D stamps
+ * Port1_LengthUnit and friends), or null when it declares none. Callers that
+ * label a raw length property must prefer this over the model's display unit.
+ */
+export function resolveAuthoredLinearUnit(properties: Record<string, unknown> | null | undefined): string | null {
+  return authoredLinearUnitHint(flattenProperties(properties ?? {}));
+}
+
+/**
+ * The drawing unit an overwhelming majority of hinted elements declare, or
+ * null when there is no real consensus. Pass into resolveElementMeasurement so
+ * a list of elements units the same way the rollups do.
+ */
+export function resolveModelAuthoredUnit(elements: ModelTopologyElementInput[]): string | null {
+  const hintCounts = new Map<LinearUnit, number>();
+  for (const input of elements) {
+    const hint = authoredLinearUnitHint(flattenProperties(input.properties ?? {}));
+    if (!hint) continue;
+    hintCounts.set(hint, (hintCounts.get(hint) ?? 0) + 1);
+  }
+  const hintedTotal = Array.from(hintCounts.values()).reduce((sum, count) => sum + count, 0);
+  const modal = Array.from(hintCounts.entries()).sort((left, right) => right[1] - left[1])[0];
+  return modal && modal[1] >= 3 && modal[1] / hintedTotal >= 0.8 ? modal[0] : null;
+}
+
 function groupQuality(members: SemanticElement[], connections: ModelTopologyConnectionResult[], measurementCoverage: number, expectConnectivity = true) {
   const warnings: string[] = [];
   const materials = new Set(members.map((member) => member.material?.trim()).filter(Boolean));

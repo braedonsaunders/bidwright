@@ -153,6 +153,7 @@ import { useAuth } from "@/components/auth-provider";
 import { PluginsPage } from "@/components/plugins-page";
 import { IntegrationsPage } from "@/components/integrations/integrations-page";
 import { ConditionLibraryManager } from "@/components/condition-library-manager";
+import { RichTextEditor } from "@/components/rich-text-editor";
 import {
   exportAllDataManagement,
   parseExportFile,
@@ -1978,7 +1979,15 @@ export function SettingsPage({
           )}
 
           {/* ── Terms & Conditions Tab ─────────────────────────────────── */}
-          {activeGroup === "organization" && orgSubTab === "terms" && (
+          {activeGroup === "organization" && orgSubTab === "terms" && (() => {
+            // Terms are stored as HTML; count what the client will read, not markup.
+            const termsPlainTextLength = settings.termsAndConditions
+              .replace(/<[^>]*>/g, " ")
+              .replace(/&nbsp;/g, " ")
+              .replace(/\s+/g, " ")
+              .trim()
+              .length;
+            return (
             <Card>
               <CardHeader>
                 <CardTitle>Terms & Conditions</CardTitle>
@@ -1990,18 +1999,17 @@ export function SettingsPage({
                     <p className="text-xs text-fg/40 mt-1 mb-3">
                       Paste your standard terms and conditions below. These will be included in all generated quote PDFs when the Terms & Conditions section is enabled.
                     </p>
-                    <textarea
-                      className="w-full rounded-lg border border-line bg-transparent px-4 py-3 text-sm text-fg leading-relaxed resize-y focus:border-accent focus:outline-none focus:ring-1 focus:ring-accent/20 min-h-[400px]"
-                      rows={20}
+                    <RichTextEditor
                       value={settings.termsAndConditions}
-                      onChange={(e) => setSettings((prev) => ({ ...prev, termsAndConditions: e.target.value }))}
-                      placeholder={"1. SCOPE OF WORK\nThe Contractor shall provide all labour, materials, and equipment necessary to complete the work as described in this proposal.\n\n2. PAYMENT TERMS\nPayment is due within 30 days of invoice date...\n\n3. WARRANTY\nAll work shall be warranted for a period of one (1) year from the date of completion..."}
+                      onChange={(html) => setSettings((prev) => ({ ...prev, termsAndConditions: html }))}
+                      minHeight="400px"
+                      placeholder="1. SCOPE OF WORK — the Contractor shall provide all labour, materials and equipment necessary to complete the work as described in this proposal."
                     />
                   </div>
                   <div className="flex items-center justify-between pt-2">
                     <span className="text-xs text-fg/30">
-                      {settings.termsAndConditions.length > 0
-                        ? `${settings.termsAndConditions.length.toLocaleString()} characters`
+                      {termsPlainTextLength > 0
+                        ? `${termsPlainTextLength.toLocaleString()} characters`
                         : "No terms configured"}
                     </span>
                     <span className="text-xs text-fg/30">Auto-saves when changed</span>
@@ -2009,7 +2017,8 @@ export function SettingsPage({
                 </div>
               </CardContent>
             </Card>
-          )}
+            );
+          })()}
 
           {/* ── Estimator Personas Tab ─────────────────────────────── */}
           {activeGroup === "organization" && orgSubTab === "personas" && (

@@ -108,7 +108,7 @@ export interface PdfDataPackage {
     computedCost: number;
     computedMargin: number;
   }>;
-  conditions: Array<{ type: string; value: string }>;
+  conditions: Array<{ type: string; value: string; order: number }>;
   notes: string;
   leadLetter: string;
   reportSections: Array<{
@@ -354,6 +354,7 @@ export function buildPdfDataPackage(
     conditions: (workspace.conditions ?? []).map((c: any) => ({
       type: c.type,
       value: c.value,
+      order: Number(c.order) || 0,
     })),
     notes: rev?.notes ?? "",
     leadLetter: rev?.leadLetter ?? "",
@@ -475,12 +476,15 @@ export function generatePdfHtml(
   const headerText = data.orgName || "Proposal";
   const footerText = data.orgWebsite || data.orgName || data.quoteNumber;
 
-  const inclusions = data.conditions.filter((c) =>
-    c.type.toLowerCase().includes("inclusion")
-  );
-  const exclusions = data.conditions.filter((c) =>
-    c.type.toLowerCase().includes("exclusion")
-  );
+  // Conditions carry an estimator-controlled order (the setup page reorders
+  // them); the PDF must print them in that order, not in query order.
+  const byOrder = (left: { order: number }, right: { order: number }) => left.order - right.order;
+  const inclusions = data.conditions
+    .filter((c) => c.type.toLowerCase().includes("inclusion"))
+    .sort(byOrder);
+  const exclusions = data.conditions
+    .filter((c) => c.type.toLowerCase().includes("exclusion"))
+    .sort(byOrder);
 
   const formatMoney = (v: number) =>
     `$${v.toLocaleString("en-US", {
@@ -867,7 +871,7 @@ export function generatePdfHtml(
 
   const renderTerms = (): string => {
     if (!data.orgTermsAndConditions?.trim()) return "";
-    return `<h2>Terms &amp; Conditions</h2><div class="section-body" style="white-space:pre-wrap">${escapeHtml(data.orgTermsAndConditions)}</div>`;
+    return `<h2>Terms &amp; Conditions</h2><div class="section-body">${renderStoredRichText(data.orgTermsAndConditions)}</div>`;
   };
 
   const renderSchedule = (): string => {
@@ -916,12 +920,44 @@ export function generatePdfHtml(
       0,
     );
     const total = tiers.reduce((sum, [tierId]) => sum + tierTotal(tierId), 0);
+
+    // Break the totals out by resource (the rate-schedule item behind each
+    // row): a single blended row hides which trade or grade the hours sit on,
+    // which is the first thing an estimator checks.
+    const resources = new Map<string, { label: string; tiers: Map<string, number>; total: number }>();
+    for (const item of labourItems) {
+      const label = item.entityName?.trim() || item.category?.trim() || "Labour";
+      const entry = resources.get(label) ?? { label, tiers: new Map<string, number>(), total: 0 };
+      for (const tier of item.unitTiers) {
+        const extended = tier.units * item.quantity;
+        entry.tiers.set(tier.tierId, (entry.tiers.get(tier.tierId) ?? 0) + extended);
+        entry.total += extended;
+      }
+      resources.set(label, entry);
+    }
+    const resourceRows = [...resources.values()]
+      .filter((entry) => entry.total > 0)
+      .sort((left, right) => right.total - left.total || left.label.localeCompare(right.label));
+
+    const headerCells = tiers
+      .map(([, tier]) => `<th class="num">${escapeHtml(tier.name)}${tier.multiplier !== 1 ? ` (${tier.multiplier}x)` : ""}</th>`)
+      .join("");
+    const bodyRows = resourceRows
+      .map((entry) => `<tr><td>${escapeHtml(entry.label)}</td>${tiers
+        .map(([tierId]) => `<td class="num">${(entry.tiers.get(tierId) ?? 0).toLocaleString()}</td>`)
+        .join("")}<td class="num">${entry.total.toLocaleString()}</td></tr>`)
+      .join("");
+
     return `<h2>Labour Hours Summary</h2>
-      <table><thead><tr>${tiers.map(([, tier]) => `<th class="num">${escapeHtml(tier.name)}${tier.multiplier !== 1 ? ` (${tier.multiplier}x)` : ""}</th>`).join("")}<th class="num">Total</th></tr></thead>
-      <tbody><tr>
-        ${tiers.map(([tierId]) => `<td class="num">${tierTotal(tierId).toLocaleString()}</td>`).join("")}
-        <td class="num"><strong>${total.toLocaleString()}</strong></td>
-      </tr></tbody></table>`;
+      <table><thead><tr><th style="text-align:left">Resource</th>${headerCells}<th class="num">Total</th></tr></thead>
+      <tbody>
+        ${bodyRows}
+        <tr class="totals" style="font-weight:700;border-top:2px solid #333">
+          <td>All labour</td>
+          ${tiers.map(([tierId]) => `<td class="num">${tierTotal(tierId).toLocaleString()}</td>`).join("")}
+          <td class="num"><strong>${total.toLocaleString()}</strong></td>
+        </tr>
+      </tbody></table>`;
   };
 
   const renderLabourSummary = (): string => {
@@ -1269,7 +1305,7 @@ export function generateSnapPdfHtml(data: PdfDataPackage): string {
   const termsHtml = terms ? `
     <section class="terms-page">
       <h1>Terms &amp; Conditions</h1>
-      <div class="terms-body">${escapeHtml(terms)}</div>
+      <div class="terms-body">${renderStoredRichText(terms)}</div>
     </section>
   ` : "";
 
@@ -1441,6 +1477,17 @@ export function tierAbbreviation(name: string): string {
     return words.map((word) => word[0]!.toUpperCase()).join("").slice(0, 4);
   }
   return trimmed.length <= 4 ? trimmed : `${trimmed.slice(0, 3)}.`;
+}
+
+/**
+ * Terms are authored in a rich text editor, but tenants configured before that
+ * still hold plain text with meaningful newlines. Render stored HTML as-is and
+ * fall back to escaped pre-wrap so neither shape breaks.
+ */
+function renderStoredRichText(value: string): string {
+  const text = value ?? "";
+  const looksLikeHtml = /<\/?(?:p|div|br|ul|ol|li|h[1-6]|strong|em|b|i|u|span|a|blockquote)\b[^>]*>/i.test(text);
+  return looksLikeHtml ? text : `<div style="white-space:pre-wrap">${escapeHtml(text)}</div>`;
 }
 
 function escapeForCssContent(str: string): string {

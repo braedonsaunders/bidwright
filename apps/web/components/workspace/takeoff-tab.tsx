@@ -159,7 +159,14 @@ import {
 } from "@/components/legacy-controls";
 import * as Popover from "@radix-ui/react-popover";
 import dynamic from "next/dynamic";
-import { isPrimitiveClosed, samplePdfPrimitive } from "@bidwright/domain";
+import {
+  formatMeasurement,
+  isPrimitiveClosed,
+  resolveAuthoredLinearUnit,
+  resolveElementMeasurement,
+  resolveModelAuthoredUnit,
+  samplePdfPrimitive,
+} from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import { modelEditorChannelName, postWorkspaceMutation } from "@/lib/workspace-sync";
 import {
@@ -1593,9 +1600,41 @@ function getMappedModelElementQuantity(
   };
 }
 
-function formatElementQuantity(element: ModelElementWithQuantities, basis: ModelQuantityBasis) {
-  const primary = getModelElementTakeoffQuantity(element, basis);
-  return formatModelSelectionQuantity(primary.quantity, primary.uom);
+function formatElementQuantity(
+  element: ModelElementWithQuantities,
+  basis: ModelQuantityBasis,
+  options: { units?: string; modalAuthoredUnit?: string | null } = {},
+) {
+  // An explicit area/volume basis still wins; otherwise resolve the element's
+  // estimating measurement through the same engine the run rollups use, so a
+  // drawing-unit length is converted rather than mislabelled.
+  if (basis !== "count") {
+    const primary = getModelElementTakeoffQuantity(element, basis);
+    if (primary.quantityType !== "count") {
+      return formatMeasurement(primary.quantity, primary.uom);
+    }
+  }
+  const resolved = resolveElementMeasurement(
+    {
+      id: element.id,
+      externalId: element.externalId ?? "",
+      name: element.name ?? "",
+      elementClass: element.elementClass ?? undefined,
+      elementType: element.elementType ?? undefined,
+      system: element.system ?? undefined,
+      level: element.level ?? undefined,
+      material: element.material ?? undefined,
+      properties: element.properties ?? {},
+      quantities: (element.quantities ?? []).map((quantity) => ({
+        id: quantity.id,
+        quantityType: quantity.quantityType,
+        value: quantity.value,
+        unit: quantity.unit,
+      })),
+    },
+    options,
+  );
+  return formatMeasurement(resolved.value, resolved.unit);
 }
 
 function buildModelElementLineItem(
@@ -2988,7 +3027,9 @@ export function TakeoffTab({
         elementClass: element.elementClass ?? undefined,
         material: element.material ?? undefined,
         level: element.level ?? undefined,
-        quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+        quantitySummary: formatElementQuantity(element, modelLedgerBasis, {
+          units: selectedModelAsset?.units || "",
+        }),
       });
     },
     [modelLedgerBasis, onSelectionChange, postTakeoffMessage, selectedModelAsset, selection],
@@ -6882,6 +6923,18 @@ export function TakeoffTab({
     Promise.allSettled(deletions).then(() => notifyAnnotationsMutated());
   }
 
+  // One consensus drawing unit for the whole model, matching how the topology
+  // rollups unit hint-less elements.
+  const modelAuthoredUnit = useMemo(
+    () => resolveModelAuthoredUnit(modelElements.map((element) => ({
+      id: element.id,
+      externalId: element.externalId ?? "",
+      name: element.name ?? "",
+      properties: element.properties ?? {},
+    }))),
+    [modelElements],
+  );
+
   const inspectModelElementsForSnapshot = useMemo<InspectModelElement[]>(() => (
     modelElements.map((element) => ({
       id: element.id,
@@ -6895,8 +6948,12 @@ export function TakeoffTab({
       classification: (element as { classification?: Record<string, string> }).classification ?? null,
       lod: (element as { lod?: string }).lod ?? null,
       lodSource: (element as { lodSource?: string }).lodSource ?? null,
-      quantitySummary: formatElementQuantity(element, modelLedgerBasis),
+      quantitySummary: formatElementQuantity(element, modelLedgerBasis, {
+        units: selectedModelAsset?.units || "",
+        modalAuthoredUnit: modelAuthoredUnit,
+      }),
       modelUnit: selectedModelAsset?.units || "",
+      authoredLinearUnit: resolveAuthoredLinearUnit(element.properties ?? {}) ?? modelAuthoredUnit,
       quantities: (element.quantities ?? []).map((quantity) => ({
         id: quantity.id,
         quantityType: quantity.quantityType,
@@ -6908,7 +6965,7 @@ export function TakeoffTab({
       properties: element.properties ?? {},
       isLinked: linkedModelElementIds.has(element.id),
     }))
-  ), [linkedModelElementIds, modelElements, modelLedgerBasis, selectedModelAsset?.units]);
+  ), [linkedModelElementIds, modelAuthoredUnit, modelElements, modelLedgerBasis, selectedModelAsset?.units]);
 
   // Publish a snapshot of inspect-relevant state to the parent so the
   // side-panel Inspect tab can render the appropriate browse view.

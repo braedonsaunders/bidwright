@@ -18,7 +18,7 @@ import type {
   ModelTakeoffTopology,
   PickupLinkRecord,
 } from "@/lib/api";
-import { isRasterCircleCoveredByVector, measurePdfPrimitive, type PixelCircle } from "@bidwright/domain";
+import { formatMeasurement, isRasterCircleCoveredByVector, measurePdfPrimitive, type PixelCircle } from "@bidwright/domain";
 
 /** `bim` is element-aware (IFC/Revit/Navisworks) and uses the BIM-specific
  *  inspect surface; `model` is geometry-only (STEP/glTF/OBJ/STL) and degrades
@@ -310,6 +310,9 @@ export interface InspectModelElement {
   /** Native model unit used when APS exposes a numeric quantity property
    *  without attaching units to that individual property. */
   modelUnit?: string;
+  /** Drawing unit the element's own properties declare (e.g. Plant3D inches),
+   *  which frequently differs from the model's display unit. */
+  authoredLinearUnit?: string | null;
   /** Every indexed model quantity remains available to the Inspect composer
    *  so the estimator can deliberately map count, length, area, volume, or a
    *  source-specific BIM quantity before anything is written. */
@@ -2466,9 +2469,14 @@ function modelElementQuantityOptions(element: InspectModelElement): InspectQuant
     const siblingUnit = siblingUnitKey !== key ? element.properties[siblingUnitKey] : null;
     if (typeof siblingUnit === "string" && siblingUnit.trim()) return siblingUnit.trim();
     const modelUnit = element.modelUnit || "";
-    if (lower.includes("area")) return modelUnit ? `${modelUnit}²` : "";
-    if (lower.includes("volume")) return modelUnit ? `${modelUnit}³` : "";
-    if (/length|width|height|depth|diameter|radius|perimeter|circumference|thickness|offset|elevation|\.(?:bop|top)$/i.test(lower)) return modelUnit;
+    // Raw geometry properties are in the DRAWING unit, which is not always the
+    // model's display unit — an imperial Plant3D model reports feet while
+    // stamping inches. Labelling an inch value "ft" is what made the inspect
+    // list read far longer than the object is.
+    const drawingUnit = element.authoredLinearUnit || modelUnit;
+    if (lower.includes("area")) return drawingUnit ? `${drawingUnit}²` : "";
+    if (lower.includes("volume")) return drawingUnit ? `${drawingUnit}³` : "";
+    if (/length|width|height|depth|diameter|radius|perimeter|circumference|thickness|offset|elevation|\.(?:bop|top)$/i.test(lower)) return drawingUnit;
     const weightUnit = element.properties[`${key.split(".")[0]}.WeightUnit`];
     if (lower.includes("weight") && typeof weightUnit === "string") return weightUnit;
     return "";
@@ -3811,7 +3819,9 @@ function ModelInspect({
     >
       <div className="space-y-1.5">
         {groups.map((group) => {
-          const quantityLabel = group.quantity > 0 ? `${numericFormat(group.quantity)} ${group.unit || group.measurementType}` : "";
+          const quantityLabel = group.quantity > 0
+            ? formatMeasurement(group.quantity, group.unit || group.measurementType)
+            : "";
           const warningLabel = group.warnings.length > 0 ? `${group.warnings.length} review` : "";
           return (
             <DetectionGroup
@@ -3971,7 +3981,7 @@ function ScanInspect({
       subtitle: segment.detail ?? "",
       detail: identificationLine || undefined,
       confidence: segment.confidence,
-      value: `${numericFormat(segment.quantity)} ${segment.uom}`,
+      value: formatMeasurement(segment.quantity, segment.uom),
       quantityOptions: [{
         id: `scan:${segment.id}`,
         label: segment.kind === "pipe-run"
