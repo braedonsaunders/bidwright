@@ -26,8 +26,8 @@ import {
   type LinkRender,
   type SidebarNavGroup,
   type TenantNavigationConfig,
-} from "@appkit/ui";
-import { PageTransition } from "@appkit/ui/page-transition";
+} from "@braedonsaunders/appkit-ui";
+import { PageTransition } from "@braedonsaunders/appkit-ui/page-transition";
 import { BidwrightMark } from "@/components/brand-logo";
 import { ImpersonationBanner, useAuth } from "@/components/auth-provider";
 import {

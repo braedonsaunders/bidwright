@@ -7,7 +7,7 @@ import {
   Button,
   Input,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   generatePhotoBom,
   getDocumentDownloadUrl,

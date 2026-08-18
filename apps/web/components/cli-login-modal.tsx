@@ -27,7 +27,7 @@ import "@xterm/xterm/css/xterm.css";
 
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   ModalBackdrop,
 } from "@/components/legacy-controls";

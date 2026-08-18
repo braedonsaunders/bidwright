@@ -151,7 +151,7 @@ import {
   Separator,
   WorkspaceLauncher,
   type WorkspaceLaunchItem,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   EmptyState,

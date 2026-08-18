@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { Button } from "@appkit/ui";
+import { Button } from "@braedonsaunders/appkit-ui";
 import { ProjectWorkspace } from "@/components/project-workspace";
 import { getProjectWorkspace, type WorkspaceResponse } from "@/lib/api";
 

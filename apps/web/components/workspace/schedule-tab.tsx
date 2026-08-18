@@ -42,7 +42,7 @@ import {
 } from "@/lib/api";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   EmptyState,

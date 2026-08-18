@@ -30,7 +30,7 @@ import {
   Input,
   Label,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
 } from "@/components/legacy-controls";

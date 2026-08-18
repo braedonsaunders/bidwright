@@ -21,7 +21,7 @@ import {
   type RecordColumn,
   SearchSelect,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 
 /* ─────────────────────── Types & constants ─────────────────────── */
 

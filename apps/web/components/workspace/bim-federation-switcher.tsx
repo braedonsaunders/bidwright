@@ -11,7 +11,7 @@ import {
   CardHeader,
   CardTitle,
   Input,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   ModalBackdrop,
 } from "@/components/legacy-controls";

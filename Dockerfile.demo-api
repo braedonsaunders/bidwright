@@ -23,7 +23,6 @@ COPY packages/mcp-server/package.json packages/mcp-server/
 COPY packages/vision/package.json packages/vision/
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
-COPY vendor/appkit/ vendor/appkit/
 RUN pnpm install --frozen-lockfile
 RUN npm install -g node-gyp@^11
 RUN set -eux \

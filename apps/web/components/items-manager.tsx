@@ -48,7 +48,7 @@ import {
   TableHead,
   TableHeader,
   TableRow,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { UomSelect } from "@/components/shared/uom-select";
 
 /* ─── Constants ─── */

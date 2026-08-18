@@ -36,7 +36,7 @@ import {
   CardHeader,
   CardTitle,
   Label,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { FileBrowser, type FileBrowserProps } from "@/components/workspace/file-browser";
 import { ScheduleTab } from "@/components/workspace/schedule-tab";

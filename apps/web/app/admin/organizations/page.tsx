@@ -29,7 +29,7 @@ import {
   type RecordColumn,
   SearchSelect,
   SubtabNav,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Building2,
   ExternalLink,

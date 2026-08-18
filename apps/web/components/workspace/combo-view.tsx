@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Group, Panel, Separator, useDefaultLayout, type LayoutStorage } from "react-resizable-panels";
 import { ArrowRight, Check, ChevronDown, Compass, GripHorizontal, Layers, Loader2, Maximize2, Minimize2, PanelRightClose, Search, TableProperties, X } from "lucide-react";
-import { Button, Input } from "@appkit/ui";
+import { Button, Input } from "@braedonsaunders/appkit-ui";
 import type { CreateWorksheetItemInput, ProjectWorkspaceData, WorkspaceResponse } from "@/lib/api";
 import { createLiveActionBridge } from "@/lib/live-action-bridge";
 import { cn } from "@/lib/utils";

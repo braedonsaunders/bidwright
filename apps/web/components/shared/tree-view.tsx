@@ -20,7 +20,7 @@ import { createPortal } from "react-dom";
 import { cn } from "@/lib/utils";
 import {
   Input,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   EmptyState,
 } from "@/components/legacy-controls";

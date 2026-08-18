@@ -27,7 +27,7 @@ import {
   Button,
   Input,
   Label,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Select,
 } from "@/components/legacy-controls";

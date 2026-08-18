@@ -28,11 +28,11 @@ import {
   Badge,
   Button,
   EmptyState,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   DashboardMetricCard,
   DashboardPanel,
-} from "@appkit/dashboard/primitives";
+} from "@braedonsaunders/appkit-dashboard/primitives";
 import { cn } from "@/lib/utils";
 
 type Stage = "active" | "won" | "lost" | "other";

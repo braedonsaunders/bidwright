@@ -13,7 +13,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 
 export default function SignupPage() {
   const t = useTranslations("Auth.signup");

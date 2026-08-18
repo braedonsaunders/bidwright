@@ -11,7 +11,7 @@ import {
   Input,
   Label,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   ModalBackdrop,
 } from "@/components/legacy-controls";

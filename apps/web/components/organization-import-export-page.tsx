@@ -40,7 +40,7 @@ import {
   Label,
   Progress,
   Separator,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   Select,

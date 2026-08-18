@@ -1,4 +1,4 @@
-import { createContextualSealer } from "@appkit/crypto";
+import { createContextualSealer } from "@braedonsaunders/appkit-crypto";
 
 import { readIntegrationsEncryptionKey } from "./settings-secret-crypto.js";
 

@@ -11,7 +11,7 @@ import {
   Label,
   Textarea,
   Separator,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   ModalBackdrop as AnimatedModalBackdrop,
   Select,

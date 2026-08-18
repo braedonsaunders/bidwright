@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2, AlertTriangle, Mail, Paperclip, User, Calendar, Users } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { inspectFileIngest, type FileIngestManifestResponse } from "@/lib/api";
 
 interface EmailViewerProps {

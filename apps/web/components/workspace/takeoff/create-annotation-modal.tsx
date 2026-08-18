@@ -9,7 +9,7 @@ import {
   CardTitle,
   Input,
   Label,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   ModalBackdrop,
   Select,

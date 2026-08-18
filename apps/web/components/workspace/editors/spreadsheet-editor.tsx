@@ -7,7 +7,7 @@ import "@fortune-sheet/react/dist/index.css";
 import { Save, X } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 
 interface SpreadsheetEditorProps {
   fileName: string;

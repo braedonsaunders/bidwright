@@ -13,7 +13,7 @@ import {
   Label,
   SettingsRow,
   SettingsSection,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 
 export default function ProfilePage() {
   const t = useTranslations("Profile");

@@ -33,7 +33,7 @@
 
 import type { ChildProcess } from "node:child_process";
 import { isAbsolute, relative, resolve, sep } from "node:path";
-import { spawnBubblewrappedProcess } from "@appkit/process-sandbox";
+import { spawnBubblewrappedProcess } from "@braedonsaunders/appkit-process-sandbox";
 
 import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
 import { stripBlankCredentialEnv } from "./env-sanitize.js";

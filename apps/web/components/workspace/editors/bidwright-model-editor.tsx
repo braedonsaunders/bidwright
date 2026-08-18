@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Box, ExternalLink, Loader2, RefreshCw, Send } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
 
 export interface BidwrightModelSelectionNode {

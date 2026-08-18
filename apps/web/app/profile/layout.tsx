@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { KeyRound, UserRound } from "lucide-react";
-import { SettingsShell } from "@appkit/ui";
+import { SettingsShell } from "@braedonsaunders/appkit-ui";
 
 const PROFILE_NAV = [
   {

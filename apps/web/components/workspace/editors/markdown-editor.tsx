@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Save, X } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 
 interface MarkdownEditorProps {
   fileName: string;

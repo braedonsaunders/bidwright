@@ -48,7 +48,7 @@ import {
   TableRow,
   Tabs,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
 import {
   analyzeCostSpreadsheetEvidence,

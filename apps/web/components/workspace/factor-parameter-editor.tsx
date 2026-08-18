@@ -4,7 +4,7 @@ import type { EstimateFactorFormulaType } from "@/lib/api";
 import {
   Input,
   Label,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   Select,

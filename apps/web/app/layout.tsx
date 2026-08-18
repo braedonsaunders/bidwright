@@ -6,7 +6,7 @@ import { ApplicationFrame } from "@/components/app-shell";
 import { SplashScreen } from "@/components/brand-splash";
 import { I18nProvider } from "@/components/i18n-provider";
 import { RequireAuth } from "@/components/require-auth";
-import "@appkit/dashboard/primitives.css";
+import "@braedonsaunders/appkit-dashboard/primitives.css";
 import "./globals.css";
 
 const plexMono = IBM_Plex_Mono({

@@ -25,7 +25,7 @@ import {
   Drawer,
   Input,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   Select,

@@ -5,7 +5,7 @@ import { Check, CheckSquare2, ChevronDown, ChevronRight, Eye, EyeOff, GitBranch,
 import * as Popover from "@radix-ui/react-popover";
 import {
   Input,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
 import { groupCadEntities, type CadEntityGroupAxis } from "@/lib/cad-entity-groups";
 import type { Pickup } from "@/components/workspace/takeoff/annotation-canvas";

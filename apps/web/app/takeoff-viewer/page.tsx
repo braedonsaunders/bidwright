@@ -7,7 +7,7 @@ import { TakeoffTab } from "@/components/workspace/takeoff-tab";
 import { getProjectWorkspace, type WorkspaceResponse } from "@/lib/api";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 
 function TakeoffViewerInner() {
   const searchParams = useSearchParams();

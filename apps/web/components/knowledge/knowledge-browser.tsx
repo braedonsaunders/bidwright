@@ -14,7 +14,7 @@ import {
   CardContent,
   CardHeader,
   CardTitle,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   EmptyState,

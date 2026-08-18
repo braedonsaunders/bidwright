@@ -4,7 +4,7 @@ import { useState, useEffect, useRef } from "react";
 import { Save, X, Loader2 } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import "@excalidraw/excalidraw/index.css";
 
 interface WhiteboardEditorProps {

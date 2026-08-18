@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, Loader2, RotateCcw } from "lucide-react";
-import { Button } from "@appkit/ui";
+import { Button } from "@braedonsaunders/appkit-ui";
 import type * as THREE from "three";
 import type { OrbitControls as OrbitControlsType } from "three/examples/jsm/controls/OrbitControls.js";
 import { cn } from "@/lib/utils";

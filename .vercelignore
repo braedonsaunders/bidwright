@@ -5,7 +5,6 @@
 dist
 .bidwright
 *.tgz
-!vendor/appkit/*.tgz
 node_modules
 **/node_modules
 **/.next

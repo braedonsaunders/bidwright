@@ -1,4 +1,4 @@
-import type { NavigationRegistryItem, TenantNavigationConfig } from "@appkit/ui";
+import type { NavigationRegistryItem, TenantNavigationConfig } from "@braedonsaunders/appkit-ui";
 
 /**
  * Bidwright owns route metadata; AppKit owns the persisted ordering and

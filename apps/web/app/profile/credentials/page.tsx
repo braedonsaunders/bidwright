@@ -24,7 +24,7 @@ import {
   CardTitle,
   Input,
   Label,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { CliLoginModal } from "@/components/cli-login-modal";
 import { detectCli, type CliRuntimeStatus } from "@/lib/api";
 import {

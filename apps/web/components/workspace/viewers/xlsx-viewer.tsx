@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Loader2, AlertTriangle, FileSpreadsheet, Pencil } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
 import * as XLSX from "xlsx";
 

@@ -10,7 +10,7 @@ import {
   CardTitle,
   Input,
   Separator,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   EmptyState,
 } from "@/components/legacy-controls";

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, useCallback, type MutableRefObject } from 
 import { Loader2, Maximize2, Box, AlertCircle, RotateCcw } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
 import { prepareModelViewer, type ModelViewerSession } from "@/lib/api";
 import { firstAutodeskSelectedDbId } from "@/lib/autodesk-viewer-selection";

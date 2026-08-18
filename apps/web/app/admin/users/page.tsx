@@ -20,7 +20,7 @@ import {
   RecordList,
   type RecordColumn,
   SearchSelect,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { Loader2, Save, Trash2, Users } from "lucide-react";
 
 interface UserWithOrg extends AuthUser {

@@ -4,7 +4,7 @@ import { Fragment, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, GripVertical, Trash2 } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
 } from "@/components/legacy-controls";

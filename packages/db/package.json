@@ -17,7 +17,7 @@
     "db:reset": "tsx src/reset.ts"
   },
   "dependencies": {
-    "@appkit/crypto": "file:../../vendor/appkit/appkit-crypto-0.3.0.tgz",
+    "@braedonsaunders/appkit-crypto": "^0.3.0",
     "@bidwright/domain": "workspace:*",
     "@prisma/adapter-pg": "^7.5.0",
     "@prisma/client": "^6.6.0",

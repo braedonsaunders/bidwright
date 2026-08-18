@@ -5,7 +5,7 @@ import { Download, Loader2, Search, X } from "lucide-react";
 import { cn } from "@/lib/utils";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   ModalBackdrop,
 } from "@/components/legacy-controls";

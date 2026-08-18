@@ -65,7 +65,7 @@ import {
   Label,
   PagedTable,
   type PagedColumn,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   EmptyState,

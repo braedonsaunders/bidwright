@@ -20,7 +20,7 @@ import {
 } from "lucide-react";
 import {
   Button,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   EmptyState,
   Select,

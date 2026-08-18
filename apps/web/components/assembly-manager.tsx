@@ -24,7 +24,7 @@ import {
   RecordList,
   type RecordColumn,
   Textarea,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { UomSelect } from "@/components/shared/uom-select";
 import {
   AssemblyHeaderEditor,

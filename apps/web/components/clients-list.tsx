@@ -35,7 +35,7 @@ import {
   PageHeader,
   RecordList,
   type RecordColumn,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { FadeIn } from "@/components/legacy-controls";
 
 type SortKey = "name" | "quotes" | "activeValue" | "wonValue" | "winRate" | "margin" | "updated";

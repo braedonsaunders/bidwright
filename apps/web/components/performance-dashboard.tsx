@@ -25,11 +25,11 @@ import {
   Input,
   SearchSelect,
   Tabs,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   DashboardMetricCard,
   DashboardPanel,
-} from "@appkit/dashboard/primitives";
+} from "@braedonsaunders/appkit-dashboard/primitives";
 import { formatMoney, formatPercent } from "@/lib/format";
 import { cn } from "@/lib/utils";
 

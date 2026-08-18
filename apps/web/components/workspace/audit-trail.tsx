@@ -27,7 +27,7 @@ import { getActivities, revertActivity } from "@/lib/api";
 import {
   Button,
   Input,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
   Combobox,

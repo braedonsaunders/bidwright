@@ -52,7 +52,7 @@ import {
   RecordList,
   SearchInput,
   type RecordColumn,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   FadeIn,
   ModalBackdrop,

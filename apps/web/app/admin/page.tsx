@@ -7,7 +7,7 @@ import {
   Badge,
   type AdminHubGroup,
   type LinkRender,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { Building2, Library, Users } from "lucide-react";
 import { adminListOrganizations, type AdminOrg } from "@/lib/api";
 

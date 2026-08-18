@@ -4,7 +4,7 @@ import type {
   PermissionGroup,
   RoleRecord,
   RoleScope,
-} from "@appkit/iam";
+} from "@braedonsaunders/appkit-iam";
 import {
   createUser,
   deleteUser,

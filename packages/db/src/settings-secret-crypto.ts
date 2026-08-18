@@ -1,4 +1,4 @@
-import { createContextualSealer } from "@appkit/crypto";
+import { createContextualSealer } from "@braedonsaunders/appkit-crypto";
 
 const ENVELOPE_MARKER = "appkit.contextual-secret.v1";
 const HKDF_INFO = "bidwright:settings:secret:v1";

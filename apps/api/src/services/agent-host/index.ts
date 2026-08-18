@@ -14,7 +14,7 @@
 import { bubblewrappedHost } from "./bubblewrapped.js";
 import { localProcessHost } from "./local-process.js";
 import type { AgentRuntimeHost } from "./types.js";
-import { verifyProcessSandbox } from "@appkit/process-sandbox";
+import { verifyProcessSandbox } from "@braedonsaunders/appkit-process-sandbox";
 import { getBidwrightMode } from "../agent-home.js";
 import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 
@@ -55,7 +55,7 @@ export function getAgentRuntimeHost(): AgentRuntimeHost {
     }
     cached = bubblewrappedHost;
     console.log(
-      "[agent-host] selected: @appkit/process-sandbox — server CLI sessions run in per-tenant bubblewrap namespaces",
+      "[agent-host] selected: @braedonsaunders/appkit-process-sandbox — server CLI sessions run in per-tenant bubblewrap namespaces",
     );
   } else {
     cached = localProcessHost;

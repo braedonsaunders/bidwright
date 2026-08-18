@@ -1,7 +1,7 @@
 import { apiRequest } from "./client";
 import type { UnitOfMeasure } from "@bidwright/domain";
 import type { SupportedLocale } from "@/lib/i18n";
-import type { TenantNavigationConfig } from "@appkit/ui";
+import type { TenantNavigationConfig } from "@braedonsaunders/appkit-ui";
 
 export interface BrandProfile {
   companyName: string;

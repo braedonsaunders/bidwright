@@ -23,7 +23,7 @@ import {
   Spline,
   Square,
 } from "lucide-react";
-import { Button } from "@appkit/ui";
+import { Button } from "@braedonsaunders/appkit-ui";
 import { EmptyState } from "@/components/legacy-controls";
 import {
   createPickup,

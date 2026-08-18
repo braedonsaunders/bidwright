@@ -3,7 +3,7 @@ import { DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
 
 import type { BrandProfile } from "@/lib/api";
 import type { SupportedLocale } from "@/lib/i18n";
-import type { TenantNavigationConfig } from "@appkit/ui";
+import type { TenantNavigationConfig } from "@braedonsaunders/appkit-ui";
 
 export const STORAGE_KEY = "bidwright-settings";
 

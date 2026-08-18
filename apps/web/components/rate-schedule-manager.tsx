@@ -49,7 +49,7 @@ import {
   TableHeader,
   TableRow,
   type RecordColumn,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import { useUomOptions } from "@/components/shared/uom-select";
 
 /* ─── Constants ─── */

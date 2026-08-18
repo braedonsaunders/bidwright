@@ -1,4 +1,4 @@
-import type { ProcessSandboxLauncherIdentity } from "@appkit/process-sandbox";
+import type { ProcessSandboxLauncherIdentity } from "@braedonsaunders/appkit-process-sandbox";
 
 const MAX_ID = 2_147_483_647;
 

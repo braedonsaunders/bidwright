@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, type ReactNode } from "react";
 import { Building2, LayoutDashboard, Library, LogOut, Shield, Users } from "lucide-react";
-import { Button, SettingsShell, ThemeProvider, UiLinkProvider } from "@appkit/ui";
+import { Button, SettingsShell, ThemeProvider, UiLinkProvider } from "@braedonsaunders/appkit-ui";
 import { useAuth } from "@/components/auth-provider";
 
 const adminNav = [

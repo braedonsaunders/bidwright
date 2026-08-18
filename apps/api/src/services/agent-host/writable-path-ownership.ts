@@ -1,7 +1,7 @@
 import { lchown, lstat, readdir } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { ProcessSandboxLauncherIdentity } from "@appkit/process-sandbox";
+import type { ProcessSandboxLauncherIdentity } from "@braedonsaunders/appkit-process-sandbox";
 
 /**
  * Every sandbox launch must be able to traverse the project workspace and

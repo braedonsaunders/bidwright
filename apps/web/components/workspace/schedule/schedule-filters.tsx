@@ -4,7 +4,7 @@ import { X } from "lucide-react";
 import {
   Button,
   Input,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Select,
 } from "@/components/legacy-controls";

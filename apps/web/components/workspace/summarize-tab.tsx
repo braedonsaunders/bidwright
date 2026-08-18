@@ -49,7 +49,7 @@ import { buildPriceBuildView, scalePriceBuildAmount } from "@bidwright/domain";
 import {
   Button,
   Input,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   Badge,
 } from "@/components/legacy-controls";

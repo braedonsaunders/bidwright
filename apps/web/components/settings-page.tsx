@@ -26,7 +26,7 @@ import {
   Zap,
 } from "lucide-react";
 import { DEFAULT_UOMS, normalizeUomCode, normalizeUomLibrary, type UnitOfMeasure } from "@bidwright/domain";
-import { UsersAdmin } from "@appkit/iam/react";
+import { UsersAdmin } from "@braedonsaunders/appkit-iam/react";
 import { cn } from "@/lib/utils";
 import { SUPPORTED_LOCALES, localeDisplayName, normalizeLocale } from "@/lib/i18n";
 import {
@@ -52,7 +52,7 @@ import {
   buildDefaultNavigationConfig,
   stampKnownNavigationItems,
   type TenantNavigationConfig,
-} from "@appkit/ui";
+} from "@braedonsaunders/appkit-ui";
 import {
   AgentRuntimeSettings,
   ColorField,

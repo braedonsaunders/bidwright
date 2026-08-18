@@ -1,7 +1,7 @@
 import {
   createHmac, timingSafeEqual,
 } from "node:crypto";
-import { createContextualSealer } from "@appkit/crypto";
+import { createContextualSealer } from "@braedonsaunders/appkit-crypto";
 
 /**
  * Per-tenant credential encryption.

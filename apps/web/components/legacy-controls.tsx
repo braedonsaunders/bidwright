@@ -2,7 +2,7 @@
 
 /**
  * Transitional composites whose interaction contracts do not map one-to-one
- * to AppKit yet. Foundation primitives belong in direct `@appkit/ui` imports;
+ * to AppKit yet. Foundation primitives belong in direct `@braedonsaunders/appkit-ui` imports;
  * keep new controls out of this file.
  */
 
