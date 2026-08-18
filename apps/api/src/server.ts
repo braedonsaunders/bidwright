@@ -412,11 +412,27 @@ const scheduleBaselineSchema = z.object({
   isPrimary: z.boolean().optional(),
 });
 
+/**
+ * Modifier percentages are ratios (0.05 = 5%). A caller that sends a percent
+ * instead prices the quote 100x over — a 5% contingency once landed as 500%
+ * and added $600k to a $100k job. Nothing legitimately multiplies a quote by
+ * more than 10x, so refuse the value rather than silently repricing.
+ */
+const MODIFIER_RATIO_LIMIT = 10;
+const modifierRatio = z
+  .number()
+  .finite()
+  .refine((value) => Math.abs(value) <= MODIFIER_RATIO_LIMIT, {
+    message: `percentage is a ratio (0.05 = 5%); ${MODIFIER_RATIO_LIMIT} (=${MODIFIER_RATIO_LIMIT * 100}%) is the maximum. Did you send a percent instead of a ratio?`,
+  })
+  .nullable()
+  .optional();
+
 const createModifierSchema = z.object({
   name: z.string().optional(),
   type: z.string().optional(),
   appliesTo: z.string().optional(),
-  percentage: z.number().finite().nullable().optional(),
+  percentage: modifierRatio,
   amount: z.number().finite().nullable().optional(),
   show: z.enum(["Yes", "No"]).optional()
 });
@@ -425,7 +441,7 @@ const modifierPatchSchema = z.object({
   name: z.string().optional(),
   type: z.string().optional(),
   appliesTo: z.string().optional(),
-  percentage: z.number().finite().nullable().optional(),
+  percentage: modifierRatio,
   amount: z.number().finite().nullable().optional(),
   show: z.enum(["Yes", "No"]).optional()
 });
@@ -447,7 +463,7 @@ const createAdjustmentSchema = z.object({
   calculationBase: z.enum(["selected_scope", "line_subtotal", "direct_cost", "cumulative"]).optional(),
   active: z.boolean().optional(),
   appliesTo: z.string().optional(),
-  percentage: z.number().finite().nullable().optional(),
+  percentage: modifierRatio,
   amount: z.number().finite().nullable().optional(),
   show: z.enum(["Yes", "No"]).optional(),
   order: z.number().int().optional(),

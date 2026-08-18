@@ -112,6 +112,7 @@ jobs:
           packages/mcp-server/src/model-tools.test.ts
           packages/mcp-server/src/knowledge-dataset-tools.test.ts
           packages/mcp-server/src/api-client.test.ts
+          packages/mcp-server/src/modifier-percent.test.ts
           packages/domain/src/worksheet-hours.test.ts
           packages/domain/src/price-build.test.ts
           packages/domain/src/measurement-format.test.ts

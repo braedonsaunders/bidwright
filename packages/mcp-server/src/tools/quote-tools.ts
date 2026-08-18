@@ -2829,6 +2829,18 @@ function worksheetTreeSummary(ws: any) {
     }
   );
 
+/**
+ * Modifier percentages are stored as a ratio (0.05 = 5%), which is what the
+ * pricing engine multiplies by — the UI divides its input by 100 for exactly
+ * this reason. Agents were handed a percent-shaped contract with no conversion,
+ * so a 5% contingency was written as the ratio 5 and priced at 500%.
+ */
+function percentToRatio(percent: number | null | undefined): number | null | undefined {
+  if (percent === null || percent === undefined) return percent;
+  const value = Number(percent);
+  return Number.isFinite(value) ? value / 100 : percent;
+}
+
   // ═══════════════════════════════════════════════════════════
   // MODIFIERS — overhead, profit, contingency, discounts
   // ═══════════════════════════════════════════════════════════
@@ -2841,13 +2853,15 @@ function worksheetTreeSummary(ws: any) {
       name: z.string().describe("Modifier name, e.g. 'Overhead', '10% Contingency', 'Volume Discount'"),
       type: z.enum(["Contingency", "Surcharge", "Discount", "Other"]).default("Other").describe("Modifier type"),
       appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).default("All").describe("What the modifier applies to"),
-      percentage: z.coerce.number().optional().describe("Percentage adjustment (e.g. 10 for 10%). Use this OR amount, not both."),
+      percentage: z.coerce.number().optional().describe("Percentage adjustment as a PERCENT, not a fraction: pass 5 for 5%, 10 for 10%. Use this OR amount, not both."),
       amount: z.coerce.number().optional().describe("Fixed dollar amount. Use this OR percentage, not both."),
       show: z.enum(["Yes", "No"]).default("Yes").describe("Show on client quote ('Yes') or hide/distribute ('No')"),
     },
     async (input) => {
-      await apiPost(projectPath("/modifiers"), input);
-      return { content: [{ type: "text" as const, text: `Created modifier: ${input.name}` }] };
+      const payload = { ...input, percentage: percentToRatio(input.percentage) };
+      await apiPost(projectPath("/modifiers"), payload);
+      const applied = input.percentage !== undefined ? ` at ${input.percentage}%` : "";
+      return { content: [{ type: "text" as const, text: `Created modifier: ${input.name}${applied}` }] };
     }
   );
 
@@ -2860,12 +2874,13 @@ function worksheetTreeSummary(ws: any) {
       name: z.string().optional(),
       type: z.enum(["Contingency", "Surcharge", "Discount", "Other"]).optional(),
       appliesTo: z.enum(["All", "Labour Only", "Materials Only", "Equipment Only"]).optional(),
-      percentage: z.coerce.number().nullable().optional().describe("Set to null to clear percentage"),
+      percentage: z.coerce.number().nullable().optional().describe("New percentage as a PERCENT, not a fraction: pass 5 for 5%. Set to null to clear."),
       amount: z.coerce.number().nullable().optional().describe("Set to null to clear amount"),
       show: z.enum(["Yes", "No"]).optional(),
     },
     async ({ modifierId, ...patch }) => {
-      await apiPatch(projectPath(`/modifiers/${modifierId}`), patch);
+      const payload = "percentage" in patch ? { ...patch, percentage: percentToRatio(patch.percentage) } : patch;
+      await apiPatch(projectPath(`/modifiers/${modifierId}`), payload);
       return { content: [{ type: "text" as const, text: `Updated modifier ${modifierId}` }] };
     }
   );
