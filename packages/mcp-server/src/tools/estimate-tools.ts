@@ -369,11 +369,17 @@ export function registerEstimateTools(server: McpServer) {
       }).passthrough()).optional(),
       visualTakeoffAudit: z.object({
         drawingDrivenPackages: z.array(z.object({
-          packageId: z.string(),
+          packageId: z.string().describe("Required. The packageId from your package plan — not the package name."),
           packageName: z.string().optional(),
           scopeRefs: z.array(z.string()).default([]),
           documentIds: z.array(z.string()).default([]),
-          renderedPages: z.array(visualPageEvidenceSchema).default([]),
+          // Intentionally NOT coerced from bare page numbers: documentId and
+          // observation are what make this evidence rather than an assertion,
+          // and defaulting them would let a page be claimed as reviewed without
+          // anything actually having been looked at.
+          renderedPages: z.array(visualPageEvidenceSchema).default([]).describe(
+            "Objects, not page numbers: [{documentId, pageNumber, observation}]. Each entry records a page you actually rendered and what you saw on it.",
+          ),
           zoomEvidence: z.array(visualRegionEvidenceSchema).default([]),
           tableEvidence: z.array(tableEvidenceSchema).default([]).describe("Use for BOM/schedule/table evidence from structured extraction or a table region. Do not put full-page table extraction in zoomEvidence."),
           symbolScanEvidence: z.array(visualSymbolEvidenceSchema).default([]).describe("Optional. Use only after identifying a specific small repeated symbol or cropped region; this is not a substitute for zoomEvidence."),
