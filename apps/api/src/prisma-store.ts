@@ -2732,6 +2732,17 @@ export class PrismaApiStore {
     return { indexed: Number(countRows[0]?.count ?? 0) };
   }
 
+  /** Rate-schedule ids belonging to the revision a project is currently editing. */
+  private async currentRevisionRateScheduleIds(projectId: string): Promise<string[]> {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return [];
+    const rows = await this.db.rateSchedule.findMany({
+      where: { revisionId: revision.id },
+      select: { id: true },
+    });
+    return rows.map((row) => row.id);
+  }
+
   async searchLineItemCandidates(projectId: string, input: LineItemSearchInput = {}): Promise<LineItemSearchResult[]> {
     await this.requireProject(projectId);
     await this.ensureLineItemSearchInfrastructure();
@@ -2742,6 +2753,12 @@ export class PrismaApiStore {
     // catalog/rate mutations and the explicit refresh endpoint. A cold index
     // returns no candidates instead of turning an interactive read into a
     // potentially organization-wide write.
+
+    // Belt and braces on top of the per-revision index rebuild: that rebuild is
+    // best-effort (refreshRateScheduleSearchDocuments swallows its errors), so a
+    // failed one would otherwise leave the picker serving another revision's
+    // rateScheduleItemIds — which the item validator rejects on save.
+    const currentRevisionScheduleIds = await this.currentRevisionRateScheduleIds(projectId);
 
     const q = input.q?.trim() ?? "";
     const ftsQuery = lineItemFullTextQuery(q);
@@ -2955,6 +2972,16 @@ export class PrismaApiStore {
             LIMIT 1
           ) d ON true
           WHERE TRUE
+            -- A rate-schedule item is only offerable if its schedule belongs to
+            -- the revision being edited. updateWorksheetItemWithSnapshot
+            -- validates rateScheduleItemId against that revision, so an id from
+            -- any other revision is guaranteed to be rejected — never show it.
+            -- An empty list means the revision imported no rate books, so no
+            -- rate-schedule item is valid and every one is correctly filtered.
+            AND (
+              d."sourceType" <> 'rate_schedule_item'
+              OR (d."payload"->>'scheduleId') = ANY($14::text[])
+            )
             AND (
               d."sourceType" <> 'catalog_item'
               OR NOT EXISTS (
@@ -3029,6 +3056,7 @@ export class PrismaApiStore {
       disabledCatalogIds,
       autocompleteTsQuery,
       literalPattern,
+      currentRevisionScheduleIds,
     );
 
     const mapped = rows.map((row) => ({
@@ -12091,7 +12119,7 @@ export class PrismaApiStore {
     const currentRevision = await this.db.quoteRevision.findFirst({ where: { id: quote.currentRevisionId } });
     if (!currentRevision) throw new Error(`Current revision not found for quote ${quoteId}`);
 
-    return await this.db.$transaction(async (tx) => {
+    const created = await this.db.$transaction(async (tx) => {
       const maxRev = await tx.quoteRevision.aggregate({
         where: { quoteId },
         _max: { revisionNumber: true },
@@ -12392,6 +12420,15 @@ export class PrismaApiStore {
       const newRevision = await tx.quoteRevision.findFirst({ where: { id: newRevisionId } });
       return mapRevision(newRevision!);
     });
+
+    // The copy above gave the new revision its OWN rate schedules/items/tiers
+    // and repointed the quote at it. The line-item search index is scoped to
+    // the current revision (see upsertRateScheduleItemSearchDocuments), so
+    // until it is rebuilt it still describes the previous revision — the
+    // picker keeps offering rateScheduleItemIds that this revision rejects.
+    await this.refreshRateScheduleSearchDocuments(projectId);
+
+    return created;
   }
 
   async deleteRevision(projectId: string, revisionId: string) {
