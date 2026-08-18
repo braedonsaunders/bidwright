@@ -7,6 +7,10 @@ FROM base AS deps
 COPY pnpm-lock.yaml pnpm-workspace.yaml package.json .npmrc ./
 COPY packages/domain/package.json packages/domain/
 COPY apps/web/package.json apps/web/
+# Vendored AppKit tarballs. Some @braedonsaunders/appkit-* packages are not
+# published yet, so package.json resolves them from here; the install fails
+# without this copy.
+COPY vendor/ ./vendor/
 RUN pnpm install --frozen-lockfile
 
 # --- build stage ---
