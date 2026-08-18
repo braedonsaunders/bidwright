@@ -1,5 +1,5 @@
 import { ArrowUpDown, Building2, Layers, Users, Zap } from "lucide-react";
-import { DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
+import { DEFAULT_QUOTE_NUMBER_PATTERN, DEFAULT_UOMS, type UnitOfMeasure } from "@bidwright/domain";
 
 import type { BrandProfile } from "@/lib/api";
 import type { SupportedLocale } from "@/lib/i18n";
@@ -64,6 +64,8 @@ export interface DefaultSettings {
   defaultMarkup: number;
   defaultBreakoutStyle: string;
   defaultQuoteType: string;
+  /** Token pattern for new quote numbers, e.g. "{INITIALS}-{YY}{MM}{DD}-{SEQ:4}". */
+  quoteNumberPattern: string;
   uoms: UnitOfMeasure[];
   benchmarkingEnabled: boolean;
   benchmarkMinimumSimilarity: number;
@@ -163,6 +165,7 @@ export const DEFAULT_SETTINGS: AllSettings = {
     defaultMarkup: 15,
     defaultBreakoutStyle: "category",
     defaultQuoteType: "Firm",
+    quoteNumberPattern: DEFAULT_QUOTE_NUMBER_PATTERN,
     uoms: DEFAULT_UOMS,
     benchmarkingEnabled: false,
     benchmarkMinimumSimilarity: 0.55,

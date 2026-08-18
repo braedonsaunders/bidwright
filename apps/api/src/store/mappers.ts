@@ -58,7 +58,7 @@ import type {
   User,
   WorksheetItem,
 } from "@bidwright/domain";
-import { DEFAULT_UOMS, normalizeCalculationType } from "@bidwright/domain";
+import { DEFAULT_QUOTE_NUMBER_PATTERN, DEFAULT_UOMS, normalizeCalculationType } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 
 import { relativeWorkspacePath } from "../paths.js";
@@ -79,6 +79,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     defaultMarkup: 15,
     breakoutStyle: "category",
     quoteType: "Firm",
+    quoteNumberPattern: DEFAULT_QUOTE_NUMBER_PATTERN,
     timezone: "America/New_York",
     currency: "USD",
     dateFormat: "MM/DD/YYYY",

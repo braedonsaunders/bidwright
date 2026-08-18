@@ -25,7 +25,16 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { DEFAULT_UOMS, normalizeUomCode, normalizeUomLibrary, type UnitOfMeasure } from "@bidwright/domain";
+import {
+  DEFAULT_QUOTE_NUMBER_PATTERN,
+  DEFAULT_UOMS,
+  QUOTE_NUMBER_TOKENS,
+  formatQuoteNumber,
+  normalizeUomCode,
+  normalizeUomLibrary,
+  validateQuoteNumberPattern,
+  type UnitOfMeasure,
+} from "@bidwright/domain";
 import { UsersAdmin } from "@braedonsaunders/appkit-iam/react";
 import { cn } from "@/lib/utils";
 import { SUPPORTED_LOCALES, localeDisplayName, normalizeLocale } from "@/lib/i18n";
@@ -429,6 +438,8 @@ export function SettingsPage({
             defaultMarkup: apiSettings.defaults.defaultMarkup ?? prev.defaults.defaultMarkup,
             defaultBreakoutStyle: apiSettings.defaults.breakoutStyle || prev.defaults.defaultBreakoutStyle,
             defaultQuoteType: apiSettings.defaults.quoteType || prev.defaults.defaultQuoteType,
+            quoteNumberPattern:
+              apiSettings.defaults.quoteNumberPattern || prev.defaults.quoteNumberPattern,
             uoms: normalizeUomLibrary(apiSettings.defaults.uoms),
             benchmarkingEnabled: apiSettings.defaults.benchmarkingEnabled ?? prev.defaults.benchmarkingEnabled,
             benchmarkMinimumSimilarity: apiSettings.defaults.benchmarkMinimumSimilarity ?? prev.defaults.benchmarkMinimumSimilarity,
@@ -735,6 +746,7 @@ export function SettingsPage({
         defaultMarkup: settings.defaults.defaultMarkup,
         breakoutStyle: settings.defaults.defaultBreakoutStyle,
         quoteType: settings.defaults.defaultQuoteType,
+        quoteNumberPattern: settings.defaults.quoteNumberPattern,
         timezone: settings.general.timezone,
         currency: settings.general.currency,
         dateFormat: settings.general.dateFormat,
@@ -855,6 +867,19 @@ export function SettingsPage({
   );
   const updateIntegrations = (patch: Partial<IntegrationSettings>) =>
     setSettings((s) => ({ ...s, integrations: { ...s.integrations, ...patch } }));
+
+  // Preview uses a fixed sequence rather than the real next value: the true
+  // number depends on what has already been issued, and showing a live count
+  // here would imply this screen reserves one.
+  const quoteNumberPattern = settings.defaults.quoteNumberPattern;
+  const quoteNumberIssues = useMemo(
+    () => validateQuoteNumberPattern(quoteNumberPattern),
+    [quoteNumberPattern],
+  );
+  const quoteNumberPreview = useMemo(
+    () => formatQuoteNumber(quoteNumberPattern, { initials: "BS", sequence: 35 }),
+    [quoteNumberPattern],
+  );
   const persistAiProviderSettings = useCallback(async (patch: Partial<IntegrationSettings>) => {
     setSettings((current) => ({
       ...current,
@@ -1445,6 +1470,56 @@ export function SettingsPage({
                         { value: "BudgetDNE", label: "Budget DNE" },
                       ]}
                     />
+                  </div>
+                </div>
+
+                <Separator />
+
+                <div className="space-y-3">
+                  <div>
+                    <Label className="mb-1 block">Quote Number Format</Label>
+                    <p className="text-xs text-fg/40">
+                      Pattern used for new quote numbers. {"{SEQ}"} counts up within the scope the
+                      rest of the pattern implies — include a date to restart it daily, or leave the
+                      date out for one continuous sequence. Add {":n"} to pad, e.g. {"{SEQ:4}"}.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-start gap-3">
+                    <Input
+                      className="max-w-[320px] font-mono text-xs"
+                      value={settings.defaults.quoteNumberPattern}
+                      onChange={(e) => updateDefaults({ quoteNumberPattern: e.target.value })}
+                      placeholder={DEFAULT_QUOTE_NUMBER_PATTERN}
+                      aria-label="Quote number pattern"
+                    />
+                    <div className="text-xs">
+                      <div className="text-fg/40">Preview</div>
+                      <div className="font-mono text-fg/70">{quoteNumberPreview}</div>
+                    </div>
+                  </div>
+                  {quoteNumberIssues.length > 0 && (
+                    <ul className="space-y-0.5 text-xs text-danger">
+                      {quoteNumberIssues.map((issue) => (
+                        <li key={issue}>{issue}</li>
+                      ))}
+                    </ul>
+                  )}
+                  <div className="flex flex-wrap gap-1.5">
+                    {QUOTE_NUMBER_TOKENS.map((entry) => (
+                      <button
+                        key={entry.token}
+                        type="button"
+                        onClick={() =>
+                          updateDefaults({
+                            quoteNumberPattern: `${settings.defaults.quoteNumberPattern}${entry.token}`,
+                          })
+                        }
+                        className="rounded-md border border-line/70 bg-panel2/40 px-1.5 py-0.5 font-mono text-[10px] text-fg/55 transition-colors hover:border-accent/30 hover:text-fg/80"
+                        title={`${entry.label} — e.g. ${entry.example}`}
+                      >
+                        {entry.token}
+                      </button>
+                    ))}
                   </div>
                 </div>
 

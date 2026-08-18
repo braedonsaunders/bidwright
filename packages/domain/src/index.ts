@@ -34,3 +34,4 @@ export * from "./cad-takeoff";
 export * from "./model-ingest";
 export * from "./model-topology";
 export * from "./file-ingest";
+export * from "./quote-number";

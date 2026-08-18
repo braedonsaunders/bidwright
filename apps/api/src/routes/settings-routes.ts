@@ -2,6 +2,7 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
 import { invalidProviderKeys } from "@bidwright/db";
+import { validateQuoteNumberPattern } from "@bidwright/domain";
 
 import {
   BIDWRIGHT_NAVIGATION_KEYS,
@@ -132,6 +133,16 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
           ". Leave the field empty to keep that organization provider unconfigured.",
       });
     }
+    // A pattern with no {SEQ}/{RAND} would hand every new quote in the org the
+    // same number, so reject it here rather than only in the settings UI.
+    const patternPatch = (patch.defaults as Record<string, unknown> | undefined)?.quoteNumberPattern;
+    if (typeof patternPatch === "string") {
+      const issues = validateQuoteNumberPattern(patternPatch);
+      if (issues.length > 0) {
+        return reply.code(400).send({ error: `Invalid quote number format: ${issues.join(" ")}` });
+      }
+    }
+
     return request.store!.updateSettings(patch as Parameters<PrismaApiStore["updateSettings"]>[0]);
   });
 

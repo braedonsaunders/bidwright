@@ -1822,6 +1822,8 @@ export interface AppSettings {
     defaultMarkup: number;
     breakoutStyle: string;
     quoteType: string;
+    /** Token pattern for new quote numbers, e.g. "{INITIALS}-{YY}{MM}{DD}-{SEQ:4}". */
+    quoteNumberPattern?: string;
     timezone: string;
     currency: string;
     dateFormat: string;

@@ -22,6 +22,11 @@ import {
   normalizeSummaryBuilderConfig,
   normalizeCalculationType,
   normalizeUomLibrary,
+  DEFAULT_QUOTE_NUMBER_PATTERN,
+  formatQuoteNumber,
+  initialsFromName,
+  nextQuoteNumberSequence,
+  patternUsesSequence,
   summarizeExpandedAssemblyResources,
   summarizeProjectTotals,
   validateEstimateWorkspace,
@@ -5702,7 +5707,7 @@ export class PrismaApiStore {
       data: {
         id: quoteId,
         projectId,
-        quoteNumber: makeQuoteNumber(),
+        quoteNumber: await this.nextQuoteNumber(),
         title: projectName,
         status: "draft",
         currentRevisionId: revisionId,
@@ -9312,7 +9317,7 @@ export class PrismaApiStore {
         data: {
           id: quoteId,
           projectId,
-          quoteNumber: makeQuoteNumber(),
+          quoteNumber: await this.nextQuoteNumber(),
           title: input.name,
           customerId: customerSelection.customerId,
           customerString: customerSelection.customerString,
@@ -9441,7 +9446,7 @@ export class PrismaApiStore {
         data: {
           id: quoteId,
           projectId,
-          quoteNumber: makeQuoteNumber(),
+          quoteNumber: await this.nextQuoteNumber(),
           title: input.title,
           customerId: customerSelection.customerId,
           customerString: customerSelection.customerString,
@@ -12546,7 +12551,7 @@ export class PrismaApiStore {
         data: {
           id: newQuoteId,
           projectId: newProjectId,
-          quoteNumber: makeQuoteNumber(),
+          quoteNumber: await this.nextQuoteNumber(),
           title: sourceQuote.title,
           status: sourceQuote.status,
           currentRevisionId: newRevisionId,
@@ -16886,6 +16891,52 @@ export class PrismaApiStore {
       },
     });
     return general;
+  }
+
+  /**
+   * Next quote number for this organization, honouring its configured pattern.
+   *
+   * The sequence is derived from numbers already issued (max+1 within the scope
+   * the pattern implies) rather than a stored counter, so it needs no migration
+   * and never reissues a deleted quote's number. Falls back to the historical
+   * BW-YYMMDD-XXXX format if anything here fails — a numbering problem must not
+   * block quote creation.
+   */
+  private async nextQuoteNumber(): Promise<string> {
+    try {
+      const defaults = await this.getOrganizationDefaults();
+      const pattern = defaults.quoteNumberPattern?.trim() || DEFAULT_QUOTE_NUMBER_PATTERN;
+
+      let initials = "";
+      if (this._userId) {
+        const user = await this.db.user.findFirst({
+          where: { id: this._userId },
+          select: { name: true },
+        });
+        initials = initialsFromName(user?.name);
+      }
+
+      let sequence = 1;
+      if (patternUsesSequence(pattern)) {
+        const issued = await this.db.quote.findMany({
+          where: { project: { organizationId: this.organizationId } },
+          select: { quoteNumber: true },
+        });
+        sequence = nextQuoteNumberSequence(
+          pattern,
+          issued.map((row) => row.quoteNumber ?? ""),
+          { initials },
+        );
+      }
+
+      return formatQuoteNumber(pattern, { initials, sequence });
+    } catch (err) {
+      console.error(
+        "[quote-number] falling back to the default pattern:",
+        err instanceof Error ? err.message : err,
+      );
+      return makeQuoteNumber();
+    }
   }
 
   async getOrganizationDefaults(): Promise<AppSettings["defaults"]> {
