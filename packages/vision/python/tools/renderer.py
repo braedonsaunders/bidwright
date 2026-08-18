@@ -10,7 +10,12 @@ Usage as library:
     result = render_page("/path.pdf", page=1, dpi=150)
     zoomed = render_region("/path.pdf", page=1, x=100, y=200, w=300, h=250, img_w=5400, img_h=3600)
 """
-import fitz
+try:  # PyMuPDF renamed the module; the "fitz" alias prints a deprecation
+    # notice on import, and these tools answer on stdout, so the notice would
+    # corrupt the JSON reply.
+    import pymupdf as fitz
+except ImportError:  # older PyMuPDF without the new name
+    import fitz
 import base64
 import numpy as np
 

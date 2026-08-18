@@ -79,6 +79,21 @@ function spawnSingleCommand(args: {
   });
 }
 
+/**
+ * Every tool here answers with a single JSON document on stdout, so any
+ * library that prints a banner there corrupts the reply. PyMuPDF routes its
+ * diagnostics (including the "fitz is deprecated" notice) through a message
+ * channel that defaults to stdout; `fd:2` moves them to stderr, where they
+ * stay visible in logs without breaking the contract.
+ */
+function withQuietPythonStdout(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return {
+    PYMUPDF_MESSAGE: "fd:2",
+    PYTHONWARNINGS: "ignore",
+    ...env,
+  };
+}
+
 export async function spawnPythonCommand(args: {
   scriptArgs: string[];
   cwd: string;
@@ -95,7 +110,7 @@ export async function spawnPythonCommand(args: {
       scriptArgs: args.scriptArgs,
       cwd: args.cwd,
       timeoutMs: args.timeoutMs ?? 120_000,
-      env: args.env ?? process.env,
+      env: withQuietPythonStdout(args.env ?? process.env),
       stdin: args.stdin,
     });
 
@@ -113,4 +128,45 @@ export async function spawnPythonCommand(args: {
     code: -1,
     command: missingCommands[0] ?? "python",
   };
+}
+
+/**
+ * Parse a Python tool's stdout as JSON, tolerating a preamble.
+ *
+ * The tools promise one JSON document on stdout, but a dependency printing a
+ * banner on import (PyMuPDF's deprecated-`fitz` notice is the one that bit us)
+ * silently turned every reply into a parse error. Recover the payload by
+ * scanning for the outermost JSON value rather than failing the whole call.
+ */
+export function parsePythonJson<T = unknown>(stdout: string): { ok: true; value: T } | { ok: false; error: string } {
+  const text = (stdout ?? "").trim();
+  if (!text) return { ok: false, error: "Python tool produced no output" };
+
+  try {
+    return { ok: true, value: JSON.parse(text) as T };
+  } catch {
+    // Fall through to recovery.
+  }
+
+  for (const opener of ["{", "["] as const) {
+    const start = text.indexOf(opener);
+    if (start < 0) continue;
+    const closer = opener === "{" ? "}" : "]";
+    const end = text.lastIndexOf(closer);
+    if (end <= start) continue;
+    try {
+      return { ok: true, value: JSON.parse(text.slice(start, end + 1)) as T };
+    } catch {
+      // Try the other bracket shape.
+    }
+  }
+
+  return { ok: false, error: `Bad JSON: ${text.slice(0, 300)}` };
+}
+
+/** Throwing form, for call sites that already funnel failures into a catch. */
+export function parsePythonJsonOrThrow<T = unknown>(stdout: string): T {
+  const parsed = parsePythonJson<T>(stdout);
+  if (!parsed.ok) throw new Error(parsed.error);
+  return parsed.value;
 }

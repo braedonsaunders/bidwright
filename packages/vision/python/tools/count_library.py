@@ -47,7 +47,12 @@ from typing import Any
 
 import cv2
 import numpy as np
-import fitz
+try:  # PyMuPDF renamed the module; the "fitz" alias prints a deprecation
+    # notice on import, and these tools answer on stdout, so the notice would
+    # corrupt the JSON reply.
+    import pymupdf as fitz
+except ImportError:  # older PyMuPDF without the new name
+    import fitz
 
 try:
     from tools.count_symbols import count_matches, count_matches_cross_scale

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnPythonCommand } from "./python-runtime.js";
+import { parsePythonJson, spawnPythonCommand } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
@@ -52,10 +52,9 @@ export async function renderPdfPage(request: RenderPageRequest): Promise<RenderP
     return { success: false, error: stderr || `exit code ${code}`, duration_ms };
   }
 
-  try {
-    const result = JSON.parse(stdout);
-    return { ...result, duration_ms };
-  } catch {
-    return { success: false, error: `Bad JSON: ${stdout.slice(0, 300)}`, duration_ms };
+  const parsed = parsePythonJson<Record<string, unknown>>(stdout);
+  if (!parsed.ok) {
+    return { success: false, error: parsed.error, duration_ms };
   }
+  return { ...(parsed.value as object), duration_ms } as RenderPageResult;
 }

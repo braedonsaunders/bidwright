@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnPythonCommand } from "./python-runtime.js";
+import { parsePythonJsonOrThrow, spawnPythonCommand } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
@@ -358,7 +358,7 @@ export async function runAnalyzeDrawingGeometry(
   }
 
   try {
-    const parsed = JSON.parse(stdout) as Partial<AnalyzeDrawingGeometryResult>;
+    const parsed = parsePythonJsonOrThrow(stdout) as Partial<AnalyzeDrawingGeometryResult>;
     return {
       ...emptyResult(duration_ms),
       ...parsed,

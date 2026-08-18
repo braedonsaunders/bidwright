@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnPythonCommand } from "./python-runtime.js";
+import { parsePythonJsonOrThrow, spawnPythonCommand } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
@@ -79,7 +79,7 @@ export async function runScanDrawing(request: ScanDrawingRequest): Promise<ScanD
   }
 
   try {
-    const result = JSON.parse(stdout);
+    const result = parsePythonJsonOrThrow<any>(stdout);
     return {
       clusters: result.clusters ?? [],
       imageWidth: result.imageWidth ?? 0,

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnPythonCommand } from "./python-runtime.js";
+import { parsePythonJsonOrThrow, spawnPythonCommand } from "./python-runtime.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PYTHON_DIR = path.resolve(__dirname, "..", "python");
@@ -121,7 +121,7 @@ async function runPointCloudTool<T>(args: {
 
   let parsed: unknown;
   try {
-    parsed = JSON.parse(stdout);
+    parsed = parsePythonJsonOrThrow<any>(stdout);
   } catch {
     const detail = stderr.trim() || stdout.slice(0, 500) || `exit code ${code}`;
     throw new PointCloudToolError(`${args.toolName} produced invalid output: ${detail}`, "invalid-output");

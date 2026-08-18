@@ -335,7 +335,10 @@ def extract_pdf_vector_segments(
     preserved.
     """
     try:
-        import fitz  # type: ignore
+        try:
+            import pymupdf as fitz  # the 'fitz' alias prints a deprecation notice on stdout
+        except ImportError:
+            import fitz
     except Exception as exc:
         return [], {"available": False, "error": f"PyMuPDF unavailable: {exc}"}
 

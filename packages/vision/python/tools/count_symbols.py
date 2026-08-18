@@ -163,7 +163,10 @@ def count_matches_on_pdf(pdf_path: str, page: int, bbox: dict,
     Returns:
         {matches, totalCount, templateImage, elapsed_ms, imageWidth, imageHeight}
     """
-    import fitz
+    try:
+        import pymupdf as fitz  # the 'fitz' alias prints a deprecation notice on stdout
+    except ImportError:
+        import fitz
     import base64
 
     start = time.time()
