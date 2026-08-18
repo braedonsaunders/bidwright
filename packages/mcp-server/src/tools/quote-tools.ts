@@ -3168,19 +3168,23 @@ function percentToRatio(percent: number | null | undefined): number | null | und
   );
 
   // ── createSummaryRow ────────────────────────────────────────
+  // Mirrors the API's summary-row contract exactly. The previous schema
+  // offered row types the API rejects and value fields it silently drops, so
+  // every call either 400'd or created an empty row.
   server.tool(
     "createSummaryRow",
-    "Add a row to the quote summary. Types: auto_category, auto_phase, manual, modifier, subtotal, separator.",
+    "Add a row to the quote summary. A row either aggregates a source (category, phase, worksheet, classification, adjustment) or is structural (heading, separator, subtotal). Values come from the aggregated source, not from this call.",
     {
-      type: z.enum(["auto_category", "auto_phase", "manual", "modifier", "subtotal", "separator"]).describe("Row type"),
+      type: z.enum(["category", "phase", "worksheet", "classification", "adjustment", "heading", "separator", "subtotal"]).describe("Row type"),
       label: z.string().describe("Display label"),
-      sourceCategory: z.string().optional().describe("For auto_category: EntityCategory name to aggregate"),
-      sourcePhase: z.string().optional().describe("For auto_phase: phase name to aggregate"),
-      manualValue: z.coerce.number().optional().describe("For manual: sell/price value"),
-      manualCost: z.coerce.number().optional().describe("For manual: cost value"),
-      modifierPercent: z.coerce.number().optional().describe("For modifier: percentage"),
-      modifierAmount: z.coerce.number().optional().describe("For modifier: fixed dollar amount"),
+      order: z.coerce.number().int().optional().describe("Position in the summary"),
       visible: z.boolean().optional().describe("Visible on PDF (default true)"),
+      style: z.enum(["normal", "bold", "indent", "highlight"]).optional().describe("Display style"),
+      sourceCategoryId: z.string().optional().describe("For type=category: EntityCategory id to aggregate"),
+      sourcePhaseId: z.string().optional().describe("For type=phase: phase id to aggregate"),
+      sourceWorksheetId: z.string().optional().describe("For type=worksheet: worksheet id to aggregate"),
+      sourceClassificationId: z.string().optional().describe("For type=classification: classification id to aggregate"),
+      sourceAdjustmentId: z.string().optional().describe("For type=adjustment: adjustment id to show"),
     },
     async (input) => {
       const body: Record<string, unknown> = {};
@@ -3195,14 +3199,11 @@ function percentToRatio(percent: number | null | undefined): number | null | und
   // ── updateSummaryRow ────────────────────────────────────────
   server.tool(
     "updateSummaryRow",
-    "Update an existing summary row.",
+    "Update an existing summary row. Only provided fields are changed.",
     {
       rowId: z.string().describe("Summary row ID"),
       label: z.string().optional().describe("New label"),
-      manualValue: z.coerce.number().optional().describe("New value (manual rows)"),
-      manualCost: z.coerce.number().optional().describe("New cost (manual rows)"),
-      modifierPercent: z.coerce.number().optional().describe("New percentage (modifier rows)"),
-      modifierAmount: z.coerce.number().optional().describe("New amount (modifier rows)"),
+      order: z.coerce.number().int().optional().describe("New position in the summary"),
       visible: z.boolean().optional().describe("Visible on PDF"),
       style: z.enum(["normal", "bold", "indent", "highlight"]).optional().describe("Display style"),
     },
@@ -3213,7 +3214,7 @@ function percentToRatio(percent: number | null | undefined): number | null | und
         if (v !== undefined) body[k] = v;
       }
       await apiPatch(projectPath(`/summary-rows/${rowId}`), body);
-      return { content: [{ type: "text" as const, text: `Updated summary row ${rowId}` }] };
+      return { content: [{ type: "text" as const, text: "Updated summary row" }] };
     }
   );
 
