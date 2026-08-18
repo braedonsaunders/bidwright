@@ -2736,7 +2736,12 @@ export function registerDrawingEvidenceTools(server: McpServer) {
       confidence: z.enum(["high", "medium", "low"]).default("medium"),
       rationale: z.string().default(""),
       assumption: z.string().optional(),
-      evidence: z.array(z.object({
+      // A claim usually rests on ONE crop, and models routinely send that single
+      // item as a bare object. Rejecting it burned a full round trip every time
+      // ("Expected array, received object"), so accept either shape.
+      evidence: z.preprocess(
+        (value) => (value && typeof value === "object" && !Array.isArray(value) ? [value] : value),
+        z.array(z.object({
         documentId: z.string().nullish(),
         pageNumber: z.coerce.number().int().positive().nullish(),
         regionId: z.string().nullish(),
@@ -2747,7 +2752,8 @@ export function registerDrawingEvidenceTools(server: McpServer) {
         cropPath: z.string().nullish(),
         sourceText: z.string().nullish(),
         imageHashVerifiedAt: z.string().nullish(),
-      }).passthrough()).default([]),
+        }).passthrough()).default([]),
+      ) as unknown as z.ZodType<Array<Record<string, unknown>>>,
       reconciliation: z.object({
         status: z.enum(["resolved", "carried_assumption"]).optional(),
         resolution: z.string().optional(),

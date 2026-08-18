@@ -28,7 +28,11 @@ export function registerSystemTools(server: McpServer) {
     "askUser",
     "MANDATORY: Ask the user a clarifying question and WAIT for their response. Use this BEFORE making any assumptions about scope, subcontracting, labour basis, scheduling, or other ambiguous details. The question will appear in the UI and the user can respond. This tool BLOCKS until the user answers — do not proceed without the answer.",
     {
-      question: z.string().describe("Short overall prompt or summary for this ask. If using `questions`, keep this concise."),
+      // Optional because this tool tells the model to prefer `questions` for
+      // multi-part asks, and it then omits the singular field — which failed
+      // validation outright ("question: Required") and cost a round trip. When
+      // it is missing we derive it from the structured list below.
+      question: z.string().optional().describe("Short overall prompt or summary for this ask. If using `questions`, keep this concise."),
       options: z.array(z.string()).optional().describe("Optional suggested answer choices the user can click"),
       allowMultiple: z.boolean().optional().describe("Set true when the top-level options support multiple selections"),
       context: z.string().optional().describe("Brief context explaining why you need this information"),
@@ -40,9 +44,23 @@ export function registerSystemTools(server: McpServer) {
         return { content: [{ type: "text" as const, text: "Error: No project ID configured" }] };
       }
 
+      // Everything downstream keys off a non-empty `question` — the drawer hides
+      // any askUser event without one. Since the field is now optional, derive a
+      // summary from the structured list rather than posting a blank prompt.
+      const resolvedQuestion =
+        question?.trim() ||
+        (questions?.length === 1
+          ? questions[0]?.prompt?.trim()
+          : questions?.length
+            ? `${questions.length} questions about scope and pricing basis`
+            : "");
+      if (!resolvedQuestion) {
+        return { content: [{ type: "text" as const, text: "Error: askUser needs either `question` or a non-empty `questions` list" }] };
+      }
+
       try {
         const created = await apiPost<{ ok: boolean; questionId: string }>(`/api/cli/${projectId}/question`, {
-          question,
+          question: resolvedQuestion,
           options,
           allowMultiple,
           context,

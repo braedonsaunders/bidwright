@@ -3959,19 +3959,33 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                   if (!prompt?.question) return null;
                   if (isDuplicateAskUserEvent(timelineEvents, i)) return null;
                   const answer = findAnswerForAskUser(timelineEvents, i);
-                  const isCurrentPending = !answer
-                    && cliRuntime
-                    && cliPendingQuestion
-                    && promptMatchesAskUserEvent(cliPendingQuestion, evt);
+                  // An unanswered question is ALWAYS answerable. Previously this
+                  // also required a live runtime and a server-side "still
+                  // pending" record, so a question whose run had stopped (or
+                  // whose tool call had expired) silently rendered as a
+                  // look-alike read-only card that could never be answered.
+                  // The answer is persisted as a run event and picked up
+                  // whenever the agent reads it, so answering later is valid.
+                  const isCurrentPending = !answer;
 
                   if (isCurrentPending) {
                     return (
                       <PendingQuestionCard
                         key={key}
-                        prompt={cliPendingQuestion}
-                        promptKey={`cli-inline-${projectId}-${cliPendingQuestion.id || cliPendingQuestion.question}`}
+                        // Prefer the live pending record when it matches (it can
+                        // carry server-side updates), else fall back to the event
+                        // itself so a question outlives its run.
+                        prompt={
+                          cliPendingQuestion && promptMatchesAskUserEvent(cliPendingQuestion, evt)
+                            ? cliPendingQuestion
+                            : prompt
+                        }
+                        promptKey={`cli-inline-${projectId}-${prompt.id || prompt.question}`}
                         onSubmit={async (submittedAnswer) => {
-                          const pendingPrompt = cliPendingQuestion;
+                          const pendingPrompt =
+                            cliPendingQuestion && promptMatchesAskUserEvent(cliPendingQuestion, evt)
+                              ? cliPendingQuestion
+                              : prompt;
                           try {
                             await answerCliQuestion(projectId, submittedAnswer, pendingPrompt?.id);
                             recordCliAnswer(submittedAnswer, pendingPrompt);

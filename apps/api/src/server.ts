@@ -4322,8 +4322,17 @@ export function buildServer() {
       return reply.code(404).send({ message: "Project not found" });
     }
     try {
-      const result = await request.store!.revertActivity(projectId, activityId);
-      return result;
+      await request.store!.revertActivity(projectId, activityId);
+      // revertActivity returns the bare workspace, but the client applies this
+      // response as a full WorkspaceResponse ({ workspace, workspaceState,
+      // summaryMetrics, packages, jobs, documents }). Returning the inner object
+      // left workspace undefined and crashed the page right after a successful
+      // revert — rebuild the same envelope the workspace GET returns.
+      const payload = await buildWorkspaceResponse(request.store!, projectId);
+      if (!payload) {
+        return reply.code(404).send({ message: "Project workspace not found" });
+      }
+      return payload;
     } catch (err: any) {
       const code = err.statusCode ?? (err.message?.includes("cannot be reverted") ? 400 : err.message?.includes("no longer exists") ? 409 : 500);
       return reply.code(code).send({ message: err.message });

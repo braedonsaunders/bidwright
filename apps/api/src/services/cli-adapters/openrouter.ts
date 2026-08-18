@@ -19,6 +19,7 @@ import type {
   SpawnPlan,
 } from "./types.js";
 import { codexAdapter } from "./codex.js";
+import { MCP_TOOL_TIMEOUT_SEC } from "./shared.js";
 import { createRuntimeBrokerPlan } from "../runtime-broker.js";
 
 const DEFAULT_MODEL = "~openai/gpt-latest";
@@ -77,6 +78,10 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     `mcp_servers.bidwright.args=${JSON.stringify(ctx.mcpArgs)}`,
     "-c",
     `mcp_servers.bidwright.env_vars=${JSON.stringify(envNames)}`,
+    // See MCP_TOOL_TIMEOUT_SEC: Codex's 300s default expired askUser questions
+    // before the estimator could answer them.
+    "-c",
+    `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
   ];
 }
 

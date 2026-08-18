@@ -1879,6 +1879,8 @@ function firstPluginSearchField(tool: { ui?: { sections?: Array<{ fields?: Array
 // Stable key for the Postgres advisory lock that serialises the one-time
 // line-item search DDL across concurrent requests and API processes.
 const LINE_ITEM_SEARCH_DDL_LOCK = 4823170192;
+/** How long the search-index DDL will wait for the advisory lock before failing. */
+const LINE_ITEM_SEARCH_DDL_LOCK_TIMEOUT_MS = 15_000;
 
 export class PrismaApiStore {
   private static lineItemSearchInfrastructureReady = false;
@@ -1965,6 +1967,13 @@ export class PrismaApiStore {
     // exists", then race to insert into pg_class and one fails with 23505. The
     // advisory lock serialises this across requests AND across API processes.
     await this.db.$transaction(async (tx) => {
+      // pg_advisory_xact_lock waits forever by default. If another session holds
+      // this lock, every search awaits the memoised promise below — which only
+      // resets on rejection, so a hang wedges search for the life of the process
+      // with no response and no error logged. lock_timeout aborts the wait
+      // (verified: it does apply to advisory locks), turning a permanent hang
+      // into a rejection the retry path already handles.
+      await tx.$executeRawUnsafe(`SET LOCAL lock_timeout = '${LINE_ITEM_SEARCH_DDL_LOCK_TIMEOUT_MS}ms'`);
       await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(${LINE_ITEM_SEARCH_DDL_LOCK})`);
       await tx.$executeRawUnsafe(`CREATE EXTENSION IF NOT EXISTS pg_trgm`);
       await tx.$executeRawUnsafe(`
@@ -5920,7 +5929,10 @@ export class PrismaApiStore {
 
     if (opts.status && opts.status.length > 0) {
       params.push(opts.status);
-      whereParts.push(`q.status = ANY($${paramIdx++}::text[])`);
+      // Quote.status is a write-once legacy field ('draft'); the status the
+      // estimator actually sets lives on the current revision. Filter on the
+      // same value the list displays or the filter matches nothing.
+      whereParts.push(`COALESCE(r.status, q.status) = ANY($${paramIdx++}::text[])`);
     }
     if (opts.userIds && opts.userIds.length > 0) {
       params.push(opts.userIds);
@@ -5995,7 +6007,7 @@ export class PrismaApiStore {
           p."updatedAt" AS p_updatedAt,
           q."quoteNumber",
           q.title AS q_title,
-          q.status AS q_status,
+          COALESCE(r.status, q.status) AS q_status,
           COALESCE(r.subtotal, 0) AS r_subtotal,
           COALESCE(r."estimatedMargin", 0) AS r_margin,
           COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), 'Unassigned Client') AS client_disp,

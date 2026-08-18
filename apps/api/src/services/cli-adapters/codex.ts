@@ -27,7 +27,7 @@ import type {
   SpawnCtx,
   SpawnPlan,
 } from "./types.js";
-import { getCliVersion, homeDir, resolveCliCommand } from "./shared.js";
+import { getCliVersion, homeDir, MCP_TOOL_TIMEOUT_SEC, resolveCliCommand } from "./shared.js";
 import { getBidwrightMode } from "../agent-home.js";
 import { createRuntimeBrokerPlan } from "../runtime-broker.js";
 
@@ -133,6 +133,13 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     `mcp_servers.bidwright.args=${JSON.stringify(ctx.mcpArgs)}`,
     "-c",
     `mcp_servers.bidwright.env_vars=${JSON.stringify(envNames)}`,
+    // askUser blocks on a human. Codex's default tool timeout is 300s, so a
+    // question the estimator did not answer within five minutes failed with
+    // "timed out awaiting tools/call after 300s" — the run moved on and the
+    // rendered question became a dead, read-only form. Server-side work is
+    // bounded independently, so this only needs to cover human think time.
+    "-c",
+    `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
   ];
 }
 

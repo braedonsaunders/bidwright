@@ -167,3 +167,23 @@ export function environmentReferences(
 export function homeDir(): string {
   return process.env.HOME || process.env.USERPROFILE || "";
 }
+
+/**
+ * Tool-call timeout for the bidwright MCP server, in seconds — deliberately set
+ * to a year, i.e. effectively none.
+ *
+ * `askUser` must never expire. The API already treats it that way: the answer is
+ * persisted as a `userAnswer` run event and the tool polls run history for it, so
+ * an answer given tomorrow is still delivered, even across an API restart (see
+ * the question-timeout route: "an agent can wait for days without inventing
+ * defaults or continuing past the user").
+ *
+ * Codex's own 300s default was overriding all of that — the call died with
+ * "timed out awaiting tools/call after 300s", the run carried on unanswered, and
+ * the question already on screen became a dead read-only form. A shorter cap
+ * here would just reintroduce the same deadline, so there is no cap.
+ *
+ * This does not risk wedging a run on a stuck request: work that could hang
+ * server-side is bounded server-side (see LINE_ITEM_SEARCH_DDL_LOCK_TIMEOUT_MS).
+ */
+export const MCP_TOOL_TIMEOUT_SEC = 31_536_000;

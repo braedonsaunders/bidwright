@@ -2043,7 +2043,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
               options={QUOTE_STATUSES}
             />
             {isSnap && <Badge tone="info">Snap</Badge>}
-            <Badge tone={statusTone(workspace.currentRevision.status)}>{workspace.currentRevision.type ?? "Firm"}</Badge>
+            {/* The estimate type is not a status, so it must not borrow the
+                status colour — it stays neutral like the Rev pill. Sized to
+                text-[10px]/px-2 so it matches the status dropdown's height. */}
+            <Badge tone="default" className="px-2 text-[10px]">{workspace.currentRevision.type ?? "Firm"}</Badge>
           </div>
           <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] text-fg/40">
             <span>{getClientDisplayName(workspace.project, workspace.quote)}</span>
