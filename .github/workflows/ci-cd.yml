@@ -99,6 +99,8 @@ jobs:
           apps/api/src/services/dataset-search-fitness.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/pdf-service.test.ts
+          packages/vision/src/python-runtime.test.ts
+          apps/api/src/services/revision-copy.test.ts
           apps/api/src/services/project-image-service.test.ts
           apps/api/src/services/model-ingest/aps-client.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts

@@ -146,6 +146,7 @@ import {
   type SearchProfile,
   type SearchProfileTerm,
 } from "./services/estimator-search.js";
+import { remapRateScheduleItemId, remapTierUnits } from "./services/revision-copy.js";
 
 import {
   apiDataRoot,
@@ -12171,6 +12172,56 @@ export class PrismaApiStore {
         });
       }
 
+      // Copy rate schedules BEFORE worksheets. The copy mints new schedule,
+      // tier and item ids, and a worksheet row addresses both: rateScheduleItemId
+      // names an item, and tierUnits is keyed by tier id. Copying rows first left
+      // them pointing at the previous revision's ids, so the new revision showed
+      // no hours and rejected its own rate items as non-existent.
+      const scheduleItemIdMap = new Map<string, string>();
+      const tierIdMap = new Map<string, string>();
+      const oldSchedules = await tx.rateSchedule.findMany({
+        where: { revisionId: currentRevision.id },
+        include: rateScheduleCalcInclude,
+      });
+      for (const sched of oldSchedules) {
+        const newSchedId = createId("rs");
+        await tx.rateSchedule.create({
+          data: {
+            id: newSchedId, organizationId: sched.organizationId, name: sched.name, description: sched.description,
+            category: sched.category, scope: "revision", projectId: sched.projectId,
+            revisionId: newRevisionId, sourceScheduleId: sched.sourceScheduleId,
+            effectiveDate: sched.effectiveDate, expiryDate: sched.expiryDate,
+            defaultMarkup: sched.defaultMarkup, autoCalculate: sched.autoCalculate,
+            metadata: sched.metadata as any,
+          },
+        });
+        for (const tier of sched.tiers) {
+          const newTierId = createId("rst");
+          tierIdMap.set(tier.id, newTierId);
+          await tx.rateScheduleTier.create({
+            data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder, uom: (tier as any).uom ?? null },
+          });
+        }
+        for (const item of sched.items) {
+          const remappedRates: Record<string, number> = {};
+          for (const [oldTierId, val] of Object.entries((item.rates as Record<string, number>) ?? {})) {
+            const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
+            remappedRates[newTierId] = val;
+          }
+          const newItemId = createId("rsi");
+          scheduleItemIdMap.set(item.id, newItemId);
+          await (tx as any).rateScheduleItem.create({
+            data: {
+              id: newItemId, scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
+              resourceId: (item as any).resourceId ?? null,
+              code: item.code, name: item.name, unit: item.unit,
+              rates: remappedRates, costRates: {},
+              burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
+            },
+          });
+        }
+      }
+
       // Copy worksheets and items
       const worksheetIdMap = new Map<string, string>();
       const worksheetItemIdMap = new Map<string, string>();
@@ -12196,9 +12247,9 @@ export class PrismaApiStore {
               vendor: oldItem.vendor, description: oldItem.description, quantity: oldItem.quantity,
               uom: oldItem.uom, cost: oldItem.cost, markup: oldItem.markup, price: oldItem.price,
               lineOrder: oldItem.lineOrder,
-              rateScheduleItemId: oldItem.rateScheduleItemId ?? null,
+              rateScheduleItemId: remapRateScheduleItemId(oldItem.rateScheduleItemId, scheduleItemIdMap),
               itemId: oldItem.itemId ?? null,
-              tierUnits: oldItem.tierUnits ?? {},
+              tierUnits: remapTierUnits(oldItem.tierUnits, tierIdMap),
               rateResolution: toPrismaJson((oldItem as any).rateResolution ?? {}),
               sourceNotes: oldItem.sourceNotes ?? "",
               costResourceId: (oldItem as any).costResourceId ?? null,
@@ -12306,49 +12357,6 @@ export class PrismaApiStore {
       const oldConditions = await tx.condition.findMany({ where: { revisionId: currentRevision.id } });
       for (const c of oldConditions) {
         await tx.condition.create({ data: { id: createId("cond"), revisionId: newRevisionId, type: c.type, value: c.value, order: c.order } });
-      }
-
-      // Copy rate schedules (deep copy with tier ID remapping)
-      const oldSchedules = await tx.rateSchedule.findMany({
-        where: { revisionId: currentRevision.id },
-        include: rateScheduleCalcInclude,
-      });
-      for (const sched of oldSchedules) {
-        const newSchedId = createId("rs");
-        const tierIdMap = new Map<string, string>();
-        await tx.rateSchedule.create({
-          data: {
-            id: newSchedId, organizationId: sched.organizationId, name: sched.name, description: sched.description,
-            category: sched.category, scope: "revision", projectId: sched.projectId,
-            revisionId: newRevisionId, sourceScheduleId: sched.sourceScheduleId,
-            effectiveDate: sched.effectiveDate, expiryDate: sched.expiryDate,
-            defaultMarkup: sched.defaultMarkup, autoCalculate: sched.autoCalculate,
-            metadata: sched.metadata as any,
-          },
-        });
-        for (const tier of sched.tiers) {
-          const newTierId = createId("rst");
-          tierIdMap.set(tier.id, newTierId);
-          await tx.rateScheduleTier.create({
-            data: { id: newTierId, scheduleId: newSchedId, name: tier.name, multiplier: tier.multiplier, sortOrder: tier.sortOrder, uom: (tier as any).uom ?? null },
-          });
-        }
-        for (const item of sched.items) {
-          const remappedRates: Record<string, number> = {};
-          for (const [oldTierId, val] of Object.entries((item.rates as Record<string, number>) ?? {})) {
-            const newTierId = tierIdMap.get(oldTierId) ?? oldTierId;
-            remappedRates[newTierId] = val;
-          }
-          await (tx as any).rateScheduleItem.create({
-            data: {
-              id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
-              resourceId: (item as any).resourceId ?? null,
-              code: item.code, name: item.name, unit: item.unit,
-              rates: remappedRates, costRates: {},
-              burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
-            },
-          });
-        }
       }
 
       // Copy report sections with ID mapping
