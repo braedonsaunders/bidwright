@@ -5531,7 +5531,16 @@ export async function getCliPendingQuestion(projectId: string) {
 }
 
 export async function answerCliQuestion(projectId: string, answer: string, questionId?: string | null) {
-  return apiRequest<{ ok: boolean; message: string }>(`/api/cli/${projectId}/answer`, {
+  // `resumed` is true when the agent had already stopped and this answer
+  // restarted it — questions have no deadline, so the answer can arrive after
+  // the run exited. `sessionId` is the new run to attach the stream to.
+  return apiRequest<{
+    ok: boolean;
+    message: string;
+    resumed?: boolean;
+    sessionId?: string;
+    resumeError?: string;
+  }>(`/api/cli/${projectId}/answer`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ answer, questionId: questionId || undefined }),

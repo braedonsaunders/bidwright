@@ -2346,11 +2346,29 @@ function worksheetTreeSummary(ws: any) {
   // ── recalculateTotals ─────────────────────────────────────
   server.tool(
     "recalculateTotals",
-    "Recalculate all financial totals for the quote.",
+    [
+      "Recalculate all financial totals for the quote and return the authoritative figures.",
+      "These are the SAME numbers finalizeEstimateStrategy validates a claimed summary against (within 2%), so quote them verbatim in that summary instead of adding up line items yourself.",
+    ].join(" "),
     {},
     async () => {
-      await apiPost(projectPath("/recalculate"), {});
-      return { content: [{ type: "text" as const, text: "Totals recalculated" }] };
+      const result = await apiPost<{ computedSummary?: Record<string, unknown> | null }>(
+        projectPath("/recalculate"),
+        {},
+      );
+      // Returning only "Totals recalculated" left the caller with no way to read
+      // totalHours or per-bucket labourHours, so it estimated them and finalize
+      // rejected the claim.
+      const summary = result?.computedSummary;
+      if (!summary) {
+        return { content: [{ type: "text" as const, text: "Totals recalculated (summary unavailable)" }] };
+      }
+      return {
+        content: [{
+          type: "text" as const,
+          text: `Totals recalculated. Authoritative summary (use these exact values):\n${JSON.stringify(summary, null, 2)}`,
+        }],
+      };
     }
   );
 

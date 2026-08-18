@@ -605,6 +605,26 @@ function findCliQuestionAnswer(events: PersistedCliEvent[], questionId: string):
   return null;
 }
 
+/**
+ * Text of an asked question, for restating it to a resumed agent. Falls back to
+ * the structured list when the ask had no single top-level prompt.
+ */
+function pendingQuestionText(events: PersistedCliEvent[], questionId: string): string {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (event.type !== "askUser") continue;
+    const data = (event.data || {}) as Record<string, unknown>;
+    if (data.questionId !== questionId && data.id !== questionId) continue;
+    if (typeof data.question === "string" && data.question.trim()) return data.question;
+    const questions = Array.isArray(data.questions) ? data.questions : [];
+    const prompts = questions
+      .map((entry) => (entry as Record<string, unknown>)?.prompt)
+      .filter((prompt): prompt is string => typeof prompt === "string" && prompt.trim().length > 0);
+    if (prompts.length > 0) return prompts.join(" | ");
+  }
+  return "(question text unavailable)";
+}
+
 function findPendingCliQuestionFromEvents(
   events: PersistedCliEvent[],
   questionId?: string,
@@ -1630,14 +1650,22 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
   });
 
   // ── Resume Session ──────────────────────────────────────────
-  app.post("/api/cli/:projectId/resume", async (request, reply) => {
+  /**
+   * Start a resumed CLI session. Extracted from POST /resume so answering a
+   * question can restart a run that already stopped — an interactive question
+   * has no deadline, so the answer may arrive long after the agent exited.
+   * Throws with `statusCode` set; callers map that to a reply.
+   */
+  async function startResumedSession(
+    request: FastifyRequest,
+    body: { prompt?: string; model?: string; mode?: AgentChatMode },
+  ): Promise<{ sessionId: string; status: string }> {
     const { projectId } = request.params as { projectId: string };
-    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode };
     const projectDir = resolveProjectDir(projectId);
     const store = request.store!;
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) {
-      return reply.code(404).send({ error: "Project not found" });
+      throw Object.assign(new Error("Project not found"), { statusCode: 404 });
     }
 
     const integrations = await store.getEffectiveIntegrations(request.user?.id, { isSuperAdmin: request.user?.isSuperAdmin });
@@ -1730,7 +1758,22 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         } as any,
         output: { events: [] } as any,
       }).catch(() => {});
-      return reply.code(500).send({ error: err instanceof Error ? err.message : "Failed to resume session" });
+      throw Object.assign(
+        new Error(err instanceof Error ? err.message : "Failed to resume session"),
+        { statusCode: 500 },
+      );
+    }
+  }
+
+  app.post("/api/cli/:projectId/resume", async (request, reply) => {
+    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode };
+    try {
+      return await startResumedSession(request, body);
+    } catch (err) {
+      const statusCode = (err as { statusCode?: number })?.statusCode ?? 500;
+      return reply.code(statusCode).send({
+        error: err instanceof Error ? err.message : "Failed to resume session",
+      });
     }
   });
 
@@ -2488,7 +2531,38 @@ Merge tables that span multiple pages. Skip non-data pages.
       runId: pending?.runId ?? null,
     }).catch(() => null);
 
-    return { ok: true, message: "Answer delivered to agent" };
+    // A live session's askUser poll picks the answer up on its own. If the run
+    // already stopped there is nobody polling, so the answer would sit in
+    // history forever. Questions have no deadline by design — the answer can
+    // arrive the next day — so restart the run and hand it the answer.
+    if (session) {
+      return { ok: true, message: "Answer delivered to agent", resumed: false };
+    }
+
+    try {
+      const resumed = await startResumedSession(request, {
+        prompt: [
+          "The user has answered the question you were waiting on.",
+          `Question: ${pendingQuestionText(latestEvents, resolvedQuestionId)}`,
+          `Answer: ${normalizedAnswer}`,
+          "Continue from where you stopped, using this answer.",
+        ].join("\n"),
+      });
+      return { ok: true, message: "Answer delivered; agent resumed", resumed: true, ...resumed };
+    } catch (err) {
+      // The answer is already persisted, so report the delivery as successful
+      // and surface only the resume failure — retrying is safe.
+      request.log?.error?.(
+        { err, projectId, questionId: resolvedQuestionId },
+        "answer stored but resuming the agent failed",
+      );
+      return {
+        ok: true,
+        message: "Answer saved. The agent was not running and could not be resumed automatically.",
+        resumed: false,
+        resumeError: err instanceof Error ? err.message : "Failed to resume session",
+      };
+    }
   });
 
   app.post("/api/cli/:projectId/question-timeout", async (request) => {

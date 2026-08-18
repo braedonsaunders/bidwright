@@ -4229,6 +4229,25 @@ export class PrismaApiStore {
     };
   }
 
+  /**
+   * The exact figures finalizeEstimateStrategy validates a claimed summary
+   * against.
+   *
+   * This existed only inside that validator, so an agent had no way to read the
+   * numbers it was required to claim to within 2% — no tool returned total or
+   * per-bucket labour hours. It therefore estimated them and got rejected (one
+   * run claimed 248.5 labour hours against an actual 225.84). Exposing the same
+   * computation means the claim can be quoted rather than guessed.
+   */
+  async getEstimateComputedSummary(projectId: string): Promise<Record<string, unknown>> {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const strategy = await this.db.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+    const workspace = await this.getWorkspace(projectId);
+    if (!workspace) throw new Error(`Workspace unavailable for project ${projectId}`);
+    return this.buildEstimateComputedSummary(workspace, strategy);
+  }
+
   private buildEstimateComputedSummary(
     workspace: ProjectWorkspace,
     strategy?: { benchmarkProfile?: unknown } | null,

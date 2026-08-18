@@ -3011,6 +3011,27 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     await handleStartIntake();
   }
 
+  /**
+   * Deliver an answer and, if it restarted a stopped agent, attach to the new
+   * run. Questions have no deadline, so an answer can arrive long after the run
+   * exited — the server resumes it and hands back the new sessionId.
+   */
+  async function deliverCliAnswer(answer: string, pendingPrompt: PendingQuestionPrompt | null) {
+    const result = await answerCliQuestion(projectId, answer, pendingPrompt?.id);
+    recordCliAnswer(answer, pendingPrompt);
+    setCliPendingQuestion(null);
+
+    if (result?.resumeError) {
+      setSessionError(`Answer saved, but the agent could not be resumed: ${result.resumeError}`);
+      return;
+    }
+    if (!result?.resumed) return;
+
+    setIntakeSessionId(result.sessionId || intakeSessionId);
+    setIntakeStatus((prev) => prev ? { ...prev, status: "running" } : prev);
+    connectToSseStream(projectId, chatMode);
+  }
+
   // SSE stream connection for CLI runtime
   function connectToSseStream(pid: string, mode: AgentChatMode) {
     // Cleanup existing connection
@@ -3987,9 +4008,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                               ? cliPendingQuestion
                               : prompt;
                           try {
-                            await answerCliQuestion(projectId, submittedAnswer, pendingPrompt?.id);
-                            recordCliAnswer(submittedAnswer, pendingPrompt);
-                            setCliPendingQuestion(null);
+                            await deliverCliAnswer(submittedAnswer, pendingPrompt);
                           } catch (err) {
                             setSessionError(err instanceof Error ? err.message : "Failed to deliver answer to agent");
                           }
@@ -4062,9 +4081,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                   onSubmit={async (answer) => {
                     const pendingPrompt = cliPendingQuestion;
                     try {
-                      await answerCliQuestion(projectId, answer, pendingPrompt?.id);
-                      recordCliAnswer(answer, pendingPrompt);
-                      setCliPendingQuestion(null);
+                      await deliverCliAnswer(answer, pendingPrompt);
                     } catch (err) {
                       setSessionError(err instanceof Error ? err.message : "Failed to deliver answer to agent");
                     }

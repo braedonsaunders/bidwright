@@ -2526,7 +2526,12 @@ export function buildServer() {
         message: "Project workspace not found"
       });
     }
-    return payload;
+    // Ship the figures finalizeEstimateStrategy validates against, so a caller
+    // that just recalculated can quote them instead of estimating them.
+    const computedSummary = await request.store!
+      .getEstimateComputedSummary(projectId)
+      .catch(() => null);
+    return { ...payload, computedSummary };
   });
 
   app.get("/projects/:projectId/packages", async (request, reply) => {
