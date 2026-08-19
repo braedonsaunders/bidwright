@@ -256,7 +256,9 @@ model Quote {
   project                    Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
   quoteNumber                String           @default("")
   title                      String           @default("")
-  status                     String           @default("draft")
+  // No status column: a quote's status is its current revision's status.
+  // Keeping a second copy here only produced drift (it was written once as
+  // 'draft' and never updated, so every list rendered "Other").
   currentRevisionId          String           @default("")
   customerExistingNew        String           @default("New")
   customerId                 String?

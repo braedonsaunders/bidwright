@@ -160,7 +160,7 @@ export async function seedSampleProjects(prisma: PrismaClient, store: BidwrightS
     await prisma.quote.create({
       data: {
         id: quote.id, projectId: quote.projectId, quoteNumber: quote.quoteNumber,
-        title: quote.title, status: quote.status, currentRevisionId: quote.currentRevisionId,
+        title: quote.title, currentRevisionId: quote.currentRevisionId,
       },
     });
   }

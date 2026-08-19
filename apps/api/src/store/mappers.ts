@@ -199,13 +199,27 @@ export function mapSourceDocument(d: any): SourceDocument {
   };
 }
 
-export function mapQuote(q: any): Quote {
+/**
+ * A quote's status IS its current revision's status. There is no quote-level
+ * status column; carrying one only created two sources of truth that drifted.
+ */
+export function resolveQuoteStatus(
+  quote: { currentRevisionId?: string | null },
+  revisions: Array<{ id: string; revisionNumber?: number; status?: string | null }> = [],
+): Quote["status"] {
+  const current =
+    revisions.find((revision) => revision.id === quote.currentRevisionId) ??
+    [...revisions].sort((a, b) => (b.revisionNumber ?? 0) - (a.revisionNumber ?? 0))[0];
+  return (current?.status || "Open") as Quote["status"];
+}
+
+export function mapQuote(q: any, revisions: any[] = []): Quote {
   return {
     id: q.id,
     projectId: q.projectId,
     quoteNumber: q.quoteNumber,
     title: q.title,
-    status: q.status as Quote["status"],
+    status: resolveQuoteStatus(q, revisions.length > 0 ? revisions : (q.revisions ?? [])),
     currentRevisionId: q.currentRevisionId,
     customerExistingNew: q.customerExistingNew as Quote["customerExistingNew"],
     customerId: q.customerId ?? null,

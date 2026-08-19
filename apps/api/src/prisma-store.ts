@@ -3385,7 +3385,7 @@ export class PrismaApiStore {
     return {
       projects: [mapProject(project)],
       sourceDocuments: sourceDocuments.map(mapSourceDocument),
-      quotes: quotes.map(mapQuote),
+      quotes: quotes.map((quote) => mapQuote(quote, revisions)),
       revisions: revisions.map(mapRevision),
       worksheetFolders: worksheetFolders.map(mapWorksheetFolder),
       worksheets: worksheets.map(mapWorksheet),
@@ -5728,7 +5728,6 @@ export class PrismaApiStore {
         projectId,
         quoteNumber: await this.nextQuoteNumber(),
         title: projectName,
-        status: "draft",
         currentRevisionId: revisionId,
         customerExistingNew: "New",
         userId: this._userId,
@@ -5818,7 +5817,9 @@ export class PrismaApiStore {
           id: quote.id,
           quoteNumber: quote.quoteNumber,
           title: quote.title,
-          status: quote.status,
+          // A quote's status is its current revision's status; there is no
+          // quote-level status column.
+          status: revision?.status ?? "Open",
           currentRevisionId: quote.currentRevisionId,
           customerId: quote.customerId || null,
           customerName: (quote as any).customer?.name || null,
@@ -5956,7 +5957,7 @@ export class PrismaApiStore {
       // Quote.status is a write-once legacy field ('draft'); the status the
       // estimator actually sets lives on the current revision. Filter on the
       // same value the list displays or the filter matches nothing.
-      whereParts.push(`COALESCE(r.status, q.status) = ANY($${paramIdx++}::text[])`);
+      whereParts.push(`r.status = ANY($${paramIdx++}::text[])`);
     }
     if (opts.userIds && opts.userIds.length > 0) {
       params.push(opts.userIds);
@@ -6031,7 +6032,7 @@ export class PrismaApiStore {
           p."updatedAt" AS p_updatedAt,
           q."quoteNumber",
           q.title AS q_title,
-          COALESCE(r.status, q.status) AS q_status,
+          r.status AS q_status,
           COALESCE(r.subtotal, 0) AS r_subtotal,
           COALESCE(r."estimatedMargin", 0) AS r_margin,
           COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), 'Unassigned Client') AS client_disp,
@@ -6109,7 +6110,9 @@ export class PrismaApiStore {
           id: quote.id,
           quoteNumber: quote.quoteNumber,
           title: quote.title,
-          status: quote.status,
+          // A quote's status is its current revision's status; there is no
+          // quote-level status column.
+          status: revision?.status ?? "Open",
           currentRevisionId: quote.currentRevisionId,
           customerId: quote.customerId || null,
           customerName: (quote as any).customer?.name || null,
@@ -9340,8 +9343,7 @@ export class PrismaApiStore {
           title: input.name,
           customerId: customerSelection.customerId,
           customerString: customerSelection.customerString,
-          status: "draft",
-          currentRevisionId: revisionId,
+            currentRevisionId: revisionId,
           customerExistingNew: customerSelection.customerExistingNew,
           userId: this._userId,
           createdAt: now,
@@ -9422,7 +9424,7 @@ export class PrismaApiStore {
 
       return {
         project: mapProject(project),
-        quote: quote ? mapQuote(quote) : null,
+        quote: quote ? mapQuote(quote, revision ? [revision] : []) : null,
         revision: revision ? mapRevision(revision) : null,
         workspaceState: wsRecord,
       };
@@ -9469,8 +9471,7 @@ export class PrismaApiStore {
           title: input.title,
           customerId: customerSelection.customerId,
           customerString: customerSelection.customerString,
-          status: "draft",
-          currentRevisionId: revisionId,
+            currentRevisionId: revisionId,
           customerExistingNew: customerSelection.customerExistingNew,
           userId: this._userId,
           createdAt: now,
@@ -9513,7 +9514,7 @@ export class PrismaApiStore {
 
       return {
         project: mapProject({ ...project, updatedAt: now }),
-        quote: quote ? mapQuote(quote) : null,
+        quote: quote ? mapQuote(quote, revision ? [revision] : []) : null,
         revision: revision ? mapRevision(revision) : null,
         workspaceState: null,
       };
@@ -12572,7 +12573,6 @@ export class PrismaApiStore {
           projectId: newProjectId,
           quoteNumber: await this.nextQuoteNumber(),
           title: sourceQuote.title,
-          status: sourceQuote.status,
           currentRevisionId: newRevisionId,
           customerExistingNew: sourceQuote.customerExistingNew,
           customerId: sourceQuote.customerId,
@@ -12839,7 +12839,7 @@ export class PrismaApiStore {
 
       return {
         project: mapProject(newProject!),
-        quote: mapQuote(newQuote!),
+        quote: mapQuote(newQuote!, newRevision ? [newRevision] : []),
         revision: mapRevision(newRevision!),
       };
     });
@@ -12941,7 +12941,10 @@ export class PrismaApiStore {
       },
     });
 
-    return mapQuote(updated);
+    const currentRevision = updated.currentRevisionId
+      ? await this.db.quoteRevision.findFirst({ where: { id: updated.currentRevisionId } })
+      : null;
+    return mapQuote(updated, currentRevision ? [currentRevision] : []);
   }
 
   async makeCurrentRevisionZero(projectId: string) {
