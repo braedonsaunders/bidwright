@@ -17,7 +17,6 @@ COPY apps/worker/package.json apps/worker/
 # Vendored AppKit tarballs. Some @braedonsaunders/appkit-* packages are not
 # published yet, so package.json resolves them from here; the install fails
 # without this copy.
-COPY vendor/ ./vendor/
 RUN pnpm install --frozen-lockfile
 
 # --- build stage ---

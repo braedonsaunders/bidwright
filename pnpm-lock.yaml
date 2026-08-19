@@ -6,12 +6,12 @@ settings:
 
 overrides:
   '@swc/helpers': ^0.5.17
-  '@braedonsaunders/appkit-ui': file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz
-  '@braedonsaunders/appkit-tokens': file:vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz
-  '@braedonsaunders/appkit-iam': file:vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz
-  '@braedonsaunders/appkit-process-sandbox': file:vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz
-  '@braedonsaunders/appkit-analytics': file:vendor/appkit/braedonsaunders-appkit-analytics-0.2.0.tgz
-  '@braedonsaunders/appkit-tenant': file:vendor/appkit/braedonsaunders-appkit-tenant-0.2.0.tgz
+  '@braedonsaunders/appkit-ui': ^0.2.0
+  '@braedonsaunders/appkit-tokens': ^0.1.2
+  '@braedonsaunders/appkit-iam': ^2.0.0
+  '@braedonsaunders/appkit-process-sandbox': ^0.3.0
+  '@braedonsaunders/appkit-analytics': ^0.2.0
+  '@braedonsaunders/appkit-tenant': ^0.2.0
 
 importers:
 
@@ -66,8 +66,8 @@ importers:
         specifier: ^0.3.0
         version: 0.3.0
       '@braedonsaunders/appkit-process-sandbox':
-        specifier: file:../../vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz
-        version: file:vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz
+        specifier: ^0.3.0
+        version: 0.3.0
       '@fastify/compress':
         specifier: ^8.0.1
         version: 8.3.1
@@ -217,16 +217,16 @@ importers:
         version: link:../../packages/domain
       '@braedonsaunders/appkit-dashboard':
         specifier: ^2.0.0
-        version: 2.0.0(@braedonsaunders/appkit-ui@file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        version: 2.0.0(@braedonsaunders/appkit-ui@0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@braedonsaunders/appkit-iam':
-        specifier: file:../../vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz
-        version: file:vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz(@braedonsaunders/appkit-ui@file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
+        specifier: ^2.0.0
+        version: 2.0.0(@braedonsaunders/appkit-ui@0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
       '@braedonsaunders/appkit-tokens':
-        specifier: file:../../vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz
-        version: file:vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz(tailwindcss@4.3.3)
+        specifier: ^0.1.2
+        version: 0.1.2(tailwindcss@4.3.3)
       '@braedonsaunders/appkit-ui':
-        specifier: file:../../vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz
-        version: file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
+        specifier: ^0.2.0
+        version: 0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
       '@excalidraw/excalidraw':
         specifier: ^0.18.0
         version: 0.18.0(@types/react-dom@19.2.3(@types/react@19.2.14))(@types/react@19.2.14)(immer@9.0.21)(react-dom@19.2.4(react@19.2.4))(react@19.2.4)
@@ -798,9 +798,8 @@ packages:
     resolution: {integrity: sha512-JiDShH45zKHWyGe4ZNVRrCjBz8Nh9TMmZG1kh4QTK8hCBTWBi8Da+i7s1fJw7/lYpM4ccepSNfqzZ/QvABBi5g==}
     engines: {node: '>=6.9.0'}
 
-  '@braedonsaunders/appkit-analytics@file:vendor/appkit/braedonsaunders-appkit-analytics-0.2.0.tgz':
-    resolution: {integrity: sha512-LF38PDLXKvPUfbIi8epyDY70aSLzyt22/jbnw0tJk+CARDdt3107rN3W5O1jNg77FyfaA/reOgUNwXL49DZahw==, tarball: file:vendor/appkit/braedonsaunders-appkit-analytics-0.2.0.tgz}
-    version: 0.2.0
+  '@braedonsaunders/appkit-analytics@0.2.0':
+    resolution: {integrity: sha512-H0gYz2CMTG1AF37n+uFpchtjBz8GOMOIqfhgBOGSEIcfL0U9LSeoOccvJNSApilTxUezOteLcOuBFJ1g+60wmg==}
     engines: {node: '>=22'}
 
   '@braedonsaunders/appkit-crypto@0.3.0':
@@ -809,7 +808,6 @@ packages:
 
   '@braedonsaunders/appkit-dashboard@2.0.0':
     resolution: {integrity: sha512-Fx4iU8INivtIwa8WIFHsuw6RHDWOnX1/b+YNwb5zPs/BeGwfcluVmrEtnks+Wd6u7OiJxjestcA8Ful1UeU9kw==}
-    version: 2.0.0
     engines: {node: '>=22'}
     peerDependencies:
       '@braedonsaunders/appkit-db': ^0.2.0
@@ -835,9 +833,8 @@ packages:
       react-grid-layout:
         optional: true
 
-  '@braedonsaunders/appkit-iam@file:vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz':
-    resolution: {integrity: sha512-pKWX8JZHv1v0irFyz2QyX1Xi4rSRz/iJkFhVa6NK89TC2vq8HJnyMg1V0myMee8hjLIZjGpgF0BfZdjol65ngg==, tarball: file:vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz}
-    version: 2.0.0
+  '@braedonsaunders/appkit-iam@2.0.0':
+    resolution: {integrity: sha512-kHkjxAWxvSKbty8vxDEGplYQ8KqefySEOZAAy4iEKnCskyRHkARRlT61NX4apmLBmjMcQQ+qe7j4EFSIxR1f8A==}
     engines: {node: '>=22'}
     peerDependencies:
       '@braedonsaunders/appkit-db': ^0.2.0
@@ -863,21 +860,18 @@ packages:
       react-dom:
         optional: true
 
-  '@braedonsaunders/appkit-process-sandbox@file:vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz':
-    resolution: {integrity: sha512-zD9CT5D9SCPsQEfpSJrD304nqTr8Mc/jWI0ekMRBcGNZkgcSED4URsXwu07yhhwT6FQQVJUS+b74ZiX5RtErkg==, tarball: file:vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz}
-    version: 0.3.0
+  '@braedonsaunders/appkit-process-sandbox@0.3.0':
+    resolution: {integrity: sha512-lXzNikNucocZjlbvI7Kn3mabPH4QYtPuMBDfQpCvaOD5sHDdpUtuK0f2dHEPN0hvfCY7fiTYTbIKWvcKAh38EA==}
     engines: {node: '>=22'}
 
-  '@braedonsaunders/appkit-tokens@file:vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz':
-    resolution: {integrity: sha512-Oiua5zOqdlWZqVSzIFf9AnWyKEgUaCIN22CGrocdYFqmeoFA7V0gFlaeIG2ydVq9yvQJyl5ggpG2muat1S4+Hw==, tarball: file:vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz}
-    version: 0.1.2
+  '@braedonsaunders/appkit-tokens@0.1.2':
+    resolution: {integrity: sha512-coIavTu9rbfIHYL2kBiyPl4qXbu5R5UMYTsS5KZCKqSdKV9Hpix4NGE1UAHeLVOrQPMx0ow/6qnS3muP/4mlvg==}
     engines: {node: '>=22'}
     peerDependencies:
       tailwindcss: ^4.0.0
 
-  '@braedonsaunders/appkit-ui@file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz':
-    resolution: {integrity: sha512-bwThFBjRIwl3SyTcZy6jxU/CuzixVVKbZdA1b+XSLHBjTstofcs76SUq+d/Ocuyxiptqlqon5d4PR75wdNoLSw==, tarball: file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz}
-    version: 0.2.0
+  '@braedonsaunders/appkit-ui@0.2.0':
+    resolution: {integrity: sha512-aULqo6VB/b18JhMVil64PadPWvPVVjzHVdMJY4mf/i5eYFUCIocT5QvUzk8GTM0DUl5Xdb3ioHFZWfVLlmzeZw==}
     engines: {node: '>=22'}
     peerDependencies:
       react: ^19.0.0
@@ -7912,35 +7906,35 @@ snapshots:
 
   '@babel/runtime@7.29.2': {}
 
-  '@braedonsaunders/appkit-analytics@file:vendor/appkit/braedonsaunders-appkit-analytics-0.2.0.tgz': {}
+  '@braedonsaunders/appkit-analytics@0.2.0': {}
 
   '@braedonsaunders/appkit-crypto@0.3.0': {}
 
-  '@braedonsaunders/appkit-dashboard@2.0.0(@braedonsaunders/appkit-ui@file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@braedonsaunders/appkit-dashboard@2.0.0(@braedonsaunders/appkit-ui@0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     dependencies:
-      '@braedonsaunders/appkit-analytics': file:vendor/appkit/braedonsaunders-appkit-analytics-0.2.0.tgz
+      '@braedonsaunders/appkit-analytics': 0.2.0
     optionalDependencies:
-      '@braedonsaunders/appkit-ui': file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
+      '@braedonsaunders/appkit-ui': 0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
       lucide-react: 0.474.0(react@19.2.4)
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@braedonsaunders/appkit-iam@file:vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz(@braedonsaunders/appkit-ui@file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
+  '@braedonsaunders/appkit-iam@2.0.0(@braedonsaunders/appkit-ui@0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3))(lucide-react@0.474.0(react@19.2.4))(react-dom@19.2.4(react@19.2.4))(react@19.2.4)':
     optionalDependencies:
-      '@braedonsaunders/appkit-ui': file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
+      '@braedonsaunders/appkit-ui': 0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)
       lucide-react: 0.474.0(react@19.2.4)
       react: 19.2.4
       react-dom: 19.2.4(react@19.2.4)
 
-  '@braedonsaunders/appkit-process-sandbox@file:vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz': {}
+  '@braedonsaunders/appkit-process-sandbox@0.3.0': {}
 
-  '@braedonsaunders/appkit-tokens@file:vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz(tailwindcss@4.3.3)':
+  '@braedonsaunders/appkit-tokens@0.1.2(tailwindcss@4.3.3)':
     dependencies:
       tailwindcss: 4.3.3
 
-  '@braedonsaunders/appkit-ui@file:vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)':
+  '@braedonsaunders/appkit-ui@0.2.0(react-dom@19.2.4(react@19.2.4))(react@19.2.4)(tailwindcss@4.3.3)':
     dependencies:
-      '@braedonsaunders/appkit-tokens': file:vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz(tailwindcss@4.3.3)
+      '@braedonsaunders/appkit-tokens': 0.1.2(tailwindcss@4.3.3)
       class-variance-authority: 0.7.1
       clsx: 2.1.1
       framer-motion: 12.42.2(react-dom@19.2.4(react@19.2.4))(react@19.2.4)

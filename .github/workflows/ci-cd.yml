@@ -113,6 +113,12 @@ jobs:
           packages/mcp-server/src/knowledge-dataset-tools.test.ts
           packages/mcp-server/src/api-client.test.ts
           packages/mcp-server/src/modifier-percent.test.ts
+          packages/mcp-server/src/summary-row-contract.test.ts
+          apps/api/src/revision-rate-schedule-scoping.test.ts
+          apps/api/src/answer-resumes-run.test.ts
+          apps/api/src/quote-status-source.test.ts
+          apps/api/src/vercelignore-vendor.test.ts
+          packages/domain/src/quote-number.test.ts
           packages/domain/src/worksheet-hours.test.ts
           packages/domain/src/price-build.test.ts
           packages/domain/src/measurement-format.test.ts

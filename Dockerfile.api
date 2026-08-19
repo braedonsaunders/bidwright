@@ -26,7 +26,6 @@ COPY apps/worker/package.json apps/worker/
 # Vendored AppKit tarballs. Some @braedonsaunders/appkit-* packages are not
 # published yet, so package.json resolves them from here; the install fails
 # without this copy.
-COPY vendor/ ./vendor/
 RUN pnpm install --frozen-lockfile
 # pnpm 10's approve-builds policy denies node-pty's `install` script
 # (the one that runs `node-gyp rebuild`). node-pty ships prebuilds for

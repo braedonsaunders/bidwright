@@ -20,7 +20,7 @@
     "@bidwright/vector": "workspace:*",
     "@bidwright/vision": "workspace:*",
     "@braedonsaunders/appkit-crypto": "^0.3.0",
-    "@braedonsaunders/appkit-process-sandbox": "file:../../vendor/appkit/braedonsaunders-appkit-process-sandbox-0.3.0.tgz",
+    "@braedonsaunders/appkit-process-sandbox": "^0.3.0",
     "@anthropic-ai/claude-agent-sdk": "0.3.220",
     "@fastify/compress": "^8.0.1",
     "@fastify/cors": "^10.0.2",

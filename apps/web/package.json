@@ -16,9 +16,9 @@
   },
   "dependencies": {
     "@braedonsaunders/appkit-dashboard": "^2.0.0",
-    "@braedonsaunders/appkit-iam": "file:../../vendor/appkit/braedonsaunders-appkit-iam-2.0.0.tgz",
-    "@braedonsaunders/appkit-tokens": "file:../../vendor/appkit/braedonsaunders-appkit-tokens-0.1.2.tgz",
-    "@braedonsaunders/appkit-ui": "file:../../vendor/appkit/braedonsaunders-appkit-ui-0.2.0.tgz",
+    "@braedonsaunders/appkit-iam": "^2.0.0",
+    "@braedonsaunders/appkit-tokens": "^0.1.2",
+    "@braedonsaunders/appkit-ui": "^0.2.0",
     "@bidwright/domain": "workspace:*",
     "@excalidraw/excalidraw": "^0.18.0",
     "@next/env": "^16.2.1",
