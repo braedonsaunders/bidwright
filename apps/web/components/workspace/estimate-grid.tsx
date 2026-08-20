@@ -161,8 +161,6 @@ export interface EstimateGridProps {
   onActiveWorksheetChange?: (worksheetId: WorksheetTabId) => void;
   onOpenPluginTools?: (target?: { pluginId?: string; pluginSlug?: string; toolId?: string }) => void;
   onOpenTakeoffLink?: (worksheetItemId: string) => void;
-  variant?: "default" | "snap";
-  lockedWorksheetId?: string;
   /** Per-row revision-diff impact for BIM-linked items. When a row's id is a
    *  key, the grid renders a "↻ Δqty / Δ$" chip on the entity-name cell so the
    *  estimator can see at a glance which lines a pending revision changes.
@@ -352,17 +350,6 @@ const DEFAULT_VISIBLE_COLUMNS: ColumnId[] = [
   "units",
   "cost",
   "extCost",
-  "markup",
-  "price",
-];
-
-const SNAP_VISIBLE_COLUMNS: ColumnId[] = [
-  "expand",
-  "entityName",
-  "description",
-  "quantity",
-  "uom",
-  "cost",
   "markup",
   "price",
 ];
@@ -2364,16 +2351,12 @@ export function EstimateGrid({
   onActiveWorksheetChange,
   onOpenPluginTools,
   onOpenTakeoffLink,
-  variant = "default",
-  lockedWorksheetId,
   revisionImpactByItem,
   onOpenRevisionDiff,
   lineItemPickerRequest,
   dockMode = false,
 }: EstimateGridProps) {
   const [isPending, startTransition] = useTransition();
-  const isSnapMode = variant === "snap";
-  const snapWorksheetId = lockedWorksheetId ?? workspace.worksheets[0]?.id ?? null;
 
   const entityCategories = workspace.entityCategories;
   const globalUoms = useUomLibrary();
@@ -2381,9 +2364,7 @@ export function EstimateGrid({
   // Tab state
   const [worksheetViewMode, setWorksheetViewMode] = useState<WorksheetViewMode>("tabs");
   const [activeTab, setActiveTabState] = useState<WorksheetViewId>(
-    isSnapMode
-      ? snapWorksheetId ?? "all"
-      : activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
+    activeWorksheetId ?? workspace.worksheets[0]?.id ?? "all"
   );
   const prevTabRef = useRef<WorksheetViewId>(activeTab);
   const [tabSlideDir, setTabSlideDir] = useState<1 | -1>(1);
@@ -2406,19 +2387,11 @@ export function EstimateGrid({
   }, [onActiveWorksheetChange, workspace.worksheets]);
 
   useEffect(() => {
-    if (isSnapMode) {
-      const nextTab = snapWorksheetId ?? workspace.worksheets[0]?.id ?? "all";
-      if (activeTab !== nextTab) {
-        setActiveTabState(nextTab);
-        prevTabRef.current = nextTab;
-      }
-      return;
-    }
     if (!activeWorksheetId || activeWorksheetId === activeTab) return;
     if (worksheetViewIsFolder(activeTab)) return;
     setActiveTabState(activeWorksheetId);
     prevTabRef.current = activeWorksheetId;
-  }, [activeTab, activeWorksheetId, isSnapMode, snapWorksheetId, workspace.worksheets]);
+  }, [activeTab, activeWorksheetId]);
 
   // Editing state
   const [editingCell, setEditingCell] = useState<EditingCell>(null);
@@ -2517,7 +2490,7 @@ export function EstimateGrid({
 
   // ─── NEW STATE: Column Visibility ───
   const [visibleColumns, setVisibleColumns] = useState<Set<ColumnId>>(
-    new Set(isSnapMode ? SNAP_VISIBLE_COLUMNS : DEFAULT_VISIBLE_COLUMNS)
+    new Set(DEFAULT_VISIBLE_COLUMNS)
   );
   const [columnWidths, setColumnWidths] = useState<Partial<Record<ColumnId, number>>>({});
   const [showColumnPicker, setShowColumnPicker] = useState(false);
@@ -3378,7 +3351,6 @@ export function EstimateGrid({
   // Only applies when user hasn't manually toggled columns yet.
   const autoDefaultColumns = useMemo(() => {
     if (entityCategories.length === 0) return null;
-    if (isSnapMode) return new Set(SNAP_VISIBLE_COLUMNS);
 
     const allItems = (workspace.worksheets ?? []).flatMap((w) => w.items);
     const activeCats = new Set(allItems.map((r) => r.category));
@@ -3395,7 +3367,7 @@ export function EstimateGrid({
     }
 
     return cols;
-  }, [entityCategories, isSnapMode, workspace.worksheets]);
+  }, [entityCategories, workspace.worksheets]);
 
   // Apply auto-default columns when categories first load (and user hasn't toggled).
   // The memo above returns a new Set on every render (Set identity is unstable), so
@@ -3829,7 +3801,6 @@ export function EstimateGrid({
     (col: ColumnId) => {
       if (col === "checkbox") return selectionMode || selectedIds.size > 0;
       if (!visibleColumns.has(col)) return false;
-      if (isSnapMode) return true;
       if (fitLevel === "compact") {
         return !["lineOrder", "vendor", "extCost", "markup", "margin"].includes(col);
       }
@@ -3838,7 +3809,7 @@ export function EstimateGrid({
       }
       return true;
     },
-    [fitLevel, isSnapMode, selectionMode, selectedIds.size, visibleColumns]
+    [fitLevel, selectionMode, selectedIds.size, visibleColumns]
   );
 
   // Count visible data columns for colSpan on group header
@@ -7381,7 +7352,7 @@ export function EstimateGrid({
     <div className={cn("flex h-full min-h-0 flex-1 flex-col pb-1", dockMode ? "gap-1" : "gap-2")}>
       {renderEntityDropdownPortal()}
       {/* ─── Worksheet Navigation ─── */}
-      {!isSnapMode && !dockMode && (
+      {!dockMode && (
       <div className="flex items-center gap-2 border-b border-line shrink-0">
         <div className="flex items-center rounded-md border border-line bg-bg/60 p-0.5">
           <button

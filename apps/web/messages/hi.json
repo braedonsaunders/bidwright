@@ -213,19 +213,13 @@
       "aiIntake": "AI इनटेक",
       "aiIntakeDescription": "बिड पैकेज अपलोड करें",
       "newQuote": "नया कोट",
-      "newQuoteDescription": "खाली कोट से शुरू करें",
-      "newSnap": "नया Snap",
-      "newSnapDescription": "एक-पेज त्वरित कोट"
+      "newQuoteDescription": "खाली कोट से शुरू करें"
     },
     "manual": {
-      "snapTitle": "नया Snap",
       "quoteTitle": "नया कोट",
-      "snapDescription": "दस-लाइन अनुमान ग्रिड के साथ तेज एक-पेज कोट बनाएं।",
       "quoteDescription": "AI इनटेक चलाए बिना खाली अनुमान कार्यक्षेत्र बनाएं।",
       "close": "मैनुअल कोट संवाद बंद करें",
-      "snapTitleLabel": "Snap शीर्षक",
       "quoteTitleLabel": "कोट शीर्षक",
-      "snapTitlePlaceholder": "जैसे पंप रूम सर्विस कॉल",
       "quoteTitlePlaceholder": "जैसे कोजेन पाइप रैक इंसुलेशन",
       "client": "क्लाइंट",
       "newClientName": "नए क्लाइंट का नाम",
@@ -235,14 +229,11 @@
       "location": "स्थान",
       "locationPlaceholder": "निर्धारित होना है",
       "cancel": "रद्द करें",
-      "createSnap": "Snap बनाएं",
       "createQuote": "कोट बनाएं",
       "failedClient": "क्लाइंट नहीं बनाया जा सका।",
       "titleRequired": "कोट शीर्षक आवश्यक है।",
       "unassignedClient": "अनअसाइन्ड क्लाइंट",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} मैनुअल कोट",
-      "snapSummary": "छोटे कामों की तेज कीमत के लिए Snap कोट बनाया गया।",
       "createError": "कोट नहीं बनाया जा सका।",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "कोट #",
-      "kind": "प्रकार",
       "title": "शीर्षक",
       "client": "क्लाइंट",
       "estimator": "अनुमानकर्ता",
@@ -272,10 +262,6 @@
       "subtotal": "उप-योग",
       "margin": "मार्जिन",
       "updated": "अपडेटेड"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "पूर्ण"
     },
     "status": {
       "Open": "खुला",

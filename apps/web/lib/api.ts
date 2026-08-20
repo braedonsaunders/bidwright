@@ -1518,7 +1518,6 @@ export interface ProjectsResponse {
 
 export type QuotesSortKey =
   | "quoteNumber"
-  | "kind"
   | "title"
   | "client"
   | "estimator"

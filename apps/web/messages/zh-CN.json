@@ -213,19 +213,13 @@
       "aiIntake": "AI 导入",
       "aiIntakeDescription": "上传投标资料包",
       "newQuote": "新建报价",
-      "newQuoteDescription": "从空白报价开始",
-      "newSnap": "新建 Snap",
-      "newSnapDescription": "一页快速报价"
+      "newQuoteDescription": "从空白报价开始"
     },
     "manual": {
-      "snapTitle": "新建 Snap",
       "quoteTitle": "新建报价",
-      "snapDescription": "用十行估算表创建一页快速报价。",
       "quoteDescription": "创建空白估算工作区，不运行 AI 导入。",
       "close": "关闭手动报价对话框",
-      "snapTitleLabel": "Snap 标题",
       "quoteTitleLabel": "报价标题",
-      "snapTitlePlaceholder": "例如：泵房服务工单",
       "quoteTitlePlaceholder": "例如：热电联产管架保温",
       "client": "客户",
       "newClientName": "新客户名称",
@@ -235,14 +229,11 @@
       "location": "地点",
       "locationPlaceholder": "待定",
       "cancel": "取消",
-      "createSnap": "创建 Snap",
       "createQuote": "创建报价",
       "failedClient": "创建客户失败。",
       "titleRequired": "报价标题为必填项。",
       "unassignedClient": "未分配客户",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} 手动报价",
-      "snapSummary": "已创建用于小型工作快速定价的 Snap 报价。",
       "createError": "无法创建报价。",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "报价 #",
-      "kind": "类型",
       "title": "标题",
       "client": "客户",
       "estimator": "估算员",
@@ -272,10 +262,6 @@
       "subtotal": "小计",
       "margin": "利润率",
       "updated": "更新时间"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "完整"
     },
     "status": {
       "Open": "打开",

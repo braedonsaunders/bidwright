@@ -213,19 +213,13 @@
       "aiIntake": "Entrada por IA",
       "aiIntakeDescription": "Enviar pacote de licitação",
       "newQuote": "Nova cotação",
-      "newQuoteDescription": "Começar com uma cotação em branco",
-      "newSnap": "Novo Snap",
-      "newSnapDescription": "Cotação rápida de uma página"
+      "newQuoteDescription": "Começar com uma cotação em branco"
     },
     "manual": {
-      "snapTitle": "Novo Snap",
       "quoteTitle": "Nova cotação",
-      "snapDescription": "Crie uma cotação rápida de uma página com uma grade de estimativa de dez linhas.",
       "quoteDescription": "Crie uma área de estimativa em branco sem executar a entrada por IA.",
       "close": "Fechar diálogo de cotação manual",
-      "snapTitleLabel": "Título do Snap",
       "quoteTitleLabel": "Título da cotação",
-      "snapTitlePlaceholder": "ex. Chamado de serviço da sala de bombas",
       "quoteTitlePlaceholder": "ex. Isolamento do pipe rack de cogeração",
       "client": "Cliente",
       "newClientName": "Nome do novo cliente",
@@ -235,14 +229,11 @@
       "location": "Local",
       "locationPlaceholder": "A definir",
       "cancel": "Cancelar",
-      "createSnap": "Criar Snap",
       "createQuote": "Criar cotação",
       "failedClient": "Falha ao criar cliente.",
       "titleRequired": "O título da cotação é obrigatório.",
       "unassignedClient": "Cliente não atribuído",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} Cotação manual",
-      "snapSummary": "Cotação Snap criada para preços rápidos de pequenos serviços.",
       "createError": "Não foi possível criar a cotação.",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "Cotação #",
-      "kind": "Tipo",
       "title": "Título",
       "client": "Cliente",
       "estimator": "Orçamentista",
@@ -272,10 +262,6 @@
       "subtotal": "Subtotal",
       "margin": "Margem",
       "updated": "Atualizado"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "Completa"
     },
     "status": {
       "Open": "Aberta",

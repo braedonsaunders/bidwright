@@ -790,7 +790,7 @@ function ClientRatebooksPanel({ customer }: { customer: CustomerWithContacts }) 
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-line px-4 py-3">
         <div>
           <h2 className="text-sm font-semibold text-fg">Default ratebooks</h2>
-          <p className="mt-0.5 text-xs text-fg/45">Applied to new Snap quotes for this client.</p>
+          <p className="mt-0.5 text-xs text-fg/45">Applied to new quotes for this client.</p>
         </div>
         <Badge tone={activeAssignments.length > 0 ? "info" : "default"}>
           {activeAssignments.length} default{activeAssignments.length === 1 ? "" : "s"}

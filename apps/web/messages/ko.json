@@ -213,19 +213,13 @@
       "aiIntake": "AI 접수",
       "aiIntakeDescription": "입찰 패키지 업로드",
       "newQuote": "새 견적",
-      "newQuoteDescription": "빈 견적으로 시작",
-      "newSnap": "새 Snap",
-      "newSnapDescription": "한 페이지 빠른 견적"
+      "newQuoteDescription": "빈 견적으로 시작"
     },
     "manual": {
-      "snapTitle": "새 Snap",
       "quoteTitle": "새 견적",
-      "snapDescription": "10줄 견적 그리드로 빠른 한 페이지 견적을 만듭니다.",
       "quoteDescription": "AI 접수 없이 빈 견적 작업 공간을 만듭니다.",
       "close": "수동 견적 대화상자 닫기",
-      "snapTitleLabel": "Snap 제목",
       "quoteTitleLabel": "견적 제목",
-      "snapTitlePlaceholder": "예: 펌프실 서비스 호출",
       "quoteTitlePlaceholder": "예: 열병합 배관 랙 단열",
       "client": "고객",
       "newClientName": "새 고객 이름",
@@ -235,14 +229,11 @@
       "location": "위치",
       "locationPlaceholder": "미정",
       "cancel": "취소",
-      "createSnap": "Snap 만들기",
       "createQuote": "견적 만들기",
       "failedClient": "고객을 만들지 못했습니다.",
       "titleRequired": "견적 제목은 필수입니다.",
       "unassignedClient": "미할당 고객",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} 수동 견적",
-      "snapSummary": "소규모 작업의 빠른 가격 책정을 위해 Snap 견적을 만들었습니다.",
       "createError": "견적을 만들 수 없습니다.",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "견적 #",
-      "kind": "유형",
       "title": "제목",
       "client": "고객",
       "estimator": "견적 담당자",
@@ -272,10 +262,6 @@
       "subtotal": "소계",
       "margin": "마진",
       "updated": "업데이트됨"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "전체"
     },
     "status": {
       "Open": "열림",

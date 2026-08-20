@@ -20,7 +20,6 @@ import {
   PencilLine,
   Plus,
   X,
-  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatMoney, formatPercent, formatDate } from "@/lib/format";
@@ -30,7 +29,6 @@ import {
   createProject,
   getCustomers,
   getProjectsWithFilters,
-  listRateBookAssignments,
   promoteProject,
   type Customer,
   type ProjectListItem,
@@ -89,11 +87,6 @@ function statusLabelKey(status: string): QuoteStatusValue {
   return STATUS_OPTIONS.some((s) => s.value === status) ? (status as QuoteStatusValue) : "Other";
 }
 
-function getQuoteKind(project: ProjectListItem): "snap" | "full" {
-  const state = project.workspaceState?.state;
-  return state?.quoteMode === "snap" && state.snapUpgraded !== true ? "snap" : "full";
-}
-
 function getEstimatorLabelForQuote(
   quote: ProjectQuoteSummary | null | undefined,
   unassignedLabel = "Unassigned",
@@ -121,7 +114,6 @@ type QuoteRecordRow = {
   entry: ProjectQuoteEntry | null;
   isChild: boolean;
   quoteNumber: string;
-  quoteKind: "snap" | "full" | "project";
   title: string;
   client: string;
   estimator: string;
@@ -338,7 +330,6 @@ export function QuotesList() {
 
   // ── Modal/quick-add state ────────────────────────────────────────────────
   const [newQuoteMenuOpen, setNewQuoteMenuOpen] = useState(false);
-  const [manualCreationMode, setManualCreationMode] = useState<"quote" | "snap">("quote");
   const [manualModalOpen, setManualModalOpen] = useState(false);
   const [manualTitle, setManualTitle] = useState("");
   const [manualCustomerId, setManualCustomerId] = useState("");
@@ -492,8 +483,7 @@ export function QuotesList() {
     }, { resetPage: true });
   }
 
-  function openManualQuoteModal(mode: "quote" | "snap" = "quote", parentProjectId: string | null = null) {
-    setManualCreationMode(mode);
+  function openManualQuoteModal(parentProjectId: string | null = null) {
     setNewQuoteMenuOpen(false);
     setManualError("");
     setManualParentProjectId(parentProjectId);
@@ -587,26 +577,14 @@ export function QuotesList() {
     setManualSaving(true);
     setManualError("");
     try {
-      const isSnap = manualCreationMode === "snap";
       const selectedCustomer = manualCustomerOptions.find((c) => c.id === manualCustomerId) ?? null;
-      if (isSnap && selectedCustomer) {
-        const defaultRatebooks = await listRateBookAssignments({
-          customerId: selectedCustomer.id,
-          active: true,
-        });
-        if (defaultRatebooks.length === 0) {
-          setManualSaving(false);
-          setManualError(`Snap quotes need a default ratebook for ${selectedCustomer.name}. Add one on the client Ratebooks tab, then try again.`);
-          return;
-        }
-      }
 
       // Path 1: add this quote to an existing container project.
       if (manualParentProjectId) {
         const result = await addQuoteToProject(manualParentProjectId, {
           title,
           customerId: selectedCustomer?.id ?? null,
-          creationMode: isSnap ? "snap" : "manual",
+          creationMode: "manual",
         });
         router.push(`/projects/${result.project.id}?tab=estimate&subtab=worksheets`);
         return;
@@ -620,9 +598,8 @@ export function QuotesList() {
         clientName,
         customerId: selectedCustomer?.id ?? null,
         location,
-        creationMode: isSnap ? "snap" : "manual",
-        packageName: isSnap ? `${title} Snap` : `${title} Manual Quote`,
-        summary: isSnap ? "Snap quote created for quick small-work pricing." : undefined,
+        creationMode: "manual",
+        packageName: `${title} Manual Quote`,
         isStandalone: true,
       });
 
@@ -641,7 +618,6 @@ export function QuotesList() {
     }
   }
 
-  const manualIsSnap = manualCreationMode === "snap";
   const recordRows = useMemo<QuoteRecordRow[]>(() => {
     const result: QuoteRecordRow[] = [];
     for (const project of projects) {
@@ -663,7 +639,6 @@ export function QuotesList() {
           entry: null,
           isChild: false,
           quoteNumber: "",
-          quoteKind: "project",
           title: project.name,
           client: project.clientName || "—",
           estimator: "",
@@ -682,7 +657,6 @@ export function QuotesList() {
           entry,
           isChild: isContainer,
           quoteNumber: entry.quote.quoteNumber,
-          quoteKind: getQuoteKind(project),
           title: entry.quote.title || project.name,
           client: getClientDisplayName(project, entry.quote),
           estimator: getEstimatorLabelForQuote(entry.quote, unassignedLabel),
@@ -729,20 +703,6 @@ export function QuotesList() {
         >
           {row.quoteNumber}
         </Link>
-      ),
-    },
-    {
-      key: "kind",
-      label: t("table.kind"),
-      sortable: true,
-      width: "7rem",
-      render: (row) => row.rowType === "project" ? (
-        <Badge variant="secondary">{t("group.quotesCount", { count: row.project.quotes?.length ?? 0 })}</Badge>
-      ) : (
-        <Badge variant={row.quoteKind === "snap" ? "info" : "secondary"}>
-          {row.quoteKind === "snap" && <Zap className="size-3" />}
-          {row.quoteKind === "snap" ? t("kind.snap") : t("kind.full")}
-        </Badge>
       ),
     },
     {
@@ -848,7 +808,7 @@ export function QuotesList() {
                 onClick={(event) => {
                   event.stopPropagation();
                   setOpenRowMenu(null);
-                  openManualQuoteModal("quote", row.project.id);
+                  openManualQuoteModal(row.project.id);
                 }}
                 className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg-muted hover:bg-surface-hover hover:text-fg"
               >
@@ -899,24 +859,13 @@ export function QuotesList() {
                 </Link>
                 <button
                   type="button"
-                  onClick={() => openManualQuoteModal("quote")}
+                  onClick={() => openManualQuoteModal()}
                   className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
                 >
                   <PencilLine className="h-3.5 w-3.5 text-accent" />
                   <span className="flex min-w-0 flex-col">
                     <span className="font-medium">{t("menu.newQuote")}</span>
                     <span className="text-[11px] text-fg/40">{t("menu.newQuoteDescription")}</span>
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => openManualQuoteModal("snap")}
-                  className="flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/75 transition-colors hover:bg-panel2 hover:text-fg"
-                >
-                  <Zap className="h-3.5 w-3.5 text-accent" />
-                  <span className="flex min-w-0 flex-col">
-                    <span className="font-medium">{t("menu.newSnap")}</span>
-                    <span className="text-[11px] text-fg/40">{t("menu.newSnapDescription")}</span>
                   </span>
                 </button>
               </Popover.Content>
@@ -931,8 +880,8 @@ export function QuotesList() {
         open={manualModalOpen}
         onClose={closeManualQuoteModal}
         size="md"
-        title={manualIsSnap ? t("manual.snapTitle") : t("manual.quoteTitle")}
-        description={manualIsSnap ? t("manual.snapDescription") : t("manual.quoteDescription")}
+        title={t("manual.quoteTitle")}
+        description={t("manual.quoteDescription")}
         closeLabel={t("manual.close")}
         footer={
           <>
@@ -941,19 +890,19 @@ export function QuotesList() {
             </Button>
             <Button type="submit" form="create-quote-form" variant="default" size="sm" disabled={manualSaving}>
               {manualSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Plus className="h-3.5 w-3.5" />}
-              {manualIsSnap ? t("manual.createSnap") : t("manual.createQuote")}
+              {t("manual.createQuote")}
             </Button>
           </>
         }
       >
         <form id="create-quote-form" onSubmit={handleManualQuoteSubmit} className="space-y-3">
             <label className="block space-y-1.5">
-              <span className="text-xs font-medium text-fg/65">{manualIsSnap ? t("manual.snapTitleLabel") : t("manual.quoteTitleLabel")}</span>
+              <span className="text-xs font-medium text-fg/65">{t("manual.quoteTitleLabel")}</span>
               <Input
                 autoFocus
                 value={manualTitle}
                 onChange={(event) => setManualTitle(event.target.value)}
-                placeholder={manualIsSnap ? t("manual.snapTitlePlaceholder") : t("manual.quoteTitlePlaceholder")}
+                placeholder={t("manual.quoteTitlePlaceholder")}
                 disabled={manualSaving}
               />
             </label>

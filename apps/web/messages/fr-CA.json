@@ -213,19 +213,13 @@
       "aiIntake": "Admission IA",
       "aiIntakeDescription": "Televerser un dossier d'appel d'offres",
       "newQuote": "Nouvelle soumission",
-      "newQuoteDescription": "Commencer avec une soumission vide",
-      "newSnap": "Nouveau Snap",
-      "newSnapDescription": "Soumission rapide d'une page"
+      "newQuoteDescription": "Commencer avec une soumission vide"
     },
     "manual": {
-      "snapTitle": "Nouveau Snap",
       "quoteTitle": "Nouvelle soumission",
-      "snapDescription": "Creez une soumission rapide d'une page avec une grille d'estimation de dix lignes.",
       "quoteDescription": "Creez un espace d'estimation vide sans lancer l'admission IA.",
       "close": "Fermer la boite de dialogue de soumission manuelle",
-      "snapTitleLabel": "Titre du Snap",
       "quoteTitleLabel": "Titre de la soumission",
-      "snapTitlePlaceholder": "ex. Appel de service salle des pompes",
       "quoteTitlePlaceholder": "ex. Isolation du support de tuyauterie de cogeneration",
       "client": "Client",
       "newClientName": "Nom du nouveau client",
@@ -235,14 +229,11 @@
       "location": "Emplacement",
       "locationPlaceholder": "A determiner",
       "cancel": "Annuler",
-      "createSnap": "Creer le Snap",
       "createQuote": "Creer la soumission",
       "failedClient": "Impossible de creer le client.",
       "titleRequired": "Le titre de la soumission est requis.",
       "unassignedClient": "Client non assigne",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} Soumission manuelle",
-      "snapSummary": "Soumission Snap creee pour tarifer rapidement les petits travaux.",
       "createError": "Impossible de creer la soumission.",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "Soumission #",
-      "kind": "Type",
       "title": "Titre",
       "client": "Client",
       "estimator": "Estimateur",
@@ -272,10 +262,6 @@
       "subtotal": "Sous-total",
       "margin": "Marge",
       "updated": "Mis a jour"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "Complete"
     },
     "status": {
       "Open": "Ouverte",

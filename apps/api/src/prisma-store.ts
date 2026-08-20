@@ -658,7 +658,7 @@ export interface CreateProjectInput {
   location: string;
   packageName?: string;
   scope?: string;
-  creationMode?: "manual" | "intake" | "snap" | "container";
+  creationMode?: "manual" | "intake" | "container";
   summary?: string;
   // Default true (shadow). Pass false for an explicit container project that
   // groups multiple quotes. Container creation skips the auto-quote.
@@ -668,7 +668,7 @@ export interface CreateProjectInput {
 export interface CreateQuoteInProjectInput {
   title: string;
   customerId?: string | null;
-  creationMode?: "manual" | "snap";
+  creationMode?: "manual";
 }
 
 export interface RegisterPackageInput {
@@ -6010,7 +6010,6 @@ export class PrismaApiStore {
         case "estimator": return `LOWER(estimator_disp)`;
         case "subtotal": return `r_subtotal`;
         case "margin": return `r_margin`;
-        case "kind": return `kind_disp`;
         default: return `p_updatedAt`;
       }
     })();
@@ -6037,9 +6036,6 @@ export class PrismaApiStore {
           COALESCE(r."estimatedMargin", 0) AS r_margin,
           COALESCE(NULLIF(c.name, ''), NULLIF(q."customerString", ''), 'Unassigned Client') AS client_disp,
           COALESCE(NULLIF(u.name, ''), NULLIF(d.name, '')) AS estimator_disp,
-          CASE WHEN ws.state->>'quoteMode' = 'snap'
-                AND COALESCE((ws.state->>'snapUpgraded')::boolean, false) = false
-               THEN 'snap' ELSE 'full' END AS kind_disp,
           ROW_NUMBER() OVER (PARTITION BY p.id ORDER BY q."updatedAt" DESC) AS rn
         ${baseFromJoin}
         WHERE ${whereSql}
@@ -9276,9 +9272,8 @@ export class PrismaApiStore {
     const nowISO = now.toISOString();
     const projectId = createId("project");
     const isManualProject = input.creationMode === "manual";
-    const isSnapProject = input.creationMode === "snap";
     const isContainerProject = input.creationMode === "container";
-    const isBlankProject = isManualProject || isSnapProject;
+    const isBlankProject = isManualProject;
     const packageName = input.packageName ?? input.name;
     // Default behaviour: shadow project. Container projects are explicitly
     // multi-quote, so they're never standalone (and skip the auto-quote).
@@ -9308,13 +9303,11 @@ export class PrismaApiStore {
           packageUploadedAt: nowISO,
           ingestionStatus: isBlankProject ? "review" : (isContainerProject ? "ready" : "queued"),
           scope: input.scope ?? "",
-          summary: input.summary ?? (isSnapProject
-            ? "Snap quote created for quick small-work pricing."
-            : isManualProject
-              ? "Manual quote created from scratch."
-              : isContainerProject
-                ? `Container project for ${customerSelection.clientName}.`
-                : defaultProjectSummary(packageName, customerSelection.clientName)),
+          summary: input.summary ?? (isManualProject
+            ? "Manual quote created from scratch."
+            : isContainerProject
+              ? `Container project for ${customerSelection.clientName}.`
+              : defaultProjectSummary(packageName, customerSelection.clientName)),
           isStandalone,
           createdAt: now,
           updatedAt: now,
@@ -9333,7 +9326,6 @@ export class PrismaApiStore {
 
       const quoteId = createId("quote");
       const revisionId = createId("revision");
-      const worksheetId = createId("worksheet");
 
       await tx.quote.create({
         data: {
@@ -9357,13 +9349,9 @@ export class PrismaApiStore {
           quoteId,
           revisionNumber: 0,
           title: input.name,
-          description: isSnapProject
-            ? `Quick scope for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`
-            : `Estimate for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
-          notes: isSnapProject
-            ? "Quick scope on a single worksheet. Upgrade to a full quote if you need phases, modifiers, or breakouts."
-            : "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
-          breakoutStyle: isSnapProject ? "grand_total" : "phase_detail",
+          description: `Estimate for ${customerSelection.clientName} — ${input.location}${input.scope ? `. Scope: ${input.scope}` : ""}`,
+          notes: "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
+          breakoutStyle: "phase_detail",
           type: "Firm",
           status: "Open",
           defaultMarkup,
@@ -9372,32 +9360,15 @@ export class PrismaApiStore {
         },
       });
 
-      if (isSnapProject) {
-        await tx.worksheet.create({
-          data: {
-            id: worksheetId,
-            revisionId,
-            name: "Snap",
-            order: 1,
-          },
-        });
-      }
-
       const wsState = {
         activeTab: isBlankProject ? "estimate" : "overview",
         selectedQuoteId: quoteId,
         selectedRevisionId: revisionId,
-        selectedWorksheetId: isSnapProject ? worksheetId : null,
+        selectedWorksheetId: null,
         selectedDocumentId: null,
         openDocumentIds: [],
         filters: { documentKinds: [], search: "" },
         panels: { documents: true, estimate: true, ai: true },
-        ...(isSnapProject
-          ? {
-              quoteMode: "snap",
-              snapUpgraded: false,
-            }
-          : {}),
       };
 
       await tx.workspaceState.create({
@@ -9440,7 +9411,6 @@ export class PrismaApiStore {
   async createQuoteInProject(projectId: string, input: CreateQuoteInProjectInput) {
     const now = new Date();
     const nowISO = now.toISOString();
-    const isSnap = input.creationMode === "snap";
 
     const orgSettings = await this.db.organizationSettings.findUnique({
       where: { organizationId: this.organizationId },
@@ -9461,7 +9431,6 @@ export class PrismaApiStore {
 
       const quoteId = createId("quote");
       const revisionId = createId("revision");
-      const worksheetId = createId("worksheet");
 
       await tx.quote.create({
         data: {
@@ -9485,13 +9454,9 @@ export class PrismaApiStore {
           quoteId,
           revisionNumber: 0,
           title: input.title,
-          description: isSnap
-            ? `Quick scope for ${customerSelection.clientName}`
-            : `Estimate for ${customerSelection.clientName}`,
-          notes: isSnap
-            ? "Quick scope on a single worksheet. Upgrade to a full quote if you need phases, modifiers, or breakouts."
-            : "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
-          breakoutStyle: isSnap ? "grand_total" : "phase_detail",
+          description: `Estimate for ${customerSelection.clientName}`,
+          notes: "Populate worksheets, phases, modifiers, and conditions as the estimate matures.",
+          breakoutStyle: "phase_detail",
           type: "Firm",
           status: "Open",
           defaultMarkup,
@@ -9499,12 +9464,6 @@ export class PrismaApiStore {
           updatedAt: now,
         },
       });
-
-      if (isSnap) {
-        await tx.worksheet.create({
-          data: { id: worksheetId, revisionId, name: "Snap", order: 1 },
-        });
-      }
 
       const quote = await tx.quote.findFirst({ where: { id: quoteId }, include: { customer: true } });
       const revision = await tx.quoteRevision.findFirst({ where: { id: revisionId } });

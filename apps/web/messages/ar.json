@@ -213,19 +213,13 @@
       "aiIntake": "إدخال بالذكاء الاصطناعي",
       "aiIntakeDescription": "تحميل حزمة العطاء",
       "newQuote": "عرض سعر جديد",
-      "newQuoteDescription": "البدء من عرض فارغ",
-      "newSnap": "Snap جديد",
-      "newSnapDescription": "عرض سريع من صفحة واحدة"
+      "newQuoteDescription": "البدء من عرض فارغ"
     },
     "manual": {
-      "snapTitle": "Snap جديد",
       "quoteTitle": "عرض سعر جديد",
-      "snapDescription": "أنشئ عرضا سريعا من صفحة واحدة مع شبكة تقدير من عشرة أسطر.",
       "quoteDescription": "أنشئ مساحة تقدير فارغة دون تشغيل إدخال الذكاء الاصطناعي.",
       "close": "إغلاق مربع عرض السعر اليدوي",
-      "snapTitleLabel": "عنوان Snap",
       "quoteTitleLabel": "عنوان عرض السعر",
-      "snapTitlePlaceholder": "مثال: طلب خدمة غرفة المضخات",
       "quoteTitlePlaceholder": "مثال: عزل حامل أنابيب التوليد المشترك",
       "client": "العميل",
       "newClientName": "اسم العميل الجديد",
@@ -235,14 +229,11 @@
       "location": "الموقع",
       "locationPlaceholder": "يحدد لاحقا",
       "cancel": "إلغاء",
-      "createSnap": "إنشاء Snap",
       "createQuote": "إنشاء عرض سعر",
       "failedClient": "تعذر إنشاء العميل.",
       "titleRequired": "عنوان عرض السعر مطلوب.",
       "unassignedClient": "عميل غير معين",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} عرض يدوي",
-      "snapSummary": "تم إنشاء عرض Snap لتسعير سريع للأعمال الصغيرة.",
       "createError": "تعذر إنشاء عرض السعر.",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "عرض #",
-      "kind": "النوع",
       "title": "العنوان",
       "client": "العميل",
       "estimator": "المقدر",
@@ -272,10 +262,6 @@
       "subtotal": "المجموع الفرعي",
       "margin": "الهامش",
       "updated": "محدث"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "كامل"
     },
     "status": {
       "Open": "مفتوح",

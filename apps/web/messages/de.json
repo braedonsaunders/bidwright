@@ -213,19 +213,13 @@
       "aiIntake": "KI-Erfassung",
       "aiIntakeDescription": "Ausschreibungspaket hochladen",
       "newQuote": "Neues Angebot",
-      "newQuoteDescription": "Mit leerem Angebot starten",
-      "newSnap": "Neuer Snap",
-      "newSnapDescription": "Schnelles einseitiges Angebot"
+      "newQuoteDescription": "Mit leerem Angebot starten"
     },
     "manual": {
-      "snapTitle": "Neuer Snap",
       "quoteTitle": "Neues Angebot",
-      "snapDescription": "Erstelle ein schnelles einseitiges Angebot mit einem Zehn-Zeilen-Schätzraster.",
       "quoteDescription": "Erstelle einen leeren Schätzarbeitsbereich ohne KI-Erfassung.",
       "close": "Dialog fuer manuelles Angebot schliessen",
-      "snapTitleLabel": "Snap-Titel",
       "quoteTitleLabel": "Angebotstitel",
-      "snapTitlePlaceholder": "z. B. Serviceeinsatz Pumpenraum",
       "quoteTitlePlaceholder": "z. B. Dämmung Rohrbrücke BHKW",
       "client": "Kunde",
       "newClientName": "Name des neuen Kunden",
@@ -235,14 +229,11 @@
       "location": "Standort",
       "locationPlaceholder": "Noch offen",
       "cancel": "Abbrechen",
-      "createSnap": "Snap erstellen",
       "createQuote": "Angebot erstellen",
       "failedClient": "Kunde konnte nicht erstellt werden.",
       "titleRequired": "Angebotstitel ist erforderlich.",
       "unassignedClient": "Nicht zugewiesener Kunde",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} Manuelles Angebot",
-      "snapSummary": "Snap-Angebot fuer schnelle Preise kleiner Arbeiten erstellt.",
       "createError": "Angebot konnte nicht erstellt werden.",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "Angebot #",
-      "kind": "Typ",
       "title": "Titel",
       "client": "Kunde",
       "estimator": "Kalkulator",
@@ -272,10 +262,6 @@
       "subtotal": "Zwischensumme",
       "margin": "Marge",
       "updated": "Aktualisiert"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "Voll"
     },
     "status": {
       "Open": "Offen",

@@ -138,7 +138,7 @@ import { userRoutes } from "./routes/user-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
-import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, generateSnapPdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
+import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
 import { validateIntegrationsEncryptionKey } from "./services/settings-key-validation.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { DEMO_DISABLED_MESSAGE, isApiDemoMode } from "./demo-mode.js";
@@ -169,7 +169,7 @@ const createProjectSchema = z.object({
   location: z.string().min(1),
   packageName: z.string().min(1).optional(),
   scope: z.string().optional(),
-  creationMode: z.enum(["manual", "intake", "snap", "container"]).optional(),
+  creationMode: z.enum(["manual", "intake", "container"]).optional(),
   summary: z.string().optional(),
   isStandalone: z.boolean().optional()
 });
@@ -181,7 +181,7 @@ const promoteProjectSchema = z.object({
 const createQuoteForProjectSchema = z.object({
   title: z.string().min(1),
   customerId: z.string().nullable().optional(),
-  creationMode: z.enum(["manual", "snap"]).optional()
+  creationMode: z.literal("manual").optional()
 });
 
 const workspacePatchSchema = z.record(z.unknown());
@@ -1726,11 +1726,6 @@ async function captureHumanEstimateFeedback(
   }).catch(() => null);
 }
 
-function isSnapWorkspaceState(state: Record<string, unknown> | undefined): boolean {
-  if (!state) return false;
-  return state.quoteMode === "snap" && state.snapUpgraded !== true;
-}
-
 async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
   const multipartUpload = await saveMultipartPackageUpload(request);
   const sourceKind = multipartUpload.fields.sourceKind ?? "project";
@@ -2063,7 +2058,7 @@ export function buildServer() {
     departmentIds: stringOrStringArray,
     clientNames: stringOrStringArray,
     sortKey: z.enum([
-      "quoteNumber", "kind", "title", "client", "estimator",
+      "quoteNumber", "title", "client", "estimator",
       "status", "subtotal", "margin", "updated",
     ]).optional(),
     sortDir: z.enum(["asc", "desc"]).optional(),
@@ -3098,13 +3093,6 @@ export function buildServer() {
       return reply.code(400).send({
         message: "Invalid worksheet payload",
         issues: parsed.error.flatten()
-      });
-    }
-
-    const workspaceState = await request.store!.getWorkspaceState(projectId).catch(() => null);
-    if (isSnapWorkspaceState(workspaceState?.state as Record<string, unknown> | undefined)) {
-      return reply.code(400).send({
-        message: "Snaps use a single worksheet. Upgrade this Snap to a quote before adding worksheets.",
       });
     }
 
@@ -5240,7 +5228,7 @@ export function buildServer() {
       projectId: string;
       templateType: string;
     };
-    const validTypes = ["main", "backup", "sitecopy", "closeout", "schedule", "snap"];
+    const validTypes = ["main", "backup", "sitecopy", "closeout", "schedule"];
     if (!validTypes.includes(templateType)) {
       return reply
         .code(400)
@@ -5290,9 +5278,7 @@ export function buildServer() {
       try { layoutOptions = JSON.parse(decodeURIComponent(layoutParam)); } catch { /* ignore */ }
     }
 
-    const html = templateType === "snap"
-      ? generateSnapPdfHtml(pdfData)
-      : generatePdfHtml(pdfData, templateType, layoutOptions);
+    const html = generatePdfHtml(pdfData, templateType, layoutOptions);
     const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
     return reply.type(contentType).send(buffer);
   });

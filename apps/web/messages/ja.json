@@ -213,19 +213,13 @@
       "aiIntake": "AI 取込",
       "aiIntakeDescription": "入札パッケージをアップロード",
       "newQuote": "新規見積",
-      "newQuoteDescription": "空の見積から開始",
-      "newSnap": "新規 Snap",
-      "newSnapDescription": "1ページのクイック見積"
+      "newQuoteDescription": "空の見積から開始"
     },
     "manual": {
-      "snapTitle": "新規 Snap",
       "quoteTitle": "新規見積",
-      "snapDescription": "10行の見積グリッドで、1ページのクイック見積を作成します。",
       "quoteDescription": "AI 取込を実行せず、空の見積ワークスペースを作成します。",
       "close": "手動見積ダイアログを閉じる",
-      "snapTitleLabel": "Snap タイトル",
       "quoteTitleLabel": "見積タイトル",
-      "snapTitlePlaceholder": "例: ポンプ室のサービスコール",
       "quoteTitlePlaceholder": "例: コージェネ配管ラック断熱",
       "client": "顧客",
       "newClientName": "新規顧客名",
@@ -235,14 +229,11 @@
       "location": "場所",
       "locationPlaceholder": "未定",
       "cancel": "キャンセル",
-      "createSnap": "Snap を作成",
       "createQuote": "見積を作成",
       "failedClient": "顧客を作成できませんでした。",
       "titleRequired": "見積タイトルは必須です。",
       "unassignedClient": "未割り当ての顧客",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} 手動見積",
-      "snapSummary": "小規模作業の迅速な価格設定用に Snap 見積を作成しました。",
       "createError": "見積を作成できませんでした。",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -264,7 +255,6 @@
     },
     "table": {
       "quoteNumber": "見積 #",
-      "kind": "種類",
       "title": "タイトル",
       "client": "顧客",
       "estimator": "見積担当",
@@ -272,10 +262,6 @@
       "subtotal": "小計",
       "margin": "利益率",
       "updated": "更新日"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "通常"
     },
     "status": {
       "Open": "オープン",

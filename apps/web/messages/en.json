@@ -181,19 +181,13 @@
       "aiIntake": "AI Intake",
       "aiIntakeDescription": "Upload a bid package",
       "newQuote": "New Quote",
-      "newQuoteDescription": "Start from a blank quote",
-      "newSnap": "New Snap",
-      "newSnapDescription": "One-page quick quote"
+      "newQuoteDescription": "Start from a blank quote"
     },
     "manual": {
-      "snapTitle": "New Snap",
       "quoteTitle": "New quote",
-      "snapDescription": "Create a fast one-page quote with a ten-line estimate grid.",
       "quoteDescription": "Create a blank estimate workspace without running AI intake.",
       "close": "Close manual quote dialog",
-      "snapTitleLabel": "Snap title",
       "quoteTitleLabel": "Quote title",
-      "snapTitlePlaceholder": "e.g. Pump room service call",
       "quoteTitlePlaceholder": "e.g. Cogen pipe rack insulation",
       "client": "Client",
       "newClientName": "New client name",
@@ -203,14 +197,11 @@
       "location": "Location",
       "locationPlaceholder": "TBD",
       "cancel": "Cancel",
-      "createSnap": "Create Snap",
       "createQuote": "Create Quote",
       "failedClient": "Failed to create client.",
       "titleRequired": "Quote title is required.",
       "unassignedClient": "Unassigned Client",
-      "snapPackageName": "{title} Snap",
       "manualPackageName": "{title} Manual Quote",
-      "snapSummary": "Snap quote created for quick small-work pricing.",
       "createError": "Could not create quote.",
       "addToProject": "Add to project (optional)",
       "parentProject": "Project",
@@ -249,7 +240,6 @@
     },
     "table": {
       "quoteNumber": "Quote #",
-      "kind": "Type",
       "title": "Title",
       "client": "Client",
       "estimator": "Estimator",
@@ -257,10 +247,6 @@
       "subtotal": "Subtotal",
       "margin": "Margin",
       "updated": "Updated"
-    },
-    "kind": {
-      "snap": "Snap",
-      "full": "Full"
     },
     "status": {
       "Open": "Open",
