@@ -620,6 +620,14 @@ const createFileNodeSchema = z.object({
   createdBy: z.string().optional()
 });
 
+const createTextFileSchema = z.object({
+  name: z.string().min(1).refine((value) => !value.includes("/") && !value.includes("\\"), {
+    message: "name must be a file name, not a path",
+  }),
+  content: z.string(),
+  parentId: z.string().nullable().optional(),
+});
+
 const fileNodePatchSchema = z.object({
   name: z.string().min(1).optional(),
   parentId: z.string().nullable().optional()
@@ -4904,6 +4912,48 @@ export function buildServer() {
     // Update node with storagePath
     const updated = await request.store!.updateFileNode(node.id, { storagePath: relPath });
 
+    reply.code(201);
+    return updated;
+  });
+
+  /**
+   * Create a text file directly in the project's Files area.
+   *
+   * The upload route above is multipart, which an agent tool cannot reasonably
+   * produce — so the estimating agent had no way to put a document INTO
+   * Bidwright and wrote generated artifacts (a BOM, for one) into its own
+   * working directory, where the estimator never sees them. This is the JSON
+   * equivalent: name + content in, a real FileNode out.
+   */
+  app.post("/projects/:projectId/files/create-text", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = createTextFileSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid file payload", issues: parsed.error.flatten() });
+    }
+    const project = await request.store!.getProject(projectId);
+    if (!project) return reply.code(404).send({ message: "Project not found" });
+
+    const { name, content, parentId } = parsed.data;
+    const buffer = Buffer.from(content, "utf8");
+    const fileExt = path.extname(name).replace(/^\./, "").toLowerCase();
+
+    const node = await request.store!.createFileNode(projectId, {
+      parentId: parentId ?? null,
+      name,
+      type: "file",
+      fileType: fileExt || "txt",
+      size: buffer.byteLength,
+      metadata: { createdByAgent: true },
+    });
+
+    const relPath = relativeProjectFilePath(projectId, node.id, name);
+    const absPath = resolveApiPath(relPath);
+    await mkdir(path.dirname(absPath), { recursive: true });
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(absPath, buffer);
+
+    const updated = await request.store!.updateFileNode(node.id, { storagePath: relPath });
     reply.code(201);
     return updated;
   });

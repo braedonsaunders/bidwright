@@ -120,6 +120,7 @@ jobs:
           apps/api/src/vercelignore-vendor.test.ts
           apps/api/src/version-story.test.ts
           packages/domain/src/quote-number.test.ts
+          packages/domain/src/provenance-labels.test.ts
           packages/domain/src/worksheet-hours.test.ts
           packages/domain/src/price-build.test.ts
           packages/domain/src/measurement-format.test.ts

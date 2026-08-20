@@ -22,6 +22,9 @@ import {
   normalizeSummaryBuilderConfig,
   normalizeCalculationType,
   normalizeUomLibrary,
+  findProvenanceIds,
+  humanizeProvenanceIds,
+  resolveTruncatedId,
   DEFAULT_QUOTE_NUMBER_PATTERN,
   formatQuoteNumber,
   initialsFromName,
@@ -3212,6 +3215,70 @@ export class PrismaApiStore {
       throw new Error(`Effective cost ${effectiveCostId} not found`);
     }
     return cost;
+  }
+
+  /**
+   * Swap record ids in estimator-facing provenance text for their names.
+   *
+   * The agent cites sources by id, usually truncated to the first uuid segment
+   * ("ds-fb7262c3"), which tells an estimator nothing. Resolving at WRITE time
+   * means the stored note is readable everywhere it is later shown — grid, PDF,
+   * export — instead of each surface needing its own lookup.
+   *
+   * Unresolvable or ambiguous ids are left exactly as written; see
+   * resolveTruncatedId for why guessing is worse than leaving them.
+   */
+  private async humanizeProvenanceText(text: string): Promise<string> {
+    const tokens = findProvenanceIds(text);
+    if (tokens.length === 0) return text;
+
+    const byPrefix = new Map<string, string[]>();
+    for (const token of tokens) {
+      const list = byPrefix.get(token.prefix) ?? [];
+      list.push(token.raw);
+      byPrefix.set(token.prefix, list);
+    }
+
+    // One query per record type, not per id.
+    const loaders: Record<string, (raws: string[]) => Promise<Array<{ id: string; name: string }>>> = {
+      ds: (raws) => this.db.dataset.findMany({
+        where: { OR: raws.map((raw) => ({ id: { startsWith: raw } })) },
+        select: { id: true, name: true },
+      }),
+      lu: (raws) => this.db.laborUnit.findMany({
+        where: { OR: raws.map((raw) => ({ id: { startsWith: raw } })) },
+        select: { id: true, name: true },
+      }),
+      rsi: (raws) => this.db.rateScheduleItem.findMany({
+        where: { OR: raws.map((raw) => ({ id: { startsWith: raw } })) },
+        select: { id: true, name: true },
+      }),
+      kdoc: (raws) => this.db.knowledgeDocument.findMany({
+        where: { OR: raws.map((raw) => ({ id: { startsWith: raw } })) },
+        select: { id: true, title: true },
+      }).then((rows) => rows.map((row) => ({ id: row.id, name: row.title }))),
+      doc: (raws) => this.db.sourceDocument.findMany({
+        where: { OR: raws.map((raw) => ({ id: { startsWith: raw } })) },
+        select: { id: true, fileName: true },
+      }).then((rows) => rows.map((row) => ({ id: row.id, name: row.fileName }))),
+    };
+
+    const names = new Map<string, string>();
+    await Promise.all(
+      [...byPrefix.entries()].map(async ([prefix, raws]) => {
+        const load = loaders[prefix];
+        if (!load) return;
+        const rows = await load(raws).catch(() => []);
+        const ids = rows.map((row) => row.id);
+        for (const raw of raws) {
+          const resolved = resolveTruncatedId(raw, ids);
+          const row = resolved ? rows.find((candidate) => candidate.id === resolved) : null;
+          if (row?.name) names.set(raw, row.name);
+        }
+      }),
+    );
+
+    return humanizeProvenanceIds(text, names);
   }
 
   private async validateWorksheetItemProvenanceRefs(input: {
@@ -8219,7 +8286,7 @@ export class PrismaApiStore {
       entityName: decodeHtmlEntities(input.entityName),
       vendor: typeof input.vendor === "string" ? decodeHtmlEntities(input.vendor) : input.vendor,
       description: decodeHtmlEntities(input.description),
-      sourceNotes: decodeHtmlEntities(input.sourceNotes ?? ""),
+      sourceNotes: await this.humanizeProvenanceText(decodeHtmlEntities(input.sourceNotes ?? "")),
     };
     await this.validateWorksheetItemProvenanceRefs(normalizedInput);
 
@@ -8650,7 +8717,9 @@ export class PrismaApiStore {
       ...(typeof patch.entityName === "string" ? { entityName: decodeHtmlEntities(patch.entityName) } : {}),
       ...(typeof patch.vendor === "string" ? { vendor: decodeHtmlEntities(patch.vendor) } : {}),
       ...(typeof patch.description === "string" ? { description: decodeHtmlEntities(patch.description) } : {}),
-      ...(typeof patch.sourceNotes === "string" ? { sourceNotes: decodeHtmlEntities(patch.sourceNotes) } : {}),
+      ...(typeof patch.sourceNotes === "string"
+        ? { sourceNotes: await this.humanizeProvenanceText(decodeHtmlEntities(patch.sourceNotes)) }
+        : {}),
     };
 
     // Apply patch to a domain item for recalculation

@@ -733,6 +733,37 @@ export function registerKnowledgeTools(server: McpServer) {
 
   // ── listDocuments ─────────────────────────────────────────
   server.tool(
+    "createProjectFile",
+    [
+      "Save a text document INTO this Bidwright project's Files area so the estimator can see it.",
+      "Use this for any artifact you produce for the user — a BOM, a takeoff summary, a scope narrative, a CSV of quantities.",
+      "Do NOT write these to your own working directory: files there are invisible to the user and are discarded when the run ends.",
+      "Returns the created file node, including the id you can cite later.",
+    ].join(" "),
+    {
+      name: z.string().min(1).describe("File name including extension, e.g. \"resin-module-BOM.csv\". Not a path."),
+      content: z.string().describe("Full text content of the file."),
+      parentId: z.string().optional().describe("Optional folder node id to create it inside; omit for the project root."),
+    },
+    async (input) => {
+      try {
+        const node = await apiPost<{ id: string; name: string; size?: number }>(
+          projectPath("/files/create-text"),
+          { name: input.name, content: input.content, parentId: input.parentId ?? null },
+        );
+        return {
+          content: [{
+            type: "text" as const,
+            text: `Saved "${node.name}" to the project Files area (id ${node.id}, ${node.size ?? input.content.length} bytes). The user can see it under Documents.`,
+          }],
+        };
+      } catch (err: any) {
+        return { content: [{ type: "text" as const, text: `Error saving file: ${err?.message || "unknown error"}` }] };
+      }
+    }
+  );
+
+  server.tool(
     "listDocuments",
     "List all project documents with their metadata — fileName, fileType, documentType, pageCount, whether structured data is available. Use this to understand what documents you have before reading them.",
     {
