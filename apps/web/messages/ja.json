@@ -191,7 +191,6 @@
     "modal": {
       "title": "新規顧客",
       "description": "見積作成前にアカウントレコードを作成します。",
-      "close": "新規顧客ダイアログを閉じる",
       "name": "名前",
       "namePlaceholder": "顧客名",
       "shortName": "短縮名",

@@ -170,9 +170,16 @@ body {
 }
 
 
-a {
-  color: inherit;
-  text-decoration: none;
+/* Must live in @layer base. Tailwind v4 puts utilities in @layer utilities, and
+   UNLAYERED css beats any layered rule regardless of specificity — so an
+   unlayered `a { color: inherit }` silently overrode text colours on every
+   link-as-button (`<Button asChild><Link/></Button>`), which is why the primary
+   "New Quote" button rendered black text on its accent fill instead of white. */
+@layer base {
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 }
 
 ::-webkit-scrollbar {

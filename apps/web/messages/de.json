@@ -191,7 +191,6 @@
     "modal": {
       "title": "Neuer Kunde",
       "description": "Lege den Kundendatensatz an, bevor du die Arbeit anbietest.",
-      "close": "Dialog Neuer Kunde schließen",
       "name": "Name",
       "namePlaceholder": "Kundenname",
       "shortName": "Kurzname",

@@ -191,7 +191,6 @@
     "modal": {
       "title": "Nuevo cliente",
       "description": "Crea el registro de cuenta antes de cotizar el trabajo.",
-      "close": "Cerrar diálogo de nuevo cliente",
       "name": "Nombre",
       "namePlaceholder": "Nombre del cliente",
       "shortName": "Nombre corto",

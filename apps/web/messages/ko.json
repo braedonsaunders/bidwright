@@ -191,7 +191,6 @@
     "modal": {
       "title": "새 고객",
       "description": "작업 견적 전에 계정 기록을 만듭니다.",
-      "close": "새 고객 대화상자 닫기",
       "name": "이름",
       "namePlaceholder": "고객 이름",
       "shortName": "짧은 이름",

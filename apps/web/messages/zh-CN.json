@@ -191,7 +191,6 @@
     "modal": {
       "title": "新建客户",
       "description": "在报价前先创建客户账户记录。",
-      "close": "关闭新建客户对话框",
       "name": "名称",
       "namePlaceholder": "客户名称",
       "shortName": "简称",

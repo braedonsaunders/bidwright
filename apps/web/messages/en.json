@@ -159,7 +159,6 @@
     "modal": {
       "title": "New client",
       "description": "Create the account record before quoting the work.",
-      "close": "Close new client dialog",
       "name": "Name",
       "namePlaceholder": "Client name",
       "shortName": "Short Name",

@@ -191,7 +191,6 @@
     "modal": {
       "title": "Nouveau client",
       "description": "Créez le compte avant de soumissionner le travail.",
-      "close": "Fermer la fenêtre nouveau client",
       "name": "Nom",
       "namePlaceholder": "Nom du client",
       "shortName": "Nom court",

@@ -191,7 +191,6 @@
     "modal": {
       "title": "Novo cliente",
       "description": "Crie o registro da conta antes de gerar a proposta.",
-      "close": "Fechar diálogo de novo cliente",
       "name": "Nome",
       "namePlaceholder": "Nome do cliente",
       "shortName": "Nome curto",

@@ -28,7 +28,7 @@ import { formatCompactMoney, formatDate, formatPercent } from "@/lib/format";
 import {
   Badge,
   Button,
-  Dialog,
+  Drawer,
   Input,
   Label,
   ListPageLayout,
@@ -365,13 +365,15 @@ export function ClientsList({
         />
       </FadeIn>
 
-      <Dialog
+      {/* Flyout rather than a centred modal: creating a client is a side task
+          done against the list, so the list stays visible behind it. */}
+      <Drawer
         open={createOpen}
         onClose={() => !createSaving && setCreateOpen(false)}
         size="lg"
+        side="right"
         title={t("modal.title")}
         description={t("modal.description")}
-        closeLabel={t("modal.close")}
         footer={
           <>
             <Button type="button" variant="ghost" size="sm" onClick={() => setCreateOpen(false)} disabled={createSaving}>
@@ -425,7 +427,7 @@ export function ClientsList({
               </div>
             )}
         </form>
-      </Dialog>
+      </Drawer>
     </ListPageLayout>
   );
 }

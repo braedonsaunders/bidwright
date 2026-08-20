@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft,
@@ -38,6 +39,7 @@ import {
 import {
   createRateBookAssignment,
   createCustomerContact,
+  deleteCustomer,
   deleteCustomerContact,
   deleteRateBookAssignment,
   listRateBookAssignments,
@@ -881,7 +883,9 @@ export function ClientDetail({
   departments?: OrgDepartment[];
 }) {
   const [customer, setCustomer] = useState<CustomerWithContacts | null>(initialCustomer);
+  const router = useRouter();
   const [editOpen, setEditOpen] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState("");
   const [activeTab, setActiveTab] = useState<ClientTab>("quotes");
@@ -942,6 +946,44 @@ export function ClientDetail({
     } catch (error) {
       setEditError(error instanceof Error ? error.message : "Could not update client.");
     } finally {
+      setEditSaving(false);
+    }
+  }
+
+  /**
+   * Deactivating keeps the record and its quote history intact — it just drops
+   * the client out of pickers and the default list filter. This is the right
+   * action for a client you have stopped working with.
+   */
+  async function handleToggleActive() {
+    if (!customer) return;
+    setEditSaving(true);
+    setEditError("");
+    try {
+      const updated = await updateCustomer(customer.id, { active: !customer.active });
+      setCustomer({ ...customer, ...updated });
+      setEditOpen(false);
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Could not change client status.");
+    } finally {
+      setEditSaving(false);
+    }
+  }
+
+  /**
+   * Deleting is permanent and only offered when nothing references the client —
+   * quotes hold a customerId, and removing a client out from under them would
+   * strand that history. The count comes from the quotes already loaded here.
+   */
+  async function handleDeleteClient() {
+    if (!customer) return;
+    setEditSaving(true);
+    setEditError("");
+    try {
+      await deleteCustomer(customer.id);
+      router.push("/clients");
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Could not delete client.");
       setEditSaving(false);
     }
   }
@@ -1151,7 +1193,63 @@ export function ClientDetail({
                     )}
                   </div>
                 </div>
-                <div className="flex items-center justify-end gap-2 border-t border-line px-5 py-4">
+                {confirmDelete && (
+                  <div className="border-t border-danger/25 bg-danger/8 px-5 py-3">
+                    <p className="text-xs text-danger">
+                      Permanently delete <span className="font-semibold">{customer.name}</span>? This cannot be undone.
+                      {scopedProjects.length > 0 && (
+                        <>
+                          {" "}
+                          {scopedProjects.length} quote{scopedProjects.length === 1 ? "" : "s"} will be kept but will
+                          lose the link to this client. Make it inactive instead to keep the relationship intact.
+                        </>
+                      )}
+                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <Button type="button" variant="ghost" size="sm" onClick={() => setConfirmDelete(false)} disabled={editSaving}>
+                        Keep client
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={handleDeleteClient}
+                        disabled={editSaving}
+                      >
+                        {editSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                        Delete permanently
+                      </Button>
+                    </div>
+                  </div>
+                )}
+                <div className="flex items-center justify-between gap-2 border-t border-line px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={handleToggleActive}
+                      disabled={editSaving}
+                      title={customer.active
+                        ? "Hide from pickers and the default list, keeping all quote history"
+                        : "Return this client to pickers and the default list"}
+                    >
+                      {customer.active ? "Make Inactive" : "Reactivate"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setConfirmDelete(true)}
+                      disabled={editSaving}
+                      className="text-danger hover:bg-danger/10"
+                      title="Permanently delete this client"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Delete
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
                   <Button type="button" variant="ghost" size="sm" onClick={() => setEditOpen(false)} disabled={editSaving}>
                     Cancel
                   </Button>
@@ -1159,6 +1257,7 @@ export function ClientDetail({
                     {editSaving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
                     Save Profile
                   </Button>
+                  </div>
                 </div>
               </form>
             </div>
