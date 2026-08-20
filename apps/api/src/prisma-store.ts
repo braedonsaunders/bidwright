@@ -15251,8 +15251,74 @@ export class PrismaApiStore {
 
   // ── File Node CRUD ─────────────────────────────────────────────────────
 
+  /**
+   * Adopt files sitting in the project's files directory that have no FileNode.
+   *
+   * The agent has a shell, and it writes artifacts straight to disk — a BOM
+   * xlsx landed in the project's own files folder and was invisible, because
+   * the browser lists FileNodes, not the filesystem. The file was there the
+   * whole time; only the registration was missing. Rather than rely on the
+   * agent always choosing createProjectFile, reconcile on read so anything
+   * dropped into the project becomes visible.
+   */
+  private async adoptOrphanedProjectFiles(projectId: string): Promise<void> {
+    try {
+      const { readdir, stat } = await import("node:fs/promises");
+      const { join } = await import("node:path");
+      const filesRoot = resolveApiPath(`projects/${projectId}/files`);
+      const entries = await readdir(filesRoot, { withFileTypes: true }).catch(() => []);
+      if (entries.length === 0) return;
+
+      const known = await this.db.fileNode.findMany({
+        where: { projectId },
+        select: { storagePath: true },
+      });
+      const knownPaths = new Set(
+        known.map((row) => row.storagePath).filter((value): value is string => !!value),
+      );
+
+      const adopted: Array<{ dir: string; file: string; size: number }> = [];
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const inner = await readdir(join(filesRoot, entry.name), { withFileTypes: true }).catch(() => []);
+        for (const file of inner) {
+          if (!file.isFile()) continue;
+          const relPath = `projects/${projectId}/files/${entry.name}/${file.name}`;
+          if (knownPaths.has(relPath)) continue;
+          const info = await stat(join(filesRoot, entry.name, file.name)).catch(() => null);
+          if (!info) continue;
+          adopted.push({ dir: entry.name, file: file.name, size: info.size });
+        }
+      }
+      if (adopted.length === 0) return;
+
+      await this.db.fileNode.createMany({
+        data: adopted.map((item) => ({
+          id: createId("fn"),
+          projectId,
+          parentId: null,
+          name: item.file,
+          type: "file",
+          scope: "project",
+          fileType: item.file.split(".").pop()?.toLowerCase() || "",
+          size: item.size,
+          storagePath: `projects/${projectId}/files/${item.dir}/${item.file}`,
+          metadata: { adoptedFromDisk: true } as any,
+        })),
+        skipDuplicates: true,
+      });
+    } catch (err) {
+      // Never let reconciliation break a file listing.
+      console.error(
+        `[files] adopting orphaned files failed for project=${projectId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   async listFileNodes(projectId: string, parentId?: string | null, scope?: string) {
     await this.requireProject(projectId);
+    await this.adoptOrphanedProjectFiles(projectId);
     const where: any = { projectId };
     if (parentId !== undefined) {
       where.parentId = parentId ?? null;
