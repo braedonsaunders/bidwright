@@ -7,5 +7,10 @@ Pillow
 scikit-learn
 laspy[lazrs]
 plyfile
+# Spreadsheet authoring for the estimating agent. Without it the agent has no
+# way to produce an xlsx a user asked for, so it resorted to `pip install
+# openpyxl --break-system-packages` as root mid-run — which is slow, noisy and
+# not reproducible across deployments.
+openpyxl
 # pye57 intentionally not pinned here: E57 ingest is optional and
 # pointcloud_ingest.py reports {"code": "missing-dependency"} when absent.

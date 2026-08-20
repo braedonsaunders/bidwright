@@ -1715,6 +1715,16 @@ CRITICAL: Do not jump from document facts straight into line-item hours. The est
         reasoningEffort,
         agentMode: mode,
         emitCompletionMessage: mode !== "qa",
+        // The runtime's default exit wording is intake-shaped ("Intake complete.
+        // Review the estimate worksheets..."), which is wrong after an edit —
+        // the user asked for one change, not a fresh estimate.
+        ...(mode === "assist_edit"
+          ? {
+              completionMessage: "Done. The requested changes are applied.",
+              stoppedMessage: "Stopped before finishing the requested changes.",
+              failedMessagePrefix: "Edit failed",
+            }
+          : {}),
         requireFinalAssistantMessage: mode === "qa",
       });
 
