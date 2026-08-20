@@ -119,6 +119,7 @@ jobs:
           apps/api/src/quote-status-source.test.ts
           apps/api/src/vercelignore-vendor.test.ts
           apps/api/src/version-story.test.ts
+          apps/api/src/resume-session-guard.test.ts
           packages/domain/src/quote-number.test.ts
           packages/domain/src/provenance-labels.test.ts
           packages/domain/src/worksheet-hours.test.ts

@@ -930,6 +930,21 @@ export function buildWatchdogRecoveryOptions(
  */
 export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession> {
   const session = sessions.get(opts.projectId);
+
+  // spawnSession refuses to start on top of a live session; resume must too.
+  // Without this we resumed a thread whose writer was still working, and the
+  // runtime rejected it outright — "thread-store conflict: thread <id> already
+  // has an active writer" — killing the new run. Codex was right to refuse: the
+  // previous session was mid-flight and kept emitting for another 90 seconds.
+  if (session && session.status === "running") {
+    throw Object.assign(
+      new Error(
+        `A session is already running for this project. Stop it before resuming, or wait for it to finish.`,
+      ),
+      { statusCode: 409 },
+    );
+  }
+
   let sessionId = session?.sessionId;
   let runtime: AgentRuntime | undefined = opts.runtime || session?.runtime;
 
