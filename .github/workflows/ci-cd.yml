@@ -118,6 +118,7 @@ jobs:
           apps/api/src/answer-resumes-run.test.ts
           apps/api/src/quote-status-source.test.ts
           apps/api/src/vercelignore-vendor.test.ts
+          apps/api/src/version-story.test.ts
           packages/domain/src/quote-number.test.ts
           packages/domain/src/worksheet-hours.test.ts
           packages/domain/src/price-build.test.ts

@@ -2,7 +2,7 @@
   "name": "bidwright",
   "private": true,
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "Braedon Saunders",
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.30.3",
@@ -37,7 +37,8 @@
     "deploy:export": "powershell -ExecutionPolicy Bypass -File scripts/deploy/export-local-state.ps1",
     "docker:up": "docker compose -f docker-compose.prod.yml up --build -d",
     "docker:down": "docker compose -f docker-compose.prod.yml down",
-    "docker:logs": "docker compose -f docker-compose.prod.yml logs -f"
+    "docker:logs": "docker compose -f docker-compose.prod.yml logs -f",
+    "version:set": "node scripts/set-version.mjs"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

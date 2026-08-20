@@ -8,12 +8,40 @@ import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
 import { access, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import JSZip from "jszip";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import PostalMime, { type Address as PostalAddress, type Attachment as PostalAttachment, type Email as PostalEmail } from "postal-mime";
 import { z } from "zod";
+
+/**
+ * The product version — read from the workspace root package.json, which is
+ * the single source of truth (see scripts/set-version.mjs). Reading it at
+ * runtime avoids a build-arg and a CI change: the image already ships the root
+ * manifest. BIDWRIGHT_VERSION overrides it for anyone who wants to stamp it
+ * explicitly; "dev" is the honest answer when neither is available.
+ */
+const PRODUCT_VERSION = (() => {
+  if (process.env.BIDWRIGHT_VERSION) return process.env.BIDWRIGHT_VERSION;
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (let depth = 0; depth < 8; depth += 1) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(dir, "package.json"), "utf8"));
+      if (manifest?.name === "bidwright" && typeof manifest.version === "string") {
+        return manifest.version;
+      }
+    } catch {
+      // keep walking up
+    }
+    const parent = dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return "dev";
+})();
 import {
   DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
   ingestCustomerPackage,
@@ -2007,6 +2035,11 @@ export function buildServer() {
   app.get("/health", async () => ({
     status: "ok",
     service: "bidwright-api",
+    // Two identifiers, deliberately: `deploymentTag` is the immutable
+    // sha-<commit> image tag (what is actually running), `version` is the
+    // product release it belongs to. Without the latter there was no way to
+    // tell which release a deployment corresponded to.
+    version: PRODUCT_VERSION,
     deploymentTag: process.env.BIDWRIGHT_DEPLOYMENT_TAG ?? "development",
     dataRoot: resolveApiPath(),
     integrationsKeyProbe: validateIntegrationsEncryptionKey().probeVerified
