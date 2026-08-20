@@ -173,6 +173,8 @@ interface TreeItem {
 
 export interface FileBrowserProps {
   workspace: ProjectWorkspaceData;
+  /** Bumped when the workspace refreshes; refetches the tree so an agent-created file appears without a page reload. */
+  filesRefreshKey?: number;
   packages?: PackageRecord[];
   selectedWorksheet?: WorkspaceWorksheet | null;
   modelEditorChannelName?: string;
@@ -1703,7 +1705,7 @@ function DeleteFileModal({
 
 /* ─── Main Component ─── */
 
-export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onSourceDocumentsChange }: FileBrowserProps) {
+export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onSourceDocumentsChange, filesRefreshKey }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cadEditorSyncChannelName = useMemo(() => cadEditorChannelName(projectId), [projectId]);
@@ -1796,7 +1798,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       .then(setUserNodes)
       .catch(() => setUserNodes([]))
       .finally(() => setLoadingNodes(false));
-  }, [projectId]);
+  }, [projectId, filesRefreshKey]);
 
   useEffect(() => {
     setSourceDocumentsLocal(workspace.sourceDocuments ?? []);

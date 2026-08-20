@@ -625,6 +625,12 @@ const createTextFileSchema = z.object({
     message: "name must be a file name, not a path",
   }),
   content: z.string(),
+  /**
+   * How `content` is encoded. base64 exists so binary artifacts (xlsx, pdf)
+   * survive the trip intact — without it a caller holding a spreadsheet has to
+   * downgrade it to CSV to get it through a JSON string field.
+   */
+  encoding: z.enum(["utf8", "base64"]).default("utf8"),
   parentId: z.string().nullable().optional(),
 });
 
@@ -4934,8 +4940,8 @@ export function buildServer() {
     const project = await request.store!.getProject(projectId);
     if (!project) return reply.code(404).send({ message: "Project not found" });
 
-    const { name, content, parentId } = parsed.data;
-    const buffer = Buffer.from(content, "utf8");
+    const { name, content, encoding, parentId } = parsed.data;
+    const buffer = Buffer.from(content, encoding);
     const fileExt = path.extname(name).replace(/^\./, "").toLowerCase();
 
     const node = await request.store!.createFileNode(projectId, {

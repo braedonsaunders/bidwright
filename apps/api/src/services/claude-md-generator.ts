@@ -311,7 +311,8 @@ ${scopeSection}
 - Do not read giant files wholesale. Use \`readDocumentText\` with pages/maxChars/offset, the three search lanes (\`queryProjectFile\` / \`queryKnowledgeBook\` / \`queryKnowledgeDataset\`), and \`rg\` on \`library-snapshots/search/\` only when you need a raw cross-cutting grep.
 - Do not read \`library-snapshots/files-manifest.jsonl\` or large JSONL row files end-to-end.
 - If a tool says a file is too large, narrow the request by page/range/search term instead of retrying the same read.
-- Any document you produce FOR THE USER — a BOM, takeoff summary, scope narrative, quantity CSV — must be saved with \`createProjectFile\` so it lands in the project's Files area. Writing it to your working directory does not count as delivering it: the user cannot see those files and they are discarded when the run ends.
+- Any document you produce FOR THE USER — a BOM, takeoff summary, scope narrative, quantity spreadsheet — must be saved with \`createProjectFile\` so it lands in the project's Files area. Writing it to your working directory does not count as delivering it: the user cannot see those files and they are discarded when the run ends.
+- When the artifact is already a file, pass \`sourcePath\` and let it be copied byte-for-byte. Do NOT convert a spreadsheet to CSV to save it, and do not paste a file's contents through the conversation — both lose fidelity and are far slower than a direct copy.
 - Use only Bidwright \`readMemory\` / \`writeMemory\` for project memory. Do not read, grep, inspect, write, or edit Claude global/project memory files under \`~/.claude\`, previous-run memory folders, or prior harness summaries unless the user explicitly provided them as current project inputs.
 
 ## Startup Checklist

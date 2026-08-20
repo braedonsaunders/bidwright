@@ -735,26 +735,52 @@ export function registerKnowledgeTools(server: McpServer) {
   server.tool(
     "createProjectFile",
     [
-      "Save a text document INTO this Bidwright project's Files area so the estimator can see it.",
-      "Use this for any artifact you produce for the user — a BOM, a takeoff summary, a scope narrative, a CSV of quantities.",
-      "Do NOT write these to your own working directory: files there are invisible to the user and are discarded when the run ends.",
-      "Returns the created file node, including the id you can cite later.",
+      "Save a document INTO this Bidwright project's Files area so the estimator can see it.",
+      "Use this for any artifact you produce for the user — a BOM, takeoff summary, scope narrative, quantity spreadsheet.",
+      "PREFER sourcePath: give the path of a file you already wrote and it is copied byte-for-byte, so xlsx/pdf stay in their original format and nothing large passes through the conversation.",
+      "Use content only for text you are composing right now.",
+      "Do NOT leave artifacts in your working directory: the user cannot see them and they are discarded when the run ends.",
     ].join(" "),
     {
-      name: z.string().min(1).describe("File name including extension, e.g. \"resin-module-BOM.csv\". Not a path."),
-      content: z.string().describe("Full text content of the file."),
-      parentId: z.string().optional().describe("Optional folder node id to create it inside; omit for the project root."),
+      name: z.string().optional().describe("File name including extension, e.g. \"resin-module-BOM.xlsx\". Defaults to the sourcePath file name."),
+      sourcePath: z.string().optional().describe("Path to a file you already wrote. Copied as-is — use this for spreadsheets, PDFs, or anything binary."),
+      content: z.string().optional().describe("Text content, when you are composing the document inline rather than from a file."),
+      parentId: z.string().optional().describe("Optional folder node id; omit for the project root."),
     },
     async (input) => {
       try {
+        let name = input.name;
+        let payloadContent: string;
+        let encoding: "utf8" | "base64";
+
+        if (input.sourcePath) {
+          const { readFile } = await import("node:fs/promises");
+          const path = await import("node:path");
+          const bytes = await readFile(input.sourcePath);
+          // Copy the bytes as they are. Re-encoding a spreadsheet as CSV to fit
+          // a text field loses formatting, formulas and sheets.
+          payloadContent = bytes.toString("base64");
+          encoding = "base64";
+          name = name || path.basename(input.sourcePath);
+        } else if (typeof input.content === "string") {
+          payloadContent = input.content;
+          encoding = "utf8";
+        } else {
+          return { content: [{ type: "text" as const, text: "Error: provide either sourcePath (preferred) or content." }] };
+        }
+
+        if (!name) {
+          return { content: [{ type: "text" as const, text: "Error: name is required when passing content." }] };
+        }
+
         const node = await apiPost<{ id: string; name: string; size?: number }>(
           projectPath("/files/create-text"),
-          { name: input.name, content: input.content, parentId: input.parentId ?? null },
+          { name, content: payloadContent, encoding, parentId: input.parentId ?? null },
         );
         return {
           content: [{
             type: "text" as const,
-            text: `Saved "${node.name}" to the project Files area (id ${node.id}, ${node.size ?? input.content.length} bytes). The user can see it under Documents.`,
+            text: `Saved "${node.name}" to the project Files area (id ${node.id}, ${node.size ?? 0} bytes). It is visible to the user under Documents.`,
           }],
         };
       } catch (err: any) {

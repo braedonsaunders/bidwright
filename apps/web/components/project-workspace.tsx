@@ -1553,11 +1553,17 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     [],
   );
 
+  const [filesRefreshKey, setFilesRefreshKey] = useState(0);
+
   const refreshWorkspace = useCallback(async () => {
     try {
       const fresh = await getProjectWorkspace(workspace.project.id);
       startTransition(() => {
         apply(fresh);
+        // File nodes are fetched separately from the workspace payload, so the
+        // browser has no way to know the agent just added one. Bump a counter
+        // it can watch instead of making it refetch on every optimistic edit.
+        setFilesRefreshKey((key) => key + 1);
       });
       return fresh;
     } catch {
@@ -2286,6 +2292,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                 <motion.div key="documents" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }} className="flex-1 min-h-0 flex flex-col">
                   <DocumentationTab
                     workspace={workspace}
+                    filesRefreshKey={filesRefreshKey}
                     apply={apply}
                     packages={data.packages}
                     highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined}

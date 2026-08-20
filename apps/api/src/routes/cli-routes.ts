@@ -2076,7 +2076,13 @@ ${message}`;
         },
       });
 
+      // Only an estimate-building run may conclude with "Estimate complete."
+      // bindEstimateStrategyRun attaches the strategy to EVERY non-qa run, so an
+      // assist/edit run inherits the already-complete strategy — which pinned a
+      // stale completion summary to the bottom of every edit conversation, as
+      // though the edit had just finished the estimate.
       const strategyMatchesLatestRun =
+        latestRun.kind === "cli-intake" &&
         strategy?.aiRunId === latestRun.id &&
         (strategy.status === "complete" || strategy.status === "ready_for_review") &&
         strategy.currentStage === "complete";

@@ -48,6 +48,8 @@ type SubTab = "knowledge" | "schedule" | "report" | "lead-letter" | "scratchpad"
 
 interface DocumentationTabProps {
   workspace: ProjectWorkspaceData;
+  /** Bumped when the workspace refreshes, so the file tree refetches. */
+  filesRefreshKey?: number;
   apply: (next: WorkspaceResponse) => void;
   packages?: FileBrowserProps["packages"];
   highlightDocumentId?: string;
@@ -71,6 +73,7 @@ const subTabs: { id: SubTab; label: string }[] = [
 
 export function DocumentationTab({
   workspace,
+  filesRefreshKey,
   apply,
   packages,
   highlightDocumentId,
@@ -126,6 +129,7 @@ export function DocumentationTab({
         {activeTab === "knowledge" && (
           <FileBrowser
             workspace={workspace}
+            filesRefreshKey={filesRefreshKey}
             packages={packages}
             selectedWorksheet={selectedWorksheet}
             modelEditorChannelName={modelEditorChannelName}
