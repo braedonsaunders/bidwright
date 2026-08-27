@@ -330,7 +330,10 @@ function categoryNameForSearch(categoryId: string | undefined, category: string 
 function queryString(input: Record<string, unknown>) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(input)) {
-    if (value === undefined || value === null || value === "") continue;
+    // Skip false so `refresh: false` is omitted. The UI client does the same;
+    // sending `refresh=false` used to trigger a full index rebuild because the
+    // API parsed it with `z.coerce.boolean()` (`Boolean("false") === true`).
+    if (value === undefined || value === null || value === "" || value === false) continue;
     if (Array.isArray(value)) {
       if (value.length) params.set(key, value.join(","));
     } else {

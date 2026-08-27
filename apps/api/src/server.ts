@@ -16,6 +16,7 @@ import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import PostalMime, { type Address as PostalAddress, type Attachment as PostalAttachment, type Email as PostalEmail } from "postal-mime";
 import { z } from "zod";
+import { parseQueryBoolean } from "./query-boolean.js";
 
 /**
  * The product version — read from the workspace root package.json, which is
@@ -3246,7 +3247,7 @@ export function buildServer() {
       disabledCatalogIds: z.string().optional(),
       limit: z.coerce.number().int().positive().max(100).optional(),
       offset: z.coerce.number().int().min(0).max(100000).optional(),
-      refresh: z.coerce.boolean().optional(),
+      refresh: z.unknown().optional().transform(parseQueryBoolean),
     }).safeParse(request.query ?? {});
     if (!parsed.success) {
       return reply.code(400).send({
