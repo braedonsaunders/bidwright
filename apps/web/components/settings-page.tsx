@@ -1610,13 +1610,15 @@ export function SettingsPage({
           )}
 
           {activeGroup === "users" && (
-            <UsersAdmin
-              service={iamService}
-              permissionGroups={bidwrightPermissionGroups}
-              title="Users & access"
-              description="Manage organization members and the built-in Bidwright roles."
-              canManage
-            />
+            <div className="users-access-table-only min-h-0 flex-1">
+              <UsersAdmin
+                service={iamService}
+                permissionGroups={bidwrightPermissionGroups}
+                title="Users & access"
+                description="Manage organization members and the built-in Bidwright roles."
+                canManage
+              />
+            </div>
           )}
 
           {activeGroup === "integrations" && integrationsSubTab === "llm" && (() => {

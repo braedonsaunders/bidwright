@@ -3,6 +3,7 @@
 @source "../app";
 @source "../components";
 @source "../lib";
+@source "../../../node_modules/@braedonsaunders/appkit-iam";
 
 /* Compatibility aliases for legacy Bidwright surface/accent utility names. */
 @theme inline {
@@ -271,4 +272,14 @@ table {
 .no-spinner {
   -moz-appearance: textfield;
   appearance: textfield;
+}
+
+/* UsersAdmin ships a mobile card list plus a desktop table. Tailwind does not
+   scan the IAM package for `sm:hidden`, so both stacks render on desktop.
+   Keep the table only. */
+.users-access-table-only > div > div.space-y-2 {
+  display: none !important;
+}
+.users-access-table-only > div > div.hidden {
+  display: block !important;
 }
