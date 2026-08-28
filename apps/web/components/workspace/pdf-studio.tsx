@@ -14,6 +14,7 @@ import {
   Loader2,
   Minus,
   Palette,
+  Paperclip,
   Plus,
   Save,
   Send,
@@ -32,14 +33,28 @@ import {
   Select,
   Toggle,
 } from "@/components/legacy-controls";
-import { getQuotePdfPreviewUrl, fetchQuotePdfBlobUrl, getPdfPreferences, savePdfPreferences } from "@/lib/api";
+import {
+  fetchQuotePdfBlob,
+  getFileTree,
+  getPdfPreferences,
+  getQuotePdfPreviewUrl,
+  listProjectDocuments,
+  savePdfPreferences,
+  type FileNode,
+  type SourceDocument,
+} from "@/lib/api";
 import { loadPdfJs, type PDFDocumentLoadingTask, type PDFDocumentProxy, type RenderTask } from "@/lib/pdfjs-loader";
 import { cn } from "@/lib/utils";
 import {
   PDF_DOCUMENT_PROFILES,
   PDF_SECTION_KEYS,
+  getPdfAttachmentSectionId,
+  getPdfAttachmentSectionKey,
+  insertPdfAttachmentAfterReport,
   normalizePdfDocumentType,
+  pdfAttachmentIdForSource,
   type PdfDocumentType,
+  type PdfFileAttachment,
   type PdfSectionKey,
 } from "@bidwright/domain";
 
@@ -92,6 +107,7 @@ export interface PdfLayoutOptions {
     content: string;
     order: number;
   }>;
+  attachments: PdfFileAttachment[];
 }
 
 type PdfTemplateType = PdfDocumentType;
@@ -125,6 +141,7 @@ const DEFAULT_OPTIONS: PdfLayoutOptions = {
   headerFooter: { showHeader: true, showFooter: true, showPageNumbers: true },
   customerFacing: true,
   customSections: [],
+  attachments: [],
 };
 
 const DEFAULT_SECTION_ORDER = [...DEFAULT_OPTIONS.sectionOrder];
@@ -159,7 +176,7 @@ function optionsForDocumentType(
     next.lineItemOptions.showCostColumn = false;
     next.lineItemOptions.showMarkupColumn = false;
   }
-  next.sectionOrder = normalizeSectionOrder(next.sectionOrder, next.customSections);
+  next.sectionOrder = normalizeSectionOrder(next.sectionOrder, next.customSections, next.attachments);
   return next;
 }
 
@@ -198,9 +215,14 @@ function insertBeforePricingSummary(order: string[], key: string) {
   else order.splice(pricingIndex, 0, key);
 }
 
-function normalizeSectionOrder(order: string[], customSections: CustomSection[]) {
+function normalizeSectionOrder(
+  order: string[],
+  customSections: CustomSection[],
+  attachments: PdfFileAttachment[] = [],
+) {
   const seen = new Set<string>();
   const customIds = new Set(customSections.map((section) => section.id));
+  const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
   const normalized: string[] = [];
 
   for (const sectionKey of order) {
@@ -208,6 +230,14 @@ function normalizeSectionOrder(order: string[], customSections: CustomSection[])
     const customId = getCustomSectionId(sectionKey);
     if (customId) {
       if (customIds.has(customId)) {
+        normalized.push(sectionKey);
+        seen.add(sectionKey);
+      }
+      continue;
+    }
+    const attachmentId = getPdfAttachmentSectionId(sectionKey);
+    if (attachmentId) {
+      if (attachmentIds.has(attachmentId)) {
         normalized.push(sectionKey);
         seen.add(sectionKey);
       }
@@ -232,18 +262,74 @@ function normalizeSectionOrder(order: string[], customSections: CustomSection[])
     seen.add(sectionKey);
   }
 
+  for (const attachment of attachments) {
+    const sectionKey = getPdfAttachmentSectionKey(attachment.id);
+    if (seen.has(sectionKey)) continue;
+    insertPdfAttachmentAfterReport(normalized, sectionKey);
+    seen.add(sectionKey);
+  }
+
   return normalized;
+}
+
+function isPdfCandidate(name: string, fileType?: string | null) {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  if (ext === "pdf") return true;
+  const type = (fileType ?? "").toLowerCase();
+  return type === "pdf" || type.includes("application/pdf");
+}
+
+function attachmentPickerKey(attachment: PdfFileAttachment) {
+  if (attachment.fileNodeId) return `file:${attachment.fileNodeId}`;
+  if (attachment.documentId) return `doc:${attachment.documentId}`;
+  return `id:${attachment.id}`;
+}
+
+function collectQuotePdfCandidates(fileNodes: FileNode[], documents: SourceDocument[]): PdfFileAttachment[] {
+  const candidates: PdfFileAttachment[] = [];
+  const seenDocuments = new Set<string>();
+
+  for (const node of fileNodes) {
+    if (node.type !== "file" || !isPdfCandidate(node.name, node.fileType)) continue;
+    if (node.documentId) seenDocuments.add(node.documentId);
+    candidates.push({
+      id: pdfAttachmentIdForSource({ fileNodeId: node.id, documentId: node.documentId }),
+      title: node.name,
+      fileNodeId: node.id,
+      documentId: node.documentId,
+    });
+  }
+
+  for (const document of documents) {
+    if (seenDocuments.has(document.id) || !isPdfCandidate(document.fileName, document.fileType)) continue;
+    seenDocuments.add(document.id);
+    candidates.push({
+      id: pdfAttachmentIdForSource({ documentId: document.id }),
+      title: document.fileName,
+      documentId: document.id,
+    });
+  }
+
+  return candidates.sort((left, right) => left.title.localeCompare(right.title));
 }
 
 interface PdfStudioProps {
   projectId: string;
   open: boolean;
   onClose: () => void;
+  pendingAttachment?: PdfFileAttachment | null;
+  onPendingAttachmentConsumed?: () => void;
 }
 
 // ─── Component ────────────────────────────────────────────────────────
 
-export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
+export function PdfStudio({
+  projectId,
+  open,
+  onClose,
+  pendingAttachment,
+  onPendingAttachmentConsumed,
+}: PdfStudioProps) {
   const [options, setOptions] = useState<PdfLayoutOptions>(() => defaultDocumentLayouts().main);
   const [documentLayouts, setDocumentLayouts] = useState<Record<PdfTemplateType, PdfLayoutOptions>>(
     () => defaultDocumentLayouts(),
@@ -255,6 +341,11 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const [zoom, setZoom] = useState(100);
   const [downloading, setDownloading] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadWarnings, setDownloadWarnings] = useState<string[]>([]);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [pickerLoading, setPickerLoading] = useState(false);
+  const [pickerError, setPickerError] = useState<string | null>(null);
+  const [pickerItems, setPickerItems] = useState<PdfFileAttachment[]>([]);
   const [saving, setSaving] = useState(false);
   const [loadingPrefs, setLoadingPrefs] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -308,8 +399,9 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                 [active]: optionsForDocumentType(active, deepMergeOptions(defaults[active], saved as Partial<PdfLayoutOptions>)),
               };
           for (const layout of Object.values(layouts)) {
+            layout.attachments = Array.isArray(layout.attachments) ? layout.attachments : [];
             layout.lineItemOptions.groupBy = normalizeLineItemGroupBy(layout.lineItemOptions.groupBy);
-            layout.sectionOrder = normalizeSectionOrder(layout.sectionOrder, layout.customSections);
+            layout.sectionOrder = normalizeSectionOrder(layout.sectionOrder, layout.customSections, layout.attachments);
           }
           const merged = layouts[active];
           setDocumentLayouts(layouts);
@@ -365,7 +457,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
     return {
       ...source,
       customSections,
-      sectionOrder: normalizeSectionOrder(source.sectionOrder, customSections),
+      sectionOrder: normalizeSectionOrder(source.sectionOrder, customSections, source.attachments),
     };
   }, [customSectionDrafts]);
 
@@ -408,6 +500,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const handleDownload = async () => {
     setDownloading(true);
     setDownloadError(null);
+    setDownloadWarnings([]);
     try {
       const committedOptions = withCommittedCustomSectionDrafts(options);
       if (committedOptions !== options) {
@@ -419,7 +512,12 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       const payload = { layouts, activeTemplate } as Record<string, unknown>;
       savePdfPreferences(projectId, payload).catch(() => {});
 
-      const blobUrl = await fetchQuotePdfBlobUrl(projectId, activeTemplate, committedOptions as unknown as Record<string, unknown>);
+      const { url: blobUrl, warnings } = await fetchQuotePdfBlob(
+        projectId,
+        activeTemplate,
+        committedOptions as unknown as Record<string, unknown>,
+      );
+      setDownloadWarnings(warnings);
       const a = document.createElement("a");
       a.href = blobUrl;
       a.download = `quote-${Date.now()}.pdf`;
@@ -467,7 +565,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   // Section reordering
   const moveSection = (key: string, direction: "up" | "down") => {
     setOptions((prev) => {
-      const order = normalizeSectionOrder([...prev.sectionOrder], prev.customSections);
+      const order = normalizeSectionOrder([...prev.sectionOrder], prev.customSections, prev.attachments);
       const idx = order.indexOf(key);
       if (idx < 0) return prev;
       const target = direction === "up" ? idx - 1 : idx + 1;
@@ -491,6 +589,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       const nextSectionOrder = normalizeSectionOrder(
         [...prev.sectionOrder, getCustomSectionKey(id)],
         nextCustomSections,
+        prev.attachments,
       );
       return {
         ...prev,
@@ -527,7 +626,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       return {
         ...prev,
         customSections,
-        sectionOrder: normalizeSectionOrder(prev.sectionOrder, customSections),
+        sectionOrder: normalizeSectionOrder(prev.sectionOrder, customSections, prev.attachments),
       };
     });
     const stored = options.customSections.find((section) => section.id === id);
@@ -547,6 +646,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
       const sectionOrder = normalizeSectionOrder(
         prev.sectionOrder.filter((sectionKey) => sectionKey !== getCustomSectionKey(id)),
         customSections,
+        prev.attachments,
       );
       return {
         ...prev,
@@ -560,7 +660,7 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   const moveSectionTo = (sourceKey: string, targetKey: string) => {
     if (sourceKey === targetKey) return;
     setOptions((prev) => {
-      const order = normalizeSectionOrder([...prev.sectionOrder], prev.customSections);
+      const order = normalizeSectionOrder([...prev.sectionOrder], prev.customSections, prev.attachments);
       const sourceIndex = order.indexOf(sourceKey);
       const targetIndex = order.indexOf(targetKey);
       if (sourceIndex === -1 || targetIndex === -1) return prev;
@@ -570,6 +670,77 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
     });
     setDirty(true);
   };
+
+  const addAttachment = useCallback((attachment: PdfFileAttachment) => {
+    setOptions((prev) => {
+      if (prev.attachments.some((existing) => existing.id === attachment.id)) {
+        return {
+          ...prev,
+          sectionOrder: normalizeSectionOrder(
+            [...prev.sectionOrder, getPdfAttachmentSectionKey(attachment.id)],
+            prev.customSections,
+            prev.attachments,
+          ),
+        };
+      }
+      const attachments = [...prev.attachments, attachment];
+      return {
+        ...prev,
+        attachments,
+        sectionOrder: normalizeSectionOrder(
+          [...prev.sectionOrder, getPdfAttachmentSectionKey(attachment.id)],
+          prev.customSections,
+          attachments,
+        ),
+      };
+    });
+    setDirty(true);
+  }, []);
+
+  const removeAttachment = (id: string) => {
+    setOptions((prev) => {
+      const attachments = prev.attachments.filter((attachment) => attachment.id !== id);
+      return {
+        ...prev,
+        attachments,
+        sectionOrder: normalizeSectionOrder(
+          prev.sectionOrder.filter((sectionKey) => sectionKey !== getPdfAttachmentSectionKey(id)),
+          prev.customSections,
+          attachments,
+        ),
+      };
+    });
+    setDirty(true);
+  };
+
+  const loadPickerItems = useCallback(async () => {
+    setPickerLoading(true);
+    setPickerError(null);
+    try {
+      const [fileNodes, documents] = await Promise.all([
+        getFileTree(projectId),
+        listProjectDocuments(projectId),
+      ]);
+      setPickerItems(collectQuotePdfCandidates(fileNodes, documents));
+    } catch (error) {
+      setPickerError(error instanceof Error ? error.message : "Could not load Files");
+      setPickerItems([]);
+    } finally {
+      setPickerLoading(false);
+    }
+  }, [projectId]);
+
+  const togglePicker = () => {
+    const next = !pickerOpen;
+    setPickerOpen(next);
+    if (next) void loadPickerItems();
+  };
+
+  useEffect(() => {
+    if (!open || loadingPrefs || !pendingAttachment) return;
+    addAttachment(pendingAttachment);
+    onPendingAttachmentConsumed?.();
+  }, [open, loadingPrefs, pendingAttachment, addAttachment, onPendingAttachmentConsumed]);
 
   const togglePanel = (panel: string) => {
     setExpandedPanels((prev) => {
@@ -602,8 +773,11 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
   };
 
   const activeProfile = PDF_DOCUMENT_PROFILES[activeTemplate];
-  const orderedSectionKeys = normalizeSectionOrder(options.sectionOrder, options.customSections)
+  const attachmentsById = new Map(options.attachments.map((attachment) => [attachment.id, attachment] as const));
+  const attachedPickerKeys = new Set(options.attachments.map(attachmentPickerKey));
+  const orderedSectionKeys = normalizeSectionOrder(options.sectionOrder, options.customSections, options.attachments)
     .filter((key) => {
+      if (getPdfAttachmentSectionId(key)) return true;
       const customId = getCustomSectionId(key);
       return customId ? true : activeProfile.sections[key as PdfSectionKey]?.available;
     });
@@ -736,16 +910,21 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                         {orderedSectionKeys.map((key, idx) => {
                           const customSectionId = getCustomSectionId(key);
                           const customSection = customSectionId ? customSectionsById.get(customSectionId) : null;
+                          const attachmentId = getPdfAttachmentSectionId(key);
+                          const attachment = attachmentId ? attachmentsById.get(attachmentId) : null;
                           const draft = customSectionId ? customSectionDrafts[customSectionId] : null;
-                          const capability = customSectionId ? null : activeProfile.sections[key as PdfSectionKey];
-                          const label = customSection
-                            ? (draft?.title || customSection.title || "Custom Section")
-                            : capability?.label ?? SECTION_LABELS[key];
+                          const capability = customSectionId || attachment ? null : activeProfile.sections[key as PdfSectionKey];
+                          const label = attachment
+                            ? attachment.title
+                            : customSection
+                              ? (draft?.title || customSection.title || "Custom Section")
+                              : capability?.label ?? SECTION_LABELS[key];
                           if (!label) return null;
-                          const enabled = customSection ? true : options.sections[key as keyof typeof options.sections];
+                          const enabled = customSection || attachment ? true : options.sections[key as keyof typeof options.sections];
                           const hasSubOptions = key === "lineItems" || key === "coverPage";
                           const isExpanded = expandedSections.has(key);
                           const isCustomSection = !!customSection;
+                          const isAttachment = !!attachment;
                           const isDragOver = dragOverSectionKey === key && dragSectionKey !== key;
 
                           return (
@@ -814,13 +993,23 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                                   <div className="w-3" />
                                 )}
 
+                                {isAttachment && <Paperclip className="h-3 w-3 text-fg/35" />}
                                 <span className="flex-1 text-xs text-fg/70">{label}</span>
                                 {capability?.locked && capability.reason && (
                                   <span className="max-w-[115px] text-right text-[9px] leading-tight text-fg/35" title={capability.reason}>
                                     Required
                                   </span>
                                 )}
-                                {isCustomSection ? (
+                                {isAttachment ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeAttachment(attachment.id)}
+                                    className="text-fg/30 hover:text-danger transition-colors"
+                                    title="Remove from quote PDF"
+                                  >
+                                    <X className="h-3.5 w-3.5" />
+                                  </button>
+                                ) : isCustomSection ? (
                                   <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-accent">
                                     Drag
                                   </span>
@@ -949,6 +1138,42 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                       >
                         <Plus className="h-3 w-3" /> Add Custom Section
                       </button>
+                      <button
+                        onClick={togglePicker}
+                        className="mt-1.5 flex w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-line px-3 py-2 text-xs text-fg/40 hover:border-fg/30 hover:text-fg/60 transition-colors"
+                      >
+                        <Paperclip className="h-3 w-3" /> Add from Files
+                      </button>
+                      {pickerOpen && (
+                        <div className="mt-2 max-h-48 overflow-y-auto rounded-md border border-line">
+                          {pickerLoading ? (
+                            <div className="flex items-center gap-2 px-3 py-2 text-[11px] text-fg/40">
+                              <Loader2 className="h-3 w-3 animate-spin" /> Loading PDFs...
+                            </div>
+                          ) : pickerError ? (
+                            <div className="px-3 py-2 text-[11px] text-danger">{pickerError}</div>
+                          ) : pickerItems.length === 0 ? (
+                            <div className="px-3 py-2 text-[11px] text-fg/40">No PDFs found in Files.</div>
+                          ) : (
+                            pickerItems.map((item) => {
+                              const alreadyAdded = attachedPickerKeys.has(attachmentPickerKey(item));
+                              return (
+                                <button
+                                  key={attachmentPickerKey(item)}
+                                  type="button"
+                                  disabled={alreadyAdded}
+                                  onClick={() => addAttachment(item)}
+                                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-fg/70 hover:bg-panel2 disabled:opacity-40"
+                                >
+                                  <Paperclip className="h-3 w-3 shrink-0 text-fg/30" />
+                                  <span className="flex-1 truncate">{item.title}</span>
+                                  {alreadyAdded && <span className="text-[10px] text-fg/35">Added</span>}
+                                </button>
+                              );
+                            })
+                          )}
+                        </div>
+                      )}
                     </SidebarPanel>
 
                     {/* Branding */}
@@ -1084,6 +1309,11 @@ export function PdfStudio({ projectId, open, onClose }: PdfStudioProps) {
                     )}
                     {downloadError && (
                       <div className="text-center text-[10px] text-danger">{downloadError}</div>
+                    )}
+                    {downloadWarnings.length > 0 && (
+                      <div className="rounded-md border border-amber-400/40 bg-amber-50 px-2 py-1.5 text-[10px] leading-snug text-amber-800 dark:border-amber-500/30 dark:bg-amber-950/30 dark:text-amber-300">
+                        {downloadWarnings.join(" ")}
+                      </div>
                     )}
                   </div>
                 </>

@@ -144,6 +144,7 @@ import {
   type AIEquipmentResult,
 } from "@/components/workspace/modals";
 import { PdfPagePreview, PdfStudio } from "@/components/workspace/pdf-studio";
+import type { PdfFileAttachment } from "@bidwright/domain";
 import { PluginToolsPanel } from "@/components/workspace/plugin-tools-panel";
 import { RevisionDiffModal } from "@/components/workspace/revision-diff-modal";
 import { WorkspaceI18nSurface } from "@/components/workspace/workspace-i18n-surface";
@@ -1203,6 +1204,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   }, [data.workspace.project.id, data.workspace.currentRevision.id]);
   const modelLineCategory = useMemo(() => pickModelLineCategory(entityCategories), [entityCategories]);
   const [modal, setModal] = useState<ModalState>(null);
+  const [pendingPdfAttachment, setPendingPdfAttachment] = useState<PdfFileAttachment | null>(null);
   const [aiResult, setAiResult] = useState<string | null>(null);
   const [aiPhaseResult, setAiPhaseResult] = useState<AIPhaseResult[] | null>(null);
   const [aiEquipResult, setAiEquipResult] = useState<AIEquipmentResult[] | null>(null);
@@ -1877,7 +1879,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
       case "aiNotes": setModal("aiNotes"); setAiResult(null); break;
       case "aiPhases": setModal("aiPhases"); setAiPhaseResult(null); break;
       case "aiEquipment": setModal("aiEquipment"); setAiEquipResult(null); break;
-      case "pdf": setModal("pdf"); break;
+      case "pdf":
+        setPendingPdfAttachment(null);
+        setModal("pdf");
+        break;
       case "compare": setModal("compare"); break;
     }
   }
@@ -2299,6 +2304,10 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                     selectedWorksheet={selectedModelWorksheet}
                     modelEditorChannelName={modelEditorSyncChannelName}
                     onOpenInTakeoff={handleOpenFileInTakeoff}
+                    onIncludeInQuotePdf={(attachment) => {
+                      setPendingPdfAttachment(attachment);
+                      setModal("pdf");
+                    }}
                     onSourceDocumentsChange={patchSourceDocuments}
                   />
                 </motion.div>
@@ -2476,7 +2485,13 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
         }} />
 
 
-      <PdfStudio projectId={workspace.project.id} open={modal === "pdf"} onClose={closeModal} />
+      <PdfStudio
+        projectId={workspace.project.id}
+        open={modal === "pdf"}
+        onClose={closeModal}
+        pendingAttachment={pendingPdfAttachment}
+        onPendingAttachmentConsumed={() => setPendingPdfAttachment(null)}
+      />
 
       <RevisionCompare workspace={workspace} open={modal === "compare"} onClose={closeModal} />
 

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildPdfDataPackage, generatePdfHtml, tierAbbreviation } from "./pdf-service";
+import { buildPdfDataPackage, buildSchedulePdfData, generatePdfHtml, generateSchedulePdfHtml, tierAbbreviation } from "./pdf-service";
 
 export function workspaceFixture() {
   const pricingLadder = {
@@ -374,4 +374,55 @@ test("a quote with no adjustments at all prints a single Price Build total", () 
   const html = generatePdfHtml(data, "main");
   assert.doesNotMatch(html, /<td>Rollup<\/td>/);
   assert.match(html, /Price Build<\/td><td class="num">\$1,000\.00<\/td>/);
+});
+
+test("the dedicated schedule PDF renders a landscape Gantt instead of a date table", () => {
+  const html = generateSchedulePdfHtml(buildSchedulePdfData({
+    project: { name: "Plant Outage" },
+    quote: { customerName: "Kingdom Construction" },
+    currentRevision: { dateWorkStart: "2026-09-01", dateWorkEnd: "2026-09-30" },
+    phases: [{ id: "p1", name: "Install", number: "1", color: "#3b82f6" }],
+    scheduleTasks: [{
+      name: "Set transformer",
+      phaseId: "p1",
+      startDate: "2026-09-07",
+      endDate: "2026-09-18",
+      duration: 10,
+      progress: 0.4,
+      assignee: "Crew A",
+      status: "in_progress",
+      taskType: "task",
+    }],
+  }));
+  assert.match(html, /class="gantt"/);
+  assert.match(html, /class="bar"/);
+  assert.match(html, /Set transformer/);
+  assert.match(html, /size: landscape/);
+});
+
+test("freezeSectionOrder does not backfill default or custom sections", () => {
+  const data = buildPdfDataPackage(workspaceFixture());
+  const html = generatePdfHtml(data, "main", {
+    freezeSectionOrder: true,
+    sectionOrder: ["terms"],
+    sections: {
+      coverPage: false,
+      scopeOfWork: false,
+      leadLetter: false,
+      lineItems: false,
+      phases: false,
+      conditions: false,
+      terms: true,
+      pricingSummary: false,
+      hoursSummary: false,
+      labourSummary: false,
+      notes: false,
+      reportSections: false,
+      schedule: false,
+    },
+    customSections: [{ id: "extra", title: "Extra Block", content: "Should stay out", order: 0 }],
+  });
+  assert.doesNotMatch(html, /Scope of Work/);
+  assert.doesNotMatch(html, /Extra Block/);
+  assert.doesNotMatch(html, /Price Build/);
 });

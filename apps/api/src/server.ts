@@ -140,6 +140,7 @@ import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
 import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
+import { loadQuotePdfAttachmentBytes, mergePdfBuffers, quotePdfSegmentsFromLayout } from "./services/pdf-attachments.js";
 import { validateIntegrationsEncryptionKey } from "./services/settings-key-validation.js";
 import { sendQuoteEmail } from "./services/email-service.js";
 import { DEMO_DISABLED_MESSAGE, isApiDemoMode } from "./demo-mode.js";
@@ -1960,7 +1961,8 @@ export function buildServer() {
 
   app.register(cors, {
     origin: true,
-    credentials: true
+    credentials: true,
+    exposedHeaders: ["X-Bidwright-Pdf-Warnings"],
   });
 
   app.register(multipart, {
@@ -5298,7 +5300,9 @@ export function buildServer() {
     if (templateType === "schedule") {
       const schedulePdfData = buildSchedulePdfData(workspace);
       const html = generateSchedulePdfHtml(schedulePdfData);
-      const { buffer, contentType } = await generatePdfBuffer(html);
+      const { buffer, contentType } = await generatePdfBuffer(html, {
+        pageSetup: { orientation: "landscape", pageSize: "letter" },
+      });
       return reply.type(contentType).send(buffer);
     }
 
@@ -5335,9 +5339,52 @@ export function buildServer() {
       try { layoutOptions = JSON.parse(decodeURIComponent(layoutParam)); } catch { /* ignore */ }
     }
 
-    const html = generatePdfHtml(pdfData, templateType, layoutOptions);
-    const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
-    return reply.type(contentType).send(buffer);
+    const { segments } = quotePdfSegmentsFromLayout(layoutOptions);
+    const warnings: string[] = [];
+    const parts: Buffer[] = [];
+    const needsMerge = segments.some((segment) => segment.kind !== "html");
+
+    if (!needsMerge) {
+      const html = generatePdfHtml(pdfData, templateType, layoutOptions);
+      const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
+      return reply.type(contentType).send(buffer);
+    }
+
+    for (const segment of segments) {
+      if (segment.kind === "html") {
+        const html = generatePdfHtml(pdfData, templateType, {
+          ...layoutOptions,
+          sectionOrder: segment.sectionKeys,
+          freezeSectionOrder: true,
+        });
+        const { buffer } = await generatePdfBuffer(html, layoutOptions);
+        parts.push(buffer);
+        continue;
+      }
+      if (segment.kind === "schedule") {
+        const scheduleHtml = generateSchedulePdfHtml(buildSchedulePdfData(workspace));
+        const { buffer } = await generatePdfBuffer(scheduleHtml, {
+          pageSetup: {
+            orientation: "landscape",
+            pageSize: layoutOptions?.pageSetup?.pageSize ?? "letter",
+          },
+        });
+        parts.push(buffer);
+        continue;
+      }
+      const loaded = await loadQuotePdfAttachmentBytes(request.store!, projectId, segment.attachment);
+      if (loaded.bytes) parts.push(loaded.bytes);
+      else if (loaded.warning) warnings.push(loaded.warning);
+    }
+
+    if (parts.length === 0) {
+      return reply.code(500).send({ message: warnings[0] ?? "PDF generation produced no pages." });
+    }
+    const buffer = await mergePdfBuffers(parts);
+    if (warnings.length) {
+      reply.header("X-Bidwright-Pdf-Warnings", warnings.join(" | "));
+    }
+    return reply.type("application/pdf").send(buffer);
   });
 
   // -------------------------------------------------------------------------

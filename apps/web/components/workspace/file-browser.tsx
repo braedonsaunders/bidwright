@@ -31,6 +31,7 @@ import {
   Search,
   Table2,
   ClipboardCheck,
+  Paperclip,
   Pencil,
   PenTool,
   Maximize2,
@@ -144,6 +145,7 @@ import {
   Select,
 } from "@/components/legacy-controls";
 import { BidwrightMark } from "@/components/brand-logo";
+import { pdfAttachmentIdForSource, type PdfFileAttachment } from "@bidwright/domain";
 import { cn } from "@/lib/utils";
 import { formatDate } from "@/lib/format";
 import { cadEditorChannelName } from "@/lib/workspace-sync";
@@ -179,6 +181,7 @@ export interface FileBrowserProps {
   selectedWorksheet?: WorkspaceWorksheet | null;
   modelEditorChannelName?: string;
   onOpenInTakeoff?: (documentId: string) => void;
+  onIncludeInQuotePdf?: (attachment: PdfFileAttachment) => void;
   /** Lifts source-document mutations (upload/rename/move/delete) up to the
    *  workspace owner so they survive this component unmounting on tab switch.
    *  Without it, the optimistic local edit is lost until a full page reload. */
@@ -1500,18 +1503,20 @@ function TreeNode({
   );
 }
 
-type FileContextAction = "open" | "open-fullscreen" | "open-takeoff" | "new-folder" | "upload" | "rename" | "move" | "delete";
+type FileContextAction = "open" | "open-fullscreen" | "open-takeoff" | "include-quote-pdf" | "new-folder" | "upload" | "rename" | "move" | "delete";
 
 function FileTreeContextMenu({
   menu,
   projectId,
   canOpenInTakeoff,
+  canIncludeInQuotePdf,
   onClose,
   onAction,
 }: {
   menu: { item: TreeItem; x: number; y: number } | null;
   projectId: string;
   canOpenInTakeoff?: boolean;
+  canIncludeInQuotePdf?: boolean;
   onClose: () => void;
   onAction: (action: FileContextAction, item: TreeItem) => void;
 }) {
@@ -1557,6 +1562,7 @@ function FileTreeContextMenu({
   const canCreateInside = item.type === "directory" && Boolean(item.fileNode || item.isRoot);
   const downloadUrl = item.type === "file" ? getDownloadUrl(item, projectId, false) : null;
   const takeoffDocumentId = canOpenInTakeoff ? getTakeoffDocumentIdForItem(item) : null;
+  const isQuotePdfCandidate = item.type === "file" && PDF_EXTENSIONS.has(getFileExtension(item.name));
   const menuItemClass =
     "flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-xs text-fg/70 outline-none transition-colors hover:bg-panel2 hover:text-fg";
 
@@ -1589,6 +1595,7 @@ function FileTreeContextMenu({
       {!item.isRoot && button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
       {item.type === "file" && button("open-fullscreen", "Open Fullscreen", <Maximize2 className="h-3.5 w-3.5" />)}
       {takeoffDocumentId && button("open-takeoff", "Open in Takeoff", <Ruler className="h-3.5 w-3.5" />)}
+      {canIncludeInQuotePdf && isQuotePdfCandidate && button("include-quote-pdf", "Include in quote PDF", <Paperclip className="h-3.5 w-3.5" />)}
       {downloadUrl && (
         <a
           href={downloadUrl}
@@ -1705,7 +1712,7 @@ function DeleteFileModal({
 
 /* ─── Main Component ─── */
 
-export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onSourceDocumentsChange, filesRefreshKey }: FileBrowserProps) {
+export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onIncludeInQuotePdf, onSourceDocumentsChange, filesRefreshKey }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cadEditorSyncChannelName = useMemo(() => cadEditorChannelName(projectId), [projectId]);
@@ -2112,6 +2119,16 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         handleSelect(item);
         onOpenInTakeoff?.(takeoffDocumentId);
       }
+    } else if (action === "include-quote-pdf" && item.type === "file") {
+      const fileNodeId = item.fileNode?.id;
+      const documentId = item.sourceDocument?.id ?? item.fileNode?.documentId;
+      if (!fileNodeId && !documentId) return;
+      onIncludeInQuotePdf?.({
+        id: pdfAttachmentIdForSource({ fileNodeId, documentId }),
+        title: item.name,
+        fileNodeId,
+        documentId,
+      });
     } else if (action === "new-folder" && item.type === "directory" && (item.fileNode || item.isRoot)) {
       setCreatingFolder(true);
       setNewFolderParentId(item.fileNode?.id ?? null);
@@ -2130,7 +2147,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } else if (action === "delete") {
       setDeletingItem(item);
     }
-  }, [handleSelect, onOpenInTakeoff, openFilePickerForParent]);
+  }, [handleSelect, onOpenInTakeoff, onIncludeInQuotePdf, openFilePickerForParent]);
 
   const handleConfirmMove = useCallback(() => {
     if (movingItem?.fileNode) {
@@ -3162,6 +3179,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         menu={contextMenu}
         projectId={projectId}
         canOpenInTakeoff={Boolean(onOpenInTakeoff)}
+        canIncludeInQuotePdf={Boolean(onIncludeInQuotePdf)}
         onClose={() => setContextMenu(null)}
         onAction={handleContextAction}
       />

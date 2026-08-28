@@ -5,6 +5,7 @@ import {
   getExtendedWorksheetUnitBreakdown,
   scalePriceBuildAmount,
   normalizePdfDocumentType,
+  type PdfFileAttachment,
   type PricingLadderSnapshot,
   type WorksheetUnitKind,
 } from "@bidwright/domain";
@@ -186,6 +187,7 @@ export interface PdfLayoutOptions {
     content: string;
     order: number;
   }>;
+  attachments: PdfFileAttachment[];
 }
 
 export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
@@ -234,6 +236,7 @@ export function getDefaultPdfLayoutOptions(): PdfLayoutOptions {
     },
     customerFacing: true,
     customSections: [],
+    attachments: [],
   };
 }
 
@@ -444,29 +447,32 @@ function applyDocumentProfile(
 export function generatePdfHtml(
   data: PdfDataPackage,
   templateType: string,
-  options?: Partial<PdfLayoutOptions>
+  options?: Partial<PdfLayoutOptions> & { freezeSectionOrder?: boolean }
 ): string {
   const defaults = getDefaultPdfLayoutOptions();
+  const freezeSectionOrder = Boolean(options?.freezeSectionOrder);
   let opts: PdfLayoutOptions = options ? deepMerge(defaults, options) : defaults;
   opts = applyDocumentProfile(opts, templateType, !options);
   // "Adjustments" used to be a standalone PDF section. They now form part of
   // the customer-facing Price Build, so discard the stale key from saved layouts.
   opts.sectionOrder = opts.sectionOrder.filter((key) => key !== "modifiers");
 
-  // Ensure any new section keys present in defaults are added to sectionOrder
-  for (const key of defaults.sectionOrder) {
-    if (!opts.sectionOrder.includes(key)) {
-      // Insert at the default position
-      const defaultIdx = defaults.sectionOrder.indexOf(key);
-      const insertAt = Math.min(defaultIdx, opts.sectionOrder.length);
-      opts.sectionOrder.splice(insertAt, 0, key);
+  if (!freezeSectionOrder) {
+    // Ensure any new section keys present in defaults are added to sectionOrder
+    for (const key of defaults.sectionOrder) {
+      if (!opts.sectionOrder.includes(key)) {
+        // Insert at the default position
+        const defaultIdx = defaults.sectionOrder.indexOf(key);
+        const insertAt = Math.min(defaultIdx, opts.sectionOrder.length);
+        opts.sectionOrder.splice(insertAt, 0, key);
+      }
     }
-  }
 
-  for (const customSection of opts.customSections) {
-    const sectionKey = `${CUSTOM_SECTION_PREFIX}${customSection.id}`;
-    if (!opts.sectionOrder.includes(sectionKey)) {
-      insertCustomSectionBeforePricing(opts.sectionOrder, sectionKey);
+    for (const customSection of opts.customSections) {
+      const sectionKey = `${CUSTOM_SECTION_PREFIX}${customSection.id}`;
+      if (!opts.sectionOrder.includes(sectionKey)) {
+        insertCustomSectionBeforePricing(opts.sectionOrder, sectionKey);
+      }
     }
   }
 

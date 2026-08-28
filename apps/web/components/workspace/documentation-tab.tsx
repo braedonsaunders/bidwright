@@ -56,6 +56,7 @@ interface DocumentationTabProps {
   selectedWorksheet?: FileBrowserProps["selectedWorksheet"];
   modelEditorChannelName?: string;
   onOpenInTakeoff?: FileBrowserProps["onOpenInTakeoff"];
+  onIncludeInQuotePdf?: FileBrowserProps["onIncludeInQuotePdf"];
   onSourceDocumentsChange?: (updater: (prev: SourceDocument[]) => SourceDocument[]) => void;
 }
 
@@ -80,6 +81,7 @@ export function DocumentationTab({
   selectedWorksheet,
   modelEditorChannelName,
   onOpenInTakeoff,
+  onIncludeInQuotePdf,
   onSourceDocumentsChange,
 }: DocumentationTabProps) {
   const [activeTab, setActiveTab] = useState<SubTab>("knowledge");
@@ -134,6 +136,7 @@ export function DocumentationTab({
             selectedWorksheet={selectedWorksheet}
             modelEditorChannelName={modelEditorChannelName}
             onOpenInTakeoff={onOpenInTakeoff}
+            onIncludeInQuotePdf={onIncludeInQuotePdf}
             onSourceDocumentsChange={onSourceDocumentsChange}
           />
         )}

@@ -46,7 +46,7 @@ const LABELS: Record<PdfSectionKey, string> = {
   labourSummary: "Labour by Phase",
   notes: "Notes",
   reportSections: "Report Sections",
-  schedule: "Project Schedule",
+  schedule: "Schedule (Gantt)",
 };
 
 function sections(
@@ -107,4 +107,77 @@ export function normalizePdfDocumentType(value: unknown): PdfDocumentType {
   if (value === "backup" || value === "sitecopy" || value === "main") return value;
   if (value === "detailed") return "backup";
   return "main";
+}
+
+export const PDF_ATTACHMENT_PREFIX = "attachment:";
+
+export type PdfFileAttachment = {
+  id: string;
+  title: string;
+  fileNodeId?: string;
+  documentId?: string;
+};
+
+export function getPdfAttachmentSectionKey(id: string) {
+  return `${PDF_ATTACHMENT_PREFIX}${id}`;
+}
+
+export function getPdfAttachmentSectionId(sectionKey: string): string | null {
+  return sectionKey.startsWith(PDF_ATTACHMENT_PREFIX)
+    ? sectionKey.slice(PDF_ATTACHMENT_PREFIX.length)
+    : null;
+}
+
+export function pdfAttachmentIdForSource(input: { fileNodeId?: string; documentId?: string }) {
+  if (input.fileNodeId) return `att_${input.fileNodeId}`;
+  if (input.documentId) return `att_${input.documentId}`;
+  return `att_${Date.now()}`;
+}
+
+export function insertPdfAttachmentAfterReport(order: string[], key: string) {
+  if (order.includes(key)) return;
+  const reportIdx = order.indexOf("reportSections");
+  const termsIdx = order.indexOf("terms");
+  if (reportIdx !== -1) order.splice(reportIdx + 1, 0, key);
+  else if (termsIdx !== -1) order.splice(termsIdx, 0, key);
+  else order.push(key);
+}
+
+export type QuotePdfSegment =
+  | { kind: "html"; sectionKeys: string[] }
+  | { kind: "attachment"; attachment: PdfFileAttachment }
+  | { kind: "schedule" };
+
+export function buildQuotePdfSegments(
+  sectionOrder: string[],
+  attachments: PdfFileAttachment[],
+): QuotePdfSegment[] {
+  const byId = new Map(attachments.map((attachment) => [attachment.id, attachment]));
+  const segments: QuotePdfSegment[] = [];
+  let htmlKeys: string[] = [];
+
+  const flushHtml = () => {
+    if (htmlKeys.length === 0) return;
+    segments.push({ kind: "html", sectionKeys: htmlKeys });
+    htmlKeys = [];
+  };
+
+  for (const key of sectionOrder) {
+    if (key === "schedule") {
+      flushHtml();
+      segments.push({ kind: "schedule" });
+      continue;
+    }
+    const attachmentId = getPdfAttachmentSectionId(key);
+    if (attachmentId) {
+      const attachment = byId.get(attachmentId);
+      if (!attachment) continue;
+      flushHtml();
+      segments.push({ kind: "attachment", attachment });
+      continue;
+    }
+    htmlKeys.push(key);
+  }
+  flushHtml();
+  return segments;
 }

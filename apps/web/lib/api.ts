@@ -3154,6 +3154,15 @@ export function getQuotePdfPreviewUrl(projectId: string, templateType: string, l
 }
 
 export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "main", layoutOptions?: Record<string, unknown>): Promise<string> {
+  const result = await fetchQuotePdfBlob(projectId, templateType, layoutOptions);
+  return result.url;
+}
+
+export async function fetchQuotePdfBlob(
+  projectId: string,
+  templateType = "main",
+  layoutOptions?: Record<string, unknown>,
+): Promise<{ url: string; warnings: string[] }> {
   let url = resolveApiUrl(`/projects/${projectId}/pdf/${templateType}`);
   if (layoutOptions) {
     url += `?layout=${encodeURIComponent(JSON.stringify(layoutOptions))}`;
@@ -3173,7 +3182,11 @@ export async function fetchQuotePdfBlobUrl(projectId: string, templateType = "ma
   if (signature !== "%PDF-") {
     throw new Error("PDF fetch returned invalid PDF bytes");
   }
-  return URL.createObjectURL(blob);
+  const warningHeader = res.headers.get("X-Bidwright-Pdf-Warnings") ?? "";
+  return {
+    url: URL.createObjectURL(blob),
+    warnings: warningHeader ? warningHeader.split(" | ").filter(Boolean) : [],
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -3774,6 +3787,10 @@ export async function listFileNodes(projectId: string, parentId?: string) {
 export async function getFileTree(projectId: string, scope?: string) {
   const qs = scope ? `?scope=${scope}` : "";
   return apiRequest<FileNode[]>(`/projects/${projectId}/files/tree${qs}`);
+}
+
+export async function listProjectDocuments(projectId: string) {
+  return apiRequest<SourceDocument[]>(`/projects/${projectId}/documents`);
 }
 
 export async function createFileNode(
