@@ -3,7 +3,7 @@
  *
  * Supports three providers:
  * - **llamaparse** — LlamaIndex Cloud API (recommended default)
- * - **local** — Pure JS fallback using `pdf-parse` (zero-cost, no API key)
+ * - **local** — Pure JS fallback using `pdf-parse`, then pdf.js reading-order text
  * - **vision** — Sends page images to a caller-supplied vision LLM
  *
  * The "docling" provider is accepted by the config type but not yet
@@ -410,41 +410,116 @@ async function llamaParsePdf(
 // Local Provider (pdf-parse)
 // ---------------------------------------------------------------------------
 
+export function layoutTextFromPdfJsItems(
+  items: Array<{ str?: string; transform?: number[]; width?: number }>,
+) {
+  const rows: { y: number; cells: { x: number; width: number; text: string }[] }[] = [];
+  for (const item of items) {
+    const text = String(item.str ?? '');
+    if (!text) continue;
+    const transform = Array.isArray(item.transform) ? item.transform : [];
+    const x = Number(transform[4] ?? 0);
+    const y = Number(transform[5] ?? 0);
+    const width = Number(item.width ?? 0);
+    const row = rows.find((candidate) => Math.abs(candidate.y - y) <= 3);
+    if (row) row.cells.push({ x, width, text });
+    else rows.push({ y, cells: [{ x, width, text }] });
+  }
+  rows.sort((a, b) => b.y - a.y);
+  return rows.map((row) => {
+    row.cells.sort((a, b) => a.x - b.x);
+    let line = '';
+    let lastEnd = Number.NEGATIVE_INFINITY;
+    for (const cell of row.cells) {
+      if (line && cell.x - lastEnd > 1.2) line += ' ';
+      line += cell.text;
+      lastEnd = cell.x + (cell.width || cell.text.length);
+    }
+    return line.replace(/[ \t]+$/g, '');
+  }).join('\n');
+}
+
+async function extractPdfJsLayoutPages(input: Buffer) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs') as {
+    getDocument: (options: { data: Uint8Array; disableWorker?: boolean; useSystemFonts?: boolean }) => {
+      promise: Promise<{
+        numPages: number;
+        getPage: (pageNumber: number) => Promise<{ getTextContent: () => Promise<{ items: Array<{ str?: string; transform?: number[]; width?: number }> }> }>;
+        destroy?: () => Promise<void>;
+      }>;
+    };
+  };
+  const loadingTask = pdfjs.getDocument({
+    data: new Uint8Array(input),
+    disableWorker: true,
+    useSystemFonts: true,
+  });
+  const pdf = await loadingTask.promise;
+  const pages: string[] = [];
+  try {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      pages.push(layoutTextFromPdfJsItems(content.items ?? []));
+    }
+  } finally {
+    await pdf.destroy?.();
+  }
+  return {
+    pages,
+    pageCount: pdf.numPages,
+    fullText: pages.filter((page) => page.trim()).join('\n\n'),
+  };
+}
+
 async function localParsePdf(
   input: Buffer,
   filename: string,
   config: PdfParserConfig,
 ): Promise<ParsedDocument> {
   const warnings: string[] = [];
-
-  let pdfParse: (buffer: Buffer) => Promise<{
-    numpages: number;
-    text: string;
-    info?: { Title?: string; Author?: string; CreationDate?: string };
-  }>;
+  let numpages = 1;
+  let fullText = '';
+  let info: { Title?: string; Author?: string; CreationDate?: string } | undefined;
 
   try {
     // Dynamic import — pdf-parse is an optional peer dependency
     // @ts-ignore -- pdf-parse has no type declarations in downstream consumers
     const mod = await import('pdf-parse');
-    pdfParse = (mod.default ?? mod) as typeof pdfParse;
-  } catch {
-    throw new Error(
-      'The "local" PDF parser requires the "pdf-parse" package. Install it with: pnpm add pdf-parse',
-    );
+    const pdfParse = (mod.default ?? mod) as (buffer: Buffer) => Promise<{
+      numpages: number;
+      text: string;
+      info?: { Title?: string; Author?: string; CreationDate?: string };
+    }>;
+    const result = await pdfParse(input);
+    numpages = result.numpages || 1;
+    fullText = result.text ?? '';
+    info = result.info;
+  } catch (err) {
+    warnings.push(`pdf-parse failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const result = await pdfParse(input);
-  const fullText = result.text ?? '';
+  let rawPages = fullText.split(/\f/).map((page) => page.trim());
+  if (rawPages.every((page) => !page) || fullText.trim().length < 200) {
+    try {
+      const pdfjs = await extractPdfJsLayoutPages(input);
+      if (pdfjs.fullText.trim().length > fullText.trim().length) {
+        rawPages = pdfjs.pages.map((page) => page.trim());
+        fullText = pdfjs.fullText;
+        numpages = pdfjs.pageCount;
+        warnings.push('Used pdf.js reading-order text because pdf-parse extracted little or no content.');
+      }
+    } catch (err) {
+      warnings.push(`pdf.js text extraction failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
-  // Split on form-feed characters which pdf-parse uses as page separators
-  const rawPages = fullText.split(/\f/);
   const pages: ParsedPage[] = [];
   const tables: ExtractedTable[] = [];
   const maxPages = config.options?.maxPages ?? Infinity;
 
   for (let i = 0; i < Math.min(rawPages.length, maxPages); i++) {
-    const pageText = rawPages[i].trim();
+    const pageText = rawPages[i]?.trim() ?? '';
     if (!pageText) continue;
 
     const pageNumber = i + 1;
@@ -456,7 +531,7 @@ async function localParsePdf(
   }
 
   // Detect if this might be a scanned PDF (very little text per page)
-  const avgCharsPerPage = fullText.length / Math.max(result.numpages, 1);
+  const avgCharsPerPage = fullText.length / Math.max(numpages, 1);
   const hasOcr = avgCharsPerPage < 100;
   if (hasOcr) {
     warnings.push(
@@ -466,14 +541,14 @@ async function localParsePdf(
   }
 
   return {
-    title: result.info?.Title || filename.replace(/\.[^.]+$/, ''),
+    title: info?.Title || filename.replace(/\.[^.]+$/, ''),
     content: fullText,
     pages,
     tables,
     metadata: {
-      pageCount: result.numpages,
-      author: result.info?.Author,
-      createdDate: result.info?.CreationDate,
+      pageCount: numpages,
+      author: info?.Author,
+      createdDate: info?.CreationDate,
       fileSize: input.byteLength,
       mimeType: 'application/pdf',
       hasImages: false,
@@ -1104,7 +1179,7 @@ async function hybridParsePdf(
         const azureResult = await azureParsePdf(input, filename, config);
         // Merge Azure's structured data into the local result
         if (azureResult.tables.length > 0) {
-          localResult.tables = azureResult.tables;
+          localResult.tables = [...localResult.tables, ...azureResult.tables];
         }
         if (azureResult.metadata.keyValuePairs) {
           localResult.metadata.keyValuePairs = azureResult.metadata.keyValuePairs;

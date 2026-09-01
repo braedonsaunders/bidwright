@@ -100,6 +100,8 @@ jobs:
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/pdf-service.test.ts
           apps/api/src/services/pdf-attachments.test.ts
+          apps/api/src/services/vendor-evidence-lines.test.ts
+          packages/ingestion/src/pdf-parser.test.ts
           packages/domain/src/pdf-layout.test.ts
           packages/vision/src/python-runtime.test.ts
           apps/api/src/services/revision-copy.test.ts

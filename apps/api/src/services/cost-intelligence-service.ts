@@ -2,7 +2,7 @@ import type { PrismaClient } from "@bidwright/db";
 import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { resolve } from "node:path";
-import { createPdfParser, type ExtractedTable, type ParsedDocument } from "@bidwright/ingestion";
+import { createPdfParser, type ParsedDocument } from "@bidwright/ingestion";
 import * as XLSX from "xlsx";
 import {
   deriveEffectiveCostFromObservations,
@@ -16,6 +16,10 @@ import {
 import { prisma as sharedPrisma } from "@bidwright/db";
 import { createId } from "../calc-utils.js";
 import { resolveApiPath, sanitizeFileName } from "../paths.js";
+import {
+  extractVendorEvidenceLines,
+  isCredibleResourceMatch,
+} from "./vendor-evidence-lines.js";
 
 export interface CreateResourceCatalogItemInput {
   catalogItemId?: string | null;
@@ -716,17 +720,20 @@ function extractLabeledValue(text: string, patterns: RegExp[]): string {
 }
 
 function inferVendorNameFromText(text: string) {
+  if (/\bpinacle\b/i.test(text)) return "Pinacle";
   const labeled = extractLabeledValue(text, [
-    /\b(?:vendor|supplier|merchant|remit\s+to|sold\s+by|from)\b\s*[:#-]?\s*(.{3,120})$/i,
+    /\b(?:vendor|supplier|merchant|remit\s+to|sold\s+by)\b\s*[:#-]?\s*(.{3,120})$/i,
   ]);
-  if (labeled) return labeled.split(/\s{2,}|\|/)[0]!.trim();
+  if (labeled && !/^(sold\s+to|shipped\s+to|rassaun)\b/i.test(labeled)) {
+    return labeled.split(/\s{2,}|\|/)[0]!.trim();
+  }
 
   const firstUsefulLine = text
     .split(/\r?\n/)
     .map((line) => line.trim())
     .find((line) => (
       line.length >= 3 &&
-      !/invoice|receipt|statement|credit\s+memo|purchase\s+order|page\s+\d+|date|qty|quantity|description|subtotal|total/i.test(line)
+      !/invoice|receipt|statement|credit\s+memo|purchase\s+order|quotation|q u o t a t i o n|page\s+\d+|date|qty|quantity|description|subtotal|total|sold\s+to|shipped\s+to/i.test(line)
     ));
   return firstUsefulLine ?? "";
 }
@@ -749,12 +756,12 @@ function inferDocumentNumber(doc: ParsedDocument) {
 
 function inferDocumentNumberFromText(text: string) {
   const labeled = extractLabeledValue(text, [
-    /\b(?:invoice|receipt|statement|document)\s*(?:no\.?|number|#|id)\s*[:#-]?\s*([A-Z0-9][A-Z0-9-]{1,})\b/i,
-    /\b(?:invoice|receipt|statement|document)\s*[:#-]\s*([A-Z0-9][A-Z0-9-]{1,})\b/i,
+    /\b(?:invoice|receipt|statement|document|quote|quotation)\s*(?:no\.?|number|#|id)\s*[:#-]?\s*([A-Z0-9][A-Z0-9-]{1,})\b/i,
+    /\b(?:invoice|receipt|statement|document|quote|quotation)\s*[:#-]\s*([A-Z0-9][A-Z0-9-]{1,})\b/i,
     /\b(?:inv|rcpt)\b\s*[:#-]?\s*([A-Z0-9][A-Z0-9-]{2,})/i,
   ]);
-  if (/^(date|total|subtotal|amount|due)$/i.test(labeled)) return "";
-  return labeled;
+  if (labeled && !/^(date|total|subtotal|amount|due)$/i.test(labeled)) return labeled;
+  return text.match(/\b(T\d{5,})\b/)?.[1] ?? "";
 }
 
 function inferDocumentDate(doc: ParsedDocument) {
@@ -854,100 +861,6 @@ function contextForLine(contexts: Map<number | null, VendorEvidencePageContext>,
 
 function columnIndex(headers: string[], patterns: RegExp[]) {
   return headers.findIndex((header) => patterns.some((pattern) => pattern.test(header.toLowerCase())));
-}
-
-function extractLinesFromTables(
-  tables: ExtractedTable[],
-  currencyForPage: (pageNumber: number) => string,
-): VendorEvidenceLineCandidate[] {
-  const lines: VendorEvidenceLineCandidate[] = [];
-  for (const table of tables) {
-    const headers = table.headers.map((header) => header.trim());
-    const descIdx = columnIndex(headers, [/description/, /\bitem\b/, /product/, /material/, /service/, /details?/]);
-    const skuIdx = columnIndex(headers, [/sku/, /part/, /item\s*#/, /catalog/, /product\s*code/, /\bcode\b/, /stock/]);
-    const qtyIdx = columnIndex(headers, [/^qty\b/, /quantity/, /\bqnty\b/]);
-    const uomIdx = columnIndex(headers, [/^uom$/, /unit of measure/, /\bunit\b/, /\bum\b/]);
-    const unitIdx = columnIndex(headers, [/unit\s*(price|cost|rate)/, /price\s*each/, /cost\s*each/, /\brate\b/]);
-    const totalIdx = columnIndex(headers, [/extended/, /line\s*total/, /\btotal\b/, /amount/, /net/]);
-    const currency = currencyForPage(table.pageNumber);
-
-    if (descIdx < 0 || (unitIdx < 0 && totalIdx < 0)) continue;
-
-    for (const row of table.rows) {
-      const description = (row[descIdx] ?? "").trim();
-      if (!description || /subtotal|total|tax|freight|shipping|balance|amount due/i.test(description)) continue;
-      const quantity = cleanQuantity(qtyIdx >= 0 ? row[qtyIdx] : "") ?? 1;
-      const unitCostFromColumn = cleanMoney(unitIdx >= 0 ? row[unitIdx] : "");
-      const lineTotal = cleanMoney(totalIdx >= 0 ? row[totalIdx] : "");
-      const unitCost = unitCostFromColumn ?? (lineTotal != null && quantity > 0 ? lineTotal / quantity : null);
-      if (unitCost == null || unitCost < 0) continue;
-      lines.push({
-        description,
-        vendorSku: skuIdx >= 0 ? (row[skuIdx] ?? "").trim() : "",
-        quantity,
-        uom: normalizeUom(uomIdx >= 0 ? row[uomIdx] : ""),
-        unitCost,
-        unitPrice: null,
-        currency,
-        lineTotal,
-        pageNumber: table.pageNumber,
-        source: "table",
-        rawText: `${headers.join(" | ")}\n${row.join(" | ")}`,
-        confidence: 0.82,
-      });
-    }
-  }
-  return lines;
-}
-
-function extractLinesFromText(text: string, currency: string, pageNumber?: number): VendorEvidenceLineCandidate[] {
-  const lines: VendorEvidenceLineCandidate[] = [];
-  const money = String.raw`(?:C\$|US\$|[$€£])?\s*\d[\d,]*(?:\.\d{2})?`;
-  const qty = String.raw`\d+(?:\.\d+)?`;
-  const uom = String.raw`EA|EACH|FT|LF|SF|SY|CY|HR|DAY|WK|MO|LB|KG|TON|GAL|LOT|LS|PKG|BOX|BX|PAIR|PR|SET`;
-  const pattern = new RegExp(String.raw`^(.{4,120}?)\s+(${qty})\s+(${uom})\s+(${money})\s+(${money})(?:\s|$)`, "i");
-  const runningContext: Partial<VendorEvidencePageContext> = {};
-
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.replace(/\s+/g, " ").trim();
-    if (!line || /subtotal|total|tax|freight|shipping|amount due/i.test(line)) continue;
-    const vendorName = extractLabeledValue(line, [
-      /\b(?:vendor|supplier|merchant|remit\s+to|sold\s+by|from)\b\s*[:#-]?\s*(.{3,120})$/i,
-    ]);
-    if (vendorName) runningContext.vendorName = vendorName;
-    const documentNumber = inferDocumentNumberFromText(line);
-    if (documentNumber) runningContext.documentNumber = documentNumber;
-    const documentDate = inferDocumentDateFromText(line);
-    if (documentDate) runningContext.documentDate = documentDate;
-    const documentType = inferDocumentTypeFromText(line);
-    if (documentType !== "vendor_pdf") runningContext.documentType = documentType;
-
-    const match = line.match(pattern);
-    if (!match) continue;
-    const quantity = cleanQuantity(match[2]) ?? 1;
-    const unitCost = cleanMoney(match[4]);
-    const lineTotal = cleanMoney(match[5]);
-    if (unitCost == null || unitCost < 0) continue;
-    lines.push({
-      description: match[1]!.trim(),
-      vendorSku: "",
-      quantity,
-      uom: normalizeUom(match[3]),
-      unitCost,
-      unitPrice: null,
-      currency: inferCurrency(line, currency),
-      lineTotal,
-      pageNumber,
-      source: "text",
-      rawText: line,
-      confidence: 0.62,
-      vendorName: runningContext.vendorName,
-      documentNumber: runningContext.documentNumber,
-      documentDate: runningContext.documentDate ?? null,
-      documentType: runningContext.documentType,
-    });
-  }
-  return lines;
 }
 
 interface SpreadsheetEvidenceLine {
@@ -1091,25 +1004,6 @@ function parseSpreadsheetEvidenceFile(file: VendorPdfIngestFile, fallbackCurrenc
   return { lines, sheets, warnings };
 }
 
-function dedupeLineCandidates(lines: VendorEvidenceLineCandidate[]) {
-  const seen = new Set<string>();
-  const deduped: VendorEvidenceLineCandidate[] = [];
-  for (const line of lines) {
-    const key = [
-      normalizeResourceName(line.description),
-      line.vendorSku.toLowerCase(),
-      line.quantity,
-      line.uom,
-      line.unitCost.toFixed(4),
-      line.lineTotal?.toFixed(2) ?? "",
-    ].join("|");
-    if (seen.has(key)) continue;
-    seen.add(key);
-    deduped.push(line);
-  }
-  return deduped;
-}
-
 function makeFingerprint(organizationId: string, fileName: string, vendorName: string, documentNumber: string, line: VendorEvidenceLineCandidate) {
   return createHash("sha256")
     .update([
@@ -1160,25 +1054,36 @@ export class CostIntelligenceService {
         provider: hasAzure ? "hybrid" : "local",
         azureEndpoint: options.azureConfig?.endpoint,
         azureKey: options.azureConfig?.key,
-        azureModel: "prebuilt-invoice",
+        azureModel: "prebuilt-layout",
         options: { tableExtractionEnabled: true, outputFormat: "text" },
       }),
     };
   }
 
   private async findResourceForEvidenceLine(organizationId: string, line: Pick<VendorEvidenceLineCandidate, "description" | "vendorSku">) {
-    const normalizedName = normalizeResourceName(line.description);
-    const existing = await (this.db as any).resourceCatalogItem.findFirst({
-      where: {
-        organizationId,
-        OR: [
-          { normalizedName },
-          ...(line.vendorSku ? [{ code: line.vendorSku }] : []),
-        ],
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-    return existing ? mapResource(existing) : null;
+    const sku = line.vendorSku.trim();
+    const existing = sku
+      ? await (this.db as any).resourceCatalogItem.findFirst({
+          where: {
+            organizationId,
+            OR: [
+              { code: { equals: sku, mode: "insensitive" } },
+              { manufacturerPartNumber: { equals: sku, mode: "insensitive" } },
+              { aliases: { has: sku } },
+            ],
+          },
+          orderBy: { updatedAt: "desc" },
+        })
+      : await (this.db as any).resourceCatalogItem.findFirst({
+          where: {
+            organizationId,
+            normalizedName: normalizeResourceName(line.description),
+          },
+          orderBy: { updatedAt: "desc" },
+        });
+    if (!existing) return null;
+    const resource = mapResource(existing);
+    return isCredibleResourceMatch(resource, line) ? resource : null;
   }
 
   private async findExistingCostBasis(organizationId: string, resourceId: string | null, currency: string, vendorName?: string) {
@@ -1769,16 +1674,10 @@ export class CostIntelligenceService {
         }
 
         const pageContexts = buildPageContexts(doc, fallbackCurrency);
-        const lines = dedupeLineCandidates([
-          ...extractLinesFromTables(doc.tables, (pageNumber) => pageContexts.get(pageNumber)?.currency ?? fallbackCurrency),
-          ...(doc.pages.length > 0
-            ? doc.pages.flatMap((page) => extractLinesFromText(
-                page.content,
-                pageContexts.get(page.pageNumber)?.currency ?? fallbackCurrency,
-                page.pageNumber,
-              ))
-            : extractLinesFromText(doc.content, pageContexts.get(null)?.currency ?? fallbackCurrency)),
-        ]);
+        const lines = extractVendorEvidenceLines(
+          doc,
+          (pageNumber) => pageContexts.get(pageNumber)?.currency ?? fallbackCurrency,
+        );
         const lineContexts = lines.map((line) => contextForLine(pageContexts, line));
 
         fileResult.vendorName = summarizeDistinct(lineContexts.map((context) => context.vendorName), "Unknown vendor", "Multiple vendors");
@@ -2467,16 +2366,10 @@ export class CostIntelligenceService {
         }
 
         const pageContexts = buildPageContexts(doc, fallbackCurrency);
-        const lines = dedupeLineCandidates([
-          ...extractLinesFromTables(doc.tables, (pageNumber) => pageContexts.get(pageNumber)?.currency ?? fallbackCurrency),
-          ...(doc.pages.length > 0
-            ? doc.pages.flatMap((page) => extractLinesFromText(
-                page.content,
-                pageContexts.get(page.pageNumber)?.currency ?? fallbackCurrency,
-                page.pageNumber,
-              ))
-            : extractLinesFromText(doc.content, pageContexts.get(null)?.currency ?? fallbackCurrency)),
-        ]);
+        const lines = extractVendorEvidenceLines(
+          doc,
+          (pageNumber) => pageContexts.get(pageNumber)?.currency ?? fallbackCurrency,
+        );
         const lineContexts = lines.map((line) => contextForLine(pageContexts, line));
 
         fileResult.vendorName = summarizeDistinct(lineContexts.map((context) => context.vendorName), "Unknown vendor", "Multiple vendors");
@@ -2882,18 +2775,8 @@ export class CostIntelligenceService {
     organizationId: string,
     line: VendorEvidenceLineCandidate,
   ): Promise<{ resource: ResourceCatalogItem; created: boolean }> {
-    const normalizedName = normalizeResourceName(line.description);
-    const existing = await (this.db as any).resourceCatalogItem.findFirst({
-      where: {
-        organizationId,
-        OR: [
-          { normalizedName },
-          ...(line.vendorSku ? [{ code: line.vendorSku }] : []),
-        ],
-      },
-      orderBy: { updatedAt: "desc" },
-    });
-    if (existing) return { resource: mapResource(existing), created: false };
+    const existing = await this.findResourceForEvidenceLine(organizationId, line);
+    if (existing) return { resource: existing, created: false };
 
     const resource = await this.createResource(organizationId, {
       resourceType: "material",

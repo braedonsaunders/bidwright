@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { polygonToBbox } from "./pdf-parser";
+import { layoutTextFromPdfJsItems, polygonToBbox } from "./pdf-parser";
 
 test("polygonToBbox: clockwise polygon → axis-aligned bbox", () => {
   // Standard top-left, top-right, bottom-right, bottom-left at (1,2)..(4,5)
@@ -40,4 +40,14 @@ test("polygonToBbox: degenerate vertical line (zero width) returns undefined", (
 
 test("polygonToBbox: NaN input returns undefined", () => {
   assert.equal(polygonToBbox([1, NaN, 3, 4, 5, 6, 7, 8]), undefined);
+});
+
+test("layoutTextFromPdfJsItems keeps left-to-right cells on the same baseline", () => {
+  const text = layoutTextFromPdfJsItems([
+    { str: "16", transform: [1, 0, 0, 1, 10, 40], width: 8 },
+    { str: "EA", transform: [1, 0, 0, 1, 22, 40], width: 10 },
+    { str: "2 10S 90 DEG ELBOW L/R", transform: [1, 0, 0, 1, 40, 41], width: 80 },
+    { str: "304LWP10902", transform: [1, 0, 0, 1, 140, 40], width: 40 },
+  ]);
+  assert.equal(text, "16 EA 2 10S 90 DEG ELBOW L/R 304LWP10902");
 });
