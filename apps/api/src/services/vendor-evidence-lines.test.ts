@@ -1,11 +1,9 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
 import test from "node:test";
 
 import {
   extractLinesFromTables,
   extractLinesFromText,
-  extractVendorEvidenceLines,
   isCredibleResourceMatch,
   preferSkuBackedLines,
 } from "./vendor-evidence-lines.js";
@@ -200,40 +198,4 @@ test("jammed pdf-parse reading order recovers Pinacle lines", () => {
     ["304LWP10903", 8, "EA", 16.23],
     ["304LWP10T2", 8, "EA", 12.8],
   ]);
-});
-
-test("the attached Pinacle quotation PDF extracts eleven cost lines", async () => {
-  const pdfPath = "/Users/braedonsaunders/.bb/thread-storage/thr_i2qrj8ac6e/Attachments/Quote_T390411_RASSAUN_20260831_15_23.pdf";
-  let buffer: Buffer;
-  try {
-    buffer = await readFile(pdfPath);
-  } catch {
-    return;
-  }
-  let createPdfParser: typeof import("@bidwright/ingestion")["createPdfParser"];
-  try {
-    ({ createPdfParser } = await import("@bidwright/ingestion"));
-  } catch {
-    return;
-  }
-  const doc = await createPdfParser({ provider: "local", options: { tableExtractionEnabled: true, outputFormat: "text" } })
-    .parse(buffer, "Quote_T390411_RASSAUN_20260831_15_23.pdf");
-  const lines = extractVendorEvidenceLines(doc, () => "CAD");
-  assert.equal(lines.length, 11, lines.map((line) => `${line.vendorSku}:${line.quantity}${line.uom}`).join(", "));
-  assert.deepEqual(
-    lines.map((line) => [line.vendorSku, line.quantity, line.uom, Number(line.unitCost.toFixed(2))]),
-    [
-      ["304LPW102", 120, "FT", 8.1],
-      ["304LPW103", 80, "FT", 12.1],
-      ["304LPW1015", 40, "FT", 5.3],
-      ["304LFAWN102", 20, "EA", 32.9],
-      ["304LFAWN103", 12, "EA", 55.24],
-      ["304LFAWN1015", 8, "EA", 22.95],
-      ["304LWP10902", 16, "EA", 7.32],
-      ["304LWS10452", 8, "EA", 7.22],
-      ["304LWP10CR200015", 4, "EA", 7.36],
-      ["304LWP10903", 8, "EA", 16.23],
-      ["304LWP10T2", 8, "EA", 12.8],
-    ],
-  );
 });
