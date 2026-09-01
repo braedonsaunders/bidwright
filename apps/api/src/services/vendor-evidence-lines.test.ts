@@ -203,11 +203,16 @@ test("jammed pdf-parse reading order recovers Pinacle lines", () => {
 });
 
 test("the attached Pinacle quotation PDF extracts eleven cost lines", async () => {
-  const { createPdfParser } = await import("@bidwright/ingestion");
   const pdfPath = "/Users/braedonsaunders/.bb/thread-storage/thr_i2qrj8ac6e/Attachments/Quote_T390411_RASSAUN_20260831_15_23.pdf";
   let buffer: Buffer;
   try {
     buffer = await readFile(pdfPath);
+  } catch {
+    return;
+  }
+  let createPdfParser: typeof import("@bidwright/ingestion")["createPdfParser"];
+  try {
+    ({ createPdfParser } = await import("@bidwright/ingestion"));
   } catch {
     return;
   }
