@@ -9,6 +9,7 @@ import {
   normalizeLocale,
   type SupportedLocale,
 } from "@/lib/i18n";
+import { resolveIanaTimeZone } from "@/lib/time-zone";
 import enMessages from "@/messages/en.json";
 import esMessages from "@/messages/es.json";
 import frCaMessages from "@/messages/fr-CA.json";
@@ -68,7 +69,12 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, [locale]);
 
   return (
-    <NextIntlClientProvider locale={locale} messages={mergeMessages(messages[DEFAULT_LOCALE], messages[locale] ?? {})}>
+    <NextIntlClientProvider
+      locale={locale}
+      timeZone={resolveIanaTimeZone()}
+      now={new Date()}
+      messages={mergeMessages(messages[DEFAULT_LOCALE], messages[locale] ?? {})}
+    >
       {children}
     </NextIntlClientProvider>
   );

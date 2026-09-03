@@ -140,6 +140,12 @@ jobs:
           apps/api/src/routes/chunked-upload-routes.test.ts
           apps/web/lib/schedule-utils.test.ts
           apps/web/lib/review-labels.test.ts
+          apps/web/lib/time-zone.test.ts
+          apps/desktop/src/time-zone.test.ts
+          apps/desktop/src/process-cleanup.test.ts
+          apps/web/lib/time-zone.test.ts
+          apps/desktop/src/time-zone.test.ts
+          apps/desktop/src/process-cleanup.test.ts
 
       # Web component tests that import through the "@/" path alias only
       # resolve with apps/web as the working directory.
