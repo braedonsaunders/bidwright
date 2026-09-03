@@ -31,6 +31,8 @@ import { fileURLToPath } from "node:url";
 
 import { getAvailablePort, waitForHttpReady } from "./port-utils.js";
 import { initPgvectorIfAvailable } from "./pgvector-init.js";
+import { killProcessesUsingPath } from "./process-cleanup.js";
+import { resolveIanaTimeZone } from "./time-zone.js";
 import { wireAutoUpdater } from "./auto-updater.js";
 
 // ── Constants ─────────────────────────────────────────────────────
@@ -120,6 +122,18 @@ async function verifyClusterEncoding(password: string, port: number, dbName: str
   }
 }
 
+function sidecarEnv(extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    ELECTRON_RUN_AS_NODE: "1",
+    NODE_ENV: "production",
+    // next-intl throws ENVIRONMENT_FALLBACK when TZ is missing or is a
+    // Windows display name. Pin an IANA zone for both sidecars.
+    TZ: resolveIanaTimeZone(),
+    ...extra,
+  };
+}
+
 function killProcessTree(child: ChildProcess | null): void {
   if (!child || child.killed || !child.pid) return;
   if (process.platform === "win32") {
@@ -201,6 +215,10 @@ async function bootPackaged(): Promise<BootedServers> {
 
   // 1. Embedded Postgres ----------------------------------------------------
   const databaseDir = userDataPath("postgres");
+  // A previous Windows session can leave postgres.exe / node holding this
+  // directory after the UI is gone. Clear those before we try to bind it.
+  killProcessesUsingPath(databaseDir);
+  killProcessesUsingPath(userDataPath());
   await mkdir(databaseDir, { recursive: true });
   const pgPort = await getAvailablePort();
   const pgPassword = process.env.BIDWRIGHT_DESKTOP_PG_PASSWORD || "bidwright";
@@ -362,11 +380,7 @@ async function bootPackaged(): Promise<BootedServers> {
 
   const apiProcess = spawn(process.execPath, [apiServerScript], {
     cwd: dirname(apiServerScript),
-    env: {
-      ...process.env,
-      ELECTRON_RUN_AS_NODE: "1",
-      NODE_ENV: "production",
-    },
+    env: sidecarEnv(),
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
     windowsHide: true,
@@ -448,18 +462,12 @@ async function bootPackaged(): Promise<BootedServers> {
 
   const webProcess = spawn(process.execPath, [standaloneServer], {
     cwd: dirname(standaloneServer),
-    env: {
-      ...process.env,
-      // ELECTRON_RUN_AS_NODE makes Electron's own node binary behave
-      // like vanilla node — no GUI startup. Avoids bundling a separate
-      // node binary for the web sidecar.
-      ELECTRON_RUN_AS_NODE: "1",
+    env: sidecarEnv({
       PORT: String(webPort),
       HOSTNAME: "127.0.0.1",
       NEXT_PUBLIC_API_BASE_URL: apiUrl,
       INTERNAL_API_BASE_URL: apiUrl,
-      NODE_ENV: "production",
-    },
+    }),
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
     windowsHide: true,
@@ -705,8 +713,12 @@ async function shutdown(): Promise<void> {
   killProcessTree(booted?.webProcess ?? null);
   killProcessTree(booted?.apiProcess ?? null);
   if (booted?.pg) {
-    await booted.pg.stop().catch(() => {});
+    await Promise.race([
+      booted.pg.stop().catch(() => {}),
+      new Promise((resolveFn) => setTimeout(resolveFn, 5_000)),
+    ]);
   }
+  killProcessesUsingPath(userDataPath("postgres"));
   booted = null;
 }
 

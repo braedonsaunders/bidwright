@@ -2,7 +2,7 @@
   "name": "bidwright",
   "private": true,
   "type": "module",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "author": "Braedon Saunders",
   "license": "AGPL-3.0-only",
   "packageManager": "pnpm@10.30.3",
