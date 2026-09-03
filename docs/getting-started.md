@@ -56,6 +56,12 @@ Feature overview is in the [README](../README.md#features).
 
 Optional: add Anthropic, OpenAI, or other provider keys under **Settings → Integrations** if you want agent features that need a frontier LLM. Local Ollama embeddings still power knowledge retrieval without those keys on the Docker launcher path.
 
+## If the desktop app will not reopen
+
+On Windows, closing the window can leave `postgres.exe` or the web sidecar running. In Task Manager, end Bidwright, `postgres.exe`, and any leftover node still under Bidwright, then launch again.
+
+Logs live in `%APPDATA%\Bidwright\logs`. If a second launch dies with `ENVIRONMENT_FALLBACK` after Next says ready, that is usually this leftover-process case. Paste the newest `web-*.log` on a GitHub issue if it still fails.
+
 ## Develop from source
 
 For contributors editing code. Needs Node.js 20+, pnpm 10+, and Docker Desktop.
