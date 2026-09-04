@@ -117,6 +117,8 @@ iwr -useb https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scrip
 curl -fsSL https://raw.githubusercontent.com/braedonsaunders/bidwright/main/scripts/launcher/install.sh | bash
 ```
 
+Prefer the desktop installer, or need a short first-run walkthrough (wizard, sample data, first project)? See **[Getting started](docs/getting-started.md)**.
+
 ## What's in the box
 
 | Area | Live capabilities |
