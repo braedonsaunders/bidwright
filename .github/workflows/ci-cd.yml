@@ -437,17 +437,39 @@ jobs:
           COMPOSE_ID="$(dq "SELECT \"composeId\" FROM compose WHERE name='${COMPOSE_NAME}';")"
           PREV_DEPLOY="$(dq "SELECT \"deploymentId\" FROM deployment WHERE \"composeId\"='${COMPOSE_ID}' ORDER BY \"createdAt\" DESC LIMIT 1;")"
 
-          echo "Triggering Dokploy redeploy…"
+          echo "Triggering Dokploy redeploy for composeId '${COMPOSE_ID:-<empty>}'…"
+          if [ -z "${COMPOSE_ID}" ]; then
+            echo "::error title=Compose row not found::No compose named '${COMPOSE_NAME}' in dokploy-postgres, so there is nothing to deploy."
+            exit 1
+          fi
           # Use Dokploy's authenticated compose API. Refresh-token webhooks can
           # acknowledge a request without creating a deployment when the
           # control-plane queue is unhealthy; the supported API also gives us
           # a stable authorization boundary for GitHub Actions.
-          response=$(curl -sf -X POST --max-time 300 \
+          #
+          # Capture the status separately instead of leaning on `curl -f`: that
+          # flag turns every rejection into a bare exit 22 with no body, which
+          # makes an expired API key indistinguishable from a missing compose
+          # or an unhealthy control plane.
+          HTTP_STATUS="$(curl -s -o dokploy-deploy-response.json -w '%{http_code}' \
+            -X POST --max-time 300 \
             -H "x-api-key: ${DOKPLOY_API_KEY}" \
             -H 'Content-Type: application/json' \
             --data "{\"composeId\":\"${COMPOSE_ID}\",\"title\":\"Deploy Bidwright ${NEW_TAG}\",\"description\":\"GitHub Actions ${GITHUB_RUN_ID}\"}" \
-            "http://dokploy:3000/api/compose.deploy")
-          echo "Dokploy response: $response"
+            "http://dokploy:3000/api/compose.deploy" || echo 000)"
+          echo "Dokploy responded HTTP ${HTTP_STATUS}: $(head -c 500 dokploy-deploy-response.json 2>/dev/null)"
+          case "${HTTP_STATUS}" in
+            2*) : ;;
+            000)
+              echo "::error title=Dokploy unreachable::compose.deploy never answered. Check that dokploy:3000 is up and on this runner's network."
+              exit 1 ;;
+            401|403)
+              echo "::error title=Dokploy rejected the API key::compose.deploy returned ${HTTP_STATUS}. Rotate DOKPLOY_API_KEY in the repo secrets from Dokploy → Settings → API/CLI."
+              exit 1 ;;
+            *)
+              echo "::error title=Dokploy refused the deploy::compose.deploy returned ${HTTP_STATUS}. See the body above; prod is still on the previous image."
+              exit 1 ;;
+          esac
 
           # ── Verify the deploy actually applied ──────────────────────────────
           # Prove the new API image is actually serving production traffic. Raw
