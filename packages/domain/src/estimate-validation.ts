@@ -786,6 +786,16 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
     weight: 10,
     ruleSets: ["default", "readiness"],
     validate(context) {
+      // Rollups compute extended hours as tierUnits × quantity, so tierUnits
+      // must be PER UNIT. The classic mistake is pasting the row's already
+      // extended hours in, which then gets multiplied a second time.
+      //
+      // The tell we can prove: an hour-denominated row. One hour of quantity
+      // buys at most a crew's worth of labour hours, so a per-unit figure of a
+      // full shift or more is not a crew factor, it is a double count. Rows
+      // measured in feet, each, or pounds carry no such ceiling — a chiller
+      // legitimately takes 200 hours per unit — so they are left alone rather
+      // than flagged on a guess.
       const issues: EstimateValidationIssueInput[] = [];
       for (const row of context.rows) {
         const quantity = toFiniteNumber(row.item.quantity);
@@ -794,13 +804,13 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         }
 
         const tierTotal = sumPositiveTierUnits(row.item.tierUnits);
-        if (tierTotal <= 0) {
+        if (tierTotal <= 0 || !isTimeDenominatedUom(row.item.uom)) {
           continue;
         }
 
-        if (nearlyEqual(tierTotal * quantity, tierTotal, Math.max(0.25, tierTotal * 0.02))) {
+        if (tierTotal >= MAX_PLAUSIBLE_HOURS_PER_HOUR) {
           issues.push({
-            message: `Tier units for "${displayItemName(row.item)}" appear to already include the multiplier while quantity is ${quantity}.`,
+            message: `Tier units for "${displayItemName(row.item)}" carry ${roundNumber(tierTotal)} hours per ${normalizeText(row.item.uom).toUpperCase()} while quantity is ${quantity}, so they appear to already include the multiplier.`,
             element: itemRef(row),
             suggestions: [
               "Confirm tierUnits are per-unit hours; BidWright multiplies tierUnits by quantity during rollups.",
@@ -808,6 +818,7 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
             ],
             details: {
               quantity,
+              uom: normalizeText(row.item.uom),
               tierUnitsTotal: roundNumber(tierTotal),
               projectedExtendedHours: roundNumber(tierTotal * quantity),
             },
@@ -1333,8 +1344,16 @@ function sumPositiveTierUnits(tierUnits: EstimateValidationWorksheetItemLike["ti
   }, 0);
 }
 
-function nearlyEqual(left: number, right: number, tolerance: number) {
-  return Math.abs(left - right) <= tolerance;
+/** Units whose quantity is itself time, so tier hours are hours-per-hour. */
+const TIME_DENOMINATED_UOMS = new Set(["hr", "hrs", "hour", "hours", "mh", "mhr", "manhour", "manhours", "crewhour", "crewhours"]);
+
+/** A crew of eight on one hour of work. Past that, tier units for a
+ *  time-denominated row are extended hours, not a crew factor. */
+const MAX_PLAUSIBLE_HOURS_PER_HOUR = 8;
+
+function isTimeDenominatedUom(uom: unknown): boolean {
+  const normalized = normalizeText(uom).toLowerCase().replace(/[^a-z]/g, "");
+  return TIME_DENOMINATED_UOMS.has(normalized);
 }
 
 function itemSignature(item: EstimateValidationWorksheetItemLike) {

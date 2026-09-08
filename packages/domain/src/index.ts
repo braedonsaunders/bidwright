@@ -35,4 +35,5 @@ export * from "./model-ingest";
 export * from "./model-topology";
 export * from "./file-ingest";
 export * from "./quote-number";
+export * from "./revision-compare";
 export * from "./provenance-labels";

@@ -7,6 +7,7 @@ import path from "node:path";
 import {
   calculateTotals,
   buildProjectWorkspace,
+  buildQuoteRevisionComparison,
   buildSummaryBuilderConfig,
   computeSummaryRows,
   createSummaryBuilderPreset,
@@ -6301,6 +6302,18 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
     return buildProjectWorkspace(store, projectId);
+  }
+
+  /**
+   * Compare two revisions of this project's quote. Both sides are priced from
+   * the same snapshot through the shared calc path, so the comparison reflects
+   * what each revision is worth today rather than the totals frozen on the row
+   * when it was last saved.
+   */
+  async compareRevisions(projectId: string, baseRevisionId: string, headRevisionId: string) {
+    await this.requireProject(projectId);
+    const store = await this.buildStoreSnapshot(projectId);
+    return buildQuoteRevisionComparison(store, baseRevisionId, headRevisionId);
   }
 
   async getEstimateTotals(projectId: string) {

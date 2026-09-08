@@ -156,6 +156,54 @@ test("default rules validate rate schedule IDs, tier payloads, and quantity mult
   assert.ok(result.issues.some((issue) => issue.message.includes("unknown tier")));
 });
 
+test("suspicious tier hours are judged per unit, not by row size", () => {
+  const labourRow = (overrides: Record<string, unknown>) => ({
+    id: "li-1",
+    worksheetId: "ws-1",
+    category: "Labour",
+    entityType: "Labour",
+    entityName: "Electrician",
+    description: "Rough-in",
+    uom: "HR",
+    cost: 80,
+    price: 120,
+    rateScheduleItemId: "rsi-electrician",
+    sourceNotes: "Crew plan.",
+    ...overrides,
+  });
+  const ruleIdsFor = (item: Record<string, unknown>) => new Set(
+    validateEstimateWorkspace(baseWorkspace({
+      worksheets: [{ id: "ws-1", name: "Labour", items: [item as never] }],
+      estimateStrategy: { packagePlan: [{ id: "pkg-labour", name: "Labour", bindings: { categories: ["Labour"] } }] },
+    })).issues.map((issue) => issue.ruleId),
+  );
+  const RULE = "rate_schedule.hours.suspicious_tier_quantity_multiplication";
+
+  // A four-worker crew on each crew-hour is a real rate, not a double count.
+  assert.equal(
+    ruleIdsFor(labourRow({ quantity: 12, tierUnits: { "tier-reg": 4 } })).has(RULE),
+    false,
+  );
+
+  // A chiller genuinely takes 200 hours to set: no ceiling applies to EA.
+  assert.equal(
+    ruleIdsFor(labourRow({ quantity: 3, uom: "EA", tierUnits: { "tier-reg": 200 } })).has(RULE),
+    false,
+  );
+
+  // 30 hours of labour for every hour of quantity is extended hours pasted in.
+  assert.equal(
+    ruleIdsFor(labourRow({ quantity: 3, tierUnits: { "tier-reg": 30 } })).has(RULE),
+    true,
+  );
+
+  // ...and one unit of quantity cannot double-count, however big the row is.
+  assert.equal(
+    ruleIdsFor(labourRow({ quantity: 1, tierUnits: { "tier-reg": 400 } })).has(RULE),
+    false,
+  );
+});
+
 test("default rules flag missing package bindings and takeoff evidence links", () => {
   const result = validateEstimateWorkspace(baseWorkspace({
     worksheets: [

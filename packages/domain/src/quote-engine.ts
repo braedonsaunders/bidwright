@@ -32,6 +32,11 @@ import {
 } from "./construction-classification";
 import { buildSummaryBuilderConfig, materializeSummaryRowsFromBuilder } from "./summary-builder";
 import { getExtendedWorksheetHourBreakdown, type WorksheetHourRateScheduleLike } from "./worksheet-hours";
+import {
+  compareQuoteRevisions,
+  type QuoteRevisionComparison,
+  type RevisionCompareSide,
+} from "./revision-compare";
 
 /**
  * Shape of a row in the extended-duration interpolation table. Stored on each
@@ -2104,6 +2109,102 @@ export function getProjectById(store: BidwrightStore, projectId: string) {
     sourceDocumentCount: store.sourceDocuments.filter((document) => document.projectId === projectId).length,
     aiRunCount: store.aiRuns.filter((run) => run.projectId === projectId).length,
   };
+}
+
+/**
+ * Assemble one side of a quote-revision comparison straight from a store
+ * snapshot. Every revision of a quote is fully materialized in the snapshot
+ * (worksheets, rows, phases, adjustments, factors, rate schedules all carry a
+ * revisionId), so a non-current revision prices through exactly the same
+ * `calculateTotals` path the workspace uses — no second, drifting formula.
+ */
+export function buildRevisionCompareSide(
+  store: BidwrightStore,
+  revisionId: string,
+): RevisionCompareSide | null {
+  const revision = store.revisions.find((entry) => entry.id === revisionId);
+  if (!revision) {
+    return null;
+  }
+
+  const worksheets = getWorksheets(store, revisionId);
+  const phases = sortPhasesForDisplay(store.phases.filter((phase) => phase.revisionId === revisionId));
+  const adjustments = store.adjustments
+    .filter((adjustment) => adjustment.revisionId === revisionId)
+    .sort((left, right) => (left.order !== right.order ? left.order - right.order : left.name.localeCompare(right.name)));
+  const estimateFactors = (store.estimateFactors ?? [])
+    .filter((factor) => factor.revisionId === revisionId)
+    .sort((left, right) => (left.order !== right.order ? left.order - right.order : left.name.localeCompare(right.name)));
+  const schedules = getRevisionRateSchedules(store, revisionId);
+  const entityCategories = store.entityCategories ?? [];
+  const categoryLookup = buildCategoryLookup(entityCategories);
+  const storedSummaryBuilder = (revision.pdfPreferences as Record<string, unknown> | undefined)?.summaryBuilder as
+    | Partial<SummaryBuilderConfig>
+    | undefined;
+
+  const totals = calculateTotals(
+    revision,
+    worksheets,
+    phases,
+    adjustments,
+    schedules,
+    entityCategories,
+    storedSummaryBuilder,
+    estimateFactors,
+  );
+
+  return {
+    revision,
+    totals: {
+      subtotal: totals.subtotal,
+      cost: totals.cost,
+      estimatedProfit: totals.estimatedProfit,
+      estimatedMargin: totals.estimatedMargin,
+      calculatedTotal: totals.calculatedTotal,
+      totalHours: totals.totalHours,
+      regHours: totals.regHours,
+      overHours: totals.overHours,
+      doubleHours: totals.doubleHours,
+    },
+    worksheets: worksheets.map((worksheet) => ({
+      id: worksheet.id,
+      name: worksheet.name,
+      order: worksheet.order,
+      items: worksheet.items.map((item) => ({
+        ...item,
+        // Resolve hours through the revision's own rate schedule rather than
+        // leaving the compare to guess from raw tier keys: a copied revision
+        // re-keys its tiers, so the same row legitimately carries different
+        // tier ids on each side.
+        hours: computeItemHours(item, schedules, categoryLookup).total,
+      })),
+    })),
+    phases,
+    adjustments,
+  };
+}
+
+/**
+ * Compare two revisions of the same quote. Returns null when either revision
+ * is missing or the two belong to different quotes — comparing across quotes
+ * would pair unrelated positions and report the whole of both as churn.
+ */
+export function buildQuoteRevisionComparison(
+  store: BidwrightStore,
+  baseRevisionId: string,
+  headRevisionId: string,
+): QuoteRevisionComparison | null {
+  const baseRevision = store.revisions.find((entry) => entry.id === baseRevisionId);
+  const headRevision = store.revisions.find((entry) => entry.id === headRevisionId);
+  if (!baseRevision || !headRevision || baseRevision.quoteId !== headRevision.quoteId) {
+    return null;
+  }
+  const base = buildRevisionCompareSide(store, baseRevisionId);
+  const head = buildRevisionCompareSide(store, headRevisionId);
+  if (!base || !head) {
+    return null;
+  }
+  return compareQuoteRevisions(base, head);
 }
 
 export function buildProjectWorkspace(store: BidwrightStore, projectId: string): ProjectWorkspace | null {

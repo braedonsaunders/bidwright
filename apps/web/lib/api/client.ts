@@ -37,6 +37,36 @@ export function resolveApiUrl(path: string) {
   return new URL(path, apiBaseUrl).toString();
 }
 
+/**
+ * Every failure out of `apiRequest`. Callers need the status to tell an
+ * expected 401 ("nobody is signed in") apart from a backend that is down —
+ * the two demand very different UI, and a bare Error made them
+ * indistinguishable. `status` is 0 when the request never reached the server.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly path: string;
+  readonly body: string;
+
+  constructor(message: string, options: { status: number; path: string; body?: string; cause?: unknown }) {
+    super(message, options.cause === undefined ? undefined : { cause: options.cause });
+    this.name = "ApiError";
+    this.status = options.status;
+    this.path = options.path;
+    this.body = options.body ?? "";
+  }
+
+  /** The request never got an HTTP response (offline, DNS, TLS, CORS). */
+  get isNetworkError() {
+    return this.status === 0;
+  }
+
+  /** The server answered, but not with a success this app can use. */
+  get isServerError() {
+    return this.status >= 500;
+  }
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/json",
@@ -44,12 +74,20 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   };
 
   const { headers: _discardHeaders, ...restInit } = init ?? {};
-  const response = await fetch(resolveApiUrl(path), {
-    cache: "no-store",
-    credentials: "include",
-    ...restInit,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(resolveApiUrl(path), {
+      cache: "no-store",
+      credentials: "include",
+      ...restInit,
+      headers,
+    });
+  } catch (cause) {
+    throw new ApiError(
+      `API request failed for ${path}: ${cause instanceof Error ? cause.message : "network error"}`,
+      { status: 0, path, cause },
+    );
+  }
 
   if (response.status === 401) {
     if (typeof window !== "undefined" && !path.includes("/auth/")) {
@@ -67,8 +105,9 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
   const rawBody = await response.text().catch(() => "");
 
   if (!response.ok) {
-    throw new Error(
-      `API request failed for ${path} (${response.status} ${response.statusText})${rawBody ? `: ${rawBody}` : ""}`
+    throw new ApiError(
+      `API request failed for ${path} (${response.status} ${response.statusText})${rawBody ? `: ${rawBody}` : ""}`,
+      { status: response.status, path, body: rawBody },
     );
   }
 
@@ -81,9 +120,10 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     return JSON.parse(rawBody) as T;
   } catch {
     const snippet = rawBody.slice(0, 200).replace(/\s+/g, " ").trim();
-    throw new Error(
+    throw new ApiError(
       `API request for ${path} returned a ${response.status} response with a non-JSON body — ` +
-      `a proxy or gateway likely altered it. First bytes: ${snippet}`
+      `a proxy or gateway likely altered it. First bytes: ${snippet}`,
+      { status: response.status, path, body: rawBody },
     );
   }
 }

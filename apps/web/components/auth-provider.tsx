@@ -16,6 +16,9 @@ import {
   adminGetMyMemberships,
 } from "@/lib/api";
 import { isDemoMode } from "@/lib/demo-mode";
+import { classifyAuthFailure, type AuthBootstrapError } from "@/lib/auth-error";
+
+export type { AuthBootstrapError };
 
 // ---------------------------------------------------------------------------
 // Context shape
@@ -31,6 +34,10 @@ interface AuthContextValue {
   isOwnOrg: boolean;
   loading: boolean;
   initialized: boolean | null; // null = unknown, true = system set up, false = needs setup
+  /** Set when the backend could not be reached or answered with an error. */
+  authError: AuthBootstrapError | null;
+  /** Re-run the bootstrap after a backend failure. */
+  retryBootstrap: () => Promise<void>;
   login: (email: string, password: string, orgSlug?: string) => Promise<void>;
   signup: (data: { orgName: string; orgSlug: string; email: string; name: string; password: string }) => Promise<void>;
   superLogin: (email: string, password: string) => Promise<void>;
@@ -71,51 +78,65 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [myOrgIds, setMyOrgIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [initialized, setInitialized] = useState<boolean | null>(null);
+  const [authError, setAuthError] = useState<AuthBootstrapError | null>(null);
 
-  // Check setup status + validate token on mount
-  useEffect(() => {
-    (async () => {
-      try {
-        // Check if system is initialized
-        const status = await getSetupStatus();
-        setInitialized(status.initialized);
+  const clearSession = useCallback(() => {
+    localStorage.removeItem("bw_user");
+    localStorage.removeItem("bw_org");
+    setToken(null);
+    setUser(null);
+    setOrganization(null);
+    setIsSuperAdmin(false);
+    setImpersonating(false);
+  }, []);
 
-        if (!status.initialized) {
-          setLoading(false);
-          if (pathname !== "/setup") {
-            router.replace("/setup");
-          }
-          return;
-        }
+  // Check setup status + validate token. Runs on mount and on manual retry.
+  const bootstrap = useCallback(async () => {
+    setLoading(true);
+    setAuthError(null);
+    let stage: AuthBootstrapError["source"] = "setup-status";
+    try {
+      // Check if system is initialized
+      const status = await getSetupStatus();
+      setInitialized(status.initialized);
 
-        const me = await getCurrentUser();
-        setToken(COOKIE_SESSION_TOKEN);
-        setUser(me.user);
-        setOrganization(me.organization);
-        setIsSuperAdmin(me.isSuperAdmin);
-        setImpersonating(me.impersonating);
-        if (me.isSuperAdmin) {
-          try {
-            const m = await adminGetMyMemberships();
-            setMyOrgIds(m.organizationIds);
-          } catch { /* ignore */ }
-        }
-        if (isDemoMode && isPublicPath(pathname)) {
-          router.replace("/");
-        }
-      } catch {
-        // Session invalid or API unreachable
-        localStorage.removeItem("bw_user");
-        localStorage.removeItem("bw_org");
-        setToken(null);
-        setUser(null);
-        setOrganization(null);
-        setIsSuperAdmin(false);
-        setImpersonating(false);
-      } finally {
+      if (!status.initialized) {
         setLoading(false);
+        if (pathname !== "/setup") {
+          router.replace("/setup");
+        }
+        return;
       }
-    })();
+
+      stage = "session";
+      const me = await getCurrentUser();
+      setToken(COOKIE_SESSION_TOKEN);
+      setUser(me.user);
+      setOrganization(me.organization);
+      setIsSuperAdmin(me.isSuperAdmin);
+      setImpersonating(me.impersonating);
+      if (me.isSuperAdmin) {
+        try {
+          const m = await adminGetMyMemberships();
+          setMyOrgIds(m.organizationIds);
+        } catch { /* ignore */ }
+      }
+      if (isDemoMode && isPublicPath(pathname)) {
+        router.replace("/");
+      }
+    } catch (error) {
+      // A 401 is the ordinary "no session" answer and belongs to the login
+      // flow. Everything else means the backend itself is unusable — record it
+      // so the shell can say so and offer a retry instead of rendering blank.
+      clearSession();
+      setAuthError(classifyAuthFailure(error, stage));
+    } finally {
+      setLoading(false);
+    }
+  }, [clearSession, pathname, router]);
+
+  useEffect(() => {
+    void bootstrap();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshUser = useCallback(async () => {
@@ -135,12 +156,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setOrganization(me.organization);
       setIsSuperAdmin(me.isSuperAdmin);
       setImpersonating(me.impersonating);
-    } catch {
+      setAuthError(null);
+    } catch (error) {
       setToken(null);
       setUser(null);
       setOrganization(null);
       setIsSuperAdmin(false);
       setImpersonating(false);
+      setAuthError(classifyAuthFailure(error, "session"));
     }
   }, []);
 
@@ -248,6 +271,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isOwnOrg,
         loading,
         initialized,
+        authError,
+        retryBootstrap: bootstrap,
         login,
         signup: signupFn,
         superLogin: superLoginFn,

@@ -4255,6 +4255,41 @@ export function buildServer() {
 
   // ── Revision routes ────────────────────────────────────────────────
 
+  /**
+   * Quote-revision comparison. `base` is the revision being compared against;
+   * `head` defaults to the quote's current revision, which is what the
+   * workspace's Compare Revisions dialog always wants.
+   */
+  app.get("/projects/:projectId/revisions/compare", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({
+      base: z.string().min(1),
+      head: z.string().min(1).optional(),
+    }).safeParse(request.query ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({
+        message: "Provide a base revision id to compare against",
+        issues: parsed.error.flatten(),
+      });
+    }
+
+    const workspace = await request.store!.getWorkspace(projectId);
+    if (!workspace) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
+
+    const headRevisionId = parsed.data.head ?? workspace.currentRevision.id;
+    if (parsed.data.base === headRevisionId) {
+      return reply.code(400).send({ message: "Pick two different revisions to compare" });
+    }
+
+    const comparison = await request.store!.compareRevisions(projectId, parsed.data.base, headRevisionId);
+    if (!comparison) {
+      return reply.code(404).send({ message: "Revision not found on this quote" });
+    }
+    return comparison;
+  });
+
   app.post("/projects/:projectId/revisions", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     const workspace = await request.store!.getWorkspace(projectId);

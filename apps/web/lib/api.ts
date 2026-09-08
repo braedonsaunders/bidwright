@@ -1,4 +1,4 @@
-export { apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
+export { ApiError, apiBaseUrl, apiRequest, resolveApiUrl } from "./api/client";
 export * from "./api/settings";
 export * from "./api/auth";
 export * from "./api/integrations";
@@ -1818,6 +1818,134 @@ export async function activateRevision(projectId: string, revisionId: string) {
     },
     body: JSON.stringify({}),
   });
+}
+
+/* ── Quote-revision comparison ─────────────────────────────────────────── */
+
+export type RevisionCompareMetricFormat = "money" | "percent" | "number";
+
+export interface RevisionCompareMeta {
+  id: string;
+  revisionNumber: number;
+  title: string;
+  status: string;
+  type: string;
+  updatedAt: string | null;
+}
+
+export interface RevisionCompareMetric {
+  key: string;
+  label: string;
+  format: RevisionCompareMetricFormat;
+  base: number;
+  head: number;
+  delta: number;
+  percentDelta: number | null;
+}
+
+export interface RevisionCompareLineItem {
+  key: string;
+  worksheetName: string;
+  category: string;
+  entityName: string;
+  description: string;
+  uom: string;
+  vendor: string;
+  quantity: number;
+  unitCost: number;
+  unitPrice: number;
+  extendedCost: number;
+  extendedPrice: number;
+  hours: number;
+}
+
+export type RevisionCompareChangeKind = "quantity" | "rate" | "cost" | "markup" | "hours";
+
+export interface RevisionCompareLineItemChange {
+  key: string;
+  worksheetName: string;
+  category: string;
+  entityName: string;
+  description: string;
+  uom: string;
+  vendor: string;
+  changes: RevisionCompareChangeKind[];
+  base: RevisionCompareLineItem;
+  head: RevisionCompareLineItem;
+  quantityDelta: number;
+  unitCostDelta: number;
+  unitPriceDelta: number;
+  extendedCostDelta: number;
+  extendedPriceDelta: number;
+  hoursDelta: number;
+}
+
+export interface RevisionComparePhaseChange {
+  number: string;
+  base: { number: string; name: string; description: string } | null;
+  head: { number: string; name: string; description: string } | null;
+  changes: Array<"name" | "description">;
+}
+
+export interface RevisionCompareAdjustmentEntry {
+  name: string;
+  kind: string;
+  percentage: number | null;
+  amount: number | null;
+}
+
+export interface RevisionCompareAdjustmentChange {
+  name: string;
+  base: (RevisionCompareAdjustmentEntry & { active: boolean }) | null;
+  head: (RevisionCompareAdjustmentEntry & { active: boolean }) | null;
+  changes: Array<"percentage" | "amount" | "active" | "kind">;
+}
+
+export interface QuoteRevisionComparison {
+  base: RevisionCompareMeta;
+  head: RevisionCompareMeta;
+  financials: RevisionCompareMetric[];
+  lineItems: {
+    added: RevisionCompareLineItem[];
+    removed: RevisionCompareLineItem[];
+    changed: RevisionCompareLineItemChange[];
+    unchangedCount: number;
+  };
+  phases: {
+    added: Array<{ number: string; name: string }>;
+    removed: Array<{ number: string; name: string }>;
+    changed: RevisionComparePhaseChange[];
+  };
+  adjustments: {
+    added: RevisionCompareAdjustmentEntry[];
+    removed: RevisionCompareAdjustmentEntry[];
+    changed: RevisionCompareAdjustmentChange[];
+  };
+  worksheets: {
+    added: string[];
+    removed: string[];
+  };
+  summary: {
+    addedCount: number;
+    removedCount: number;
+    changedCount: number;
+    quantityChangedCount: number;
+    rateChangedCount: number;
+    priceDelta: number;
+    costDelta: number;
+    hoursDelta: number;
+  };
+}
+
+/** Compare a revision against `head` (the current revision when omitted). */
+export async function compareRevisions(
+  projectId: string,
+  baseRevisionId: string,
+  headRevisionId?: string,
+): Promise<QuoteRevisionComparison> {
+  const query = new URLSearchParams({ base: baseRevisionId });
+  if (headRevisionId) query.set("head", headRevisionId);
+  return apiRequest<QuoteRevisionComparison>(`/projects/${projectId}/revisions/compare?${query.toString()}`);
 }
 
 export async function copyQuote(projectId: string) {

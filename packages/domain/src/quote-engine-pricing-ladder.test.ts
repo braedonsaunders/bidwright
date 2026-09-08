@@ -290,7 +290,38 @@ test("calculateTotals applies explicit line factors only to targeted worksheet r
   assert.equal(totals.adjustedLineItems.find((item) => item.id === "other")?.price, 1000);
 });
 
+// The difficulty bands are data, not code: they live on the factor library
+// entry's `parameters.ranges` (commit 1e806b37 deleted the hardcoded NECA
+// tables). A score sheet therefore has to carry its own bands, and one that
+// doesn't is a no-op rather than a silent fallback to someone else's numbers.
+const CONDITION_SCORE_RANGES = [
+  { label: "Normal", minScore: 0, maxScore: 75, multiplier: 1 },
+  { label: "Difficult", minScore: 76, maxScore: 134, multiplier: 1.15 },
+  { label: "Very Difficult", minScore: 135, maxScore: 180, multiplier: 1.3 },
+];
+
 test("calculateTotals computes parameterized condition score sheet factors", () => {
+  const categories = [labourCategory()];
+  const worksheets: Array<Worksheet & { items: WorksheetItem[] }> = [
+    { id: "ws-test", revisionId: "rev-test", name: "Worksheet", order: 0, items: [worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" })] },
+  ];
+  // 20 criteria scored 4 = a total of 80, which lands in the "Difficult" band.
+  const criteria = Array.from({ length: 35 }, (_, index) => ({ condition: `Condition ${index + 1}`, score: index < 20 ? 4 : 0 }));
+
+  const totals = calculateTotals(revision(), worksheets, [], [], [], categories, null, [
+    estimateFactor({
+      id: "condition-score-sheet",
+      value: 1,
+      formulaType: "neca_condition_score",
+      parameters: { criteria, ranges: CONDITION_SCORE_RANGES },
+    }),
+  ]);
+
+  assert.equal(totals.factorTotals[0].value, 1.15);
+  assert.equal(totals.subtotal, 1150);
+});
+
+test("a condition score sheet with no bands of its own is a no-op multiplier", () => {
   const categories = [labourCategory()];
   const worksheets: Array<Worksheet & { items: WorksheetItem[] }> = [
     { id: "ws-test", revisionId: "rev-test", name: "Worksheet", order: 0, items: [worksheetItem({ id: "labour", category: "Labour", entityType: "Labour", price: 1000, cost: 600, tierUnits: { "tier-reg": 10 }, rateScheduleItemId: "rate-test" })] },
@@ -306,8 +337,8 @@ test("calculateTotals computes parameterized condition score sheet factors", () 
     }),
   ]);
 
-  assert.equal(totals.factorTotals[0].value, 1.15);
-  assert.equal(totals.subtotal, 1150);
+  assert.equal(totals.factorTotals[0].value, 1);
+  assert.equal(totals.subtotal, 1000);
 });
 
 test("calculateTotals composes individual labor condition score factors", () => {
