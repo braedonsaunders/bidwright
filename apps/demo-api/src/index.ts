@@ -50,6 +50,10 @@ function containerEnvVars(env: Env) {
     DATA_DIR: "/data",
     DATABASE_URL: String(env.DATABASE_URL ?? ""),
     INTEGRATIONS_ENCRYPTION_KEY: String(env.INTEGRATIONS_ENCRYPTION_KEY ?? ""),
+    // Optional here, unlike the Rassaun server deploy: the demo holds no
+    // tenant credentials and mints a fresh key per cold start. Forwarded so an
+    // operator who does pin a key can pin its probe with it.
+    INTEGRATIONS_ENCRYPTION_KEY_PROBE: String(env.INTEGRATIONS_ENCRYPTION_KEY_PROBE ?? ""),
     BIDWRIGHT_DEMO_MODE: "1",
     BIDWRIGHT_PUBLIC_DEMO: "1",
     BIDWRIGHT_DEMO_ORG_SLUG: "demo",

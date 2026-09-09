@@ -1,6 +1,10 @@
 import type { PrismaClient } from "@bidwright/db";
 import { seedAllForOrganization } from "@bidwright/db";
 
+import { isApiDemoMode } from "./demo-flag.js";
+
+export { isApiDemoMode };
+
 export const DEMO_DISABLED_MESSAGE =
   "This public demo saves quote, client, worksheet, phase, factor, condition, library, document, and manual takeoff data, but disables AI, agent CLI, uploads, package/file ingest, vision and auto-takeoff processing, email delivery, external integrations, plugin execution, and PDF generation.";
 
@@ -20,10 +24,6 @@ export type DemoIdentity = {
     settings?: { general?: unknown } | null;
   };
 };
-
-export function isApiDemoMode() {
-  return process.env.BIDWRIGHT_DEMO_MODE === "1" || process.env.BIDWRIGHT_PUBLIC_DEMO === "1";
-}
 
 export function resetDemoIdentityCache() {
   // Kept for older call sites/tests. Public demo identity is intentionally

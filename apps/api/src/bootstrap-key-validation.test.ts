@@ -40,3 +40,51 @@ test("server mode refuses to start without an application key probe", () => {
     else process.env.BIDWRIGHT_MODE = originalMode;
   }
 });
+
+// The public demo container runs with BIDWRIGHT_MODE=server but is never given
+// a probe, because it holds no tenant credentials and mints a fresh key on
+// every cold start. Requiring one aborted startup before the server could
+// listen, so the Worker answered "the container is not running" — the demo was
+// dark from 2026-07-28 until this was fixed.
+test("the public demo starts without a probe it was never given", () => {
+  const originalMode = process.env.BIDWRIGHT_MODE;
+  const originalDemo = process.env.BIDWRIGHT_DEMO_MODE;
+  process.env.BIDWRIGHT_MODE = "server";
+  process.env.BIDWRIGHT_DEMO_MODE = "1";
+  try {
+    assert.deepEqual(
+      validateIntegrationsEncryptionKey(randomBytes(32).toString("base64"), ""),
+      { probeVerified: false },
+    );
+  } finally {
+    if (originalMode === undefined) delete process.env.BIDWRIGHT_MODE;
+    else process.env.BIDWRIGHT_MODE = originalMode;
+    if (originalDemo === undefined) delete process.env.BIDWRIGHT_DEMO_MODE;
+    else process.env.BIDWRIGHT_DEMO_MODE = originalDemo;
+  }
+});
+
+test("a probe the demo does supply is still verified against the key", () => {
+  const originalMode = process.env.BIDWRIGHT_MODE;
+  const originalDemo = process.env.BIDWRIGHT_DEMO_MODE;
+  process.env.BIDWRIGHT_MODE = "server";
+  process.env.BIDWRIGHT_DEMO_MODE = "1";
+  const key = randomBytes(32).toString("base64");
+  try {
+    assert.deepEqual(validateIntegrationsEncryptionKey(key, createIntegrationsEncryptionKeyProbe(key)), {
+      probeVerified: true,
+    });
+    assert.throws(
+      () => validateIntegrationsEncryptionKey(
+        randomBytes(32).toString("base64"),
+        createIntegrationsEncryptionKeyProbe(key),
+      ),
+      /does not match INTEGRATIONS_ENCRYPTION_KEY_PROBE/,
+    );
+  } finally {
+    if (originalMode === undefined) delete process.env.BIDWRIGHT_MODE;
+    else process.env.BIDWRIGHT_MODE = originalMode;
+    if (originalDemo === undefined) delete process.env.BIDWRIGHT_DEMO_MODE;
+    else process.env.BIDWRIGHT_DEMO_MODE = originalDemo;
+  }
+});

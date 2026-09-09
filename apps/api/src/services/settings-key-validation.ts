@@ -1,5 +1,6 @@
 import { createContextualSealer } from "@braedonsaunders/appkit-crypto";
 
+import { isApiDemoMode } from "../demo-flag.js";
 import { readIntegrationsEncryptionKey } from "./settings-secret-crypto.js";
 
 const PROBE_HKDF_INFO = "bidwright:settings:key-probe:v1";
@@ -27,6 +28,15 @@ export function validateIntegrationsEncryptionKey(
 ): { probeVerified: boolean } {
   const masterKey = readIntegrationsEncryptionKey(encodedKey);
   if (!probe) {
+    // The probe guards tenant credentials: it catches a *different* valid key
+    // silently re-encrypting real integration secrets. The public demo stores
+    // no tenant credentials — every integrations route is refused by the demo
+    // middleware, and its container gets a fresh generated key on each cold
+    // start — so requiring one there only kills the process before it can
+    // listen, which is exactly how the demo went dark.
+    if (isApiDemoMode()) {
+      return { probeVerified: false };
+    }
     if ((process.env.BIDWRIGHT_MODE || "").trim().toLowerCase() === "server") {
       throw new Error(
         "INTEGRATIONS_ENCRYPTION_KEY_PROBE is required in Bidwright server mode.",
