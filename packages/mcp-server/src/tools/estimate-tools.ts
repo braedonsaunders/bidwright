@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { sourceRefArray } from "./source-refs.js";
 
 import { apiGet, apiPost, getProjectId } from "../api-client.js";
 
@@ -348,7 +349,7 @@ export function registerEstimateTools(server: McpServer) {
         id: z.string(),
         name: z.string(),
         kind: z.string(),
-        sourceRefs: z.array(z.string()).default([]),
+        sourceRefs: sourceRefArray(),
         quantityBasis: z.string().optional(),
         quantities: z.record(z.union([z.string(), z.coerce.number(), z.boolean()])).optional(),
         included: z.boolean().default(true),

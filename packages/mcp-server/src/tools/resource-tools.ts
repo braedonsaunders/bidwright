@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { sourceRefArray } from "./source-refs.js";
 import { apiGet, apiPost, getProjectId, projectPath } from "../api-client.js";
 
 const sourceTypeSchema = z.enum([
@@ -1214,19 +1215,19 @@ export function registerResourceTools(server: McpServer) {
           type: lineEvidenceBasisTypeSchema.describe("Source class that justifies the row quantity, hours, duration, or count."),
           drawingClaimIds: z.array(z.string()).default([]),
           quantityDriver: z.string().optional(),
-          sourceRefs: z.array(z.string()).default([]),
+          sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
           rationale: z.string().optional(),
         }).passthrough().optional(),
         pricing: z.object({
           type: lineEvidenceBasisTypeSchema.describe("Source class that justifies unit cost, rate, productivity, or allowance value."),
-          sourceRefs: z.array(z.string()).default([]),
+          sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
           rationale: z.string().optional(),
         }).passthrough().optional(),
         quantityDriver: z.string().optional(),
         drawingClaimIds: z.array(z.string()).default([]),
-        sourceRefs: z.array(z.string()).default([]),
+        sourceRefs: sourceRefArray(),
         assumptionIds: z.array(z.string()).default([]),
         rationale: z.string().optional(),
       }).passthrough().optional().describe("Line-level evidence contract. Required when drawings exist. Prefer quantity/pricing axes. Drawing/takeoff quantity basis needs quantity.drawingClaimIds; pricing can separately be rate_schedule, knowledge_labor, material_quote, vendor_quote, allowance, indirect, document_quantity, assumption, subcontract, equipment_rental, or mixed."),

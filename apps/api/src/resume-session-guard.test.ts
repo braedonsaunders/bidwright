@@ -2,6 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 
+/**
+ * Route-level wiring for the "one live agent per project" rule.
+ *
+ * The rule itself is exercised for real in
+ * `services/cli-runtime-liveness.test.ts`. It has to be: this file used to
+ * assert that `resumeSession` contained `session.status === "running"`, which
+ * stayed true for three weeks while the guard did nothing in production -- the
+ * session registry it consulted had been emptied by an unrelated timer, so the
+ * check never fired and resumes kept colliding with running agents. Matching
+ * source text cannot tell a working guard from an inert one.
+ */
+
 const runtime = readFileSync(new URL("./services/cli-runtime.ts", import.meta.url), "utf8");
 const routes = readFileSync(new URL("./routes/cli-routes.ts", import.meta.url), "utf8");
 
@@ -13,25 +25,14 @@ function functionBody(source: string, signature: string) {
   return next === -1 ? rest : rest.slice(0, next);
 }
 
-test("resume refuses to start on top of a running session", () => {
-  // The real incident: a resume was issued 4 minutes into a session that kept
-  // running for another 90 seconds. Codex refused the second writer --
-  // "thread-store conflict: thread <id> already has an active writer" -- and the
-  // new run died. spawnSession already guarded this; resume did not.
+test("the resume guard probes the process rather than trusting the registry", () => {
   const body = functionBody(runtime, "export async function resumeSession(");
-  assert.match(body, /session\.status === "running"/, "must check the live session's status");
-  const guardIndex = body.indexOf('session.status === "running"');
-  const sessionIdIndex = body.indexOf("let sessionId");
+  const guardIndex = body.indexOf("probeLiveAgent(");
+  assert.notEqual(guardIndex, -1, "must probe for a live agent");
   assert.ok(
-    guardIndex < sessionIdIndex,
+    guardIndex < body.indexOf("let sessionId"),
     "the guard must run before resolving a session id to resume",
   );
-});
-
-test("the guard reports a conflict, not a generic failure", () => {
-  const body = functionBody(runtime, "export async function resumeSession(");
-  assert.match(body, /statusCode: 409/, "409 so callers can distinguish it from a crash");
-  assert.match(body, /Stop it before resuming/, "tells the user what to do");
 });
 
 test("spawn and resume agree that one live session per project is the rule", () => {

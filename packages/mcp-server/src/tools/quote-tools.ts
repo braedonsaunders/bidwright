@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { sourceRefArray } from "./source-refs.js";
 import { apiGet, apiPost, apiPatch, apiDelete, projectPath, getRevisionId } from "../api-client.js";
 import { rollupWorksheetUnits } from "@bidwright/domain";
 
@@ -756,14 +757,63 @@ function claimIdsMentionedInLine(input: {
   return [...new Set([...text.matchAll(/\bclaim-[0-9a-f]{12}\b/gi)].map((match) => match[0]))];
 }
 
+/** Fields that carry the substance of a row. A real row sets at least one. */
+const WORKSHEET_ITEM_PAYLOAD_FIELDS = [
+  "categoryId", "category", "entityType", "cost", "price", "markup", "tierUnits",
+  "rateScheduleItemId", "itemId", "costResourceId", "effectiveCostId", "laborUnitId",
+  "resourceComposition", "sourceEvidence", "evidenceBasis", "classification",
+  "costCode", "phaseId",
+] as const;
+
+/**
+ * Did this call arrive carrying nothing but its two required fields?
+ *
+ * `worksheetId` and `entityName` are the only parameters without a default, so
+ * a tool call cut off partway through serialization lands here with exactly
+ * those two and everything else defaulted. That used to be reported as "Line
+ * evidence basis is required", which is technically true and diagnostically
+ * useless: it sent the agent off rewriting evidenceBasis 39 times when the real
+ * problem was that its arguments never arrived intact.
+ */
+function looksLikeTruncatedItemPayload(input: Record<string, any>): boolean {
+  const carriesPayload = WORKSHEET_ITEM_PAYLOAD_FIELDS.some((key) => {
+    const value = input[key];
+    if (value === undefined || value === null || value === "") return false;
+    if (typeof value === "object" && Object.keys(value).length === 0) return false;
+    return true;
+  });
+  if (carriesPayload) return false;
+  return !String(input.description ?? "").trim() && !String(input.sourceNotes ?? "").trim();
+}
+
+const TRUNCATED_ITEM_PAYLOAD_MESSAGE = [
+  "This call arrived with only worksheetId and entityName — no category, quantity basis, cost/rate, sourceNotes, or evidenceBasis came through.",
+  "That normally means the tool call was cut off while being written, not that the row is missing evidence. Do not retry the same way; the arguments will be cut off again.",
+  "Re-send as one row per call with a smaller payload: categoryId + quantity + uom, then either cost/price (freeform categories) or rateScheduleItemId + tierUnits (rate categories), plus sourceNotes and evidenceBasis.",
+  "For Labour, Equipment, Rental Equipment, and General Conditions rows prefer createRateScheduleWorksheetItem — it takes a much smaller payload for the same result.",
+].join(" ");
+
+/**
+ * Examples printed in gate rejections. These are real minted id prefixes —
+ * the old hint said "doc-", which nothing in the system produces, so an agent
+ * following it literally could never satisfy the gate.
+ */
+const STRUCTURED_SOURCE_REF_HINT = "plain strings like doc_<id>, lu-<id>, ds-<id>, kb-<id>, lis_<id>, rsi-<id>, ecost-<id>, a URL, or 'File.pdf p.12'";
+
 function looksLikeStructuredSourceRef(ref: unknown): boolean {
   if (typeof ref !== "string") return false;
   const value = ref.trim();
   if (value.length < 4) return false;
   // Accept "doc:<id>:<page>", "dataset:<id>:<row>", "book:<id>:<page>", "lu:<id>", "vendor:<id>", "uri:..."
-  if (/^(doc|document|dataset|ds|book|kb|knowledge|lu|labor|vendor|invoice|quote|catalog|cat|costres|effcost|sku|standard|spec|page|sheet|cell|row|atlas|claim)[-:]/i.test(value)) return true;
-  // Accept hyphenated DB ids like ds-<uuid>, lu-<uuid>, doc-<uuid>, etc.
-  if (/^[a-z]{2,8}-[a-z0-9]{6,}/i.test(value)) return true;
+  if (/^(doc|document|dataset|ds|book|kb|knowledge|lu|labor|vendor|invoice|quote|catalog|cat|costres|effcost|sku|standard|spec|page|sheet|cell|row|atlas|claim)[-:_]/i.test(value)) return true;
+  // Accept DB ids like ds-<uuid>, lu-<uuid>, rsi-<uuid>, ecost-<uuid> — and the
+  // underscore-separated ones. SourceDocument mints `doc_<uuid>` and
+  // LineItemSearchDocument mints `lis_<hex>`, so a hyphen-only rule silently
+  // scored a cited source document as zero structured refs: the row was then
+  // rejected for "needs structured cite", the agent re-cited the same real
+  // document id, and the loop repeated. Those two are the ids an agent is most
+  // likely to have for a material row, which is where this bit hardest.
+  if (/^[a-z]{2,8}[-_][a-z0-9]{6,}/i.test(value)) return true;
   // Accept URIs
   if (/^https?:\/\//i.test(value)) return true;
   // Accept document filename + page/section "Foo.pdf p.12" or "Foo.xlsx Sheet 'x' row 4"
@@ -904,7 +954,7 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
     const hasLaborUnit = !!input.laborUnitId;
     const hasStructuredRef = structuredRefs > 0;
     if (!hasLaborUnit && !hasStructuredRef && !hasAssumptionIds) {
-      return "Labour row needs laborUnitId, evidenceBasis.pricing.sourceRefs with structured cite (ds-/lu-/doc-/kb-), or assumptionIds.";
+      return `Labour row needs laborUnitId, evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}), or assumptionIds.`;
     }
   }
 
@@ -915,7 +965,7 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
     const hasStructuredRef = structuredRefs > 0;
     const hasComposition = compositionCount > 0;
     if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition) {
-      return "Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with structured cite; or assumptionIds; or resourceComposition.resources.";
+      return `Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}); or assumptionIds; or resourceComposition.resources.`;
     }
 
     // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence
@@ -923,7 +973,7 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
     if ((isLumpSum || rowDollar >= compositeMaterialThreshold()) && !hasStructuredLink) {
       const hasComponentEvidence = compositionCount >= 2 || structuredRefs >= 2;
       if (!hasComponentEvidence) {
-        return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs, or 2+ resourceComposition.resources.`;
+        return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs (${STRUCTURED_SOURCE_REF_HINT}), or 2+ resourceComposition.resources.`;
       }
     }
   }
@@ -1782,19 +1832,19 @@ function worksheetTreeSummary(ws: any) {
           type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies the row quantity, labour hours, duration, or count."),
           drawingClaimIds: z.array(z.string()).default([]).describe("Required when quantity.type is drawing_quantity, visual_takeoff, drawing_table, or drawing_note."),
           quantityDriver: z.string().optional().describe("Formula or driver behind quantity/hours/duration."),
-          sourceRefs: z.array(z.string()).default([]),
+          sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
           rationale: z.string().optional(),
         }).passthrough().optional(),
         pricing: z.object({
           type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies unit cost, rate, productivity, markup basis, or allowance value."),
-          sourceRefs: z.array(z.string()).default([]),
+          sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
           rationale: z.string().optional(),
         }).passthrough().optional(),
         quantityDriver: z.string().optional().describe("Short explanation of what drives quantity, hours, duration, or allowance."),
         drawingClaimIds: z.array(z.string()).default([]).describe("Legacy location for drawing quantity claim IDs. Prefer evidenceBasis.quantity.drawingClaimIds."),
-        sourceRefs: z.array(z.string()).default([]).describe("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
+        sourceRefs: sourceRefArray("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
         assumptionIds: z.array(z.string()).default([]).describe("Saved assumption IDs when the row is assumption-backed."),
         rationale: z.string().optional().describe("Why this source class is appropriate and how it supports the line."),
       }).passthrough().optional().describe("Line-level evidence contract. Required when drawings exist. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
@@ -1806,6 +1856,9 @@ function worksheetTreeSummary(ws: any) {
       ),
     },
     async (input) => {
+      if (looksLikeTruncatedItemPayload(input as Record<string, any>)) {
+        return { content: [{ type: "text" as const, text: TRUNCATED_ITEM_PAYLOAD_MESSAGE }] };
+      }
       const wsForGate = await getWs();
       const targetWorksheet = asArray(wsForGate.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
       const gateError = await checkGate("createWorksheetItem", [
@@ -2021,19 +2074,19 @@ function worksheetTreeSummary(ws: any) {
           type: z.enum(LINE_EVIDENCE_BASIS_TYPES),
           drawingClaimIds: z.array(z.string()).default([]),
           quantityDriver: z.string().optional(),
-          sourceRefs: z.array(z.string()).default([]),
+          sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
           rationale: z.string().optional(),
         }).passthrough().optional(),
         pricing: z.object({
           type: z.enum(LINE_EVIDENCE_BASIS_TYPES),
-          sourceRefs: z.array(z.string()).default([]),
+          sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
           rationale: z.string().optional(),
         }).passthrough().optional(),
         quantityDriver: z.string().optional(),
         drawingClaimIds: z.array(z.string()).default([]),
-        sourceRefs: z.array(z.string()).default([]),
+        sourceRefs: sourceRefArray(),
         assumptionIds: z.array(z.string()).default([]),
         rationale: z.string().optional(),
       }).passthrough().describe("Line-level evidence contract. Use quantity/pricing axes."),

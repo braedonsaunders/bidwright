@@ -5,7 +5,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
+import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, probeLiveAgent, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
 import {
   startLoginSession,
   attachLoginSession,
@@ -25,6 +25,7 @@ import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js
 import { stripBlankCredentialEnv } from "../services/agent-host/env-sanitize.js";
 import { getAgentRuntimeHost } from "../services/agent-host/index.js";
 import { buildModeConversationContext } from "../services/cli-conversation.js";
+import { selectLatestRun } from "../services/cli-run-selection.js";
 import {
   resolveAgentProviderKeys,
   resolveRuntimeProviderKey,
@@ -2057,7 +2058,7 @@ ${message}`;
       };
     }
 
-    const latestRun = runs[runs.length - 1];
+    const latestRun = selectLatestRun(runs);
     const latestRunEvents = ((latestRun?.output as any)?.events || []) as Array<{
       type?: string;
       timestamp?: string;
@@ -2551,7 +2552,15 @@ Merge tables that span multiple pages. Skip non-data pages.
     // already stopped there is nobody polling, so the answer would sit in
     // history forever. Questions have no deadline by design — the answer can
     // arrive the next day — so restart the run and hand it the answer.
-    if (session) {
+    //
+    // "Still running" has to be decided by probing the process, not by whether
+    // this API process still holds the handle. Trusting the handle alone meant
+    // a running agent that we had lost track of looked stopped: we resumed on
+    // top of it, the runtime refused the second writer on the same thread, and
+    // the user saw a failure even though the answer had been delivered and the
+    // original run went on to finish normally.
+    const liveAgent = await probeLiveAgent(projectId, resolveProjectDir(projectId));
+    if (liveAgent.live) {
       return { ok: true, message: "Answer delivered to agent", resumed: false };
     }
 

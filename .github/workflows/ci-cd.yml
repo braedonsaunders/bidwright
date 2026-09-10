@@ -99,6 +99,8 @@ jobs:
           apps/api/src/services/cli-conversation.test.ts
           apps/api/src/services/dataset-search-fitness.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
+          apps/api/src/services/cli-runtime-liveness.test.ts
+          apps/api/src/services/cli-run-selection.test.ts
           apps/api/src/services/pdf-service.test.ts
           apps/api/src/services/pdf-attachments.test.ts
           apps/api/src/services/vendor-evidence-lines.test.ts
@@ -119,6 +121,8 @@ jobs:
           packages/mcp-server/src/api-client.test.ts
           packages/mcp-server/src/modifier-percent.test.ts
           packages/mcp-server/src/summary-row-contract.test.ts
+          packages/mcp-server/src/tools/source-refs.test.ts
+          packages/mcp-server/src/tools/evidence-gate-contract.test.ts
           apps/api/src/revision-rate-schedule-scoping.test.ts
           apps/api/src/answer-resumes-run.test.ts
           apps/api/src/quote-status-source.test.ts
