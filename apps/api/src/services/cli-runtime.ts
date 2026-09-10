@@ -102,6 +102,8 @@ const sessions = new Map<string, CliSession>();
 const interruptingProjects = new Set<string>();
 const lastBackgroundInterruptAtByProject = new Map<string, number>();
 const BACKGROUND_INTERRUPT_COOLDOWN_MS = 2 * 60_000;
+/** How long a finished session stays readable in the registry before reaping. */
+const SESSION_REAP_DELAY_MS = 5 * 60_000;
 /**
  * Tool-call timing state shared across sessions (preserves prior behavior
  * where the original `toolStartTimes` was a module-level Map).
@@ -112,6 +114,114 @@ const parserState: ParserState = { toolStartTimes: new Map() };
 
 function cliRunId(prefix = "cli") {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+}
+
+/**
+ * Drop a finished session from a registry — but only if its project slot has
+ * not already been taken over by a newer session.
+ *
+ * Deleting by key alone was a live-session bug: a follow-up run started within
+ * the reap delay takes the slot, and the *previous* run's pending timer then
+ * evicted the new, running session. The API went blind to its own agent —
+ * `resumeSession`'s "already running" guard stopped firing, and answering an
+ * askUser prompt spawned a second process against the same runtime thread,
+ * which the CLI rejected with "thread-store conflict: ... already has an active
+ * writer". The original run kept working (its listeners hold the session
+ * directly, not the map entry), so the UI showed a failure over a healthy run.
+ *
+ * Returns whether anything was removed.
+ */
+export function reapSession<T extends { projectId: string }>(
+  registry: Map<string, T>,
+  finished: T,
+): boolean {
+  if (registry.get(finished.projectId) !== finished) return false;
+  registry.delete(finished.projectId);
+  return true;
+}
+
+/** Reap a finished session once its transcript has had time to drain. */
+function scheduleSessionReap(session: CliSession): void {
+  setTimeout(() => {
+    reapSession(sessions, session);
+  }, SESSION_REAP_DELAY_MS).unref?.();
+}
+
+/** Probe whether a pid is alive. Signal 0 delivers nothing; it only checks. */
+function isPidAlive(pid: unknown): boolean {
+  if (typeof pid !== "number" || !Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // EPERM means the process exists but we may not signal it — still alive.
+    return (err as NodeJS.ErrnoException)?.code === "EPERM";
+  }
+}
+
+export interface LiveAgentProbe {
+  live: boolean;
+  /** Where the answer came from: the registry, the on-disk state, or nothing. */
+  source: "memory" | "disk" | "none";
+  sessionId?: string;
+  runtime?: AgentRuntime;
+  pid?: number;
+}
+
+/**
+ * Is an agent process still running for this project?
+ *
+ * The in-memory registry is not authoritative — it is per-process and can lose
+ * an entry while the child is still working. `.bidwright/session.json` is the
+ * second opinion: it carries the child pid plus `ownerPid`, the API process
+ * that spawned it. We trust the recorded pid only when `ownerPid` is us,
+ * because a pid from a previous API process (or from a workspace snapshot
+ * restored on another host) refers to a process that either no longer exists
+ * or was never ours, and pid numbers get reused.
+ *
+ * Callers use this to tell "no agent is running" apart from "we lost the
+ * handle" — the distinction that decides whether answering a question or
+ * pressing Resume may spawn a second process on the same runtime thread.
+ */
+export async function probeLiveAgent(
+  projectId: string,
+  projectDir?: string,
+): Promise<LiveAgentProbe> {
+  const session = sessions.get(projectId);
+  if (session) {
+    return {
+      live: session.status === "running" && isPidAlive(session.pid || session.process?.pid),
+      source: "memory",
+      sessionId: session.sessionId,
+      runtime: session.runtime,
+      pid: session.pid,
+    };
+  }
+
+  if (!projectDir) return { live: false, source: "none" };
+
+  const sessionJsonPath = join(projectDir, ".bidwright", "session.json");
+  if (!existsSync(sessionJsonPath)) return { live: false, source: "none" };
+
+  try {
+    const saved = JSON.parse(await readFile(sessionJsonPath, "utf-8")) as {
+      pid?: number;
+      ownerPid?: number;
+      status?: string;
+      sessionId?: string;
+      runtime?: AgentRuntime;
+    };
+    const ownedByThisApi = saved.ownerPid === process.pid;
+    return {
+      live: ownedByThisApi && saved.status === "running" && isPidAlive(saved.pid),
+      source: "disk",
+      sessionId: saved.sessionId,
+      runtime: saved.runtime,
+      pid: saved.pid,
+    };
+  } catch {
+    return { live: false, source: "none" };
+  }
 }
 
 function sanitizeRuntimeEventForPersistence(value: unknown): unknown {
@@ -235,6 +345,10 @@ async function persistSessionState(
     join(sessionJsonDir, "session.json"),
     JSON.stringify({
       pid: session.process.pid,
+      // The API process that owns that pid. A pid written by an earlier API
+      // process (or restored with a workspace snapshot from another host) must
+      // never be probed for liveness — see probeLiveAgent.
+      ownerPid: process.pid,
       runtime: session.runtime,
       sessionId: session.sessionId,
       startedAt: session.startedAt,
@@ -655,12 +769,7 @@ function wireChildProcess(
       data: { status: session.status, exitCode: code, signal },
     });
     events.emit("done", session.status);
-    setTimeout(
-      () => {
-        sessions.delete(session.projectId);
-      },
-      5 * 60 * 1000,
-    );
+    scheduleSessionReap(session);
   });
 
   child.on("error", (err) => {
@@ -668,12 +777,7 @@ function wireChildProcess(
     session.status = "failed";
     events.emit("event", { type: "error", data: { message: err.message } });
     events.emit("done", "failed");
-    setTimeout(
-      () => {
-        sessions.delete(session.projectId);
-      },
-      5 * 60 * 1000,
-    );
+    scheduleSessionReap(session);
   });
 }
 
@@ -936,7 +1040,12 @@ export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession
   // runtime rejected it outright — "thread-store conflict: thread <id> already
   // has an active writer" — killing the new run. Codex was right to refuse: the
   // previous session was mid-flight and kept emitting for another 90 seconds.
-  if (session && session.status === "running") {
+  //
+  // The check goes through probeLiveAgent rather than the registry alone: when
+  // the in-memory entry was missing the guard silently passed and we collided
+  // anyway, which is the failure it was written to prevent.
+  const liveAgent = await probeLiveAgent(opts.projectId, opts.projectDir);
+  if (liveAgent.live) {
     throw Object.assign(
       new Error(
         `A session is already running for this project. Stop it before resuming, or wait for it to finish.`,

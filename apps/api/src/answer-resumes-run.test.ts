@@ -24,7 +24,20 @@ test("answering a question resumes a run that already stopped", () => {
   // Without this the answer sat in run history with nobody polling for it.
   const body = answerHandler();
   assert.match(body, /startResumedSession\(request, \{/, "must start a resumed session");
-  assert.match(body, /if \(session\) \{/, "must not resume when a live session is already polling");
+});
+
+test("answering a question does not resume on top of a live agent", () => {
+  // Deciding this from the in-memory handle was the bug: an agent we had lost
+  // track of looked stopped, so we resumed over it, the runtime refused the
+  // second writer on the thread, and the user saw a failure -- while the
+  // original run had the answer and went on to finish. Liveness must be probed.
+  // Behaviour is covered in services/cli-runtime-liveness.test.ts.
+  const body = answerHandler();
+  const resumeIndex = body.indexOf("startResumedSession(request, {");
+  const guardIndex = body.indexOf("liveAgent.live");
+  assert.notEqual(guardIndex, -1, "must probe for a live agent");
+  assert.ok(guardIndex < resumeIndex, "the probe must gate the resume");
+  assert.match(body, /probeLiveAgent\(projectId, resolveProjectDir\(projectId\)\)/);
 });
 
 test("the resumed agent is told the question and the answer", () => {
