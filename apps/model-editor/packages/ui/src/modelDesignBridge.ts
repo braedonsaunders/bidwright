@@ -479,6 +479,8 @@ export function installModelDesignBridge(app: IApplication): () => void {
             return;
         const target = event.source as Window;
         try {
+            if (window.document.body.dataset["bidwrightModelLoading"] === "true")
+                throw new Error("The model is still opening");
             const document = app.activeView?.document;
             if (!document) throw new Error("The model is still opening");
             const editedParts =

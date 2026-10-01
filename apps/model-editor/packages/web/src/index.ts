@@ -2,11 +2,12 @@
 // See LICENSE file in the project root for full license information.
 
 import { AppBuilder } from "@chili3d/builder";
-import { type IApplication, Logger } from "@chili3d/core";
+import { type IApplication, Logger, Transaction } from "@chili3d/core";
 import { Loading } from "./loading";
 
 const loading = new Loading();
 document.body.appendChild(loading);
+document.body.dataset["bidwrightModelLoading"] = "true";
 
 const startupParams = new URLSearchParams(window.location.search);
 const startupModelUrl = startupParams.get("url") ?? startupParams.get("model");
@@ -56,10 +57,6 @@ async function fetchStartupModelFile(url: string, preferredFileName?: string) {
     return new File([blob], fileName, { type: blob.type });
 }
 
-type ImportCapableApplication = IApplication & {
-    importFiles(files: File[]): Promise<void>;
-};
-
 async function handleApplicaionBuilt(app: IApplication) {
     document.body.removeChild(loading);
 
@@ -77,15 +74,31 @@ async function handleApplicaionBuilt(app: IApplication) {
     if (modelUrl) {
         Logger.info(`loading file from: ${modelUrl}`);
         try {
-            const file = startupModelFilePromise ? await startupModelFilePromise : await fetchStartupModelFile(modelUrl, documentName);
+            const file = startupModelFilePromise
+                ? await startupModelFilePromise
+                : await fetchStartupModelFile(modelUrl, documentName);
             if (file instanceof Error) throw file;
-            await (app as ImportCapableApplication).importFiles([file]);
+            if (file.name.toLowerCase().endsWith(".cd")) {
+                await app.loadDocument(JSON.parse(await file.text()));
+            } else {
+                const document = app.activeView!.document;
+                const transaction = new Transaction(document, "Import model");
+                transaction.start();
+                try {
+                    await app.dataExchange.import(document, [file]);
+                    transaction.commit();
+                } catch (error) {
+                    transaction.rollback();
+                    throw error;
+                }
+            }
             app.activeView?.cameraController.fitContent();
         } catch (error) {
             Logger.error(error);
-            await app.loadFileFromUrl(modelUrl, documentName);
+            throw error;
         }
     }
+    delete document.body.dataset["bidwrightModelLoading"];
 }
 
 // prettier-ignore
