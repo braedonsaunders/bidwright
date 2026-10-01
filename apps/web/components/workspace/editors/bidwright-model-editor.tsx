@@ -402,6 +402,8 @@ export function BidwrightModelEditor({
   const [selection, setSelection] = useState<BidwrightModelSelectionMessage | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const [assistantToolbar, setAssistantToolbar] = useState<HTMLDivElement | null>(null);
+  const canDesign = Boolean(projectId && variant === "editor");
   const { containerRef, expanded, nativeFullscreen, toggleFullscreen } = useViewerFullscreen();
   const handledSendEventsRef = useRef<Set<string>>(new Set());
   const handledLineItemEventsRef = useRef<Set<string>>(new Set());
@@ -757,7 +759,7 @@ export function BidwrightModelEditor({
 
   return (
     <div ref={containerRef} className={cn("relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", expanded && !nativeFullscreen && "fixed inset-0 z-[200]", className)}>
-      {showHeader && (
+      {(showHeader || canDesign) && (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
           <Box className="h-4 w-4 shrink-0 text-accent" />
           <div className="min-w-0 flex-1">
@@ -795,6 +797,7 @@ export function BidwrightModelEditor({
               {sendingSelection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
             </Button>
           )}
+          {canDesign && <div ref={setAssistantToolbar} className="flex shrink-0 items-center gap-1 border-r border-line pr-2" />}
           <Button variant="ghost" size="sm" title={expanded ? "Exit fullscreen" : "Expand model to fullscreen"} aria-label={expanded ? "Exit fullscreen" : "Expand model to fullscreen"} aria-pressed={expanded} onClick={() => void toggleFullscreen()}>
             {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
           </Button>
@@ -848,7 +851,7 @@ export function BidwrightModelEditor({
           </div>
         )}
       </div>
-      {projectId && variant === "editor" && <ModelDesignAssistant key={editorUrl} iframe={iframeRef} projectId={projectId} fileName={fileName} />}
+      {projectId && variant === "editor" && <ModelDesignAssistant key={editorUrl} iframe={iframeRef} projectId={projectId} fileName={fileName} toolbar={assistantToolbar} />}
       </div>
     </div>
   );

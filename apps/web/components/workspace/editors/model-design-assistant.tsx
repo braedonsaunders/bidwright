@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { Download, Loader2, Send, Square, Undo2, Sparkles } from "lucide-react";
+import { useCallback, useEffect, useId, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
+import { Download, Loader2, PanelRightClose, Send, Square, Undo2, Sparkles } from "lucide-react";
 import { Button } from "@braedonsaunders/appkit-ui";
 import type { ModelDesign } from "@bidwright/domain";
 import { ApiError, apiRequest } from "@/lib/api";
@@ -27,9 +28,14 @@ interface Props {
   iframe: RefObject<HTMLIFrameElement | null>;
   projectId: string;
   fileName?: string | null;
+  toolbar: HTMLDivElement | null;
 }
 
-export function ModelDesignAssistant({ iframe, projectId, fileName }: Props) {
+export function ModelDesignAssistant({ iframe, projectId, fileName, toolbar }: Props) {
+  const [expanded, setExpanded] = useState(false);
+  const panelId = useId();
+  const toggleRef = useRef<HTMLButtonElement>(null);
+  const promptRef = useRef<HTMLTextAreaElement>(null);
   const [state, setState] = useState<ModelState | null>(null);
   const [history, setHistory] = useState<Message[]>([]);
   const [prompt, setPrompt] = useState("");
@@ -101,7 +107,9 @@ export function ModelDesignAssistant({ iframe, projectId, fileName }: Props) {
     return () => { disposed = true; clearTimeout(timer); };
   }, [request]);
 
-  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [history, status]);
+  useEffect(() => { scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" }); }, [history, status, expanded]);
+
+  useEffect(() => { if (expanded) promptRef.current?.focus(); }, [expanded]);
 
   async function submit() {
     const text = prompt.trim();
@@ -169,7 +177,7 @@ export function ModelDesignAssistant({ iframe, projectId, fileName }: Props) {
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setState(next);
-    } catch (err) { if (mounted.current) setError(designError(err)); }
+    } catch (err) { if (mounted.current) { setError(designError(err)); setExpanded(true); } }
     finally { if (mounted.current) setExporting(false); }
   }
 
@@ -186,34 +194,43 @@ export function ModelDesignAssistant({ iframe, projectId, fileName }: Props) {
     finally { if (mounted.current) { setBusy(false); setStatus("Ready to design"); } }
   }
 
+  // Keep the bridge and conversation mounted while the dock is collapsed.
+  // Portal the model controls into the shared toolbar so export stays available.
   return (
-    <aside className="flex w-[320px] min-w-[260px] max-w-[38%] shrink-0 flex-col border-l border-line bg-panel" aria-label="3D design assistant">
-      <div className="flex items-center justify-between border-b border-line px-3 py-2">
-        <div className="flex items-center gap-2 text-xs font-medium"><Sparkles className="h-4 w-4 text-accent" />Design with AI</div>
-        <div className="flex gap-1">
-          <Button size="sm" variant="ghost" title="Undo model change" disabled={!state || busy || exporting} onClick={async () => {
-            try { setState(await request("undo")); setError(null); } catch (err) { setError(String(err)); }
-          }}><Undo2 className="h-3.5 w-3.5" /></Button>
-          <Button size="sm" variant="secondary" title="Export current geometry to SolidWorks as STEP" disabled={!state || busy || exporting} onClick={() => void exportStep()}>
-            {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} STEP
-          </Button>
+    <>
+      {toolbar && createPortal(<>
+        <Button ref={toggleRef} size="sm" variant={expanded ? "secondary" : "ghost"} aria-label="Design with AI" aria-expanded={expanded} aria-controls={panelId} title={error ? `Design with AI: ${error}` : busy ? status : "Design with AI"} onClick={() => setExpanded(value => !value)}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-accent" />}<span className="hidden sm:inline">Design with AI</span>
+          {error && <span className="h-1.5 w-1.5 rounded-full bg-red-400" aria-label="Design needs attention" />}
+        </Button>
+        <Button size="sm" variant="ghost" aria-label="Undo model change" title="Undo model change" disabled={!state || busy || exporting} onClick={async () => {
+          try { setState(await request("undo")); setError(null); } catch (err) { setError(String(err)); setExpanded(true); }
+        }}><Undo2 className="h-3.5 w-3.5" /></Button>
+        <Button size="sm" variant="secondary" title="Export current geometry to SolidWorks as STEP" disabled={!state || busy || exporting} onClick={() => void exportStep()}>
+          {exporting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Download className="h-3.5 w-3.5" />} STEP
+        </Button>
+      </>, toolbar)}
+      <aside id={panelId} hidden={!expanded} className={expanded ? "flex w-[320px] min-w-[260px] max-w-[45%] shrink-0 flex-col border-l border-line bg-panel" : "hidden"} aria-label="3D design assistant">
+        <div className="flex items-center justify-between border-b border-line px-3 py-2">
+          <div className="flex items-center gap-2 text-xs font-medium"><Sparkles className="h-4 w-4 text-accent" />Design with AI</div>
+          <Button size="sm" variant="ghost" title="Collapse AI panel" aria-label="Collapse AI panel" onClick={() => { setExpanded(false); toggleRef.current?.focus(); }}><PanelRightClose className="h-3.5 w-3.5" /></Button>
         </div>
-      </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
-        {!history.length && <div className="text-xs leading-relaxed text-fg/60">Describe a part or assembly, including dimensions and material. You can revise it here or select a part in the model to identify what to change.<p className="mt-3 text-fg/80">“Build a 48 × 30 × 36 inch steel stand using 2 inch square tube with 1/8 inch walls and a 1/4 inch top plate.”</p></div>}
-        {history.map((message, index) => <div key={index} className={`whitespace-pre-wrap rounded-md px-3 py-2 text-xs leading-relaxed ${message.role === "user" ? "bg-accent/10 text-fg" : "bg-bg text-fg/80"}`}>{message.content}</div>)}
-        {state?.recipe && <details className="rounded-md border border-line p-2 text-xs" open>
-          <summary className="cursor-pointer text-fg/70">Dimensions ({state.recipe.units}) · {state.recipe.parts.length} parts</summary>
-          <div className="mt-2 space-y-1.5">{Object.entries(state.recipe.parameters).map(([key, value]) => <label key={`${key}-${value}`} className="flex items-center justify-between gap-2"><span className="truncate text-fg/60">{key.replace(/_/g, " ")}</span><input aria-label={key} type="number" step="any" defaultValue={value} disabled={busy || exporting} className="w-24 rounded border border-line bg-bg px-2 py-1 text-right" onBlur={event => { if (event.target.value.trim() && Number(event.target.value) !== value) void changeParameter(key, Number(event.target.value)); }} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
-          {state.recipe.assumptions.length > 0 && <div className="mt-3 text-fg/55">Assumptions: {state.recipe.assumptions.join("; ")}</div>}
-        </details>}
-        {error && <div role="alert" className="rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-400 break-words">{error}</div>}
-      </div>
-      <div className="border-t border-line p-3">
-        <div role="status" className="mb-2 flex items-center gap-1.5 text-[11px] text-fg/50">{busy && <Loader2 className="h-3 w-3 animate-spin" />}{status}</div>
-        <textarea aria-label="Describe your 3D model" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Describe what you want built…" rows={3} className="w-full resize-none rounded-md border border-line bg-bg px-2 py-2 text-xs outline-none focus:border-accent" onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} />
-        <div className="mt-2 flex justify-end">{busy ? <Button size="sm" variant="secondary" onClick={() => controller.current?.abort()} disabled={!controller.current}><Square className="h-3 w-3" />Stop</Button> : <Button size="sm" disabled={!state || !prompt.trim() || exporting} onClick={() => void submit()}><Send className="h-3 w-3" />Build</Button>}</div>
-      </div>
-    </aside>
+        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
+          {!history.length && <div className="text-xs leading-relaxed text-fg/60">Describe a part or assembly, including dimensions and material. You can revise it here or select a part in the model to identify what to change.<p className="mt-3 text-fg/80">“Build a 48 × 30 × 36 inch steel stand using 2 inch square tube with 1/8 inch walls and a 1/4 inch top plate.”</p></div>}
+          {history.map((message, index) => <div key={index} className={`whitespace-pre-wrap rounded-md px-3 py-2 text-xs leading-relaxed ${message.role === "user" ? "bg-accent/10 text-fg" : "bg-bg text-fg/80"}`}>{message.content}</div>)}
+          {state?.recipe && <details className="rounded-md border border-line p-2 text-xs" open>
+            <summary className="cursor-pointer text-fg/70">Dimensions ({state.recipe.units}) · {state.recipe.parts.length} parts</summary>
+            <div className="mt-2 space-y-1.5">{Object.entries(state.recipe.parameters).map(([key, value]) => <label key={`${key}-${value}`} className="flex items-center justify-between gap-2"><span className="truncate text-fg/60">{key.replace(/_/g, " ")}</span><input aria-label={key} type="number" step="any" defaultValue={value} disabled={busy || exporting} className="w-24 rounded border border-line bg-bg px-2 py-1 text-right" onBlur={event => { if (event.target.value.trim() && Number(event.target.value) !== value) void changeParameter(key, Number(event.target.value)); }} onKeyDown={event => { if (event.key === "Enter") event.currentTarget.blur(); }} /></label>)}</div>
+            {state.recipe.assumptions.length > 0 && <div className="mt-3 text-fg/55">Assumptions: {state.recipe.assumptions.join("; ")}</div>}
+          </details>}
+          {error && <div role="alert" className="rounded border border-red-500/30 bg-red-500/5 p-2 text-xs text-red-400 break-words">{error}</div>}
+        </div>
+        <div className="border-t border-line p-3">
+          <div role="status" className="mb-2 flex items-center gap-1.5 text-[11px] text-fg/50">{busy && <Loader2 className="h-3 w-3 animate-spin" />}{status}</div>
+          <textarea ref={promptRef} aria-label="Describe your 3D model" value={prompt} onChange={event => setPrompt(event.target.value)} placeholder="Describe what you want built…" rows={3} className="w-full resize-none rounded-md border border-line bg-bg px-2 py-2 text-xs outline-none focus:border-accent" onKeyDown={event => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(); } }} />
+          <div className="mt-2 flex justify-end">{busy ? <Button size="sm" variant="secondary" onClick={() => controller.current?.abort()} disabled={!controller.current}><Square className="h-3 w-3" />Stop</Button> : <Button size="sm" disabled={!state || !prompt.trim() || exporting} onClick={() => void submit()}><Send className="h-3 w-3" />Build</Button>}</div>
+        </div>
+      </aside>
+    </>
   );
 }
