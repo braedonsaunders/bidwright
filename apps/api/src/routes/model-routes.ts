@@ -9,6 +9,8 @@ import {
   runScanSegmentation,
 } from "../services/scan-takeoff-service.js";
 import { requireRequestAiConfig } from "../services/request-ai-config.js";
+import { generateModelDesign } from "../services/model-design-service.js";
+import { validateModelDesign } from "@bidwright/domain";
 import {
   createModelTakeoffLink,
   createModelTakeoffLinks,
@@ -188,6 +190,25 @@ function routeError(reply: any, error: unknown) {
 }
 
 export async function modelRoutes(app: FastifyInstance) {
+  app.post("/api/models/:projectId/design", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+    const parsed = z.object({
+      prompt: z.string().trim().min(1).max(12000),
+      recipe: z.unknown().optional(),
+      context: z.unknown().optional(),
+      history: z.array(z.object({ role: z.enum(["user", "assistant"]), content: z.string().max(12000) })).max(16).optional(),
+      feedback: z.string().max(4000).optional(),
+    }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ message: "Invalid design request", issues: parsed.error.flatten() });
+    if (JSON.stringify(parsed.data.context ?? {}).length > 100000) return reply.code(400).send({ message: "Model context is too large" });
+    try {
+      if (parsed.data.recipe != null) validateModelDesign(parsed.data.recipe);
+    } catch (error) { return routeError(reply, error); }
+    const config = await requireRequestAiConfig(request);
+    return generateModelDesign(config, parsed.data as Parameters<typeof generateModelDesign>[1]);
+  });
+
   app.get("/api/models/:projectId/ingest-capabilities", async (request, reply) => {
     const query = request.query as { format?: string };
     try {

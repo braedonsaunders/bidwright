@@ -5,6 +5,7 @@ import packages from "./package.json";
 export default defineConfig({
     exclude: ["**/cpp/**"],
     globals: true,
+    pool: { type: "forks", maxWorkers: 2 },
     testEnvironment: "happy-dom",
     tools: {
         rspack: {

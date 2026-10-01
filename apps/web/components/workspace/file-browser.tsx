@@ -2586,6 +2586,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       )}
       {editorMode === "model" && (
         <BidwrightModelEditor
+          showHeader
           fileName={editorFileName}
           projectId={projectId}
           modelDocumentId={modelEditorFileNodeId}
@@ -2655,6 +2656,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               <div className="flex-1 min-h-[400px]">
                 {isBidwrightEditableModel(selectedItem.name) ? (
                   <BidwrightModelEditor
+                    showHeader
                     fileUrl={previewUrl}
                     fileName={selectedItem.name}
                     projectId={projectId}

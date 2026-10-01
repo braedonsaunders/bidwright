@@ -54,6 +54,10 @@ export class TestEdge implements IEdge {
     trim(start: number, end: number): IEdge {
         throw new Error("Method not implemented.");
     }
+    isValid(): boolean {
+        return true;
+    }
+
     isClosed(): boolean {
         throw new Error("Method not implemented.");
     }

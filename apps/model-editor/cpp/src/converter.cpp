@@ -196,7 +196,7 @@ ShapeNode initShapeNode(const TopoDS_Shape& shape, const Handle(XCAFDoc_ShapeToo
     return childShapeNode;
 }
 
-ShapeNode initGroupNode(const TopoDS_Shape& shape, const Handle_XCAFDoc_ShapeTool& shapeTool)
+ShapeNode initGroupNode(const TopoDS_Shape& shape, const opencascade::handle<XCAFDoc_ShapeTool>& shapeTool)
 {
     ShapeNode groupNode = {
         .shape = std::nullopt, .color = std::nullopt, .children = {}, .name = getShapeName(shape, shapeTool)
@@ -205,8 +205,8 @@ ShapeNode initGroupNode(const TopoDS_Shape& shape, const Handle_XCAFDoc_ShapeToo
     return groupNode;
 }
 
-ShapeNode parseShape(TopoDS_Shape& shape, const Handle_XCAFDoc_ShapeTool& shapeTool,
-    const Handle_XCAFDoc_ColorTool& colorTool)
+ShapeNode parseShape(TopoDS_Shape& shape, const opencascade::handle<XCAFDoc_ShapeTool>& shapeTool,
+    const opencascade::handle<XCAFDoc_ColorTool>& colorTool)
 {
     if (shape.ShapeType() == TopAbs_COMPOUND || shape.ShapeType() == TopAbs_COMPSOLID) {
         auto node = initGroupNode(shape, shapeTool);
@@ -290,7 +290,8 @@ public:
     static std::string convertToBrep(const TopoDS_Shape& input)
     {
         std::ostringstream oss;
-        BRepTools::Write(input, oss);
+        // Persist exact geometry, not the viewport triangulation cache.
+        BRepTools::Write(input, oss, false, false, TopTools_FormatVersion_CURRENT);
         return oss.str();
     }
 

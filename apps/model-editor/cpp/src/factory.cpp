@@ -288,18 +288,18 @@ public:
     static ShapeResult bezier(const Vector3Array& points, const NumberArray& weights)
     {
         std::vector<Vector3> pts = vecFromJSArray<Vector3>(points);
-        TColgp_Array1OfPnt arrayofPnt(1, pts.size());
+        NCollection_Array1<gp_Pnt> arrayofPnt(1, pts.size());
         for (int i = 0; i < pts.size(); i++) {
             arrayofPnt.SetValue(i + 1, Vector3::toPnt(pts[i]));
         }
 
         std::vector<double> wts = vecFromJSArray<double>(weights);
-        TColStd_Array1OfReal arrayOfWeight(1, wts.size());
+        NCollection_Array1<double> arrayOfWeight(1, wts.size());
         for (int i = 0; i < wts.size(); i++) {
             arrayOfWeight.SetValue(i + 1, wts[i]);
         }
 
-        Handle_Geom_Curve curve = wts.size() > 0 ? new Geom_BezierCurve(arrayofPnt, arrayOfWeight) : new Geom_BezierCurve(arrayofPnt);
+        opencascade::handle<Geom_Curve> curve = wts.size() > 0 ? new Geom_BezierCurve(arrayofPnt, arrayOfWeight) : new Geom_BezierCurve(arrayofPnt);
         BRepBuilderAPI_MakeEdge edge(curve);
         if (!edge.IsDone()) {
             return ShapeResult { TopoDS_Shape(), false, "Failed to create bezier" };
@@ -418,7 +418,7 @@ public:
 
     static ShapeResult makeThickSolidByJoin(const TopoDS_Shape& shape, const ShapeArray& shapes, double thickness)
     {
-        TopTools_ListOfShape shapesList = shapeArrayToListOfShape(shapes);
+        NCollection_List<TopoDS_Shape> shapesList = shapeArrayToListOfShape(shapes);
 
         BRepOffsetAPI_MakeThickSolid makeThickSolid;
         makeThickSolid.MakeThickSolidByJoin(shape, shapesList, thickness, 1e-6);
@@ -446,8 +446,8 @@ public:
     static ShapeResult booleanOperate(BRepAlgoAPI_BooleanOperation& boolOperater, const ShapeArray& args,
         const ShapeArray& tools)
     {
-        TopTools_ListOfShape argsList = shapeArrayToListOfShape(args);
-        TopTools_ListOfShape toolsList = shapeArrayToListOfShape(tools);
+        NCollection_List<TopoDS_Shape> argsList = shapeArrayToListOfShape(args);
+        NCollection_List<TopoDS_Shape> toolsList = shapeArrayToListOfShape(tools);
 
         boolOperater.SetToFillHistory(false);
         boolOperater.SetArguments(argsList);
@@ -494,7 +494,7 @@ public:
     {
         std::vector<int> edgeVec = vecFromJSArray<int>(edges);
 
-        TopTools_IndexedMapOfShape edgeMap;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edgeMap;
         TopExp::MapShapes(shape, TopAbs_EDGE, edgeMap);
 
         BRepFilletAPI_MakeFillet makeFillet(shape);
@@ -513,7 +513,7 @@ public:
     {
         std::vector<int> edgeVec = vecFromJSArray<int>(edges);
 
-        TopTools_IndexedMapOfShape edgeMap;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> edgeMap;
         TopExp::MapShapes(shape, TopAbs_EDGE, edgeMap);
 
         BRepFilletAPI_MakeChamfer makeChamfer(shape);

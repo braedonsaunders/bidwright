@@ -629,6 +629,7 @@ interface EmbindModule {
   EdgeMeshData: {};
   FaceMeshData: {};
   MeshData: {};
+  kernelVersion(): string;
   GeomAbs_Shape: {GeomAbs_C0: GeomAbs_ShapeValue<0>, GeomAbs_C1: GeomAbs_ShapeValue<2>, GeomAbs_C2: GeomAbs_ShapeValue<4>, GeomAbs_C3: GeomAbs_ShapeValue<5>, GeomAbs_CN: GeomAbs_ShapeValue<6>, GeomAbs_G1: GeomAbs_ShapeValue<1>, GeomAbs_G2: GeomAbs_ShapeValue<3>};
   GeomAbs_JoinType: {GeomAbs_Arc: GeomAbs_JoinTypeValue<0>, GeomAbs_Intersection: GeomAbs_JoinTypeValue<2>, GeomAbs_Tangent: GeomAbs_JoinTypeValue<1>};
   TopAbs_ShapeEnum: {TopAbs_VERTEX: TopAbs_ShapeEnumValue<7>, TopAbs_EDGE: TopAbs_ShapeEnumValue<6>, TopAbs_WIRE: TopAbs_ShapeEnumValue<5>, TopAbs_FACE: TopAbs_ShapeEnumValue<4>, TopAbs_SHELL: TopAbs_ShapeEnumValue<3>, TopAbs_SOLID: TopAbs_ShapeEnumValue<2>, TopAbs_COMPOUND: TopAbs_ShapeEnumValue<0>, TopAbs_COMPSOLID: TopAbs_ShapeEnumValue<1>, TopAbs_SHAPE: TopAbs_ShapeEnumValue<8>};
@@ -735,6 +736,7 @@ interface EmbindModule {
   TopoDS_Compound: {};
   TopoDS_CompSolid: {};
   Shape: {
+    isValid(_0: TopoDS_Shape): boolean;
     clean(_0: TopoDS_Shape): void;
     clone(_0: TopoDS_Shape): TopoDS_Shape;
     sectionSS(_0: TopoDS_Shape, _1: TopoDS_Shape): TopoDS_Shape;

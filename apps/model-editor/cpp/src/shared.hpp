@@ -6,6 +6,14 @@
 #include <emscripten/bind.h>
 #include <emscripten/val.h>
 
+#include <Standard_Handle.hxx>
+#include <NCollection_List.hxx>
+#include <NCollection_Sequence.hxx>
+#include <NCollection_IndexedMap.hxx>
+#include <NCollection_IndexedDataMap.hxx>
+#include <TopTools_ShapeMapHasher.hxx>
+#include <TopoDS_Shape.hxx>
+#include <NCollection_Array1.hxx>
 #include <gp_Ax1.hxx>
 #include <gp_Ax2.hxx>
 #include <gp_Ax3.hxx>
@@ -16,10 +24,10 @@
 
 #define STR(x) #x
 #define REGISTER_HANDLE(T)                                       \
-    class_<Handle_##T>(STR(Handle_##T))                          \
+    class_<opencascade::handle<T>>(STR(Handle_##T))                          \
         .constructor<const T*>()                                 \
-        .function("get", &Handle_##T::get, allow_raw_pointers()) \
-        .function("isNull", &Handle_##T::IsNull)
+        .function("get", &opencascade::handle<T>::get, allow_raw_pointers()) \
+        .function("isNull", &opencascade::handle<T>::IsNull)
 
 class Math {
 public:

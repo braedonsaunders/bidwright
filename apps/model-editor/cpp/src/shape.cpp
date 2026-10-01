@@ -9,6 +9,7 @@
 #include <BRepAlgoAPI_Section.hxx>
 #include <BRepAlgoAPI_Splitter.hxx>
 #include <BRepBndLib.hxx>
+#include <BRepCheck_Analyzer.hxx>
 #include <BRepBuilderAPI_Copy.hxx>
 #include <BRepBuilderAPI_MakeEdge.hxx>
 #include <BRepBuilderAPI_MakeFace.hxx>
@@ -36,7 +37,6 @@
 #include <ShapeFix_Shape.hxx>
 #include <TopExp.hxx>
 #include <TopExp_Explorer.hxx>
-#include <TopTools_IndexedDataMapOfShapeListOfShape.hxx>
 #include <TopoDS.hxx>
 #include <TopoDS_CompSolid.hxx>
 #include <TopoDS_Compound.hxx>
@@ -59,6 +59,10 @@ using namespace emscripten;
 
 class Shape {
 public:
+    static bool isValid(const TopoDS_Shape& shape)
+    {
+        return !shape.IsNull() && BRepCheck_Analyzer(shape).IsValid();
+    }
     static BoundingBox boundingBox(const TopoDS_Shape& shape, bool useTriangulation)
     {
         Bnd_Box obx;
@@ -100,7 +104,7 @@ public:
     static ShapeArray findAncestor(const TopoDS_Shape& from, const TopoDS_Shape& subShape,
         const TopAbs_ShapeEnum& ancestorType)
     {
-        TopTools_IndexedDataMapOfShapeListOfShape map;
+        NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> map;
         TopExp::MapShapesAndAncestors(from, subShape.ShapeType(), ancestorType, map);
         auto index = map.FindIndex(subShape);
         auto shapes = map.FindFromIndex(index);
@@ -110,7 +114,7 @@ public:
 
     static ShapeArray findSubShapes(const TopoDS_Shape& shape, const TopAbs_ShapeEnum& shapeType)
     {
-        TopTools_IndexedMapOfShape indexShape;
+        NCollection_IndexedMap<TopoDS_Shape, TopTools_ShapeMapHasher> indexShape;
         TopExp::MapShapes(shape, shapeType, indexShape);
 
         return ShapeArray(val::array(indexShape.cbegin(), indexShape.cend()));
@@ -140,8 +144,8 @@ public:
 
     static TopoDS_Shape splitShapes(const ShapeArray& arguments, const ShapeArray& tools)
     {
-        TopTools_ListOfShape argumentsList = shapeArrayToListOfShape(arguments);
-        TopTools_ListOfShape toolsList = shapeArrayToListOfShape(tools);
+        NCollection_List<TopoDS_Shape> argumentsList = shapeArrayToListOfShape(arguments);
+        NCollection_List<TopoDS_Shape> toolsList = shapeArrayToListOfShape(tools);
         BRepAlgoAPI_Splitter splitter;
         splitter.SetToFillHistory(false);
         splitter.SetArguments(argumentsList);
@@ -207,13 +211,13 @@ public:
         std::vector<TopoDS_Shape> subShapesVector = vecFromJSArray<TopoDS_Shape>(subShapes);
 
         auto source = hasOnlyOneSub(shape, TopAbs_FACE) ? shapeWires(shape) : shape;
-        TopTools_IndexedDataMapOfShapeListOfShape mapEF;
+        NCollection_IndexedDataMap<TopoDS_Shape, NCollection_List<TopoDS_Shape>, TopTools_ShapeMapHasher> mapEF;
         TopExp::MapShapesAndAncestors(source, TopAbs_EDGE, TopAbs_FACE, mapEF);
         BRepTools_ReShape reShape;
         for (auto& subShape : subShapesVector) {
             reShape.Remove(subShape);
 
-            TopTools_ListOfShape faces;
+            NCollection_List<TopoDS_Shape> faces;
             if (mapEF.FindFromKey(subShape, faces)) {
                 for (auto& face : faces) {
                     reShape.Remove(face);
@@ -256,7 +260,7 @@ public:
         trsf.SetTransformation(ax3);
 
         HLRAlgo_Projector projector(trsf, false, false);
-        Handle_HLRBRep_Algo algo = new HLRBRep_Algo();
+        opencascade::handle<HLRBRep_Algo> algo = new HLRBRep_Algo();
         algo->Add(shape);
         algo->Projector(projector);
         algo->Update();
@@ -278,7 +282,7 @@ class Edge {
 public:
     static TopoDS_Edge fromCurve(const Geom_Curve* curve)
     {
-        Handle_Geom_Curve handleCurve(curve);
+        opencascade::handle<Geom_Curve> handleCurve(curve);
         BRepBuilderAPI_MakeEdge builder(handleCurve);
         return builder.Edge();
     }
@@ -290,11 +294,11 @@ public:
         return props.Mass();
     }
 
-    static Handle_Geom_TrimmedCurve curve(const TopoDS_Edge& edge)
+    static opencascade::handle<Geom_TrimmedCurve> curve(const TopoDS_Edge& edge)
     {
         double start(0.0), end(0.0);
         auto curve = BRep_Tool::Curve(edge, start, end);
-        Handle_Geom_TrimmedCurve trimmedCurve = new Geom_TrimmedCurve(curve, start, end);
+        opencascade::handle<Geom_TrimmedCurve> trimmedCurve = new Geom_TrimmedCurve(curve, start, end);
         return trimmedCurve;
     }
 
@@ -310,8 +314,8 @@ public:
     {
         double start(0.0), end(0.0);
         auto curve = BRep_Tool::Curve(edge, start, end);
-        Handle_Geom_TrimmedCurve trimmedCurve = new Geom_TrimmedCurve(curve, start, end);
-        Handle_Geom_OffsetCurve offsetCurve = new Geom_OffsetCurve(trimmedCurve, offset, dir);
+        opencascade::handle<Geom_TrimmedCurve> trimmedCurve = new Geom_TrimmedCurve(curve, start, end);
+        opencascade::handle<Geom_OffsetCurve> offsetCurve = new Geom_OffsetCurve(trimmedCurve, offset, dir);
         BRepBuilderAPI_MakeEdge builder(offsetCurve);
         return builder.Edge();
     }
@@ -416,7 +420,7 @@ public:
         return BRepTools::OuterWire(face);
     }
 
-    static Handle_Geom_Surface surface(const TopoDS_Face& face)
+    static opencascade::handle<Geom_Surface> surface(const TopoDS_Face& face)
     {
         return BRep_Tool::Surface(face);
     }
@@ -435,6 +439,7 @@ public:
 EMSCRIPTEN_BINDINGS(Shape)
 {
     class_<Shape>("Shape")
+        .class_function("isValid", &Shape::isValid)
         .class_function("boundingBox", &Shape::boundingBox)
         .class_function("orientedBoundingBox", &Shape::orientedBoundingBox)
         .class_function("clean", &Shape::clean)

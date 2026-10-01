@@ -37,3 +37,4 @@ export * from "./file-ingest";
 export * from "./quote-number";
 export * from "./revision-compare";
 export * from "./provenance-labels";
+export * from "./model-design";

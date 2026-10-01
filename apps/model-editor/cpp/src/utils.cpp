@@ -93,20 +93,20 @@ double boundingBoxRatio(const TopoDS_Shape& shape, double linearDeflection, bool
     return linDeflection;
 }
 
-TopTools_SequenceOfShape shapeArrayToSequenceOfShape(const ShapeArray& shapes)
+NCollection_Sequence<TopoDS_Shape> shapeArrayToSequenceOfShape(const ShapeArray& shapes)
 {
     std::vector<TopoDS_Shape> shapeVector = emscripten::vecFromJSArray<TopoDS_Shape>(shapes);
-    TopTools_SequenceOfShape result;
+    NCollection_Sequence<TopoDS_Shape> result;
     for (auto& s : shapeVector) {
         result.Append(s);
     }
     return result;
 }
 
-TopTools_ListOfShape shapeArrayToListOfShape(const ShapeArray& shapes)
+NCollection_List<TopoDS_Shape> shapeArrayToListOfShape(const ShapeArray& shapes)
 {
     std::vector<TopoDS_Shape> shapeVector = emscripten::vecFromJSArray<TopoDS_Shape>(shapes);
-    TopTools_ListOfShape result;
+    NCollection_List<TopoDS_Shape> result;
     for (auto& s : shapeVector) {
         result.Append(s);
     }

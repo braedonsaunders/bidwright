@@ -109,6 +109,8 @@ jobs:
           packages/vision/src/python-runtime.test.ts
           apps/api/src/services/revision-copy.test.ts
           apps/api/src/services/project-image-service.test.ts
+          apps/api/src/services/model-design-service.test.ts
+          packages/domain/src/model-design.test.ts
           apps/api/src/services/model-ingest/aps-client.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts

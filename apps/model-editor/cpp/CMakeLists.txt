@@ -24,27 +24,36 @@ set (OcctToolkits
     TKDE TKXSBase TKXCAF TKDESTEP TKDEIGES TKDESTL
 )
 
-set (OcctUsedPackages)
-foreach(toolkit ${OcctToolkits})
-    file (STRINGS build/occt/src/${toolkit}/PACKAGES OcctPackages)
-    list (APPEND OcctUsedPackages ${OcctPackages})
-endforeach()
-list (REMOVE_DUPLICATES OcctUsedPackages)
-
-set (OcctSourceFolders)
+set (OcctSourceFiles)
 set (OcctIncludeDirs)
-foreach(package ${OcctUsedPackages})
-    if (NOT package STREQUAL "")
-        list (APPEND OcctSourceFolders build/occt/src/${package}/*.c*)
-        list (APPEND OcctIncludeDirs build/occt/src/${package})
+foreach(toolkit ${OcctToolkits})
+    file (GLOB toolkitDirs "${CMAKE_SOURCE_DIR}/build/occt/src/*/${toolkit}")
+    if (NOT toolkitDirs)
+        message(FATAL_ERROR "Missing OCCT 8 toolkit ${toolkit}; run setup:wasm")
+    endif()
+    foreach(toolkitDir ${toolkitDirs})
+        file (GLOB_RECURSE sources CONFIGURE_DEPENDS "${toolkitDir}/*.cxx" "${toolkitDir}/*.cpp" "${toolkitDir}/*.c")
+        list (FILTER sources EXCLUDE REGEX "/GTests/")
+        list (APPEND OcctSourceFiles ${sources})
+        file (GLOB_RECURSE headers "${toolkitDir}/*.hxx" "${toolkitDir}/*.h" "${toolkitDir}/*.lxx" "${toolkitDir}/*.pxx")
+        foreach(header ${headers})
+            get_filename_component(headerDir "${header}" DIRECTORY)
+            list (APPEND OcctIncludeDirs "${headerDir}")
+        endforeach()
+    endforeach()
+endforeach()
+list (REMOVE_DUPLICATES OcctIncludeDirs)
+
+# OCCT 8 retains these generated template libraries in a header-only package.
+foreach(source ${OcctSourceFiles})
+    if(source MATCHES "(Interface_(General|Reader)Lib_0|IGESData_(Writer|Specific)Lib_0|StepData_WriterLib_0)\\.cxx$")
+        set_property(SOURCE "${source}" APPEND PROPERTY INCLUDE_DIRECTORIES "${CMAKE_SOURCE_DIR}/build/occt/src/DataExchange/TKXSBase/LibCtl")
     endif()
 endforeach()
 
 include(build/occt/adm/cmake/version.cmake)
 configure_file("build/occt/adm/templates/Standard_Version.hxx.in" "include/Standard_Version.hxx" @ONLY)
 list (APPEND OcctIncludeDirs ${CMAKE_CURRENT_BINARY_DIR}/include)
-
-file (GLOB OcctSourceFiles ${OcctSourceFolders})
 
 set (ChiliWasmSourcesFolder src)
 file (GLOB
@@ -62,7 +71,7 @@ if (${EMSCRIPTEN})
     target_compile_options (occt PUBLIC
         $<$<CONFIG:Release>:-Os>
         $<$<CONFIG:Release>:-flto>
-        $<IF:$<CONFIG:Release>,-sDISABLE_EXCEPTION_CATCHING=1,-sDISABLE_EXCEPTION_CATCHING=0>
+        -sDISABLE_EXCEPTION_CATCHING=0
         -DOCCT_NO_PLUGINS
     )
 
@@ -71,13 +80,13 @@ if (${EMSCRIPTEN})
     target_compile_options (${TARGET} PUBLIC
         $<$<CONFIG:Release>:-Os>
         $<$<CONFIG:Release>:-flto>
-        $<IF:$<CONFIG:Release>,-sDISABLE_EXCEPTION_CATCHING=1,-sDISABLE_EXCEPTION_CATCHING=0>
+        -sDISABLE_EXCEPTION_CATCHING=0
     )
     target_link_libraries(${TARGET} PUBLIC occt)
     target_link_options (${TARGET} PUBLIC
         $<IF:$<CONFIG:Release>,-Os,-O0>
         $<IF:$<CONFIG:Release>,-flto,-fno-lto>
-        $<IF:$<CONFIG:Release>,-sDISABLE_EXCEPTION_CATCHING=1,-sDISABLE_EXCEPTION_CATCHING=0>
+        -sDISABLE_EXCEPTION_CATCHING=0
         -sMODULARIZE=1
         -sEXPORT_ES6=1
         -sSTACK_SIZE=8MB

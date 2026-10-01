@@ -22,6 +22,7 @@ import {
 } from "@chili3d/core";
 import { div, svg } from "@chili3d/element";
 import style from "./editor.module.css";
+import { installModelDesignBridge } from "./modelDesignBridge";
 import { OKCancel } from "./okCancel";
 import { ProjectView } from "./project";
 import { PropertyView } from "./property";
@@ -193,7 +194,13 @@ function nodePath(node: INode) {
 
 function summarizeShapeNode(node: ShapeNode): BidWrightSelectionNode {
     if (!node.shape.isOk) {
-        return { id: node.id, name: node.name, kind: node.constructor.name, path: nodePath(node), externalId: node.id };
+        return {
+            id: node.id,
+            name: node.name,
+            kind: node.constructor.name,
+            path: nodePath(node),
+            externalId: node.id,
+        };
     }
 
     const sourceShape = node.shape.value;
@@ -235,6 +242,7 @@ function summarizeSelectionNode(node: INode): BidWrightSelectionNode {
 }
 
 export class Editor extends HTMLElement {
+    private _disposeDesignBridge?: () => void;
     private readonly _selectionController: OKCancel;
     private readonly _viewportContainer: HTMLDivElement;
     private readonly _bidwrightContext = readBidWrightContext();
@@ -273,7 +281,11 @@ export class Editor extends HTMLElement {
         const tabs: Array<{ id: string; label: string; content: HTMLElement }> = [
             { id: "items", label: "Items", content: new ProjectView({ className: style.sidebarItem }) },
         ];
-        tabs.push({ id: "properties", label: "Properties", content: new PropertyView({ className: style.sidebarItem }) });
+        tabs.push({
+            id: "properties",
+            label: "Properties",
+            content: new PropertyView({ className: style.sidebarItem }),
+        });
 
         this._sidebarPanels.clear();
         this._sidebarButtons.clear();
@@ -364,6 +376,7 @@ export class Editor extends HTMLElement {
     }
 
     connectedCallback(): void {
+        if (isBidWrightEmbedded()) this._disposeDesignBridge = installModelDesignBridge(this.app);
         PubSub.default.sub("showSelectionControl", this.showSelectionControl);
         PubSub.default.sub("editMaterial", this._handleMaterialEdit);
         PubSub.default.sub("clearSelectionControl", this.clearSelectionControl);
@@ -376,6 +389,8 @@ export class Editor extends HTMLElement {
     }
 
     disconnectedCallback(): void {
+        this._disposeDesignBridge?.();
+        this._disposeDesignBridge = undefined;
         PubSub.default.remove("showSelectionControl", this.showSelectionControl);
         PubSub.default.remove("editMaterial", this._handleMaterialEdit);
         PubSub.default.remove("clearSelectionControl", this.clearSelectionControl);
@@ -424,9 +439,7 @@ export class Editor extends HTMLElement {
 
         const activeDocument = this.app.activeView?.document;
         const selectedCount = activeDocument?.selection.getSelectedNodes().length ?? 0;
-        const title = selectedCount > 0
-            ? `${selectedCount} selected`
-            : activeDocument?.name ?? "Model";
+        const title = selectedCount > 0 ? `${selectedCount} selected` : (activeDocument?.name ?? "Model");
         const subtitle = this._lastBidWrightSelection?.selectedCount
             ? `${formatModelNumber(this._lastBidWrightSelection.selectedCount)} model element${this._lastBidWrightSelection.selectedCount === 1 ? "" : "s"}`
             : "Right-click command menu";
@@ -443,7 +456,9 @@ export class Editor extends HTMLElement {
             if (visibleItems.length === 0) continue;
             const sectionEl = div({ className: style.contextMenuSection });
             if (section.title) {
-                sectionEl.append(div({ className: style.contextMenuSectionTitle, textContent: section.title }));
+                sectionEl.append(
+                    div({ className: style.contextMenuSectionTitle, textContent: section.title }),
+                );
             }
             for (const item of visibleItems) {
                 sectionEl.append(this._createContextMenuButton(item));
@@ -458,8 +473,14 @@ export class Editor extends HTMLElement {
         requestAnimationFrame(() => {
             const margin = 8;
             const rect = menu.getBoundingClientRect();
-            const left = Math.min(Math.max(margin, clientX), Math.max(margin, window.innerWidth - rect.width - margin));
-            const top = Math.min(Math.max(margin, clientY), Math.max(margin, window.innerHeight - rect.height - margin));
+            const left = Math.min(
+                Math.max(margin, clientX),
+                Math.max(margin, window.innerWidth - rect.width - margin),
+            );
+            const top = Math.min(
+                Math.max(margin, clientY),
+                Math.max(margin, window.innerHeight - rect.height - margin),
+            );
             menu.style.left = `${left}px`;
             menu.style.top = `${top}px`;
             menu.style.visibility = "visible";
@@ -507,7 +528,8 @@ export class Editor extends HTMLElement {
         const activeView = this.app.activeView;
         const activeDocument = activeView?.document;
         const selectedNodes = activeDocument?.selection.getSelectedNodes() ?? [];
-        const visualNodes = activeDocument?.modelManager.findNodes((node) => node instanceof VisualNode) ?? [];
+        const visualNodes =
+            activeDocument?.modelManager.findNodes((node) => node instanceof VisualNode) ?? [];
         const hasSelection = selectedNodes.length > 0;
         return [
             {
@@ -577,7 +599,12 @@ export class Editor extends HTMLElement {
                         disabled: !activeView,
                         action: () => this._fitActiveView(),
                     },
-                    { label: "Show All", icon: "icon-eye", disabled: visualNodes.length === 0, action: () => this._showAllGeometry() },
+                    {
+                        label: "Show All",
+                        icon: "icon-eye",
+                        disabled: visualNodes.length === 0,
+                        action: () => this._showAllGeometry(),
+                    },
                 ],
             },
         ];
@@ -719,9 +746,10 @@ export class Editor extends HTMLElement {
         event.preventDefault();
         event.stopPropagation();
 
-        const activeElement = document.activeElement instanceof HTMLElement && this.contains(document.activeElement)
-            ? document.activeElement
-            : this;
+        const activeElement =
+            document.activeElement instanceof HTMLElement && this.contains(document.activeElement)
+                ? document.activeElement
+                : this;
         const rect = activeElement.getBoundingClientRect();
         const x = rect.left + Math.min(Math.max(24, rect.width / 2), Math.max(24, rect.width - 24));
         const y = rect.top + Math.min(Math.max(24, rect.height / 2), Math.max(24, rect.height - 24));
@@ -748,10 +776,7 @@ export class Editor extends HTMLElement {
         this._postBidWrightBroadcast("model-selection", selection);
     }
 
-    private _postBidWrightBroadcast(
-        type: BidWrightBroadcastType,
-        selection: BidWrightModelSelectionMessage,
-    ) {
+    private _postBidWrightBroadcast(type: BidWrightBroadcastType, selection: BidWrightModelSelectionMessage) {
         this._bidwrightChannel?.postMessage({
             type,
             source: "bidwright-model-editor",

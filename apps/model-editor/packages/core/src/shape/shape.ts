@@ -20,6 +20,7 @@ export interface IShape extends IDisposable {
     matrix: Matrix4;
     isClosed(): boolean;
     isNull(): boolean;
+    isValid(): boolean;
     /**
      * they share the same TShape with the same Locations and Orientations.
      */

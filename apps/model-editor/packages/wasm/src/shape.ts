@@ -231,6 +231,10 @@ export class OccShape implements IShape {
         return wasm.Shape.isClosed(this.shape);
     }
 
+    isValid(): boolean {
+        return wasm.Shape.isValid(this.shape);
+    }
+
     isNull(): boolean {
         return this.shape.isNull();
     }

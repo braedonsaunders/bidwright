@@ -6,7 +6,7 @@
   "author": "BidWright contributors",
   "scripts": {
     "build": "rspack build",
-    "build:wasm": "cd cpp && cmake --preset release && cmake --build --preset release",
+    "build:wasm": "node scripts/build_wasm.mjs",
     "build:types": "node scripts/generate_types.mjs",
     "check": "biome check --write",
     "dev": "rspack dev",

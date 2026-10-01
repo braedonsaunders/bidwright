@@ -38,15 +38,15 @@ const libs = [
         dir: EMSDK_DIR,
         actions: [fixEmscripten],
         commands: [
-            `${EMSDK_DIR}/emsdk install latest`,
-            `${EMSDK_DIR}/emsdk activate --embedded latest`,
+            `${EMSDK_DIR}/emsdk install 4.0.8`,
+            `${EMSDK_DIR}/emsdk activate --embedded 4.0.8`,
             `cd ${EMSDK_DIR}/upstream/emscripten && npm i`,
         ],
     },
     {
         name: "occt",
         url: "https://github.com/Open-Cascade-SAS/OCCT.git",
-        tag: "V7_9_1",
+        tag: "V8.0.1",
         dir: OCCT_DIR,
         actions: [],
         commands: [],
@@ -77,6 +77,9 @@ async function cloneLibIfNotExists(lib) {
             console.error(`Failed to clone ${lib.name}`);
             process.exit(1);
         }
+    } else {
+        await execAsync(`git -C ${lib.dir} fetch --depth=1 origin tag ${lib.tag}`);
+        await execAsync(`git -C ${lib.dir} checkout --detach ${lib.tag}`);
     }
 }
 
@@ -91,6 +94,7 @@ function main() {
         })
         .catch((err) => {
             console.error(err);
+            process.exitCode = 1;
         });
 }
 

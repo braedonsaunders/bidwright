@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, ExternalLink, Loader2, RefreshCw, Send } from "lucide-react";
+import { Box, ExternalLink, Loader2, RefreshCw, Send, Maximize2, Minimize2 } from "lucide-react";
 import {
   Button,
 } from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
+import { ModelDesignAssistant } from "./model-design-assistant";
 
 export interface BidwrightModelSelectionNode {
   id: string;
@@ -400,6 +401,28 @@ export function BidwrightModelEditor({
   const [selection, setSelection] = useState<BidwrightModelSelectionMessage | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [nativeFullscreen, setNativeFullscreen] = useState(false);
+  useEffect(() => {
+    const changed = () => { const active = document.fullscreenElement === containerRef.current; setNativeFullscreen(active); setExpanded(active); };
+    document.addEventListener("fullscreenchange", changed);
+    return () => document.removeEventListener("fullscreenchange", changed);
+  }, []);
+  useEffect(() => {
+    if (!expanded || nativeFullscreen) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(false); };
+    window.addEventListener("keydown", escape);
+    return () => window.removeEventListener("keydown", escape);
+  }, [expanded, nativeFullscreen]);
+  const toggleFullscreen = async () => {
+    if (expanded) {
+      if (document.fullscreenElement === containerRef.current) await document.exitFullscreen();
+      else setExpanded(false);
+    } else if (containerRef.current?.requestFullscreen && document.fullscreenEnabled) {
+      try { await containerRef.current.requestFullscreen(); } catch { setExpanded(true); }
+    } else setExpanded(true);
+  };
   const handledSendEventsRef = useRef<Set<string>>(new Set());
   const handledLineItemEventsRef = useRef<Set<string>>(new Set());
   const handledDocumentSaveEventsRef = useRef<Set<string>>(new Set());
@@ -753,7 +776,7 @@ export function BidwrightModelEditor({
   );
 
   return (
-    <div className={cn("relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", className)}>
+    <div ref={containerRef} className={cn("relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", expanded && !nativeFullscreen && "fixed inset-0 z-[200]", className)}>
       {showHeader && (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
           <Box className="h-4 w-4 shrink-0 text-accent" />
@@ -792,6 +815,9 @@ export function BidwrightModelEditor({
               {sendingSelection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
             </Button>
           )}
+          <Button variant="ghost" size="sm" title={expanded ? "Exit fullscreen" : "Expand model to fullscreen"} aria-label={expanded ? "Exit fullscreen" : "Expand model to fullscreen"} aria-pressed={expanded} onClick={() => void toggleFullscreen()}>
+            {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+          </Button>
           <Button
             variant="ghost"
             size="sm"
@@ -815,7 +841,8 @@ export function BidwrightModelEditor({
         </div>
       )}
 
-      <div className="relative min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1">
+      <div className="relative min-h-0 min-w-0 flex-1">
         <iframe
           ref={iframeRef}
           key={editorUrl}
@@ -840,6 +867,8 @@ export function BidwrightModelEditor({
             )}
           </div>
         )}
+      </div>
+      {projectId && variant === "editor" && <ModelDesignAssistant key={editorUrl} iframe={iframeRef} projectId={projectId} fileName={fileName} />}
       </div>
     </div>
   );
