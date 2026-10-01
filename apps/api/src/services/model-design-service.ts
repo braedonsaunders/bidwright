@@ -1,4 +1,4 @@
-import { createLLMAdapter, type ChatMessage, type TenantAiConfig } from "@bidwright/agent";
+import type { ChatMessage, TenantAiConfig } from "@bidwright/agent";
 import { MODEL_DESIGN_INSTRUCTIONS, validateModelDesign, type ModelDesign } from "@bidwright/domain";
 
 export function parseModelDesignResponse(text: string): { message: string; recipe: ModelDesign | null } {
@@ -16,6 +16,7 @@ export async function generateModelDesign(config: TenantAiConfig, input: {
   history?: Array<{ role: "user" | "assistant"; content: string }>;
   feedback?: string;
 }) {
+  const { createLLMAdapter } = await import("@bidwright/agent");
   const adapter = createLLMAdapter(config);
   const messages: ChatMessage[] = [
     ...(input.history ?? []).slice(-16),
