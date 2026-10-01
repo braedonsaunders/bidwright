@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback, type MutableRefObject } from "react";
-import { Loader2, Maximize2, Box, AlertCircle, RotateCcw } from "lucide-react";
+import { Loader2, Maximize2, Minimize2, Box, AlertCircle, RotateCcw } from "lucide-react";
 import {
   Button,
 } from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
+import { useViewerFullscreen } from "@/lib/use-viewer-fullscreen";
 import { prepareModelViewer, type ModelViewerSession } from "@/lib/api";
 import { firstAutodeskSelectedDbId } from "@/lib/autodesk-viewer-selection";
 
@@ -781,6 +782,7 @@ export function CadViewer({
   sourceKind,
   sourceId,
 }: CadViewerProps) {
+  const { containerRef, expanded, nativeFullscreen, toggleFullscreen } = useViewerFullscreen();
   const [state, setState] = useState<CadViewerState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [loadingText, setLoadingText] = useState("Initializing 3D engine...");
@@ -1302,7 +1304,7 @@ export function CadViewer({
   }, [fileUrl, fileName, projectId, sourceKind, sourceId, retryNonce]);
 
   return (
-    <div className={cn("relative w-full h-full overflow-hidden", className)}>
+    <div ref={containerRef} className={cn("relative w-full h-full overflow-hidden", expanded && !nativeFullscreen && "fixed inset-0 z-[200]", className)}>
       {/* Canvas — always mounted so Three.js can attach */}
       <div ref={canvasContainerRef} className="w-full h-full bg-[#1a1a2e]" />
 
@@ -1361,6 +1363,18 @@ export function CadViewer({
             )}
             <span className="text-[10px] text-zinc-600 uppercase">{getFileExt(fileName ?? "")}</span>
             <div className="ml-auto flex items-center gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 px-2 text-xs text-zinc-300"
+                title={expanded ? "Exit fullscreen" : "Expand model to fullscreen"}
+                aria-label={expanded ? "Exit fullscreen" : "Expand model to fullscreen"}
+                aria-pressed={expanded}
+                onClick={() => void toggleFullscreen()}
+              >
+                {expanded ? <Minimize2 className="h-3.5 w-3.5 mr-1" /> : <Maximize2 className="h-3.5 w-3.5 mr-1" />}
+                {expanded ? "Exit" : "Fullscreen"}
+              </Button>
               <Button variant="ghost" size="sm" className="h-7 px-2 text-xs text-zinc-300" onClick={handleFitView}>
                 <Maximize2 className="h-3.5 w-3.5 mr-1" />
                 Fit

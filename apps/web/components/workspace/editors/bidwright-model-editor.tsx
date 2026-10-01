@@ -6,6 +6,7 @@ import {
   Button,
 } from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
+import { useViewerFullscreen } from "@/lib/use-viewer-fullscreen";
 import { ModelDesignAssistant } from "./model-design-assistant";
 
 export interface BidwrightModelSelectionNode {
@@ -401,28 +402,7 @@ export function BidwrightModelEditor({
   const [selection, setSelection] = useState<BidwrightModelSelectionMessage | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [expanded, setExpanded] = useState(false);
-  const [nativeFullscreen, setNativeFullscreen] = useState(false);
-  useEffect(() => {
-    const changed = () => { const active = document.fullscreenElement === containerRef.current; setNativeFullscreen(active); setExpanded(active); };
-    document.addEventListener("fullscreenchange", changed);
-    return () => document.removeEventListener("fullscreenchange", changed);
-  }, []);
-  useEffect(() => {
-    if (!expanded || nativeFullscreen) return;
-    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") setExpanded(false); };
-    window.addEventListener("keydown", escape);
-    return () => window.removeEventListener("keydown", escape);
-  }, [expanded, nativeFullscreen]);
-  const toggleFullscreen = async () => {
-    if (expanded) {
-      if (document.fullscreenElement === containerRef.current) await document.exitFullscreen();
-      else setExpanded(false);
-    } else if (containerRef.current?.requestFullscreen && document.fullscreenEnabled) {
-      try { await containerRef.current.requestFullscreen(); } catch { setExpanded(true); }
-    } else setExpanded(true);
-  };
+  const { containerRef, expanded, nativeFullscreen, toggleFullscreen } = useViewerFullscreen();
   const handledSendEventsRef = useRef<Set<string>>(new Set());
   const handledLineItemEventsRef = useRef<Set<string>>(new Set());
   const handledDocumentSaveEventsRef = useRef<Set<string>>(new Set());
