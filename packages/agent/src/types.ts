@@ -31,6 +31,7 @@ export interface ToolSpec {
 export type ToolChoice = "auto" | "required" | "none" | { type: "function"; name: string };
 
 export interface ChatRequest {
+  signal?: AbortSignal;
   model: string;
   systemPrompt: string;
   messages: ChatMessage[];

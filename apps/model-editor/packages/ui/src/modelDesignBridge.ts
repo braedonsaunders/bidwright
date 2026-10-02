@@ -22,6 +22,7 @@ import {
     modelDesignPartSignature,
     validateModelDesign,
 } from "../../../../../packages/domain/src/model-design";
+import { applyCadBuild, cadProgramState } from "./cadProgramBridge";
 
 export function buildDesignShapes(
     app: IApplication,
@@ -404,6 +405,9 @@ function modelState(app: IApplication, document: IDocument) {
     const detailed = new Set([...selected].slice(0, 2));
     const stored = document.userData?.["modelDesign"] as ModelDesign | undefined;
     const outputs = document.userData?.["modelDesignOutputs"] as Record<string, string> | undefined;
+    const cadOutputs = Object.values(
+        (document.userData?.["cadOutputs"] ?? {}) as Record<string, { nodeId: string; brep: string }>,
+    );
     return {
         recipe: stored
             ? {
@@ -414,11 +418,12 @@ function modelState(app: IApplication, document: IDocument) {
               }
             : null,
         history: document.userData?.["designConversation"] ?? [],
+        ...cadProgramState(app, document),
         name: document.name,
         kernelVersion: wasm.kernelVersion(),
         nodes: document.modelManager
             .findNodes((n) => n instanceof ShapeNode)
-            .slice(0, 200)
+            .slice(0, 1000)
             .map((node) => {
                 const typed = node as ShapeNode;
                 if (!typed.shape.isOk)
@@ -449,9 +454,12 @@ function modelState(app: IApplication, document: IDocument) {
                         minMm: [box.min.x, box.min.y, box.min.z],
                         maxMm: [box.max.x, box.max.y, box.max.z],
                         manuallyModified: Boolean(
-                            outputs?.[node.id] &&
+                            (outputs?.[node.id] || cadOutputs.find((p) => p.nodeId === node.id)?.brep) &&
                                 geometrySignature(worldBrep(app, typed)) !==
-                                    geometrySignature(outputs[node.id]),
+                                    geometrySignature(
+                                        cadOutputs.find((p) => p.nodeId === node.id)?.brep ??
+                                            outputs![node.id],
+                                    ),
                         ),
                         ...(detailed.has(node.id)
                             ? { edges: topology(ShapeTypes.edge, 80), faces: topology(ShapeTypes.face, 40) }
@@ -538,9 +546,20 @@ export function installModelDesignBridge(app: IApplication): () => void {
                 );
                 return;
             }
+            if (request.action === "apply-cad") {
+                const revision = `${document.id}:${document.history.revision}:${metadataRevisions.get(document) ?? 0}`;
+                if (request.baseRevision !== revision)
+                    throw new Error(
+                        "The model changed while the AI was designing. No changes were applied; retry against the current model.",
+                    );
+            }
             const editedParts =
-                request.action === "apply" ? applyDesign(app, document, request.recipe) : undefined;
-            if (request.action === "apply") {
+                request.action === "apply"
+                    ? applyDesign(app, document, request.recipe)
+                    : request.action === "apply-cad"
+                      ? applyCadBuild(app, document, request.build, request.editableNodeIds)
+                      : undefined;
+            if (request.action === "apply" || request.action === "apply-cad") {
                 /* applied above */
             } else if (request.action === "conversation") {
                 if (
@@ -587,7 +606,8 @@ export function installModelDesignBridge(app: IApplication): () => void {
                 } finally {
                     shapes.forEach((shape) => shape.dispose());
                 }
-            } else if (request.action !== "state") throw new Error("Unsupported model action");
+            } else if (request.action !== "state" && request.action !== "cad-state")
+                throw new Error("Unsupported model action");
             target.postMessage(
                 {
                     type: "bidwright:model-design-result",
@@ -596,6 +616,8 @@ export function installModelDesignBridge(app: IApplication): () => void {
                     ok: true,
                     editedParts,
                     ...modelState(app, document),
+                    revision: `${document.id}:${document.history.revision}:${metadataRevisions.get(document) ?? 0}`,
+                    ...(request.action === "cad-state" ? cadProgramState(app, document, true) : {}),
                 },
                 window.location.origin,
             );

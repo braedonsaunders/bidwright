@@ -110,7 +110,11 @@ jobs:
           apps/api/src/services/revision-copy.test.ts
           apps/api/src/services/project-image-service.test.ts
           apps/api/src/services/model-design-service.test.ts
+          apps/api/src/services/build123d/agent.test.ts
+          apps/api/src/services/build123d/edit-scope.test.ts
+          apps/api/src/services/build123d/jobs.test.ts
           packages/domain/src/model-design.test.ts
+          packages/domain/src/cad-program.test.ts
           apps/api/src/services/model-ingest/aps-client.test.ts
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
@@ -154,6 +158,27 @@ jobs:
           apps/web/lib/time-zone.test.ts
           apps/desktop/src/time-zone.test.ts
           apps/desktop/src/process-cleanup.test.ts
+
+      - name: Set up CAD Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned CAD runtime and sandbox
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -yq --no-install-recommends bubblewrap
+          sudo chmod u+s /usr/bin/bwrap
+          python -m venv "${RUNNER_TEMP}/cad-venv"
+          "${RUNNER_TEMP}/cad-venv/bin/pip" install --disable-pip-version-check -r apps/api/src/services/build123d/requirements.txt
+
+      - name: Verify real CAD geometry and process isolation
+        run: |
+          sudo env "PATH=${PATH}" \
+            "BIDWRIGHT_CAD_PYTHON=${RUNNER_TEMP}/cad-venv/bin/python" \
+            "BIDWRIGHT_RUNTIME_UID=$(id -u)" \
+            "BIDWRIGHT_RUNTIME_GID=$(id -g)" \
+            node "$(command -v pnpm)" exec tsx --test apps/api/src/services/build123d/runtime.test.ts
 
       # Web component tests that import through the "@/" path alias only
       # resolve with apps/web as the working directory.

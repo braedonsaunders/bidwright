@@ -38,3 +38,4 @@ export * from "./quote-number";
 export * from "./revision-compare";
 export * from "./provenance-labels";
 export * from "./model-design";
+export * from "./cad-program";

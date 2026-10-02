@@ -107,6 +107,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     unzip \
     ripgrep \
     bubblewrap \
+    util-linux \
     && rm -rf /var/lib/apt/lists/* \
     && chmod u+s /usr/bin/bwrap \
     && /usr/bin/bwrap --version
@@ -125,6 +126,13 @@ COPY packages/vision/python/requirements.txt /tmp/vision-requirements.txt
 RUN python3 -m venv "${VIRTUAL_ENV}" \
   && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir --upgrade pip setuptools wheel \
   && "${VIRTUAL_ENV}/bin/pip" install --no-cache-dir -r /tmp/vision-requirements.txt
+# Independent CAD environment: keep the manufacturing kernel version pinned
+# without coupling it to OCR/vision Python dependencies.
+COPY apps/api/src/services/build123d/requirements.txt /tmp/cad-requirements.txt
+RUN python3 -m venv /opt/cad-venv \
+  && /opt/cad-venv/bin/pip install --no-cache-dir -r /tmp/cad-requirements.txt \
+  && /opt/cad-venv/bin/python -c "import build123d; assert build123d.__version__ == '0.13.0'"
+ENV BIDWRIGHT_CAD_PYTHON=/opt/cad-venv/bin/python
 # Codex App Server is still delivered by the Codex binary. Claude runs through
 # the supported Agent SDK dependency bundled with the API instead of a global
 # interactive Claude Code install.

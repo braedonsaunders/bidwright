@@ -59,7 +59,7 @@ export class AnthropicAdapter implements LLMAdapter {
       tools: tools as Parameters<typeof client.messages.create>[0]["tools"],
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
-    });
+    }, { signal: request.signal });
 
     const content = response.content.map(block => {
       if (block.type === "text") return { type: "text" as const, text: block.text };

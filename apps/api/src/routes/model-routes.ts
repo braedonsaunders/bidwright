@@ -11,6 +11,7 @@ import {
 import { requireRequestAiConfig } from "../services/request-ai-config.js";
 import { generateModelDesign } from "../services/model-design-service.js";
 import { validateModelDesign } from "@bidwright/domain";
+import { cadDesignRoutes } from "./cad-design-routes.js";
 import {
   createModelTakeoffLink,
   createModelTakeoffLinks,
@@ -190,6 +191,7 @@ function routeError(reply: any, error: unknown) {
 }
 
 export async function modelRoutes(app: FastifyInstance) {
+  app.register(cadDesignRoutes);
   app.post("/api/models/:projectId/design", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });

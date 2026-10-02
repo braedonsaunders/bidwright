@@ -90,7 +90,7 @@ export class OpenAIAdapter implements LLMAdapter {
       tool_choice,
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
-    });
+    }, { signal: request.signal });
 
     const choice = response.choices[0];
     const content: ChatContentBlock[] = [];

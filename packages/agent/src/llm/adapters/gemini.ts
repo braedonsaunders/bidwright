@@ -29,6 +29,14 @@ export class GeminiAdapter implements LLMAdapter {
         messages.push({ role: m.role, content: m.content });
       } else {
         const blocks = m.content ?? [];
+        const toolCalls = blocks.filter(b => b.type === "tool_use").map(b => ({
+          id: b.toolUseId!, type: "function" as const,
+          function: { name: b.toolName!, arguments: JSON.stringify(b.toolInput ?? {}) },
+        }));
+        if (toolCalls.length) {
+          messages.push({ role: "assistant", content: blocks.filter(b => b.type === "text").map(b => b.text ?? "").join("") || null, tool_calls: toolCalls });
+          continue;
+        }
         if (blocks.some((b) => b.type === "image")) {
           // Google's Gemini OpenAI-compatible endpoint accepts the standard
           // Chat Completions vision shape — array of content parts mixing
@@ -67,7 +75,7 @@ export class GeminiAdapter implements LLMAdapter {
       tools: tools?.length ? tools : undefined,
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
-    });
+    }, { signal: request.signal });
 
     const choice = response.choices[0];
     const content: ChatContentBlock[] = [];
