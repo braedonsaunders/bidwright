@@ -13,7 +13,11 @@ export class OpenAIAdapter implements LLMAdapter {
   supportsVision = true;
   maxContextTokens = 128000;
 
-  constructor(private apiKey: string, private defaultModel = "gpt-4o", private baseUrl?: string) {}
+  constructor(
+    private apiKey: string,
+    private defaultModel = "gpt-4o",
+    private baseUrl?: string,
+  ) {}
 
   async chat(request: ChatRequest): Promise<ChatResponse> {
     const { default: OpenAI } = await import("openai");
@@ -23,16 +27,27 @@ export class OpenAIAdapter implements LLMAdapter {
     const messages: any[] = [{ role: "system", content: request.systemPrompt }];
     for (const m of request.messages) {
       if (m.role === "tool") {
-        messages.push({ role: "tool", tool_call_id: m.toolCallId, content: typeof m.content === "string" ? m.content : JSON.stringify(m.content) });
+        messages.push({
+          role: "tool",
+          tool_call_id: m.toolCallId,
+          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+        });
       } else if (typeof m.content === "string") {
         messages.push({ role: m.role, content: m.content });
       } else {
         const blocks = m.content ?? [];
-        const assistantToolCalls = blocks.filter(b => b.type === "tool_use").map(b => ({
-          id: b.toolUseId!, type: "function" as const, function: { name: b.toolName!, arguments: JSON.stringify(b.toolInput ?? {}) }
-        }));
+        const assistantToolCalls = blocks
+          .filter((b) => b.type === "tool_use")
+          .map((b) => ({
+            id: b.toolUseId!,
+            type: "function" as const,
+            function: { name: b.toolName!, arguments: JSON.stringify(b.toolInput ?? {}) },
+          }));
         if (assistantToolCalls.length > 0) {
-          const textParts = blocks.filter(b => b.type === "text").map(b => b.text).join("");
+          const textParts = blocks
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("");
           messages.push({ role: "assistant", content: textParts || null, tool_calls: assistantToolCalls });
         } else if (blocks.some((b) => b.type === "image")) {
           // OpenAI Chat Completions vision: array of content parts
@@ -55,17 +70,30 @@ export class OpenAIAdapter implements LLMAdapter {
           }
           messages.push({ role: m.role, content: parts });
         } else {
-          const textParts = blocks.filter(b => b.type === "text").map(b => b.text).join("");
+          const textParts = blocks
+            .filter((b) => b.type === "text")
+            .map((b) => b.text)
+            .join("");
           messages.push({ role: m.role, content: textParts });
         }
       }
+    }
+
+    if (this.id === "openrouter") {
+      request.messages.forEach((message, index) => {
+        if (message.role !== "assistant" || !message.providerState) return;
+        const target = messages[index + 1];
+        if (message.providerState.reasoningDetails)
+          target.reasoning_details = message.providerState.reasoningDetails;
+        else if (message.providerState.reasoning) target.reasoning = message.providerState.reasoning;
+      });
     }
 
     // Sanitize tool names: Claude requires ^[a-zA-Z0-9_-]+ (no dots)
     const sanitizeName = (n: string) => n.replace(/\./g, "_");
     const unsanitizeName = (n: string) => n.replace(/_/, ".");
     const nameMap = new Map<string, string>(); // sanitized -> original
-    const tools = request.tools?.map(t => {
+    const tools = request.tools?.map((t) => {
       const safe = sanitizeName(t.name);
       nameMap.set(safe, t.name);
       return {
@@ -92,12 +120,20 @@ export class OpenAIAdapter implements LLMAdapter {
       tool_choice,
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
+      ...(this.id === "openrouter" && request.reasoningEffort
+        ? { reasoning: { effort: request.reasoningEffort } }
+        : {}),
     };
     const response = request.onDelta
       ? await streamCompletion(client, params, request)
       : await client.chat.completions.create(params, { signal: request.signal, timeout: request.timeoutMs });
 
     const choice = response.choices[0];
+    // Also guard non-streaming callers against parsing an unfinished tool JSON.
+    if (choice.finish_reason === "length") {
+      const { ResponseLimitError } = await import("../response-limit.js");
+      throw new ResponseLimitError();
+    }
     const content: ChatContentBlock[] = [];
 
     if (choice.message.content) {
@@ -119,8 +155,12 @@ export class OpenAIAdapter implements LLMAdapter {
 
     return {
       content,
+      ...("providerState" in response ? { providerState: response.providerState } : {}),
       stopReason: choice.finish_reason === "tool_calls" ? "tool_use" : "end_turn",
-      usage: { inputTokens: response.usage?.prompt_tokens ?? 0, outputTokens: response.usage?.completion_tokens ?? 0 },
+      usage: {
+        inputTokens: response.usage?.prompt_tokens ?? 0,
+        outputTokens: response.usage?.completion_tokens ?? 0,
+      },
     };
   }
 }

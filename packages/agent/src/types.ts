@@ -3,6 +3,8 @@ export interface ChatMessage {
   content: string | ChatContentBlock[];
   toolCallId?: string;
   toolCalls?: ToolCall[];
+  /** Opaque provider context, retained only inside the tool conversation. */
+  providerState?: { reasoning?: string; reasoningDetails?: unknown[] };
 }
 
 export interface ChatContentBlock {
@@ -34,7 +36,9 @@ export interface ChatRequest {
   signal?: AbortSignal;
   /** Public response/tool-argument deltas; excludes private reasoning. */
   timeoutMs?: number;
-  onDelta?: (delta: { type: "text" | "tool"; text: string; toolName?: string }) => void;
+  onDelta?: (delta: { type: "text" | "tool" | "activity"; text: string; toolName?: string }) => void;
+  /** OpenRouter reasoning effort; ignored by other providers. */
+  reasoningEffort?: "low" | "high";
   model: string;
   systemPrompt: string;
   messages: ChatMessage[];
@@ -46,12 +50,22 @@ export interface ChatRequest {
 
 export interface ChatResponse {
   content: ChatContentBlock[];
+  providerState?: ChatMessage["providerState"];
   stopReason: "end_turn" | "tool_use" | "max_tokens" | "stop_sequence";
   usage: { inputTokens: number; outputTokens: number };
 }
 
 export interface StreamChunk {
-  type: "text_delta" | "tool_call_start" | "tool_call_delta" | "tool_call_end" | "tool_result" | "confirmation_needed" | "plan_update" | "error" | "done";
+  type:
+    | "text_delta"
+    | "tool_call_start"
+    | "tool_call_delta"
+    | "tool_call_end"
+    | "tool_result"
+    | "confirmation_needed"
+    | "plan_update"
+    | "error"
+    | "done";
   data: unknown;
   timestamp: string;
 }

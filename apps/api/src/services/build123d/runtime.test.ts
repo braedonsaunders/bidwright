@@ -50,6 +50,39 @@ for i in range(24):
 );
 
 test(
+	"completed parts stream automatically before execution finishes without explicit preview calls",
+	options,
+	async () => {
+		const counts: number[] = [];
+		let completed = false;
+		const build = await executeCadProgram(
+			program(`from build123d import *
+import time
+parts={}
+parts['rail']=Box(2000,100,100)-Box(2010,88,88)
+time.sleep(0.8)
+parts['floor']=Pos(0,0,55)*Box(2000,1400,10)
+time.sleep(0.8)
+`),
+			{},
+			undefined,
+			(parts) => {
+				assert.equal(completed, false);
+				assert.ok(parts.every((p) => p.volumeMm3 > 0));
+				counts.push(parts.length);
+			},
+		);
+		completed = true;
+		assert.ok(
+			counts.includes(1),
+			"the first rail appears before the rest of the program finishes",
+		);
+		assert.ok(counts.includes(2));
+		assert.equal(build.parts.length, 2);
+	},
+);
+
+test(
 	"installed full API includes lofts, sweeps, selectors and sheet metal",
 	options,
 	async () => {

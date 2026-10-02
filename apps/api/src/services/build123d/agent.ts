@@ -4,6 +4,7 @@ import type {
 	TenantAiConfig,
 	ToolSpec,
 } from "@bidwright/agent";
+import { ResponseLimitError } from "@bidwright/agent";
 import {
 	type CadBuild,
 	type CadProgram,
@@ -158,6 +159,9 @@ export async function designWithCadAdapter(
 	let candidate: CadBuild | null = null;
 	let failedBuild = false;
 	let executions = 0;
+	let responseRecoveries = 0;
+	let responseBudget = adapter.id === "openrouter" ? 65536 : 16000;
+	let hasPreview = false;
 	for (let turn = 0; turn < 48; turn++) {
 		check();
 		options.progress?.(
@@ -170,28 +174,65 @@ export async function designWithCadAdapter(
 		let announcement = "";
 		let draftCharacters = 0;
 		options.activity?.({ text: "", draftCharacters: 0 });
-		const response = await adapter.chat({
-			model,
-			signal: options.signal,
-			timeoutMs: 2 * 60 * 60_000,
-			systemPrompt: CAD_PROGRAM_INSTRUCTIONS,
-			messages,
-			tools,
-			maxTokens: 16000,
-			temperature: 0.2,
-			onDelta: (delta) => {
-				check();
-				if (delta.type === "text") {
-					announcement = (announcement + delta.text).slice(-4000);
-					options.activity?.({ text: announcement });
-				} else if (delta.toolName === "cad_execute") {
-					draftCharacters += delta.text.length;
-					options.activity?.({ draftCharacters });
-				}
-			},
-		});
+		let planning = false;
+		let response;
+		try {
+			response = await adapter.chat({
+				model,
+				signal: options.signal,
+				timeoutMs: 2 * 60 * 60_000,
+				systemPrompt:
+					CAD_PROGRAM_INSTRUCTIONS +
+					(!input.program && !hasPreview
+						? "\nFIRST PREVIEW PHASE: Do not plan or code the entire complex assembly in one response. Start with a compact, valid main body/chassis program (roughly 30–100 lines) and cad_execute it now. Use sensible stated assumptions for unspecified dimensions. Build the remaining requested details in later turns. This is an early preview, not the finished design."
+						: "\nContinue the requested design from the last successful source and measurements. Preserve unaffected parts. Complete all requested components before finish_design; an early preview is not a finished design."),
+				messages,
+				tools,
+				maxTokens: responseBudget,
+				reasoningEffort: "low",
+				temperature: 0.2,
+				onDelta: (delta) => {
+					check();
+					if (delta.type === "activity") {
+						if (!planning && !draftCharacters && !announcement) {
+							planning = true;
+							options.progress?.("AI is planning the next build step…");
+						}
+					} else if (delta.type === "text") {
+						announcement = (announcement + delta.text).slice(-4000);
+						options.activity?.({ text: announcement });
+					} else if (delta.toolName === "cad_execute") {
+						if (!draftCharacters)
+							options.progress?.("Writing the next CAD build step…");
+						draftCharacters += delta.text.length;
+						options.activity?.({ draftCharacters });
+					}
+				},
+			});
+		} catch (error) {
+			check();
+			if (!(error instanceof ResponseLimitError) || ++responseRecoveries > 3)
+				throw error;
+			responseBudget = Math.min(
+				responseBudget * 2,
+				adapter.id === "openrouter" ? 131072 : 64000,
+			);
+			options.progress?.(
+				"Continuing the design with a larger response budget…",
+			);
+			messages.push({
+				role: "user",
+				content:
+					"Your previous response exhausted its token budget before finishing. No partial code was executed. Restart this step with a compact complete runnable program, use reusable functions/loops, and execute an early useful preview before adding more detail. Continue until the original request is complete; do not ask the user to split the task.",
+			});
+			continue;
+		}
 		check();
-		messages.push({ role: "assistant", content: response.content });
+		messages.push({
+			role: "assistant",
+			content: response.content,
+			providerState: response.providerState,
+		});
 		const calls = response.content.filter((b) => b.type === "tool_use");
 		if (!calls.length) {
 			const message = response.content
@@ -242,6 +283,7 @@ export async function designWithCadAdapter(
 					validateCadEditScope(build, input.context, input.sources);
 					check();
 					candidate = build;
+					hasPreview = true;
 					options.preview?.(build.parts, "Inspecting completed geometry");
 					failedBuild = false;
 					result = {

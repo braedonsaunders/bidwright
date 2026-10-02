@@ -118,7 +118,36 @@ test("an output-limit finish never returns a candidate to execute", async () => 
       { model: "model", messages: [] },
       { model: "model", systemPrompt: "", messages: [] },
     ),
-    /could not finish/,
+    /token budget/,
   );
   assert.equal(closed, true);
+});
+test("reasoning-only streams send a content-free heartbeat and preserve provider context", async () => {
+  const deltas: unknown[] = [];
+  const result = await streamCompletion(
+    client(
+      [
+        choice({
+          reasoning: "private plan",
+          reasoning_details: [{ index: 0, type: "reasoning.text", text: "private " }],
+        }),
+        choice({ reasoning_details: [{ index: 0, type: "reasoning.text", text: "plan" }] }),
+        choice({ content: "Building the frame." }, "stop"),
+      ],
+      () => {},
+    ),
+    { model: "kimi", messages: [] },
+    {
+      model: "kimi",
+      systemPrompt: "",
+      messages: [],
+      onDelta: (d) => deltas.push(d),
+    },
+  );
+  assert.deepEqual(deltas.slice(0, 2), [
+    { type: "activity", text: "" },
+    { type: "activity", text: "" },
+  ]);
+  assert.doesNotMatch(JSON.stringify(deltas), /private/);
+  assert.equal((result.providerState?.reasoningDetails?.[0] as any).text, "private plan");
 });

@@ -194,9 +194,41 @@ def execute(payload):
         temporary = Path("preview-next.json")
         temporary.write_text(json.dumps({"parts":records,"label":str(label)[:160],"sequence":checkpoint_count}))
         temporary.replace("preview.json")
+        return True
     namespace["preview"] = preview
+    # Publish completed parts even when generated code omits explicit preview().
+    # Trace only user source; do not walk library internals or export on each line.
+    last_auto_check = 0.0
+    last_auto_signature = None
+    def live_trace(frame, event, arg):
+        nonlocal last_auto_check, last_auto_signature
+        if frame.f_code.co_filename != "design.py":
+            return None
+        if event not in ("line", "return") or checkpoint_count >= 24:
+            return live_trace
+        now = time.monotonic()
+        if now - last_auto_check < 0.3:
+            return live_trace
+        last_auto_check = now
+        current = namespace.get("parts")
+        if isinstance(current, dict) and 1 <= len(current) <= 1000:
+            signature = tuple((key, id(item), id(item.get("shape")) if isinstance(item, dict) else None)
+                              for key, item in current.items())
+            if signature != last_auto_signature:
+                try:
+                    if preview(current, f"Building assembly · {len(current)} parts"):
+                        last_auto_signature = signature
+                except Exception:
+                    # A part can be temporarily incomplete while its context is
+                    # active. The final export remains strict and reports errors.
+                    pass
+        return live_trace
     # Arbitrary Python is intentional; the OS sandbox is the boundary.
-    exec(compile(program["source"], "design.py", "exec"), namespace)
+    sys.settrace(live_trace)
+    try:
+        exec(compile(program["source"], "design.py", "exec"), namespace)
+    finally:
+        sys.settrace(None)
     exports = namespace.get("parts")
     if not isinstance(exports, dict) or not 1 <= len(exports) <= 1000:
         raise ValueError("Set parts to a dictionary of 1–1,000 stable part IDs and shapes")
