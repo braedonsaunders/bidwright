@@ -119,6 +119,8 @@ jobs:
           apps/api/src/services/runtime-broker-worker.test.ts
           apps/api/src/middleware/auth-route-policy.test.ts
           apps/api/src/prisma-store-search.test.ts
+          packages/agent/src/llm/adapters/anthropic-stream.test.ts
+          packages/agent/src/llm/stream-completion.test.ts
           packages/agent/src/tenant-config.test.ts
           packages/ingestion/src/drawing-providers/index.test.ts
           packages/mcp-server/src/project-image-tools.test.ts

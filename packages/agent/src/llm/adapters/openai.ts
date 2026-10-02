@@ -4,6 +4,8 @@
  */
 import type { ChatRequest, ChatResponse, ChatContentBlock, LLMAdapter } from "../types.js";
 
+import { streamCompletion } from "../stream-completion.js";
+
 export class OpenAIAdapter implements LLMAdapter {
   id = "openai";
   name = "OpenAI";
@@ -83,14 +85,17 @@ export class OpenAIAdapter implements LLMAdapter {
       }
     }
 
-    const response = await client.chat.completions.create({
+    const params = {
       model: request.model || this.defaultModel,
       messages,
       tools: tools?.length ? tools : undefined,
       tool_choice,
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
-    }, { signal: request.signal });
+    };
+    const response = request.onDelta
+      ? await streamCompletion(client, params, request)
+      : await client.chat.completions.create(params, { signal: request.signal, timeout: request.timeoutMs });
 
     const choice = response.choices[0];
     const content: ChatContentBlock[] = [];

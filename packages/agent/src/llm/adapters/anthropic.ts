@@ -52,14 +52,34 @@ export class AnthropicAdapter implements LLMAdapter {
       input_schema: t.inputSchema as Record<string, unknown>,
     }));
 
-    const response = await client.messages.create({
+    const params = {
       model: request.model || this.defaultModel,
       system: request.systemPrompt,
       messages: messages as Parameters<typeof client.messages.create>[0]["messages"],
       tools: tools as Parameters<typeof client.messages.create>[0]["tools"],
       max_tokens: request.maxTokens ?? 4096,
       temperature: request.temperature ?? 0,
-    }, { signal: request.signal });
+    };
+    let response;
+    if (request.onDelta) {
+      const stream = client.messages.stream(params, { signal: request.signal, timeout: request.timeoutMs });
+      const names = new Map<number, string>();
+      try {
+        for await (const event of stream) {
+          request.signal?.throwIfAborted();
+          if (event.type === "content_block_start" && event.content_block.type === "tool_use") {
+            names.set(event.index, event.content_block.name);
+            request.onDelta({ type: "tool", toolName: event.content_block.name, text: "" });
+          } else if (event.type === "content_block_delta") {
+            if (event.delta.type === "text_delta") request.onDelta({ type: "text", text: event.delta.text });
+            else if (event.delta.type === "input_json_delta") request.onDelta({ type: "tool", toolName: names.get(event.index), text: event.delta.partial_json });
+          }
+        }
+        response = await stream.finalMessage();
+      } finally { stream.abort(); }
+    } else response = await client.messages.create(params, { signal: request.signal, timeout: request.timeoutMs });
+
+    if (request.onDelta && response.stop_reason === "max_tokens") throw new Error("The AI response could not finish its CAD program. Try a smaller first step and continue the design from there.");
 
     const content = response.content.map(block => {
       if (block.type === "text") return { type: "text" as const, text: block.text };

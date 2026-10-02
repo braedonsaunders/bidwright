@@ -12,6 +12,7 @@ import re
 import resource
 import sys
 import traceback
+import time
 
 
 class QuietOutput(io.TextIOBase):
@@ -113,28 +114,7 @@ def render(parts):
     return base64.b64encode(output.getvalue()).decode("ascii")
 
 
-def execute(payload):
-    program = payload["program"]
-    namespace = {"parameters": dict(program["parameters"]), "unit_scale": 25.4 if program["units"] == "in" else 1.0}
-    sources = payload.get("sources", {})
-    imported = {}
-
-    def existing(key):
-        if key not in program["imports"] or key not in sources:
-            raise ValueError(f"No declared source snapshot {key!r}")
-        if key not in imported:
-            path = Path(f"input_{len(imported)}.brep")
-            path.write_text(sources[key]["brep"])
-            imported[key] = cad.import_brep(path)
-        return deepcopy(imported[key])
-
-    namespace["existing"] = existing
-    # Arbitrary Python is intentional: the operating-system sandbox is the
-    # security boundary, rather than an incomplete Python operation allowlist.
-    exec(compile(program["source"], "design.py", "exec"), namespace)
-    exports = namespace.get("parts")
-    if not isinstance(exports, dict) or not 1 <= len(exports) <= 1000:
-        raise ValueError("Set parts to a dictionary of 1–1,000 stable part IDs and shapes")
+def export_parts(exports):
     result = []
     shapes = []
     targets = set()
@@ -179,6 +159,49 @@ def execute(payload):
             record["material"] = metadata["material"]
         result.append(record)
         shapes.append(shape)
+    return result, shapes
+
+
+def execute(payload):
+    program = payload["program"]
+    namespace = {"parameters": dict(program["parameters"]), "unit_scale": 25.4 if program["units"] == "in" else 1.0}
+    sources = payload.get("sources", {})
+    imported = {}
+
+    def existing(key):
+        if key not in program["imports"] or key not in sources:
+            raise ValueError(f"No declared source snapshot {key!r}")
+        if key not in imported:
+            path = Path(f"input_{len(imported)}.brep")
+            path.write_text(sources[key]["brep"])
+            imported[key] = cad.import_brep(path)
+        return deepcopy(imported[key])
+
+    namespace["existing"] = existing
+    checkpoint_count = 0
+    last_checkpoint = 0.0
+    def preview(exports=None, label="Building parts"):
+        nonlocal checkpoint_count, last_checkpoint
+        now = time.monotonic()
+        if checkpoint_count >= 24 or (checkpoint_count and now - last_checkpoint < 0.3):
+            return
+        current = exports if exports is not None else namespace.get("parts")
+        if not isinstance(current, dict) or not 1 <= len(current) <= 1000:
+            return
+        records, _ = export_parts(current)
+        checkpoint_count += 1
+        last_checkpoint = now
+        temporary = Path("preview-next.json")
+        temporary.write_text(json.dumps({"parts":records,"label":str(label)[:160],"sequence":checkpoint_count}))
+        temporary.replace("preview.json")
+    namespace["preview"] = preview
+    # Arbitrary Python is intentional; the OS sandbox is the boundary.
+    exec(compile(program["source"], "design.py", "exec"), namespace)
+    exports = namespace.get("parts")
+    if not isinstance(exports, dict) or not 1 <= len(exports) <= 1000:
+        raise ValueError("Set parts to a dictionary of 1–1,000 stable part IDs and shapes")
+    result, shapes = export_parts(exports)
+    preview(exports, "Checking completed geometry")
     return {"parts": result, "libraryVersion": cad.__version__, "kernelVersion": "8.0.1",
             "preview": render(shapes)}
 

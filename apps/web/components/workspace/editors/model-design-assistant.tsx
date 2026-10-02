@@ -1,6 +1,11 @@
 "use client";
 
-import type { CadProgram, CadSource, ModelDesign } from "@bidwright/domain";
+import type {
+	CadLiveUpdate,
+	CadProgram,
+	CadSource,
+	ModelDesign,
+} from "@bidwright/domain";
 import { Button } from "@braedonsaunders/appkit-ui";
 import {
 	Download,
@@ -42,7 +47,12 @@ interface ModelState {
 	revision: string;
 	sources?: Record<string, CadSource>;
 	geometry?: Record<string, string>;
-	cadParts?: Array<{ id: string; nodeId: string; name: string; manuallyDeleted?: boolean }>;
+	cadParts?: Array<{
+		id: string;
+		nodeId: string;
+		name: string;
+		manuallyDeleted?: boolean;
+	}>;
 	history: Message[];
 	name: string;
 	kernelVersion: string;
@@ -77,6 +87,8 @@ export function ModelDesignAssistant({
 	const [prompt, setPrompt] = useState("");
 	const [status, setStatus] = useState("Opening model…");
 	const [busy, setBusy] = useState(false);
+	const [live, setLive] = useState<CadLiveUpdate | null>(null);
+	const [elapsed, setElapsed] = useState(0);
 	const [error, setError] = useState<string | null>(null);
 	const [exporting, setExporting] = useState(false);
 	const [sourceDraft, setSourceDraft] = useState("");
@@ -155,6 +167,15 @@ export function ModelDesignAssistant({
 		return () => {
 			mounted.current = false;
 			controller.current?.abort();
+			iframe.current?.contentWindow?.postMessage(
+				{
+					type: "bidwright:model-design-request",
+					source: "bidwright-host",
+					requestId: crypto.randomUUID(),
+					action: "clear-preview",
+				},
+				window.location.origin,
+			);
 			window.removeEventListener("message", receive);
 			for (const entry of pending.current.values()) {
 				clearTimeout(entry.timer);
@@ -205,12 +226,46 @@ export function ModelDesignAssistant({
 		setSourceDraft(state?.program?.source ?? "");
 	}, [state?.program?.source]);
 
+	useEffect(() => {
+		if (!busy) return;
+		const started = Date.now();
+		setElapsed(0);
+		const timer = setInterval(
+			() => setElapsed(Math.floor((Date.now() - started) / 1000)),
+			1000,
+		);
+		return () => clearInterval(timer);
+	}, [busy]);
+	async function showLive(
+		update: CadLiveUpdate,
+		current: ModelState,
+		signal: AbortSignal,
+	) {
+		if (!mounted.current || signal.aborted) return;
+		if (Object.hasOwn(update, "preview")) {
+			await request(update.preview ? "preview-cad" : "clear-preview", {
+				parts: update.preview,
+				baseRevision: current.revision,
+				editableNodeIds: current.nodes
+					.filter((n) => n.selected)
+					.map((n) => n.id),
+			});
+		}
+		if (mounted.current && !signal.aborted) setLive(update);
+	}
+	async function clearPreview() {
+		if (mounted.current) {
+			await request("clear-preview").catch(() => {});
+			setLive(null);
+		}
+	}
 	async function submit() {
 		const text = prompt.trim();
 		if (!text || busy || !state) return;
 		const abort = new AbortController();
 		controller.current = abort;
 		setBusy(true);
+		setLive(null);
 		setError(null);
 		setPrompt("");
 		const before = history;
@@ -237,6 +292,7 @@ export function ModelDesignAssistant({
 				(status) => {
 					if (mounted.current) setStatus(status);
 				},
+				(update) => showLive(update, current, abort.signal),
 			);
 			if (abort.signal.aborted || !mounted.current) return;
 			if (response.build) {
@@ -272,6 +328,7 @@ export function ModelDesignAssistant({
 				setHistory(before);
 			}
 		} finally {
+			await clearPreview();
 			if (mounted.current) {
 				setBusy(false);
 				if (abort.signal.aborted) setStatus("Stopped");
@@ -330,6 +387,7 @@ export function ModelDesignAssistant({
 		} catch (err) {
 			setError(designError(err));
 		} finally {
+			await clearPreview();
 			if (mounted.current) {
 				setBusy(false);
 				setStatus("Ready to design");
@@ -342,6 +400,7 @@ export function ModelDesignAssistant({
 		const abort = new AbortController();
 		controller.current = abort;
 		setBusy(true);
+		setLive(null);
 		setError(null);
 		setStatus("Building updated CAD source…");
 		try {
@@ -360,6 +419,7 @@ export function ModelDesignAssistant({
 				(status) => {
 					if (mounted.current) setStatus(status);
 				},
+				(update) => showLive(update, current, abort.signal),
 			);
 			if (mounted.current && !abort.signal.aborted && response.build)
 				setState(
@@ -371,6 +431,7 @@ export function ModelDesignAssistant({
 		} catch (err) {
 			if (mounted.current && !abort.signal.aborted) setError(designError(err));
 		} finally {
+			await clearPreview();
 			if (mounted.current) {
 				setBusy(false);
 				setStatus(abort.signal.aborted ? "Stopped" : "Ready to design");
@@ -454,6 +515,19 @@ export function ModelDesignAssistant({
 					</>,
 					toolbar,
 				)}
+			{busy &&
+				toolbar &&
+				createPortal(
+					<span
+						role="status"
+						className="hidden @[600px]/model:inline text-[11px] text-fg/60"
+					>
+						{live?.previewCount
+							? `Draft preview · ${live.previewCount} parts`
+							: status}
+					</span>,
+					toolbar,
+				)}
 			<aside
 				id={panelId}
 				hidden={!expanded}
@@ -505,12 +579,44 @@ export function ModelDesignAssistant({
 							{message.content}
 						</div>
 					))}
+					{busy && (
+						<div
+							role="log"
+							aria-label="Live CAD build"
+							className="rounded-md border border-accent/30 bg-accent/5 p-3 text-xs space-y-2"
+						>
+							<div className="flex justify-between font-medium">
+								<span>Building your model</span>
+								<span className="text-fg/50">{elapsed}s</span>
+							</div>
+							{live?.text && (
+								<p className="whitespace-pre-wrap text-fg/80">{live.text}</p>
+							)}
+							{live?.activity.map((item, index) => (
+								<div key={`${index}-${item}`} className="text-fg/60">
+									{item}
+								</div>
+							))}
+							{!!live?.draftCharacters && (
+								<div className="font-mono text-fg/50">
+									{live?.previewCount ? "CAD program" : "Drafting CAD program"}{" "}
+									· {live.draftCharacters.toLocaleString()} characters
+								</div>
+							)}
+							{!!live?.previewCount && (
+								<div className="text-accent">
+									Draft preview · {live.previewCount} parts
+								</div>
+							)}
+						</div>
+					)}
 					{dimensions && (
 						<details className="rounded-md border border-line p-2 text-xs" open>
 							<summary className="cursor-pointer text-fg/70">
 								Dimensions ({dimensions.units}) ·{" "}
 								{state?.program
-									? (state.cadParts?.filter(p => !p.manuallyDeleted).length ?? 0)
+									? (state.cadParts?.filter((p) => !p.manuallyDeleted).length ??
+										0)
 									: (state?.recipe?.parts.length ?? 0)}{" "}
 								parts
 							</summary>

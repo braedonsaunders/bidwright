@@ -32,6 +32,9 @@ export type ToolChoice = "auto" | "required" | "none" | { type: "function"; name
 
 export interface ChatRequest {
   signal?: AbortSignal;
+  /** Public response/tool-argument deltas; excludes private reasoning. */
+  timeoutMs?: number;
+  onDelta?: (delta: { type: "text" | "tool"; text: string; toolName?: string }) => void;
   model: string;
   systemPrompt: string;
   messages: ChatMessage[];

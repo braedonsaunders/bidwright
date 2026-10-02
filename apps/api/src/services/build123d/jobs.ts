@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { TenantAiConfig } from "@bidwright/agent";
+import type { CadLiveUpdate, CadPart } from "@bidwright/domain";
 import {
 	type CadDesignInput,
 	type CadDesignResult,
@@ -21,6 +22,8 @@ interface Job {
 	result?: CadDesignResult;
 	error?: string;
 	controller: AbortController;
+	live: Omit<CadLiveUpdate, "preview">;
+	preview: CadPart[] | null;
 }
 const jobs = new Map<string, Job>();
 const sameScope = (a: Scope, b: Scope) =>
@@ -33,6 +36,8 @@ export function startCadJob(
 	config: TenantAiConfig | null,
 	input: CadDesignInput,
 	generate: typeof generateCadDesign = generateCadDesign,
+	onEvent: (event: Record<string, unknown>) => void = (event) =>
+		console.info(JSON.stringify(event)),
 ) {
 	const now = Date.now();
 	for (const [id, job] of jobs)
@@ -76,46 +81,97 @@ export function startCadJob(
 		progress: "Starting CAD design…",
 		createdAt: now,
 		controller: new AbortController(),
+		live: {
+			activity: ["Starting CAD design…"],
+			text: "",
+			draftCharacters: 0,
+			previewRevision: 0,
+			previewCount: 0,
+		},
+		preview: null,
 	};
 	jobs.set(job.id, job);
-	const timeout = setTimeout(
-		() =>
-			job.controller.abort(
-				new Error(
-					"Model design exceeded ten minutes; split the request into smaller steps",
-				),
-			),
-		10 * 60_000,
-	);
-	timeout.unref();
+	const log = (event: string, extra: Record<string, unknown> = {}) =>
+		onEvent({
+			event,
+			runId: job.id,
+			projectId: scope.projectId,
+			userId: scope.userId,
+			elapsedMs: Date.now() - job.createdAt,
+			phase: job.progress,
+			...extra,
+		});
+	log("cad.design.started", {
+		provider: config?.provider,
+		model: config?.model,
+	});
+	let lastDraftLog = 0;
 	void generate(config, input, {
 		signal: job.controller.signal,
 		progress: (text) => {
+			if (job.status !== "running" || job.controller.signal.aborted) return;
 			job.progress = text;
+			if (job.live.activity.at(-1) !== text) {
+				job.live.activity = [...job.live.activity, text].slice(-8);
+				log("cad.design.phase");
+			}
+		},
+		activity: (value) => {
+			if (job.status === "running" && !job.controller.signal.aborted) {
+				Object.assign(job.live, value);
+				if (
+					(value.text || value.draftCharacters) &&
+					Date.now() - lastDraftLog > 15000
+				) {
+					lastDraftLog = Date.now();
+					log("cad.design.drafting", { characters: job.live.draftCharacters });
+				}
+			}
+		},
+		preview: (parts, label) => {
+			if (job.status !== "running" || job.controller.signal.aborted) return;
+			job.preview = parts;
+			job.live.previewRevision++;
+			job.live.previewCount = parts?.length ?? 0;
+			if (parts) log("cad.design.preview", { parts: parts.length });
+			if (label) {
+				job.progress = label;
+				job.live.activity = [...job.live.activity, label].slice(-8);
+			}
 		},
 	})
 		.then((result) => {
 			if (job.controller.signal.aborted) return;
+			job.preview = null;
+			job.live.previewRevision++;
+			job.live.previewCount = 0;
 			job.result = result;
 			job.status = "completed";
 			job.progress = "Ready to apply";
+			log("cad.design.completed", { parts: result.build?.parts.length ?? 0 });
 		})
 		.catch((error) => {
 			if (job.status === "cancelled") return;
+			job.preview = null;
+			job.live.previewRevision++;
+			job.live.previewCount = 0;
 			job.status = "failed";
-			job.error = error instanceof Error ? error.message : String(error);
+			const failure = job.controller.signal.aborted
+				? job.controller.signal.reason
+				: error;
+			job.error = failure instanceof Error ? failure.message : String(failure);
+			log("cad.design.failed", { error: job.error });
 			job.progress = "Design failed";
 		})
 		.finally(() => {
 			job.finishedAt = Date.now();
-			clearTimeout(timeout);
 			const expiry = setTimeout(() => jobs.delete(job.id), 10 * 60_000);
 			expiry.unref();
 		});
 	return { id: job.id, status: job.status, progress: job.progress };
 }
 
-export function getCadJob(scope: Scope, id: string) {
+export function getCadJob(scope: Scope, id: string, previewAfter = -1) {
 	const job = jobs.get(id);
 	if (!job || !sameScope(scope, job.scope)) return null;
 	return {
@@ -124,6 +180,13 @@ export function getCadJob(scope: Scope, id: string) {
 		progress: job.progress,
 		result: job.result,
 		error: job.error,
+		live: {
+			...job.live,
+			...(!Number.isFinite(previewAfter) ||
+			previewAfter < job.live.previewRevision
+				? { preview: job.preview }
+				: {}),
+		},
 	};
 }
 export function cancelCadJob(scope: Scope, id: string) {

@@ -8,6 +8,7 @@ import {
 	type CadBuild,
 	type CadProgram,
 	type CadSource,
+	type CadPart,
 	validateCadProgram,
 } from "@bidwright/domain";
 import { executeCadProgram, getCadApiDocs } from "./runtime.js";
@@ -34,6 +35,8 @@ You have the FULL upstream Python API, not a fixed list of operations. Use cad_d
 
 Program format: {version:1,engine:"build123d",name,units:"mm"|"in",parameters:{numeric_dimension:value},source:"Python source",imports:{snapshot_key:live_node_id},removedParts:[],assumptions:[]}.
 The runner injects parameters (in program.units), unit_scale (25.4 for inches, 1 for mm), and existing(snapshot_key). build123d itself uses MILLIMETRES. Multiply input lengths by unit_scale; leave counts and angles unscaled. Never overwrite parameters with hardcoded defaults. Use from build123d import * and any Python standard-library helpers. No network, package installation, external processes, host files, or interactive GUI. Runtime documentation and introspection cover the entire installed CAD API, including selectors, curves, lofts, sweeps, shell/thickness operations, assemblies and custom reusable functions.
+
+Users watch the design being built. Give a short public progress explanation before tool calls. For a nontrivial NEW design, execute a useful main body early, then refine the complete program with details/subassemblies in subsequent cad_execute calls. For existing designs always retain unaffected parts, even in early candidates. Initialize parts={} early and publish completed shapes as you construct them. Call preview(parts, "short description") at meaningful milestones (base body, drilled holes, assembled members); it streams actual valid CAD geometry to the user's viewport without committing it. Never sleep or invent geometry/progress to simulate work. Every execute still receives the complete runnable source; finish only when the requested model is complete and checked.
 
 Publish parts as a Python dictionary of stable IDs to Shape/BuildPart objects, or {"shape":shape,"name":human_name,"nodeId":existing_target_node_id,"material":material_spec}. Every physical fabrication member stays a named separate part; do not fuse a welded assembly into one solid. Use functions, loops and reusable subassemblies for complexity, with deterministic part IDs. Up to 1,000 parts, 150,000 source characters; CPU/memory are bounded, so avoid needlessly fine tessellation or fused hardware.
 
@@ -107,6 +110,8 @@ export async function designWithCadAdapter(
 	options: {
 		signal?: AbortSignal;
 		progress?: (status: string) => void;
+		activity?: (value: { text?: string; draftCharacters?: number }) => void;
+		preview?: (parts: CadPart[] | null, label?: string) => void;
 		execute?: typeof executeCadProgram;
 		docs?: typeof getCadApiDocs;
 	} = {},
@@ -122,6 +127,7 @@ export async function designWithCadAdapter(
 			input.program,
 			input,
 			options.signal,
+			(parts, label) => options.preview?.(parts, label),
 		);
 		validateCadEditScope(build, input.context, input.sources, false);
 		return {
@@ -152,23 +158,37 @@ export async function designWithCadAdapter(
 	let candidate: CadBuild | null = null;
 	let failedBuild = false;
 	let executions = 0;
-	for (let turn = 0; turn < 16; turn++) {
+	for (let turn = 0; turn < 48; turn++) {
 		check();
 		options.progress?.(
 			failedBuild
 				? "Correcting the CAD program…"
 				: candidate
 					? "Inspecting geometry and dimensions…"
-					: "Designing with build123d…",
+					: "Designing your model…",
 		);
+		let announcement = "";
+		let draftCharacters = 0;
+		options.activity?.({ text: "", draftCharacters: 0 });
 		const response = await adapter.chat({
 			model,
 			signal: options.signal,
+			timeoutMs: 2 * 60 * 60_000,
 			systemPrompt: CAD_PROGRAM_INSTRUCTIONS,
 			messages,
 			tools,
 			maxTokens: 16000,
 			temperature: 0.2,
+			onDelta: (delta) => {
+				check();
+				if (delta.type === "text") {
+					announcement = (announcement + delta.text).slice(-4000);
+					options.activity?.({ text: announcement });
+				} else if (delta.toolName === "cad_execute") {
+					draftCharacters += delta.text.length;
+					options.activity?.({ draftCharacters });
+				}
+			},
 		});
 		check();
 		messages.push({ role: "assistant", content: response.content });
@@ -204,9 +224,10 @@ export async function designWithCadAdapter(
 						options.signal,
 					);
 				} else if (call.toolName === "cad_execute") {
+					options.preview?.(null);
 					candidate = null;
 					failedBuild = true;
-					if (++executions > 6)
+					if (++executions > 20)
 						throw new Error(
 							"Build attempt limit reached; clarify or simplify the requested design",
 						);
@@ -216,10 +237,12 @@ export async function designWithCadAdapter(
 						args.program,
 						input,
 						options.signal,
+						(parts, label) => options.preview?.(parts, label),
 					);
 					validateCadEditScope(build, input.context, input.sources);
 					check();
 					candidate = build;
+					options.preview?.(build.parts, "Inspecting completed geometry");
 					failedBuild = false;
 					result = {
 						ok: true,
@@ -250,6 +273,7 @@ export async function designWithCadAdapter(
 				} else throw new Error("Unknown CAD tool");
 			} catch (error) {
 				check();
+				if (call.toolName === "cad_execute") options.preview?.(null);
 				result = {
 					ok: false,
 					error: error instanceof Error ? error.message : String(error),
@@ -296,7 +320,9 @@ export async function generateCadDesign(
 		options.progress?.("Building updated dimensions…");
 		const { preview: _, ...build } = await (
 			options.execute ?? executeCadProgram
-		)(input.program, input, options.signal);
+		)(input.program, input, options.signal, (parts, label) =>
+			options.preview?.(parts, label),
+		);
 		validateCadEditScope(build, input.context, input.sources, false);
 		return {
 			message: "Updated the model from its editable CAD source.",

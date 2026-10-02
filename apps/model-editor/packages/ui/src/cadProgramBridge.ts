@@ -11,6 +11,7 @@ import {
 import {
     cadNodeId,
     validateCadBuild,
+    validateCadParts,
     type CadBuild,
     type CadPart,
     type CadProgram,
@@ -68,8 +69,10 @@ export function cadProgramState(app: IApplication, document: IDocument, includeG
     }
     return {
         program: program ?? null,
-        cadParts: Object.values(outputs)
-            .map(({ brep: _, ...p }) => ({ ...p, manuallyDeleted: !document.modelManager.findNode((n) => n.id === p.nodeId) })),
+        cadParts: Object.values(outputs).map(({ brep: _, ...p }) => ({
+            ...p,
+            manuallyDeleted: !document.modelManager.findNode((n) => n.id === p.nodeId),
+        })),
         ...(includeGeometry ? { sources, geometry } : {}),
     };
 }
@@ -255,4 +258,69 @@ export function applyCadBuild(
     if (!previous["cadProgram"] && !previous["modelDesign"]) app.activeView?.cameraController.fitContent();
     app.activeView?.update();
     return changed.length + deleted.length;
+}
+
+/** Temporary geometry never enters document nodes, undo, autosave or exports. */
+export class CadDraftPreview {
+    private document?: IDocument;
+    private meshes: number[] = [];
+    constructor(private app: IApplication) {}
+    clear() {
+        this.meshes.forEach((id) => this.document?.visual.context.removeMesh(id));
+        this.meshes = [];
+        this.document?.visual.update();
+        this.document = undefined;
+    }
+    show(document: IDocument, parts: CadPart[], editableNodeIds?: string[]) {
+        validateCadParts(parts);
+        this.clear();
+        this.document = document;
+        const old = (document.userData?.["cadOutputs"] ?? {}) as Record<string, Output>;
+        try {
+            for (const part of parts) {
+                const prior = Object.hasOwn(old, part.id) ? old[part.id] : undefined;
+                const target = cadNodeId(part);
+                if (prior?.fingerprint === part.fingerprint) continue;
+                if (
+                    editableNodeIds?.length &&
+                    document.modelManager.findNode((n) => n.id === target) &&
+                    !editableNodeIds.includes(target)
+                )
+                    continue;
+                const converted = this.app.shapeFactory.converter.convertFromBrep(part.brep);
+                if (!converted.isOk) throw new Error(`${part.name}: ${converted.error}`);
+                const shape = converted.value;
+                try {
+                    if (shape.isNull() || !shape.isValid())
+                        throw new Error(`${part.name}: invalid draft geometry`);
+                    const solids =
+                        shape.shapeType === ShapeTypes.solid
+                            ? [shape as ISolid]
+                            : (shape.findSubShapes(ShapeTypes.solid) as ISolid[]);
+                    let volume: number;
+                    try {
+                        volume = solids.reduce((sum, solid) => sum + solid.volume(), 0);
+                    } finally {
+                        if (shape.shapeType !== ShapeTypes.solid) solids.forEach((s) => s.dispose());
+                    }
+                    if (
+                        !Number.isFinite(volume) ||
+                        Math.abs(volume - part.volumeMm3) > Math.max(1e-5, part.volumeMm3 * 1e-6)
+                    )
+                        throw new Error(`${part.name}: invalid draft volume`);
+                    const data = [shape.mesh.faces, shape.mesh.edges].filter((x) => x !== undefined);
+                    this.meshes.push(document.visual.context.displayMesh(data, 0.65));
+                } finally {
+                    shape.dispose();
+                }
+            }
+            if (!document.modelManager.findNode((n) => n instanceof ShapeNode))
+                this.app.activeView?.cameraController.fitContent(true);
+            document.visual.update();
+            this.app.activeView?.update();
+        } catch (error) {
+            this.clear();
+            throw error;
+        }
+    }
 }

@@ -12,7 +12,7 @@ export interface ICameraController extends IPropertyChanged, IDisposable {
     readonly cameraUp: XYZ;
 
     cameraType: CameraType;
-    fitContent(): void;
+    fitContent(includeTemporary?: boolean): void;
     lookAt(eye: XYZLike, target: XYZLike, up: XYZLike): void;
     pan(dx: number, dy: number): void;
     startRotate(x: number, y: number): void;

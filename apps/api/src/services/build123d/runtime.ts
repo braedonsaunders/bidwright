@@ -1,10 +1,10 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import {
 	lstat,
 	mkdtemp,
 	readdir,
-	readFile,
+	open,
 	realpath,
 	rm,
 	writeFile,
@@ -16,8 +16,10 @@ import {
 	type CadBuild,
 	type CadProgram,
 	type CadSource,
+	type CadPart,
 	validateCadBuild,
 	validateCadProgram,
+	validateCadParts,
 } from "@bidwright/domain";
 import { spawnBubblewrappedProcess } from "@braedonsaunders/appkit-process-sandbox";
 import { getProcessSandboxLauncherIdentity } from "../agent-host/launcher-identity.js";
@@ -26,6 +28,42 @@ import { prepareLauncherWritablePaths } from "../agent-host/writable-path-owners
 const runnerDirectory = dirname(fileURLToPath(import.meta.url));
 const runner = join(runnerDirectory, "runner.py");
 const MAX_BYTES = 48 * 1024 * 1024;
+// Open without following symlinks: previews are read while untrusted code is
+// still running, so a path check followed by readFile would have a race.
+async function readOutput(
+	path: string,
+	unchanged?: (stamp: string) => boolean,
+) {
+	const file = await open(
+		path,
+		constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+	);
+	try {
+		const stat = await file.stat();
+		if (!stat.isFile() || stat.size > MAX_BYTES)
+			throw new Error("Invalid CAD output file");
+		if (unchanged?.(`${stat.ino}:${stat.mtimeMs}:${stat.size}`)) return;
+		// The generated program can still mutate this file. Never let a
+		// growing file turn readFile into an unbounded allocation.
+		const buffer = Buffer.alloc(stat.size + 1);
+		let length = 0;
+		while (length < buffer.length) {
+			const { bytesRead } = await file.read(
+				buffer,
+				length,
+				buffer.length - length,
+				length,
+			);
+			if (!bytesRead) break;
+			length += bytesRead;
+		}
+		if (length !== stat.size)
+			throw new Error("CAD output changed while reading");
+		return JSON.parse(buffer.subarray(0, length).toString("utf8"));
+	} finally {
+		await file.close();
+	}
+}
 async function scratchBytes(directory: string): Promise<number> {
 	let bytes = 0;
 	for (const entry of await readdir(directory, { withFileTypes: true })) {
@@ -168,9 +206,11 @@ export async function spawnCadSandbox(
 async function run(
 	payload: unknown,
 	signal?: AbortSignal,
+	onPreview?: (parts: CadPart[], label: string) => void,
 ): Promise<Record<string, any>> {
 	await acquire(signal);
 	let directory: string | undefined;
+	let reading: Promise<void> | undefined;
 	try {
 		signal?.throwIfAborted();
 		directory = await realpath(await mkdtemp(join(tmpdir(), "bidwright-cad-")));
@@ -178,6 +218,42 @@ async function run(
 			mode: 0o600,
 		});
 		const child = await spawnCadSandbox(directory);
+		let sequence = 0;
+		let previewStamp = "";
+		const readPreview = () => {
+			if (!onPreview || reading || signal?.aborted) return;
+			reading = (async () => {
+				try {
+					const value = await readOutput(
+						join(directory!, "preview.json"),
+						(stamp) => {
+							if (stamp === previewStamp) return true;
+							previewStamp = stamp;
+							return false;
+						},
+					);
+					if (!value) return;
+					if (
+						!Number.isSafeInteger(value.sequence) ||
+						value.sequence <= sequence
+					)
+						return;
+					validateCadParts(value.parts);
+					sequence = value.sequence;
+					if (!signal?.aborted)
+						onPreview(
+							value.parts,
+							typeof value.label === "string"
+								? value.label.slice(0, 160)
+								: "Building parts",
+						);
+				} catch {
+					/* No checkpoint yet, or an invalid/untrusted preview. */
+				}
+			})().finally(() => {
+				reading = undefined;
+			});
+		};
 		await new Promise<void>((accept, reject) => {
 			let stderr = "";
 			let failure: Error | undefined;
@@ -203,6 +279,7 @@ async function run(
 					})
 					.catch(() => {});
 			}, 1000);
+			const previewCheck = setInterval(readPreview, 250);
 			signal?.addEventListener("abort", abort, { once: true });
 			child.stderr?.on("data", (chunk) => {
 				stderr = (stderr + chunk.toString()).slice(-4000);
@@ -214,6 +291,7 @@ async function run(
 				clearTimeout(timer);
 				signal?.removeEventListener("abort", abort);
 				clearInterval(diskCheck);
+				clearInterval(previewCheck);
 				if (failure) reject(failure);
 				else if (code !== 0)
 					reject(
@@ -225,6 +303,9 @@ async function run(
 			});
 			if (signal?.aborted) abort();
 		});
+		if (reading) await reading;
+		readPreview();
+		if (reading) await reading;
 		const outputPath = join(directory, "result.json");
 		const output = await lstat(outputPath);
 		if (
@@ -234,14 +315,12 @@ async function run(
 			(await realpath(outputPath)) !== outputPath
 		)
 			throw new Error("Invalid CAD output file");
-		const result = await readFile(outputPath);
-		if (result.length > MAX_BYTES)
-			throw new Error("CAD result exceeds its output limit");
-		const data = JSON.parse(result.toString("utf8"));
+		const data = await readOutput(outputPath);
 		if (!data.ok)
 			throw new Error(`${data.error}\n${data.traceback ?? ""}`.slice(0, 8000));
 		return data;
 	} finally {
+		if (reading) await reading;
 		if (directory) await rm(directory, { recursive: true, force: true });
 		release();
 	}
@@ -260,11 +339,15 @@ export async function executeCadProgram(
 		geometry?: Record<string, string>;
 	},
 	signal?: AbortSignal,
+	onPreview?: (parts: CadPart[], label: string) => void,
 ): Promise<CadBuild & { preview: string }> {
 	validateCadProgram(program);
 	const sources: Record<string, CadSource> = Object.create(null);
 	for (const [key, nodeId] of Object.entries(program.imports)) {
-		const stored = input.sources && Object.hasOwn(input.sources, key) ? input.sources[key] : undefined;
+		const stored =
+			input.sources && Object.hasOwn(input.sources, key)
+				? input.sources[key]
+				: undefined;
 		if (stored && stored.nodeId !== nodeId)
 			throw new Error(
 				`Input snapshot ${key} cannot change its target node; use a new key`,
@@ -276,7 +359,7 @@ export async function executeCadProgram(
 			);
 		sources[key] = { nodeId, brep };
 	}
-	const data = await run({ program, sources }, signal);
+	const data = await run({ program, sources }, signal, onPreview);
 	const build = {
 		program,
 		parts: data.parts,

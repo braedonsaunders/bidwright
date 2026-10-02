@@ -88,27 +88,31 @@ export async function cadDesignRoutes(app: FastifyInstance) {
 			return reply.code(404).send({ message: "Project not found" });
 		const parsed = cadDesignInputSchema.safeParse(request.body);
 		if (!parsed.success)
-			return reply
-				.code(400)
-				.send({
-					message: "Invalid CAD design request",
-					issues: parsed.error.flatten(),
-				});
+			return reply.code(400).send({
+				message: "Invalid CAD design request",
+				issues: parsed.error.flatten(),
+			});
 		try {
 			if (parsed.data.program != null) validateCadProgram(parsed.data.program);
 		} catch (error) {
-			return reply
-				.code(400)
-				.send({
-					message: error instanceof Error ? error.message : String(error),
-				});
+			return reply.code(400).send({
+				message: error instanceof Error ? error.message : String(error),
+			});
 		}
 		const config = parsed.data.rebuild
 			? null
 			: await requireRequestAiConfig(request);
 		return reply
 			.code(202)
-			.send(startCadJob(access, config, parsed.data as CadDesignInput));
+			.send(
+				startCadJob(
+					access,
+					config,
+					parsed.data as CadDesignInput,
+					undefined,
+					(event) => request.log.info(event, "CAD design activity"),
+				),
+			);
 	});
 	app.get(
 		"/api/models/:projectId/design-runs/:runId",
@@ -119,15 +123,14 @@ export async function cadDesignRoutes(app: FastifyInstance) {
 			const run = getCadJob(
 				access,
 				(request.params as { runId: string }).runId,
+				Number((request.query as { previewAfter?: string }).previewAfter ?? -1),
 			);
 			return (
 				run ??
-				reply
-					.code(404)
-					.send({
-						message:
-							"Design run expired or was stopped. Your model has not been changed.",
-					})
+				reply.code(404).send({
+					message:
+						"Design run expired or was stopped. Your model has not been changed.",
+				})
 			);
 		},
 	);

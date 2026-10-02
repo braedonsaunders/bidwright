@@ -213,3 +213,80 @@ test(
 		);
 	},
 );
+
+test(
+	"real validated geometry is published while Python is still building",
+	options,
+	async () => {
+		let completed = false;
+		const checkpoints: number[] = [];
+		const build = await executeCadProgram(
+			program(`from build123d import *
+import time
+parts={'chassis':Box(100,50,5)}
+preview(parts,'Chassis')
+time.sleep(0.8) # Test-only delay to prove previews arrive before completion.
+parts['body']=Pos(0,0,25)*Box(100,50,30)
+preview(parts,'Dump body')
+time.sleep(0.8)
+`),
+			{},
+			undefined,
+			(parts, label) => {
+				assert.equal(completed, false);
+				assert.ok(
+					parts.every(
+						(p) => p.volumeMm3 > 0 && p.brep.includes("CASCADE Topology"),
+					),
+				);
+				assert.ok(label);
+				checkpoints.push(parts.length);
+			},
+		);
+		completed = true;
+		assert.ok(checkpoints.includes(1));
+		assert.ok(checkpoints.includes(2));
+		assert.equal(build.parts.length, 2);
+	},
+);
+
+test(
+	"live preview symlinks cannot publish private host file content",
+	options,
+	async () => {
+		const directory = await mkdtemp(join(tmpdir(), "cad-preview-canary-"));
+		const path = join(directory, "preview.json");
+		const base = await executeCadProgram(
+			program(
+				"from build123d import *\nparts={'private_host_part':Box(1,2,3)}",
+			),
+			{},
+		);
+		await writeFile(
+			path,
+			JSON.stringify({
+				parts: base.parts,
+				label: "Private host content",
+				sequence: 100,
+			}),
+		);
+		const names: string[] = [];
+		try {
+			await executeCadProgram(
+				program(`import os,time
+os.symlink(${JSON.stringify(path)},'preview.json')
+time.sleep(0.8)
+from build123d import *
+parts={'safe':Box(2,3,4)}
+`),
+				{},
+				undefined,
+				(parts) => names.push(...parts.map((p) => p.id)),
+			);
+			assert.ok(!names.includes("private_host_part"));
+			assert.ok(names.includes("safe"));
+		} finally {
+			await rm(directory, { recursive: true, force: true });
+		}
+	},
+);

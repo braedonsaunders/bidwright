@@ -1,4 +1,9 @@
-import type { CadBuild, CadProgram, CadSource } from "@bidwright/domain";
+import type {
+	CadBuild,
+	CadLiveUpdate,
+	CadProgram,
+	CadSource,
+} from "@bidwright/domain";
 import { apiRequest } from "./api/client";
 
 export interface CadDesignRunInput {
@@ -17,6 +22,7 @@ export async function runCadDesign(
 	input: CadDesignRunInput,
 	signal: AbortSignal,
 	progress: (status: string) => void,
+	onLive?: (update: CadLiveUpdate) => Promise<void> | void,
 ): Promise<{ message: string; build: CadBuild | null }> {
 	const path = `/api/models/${encodeURIComponent(projectId)}/design-runs`;
 	signal.throwIfAborted();
@@ -28,16 +34,27 @@ export async function runCadDesign(
 		body: JSON.stringify(input),
 		signal: AbortSignal.timeout(30000),
 	});
+	let previewRevision = -1;
 	try {
 		while (true) {
 			signal.throwIfAborted();
 			const state = await apiRequest<{
 				status: string;
 				progress: string;
+				live?: CadLiveUpdate;
 				error?: string;
 				result?: { message: string; build: CadBuild | null };
-			}>(`${path}/${encodeURIComponent(run.id)}`, { signal });
+			}>(
+				`${path}/${encodeURIComponent(run.id)}?previewAfter=${previewRevision}`,
+				{ signal },
+			);
+			signal.throwIfAborted();
 			progress(state.progress);
+			if (state.live) {
+				await onLive?.(state.live);
+				previewRevision = state.live.previewRevision;
+			}
+			signal.throwIfAborted();
 			if (state.status === "completed" && state.result) return state.result;
 			if (state.status === "failed")
 				throw new Error(state.error || "The CAD model could not be built");
@@ -51,7 +68,7 @@ export async function runCadDesign(
 				const timer = setTimeout(() => {
 					signal.removeEventListener("abort", stop);
 					accept();
-				}, 1000);
+				}, 500);
 				signal.addEventListener("abort", stop, { once: true });
 				if (signal.aborted) stop();
 			});

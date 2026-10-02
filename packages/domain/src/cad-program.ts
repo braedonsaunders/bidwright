@@ -35,6 +35,15 @@ export interface CadBuild {
 	libraryVersion: string;
 	kernelVersion: string;
 }
+export interface CadLiveUpdate {
+	activity: string[];
+	text: string;
+	draftCharacters: number;
+	previewRevision: number;
+	previewCount: number;
+	/** Absent when unchanged, null when the previous draft must be cleared. */
+	preview?: CadPart[] | null;
+}
 
 const idPattern = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,119}$/;
 export function validateCadProgram(
@@ -109,16 +118,33 @@ export function validateCadBuild(value: unknown): asserts value is CadBuild {
 	const build = value as CadBuild;
 	if (!build || typeof build !== "object") throw new Error("Invalid CAD build");
 	validateCadProgram(build.program);
+	validateCadParts(build.parts);
 	if (
-		!Array.isArray(build.parts) ||
-		!build.parts.length ||
-		build.parts.length > 1000
+		!build.sources ||
+		typeof build.sources !== "object" ||
+		Array.isArray(build.sources)
 	)
+		throw new Error("Invalid CAD source snapshots");
+	for (const [key, nodeId] of Object.entries(build.program.imports)) {
+		const source = build.sources[key];
+		if (
+			!source ||
+			source.nodeId !== nodeId ||
+			typeof source.brep !== "string" ||
+			!source.brep.includes("CASCADE Topology")
+		)
+			throw new Error(`Missing immutable input ${key}`);
+	}
+}
+
+export function validateCadParts(value: unknown): asserts value is CadPart[] {
+	const parts = value as CadPart[];
+	if (!Array.isArray(parts) || !parts.length || parts.length > 1000)
 		throw new Error("A model requires 1–1,000 named parts");
 	const ids = new Set<string>();
 	const targets = new Set<string>();
 	let bytes = 0;
-	for (const p of build.parts) {
+	for (const p of parts) {
 		if (
 			!idPattern.test(p.id) ||
 			ids.has(p.id) ||
@@ -164,20 +190,4 @@ export function validateCadBuild(value: unknown): asserts value is CadBuild {
 		throw new Error(
 			"Generated geometry exceeds 32 MB; split the model into subassemblies",
 		);
-	if (
-		!build.sources ||
-		typeof build.sources !== "object" ||
-		Array.isArray(build.sources)
-	)
-		throw new Error("Invalid CAD source snapshots");
-	for (const [key, nodeId] of Object.entries(build.program.imports)) {
-		const source = build.sources[key];
-		if (
-			!source ||
-			source.nodeId !== nodeId ||
-			typeof source.brep !== "string" ||
-			!source.brep.includes("CASCADE Topology")
-		)
-			throw new Error(`Missing immutable input ${key}`);
-	}
 }

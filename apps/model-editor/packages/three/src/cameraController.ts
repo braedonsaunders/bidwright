@@ -224,9 +224,9 @@ export class CameraController extends Observable implements ICameraController {
         return tmpRotation.clone().multiply(rotationDx);
     }
 
-    fitContent(): void {
+    fitContent(includeTemporary = false): void {
         const context = this.view.document.visual.context as ThreeVisualContext;
-        const sphere = this.getBoundingSphere(context);
+        const sphere = this.getBoundingSphere(context, includeTemporary);
         let fieldOfView = CAMERA_FOV / 2.0;
         if (this._width < this._height) {
             fieldOfView = (fieldOfView * this._width) / this._height;
@@ -245,7 +245,7 @@ export class CameraController extends Observable implements ICameraController {
         this.updateCameraPosionTarget();
     }
 
-    private getBoundingSphere(context: ThreeVisualContext) {
+    private getBoundingSphere(context: ThreeVisualContext, includeTemporary = false) {
         const shapes = this.view.document.selection.getSelectedNodes().filter((x) => x instanceof VisualNode);
 
         const box = new Box3();
@@ -262,6 +262,7 @@ export class CameraController extends Observable implements ICameraController {
         }
 
         const sphere = new Sphere();
+        if (includeTemporary) box.union(new Box3().setFromObject(context.tempShapes));
         box.getBoundingSphere(sphere);
         if (sphere.radius < 0) {
             sphere.radius = SHAPE_EMPTY_SIZE;

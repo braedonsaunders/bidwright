@@ -34,7 +34,8 @@ function adapter(
 		supportsVision: true,
 		maxContextTokens: 128000,
 		async chat(request) {
-			requests.push(structuredClone(request));
+			const { onDelta: _, signal: __, ...snapshot } = request;
+			requests.push(structuredClone(snapshot));
 			const actions = sequence.shift();
 			assert.ok(actions, "unexpected extra agent turn");
 			return {

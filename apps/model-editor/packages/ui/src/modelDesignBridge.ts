@@ -22,7 +22,7 @@ import {
     modelDesignPartSignature,
     validateModelDesign,
 } from "../../../../../packages/domain/src/model-design";
-import { applyCadBuild, cadProgramState } from "./cadProgramBridge";
+import { applyCadBuild, cadProgramState, CadDraftPreview } from "./cadProgramBridge";
 
 export function buildDesignShapes(
     app: IApplication,
@@ -474,10 +474,12 @@ function modelState(app: IApplication, document: IDocument) {
 
 export function installModelDesignBridge(app: IApplication): () => void {
     const metadataRevisions = new WeakMap<IDocument, number>();
+    const preview = new CadDraftPreview(app);
     const body = window.document.body;
     let observed: IDocument | undefined;
     let unsubscribe: (() => void) | undefined;
     const changed = () => {
+        preview.clear();
         if (window.document.body.dataset["bidwrightModelLoading"] === "true") return;
         const message = { type: "bidwright:model-document-dirty", source: "bidwright-model-editor" };
         if (window.parent !== window) window.parent.postMessage(message, window.location.origin);
@@ -486,6 +488,7 @@ export function installModelDesignBridge(app: IApplication): () => void {
     const observe = () => {
         const document = app.activeView?.document;
         if (observed === document) return;
+        preview.clear();
         unsubscribe?.();
         observed = document;
         unsubscribe = document?.history.onChanged(changed);
@@ -546,7 +549,29 @@ export function installModelDesignBridge(app: IApplication): () => void {
                 );
                 return;
             }
+            if (request.action === "clear-preview" || request.action === "preview-cad") {
+                if (request.action === "clear-preview") preview.clear();
+                else {
+                    const revision = `${document.id}:${document.history.revision}:${metadataRevisions.get(document) ?? 0}`;
+                    if (request.baseRevision !== revision)
+                        throw new Error(
+                            "The model changed while the AI was designing. Retry against the current model.",
+                        );
+                    preview.show(document, request.parts, request.editableNodeIds);
+                }
+                target.postMessage(
+                    {
+                        type: "bidwright:model-design-result",
+                        source: "bidwright-model-editor",
+                        requestId: request.requestId,
+                        ok: true,
+                    },
+                    window.location.origin,
+                );
+                return;
+            }
             if (request.action === "apply-cad") {
+                preview.clear();
                 const revision = `${document.id}:${document.history.revision}:${metadataRevisions.get(document) ?? 0}`;
                 if (request.baseRevision !== revision)
                     throw new Error(
@@ -636,6 +661,7 @@ export function installModelDesignBridge(app: IApplication): () => void {
     };
     window.addEventListener("message", receive);
     return () => {
+        preview.clear();
         window.removeEventListener("message", receive);
         window.removeEventListener("bidwright:model-document-capture", capture);
         PubSub.default.remove("activeViewChanged", observe);
