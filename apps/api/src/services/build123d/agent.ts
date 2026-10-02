@@ -1,5 +1,6 @@
 import type {
 	ChatMessage,
+	ChatResponse,
 	LLMAdapter,
 	TenantAiConfig,
 	ToolSpec,
@@ -175,7 +176,7 @@ export async function designWithCadAdapter(
 		let draftCharacters = 0;
 		options.activity?.({ text: "", draftCharacters: 0 });
 		let planning = false;
-		let response;
+		let response: ChatResponse;
 		try {
 			response = await adapter.chat({
 				model,
