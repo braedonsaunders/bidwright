@@ -200,7 +200,7 @@ export function ModelDesignAssistant({ iframe, projectId, fileName, toolbar }: P
     <>
       {toolbar && createPortal(<>
         <Button ref={toggleRef} size="sm" variant={expanded ? "secondary" : "ghost"} aria-label="Design with AI" aria-expanded={expanded} aria-controls={panelId} title={error ? `Design with AI: ${error}` : busy ? status : "Design with AI"} onClick={() => setExpanded(value => !value)}>
-          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-accent" />}<span className="hidden sm:inline">Design with AI</span>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5 text-accent" />}<span className="hidden @[600px]/model:inline">Design with AI</span>
           {error && <span className="h-1.5 w-1.5 rounded-full bg-red-400" aria-label="Design needs attention" />}
         </Button>
         <Button size="sm" variant="ghost" aria-label="Undo model change" title="Undo model change" disabled={!state || busy || exporting} onClick={async () => {

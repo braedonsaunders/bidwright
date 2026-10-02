@@ -44,7 +44,7 @@ function fileNameFromContentDisposition(contentDisposition?: string | null) {
 }
 
 async function fetchStartupModelFile(url: string, preferredFileName?: string) {
-    const response = await fetch(url, { credentials: "include", cache: "force-cache" });
+    const response = await fetch(url, { credentials: "include", cache: "no-store" });
     if (!response.ok) {
         throw new Error(`Failed to fetch model: ${url}, statusText: ${response.statusText}`);
     }

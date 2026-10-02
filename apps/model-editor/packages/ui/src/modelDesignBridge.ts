@@ -7,6 +7,7 @@ import {
     Line,
     Matrix4,
     Plane,
+    PubSub,
     type Result,
     ShapeNode,
     ShapeTypes,
@@ -464,6 +465,46 @@ function modelState(app: IApplication, document: IDocument) {
 }
 
 export function installModelDesignBridge(app: IApplication): () => void {
+    const metadataRevisions = new WeakMap<IDocument, number>();
+    const body = window.document.body;
+    let observed: IDocument | undefined;
+    let unsubscribe: (() => void) | undefined;
+    const changed = () => {
+        if (window.document.body.dataset["bidwrightModelLoading"] === "true") return;
+        const message = { type: "bidwright:model-document-dirty", source: "bidwright-model-editor" };
+        if (window.parent !== window) window.parent.postMessage(message, window.location.origin);
+        if (window.opener) window.opener.postMessage(message, window.location.origin);
+    };
+    const observe = () => {
+        const document = app.activeView?.document;
+        if (observed === document) return;
+        unsubscribe?.();
+        observed = document;
+        unsubscribe = document?.history.onChanged(changed);
+    };
+    PubSub.default.sub("activeViewChanged", observe);
+    observe();
+    const documentSnapshot = (previousRevision?: string) => {
+        if (body.dataset["bidwrightModelLoading"] === "true") return;
+        const document = app.activeView?.document;
+        if (!document) return;
+        const revision = `${document.id}:${document.history.revision}:${metadataRevisions.get(document) ?? 0}`;
+        return {
+            documentId: document.id,
+            documentName: document.name,
+            revision,
+            ...(previousRevision === revision ? {} : { serializedDocument: document.serialize() }),
+        };
+    };
+    // The same-origin host flushes before its iframe is removed by SPA navigation.
+    const capture = (event: Event) => {
+        const detail = (event as CustomEvent).detail;
+        if (detail && typeof detail === "object") {
+            detail.capture = documentSnapshot;
+            detail.snapshot = documentSnapshot(detail.revision);
+        }
+    };
+    window.addEventListener("bidwright:model-document-capture", capture);
     const receive = (event: MessageEvent) => {
         if (
             event.origin !== window.location.origin ||
@@ -483,6 +524,20 @@ export function installModelDesignBridge(app: IApplication): () => void {
                 throw new Error("The model is still opening");
             const document = app.activeView?.document;
             if (!document) throw new Error("The model is still opening");
+            observe();
+            if (request.action === "document") {
+                target.postMessage(
+                    {
+                        type: "bidwright:model-design-result",
+                        source: "bidwright-model-editor",
+                        requestId: request.requestId,
+                        ok: true,
+                        ...documentSnapshot(request.revision),
+                    },
+                    window.location.origin,
+                );
+                return;
+            }
             const editedParts =
                 request.action === "apply" ? applyDesign(app, document, request.recipe) : undefined;
             if (request.action === "apply") {
@@ -500,6 +555,8 @@ export function installModelDesignBridge(app: IApplication): () => void {
                 )
                     throw new Error("Invalid design conversation");
                 document.userData = { ...document.userData, designConversation: request.history };
+                metadataRevisions.set(document, (metadataRevisions.get(document) ?? 0) + 1);
+                changed();
             } else if (request.action === "undo") {
                 document.history.undo();
                 document.visual.update();
@@ -556,5 +613,10 @@ export function installModelDesignBridge(app: IApplication): () => void {
         }
     };
     window.addEventListener("message", receive);
-    return () => window.removeEventListener("message", receive);
+    return () => {
+        window.removeEventListener("message", receive);
+        window.removeEventListener("bidwright:model-document-capture", capture);
+        PubSub.default.remove("activeViewChanged", observe);
+        unsubscribe?.();
+    };
 }

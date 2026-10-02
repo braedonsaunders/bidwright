@@ -14,6 +14,21 @@ export class History implements IDisposable {
     private readonly _undos: IHistoryRecord[] = [];
     private readonly _redos: IHistoryRecord[] = [];
 
+    private readonly listeners = new Set<() => void>();
+    revision = 0;
+
+    onChanged(listener: () => void): () => void {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    }
+
+    private changed() {
+        this.revision++;
+        this.listeners.forEach((listener) => {
+            listener();
+        });
+    }
+
     disabled = false;
     undoLimits = 50;
 
@@ -30,6 +45,7 @@ export class History implements IDisposable {
         this._redos.forEach((record) => record.dispose());
         this._undos.forEach((record) => record.dispose());
         this.clear();
+        this.listeners.clear();
     }
 
     private clear(): void {
@@ -47,6 +63,7 @@ export class History implements IDisposable {
             const removed = this._undos.shift();
             removed?.dispose();
         }
+        this.changed();
     }
 
     undoCount() {
@@ -66,6 +83,7 @@ export class History implements IDisposable {
 
                 record.undo();
                 this._redos.push(record);
+                this.changed();
             },
             () => {
                 this.#isUndoing = false;
@@ -82,6 +100,7 @@ export class History implements IDisposable {
 
                 record.redo();
                 this._undos.push(record);
+                this.changed();
             },
             () => {
                 this.#isRedoing = false;

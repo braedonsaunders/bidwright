@@ -1,11 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Box, ExternalLink, Loader2, RefreshCw, Send, Maximize2, Minimize2 } from "lucide-react";
+import { Box, ExternalLink, Loader2, RefreshCw, Save, Send, Maximize2, Minimize2 } from "lucide-react";
 import {
   Button,
 } from "@braedonsaunders/appkit-ui";
 import { cn } from "@/lib/utils";
+import { useModelDocumentAutosave } from "@/lib/use-model-document-autosave";
 import { useViewerFullscreen } from "@/lib/use-viewer-fullscreen";
 import { ModelDesignAssistant } from "./model-design-assistant";
 
@@ -450,20 +451,8 @@ export function BidwrightModelEditor({
       reloadKey,
     ]
   );
+  const persistence = useModelDocumentAutosave({ iframe: iframeRef, documentKey: editorUrl, fileUrl, fileName, projectId, modelDocumentId, onSave: onSaveDocument });
   const ext = getModelFileExtension(fileName);
-
-  useEffect(() => {
-    if (!fileUrl) return;
-    const controller = new AbortController();
-    void fetch(fileUrl, {
-      credentials: "include",
-      cache: "force-cache",
-      signal: controller.signal,
-    }).catch(() => {
-      /* The iframe still owns the authoritative load; this just warms the browser cache. */
-    });
-    return () => controller.abort();
-  }, [fileUrl, reloadKey]);
 
   useEffect(() => {
     linkedLineItemsRef.current = linkedLineItems;
@@ -601,14 +590,14 @@ export function BidwrightModelEditor({
         if (handledDocumentSaveEventsRef.current.has(message.eventId)) return;
         handledDocumentSaveEventsRef.current.add(message.eventId);
       }
-      await onSaveDocument(message);
+      persistence.saveSnapshot(message);
     },
-    [onSaveDocument]
+    [onSaveDocument, persistence.saveSnapshot]
   );
 
   useEffect(() => {
     function handleMessage(event: MessageEvent) {
-      if (iframeRef.current?.contentWindow && event.source !== iframeRef.current.contentWindow) return;
+      if (event.origin !== window.location.origin || (iframeRef.current?.contentWindow && event.source !== iframeRef.current.contentWindow)) return;
       if (isModelSelectionMessage(event.data)) {
         handleIncomingSelection(event.data);
         return;
@@ -758,8 +747,8 @@ export function BidwrightModelEditor({
   );
 
   return (
-    <div ref={containerRef} className={cn("relative flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", expanded && !nativeFullscreen && "fixed inset-0 z-[200]", className)}>
-      {(showHeader || canDesign) && (
+    <div ref={containerRef} className={cn("relative @container/model flex h-full min-h-0 w-full flex-col overflow-hidden bg-[#101014]", expanded && !nativeFullscreen && "fixed inset-0 z-[200]", className)}>
+      {(showHeader || canDesign || onSaveDocument) && (
         <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
           <Box className="h-4 w-4 shrink-0 text-accent" />
           <div className="min-w-0 flex-1">
@@ -797,6 +786,14 @@ export function BidwrightModelEditor({
               {sendingSelection ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
             </Button>
           )}
+          {onSaveDocument && <div className="flex shrink-0 items-center gap-1">
+            <span role={persistence.status === "error" ? "alert" : "status"} title={persistence.error || "Model autosaves to Project Files"} className={cn("text-[10px]", persistence.status === "error" ? "text-red-500" : "text-fg/50")}>
+              {persistence.status === "opening" ? "Opening…" : persistence.status === "saving" ? "Saving…" : persistence.status === "unsaved" ? "Unsaved" : persistence.status === "error" ? "Save failed" : "Saved"}
+            </span>
+            <Button size="sm" variant="ghost" aria-label={persistence.status === "error" ? "Retry saving model" : "Save model"} title={persistence.error || "Save model to Project Files"} disabled={persistence.status === "opening"} onClick={persistence.save}>
+              {persistence.status === "saving" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+            </Button>
+          </div>}
           {canDesign && <div ref={setAssistantToolbar} className="flex shrink-0 items-center gap-1 border-r border-line pr-2" />}
           <Button variant="ghost" size="sm" title={expanded ? "Exit fullscreen" : "Expand model to fullscreen"} aria-label={expanded ? "Exit fullscreen" : "Expand model to fullscreen"} aria-pressed={expanded} onClick={() => void toggleFullscreen()}>
             {expanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}

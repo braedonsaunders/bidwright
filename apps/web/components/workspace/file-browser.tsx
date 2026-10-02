@@ -1854,7 +1854,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
   const handleSelect = useCallback((item: TreeItem) => {
     setSelectedId(item.id);
-    setEditorMode("none");
+    if (item.fileNode && getFileExtension(item.name) === "cd" && !item.fileNode.storagePath) {
+      setEditorFileName(item.name);
+      setModelEditorFileNodeId(item.fileNode.id);
+      setEditorMode("model");
+    } else setEditorMode("none");
   }, []);
 
   // ── Upload handling ────────────────────────────────────────────────────
@@ -2495,19 +2499,19 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [activeFileParentId, projectId, showError, userNodes, notifyFilesMutated]);
 
+  const savedModelNodesRef = useRef(new Map<string, FileNode>());
+
   const handleModelDocumentSave = useCallback(async (message: BidwrightModelDocumentSaveMessage) => {
     try {
-      const selectedNativeNode = selectedItem?.fileNode && getFileExtension(selectedItem.fileNode.name) === "cd"
-        ? selectedItem.fileNode
-        : undefined;
-      const localNativeNode = modelEditorFileNodeId
-        ? userNodes.find((node) => node.id === modelEditorFileNodeId && getFileExtension(node.name) === "cd")
-        : undefined;
-      const messageNativeNode = message.modelDocumentId
-        ? userNodes.find((node) => node.id === message.modelDocumentId && getFileExtension(node.name) === "cd")
-        : undefined;
-      const nativeNode = selectedNativeNode ?? localNativeNode ?? messageNativeNode;
-      const fallbackName = editorFileName || message.fileName || message.documentName || selectedItem?.name || "Untitled Model";
+      if (message.projectId && message.projectId !== projectId) throw new Error("Model belongs to a different project");
+      const sourceNode = userNodes.find(node => node.id === message.modelDocumentId);
+      const cacheKey = `${message.modelDocumentId ?? "new"}:${message.documentId}`;
+      const savedCopy = savedModelNodesRef.current.get(cacheKey);
+      // A save may finish after selection changes. Resolve its own source file;
+      // imported STEP models get a native copy without replacing the original.
+      const nativeNode = sourceNode && getFileExtension(sourceNode.name) === "cd" ? sourceNode
+        : savedCopy && (userNodes.find(node => node.id === savedCopy.id) ?? savedCopy);
+      const fallbackName = message.fileName || message.documentName || "Untitled Model";
       const fileName = ensureModelDocumentName(nativeNode?.name ?? fallbackName);
       const file = new globalThis.File(
         [JSON.stringify(message.serializedDocument)],
@@ -2517,7 +2521,8 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
       const savedNode = nativeNode
         ? await saveFileNodeContent(projectId, nativeNode.id, file)
-        : await uploadFile(projectId, file, selectedItem?.fileNode?.parentId ?? null);
+        : await uploadFile(projectId, file, sourceNode?.parentId ?? selectedItem?.fileNode?.parentId ?? null);
+      savedModelNodesRef.current.set(cacheKey, savedNode);
       // Only treat the upload-new-node path as a tree mutation; an in-place
       // save of an existing node doesn't change the file list shape.
       if (!nativeNode) notifyFilesMutated();
@@ -2526,13 +2531,10 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         const exists = prev.some((node) => node.id === savedNode.id);
         return exists ? prev.map((node) => (node.id === savedNode.id ? savedNode : node)) : [...prev, savedNode];
       });
-      setSelectedId(savedNode.id);
-      setEditorFileName(savedNode.name);
-      setModelEditorFileNodeId(savedNode.id);
     } catch (err) {
-      showError(`Failed to save model: ${err instanceof Error ? err.message : "Unknown error"}`);
+      throw new Error(`Failed to save model: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [editorFileName, modelEditorFileNodeId, projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes, notifyFilesMutated]);
+  }, [projectId, selectedItem?.fileNode?.parentId, userNodes, notifyFilesMutated]);
 
   const handleCadDocumentSave = useCallback(async (message: BidwrightCadDocumentSaveMessage) => {
     try {
@@ -2652,7 +2654,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 <TextPreview key={selectedItem.id} url={previewUrl} extractedText={!hasExtracted ? selectedItem.extractedText : undefined} />
               </div>
             )}
-            {filePreviewType === "cad" && previewUrl && (
+            {filePreviewType === "cad" && (previewUrl || (selectedItem.fileNode && getFileExtension(selectedItem.name) === "cd")) && (
               <div className="flex-1 min-h-[400px]">
                 {isBidwrightEditableModel(selectedItem.name) ? (
                   <BidwrightModelEditor
@@ -2673,7 +2675,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                   />
                 ) : (
                   <CadViewer
-                    fileUrl={previewUrl}
+                    fileUrl={previewUrl!}
                     fileName={selectedItem.name}
                     projectId={projectId}
                     sourceKind={ingestSourceRef?.sourceKind}

@@ -16,6 +16,29 @@ describe("test history", () => {
         }
     }
 
+    test("edit revisions advance past the undo limit, including undo and redo", () => {
+        const history = new History();
+        history.undoLimits = 1;
+        const revisions: number[] = [];
+        const unsubscribe = history.onChanged(() => {
+            revisions.push(history.revision);
+        });
+        const record = () => ({ name: "edit", undo() {}, redo() {}, dispose() {} });
+        history.add(record());
+        history.add(record());
+        expect(history.undoCount()).toBe(1);
+        history.undo();
+        history.redo();
+        expect(revisions).toEqual([1, 2, 3, 4]);
+        history.disabled = true;
+        history.add(record());
+        expect(history.revision).toBe(4);
+        unsubscribe();
+        history.undo();
+        expect(revisions).toHaveLength(4);
+        history.dispose();
+    });
+
     test("test modify history", () => {
         const obj = new TestClass();
         const history = new History();
