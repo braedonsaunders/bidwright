@@ -1,3 +1,4 @@
+import type { LineDerivation } from "./line-derivation";
 import type { CalculationType } from "./calculation-types";
 import type { LineTotal, MarkupRatio, PerUnitCost } from "./money";
 import type { UnitOfMeasure } from "./uom";
@@ -286,6 +287,11 @@ export interface WorksheetItem {
   sourceEvidence?: WorksheetItemSourceEvidence;
   sourceAssemblyId?: string | null;
   assemblyInstanceId?: string | null;
+  /**
+   * Current per-line derivation (formula + sourced inputs + result). See
+   * LineDerivation. Null when the row has no recorded derivation.
+   */
+  derivation?: LineDerivation | null;
 }
 
 /** Where a worksheet item's cost/price came from when it was last priced. */

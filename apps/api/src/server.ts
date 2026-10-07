@@ -91,6 +91,7 @@ import {
   type WorksheetFolderPatchInput,
   type WorksheetPatchInput,
   type WorksheetItemPatchInput,
+  type WorksheetItemMutationContext,
   type CreateJobInput,
   type ImportProcessInput,
   type PluginPatchInput,
@@ -153,7 +154,7 @@ import {
   aiSuggestEquipment
 } from "./services/ai-service.js";
 import { executePluginSearchDataSource } from "./services/plugin-search-data-source.js";
-import { knowledgeService } from "./services/knowledge-service.js";
+import { knowledgeService, getEmbeddingConfig } from "./services/knowledge-service.js";
 import { documentTypeFromIngestion } from "./calc-utils.js";
 import { inferPageCount, knowledgeCategoryFromDocType } from "./store/mappers.js";
 import {
@@ -258,6 +259,7 @@ const worksheetItemPatchSchema = z.object({
   laborUnitId: z.string().nullable().optional(),
   resourceComposition: z.record(z.unknown()).optional(),
   sourceEvidence: z.record(z.unknown()).optional(),
+  derivation: z.record(z.unknown()).nullable().optional(),
 });
 const createWorksheetItemSchema = z.object({
   phaseId: z.string().nullable().optional(),
@@ -284,6 +286,7 @@ const createWorksheetItemSchema = z.object({
   laborUnitId: z.string().nullable().optional(),
   resourceComposition: z.record(z.unknown()).optional(),
   sourceEvidence: z.record(z.unknown()).optional(),
+  derivation: z.record(z.unknown()).nullable().optional(),
 });
 
 const createWorksheetSchema = z.object({
@@ -1717,6 +1720,15 @@ function shouldCaptureHumanEstimateFeedback(request: FastifyRequest): boolean {
   return actor === "" || actor === "web";
 }
 
+/** Mutation context for the store: who is editing, for derivation invalidation and calibration. */
+function worksheetMutationContext(request: FastifyRequest): WorksheetItemMutationContext {
+  const actor = requestActor(request);
+  return {
+    actorKind: actor === "" || actor === "web" ? "human" : actor === "system" ? "system" : "agent",
+    actorRef: actor || "web",
+  };
+}
+
 async function captureHumanEstimateFeedback(
   request: FastifyRequest,
   projectId: string,
@@ -3022,11 +3034,12 @@ export function buildServer() {
       }
     }
 
+    const mutationContext = worksheetMutationContext(request);
     const createResult = deltaResponse
-      ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput)
+      ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput, mutationContext)
       : null;
     if (!deltaResponse) {
-      await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput);
+      await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput, mutationContext);
     }
     await captureHumanEstimateFeedback(request, projectId, {
       action: "create_item",
@@ -3175,17 +3188,15 @@ export function buildServer() {
       });
     }
 
+    // The store records human line corrections itself (with before/after
+    // values and the AI derivation they override), so no route-level capture.
+    const mutationContext = worksheetMutationContext(request);
     const updateResult = deltaResponse
-      ? await request.store!.updateWorksheetItemWithSnapshot(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput)
+      ? await request.store!.updateWorksheetItemWithSnapshot(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput, mutationContext)
       : null;
     if (!deltaResponse) {
-      await request.store!.updateWorksheetItem(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput);
+      await request.store!.updateWorksheetItem(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput, mutationContext);
     }
-    await captureHumanEstimateFeedback(request, projectId, {
-      action: "update_item",
-      itemId,
-      fields: Object.keys(parsed.data),
-    });
 
     if (deltaResponse) {
       return buildWorksheetItemMutationResponse("update", updateResult!);
@@ -3203,16 +3214,13 @@ export function buildServer() {
   app.delete("/projects/:projectId/worksheet-items/:itemId", async (request, reply) => {
     const { projectId, itemId } = request.params as { projectId: string; itemId: string };
     const deltaResponse = ((request.query as { response?: string } | undefined)?.response) === "delta";
+    const mutationContext = worksheetMutationContext(request);
     const deleteResult = deltaResponse
-      ? await request.store!.deleteWorksheetItemWithSnapshot(projectId, itemId)
+      ? await request.store!.deleteWorksheetItemWithSnapshot(projectId, itemId, mutationContext)
       : null;
     if (!deltaResponse) {
-      await request.store!.deleteWorksheetItem(projectId, itemId);
+      await request.store!.deleteWorksheetItem(projectId, itemId, mutationContext);
     }
-    await captureHumanEstimateFeedback(request, projectId, {
-      action: "delete_item",
-      itemId,
-    });
 
     if (deltaResponse) {
       return buildWorksheetItemMutationResponse("delete", deleteResult!);
@@ -6402,11 +6410,69 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const parsedKinds = kinds
       ? (kinds.split(",").map((s) => s.trim()).filter(Boolean) as Array<"text" | "table" | "kv">)
       : undefined;
-    return await request.store!.searchProjectCorpus(projectId, q, {
+    const lexical = await request.store!.searchProjectCorpus(projectId, q, {
       limit: parsedLimit,
       kinds: parsedKinds,
       documentType: documentType?.trim() || undefined,
     });
+
+    // Hybrid lane: project documents are indexed as project-scoped knowledge
+    // books at ingest, so when an embedder is configured we fuse semantic
+    // chunk hits (with page numbers) into the lexical page hits by reciprocal
+    // rank. Without an embedder this is a no-op and the response is unchanged.
+    if (!getEmbeddingConfig() || (parsedKinds && !parsedKinds.includes("text"))) return lexical;
+    try {
+      const semantic = await knowledgeService.search(q, {
+        scope: "project",
+        projectId,
+        organizationId: request.user?.organizationId ?? undefined,
+        limit: parsedLimit,
+      }, request.store!);
+      if (semantic.length === 0) return lexical;
+      const docsByName = new Map((await request.store!.listDocuments(projectId)).map((doc) => [doc.fileName.toLowerCase(), doc]));
+      const K = 60;
+      type FusedHit = (typeof lexical.hits)[number] & { lanes: string[]; fused: number };
+      const fused = new Map<string, FusedHit>();
+      const keyFor = (documentId: string, pageNumber: number | null | undefined) => `${documentId}#${pageNumber ?? "doc"}`;
+      lexical.hits.forEach((hit, rank) => {
+        const key = keyFor(hit.documentId, hit.pageNumber);
+        fused.set(key, { ...hit, lanes: ["lexical"], fused: 1 / (K + rank + 1) });
+      });
+      semantic.forEach((result, rank) => {
+        const doc = docsByName.get(String(result.bookName ?? result.source ?? "").toLowerCase());
+        if (!doc) return;
+        const key = keyFor(doc.id, result.pageNumber ?? null);
+        const existing = fused.get(key);
+        const contribution = 1 / (K + rank + 1);
+        if (existing) {
+          existing.fused += contribution;
+          if (!existing.lanes.includes("semantic")) existing.lanes.push("semantic");
+          return;
+        }
+        fused.set(key, {
+          documentId: doc.id,
+          fileName: doc.fileName,
+          documentType: doc.documentType ?? null,
+          kind: "text",
+          pageNumber: result.pageNumber ?? null,
+          sectionTitle: result.sectionTitle ?? null,
+          snippet: result.text.replace(/\s+/g, " ").trim().slice(0, 320),
+          score: result.score,
+          coverage: 0,
+          matchedTerms: [],
+          matchedPhrases: [],
+          lanes: ["semantic"],
+          fused: contribution,
+        } as FusedHit);
+      });
+      const hits = [...fused.values()]
+        .sort((a, b) => b.fused - a.fused)
+        .slice(0, parsedLimit)
+        .map(({ fused: _fused, ...hit }) => hit);
+      return { ...lexical, hits, totalHits: Math.max(lexical.totalHits, hits.length), hybrid: true };
+    } catch {
+      return lexical;
+    }
   });
 
   // ── Knowledge Book File Serving ────────────────────────────────────

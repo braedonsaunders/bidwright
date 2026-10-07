@@ -58,7 +58,7 @@ import type {
   User,
   WorksheetItem,
 } from "@bidwright/domain";
-import { DEFAULT_QUOTE_NUMBER_PATTERN, DEFAULT_UOMS, normalizeCalculationType } from "@bidwright/domain";
+import { DEFAULT_QUOTE_NUMBER_PATTERN, DEFAULT_UOMS, normalizeCalculationType, normalizeLineDerivation } from "@bidwright/domain";
 import type { DocumentChunk, IngestionReport, PackageSourceKind } from "@bidwright/ingestion";
 
 import { relativeWorkspacePath } from "../paths.js";
@@ -407,6 +407,7 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     sourceEvidence: (i.sourceEvidence as Record<string, unknown>) ?? {},
     sourceAssemblyId: i.sourceAssemblyId ?? null,
     assemblyInstanceId: i.assemblyInstanceId ?? null,
+    derivation: normalizeLineDerivation(i.derivation),
   };
 }
 

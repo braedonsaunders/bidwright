@@ -35,7 +35,13 @@ import {
   summarizeProjectTotals,
   validateEstimateWorkspace,
 } from "@bidwright/domain";
-import type { SummaryBuilderConfig, SummaryPreset } from "@bidwright/domain";
+import type { SummaryBuilderConfig, SummaryPreset, LineDerivation } from "@bidwright/domain";
+import {
+  derivationInvalidatedByFields,
+  derivationReferencesItem,
+  markDerivationStale,
+  normalizeLineDerivation,
+} from "@bidwright/domain";
 import type {
   Activity,
   Adjustment,
@@ -775,6 +781,14 @@ export interface WorksheetItemPatchInput {
   laborUnitId?: string | null;
   resourceComposition?: Record<string, unknown>;
   sourceEvidence?: Record<string, unknown>;
+  /** Per-line derivation. `null` clears the current derivation. */
+  derivation?: Record<string, unknown> | null;
+}
+
+/** Who is performing a worksheet mutation. Drives derivation invalidation and calibration capture. */
+export interface WorksheetItemMutationContext {
+  actorKind?: "agent" | "human" | "system";
+  actorRef?: string | null;
 }
 
 export interface CreateWorksheetItemInput {
@@ -802,6 +816,7 @@ export interface CreateWorksheetItemInput {
   laborUnitId?: string | null;
   resourceComposition?: Record<string, unknown>;
   sourceEvidence?: Record<string, unknown>;
+  derivation?: Record<string, unknown> | null;
 }
 
 export interface CreateWorksheetInput {
@@ -7117,6 +7132,23 @@ export class PrismaApiStore {
       computedAt: new Date().toISOString(),
     };
 
+    // With no comparable quotes there is nothing to adjust against. Record
+    // that explicitly so the agent is not forced through a no-op
+    // saveEstimateAdjustments ceremony before it can price rows. The final
+    // reconcile stays mandatory regardless.
+    const existingAdjustments = Array.isArray(currentStrategy?.adjustmentPlan) ? (currentStrategy!.adjustmentPlan as unknown[]) : [];
+    const autoAdjustmentPlan = comparableRows.length === 0 && existingAdjustments.length === 0
+      ? [{
+          id: "adj-no-comparables",
+          area: "Overall estimate",
+          action: "keep",
+          rationale: "No comparable historical quotes met the similarity threshold, so benchmark-driven adjustments are not applicable. Proceed on document, vendor, rate-schedule, and library evidence; the final reconcile still applies.",
+          benchmarkRef: "none",
+          auto: true,
+          recordedAt: new Date().toISOString(),
+        }]
+      : null;
+
     const row = await this.db.estimateStrategy.upsert({
       where: { revisionId: revision.id },
       create: {
@@ -7128,12 +7160,14 @@ export class PrismaApiStore {
         status: currentStrategy?.status === "complete" || currentStrategy?.status === "ready_for_review" ? currentStrategy.status : "in_progress",
         benchmarkProfile: benchmarkProfile as any,
         benchmarkComparables: comparableRows as any,
+        ...(autoAdjustmentPlan ? { adjustmentPlan: autoAdjustmentPlan as any } : {}),
       },
       update: {
         currentStage: this.advanceStrategyStage(currentStrategy?.currentStage, "benchmark"),
         status: currentStrategy?.status === "complete" || currentStrategy?.status === "ready_for_review" ? currentStrategy.status : "in_progress",
         benchmarkProfile: benchmarkProfile as any,
         benchmarkComparables: comparableRows as any,
+        ...(autoAdjustmentPlan ? { adjustmentPlan: autoAdjustmentPlan as any } : {}),
       },
     });
 
@@ -7444,22 +7478,56 @@ export class PrismaApiStore {
       return (bestStart > 0 ? "…" : "") + slice + (bestStart + maxChars < haystack.length ? "…" : "");
     };
 
+    // Page delimiters written by the ingestion paths: Azure layout joins pages
+    // with "--- Page Break ---", the local pdf parser with "---" or a form feed.
+    const PAGE_DELIMITER = /\n\n--- Page Break ---\n\n|\n\n---\n\n|\f/g;
+    const MAX_PAGE_HITS_PER_DOC = 3;
+
     for (const doc of docs) {
-      // Text hit — score the extracted text + filename/sectionTitle as heading.
+      // Text hits — scored PER PAGE so the agent gets a page number to open,
+      // not one undifferentiated hit per document. Falls back to a whole-
+      // document hit when the text carries no page delimiters.
       if (kinds.has("text") && doc.extractedText && doc.extractedText.length > 0) {
-        const match = scoreEstimatorSearchText(profile, doc.extractedText, doc.fileName);
-        if (match) {
-          hits.push({
-            documentId: doc.id,
-            fileName: doc.fileName,
-            documentType: doc.documentType ?? null,
-            kind: "text",
-            snippet: bestSnippet(doc.extractedText, 320),
-            score: match.score,
-            coverage: match.coverage,
-            matchedTerms: match.matchedTerms,
-            matchedPhrases: match.matchedPhrases,
+        const pages = doc.extractedText.split(PAGE_DELIMITER);
+        if (pages.length > 1) {
+          const pageHits: Hit[] = [];
+          pages.forEach((pageText, index) => {
+            if (!pageText || !pageText.trim()) return;
+            const match = scoreEstimatorSearchText(profile, pageText, doc.fileName);
+            if (!match) return;
+            pageHits.push({
+              documentId: doc.id,
+              fileName: doc.fileName,
+              documentType: doc.documentType ?? null,
+              kind: "text",
+              pageNumber: index + 1,
+              snippet: bestSnippet(pageText, 320),
+              score: match.score,
+              coverage: match.coverage,
+              matchedTerms: match.matchedTerms,
+              matchedPhrases: match.matchedPhrases,
+            });
           });
+          pageHits
+            .sort((a, b) => b.score - a.score || b.coverage - a.coverage)
+            .slice(0, MAX_PAGE_HITS_PER_DOC)
+            .forEach((hit) => hits.push(hit));
+        } else {
+          const match = scoreEstimatorSearchText(profile, doc.extractedText, doc.fileName);
+          if (match) {
+            hits.push({
+              documentId: doc.id,
+              fileName: doc.fileName,
+              documentType: doc.documentType ?? null,
+              kind: "text",
+              pageNumber: doc.pageCount === 1 ? 1 : null,
+              snippet: bestSnippet(doc.extractedText, 320),
+              score: match.score,
+              coverage: match.coverage,
+              matchedTerms: match.matchedTerms,
+              matchedPhrases: match.matchedPhrases,
+            });
+          }
         }
       }
 
@@ -8249,8 +8317,8 @@ export class PrismaApiStore {
     return true;
   }
 
-  async createWorksheetItem(projectId: string, worksheetId: string, input: CreateWorksheetItemInput) {
-    return (await this.createWorksheetItemWithSnapshot(projectId, worksheetId, input)).item;
+  async createWorksheetItem(projectId: string, worksheetId: string, input: CreateWorksheetItemInput, context: WorksheetItemMutationContext = {}) {
+    return (await this.createWorksheetItemWithSnapshot(projectId, worksheetId, input, context)).item;
   }
 
   /**
@@ -8276,6 +8344,7 @@ export class PrismaApiStore {
     projectId: string,
     worksheetId: string,
     input: CreateWorksheetItemInput,
+    context: WorksheetItemMutationContext = {},
   ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
@@ -8355,6 +8424,7 @@ export class PrismaApiStore {
       laborUnitId: normalizedInput.laborUnitId ?? null,
       resourceComposition: normalizedInput.resourceComposition ?? {},
       sourceEvidence: normalizedInput.sourceEvidence ?? {},
+      derivation: this.prepareDerivationForWrite(normalizedInput.derivation, null),
     };
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
@@ -8446,10 +8516,20 @@ export class PrismaApiStore {
         laborUnitId: item.laborUnitId ?? null,
         resourceComposition: toPrismaJson(item.resourceComposition ?? {}),
         sourceEvidence: toPrismaJson(item.sourceEvidence ?? {}),
+        derivation: toPrismaJson(item.derivation ?? {}),
       } as any,
     });
 
     const mappedCreated = mapWorksheetItem(created);
+    if (mappedCreated.derivation) {
+      await this.recordLineDerivationEvent(projectId, revision.id, item.id, {
+        version: mappedCreated.derivation.version,
+        cause: "saved",
+        actorKind: context.actorKind ?? "agent",
+        actorRef: context.actorRef ?? null,
+        derivation: mappedCreated.derivation,
+      });
+    }
     await this.pushActivity(projectId, revision.id, "item_created", { itemId: item.id, entityName: item.entityName, category: item.category, before: null, after: mappedCreated });
     const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
       nextItem: mappedCreated,
@@ -8684,14 +8764,15 @@ export class PrismaApiStore {
     return mapWorksheet(worksheet);
   }
 
-  async updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput) {
-    return (await this.updateWorksheetItemWithSnapshot(projectId, itemId, patch)).item;
+  async updateWorksheetItem(projectId: string, itemId: string, patch: WorksheetItemPatchInput, context: WorksheetItemMutationContext = {}) {
+    return (await this.updateWorksheetItemWithSnapshot(projectId, itemId, patch, context)).item;
   }
 
   async updateWorksheetItemWithSnapshot(
     projectId: string,
     itemId: string,
     patch: WorksheetItemPatchInput,
+    context: WorksheetItemMutationContext = {},
   ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
@@ -8985,6 +9066,41 @@ export class PrismaApiStore {
     // Re-snapshot whenever cost or any library reference moved on this update.
     const costSnapshot = buildSnapshotForItem(domainItem);
 
+    // ── Derivation ledger: carry, replace, or invalidate ──────────────
+    const actorKind = context.actorKind ?? "agent";
+    const nowIso = new Date().toISOString();
+    const previousDerivation = normalizeLineDerivation(item.derivation);
+    const { derivation: patchDerivation, ...patchWithoutDerivation } = normalizedPatch;
+    const derivationProvided = patchDerivation !== undefined;
+    const fieldChanges = Object.keys(patchWithoutDerivation)
+      .map((field) => ({
+        field,
+        before: (previousDomainItem as unknown as Record<string, unknown>)[field],
+        after: (domainItem as unknown as Record<string, unknown>)[field],
+      }))
+      .filter((change) => JSON.stringify(change.before ?? null) !== JSON.stringify(change.after ?? null));
+    let nextDerivation: LineDerivation | null = previousDerivation;
+    let derivationCause: string | null = null;
+    if (derivationProvided) {
+      nextDerivation = this.prepareDerivationForWrite(patchDerivation, previousDerivation);
+      derivationCause = nextDerivation ? "saved" : "deleted";
+    } else if (previousDerivation) {
+      const invalidating = derivationInvalidatedByFields(previousDerivation, fieldChanges.map((change) => change.field));
+      if (invalidating.length > 0 && previousDerivation.status !== "stale") {
+        const first = fieldChanges.find((change) => change.field === invalidating[0]);
+        nextDerivation = markDerivationStale(previousDerivation, {
+          reason: actorKind === "human" ? "human_edit" : "input_changed",
+          at: nowIso,
+          by: context.actorRef ?? actorKind,
+          field: invalidating[0],
+          previousValue: first?.before,
+          newValue: first?.after,
+        });
+        derivationCause = actorKind === "human" ? "human_edit" : "stale";
+      }
+    }
+    domainItem.derivation = nextDerivation;
+
 	    const updated = await this.db.worksheetItem.update({
 	      where: { id: itemId },
       include: { entityCategory: true },
@@ -9016,6 +9132,7 @@ export class PrismaApiStore {
         laborUnitId: domainItem.laborUnitId ?? null,
         resourceComposition: toPrismaJson(domainItem.resourceComposition ?? {}),
         sourceEvidence: toPrismaJson(domainItem.sourceEvidence ?? {}),
+        derivation: toPrismaJson(nextDerivation ?? {}),
       } as any,
     });
 
@@ -9024,6 +9141,39 @@ export class PrismaApiStore {
     const mappedUpdated = mapWorksheetItem(updated);
     const itemAfter = this.pick(mappedUpdated as any, patchKeys);
     await this.pushActivity(projectId, revision.id, "item_updated", { itemId, entityName: domainItem.entityName, patch: patchKeys, before: itemBefore, after: itemAfter });
+
+    if (derivationCause) {
+      await this.recordLineDerivationEvent(projectId, revision.id, itemId, {
+        version: nextDerivation?.version ?? previousDerivation?.version ?? 0,
+        cause: derivationCause,
+        actorKind,
+        actorRef: context.actorRef ?? null,
+        derivation: nextDerivation ?? previousDerivation ?? {},
+        changes: fieldChanges,
+      });
+    }
+    const quantityBearingChange = fieldChanges.some((change) => ["quantity", "uom", "cost", "price", "tierUnits", "markup"].includes(change.field));
+    if (quantityBearingChange) {
+      await this.markDependentDerivationsStale(projectId, revision.id, itemId, context, fieldChanges);
+    }
+    if (actorKind === "human" && fieldChanges.length > 0) {
+      await this.captureAutomaticEstimateFeedback(projectId, {
+        source: "human_edit",
+        feedbackType: "line_correction",
+        sourceLabel: "Human line corrections",
+        correction: {
+          action: "update_item",
+          itemId,
+          entityName: domainItem.entityName,
+          category: domainItem.category,
+          changes: fieldChanges,
+          aiDerivation: previousDerivation
+            ? { version: previousDerivation.version, formula: previousDerivation.formula, result: previousDerivation.result, status: previousDerivation.status }
+            : null,
+          at: nowIso,
+        },
+      }).catch(() => null);
+    }
     const snapshot = await this.syncProjectEstimateForWorksheetItemMutation(projectId, {
       previousItem: mapWorksheetItem(item),
       nextItem: mappedUpdated,
@@ -9264,13 +9414,140 @@ export class PrismaApiStore {
     return created;
   }
 
-  async deleteWorksheetItem(projectId: string, itemId: string) {
-    return (await this.deleteWorksheetItemWithSnapshot(projectId, itemId)).item;
+  // ── Line derivation ledger ─────────────────────────────────────────
+
+  /**
+   * Normalize an incoming derivation for persistence: bump the version past
+   * the previous one, stamp computedAt, and keep the status the caller set
+   * (draft by default). Returns null when the caller cleared it.
+   */
+  private prepareDerivationForWrite(
+    incoming: Record<string, unknown> | null | undefined,
+    previous: LineDerivation | null,
+  ): LineDerivation | null {
+    if (incoming === null) return null;
+    if (incoming === undefined) return previous;
+    const normalized = normalizeLineDerivation(incoming);
+    if (!normalized) return null;
+    return {
+      ...normalized,
+      version: (previous?.version ?? 0) + 1,
+      computedAt: normalized.computedAt ?? new Date().toISOString(),
+      status: normalized.status === "stale" ? "draft" : normalized.status,
+      invalidatedBy: [],
+    };
+  }
+
+  async recordLineDerivationEvent(projectId: string, revisionId: string, itemId: string, input: {
+    version: number;
+    cause: string;
+    actorKind: string;
+    actorRef?: string | null;
+    derivation: unknown;
+    changes?: Array<Record<string, unknown>>;
+  }) {
+    await this.db.lineDerivationEvent.create({
+      data: {
+        projectId,
+        revisionId,
+        itemId,
+        version: Math.max(0, Math.trunc(input.version)),
+        cause: input.cause,
+        actorKind: input.actorKind,
+        actorRef: input.actorRef ?? null,
+        derivation: toPrismaJson(input.derivation ?? {}),
+        changes: toPrismaJson(input.changes ?? []),
+      },
+    });
+  }
+
+  /** Mark derivations on other rows stale when they cite this row as an input. */
+  private async markDependentDerivationsStale(
+    projectId: string,
+    revisionId: string,
+    changedItemId: string,
+    context: WorksheetItemMutationContext,
+    changes: Array<{ field: string; before: unknown; after: unknown }>,
+  ) {
+    const rows = await this.db.worksheetItem.findMany({
+      where: { worksheet: { revisionId }, NOT: { id: changedItemId } },
+      select: { id: true, derivation: true },
+    });
+    const nowIso = new Date().toISOString();
+    for (const row of rows) {
+      const derivation = normalizeLineDerivation(row.derivation);
+      if (!derivation || derivation.status === "stale" || !derivationReferencesItem(derivation, changedItemId)) continue;
+      const stale = markDerivationStale(derivation, {
+        reason: "dependency_changed",
+        at: nowIso,
+        by: context.actorRef ?? context.actorKind ?? "system",
+        field: changes[0]?.field ?? null,
+        previousValue: changes[0]?.before,
+        newValue: changes[0]?.after,
+      });
+      await this.db.worksheetItem.update({ where: { id: row.id }, data: { derivation: toPrismaJson(stale) } as any });
+      await this.recordLineDerivationEvent(projectId, revisionId, row.id, {
+        version: stale.version,
+        cause: "dependency_changed",
+        actorKind: "system",
+        actorRef: changedItemId,
+        derivation: stale,
+        changes,
+      });
+    }
+  }
+
+  /** Current derivation plus its full event history for one worksheet row. */
+  async getLineDerivation(projectId: string, itemId: string) {
+    await this.requireProject(projectId);
+    const { revision } = await this.findCurrentRevision(projectId);
+    const item = await this.db.worksheetItem.findFirst({
+      where: { id: itemId },
+      include: { entityCategory: true, worksheet: { select: { id: true, name: true, revisionId: true } } },
+    });
+    if (!item || !revision || item.worksheet.revisionId !== revision.id) {
+      throw new Error(`Worksheet item ${itemId} not found for project ${projectId}`);
+    }
+    const events = await this.db.lineDerivationEvent.findMany({
+      where: { projectId, itemId },
+      orderBy: { createdAt: "asc" },
+    });
+    const mapped = mapWorksheetItem(item);
+    return {
+      itemId: item.id,
+      worksheetId: item.worksheetId,
+      worksheetName: item.worksheet.name,
+      entityName: mapped.entityName,
+      category: mapped.category,
+      quantity: mapped.quantity,
+      uom: mapped.uom,
+      tierUnits: mapped.tierUnits ?? {},
+      cost: mapped.cost,
+      price: mapped.price,
+      sourceNotes: mapped.sourceNotes ?? "",
+      evidenceBasis: (mapped.sourceEvidence as Record<string, unknown> | undefined)?.evidenceBasis ?? null,
+      derivation: mapped.derivation ?? null,
+      history: events.map((event) => ({
+        id: event.id,
+        version: event.version,
+        cause: event.cause,
+        actorKind: event.actorKind,
+        actorRef: event.actorRef,
+        derivation: event.derivation,
+        changes: event.changes,
+        createdAt: event.createdAt.toISOString(),
+      })),
+    };
+  }
+
+  async deleteWorksheetItem(projectId: string, itemId: string, context: WorksheetItemMutationContext = {}) {
+    return (await this.deleteWorksheetItemWithSnapshot(projectId, itemId, context)).item;
   }
 
   async deleteWorksheetItemWithSnapshot(
     projectId: string,
     itemId: string,
+    context: WorksheetItemMutationContext = {},
   ): Promise<WorksheetItemMutationResult> {
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
@@ -9285,6 +9562,34 @@ export class PrismaApiStore {
     await this.db.worksheetItem.delete({ where: { id: itemId } });
     const mappedDeleted = mapWorksheetItem(item);
     await this.pushActivity(projectId, revision.id, "item_deleted", { itemId, entityName: item.entityName, before: mappedDeleted, after: null });
+    if (mappedDeleted.derivation) {
+      await this.recordLineDerivationEvent(projectId, revision.id, itemId, {
+        version: mappedDeleted.derivation.version,
+        cause: "deleted",
+        actorKind: context.actorKind ?? "agent",
+        actorRef: context.actorRef ?? null,
+        derivation: mappedDeleted.derivation,
+      });
+    }
+    await this.markDependentDerivationsStale(projectId, revision.id, itemId, context, [{ field: "deleted", before: mappedDeleted.quantity, after: null }]);
+    if ((context.actorKind ?? "agent") === "human") {
+      await this.captureAutomaticEstimateFeedback(projectId, {
+        source: "human_edit",
+        feedbackType: "line_correction",
+        sourceLabel: "Human line corrections",
+        correction: {
+          action: "delete_item",
+          itemId,
+          entityName: mappedDeleted.entityName,
+          category: mappedDeleted.category,
+          before: { quantity: mappedDeleted.quantity, uom: mappedDeleted.uom, cost: mappedDeleted.cost, price: mappedDeleted.price },
+          aiDerivation: mappedDeleted.derivation
+            ? { version: mappedDeleted.derivation.version, formula: mappedDeleted.derivation.formula, result: mappedDeleted.derivation.result }
+            : null,
+          at: new Date().toISOString(),
+        },
+      }).catch(() => null);
+    }
     const revisionScheduleRows = await this.db.rateSchedule.findMany({
       where: { revisionId: revision.id },
       include: rateScheduleCalcInclude,
