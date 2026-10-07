@@ -53,7 +53,7 @@ const drawingRow = (claimIds = ["claim-plates"]) => ({ quantity: { type: "drawin
 test("a row for package P is allowed while package Q, the execution plan and assumptions are still missing", () => {
   const readiness = strategyPricingReadiness(strategyBase(), "createWorksheetItem", { id: "ws-platform", name: "SS Platform Field Installation" });
   assert.equal(readiness.ok, true, readiness.reason);
-  assert.equal(readiness.mode, "incremental");
+  assert.equal(readiness.mode, "package");
   assert.equal(readiness.packageId, "pkg-platform");
   assert.deepEqual(readiness.finalizeBlockers, ["executionPlan", "assumptions", "reconcileReport", "package pkg-servo has no bound worksheet"]);
 });
@@ -77,11 +77,23 @@ test("incremental pricing refuses rows whose package is undeclared, ambiguous, o
   assert.match(strategyPricingReadiness(noScope, "createWorksheet", null).reason ?? "", /Save scopeGraph/);
 });
 
-test("with the whole strategy saved the old behaviour is unchanged (no binding required)", () => {
+test("an unbound worksheet falls back to the legacy whole-strategy gates only when every section is saved", () => {
   const full = { ...strategyBase(), executionPlan: { crew: "x" }, assumptions: [{ id: "A1" }] };
   const readiness = strategyPricingReadiness(full, "createWorksheetItem", { id: "ws-anything", name: "Anything" });
   assert.equal(readiness.ok, true);
-  assert.equal(readiness.mode, "full");
+  assert.equal(readiness.mode, "legacy_full");
+  assert.equal(readiness.packageId, null);
+});
+
+test("all four sections saved does not mean every package is ready: a bound P row stays package-scoped while Q is incomplete", () => {
+  const full = { ...strategyBase(), executionPlan: { crew: "partial, platform only" }, assumptions: [{ id: "A-PLATFORM" }] };
+  const readiness = strategyPricingReadiness(full, "createWorksheetItem", { id: "ws-platform", name: "SS Platform Field Installation" });
+  assert.equal(readiness.mode, "package");
+  assert.equal(readiness.packageId, "pkg-platform");
+  assert.ok(readiness.finalizeBlockers.includes("package pkg-servo has no bound worksheet"), "Q still blocks finalize");
+  // The drawing gate for P ignores Q's unfinished audit entry.
+  full.summary.drawingEvidenceEngine.claims = [platformClaim()];
+  assert.equal(validateVisualTakeoffAuditForPricing(ws, full, "SS Platform Field Installation", drawingRow(), [], readiness.packageId), null);
 });
 
 test("a worksheet can bind by id, by bound name, or by matching the package name", () => {

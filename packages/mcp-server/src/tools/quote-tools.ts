@@ -747,7 +747,14 @@ function validateDrawingEvidenceEngineForPricing(
 
 export interface PricingReadiness {
   ok: boolean;
-  mode: "full" | "incremental";
+  /**
+   * package: the row's worksheet resolves to one packagePlan entry, and the row
+   * is checked against that package alone (even when every strategy section is
+   * saved: four non-empty sections do not mean every package is ready).
+   * legacy_full: unbound worksheet, every section saved; the old global gates.
+   * incremental_blocked: neither; the row is refused.
+   */
+  mode: "package" | "legacy_full" | "incremental_blocked";
   reason?: string;
   packageId?: string | null;
   packageName?: string | null;
@@ -805,18 +812,18 @@ export function strategyPricingReadiness(strategy: any, gate: "createWorksheet" 
       .map((plan) => `package ${String(plan.id ?? plan.name)} has no bound worksheet`),
   ];
   const full = has.scopeGraph && has.executionPlan && has.assumptions && has.packagePlan;
-  const mode: PricingReadiness["mode"] = full ? "full" : "incremental";
-  if (!has.scopeGraph) return { ok: false, mode, reason: "Save scopeGraph (saveEstimateScopeGraph or saveEstimateStrategyStages) with at least the package you are about to price.", finalizeBlockers };
-  if (!has.packagePlan) return { ok: false, mode, reason: "Save packagePlan with at least the package you are about to price (id, name, scopeRefs).", finalizeBlockers };
-  if (gate === "createWorksheet") return { ok: true, mode, finalizeBlockers };
+  if (!has.scopeGraph) return { ok: false, mode: "incremental_blocked", reason: "Save scopeGraph (saveEstimateScopeGraph or saveEstimateStrategyStages) with at least the package you are about to price.", finalizeBlockers };
+  if (!has.packagePlan) return { ok: false, mode: "incremental_blocked", reason: "Save packagePlan with at least the package you are about to price (id, name, scopeRefs).", finalizeBlockers };
+  if (gate === "createWorksheet") return { ok: true, mode: full ? "legacy_full" : "package", finalizeBlockers };
   const resolved = resolveWorksheetPackage(strategy, worksheet);
-  if (full) return { ok: true, mode, packageId: resolved.entry ? String(resolved.entry.id ?? "") : null, packageName: resolved.entry ? String(resolved.entry.name ?? "") : null, finalizeBlockers };
-  if (!resolved.entry) {
-    return { ok: false, mode, reason: `Incremental pricing prices one declared package at a time, and ${resolved.reason}. Bind it in packagePlan (bindings.worksheetIds) or save executionPlan and assumptions for whole-estimate pricing.`, finalizeBlockers };
+  if (resolved.entry) {
+    // Package-scoped whenever the worksheet resolves, whatever else is saved.
+    const scopeProblem = packageScopeProblem(strategy, resolved.entry);
+    if (scopeProblem) return { ok: false, mode: "incremental_blocked", reason: `Pricing package ${String(resolved.entry.id ?? resolved.entry.name)} needs it scoped: ${scopeProblem}.`, packageId: String(resolved.entry.id ?? ""), finalizeBlockers };
+    return { ok: true, mode: "package", packageId: String(resolved.entry.id ?? ""), packageName: String(resolved.entry.name ?? ""), finalizeBlockers };
   }
-  const scopeProblem = packageScopeProblem(strategy, resolved.entry);
-  if (scopeProblem) return { ok: false, mode, reason: `Incremental pricing needs the row's package scoped: ${scopeProblem}.`, packageId: String(resolved.entry.id ?? ""), finalizeBlockers };
-  return { ok: true, mode, packageId: String(resolved.entry.id ?? ""), packageName: String(resolved.entry.name ?? ""), finalizeBlockers };
+  if (full) return { ok: true, mode: "legacy_full", packageId: null, packageName: null, finalizeBlockers };
+  return { ok: false, mode: "incremental_blocked", reason: `Rows are priced one declared package at a time, and ${resolved.reason}. Bind the worksheet in packagePlan (bindings.worksheetIds).`, finalizeBlockers };
 }
 
 const LINE_EVIDENCE_BASIS_TYPES = [
@@ -1975,7 +1982,7 @@ function worksheetTreeSummary(ws: any) {
       if (!readiness.ok) {
         return `${readiness.reason} Finalize will still require: ${readiness.finalizeBlockers.join("; ") || "nothing listed yet"}.`;
       }
-      rowPackageId = readiness.mode === "incremental" ? readiness.packageId ?? null : null;
+      rowPackageId = readiness.mode === "package" ? readiness.packageId ?? null : null;
     }
     void hasScopeGraph; void hasExecutionPlan; void hasAssumptions; void hasPackagePlan;
     if (benchmarkingEnabled && gate === "createWorksheetItem" && !hasBenchmarks) {
@@ -2095,7 +2102,7 @@ function worksheetTreeSummary(ws: any) {
     // Readiness telemetry: which package this row was priced under, and what
     // finalize will still require. Information only; nothing is enforced here.
     const readiness = strategyPricingReadiness(wsForGate.estimateStrategy ?? null, "createWorksheetItem", targetWorksheet ?? { id: input.worksheetId });
-    if (readiness.ok && readiness.mode === "incremental") {
+    if (readiness.ok && readiness.mode === "package") {
       autoWarnings.push(`Priced incrementally for package ${readiness.packageId}${readiness.packageName ? ` (${readiness.packageName})` : ""}. Finalize still requires: ${readiness.finalizeBlockers.join("; ") || "a ledger verifier pass and the reconcile report"}.`);
     }
   }
