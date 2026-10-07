@@ -43,8 +43,10 @@ try {
   const upload = await fetch(`${api}/projects/${projectId}/files/upload`, { method: "POST", headers, body: form, signal: AbortSignal.timeout(60_000) });
   if (!upload.ok) throw new Error(`Upload failed: HTTP ${upload.status}`);
   const prompt = "Use listProjectImages and inspectProjectImage to inspect transport-probe.png. It has four quadrants. Return only a JSON array with four lower-case color names in order top-left, top-right, bottom-left, bottom-right. Do not use shell or file-byte inspection; inspect the image returned by the tool. If you cannot see pixels say IMAGE_UNAVAILABLE.";
-  const started = await request(`/api/cli/${projectId}/message`, { message: prompt, runtime, model, mode: "qa" });
+  // This project was created exclusively by the probe. A timed-out start response
+  // can still leave a running agent, so arm cleanup before sending the request.
   active = true;
+  const started = await request(`/api/cli/${projectId}/message`, { message: prompt, runtime, model, mode: "qa" });
   const deadline = Date.now() + 5 * 60_000;
   let status: any;
   while (Date.now() < deadline) {

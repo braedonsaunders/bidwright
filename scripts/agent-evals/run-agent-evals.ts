@@ -1314,6 +1314,11 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
 
 async function runIntake(client: ApiClient, args: Args, projectId: string, scope: string | undefined, monitor: LiveMonitor): Promise<RunReport> {
   log(`Starting full intake agent (${args.runtime}${args.model ? ` / ${args.model}` : ""})`);
+  // A start request can succeed remotely even when its HTTP response times out.
+  // Only pre-arm cleanup for our isolated copy, never an existing shared project.
+  if (args.copyProjectPerRun) activeEvalRuns.set(projectId, async () => {
+    await client.requestJson(`/api/cli/${projectId}/stop`, { method: "POST", body: {} });
+  });
   const start = await client.requestJson<Json>("/api/cli/start", {
     method: "POST",
     body: {
@@ -1336,6 +1341,11 @@ async function runIntake(client: ApiClient, args: Args, projectId: string, scope
 
 async function runQuestion(client: ApiClient, args: Args, projectId: string, question: string, label: string, monitor: LiveMonitor): Promise<RunReport> {
   log(`Starting ${label}: ${truncate(question, 80)}`);
+  // A start request can succeed remotely even when its HTTP response times out.
+  // Only pre-arm cleanup for our isolated copy, never an existing shared project.
+  if (args.copyProjectPerRun) activeEvalRuns.set(projectId, async () => {
+    await client.requestJson(`/api/cli/${projectId}/stop`, { method: "POST", body: {} });
+  });
   const start = await client.requestJson<Json>(`/api/cli/${projectId}/message`, {
     method: "POST",
     body: {
