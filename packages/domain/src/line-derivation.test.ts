@@ -13,6 +13,8 @@ import {
   normalizeLineDerivation,
   flagDerivationAssumptions,
   derivationSourceLookup,
+  classifyFactorOneEvidence,
+  summarizeHourBasis,
   packsRequired,
   reconcileProcurementQuantities,
   validateLineDerivation,
@@ -400,4 +402,64 @@ test("assumption flags follow claim and linked-row references, with a cycle guar
   // a reference cycle terminates and is treated as unsourced
   const cyclic = normalizeLineDerivation(rows[1].derivation)!;
   assert.equal(flagDerivationAssumptions(cyclic, chained)[0]?.code, "assumption_dominated");
+});
+
+test("factor-of-1 evidence is classified narrowly: physical needs a counting claim in a count unit", () => {
+  const lookup = derivationSourceLookup([
+    { claimId: "c-wp200", method: "visual_count", unit: "EA", quantityName: "WP200 compactors" },
+    { claimId: "c-lot", method: "takeoff", unit: "LOT", quantityName: "Vendor hose connection lots" },
+    { claimId: "c-set", method: "takeoff", unit: "SET", quantityName: "Servo-Lift assembly" },
+    { claimId: "c-takeoff-ea", method: "takeoff", unit: "EA", quantityName: "ASBV mounting assemblies" },
+  ], []);
+  const one = (name: string, ref: string, unit = "EA") => ({ name, value: 1, unit, source: { kind: "claim" as const, ref } });
+  assert.equal(classifyFactorOneEvidence(one("equipment", "c-wp200"), lookup), "physical_count");
+  assert.equal(classifyFactorOneEvidence(one("lots", "c-lot", "LOT"), lookup), "scope_only");
+  assert.equal(classifyFactorOneEvidence(one("assembly", "c-set", "SET"), lookup), "unclassified", "SET is ambiguous");
+  assert.equal(classifyFactorOneEvidence(one("mountings", "c-takeoff-ea"), lookup), "physical_count", "a takeoff can count a real object");
+  assert.equal(classifyFactorOneEvidence({ name: "installationPackages", value: 1, unit: "SET", source: { kind: "view", ref: "v" } }, lookup), "scope_only", "package naming");
+  assert.equal(classifyFactorOneEvidence({ name: "units", value: 1, unit: "EA", source: { kind: "view", ref: "v" } }, lookup), "unclassified", "a bare view is not positive physical evidence");
+});
+
+test("dominated flags carry their basis and hour-basis totals come from sources, not labels", () => {
+  const lookup = derivationSourceLookup([
+    { claimId: "c-wp200", method: "visual_count", unit: "EA", quantityName: "WP200 compactors" },
+    { claimId: "c-lot", method: "takeoff", unit: "LOT", quantityName: "Vendor hose connection lots" },
+  ], []);
+  const crew = (evidence: Record<string, unknown>) => ({ formula: `${evidence.name} * mechanics * hours`, inputs: [evidence, { name: "mechanics", value: 3, source: { kind: "assumption", ref: "a-labour" } }, { name: "hours", value: 8, source: { kind: "assumption", ref: "a-labour" } }], result: { value: 24, unit: "HR" } });
+  const machine = normalizeLineDerivation(crew({ name: "equipment", value: 1, unit: "EA", source: { kind: "claim", ref: "c-wp200" } }))!;
+  const lot = normalizeLineDerivation(crew({ name: "packages", value: 1, unit: "LOT", source: { kind: "claim", ref: "c-lot" } }))!;
+  assert.equal(flagDerivationAssumptions(machine, lookup)[0].basis, "physical_count");
+  assert.match(flagDerivationAssumptions(machine, lookup)[0].message, /counts a physical object/);
+  assert.equal(flagDerivationAssumptions(lot, lookup)[0].basis, "scope_only");
+  const library = { formula: "n * h", inputs: [{ name: "n", value: 5, source: { kind: "claim", ref: "c-wp200" } }, { name: "h", value: 0.75, source: { kind: "laborUnit", ref: "lu-1" } }], result: { value: 3.75 } };
+  const rows = [
+    { derivation: machine, hours: 24 },
+    { derivation: lot, hours: 32 },
+    { derivation: library, hours: 3.75 },
+    { derivation: null, hours: 10 },
+  ];
+  const totals = summarizeHourBasis(rows, (row) => row.hours, lookup);
+  assert.equal(totals.assumed_physical_count, 24);
+  assert.equal(totals.assumed_scope_only, 32);
+  assert.equal(totals.sourced, 3.75);
+  assert.equal(totals.no_derivation, 10);
+});
+
+test("evidence inputs the formula does not use neither size the result nor set its basis", () => {
+  // Round-3 GPT row: 24 h = mechanics 2 x crewDuration 12, with three unused evidence inputs attached.
+  const decorated = normalizeLineDerivation({
+    formula: "mechanics*crewDuration",
+    inputs: [
+      { name: "interfaces", value: 2, unit: "EA", source: { kind: "claim", ref: "c-int" } },
+      { name: "steelFixingLocations", value: 12, unit: "EA", source: { kind: "claim", ref: "c-fix" } },
+      { name: "platformAssembly", value: 1, unit: "EA", source: { kind: "claim", ref: "c-plat" } },
+      { name: "mechanics", value: 2, source: { kind: "assumption", ref: "a-labour" } },
+      { name: "crewDuration", value: 12, unit: "HR", source: { kind: "assumption", ref: "a-labour" } },
+    ],
+    result: { value: 24, unit: "HR" },
+  })!;
+  const lookup = derivationSourceLookup([{ claimId: "c-plat", method: "visual_count", unit: "EA", quantityName: "Work platforms" }], []);
+  const [flag] = flagDerivationAssumptions(decorated, lookup);
+  assert.equal(flag.code, "assumption_dominated");
+  assert.equal(flag.basis, "assumption_only", "the unused platform claim does not make it a physical count");
 });

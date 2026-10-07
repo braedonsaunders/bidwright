@@ -786,15 +786,17 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         const [flag] = flagDerivationAssumptions(derivation, lookup);
         if (!flag) continue;
         const dominated = flag.code === "assumption_dominated";
+        // One real object x assumed hours is legitimate: visible, not a warning.
+        const warn = dominated && flag.basis !== "physical_count";
         issues.push({
           message: `"${displayItemName(row.item)}" ${dominated ? "is sized entirely by assumptions" : "uses assumed inputs"} and has not been reviewed by an estimator. ${flag.message}`,
-          severity: dominated ? "warning" : "info",
+          severity: warn ? "warning" : "info",
           element: itemRef(row),
           suggestions: [
             "Confirm the assumed inputs, replace them with a sourced value, or mark the derivation reviewed.",
           ],
-          details: { flag: flag.code, inputs: flag.inputs, derivationStatus: derivation.status },
-          scoreImpact: dominated ? 0.6 : 0.2,
+          details: { flag: flag.code, basis: flag.basis, inputs: flag.inputs, derivationStatus: derivation.status },
+          scoreImpact: warn ? 0.6 : 0.2,
         });
       }
       return issues;

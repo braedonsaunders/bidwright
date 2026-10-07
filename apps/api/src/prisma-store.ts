@@ -46,6 +46,7 @@ import {
   normalizeLineDerivation,
   flagDerivationAssumptions,
   derivationSourceLookup,
+  summarizeHourBasis,
   type DerivationSourceLookup,
   stageAfterSavingSections,
   normalizeCalibrationLessons,
@@ -4400,6 +4401,12 @@ export class PrismaApiStore {
         .map(([bucket, totals]) => [bucket, fmtTotals(totals)]),
     );
 
+    // Hours by the basis their derivations actually rest on (not the row's
+    // evidence-basis label): sourced, partly assumed, or assumed with a
+    // physical drawing count / scope-only factor / nothing from a drawing.
+    const strategyEngine = this.asEstimateObject(this.asEstimateObject((workspace as unknown as Record<string, unknown>).estimateStrategy).summary).drawingEvidenceEngine;
+    const hourBasis = summarizeHourBasis(items, (item) => this.estimateItemExtendedHours(item), derivationSourceLookup(this.asEstimateObject(strategyEngine).claims, items));
+
     const zeroPricedItems = items.filter((item) => Number(item.price ?? 0) === 0 && this.estimateItemExtendedCost(item) === 0);
     const duplicateGroups = new Map<string, number>();
     for (const item of items) {
@@ -4433,6 +4440,7 @@ export class PrismaApiStore {
       worksheetCount,
       lineItemCount,
       zeroPriceItemCount: zeroPricedItems.length,
+      hourBasis,
       duplicateGroupCount: duplicateEntries.length,
       duplicateItemCount: duplicateEntries.reduce((sum, count) => sum + count, 0),
       // Per-category and per-analytics-bucket rolls — keyed by the org's own
