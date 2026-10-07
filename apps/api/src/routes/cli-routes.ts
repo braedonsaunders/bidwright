@@ -259,7 +259,10 @@ function joinList(items: string[]): string {
 
 function isGenericCompletionMessage(content: unknown) {
   return typeof content === "string"
-    && content.trim() === "Intake complete. Review the estimate worksheets and adjust pricing as needed.";
+    && [
+      "Intake complete. Review the estimate worksheets and adjust pricing as needed.",
+      "Agent run finished. Check the saved estimate rows and review status; the run ending does not confirm estimate finalization.",
+    ].includes(content.trim());
 }
 
 function hasRichCompletionSummary(events: PersistedCliEvent[]) {

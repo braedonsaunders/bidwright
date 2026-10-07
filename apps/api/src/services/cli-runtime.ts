@@ -769,7 +769,7 @@ function wireChildProcess(
 
     const completionMsg =
       session.status === "completed"
-        ? opts?.completionMessage ?? "Intake complete. Review the estimate worksheets and adjust pricing as needed."
+        ? opts?.completionMessage ?? "Agent run finished. Check the saved estimate rows and review status; the run ending does not confirm estimate finalization."
         : session.status === "stopped"
           ? opts?.stoppedMessage ?? "Intake stopped."
           : `${opts?.failedMessagePrefix ?? "Intake failed"} (exit code ${code}).`;
