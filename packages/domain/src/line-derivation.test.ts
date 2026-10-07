@@ -12,6 +12,7 @@ import {
   markDerivationStale,
   normalizeLineDerivation,
   flagDerivationAssumptions,
+  derivationSourceLookup,
   packsRequired,
   reconcileProcurementQuantities,
   validateLineDerivation,
@@ -366,4 +367,37 @@ test("assumption review flags: dominated when every sizing input is assumed, par
 test("caller-supplied review flags with unknown codes are dropped on normalize", () => {
   const normalized = normalizeLineDerivation({ formula: "a", inputs: [{ name: "a", value: 2, source: { kind: "view", ref: "v" } }], result: { value: 2 }, reviewFlags: [{ code: "approved_by_ai", message: "fine" }] })!;
   assert.deepEqual(normalized.reviewFlags, []);
+});
+
+test("assumption flags follow claim and linked-row references, with a cycle guard", () => {
+  const deck = normalizeLineDerivation({
+    formula: "fasteningLocations * drillHoursPerHole",
+    inputs: [
+      { name: "fasteningLocations", value: 80, unit: "EA", source: { kind: "claim", ref: "claim-deck80" } },
+      { name: "drillHoursPerHole", value: 0.24, unit: "HR/EA", source: { kind: "laborUnit", ref: "lu-1" } },
+    ],
+    result: { value: 19.2, unit: "HR" },
+  })!;
+  assert.deepEqual(flagDerivationAssumptions(deck), [], "without a lookup the claim reads as evidence");
+  const lookup = derivationSourceLookup([{ claimId: "claim-deck80", method: "assumption" }, { claimId: "claim-plates", method: "visual_count" }], []);
+  const [flag] = flagDerivationAssumptions(deck, lookup);
+  assert.equal(flag.code, "assumed_inputs");
+  assert.deepEqual(flag.inputs, ["fasteningLocations"]);
+
+  // a visual_count claim stays evidence
+  const plates = normalizeLineDerivation({ formula: "a", inputs: [{ name: "basePlates", value: 5, source: { kind: "claim", ref: "claim-plates" } }], result: { value: 5 } })!;
+  assert.deepEqual(flagDerivationAssumptions(plates, lookup), []);
+
+  // chained: a material row takes installedAnchors from a labour row whose installedAnchors is assumed
+  const rows = [
+    { id: "li-labour", derivation: { formula: "x", inputs: [{ name: "installedAnchors", value: 8, source: { kind: "assumption", ref: "A-LIFT" } }], result: { value: 8 } } },
+    { id: "li-a", derivation: { formula: "x", inputs: [{ name: "n", value: 4, source: { kind: "item", ref: "li-b" } }], result: { value: 4 } } },
+    { id: "li-b", derivation: { formula: "x", inputs: [{ name: "n", value: 4, source: { kind: "item", ref: "li-a" } }], result: { value: 4 } } },
+  ];
+  const chained = derivationSourceLookup([], rows);
+  const material = normalizeLineDerivation({ formula: "ceil(installedAnchors / packSize)", inputs: [{ name: "installedAnchors", value: 8, source: { kind: "item", ref: "li-labour" } }, { name: "packSize", value: 10, source: { kind: "web", ref: "https://www.hilti.com" } }], result: { value: 1 } })!;
+  assert.equal(flagDerivationAssumptions(material, chained)[0].code, "assumed_inputs");
+  // a reference cycle terminates and is treated as unsourced
+  const cyclic = normalizeLineDerivation(rows[1].derivation)!;
+  assert.equal(flagDerivationAssumptions(cyclic, chained)[0]?.code, "assumption_dominated");
 });

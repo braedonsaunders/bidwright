@@ -1,4 +1,4 @@
-import { flagDerivationAssumptions, normalizeLineDerivation } from "./line-derivation";
+import { derivationSourceLookup, flagDerivationAssumptions, normalizeLineDerivation } from "./line-derivation";
 
 export type EstimateValidationSeverity = "info" | "warning" | "error" | "critical";
 
@@ -778,10 +778,12 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
     ruleSets: ["default", "readiness"],
     validate(context) {
       const issues: EstimateValidationIssueInput[] = [];
+      const strategy = (context.workspace.estimateStrategy ?? {}) as Record<string, any>;
+      const lookup = derivationSourceLookup(strategy.summary?.drawingEvidenceEngine?.claims, context.rows.map((row) => row.item as { id?: unknown; derivation?: unknown }));
       for (const row of context.rows) {
         const derivation = normalizeLineDerivation((row.item as Record<string, unknown>).derivation);
         if (!derivation || derivation.status === "reviewed" || derivation.status === "stale") continue;
-        const [flag] = flagDerivationAssumptions(derivation);
+        const [flag] = flagDerivationAssumptions(derivation, lookup);
         if (!flag) continue;
         const dominated = flag.code === "assumption_dominated";
         issues.push({

@@ -45,6 +45,8 @@ import {
   markDerivationStale,
   normalizeLineDerivation,
   flagDerivationAssumptions,
+  derivationSourceLookup,
+  type DerivationSourceLookup,
   stageAfterSavingSections,
   normalizeCalibrationLessons,
   scoreCalibrationLesson,
@@ -8560,6 +8562,7 @@ export class PrismaApiStore {
     }
     const classification = mergeWorksheetClassifications(linkedCatalogClassification, normalizedInput.classification);
     const costCode = stringValue(normalizedInput.costCode) ?? costCodeFromClassification(classification);
+    const derivationLookup = normalizedInput.derivation ? await this.derivationLookupForRevision(revision.id) : {};
 
     const item: WorksheetItem = {
       id: createId("li"),
@@ -8590,7 +8593,7 @@ export class PrismaApiStore {
       laborUnitId: normalizedInput.laborUnitId ?? null,
       resourceComposition: normalizedInput.resourceComposition ?? {},
       sourceEvidence: normalizedInput.sourceEvidence ?? {},
-      derivation: this.prepareDerivationForWrite(normalizedInput.derivation, null, context),
+      derivation: this.prepareDerivationForWrite(normalizedInput.derivation, null, context, derivationLookup),
     };
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
@@ -9248,7 +9251,7 @@ export class PrismaApiStore {
     let nextDerivation: LineDerivation | null = previousDerivation;
     let derivationCause: string | null = null;
     if (derivationProvided) {
-      nextDerivation = this.prepareDerivationForWrite(patchDerivation, previousDerivation, context);
+      nextDerivation = this.prepareDerivationForWrite(patchDerivation, previousDerivation, context, patchDerivation ? await this.derivationLookupForRevision(revision.id) : {});
       derivationCause = nextDerivation ? "saved" : "deleted";
     } else if (previousDerivation) {
       const invalidating = derivationInvalidatedByFields(previousDerivation, fieldChanges.map((change) => change.field));
@@ -9587,16 +9590,31 @@ export class PrismaApiStore {
    * the previous one, stamp computedAt, and keep the status the caller set
    * (draft by default). Returns null when the caller cleared it.
    */
+  /**
+   * Claim methods and sibling-row derivations for the revision, so review
+   * flags follow claim and item references (an "assumption"-method claim or
+   * an assumed input on a linked row is still an assumption).
+   */
+  private async derivationLookupForRevision(revisionId: string): Promise<DerivationSourceLookup> {
+    const [strategy, rows] = await Promise.all([
+      this.db.estimateStrategy.findUnique({ where: { revisionId }, select: { summary: true } }).catch(() => null),
+      this.db.worksheetItem.findMany({ where: { worksheet: { revisionId } }, select: { id: true, derivation: true } }).catch(() => [] as Array<{ id: string; derivation: unknown }>),
+    ]);
+    const engine = this.asEstimateObject(this.asEstimateObject(strategy?.summary).drawingEvidenceEngine);
+    return derivationSourceLookup(engine.claims, rows);
+  }
+
   private prepareDerivationForWrite(
     incoming: Record<string, unknown> | null | undefined,
     previous: LineDerivation | null,
     context: WorksheetItemMutationContext = {},
+    lookup: DerivationSourceLookup = {},
   ): LineDerivation | null {
     if (incoming === null) return null;
     if (incoming === undefined) return previous;
     const normalized = normalizeLineDerivation(incoming);
     if (!normalized) return null;
-    const reviewFlags = flagDerivationAssumptions(normalized);
+    const reviewFlags = flagDerivationAssumptions(normalized, lookup);
     let status: LineDerivation["status"] = normalized.status === "stale" ? "draft" : normalized.status;
     // An agent cannot mark its own assumptions reviewed or verified; only an
     // estimator can. The row is still saved (drafts stay possible) and the
