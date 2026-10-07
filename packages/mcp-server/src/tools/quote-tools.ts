@@ -2871,6 +2871,7 @@ function worksheetTreeSummary(ws: any) {
       "Every operation is checked with the same gates as createWorksheetItem / updateWorksheetItem (evidence basis, viewIds, derivation, assumption resolution, category/rate validation) BEFORE anything is sent; if any operation fails, the whole batch is rejected with every problem listed and nothing is applied.",
       "The server then applies all operations in one database transaction; a server-side failure rolls back the entire batch.",
       "Use it to add a worksheet's rows together, or to apply a correction that touches several dependent rows at once. Max 100 operations.",
+      'Exact shapes (worksheetId sits beside item, not inside it; there is no "type" or "data" key): {"operations":[{"op":"create","worksheetId":"worksheet-…","item":{"category":"Labour","entityName":"…","quantity":1,"uom":"HR","evidenceBasis":{…}}},{"op":"update","itemId":"li-…","patch":{"quantity":5}},{"op":"delete","itemId":"li-…"}]}.',
     ].join(" "),
     {
       operations: z.array(z.discriminatedUnion("op", [
