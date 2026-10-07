@@ -62,10 +62,10 @@ test("a compact rate item keeps the selection essentials and stays small without
   assert.ok(!("scheduleName" in row) && !("tierIds" in row), "schedule-level fields are not repeated per row");
 });
 
-test("rates are re-keyed by tier name, rounded to cents, and cost rates kept when they differ", () => {
+test("rates are re-keyed by tier name at stored precision, and cost rates kept when they differ", () => {
   const row = compactRateItem(schedule.items[0], schedule, { includeRates: true });
   assert.deepEqual(row.rates, { Regular: 98.9, Overtime: 148.35 });
-  assert.deepEqual(row.costRates, { Regular: 61.12, Overtime: 91.69 });
+  assert.deepEqual(row.costRates, { Regular: 61.1234, Overtime: 91.69 }, "no rounding: 61.1234 is retained exactly");
   assert.equal(row.burden, undefined, "empty burden is dropped");
   assert.equal(row.perDiem, undefined);
   // an unknown tier id is never dropped
@@ -126,4 +126,27 @@ test("labour diagnostics reduce to term hits and slice count with truncated keys
   assert.equal(compact?.querySlices, 3);
   assert.deepEqual(compact?.truncatedKeys, ["scoring", "candidatesConsidered"]);
   assert.equal(compactLaborDiagnostics(null), undefined);
+});
+
+test("regression: sub-cent and 3-decimal rates are retained exactly, never rounded or zeroed", () => {
+  const tiers = [{ id: "rst-reg", name: "Regular" }];
+  assert.deepEqual(compactRateMap({ "rst-reg": 0.004 }, tiers), { Regular: 0.004 });
+  assert.deepEqual(compactRateMap({ "rst-reg": 12.345 }, tiers), { Regular: 12.345 });
+  assert.deepEqual(compactRateMap({ "rst-reg": "0.004" }, tiers), { Regular: 0.004 }, "numeric strings pass through as numbers");
+  const row = compactRateItem({ id: "rsi-x", name: "Consumable", unit: "EA", rates: { "rst-reg": 0.004 } }, { id: "rs", tiers }, { includeRates: true });
+  assert.equal(row.rates?.Regular, 0.004);
+});
+
+test("duplicate tier names never overwrite each other: colliding tiers are disambiguated as name (tierId)", () => {
+  const tiers = [{ id: "rst-a", name: "Regular" }, { id: "rst-b", name: "Regular" }, { id: "rst-c", name: "Overtime" }];
+  assert.deepEqual(compactRateMap({ "rst-a": 10, "rst-b": 20, "rst-c": 30 }, tiers), {
+    "Regular (rst-a)": 10,
+    "Regular (rst-b)": 20,
+    Overtime: 30,
+  });
+  // an unmapped key whose label collides with a named tier keeps both values, source key visible
+  const collide = compactRateMap({ "rst-c": 30, Overtime: 31 }, tiers);
+  assert.equal(collide?.Overtime, 30);
+  assert.equal(collide?.["Overtime (Overtime)"], 31);
+  assert.equal(Object.keys(collide ?? {}).length, 2, "both rates survive");
 });

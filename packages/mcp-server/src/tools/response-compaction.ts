@@ -52,6 +52,7 @@ export function clipText(value: unknown, max: number): string | undefined {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text;
 }
 
+/** Display rounding for non-monetary summary fields only (hours, confidence); never applied to rates. */
 function round2(value: unknown): number | undefined {
   const n = Number(value);
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : undefined;
@@ -75,17 +76,38 @@ export function scheduleTierList(schedule: Record<string, any>): RateTier[] {
 
 /**
  * Rates come back keyed by tier id. Re-key by tier NAME for readability (ids
- * are listed once per schedule in `tiers`), round to cents, and drop empties.
- * Never drops a rate value: an unknown tier id is kept under its id.
+ * are listed once per schedule in `tiers`). Values pass through at their
+ * stored precision: unit rates may legitimately be fractional cents and a
+ * derivation built from a rounded input would disagree with the stored rate.
+ * Never drops a rate value: an unknown tier id is kept under its id, and a
+ * tier name shared by more than one tier falls back to the id so one tier's
+ * rate can never overwrite another's.
  */
 export function compactRateMap(map: unknown, tiers: RateTier[]): Record<string, number> | undefined {
   if (!map || typeof map !== "object") return undefined;
-  const nameById = new Map(tiers.map((tier) => [tier.id, tier.name || tier.id]));
+  const nameCounts = new Map<string, number>();
+  for (const tier of tiers) {
+    const name = tier.name || tier.id;
+    nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+  }
+  // Duplicate tier names are disambiguated as "name (tierId)" so two tiers
+  // can never share an output key.
+  const keyById = new Map(tiers.map((tier) => {
+    const name = tier.name || tier.id;
+    return [tier.id, (nameCounts.get(name) ?? 0) > 1 ? `${name} (${tier.id})` : name];
+  }));
   const out: Record<string, number> = {};
   for (const [key, value] of Object.entries(map as Record<string, unknown>)) {
-    const rounded = round2(value);
-    if (rounded === undefined) continue;
-    out[nameById.get(key) ?? key] = rounded;
+    const n = typeof value === "number" ? value : Number(value);
+    if (!Number.isFinite(n)) continue;
+    let outKey = keyById.get(key) ?? key;
+    if (outKey in out) {
+      // An unmapped key colliding with a named tier's label keeps its source key visible.
+      outKey = `${outKey} (${key})`;
+      let suffix = 2;
+      while (outKey in out) outKey = `${keyById.get(key) ?? key} (${key}) #${suffix++}`;
+    }
+    out[outKey] = n;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
