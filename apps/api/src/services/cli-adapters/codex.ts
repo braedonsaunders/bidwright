@@ -141,7 +141,7 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     // bounded independently, so this only needs to cover human think time.
     "-c",
     `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
-    ...bidwrightMcpApprovalArgs(ctx.mcpEnv),
+    ...bidwrightMcpApprovalArgs(),
   ];
 }
 
@@ -611,7 +611,6 @@ export const codexAdapter: CliAdapter = {
       {
         transport: "codex-app-server",
         projectDir: ctx.projectDir,
-        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "gpt-6.1-sol",
         reasoningEffort: ctx.reasoningEffort,
@@ -633,7 +632,6 @@ export const codexAdapter: CliAdapter = {
       {
         transport: "codex-app-server",
         projectDir: ctx.projectDir,
-        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "gpt-6.1-sol",
         reasoningEffort: ctx.reasoningEffort,

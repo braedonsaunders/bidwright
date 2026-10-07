@@ -83,7 +83,7 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     // before the estimator could answer them.
     "-c",
     `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
-    ...bidwrightMcpApprovalArgs(ctx.mcpEnv),
+    ...bidwrightMcpApprovalArgs(),
   ];
 }
 
@@ -157,7 +157,6 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
     {
       transport: "codex-app-server",
       projectDir: ctx.projectDir,
-      readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
       prompt: ctx.prompt,
       model,
       reasoningEffort: ctx.reasoningEffort,

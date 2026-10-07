@@ -80,9 +80,8 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
 
     const qaPlan = await openRouterAdapter.buildSpawnPlan({ ...ctx, mcpEnv: { ...ctx.mcpEnv, BIDWRIGHT_AGENT_MODE: "qa" } });
     const qaRequest = JSON.parse(await readFile(qaPlan.args[qaPlan.promptHandling.index], "utf8"));
-    assert.equal(qaRequest.readOnly, true);
-    assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.tools.listProjectImages.approval_mode="approve"'));
-    assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.default_tools_approval_mode="prompt"'));
+    assert.equal(qaRequest.readOnly, undefined);
+    assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.default_tools_approval_mode="approve"'));
     assert.ok(!qaRequest.appServerArgs.some((arg: string) => arg.includes("tools.updateWorksheetItem.")));
 
   } finally {
