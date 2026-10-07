@@ -139,7 +139,11 @@ ENV BIDWRIGHT_CAD_PYTHON=/opt/cad-venv/bin/python
 # The agent sandbox points /proc/self/exe at /usr/local/bin/codex, so Codex
 # looks for its helper binaries (codex-code-mode-host, ...) next to that path.
 # Without the links, GPT models fail to route tools before any MCP call.
-RUN npm install -g @openai/codex \
+# Pinned: npm publishes the platform binaries as separate optional packages,
+# sometimes minutes after the launcher. An unpinned install during that gap
+# (0.161.0 on 2026-10-07) silently skips the linux binary.
+ARG CODEX_VERSION=0.160.1
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
   && CODEX_VENDOR_BIN="$(dirname "$(find "$(npm root -g)/@openai/codex/node_modules/@openai" -path '*/vendor/*/bin/codex' -type f | head -1)")" \
   && test -x "${CODEX_VENDOR_BIN}/codex-code-mode-host" \
   && for helper in "${CODEX_VENDOR_BIN}"/*; do \
