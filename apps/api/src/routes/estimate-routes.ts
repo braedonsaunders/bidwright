@@ -213,6 +213,101 @@ export async function estimateRoutes(app: FastifyInstance): Promise<void> {
     }
   });
 
+  // Atomic multi-section save: validate every section first, then one write.
+  // A validation failure in any section rejects the whole call (400 with
+  // per-section issues) and nothing is persisted.
+  app.post("/api/estimate/:projectId/strategy/sections", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({
+      sections: z.object({
+        scopeGraph: z.unknown().optional(),
+        executionPlan: z.unknown().optional(),
+        assumptions: z.unknown().optional(),
+        packagePlan: z.unknown().optional(),
+        adjustmentPlan: z.unknown().optional(),
+        reconcileReport: z.unknown().optional(),
+        summary: z.unknown().optional(),
+      }),
+      aiRunId: z.string().nullable().optional(),
+      personaId: z.string().nullable().optional(),
+    }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+
+    const validators = {
+      scopeGraph: scopeGraphSchema,
+      executionPlan: executionPlanSchema,
+      assumptions: assumptionsSchema,
+      packagePlan: packagePlanSchema,
+      adjustmentPlan: adjustmentPlanSchema,
+      reconcileReport: reconcileReportSchema,
+      summary: summarySchema,
+    } as const;
+    const sections: Record<string, unknown> = {};
+    const issues: Record<string, unknown> = {};
+    for (const [name, schema] of Object.entries(validators)) {
+      const value = (parsed.data.sections as Record<string, unknown>)[name];
+      if (value === undefined) continue;
+      const result = (schema as z.ZodTypeAny).safeParse(value);
+      if (result.success) sections[name] = result.data;
+      else issues[name] = result.error.flatten();
+    }
+    if (Object.keys(issues).length > 0) {
+      return reply.code(400).send({ error: "Strategy section validation failed; nothing was saved.", issues });
+    }
+    if (Object.keys(sections).length === 0) {
+      return reply.code(400).send({ error: "At least one section is required." });
+    }
+    const strategy = await request.store!.saveEstimateStrategySections(projectId, {
+      sections: sections as any,
+      aiRunId: parsed.data.aiRunId ?? null,
+      personaId: parsed.data.personaId ?? null,
+    });
+    return {
+      ok: true,
+      atomic: true,
+      savedSections: Object.keys(sections),
+      strategyId: strategy.id,
+      currentStage: strategy.currentStage,
+      status: strategy.status,
+    };
+  });
+
+  // Estimator review of captured calibration feedback. Approving promotes
+  // lessons into the reusable pool; everything else stays capture-only.
+  app.post("/api/estimate/:projectId/feedback/:feedbackId/review", async (request, reply) => {
+    const { projectId, feedbackId } = request.params as { projectId: string; feedbackId: string };
+    const parsed = z.object({
+      status: z.enum(["approved", "rejected", "pending"]),
+      approvedLessons: z.array(z.union([z.string(), z.record(z.unknown())])).optional(),
+      reviewNotes: z.string().optional(),
+    }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    try {
+      const feedback = await request.store!.reviewEstimateFeedback(projectId, feedbackId, {
+        ...parsed.data,
+        reviewedBy: request.user?.email ?? request.user?.id ?? null,
+      });
+      return { ok: true, feedback };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/not found/i.test(message)) return reply.code(404).send({ error: message });
+      if (/requires at least one lesson/i.test(message)) return reply.code(400).send({ error: message });
+      throw error;
+    }
+  });
+
+  // Reviewed-only lesson retrieval across the organization.
+  app.get("/api/estimate/calibration-lessons", async (request) => {
+    const { q, tags, limit, excludeProjectId } = (request.query ?? {}) as { q?: string; tags?: string; limit?: string; excludeProjectId?: string };
+    const lessons = await request.store!.listApprovedCalibrationLessons({
+      query: q?.trim() || undefined,
+      tags: tags ? tags.split(",").map((tag) => tag.trim()).filter(Boolean) : undefined,
+      limit: limit ? parseInt(limit, 10) || undefined : undefined,
+      excludeProjectId: excludeProjectId?.trim() || undefined,
+    });
+    return { lessons, count: lessons.length, policy: "approved_only" };
+  });
+
   app.post("/api/estimate/:projectId/benchmarks/recompute", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     await request.store!.recomputeEstimateBenchmarks(projectId);

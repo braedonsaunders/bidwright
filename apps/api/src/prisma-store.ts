@@ -41,6 +41,12 @@ import {
   derivationReferencesItem,
   markDerivationStale,
   normalizeLineDerivation,
+  stageAfterSavingSections,
+  normalizeCalibrationLessons,
+  scoreCalibrationLesson,
+  type EstimateStrategySectionName,
+  type BatchWorksheetOperation,
+  type ApprovedCalibrationLesson,
 } from "@bidwright/domain";
 import type {
   Activity,
@@ -6412,6 +6418,62 @@ export class PrismaApiStore {
     return mapEstimateStrategy(row);
   }
 
+  /**
+   * Save several strategy sections in one write. Either every section lands
+   * or none does; the stage advances to the furthest section saved. Replaces
+   * four to six sequential saveEstimateStrategySection round trips.
+   */
+  async saveEstimateStrategySections(projectId: string, input: {
+    sections: Partial<Record<EstimateStrategySectionName, Record<string, unknown> | Array<Record<string, unknown>>>>;
+    aiRunId?: string | null;
+    personaId?: string | null;
+  }): Promise<EstimateStrategy> {
+    await this.requireProject(projectId);
+    const { revision } = await this.requireCurrentRevision(projectId);
+    const sectionNames = Object.keys(input.sections).filter((key) => input.sections[key as EstimateStrategySectionName] !== undefined) as EstimateStrategySectionName[];
+    if (sectionNames.length === 0) throw new Error("saveEstimateStrategySections requires at least one section.");
+
+    const row = await this.db.$transaction(async (tx) => {
+      const existing = await tx.estimateStrategy.findUnique({ where: { revisionId: revision.id } });
+      const nextStage = stageAfterSavingSections(existing?.currentStage, sectionNames);
+      const status =
+        existing?.status === "complete" || existing?.status === "ready_for_review"
+          ? existing.status
+          : "in_progress";
+      const sectionData: Record<string, unknown> = {};
+      for (const name of sectionNames) sectionData[name] = input.sections[name] as any;
+      return tx.estimateStrategy.upsert({
+        where: { revisionId: revision.id },
+        create: {
+          projectId,
+          revisionId: revision.id,
+          aiRunId: input.aiRunId ?? null,
+          personaId: input.personaId ?? null,
+          status,
+          currentStage: nextStage,
+          reviewCompleted: false,
+          ...(sectionData as any),
+        },
+        update: {
+          aiRunId: input.aiRunId ?? existing?.aiRunId ?? null,
+          personaId: input.personaId ?? existing?.personaId ?? null,
+          status,
+          currentStage: nextStage,
+          reviewCompleted: existing?.reviewCompleted ?? false,
+          ...(sectionData as any),
+        },
+      });
+    });
+
+    await this.pushActivity(projectId, revision.id, "estimate_strategy_updated", {
+      sections: sectionNames,
+      atomic: true,
+      currentStage: row.currentStage,
+      status: row.status,
+    });
+    return mapEstimateStrategy(row);
+  }
+
   private resolveEstimateDefaults(settings?: AppSettings | null) {
     const defaults = (settings?.defaults ?? {}) as AppSettings["defaults"];
     const asNumber = (value: unknown, fallback: number) => {
@@ -9538,6 +9600,135 @@ export class PrismaApiStore {
         createdAt: event.createdAt.toISOString(),
       })),
     };
+  }
+
+  /**
+   * Apply several worksheet-item mutations in one database transaction. Any
+   * failure (validation, missing row, calc error) rolls back every operation,
+   * so a batch never leaves the estimate half-edited. Each operation runs the
+   * same per-row logic as the single-row methods (derivation ledger,
+   * calibration capture, dependency invalidation included).
+   */
+  async batchWorksheetItemMutations(
+    projectId: string,
+    operations: BatchWorksheetOperation[],
+    context: WorksheetItemMutationContext = {},
+  ): Promise<{ results: Array<{ index: number; ref?: string; op: BatchWorksheetOperation["op"]; itemId: string; item: WorksheetItem | null }>; snapshot: EstimateMutationSnapshot | null }> {
+    await this.requireProject(projectId);
+    if (operations.length === 0) throw new Error("batchWorksheetItemMutations requires at least one operation.");
+    if (operations.length > 100) throw new Error("batchWorksheetItemMutations accepts at most 100 operations per call.");
+
+    return this.db.$transaction(async (tx) => {
+      // A store bound to the transaction client so every nested write shares
+      // the transaction and rolls back together.
+      const txStore = new PrismaApiStore(tx as unknown as PrismaClient, this.organizationId);
+      const results: Array<{ index: number; ref?: string; op: BatchWorksheetOperation["op"]; itemId: string; item: WorksheetItem | null }> = [];
+      let snapshot: EstimateMutationSnapshot | null = null;
+      for (let index = 0; index < operations.length; index += 1) {
+        const operation = operations[index];
+        try {
+          if (operation.op === "create") {
+            const result = await txStore.createWorksheetItemWithSnapshot(projectId, operation.worksheetId, operation.item as unknown as CreateWorksheetItemInput, context);
+            snapshot = result.snapshot;
+            results.push({ index, ref: operation.ref, op: "create", itemId: result.item.id, item: result.item });
+          } else if (operation.op === "update") {
+            const result = await txStore.updateWorksheetItemWithSnapshot(projectId, operation.itemId, operation.patch as unknown as WorksheetItemPatchInput, context);
+            snapshot = result.snapshot;
+            results.push({ index, ref: operation.ref, op: "update", itemId: result.item.id, item: result.item });
+          } else {
+            const result = await txStore.deleteWorksheetItemWithSnapshot(projectId, operation.itemId, context);
+            snapshot = result.snapshot;
+            results.push({ index, ref: operation.ref, op: "delete", itemId: operation.itemId, item: null });
+          }
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          const label = operation.ref ? `${operation.ref} (#${index})` : `#${index}`;
+          throw new Error(`Batch rolled back at operation ${label} [${operation.op}]: ${message}`);
+        }
+      }
+      return { results, snapshot };
+    }, { timeout: 120_000, maxWait: 15_000 });
+  }
+
+  // ── Calibration review ─────────────────────────────────────────────────
+
+  /**
+   * Estimator review of a calibration feedback row. Only approved lessons on
+   * approved rows are ever retrieved for future estimates; captured lessons
+   * remain visible for review but are not reused until promoted here.
+   */
+  async reviewEstimateFeedback(projectId: string, feedbackId: string, input: {
+    status: "approved" | "rejected" | "pending";
+    approvedLessons?: Array<Record<string, unknown> | string>;
+    reviewedBy?: string | null;
+    reviewNotes?: string;
+  }): Promise<EstimateCalibrationFeedback> {
+    await this.requireProject(projectId);
+    const existing = await this.db.estimateCalibrationFeedback.findFirst({ where: { id: feedbackId, projectId } });
+    if (!existing) throw new Error(`Calibration feedback ${feedbackId} not found for project ${projectId}`);
+    const approved = input.status === "approved"
+      ? normalizeCalibrationLessons(input.approvedLessons ?? existing.lessons)
+      : [];
+    if (input.status === "approved" && approved.length === 0) {
+      throw new Error("Approving calibration feedback requires at least one lesson to approve.");
+    }
+    const row = await this.db.estimateCalibrationFeedback.update({
+      where: { id: feedbackId },
+      data: {
+        reviewStatus: input.status,
+        reviewedAt: input.status === "pending" ? null : new Date(),
+        reviewedBy: input.status === "pending" ? null : (input.reviewedBy ?? null),
+        reviewNotes: input.reviewNotes ?? existing.reviewNotes ?? "",
+        approvedLessons: toPrismaJson(approved),
+      },
+    });
+    await this.pushActivity(projectId, existing.revisionId, "estimate_feedback_reviewed", {
+      feedbackId,
+      status: input.status,
+      approvedLessonCount: approved.length,
+    });
+    return mapEstimateCalibrationFeedback(row);
+  }
+
+  /**
+   * Approved lessons across the organization, ranked for a query. This is the
+   * ONLY retrieval path for calibration learning; unreviewed captures never
+   * reach the agent.
+   */
+  async listApprovedCalibrationLessons(input: { query?: string; tags?: string[]; limit?: number; excludeProjectId?: string } = {}): Promise<ApprovedCalibrationLesson[]> {
+    const rows = await this.db.estimateCalibrationFeedback.findMany({
+      where: {
+        reviewStatus: "approved",
+        project: { organizationId: this.organizationId },
+        ...(input.excludeProjectId ? { NOT: { projectId: input.excludeProjectId } } : {}),
+      },
+      include: { project: { select: { id: true, name: true } } },
+      orderBy: { reviewedAt: "desc" },
+      take: 500,
+    });
+    const lessons: Array<ApprovedCalibrationLesson & { score: number }> = [];
+    for (const row of rows) {
+      for (const lesson of normalizeCalibrationLessons(row.approvedLessons)) {
+        lessons.push({
+          ...lesson,
+          feedbackId: row.id,
+          projectId: row.projectId,
+          projectName: row.project?.name ?? null,
+          reviewedAt: row.reviewedAt ? row.reviewedAt.toISOString() : null,
+          reviewedBy: row.reviewedBy ?? null,
+          score: input.query || (input.tags && input.tags.length > 0)
+            ? scoreCalibrationLesson(lesson, input.query ?? "", input.tags ?? [])
+            : 0,
+        });
+      }
+    }
+    const filtered = input.query || (input.tags && input.tags.length > 0)
+      ? lessons.filter((lesson) => lesson.score > 0)
+      : lessons;
+    return filtered
+      .sort((a, b) => b.score - a.score || String(b.reviewedAt ?? "").localeCompare(String(a.reviewedAt ?? "")))
+      .slice(0, Math.max(1, Math.min(input.limit ?? 20, 100)))
+      .map(({ score: _score, ...lesson }) => lesson);
   }
 
   async deleteWorksheetItem(projectId: string, itemId: string, context: WorksheetItemMutationContext = {}) {

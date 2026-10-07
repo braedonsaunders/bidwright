@@ -57,15 +57,61 @@ async function detectOllama(): Promise<boolean> {
   }
 }
 
-type HostedEmbeddingProvider = "openai" | "openai-small" | "cohere" | "voyage" | "gemini";
+type HostedEmbeddingProvider = "openai" | "openai-small" | "openrouter" | "cohere" | "voyage" | "gemini";
 
-const HOSTED_EMBEDDING_PROVIDERS: Record<HostedEmbeddingProvider, { envKeys: string[]; model: string; dimensions: number }> = {
-  openai: { envKeys: ["EMBEDDING_API_KEY", "OPENAI_API_KEY"], model: "text-embedding-3-large", dimensions: 1024 },
-  "openai-small": { envKeys: ["EMBEDDING_API_KEY", "OPENAI_API_KEY"], model: "text-embedding-3-small", dimensions: 1024 },
-  cohere: { envKeys: ["EMBEDDING_API_KEY", "COHERE_API_KEY"], model: "embed-v4", dimensions: 1024 },
-  voyage: { envKeys: ["EMBEDDING_API_KEY", "VOYAGE_API_KEY"], model: "voyage-3-large", dimensions: 1024 },
-  gemini: { envKeys: ["EMBEDDING_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"], model: "text-embedding-004", dimensions: 768 },
+const HOSTED_EMBEDDING_PROVIDERS: Record<HostedEmbeddingProvider, { adapter: "openai" | "cohere" | "voyage" | "gemini"; envKeys: string[]; model: string; dimensions: number; baseUrl?: string; orgIntegrationKey?: string }> = {
+  openai: { adapter: "openai", envKeys: ["EMBEDDING_API_KEY", "OPENAI_API_KEY"], model: "text-embedding-3-large", dimensions: 1024, orgIntegrationKey: "openaiKey" },
+  "openai-small": { adapter: "openai", envKeys: ["EMBEDDING_API_KEY", "OPENAI_API_KEY"], model: "text-embedding-3-small", dimensions: 1024, orgIntegrationKey: "openaiKey" },
+  // OpenRouter exposes an OpenAI-compatible /embeddings endpoint. This is the
+  // option for a deployment whose only provider credential is the org's
+  // OpenRouter key (the current prod shape).
+  openrouter: { adapter: "openai", envKeys: ["EMBEDDING_API_KEY", "OPENROUTER_API_KEY"], model: "openai/text-embedding-3-small", dimensions: 1024, baseUrl: "https://openrouter.ai/api/v1", orgIntegrationKey: "openrouterKey" },
+  cohere: { adapter: "cohere", envKeys: ["EMBEDDING_API_KEY", "COHERE_API_KEY"], model: "embed-v4", dimensions: 1024 },
+  voyage: { adapter: "voyage", envKeys: ["EMBEDDING_API_KEY", "VOYAGE_API_KEY"], model: "voyage-3-large", dimensions: 1024 },
+  gemini: { adapter: "gemini", envKeys: ["EMBEDDING_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"], model: "text-embedding-004", dimensions: 768, orgIntegrationKey: "geminiKey" },
 };
+
+export type ResolvedEmbeddingConfig = { provider: "openai" | "cohere" | "voyage" | "gemini" | "local"; apiKey?: string; baseUrl?: string; model?: string; dimensions?: number; source: "env" | "org_integration" | "local" };
+
+/** Which hosted provider EMBEDDING_PROVIDER names, or null for local/disabled/unset. */
+function hostedEmbeddingSelection(): { name: HostedEmbeddingProvider; spec: (typeof HOSTED_EMBEDDING_PROVIDERS)[HostedEmbeddingProvider] } | null {
+  const provider = (process.env.EMBEDDING_PROVIDER ?? "").trim() as HostedEmbeddingProvider | "local" | "disabled" | "";
+  if (!provider || provider === "local" || provider === "disabled") return null;
+  if (!(provider in HOSTED_EMBEDDING_PROVIDERS)) return null;
+  return { name: provider as HostedEmbeddingProvider, spec: HOSTED_EMBEDDING_PROVIDERS[provider as HostedEmbeddingProvider] };
+}
+
+function hostedConfigFromKey(selection: NonNullable<ReturnType<typeof hostedEmbeddingSelection>>, apiKey: string, source: "env" | "org_integration"): ResolvedEmbeddingConfig {
+  return {
+    provider: selection.spec.adapter,
+    apiKey,
+    baseUrl: process.env.EMBEDDING_BASE_URL || selection.spec.baseUrl || undefined,
+    model: process.env.EMBEDDING_MODEL || selection.spec.model,
+    dimensions: parseInt(process.env.EMBEDDING_DIMENSIONS || String(selection.spec.dimensions), 10),
+    source,
+  };
+}
+
+/**
+ * Embedding config that may also draw the API key from the organization's
+ * stored integrations (the sealed provider keys in settings). Use this from
+ * code paths that have a store; the synchronous getEmbeddingConfig() only
+ * sees env and is kept for callers without one.
+ */
+export async function resolveEmbeddingConfig(store?: { getEffectiveIntegrations: (userId: string | null | undefined) => Promise<Record<string, any>> } | null): Promise<ResolvedEmbeddingConfig | null> {
+  const envConfig = getEmbeddingConfig();
+  if (envConfig) return { ...envConfig, source: envConfig.provider === "local" ? "local" : "env" };
+  const selection = hostedEmbeddingSelection();
+  if (!selection || !selection.spec.orgIntegrationKey || !store) return null;
+  try {
+    const integrations = await store.getEffectiveIntegrations(null);
+    const key = String(integrations?.[selection.spec.orgIntegrationKey] ?? "").trim();
+    if (!key) return null;
+    return hostedConfigFromKey(selection, key, "org_integration");
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Embedding configuration for hybrid search.
@@ -79,22 +125,17 @@ const HOSTED_EMBEDDING_PROVIDERS: Record<HostedEmbeddingProvider, { envKeys: str
  * is changed to match).
  */
 export function getEmbeddingConfig(): { provider: "openai" | "cohere" | "voyage" | "gemini" | "local"; apiKey?: string; baseUrl?: string; model?: string; dimensions?: number } | null {
-  const provider = (process.env.EMBEDDING_PROVIDER ?? "").trim() as HostedEmbeddingProvider | "local" | "";
+  const provider = (process.env.EMBEDDING_PROVIDER ?? "").trim() as HostedEmbeddingProvider | "local" | "disabled" | "";
+  if (provider === "disabled") return null;
 
-  if (provider && provider !== "local" && provider in HOSTED_EMBEDDING_PROVIDERS) {
-    const spec = HOSTED_EMBEDDING_PROVIDERS[provider as HostedEmbeddingProvider];
-    const apiKey = spec.envKeys.map((key) => process.env[key]?.trim()).find(Boolean);
+  const selection = hostedEmbeddingSelection();
+  if (selection) {
+    const apiKey = selection.spec.envKeys.map((key) => process.env[key]?.trim()).find(Boolean);
     if (!apiKey) {
-      return null; // configured but unusable; keyword search carries the load
+      return null; // no env key; resolveEmbeddingConfig(store) may still find the org integration key
     }
-    return {
-      // "openai-small" is the OpenAI provider with the small model, not a separate adapter.
-      provider: provider === "openai-small" ? "openai" : provider,
-      apiKey,
-      baseUrl: process.env.EMBEDDING_BASE_URL || undefined,
-      model: process.env.EMBEDDING_MODEL || spec.model,
-      dimensions: parseInt(process.env.EMBEDDING_DIMENSIONS || String(spec.dimensions), 10),
-    };
+    const { source: _source, ...config } = hostedConfigFromKey(selection, apiKey, "env");
+    return config;
   }
 
   // Explicit local provider (TEI / Ollama)
@@ -604,7 +645,7 @@ export class KnowledgeService {
       await store.updateKnowledgeBook(bookId, { pageCount, chunkCount, status: "processing" });
 
       // ── Embeddings ──
-      const embeddingCfg = getEmbeddingConfig();
+      const embeddingCfg = await resolveEmbeddingConfig(store);
       if (embeddingCfg && chunkCount > 0 && request.options?.enableEmbeddings !== false) {
         try {
           const embedder = createEmbedder({
@@ -744,6 +785,90 @@ export class KnowledgeService {
     }
   }
 
+  /**
+   * Re-embed an already-chunked book from its stored chunks. Used to build or
+   * repair the vector index after an embedder is configured on a deployment
+   * that previously ran lexical-only (books ingested then have chunks but no
+   * vectors). Idempotent: vector ids are deterministic per book/chunk.
+   */
+  async reembedKnowledgeBook(bookId: string, store: PrismaApiStore): Promise<{ bookId: string; chunkCount: number; embedded: number; skipped: boolean; errors: string[] }> {
+    const errors: string[] = [];
+    const book = await store.getKnowledgeBook(bookId);
+    if (!book) throw new Error(`Knowledge book ${bookId} not found`);
+    const embeddingCfg = await resolveEmbeddingConfig(store);
+    if (!embeddingCfg) return { bookId, chunkCount: 0, embedded: 0, skipped: true, errors: ["No embedder configured (EMBEDDING_PROVIDER unset/disabled or no key)."] };
+    const chunks = await store.listKnowledgeChunks(bookId);
+    if (chunks.length === 0) return { bookId, chunkCount: 0, embedded: 0, skipped: true, errors: ["Book has no chunks to embed."] };
+
+    const embedder = createEmbedder({
+      provider: embeddingCfg.provider,
+      apiKey: embeddingCfg.apiKey,
+      baseUrl: embeddingCfg.baseUrl,
+      model: embeddingCfg.model,
+      dimensions: embeddingCfg.dimensions,
+    });
+    const ordered = [...chunks].sort((a, b) => a.order - b.order);
+    const vectors: number[][] = [];
+    const EMBED_BATCH_SIZE = 100;
+    for (let start = 0; start < ordered.length; start += EMBED_BATCH_SIZE) {
+      const batch = ordered.slice(start, start + EMBED_BATCH_SIZE);
+      try {
+        vectors.push(...(await embedder.embed(batch.map((chunk) => chunk.text))));
+      } catch (err) {
+        errors.push(`Embedding batch ${start}-${start + batch.length} failed: ${err instanceof Error ? err.message : String(err)}`);
+        for (let i = 0; i < batch.length; i += 1) vectors.push([]);
+      }
+    }
+    const vectorStore = getVectorStore(store.organizationId ?? "default");
+    const records: VectorRecord[] = ordered
+      .map((chunk, i) => ({
+        id: `vec-${bookId}-${chunk.order ?? i}`,
+        chunkId: chunk.id,
+        documentId: bookId,
+        projectId: book.projectId ?? null,
+        scope: (book.scope === "project" ? "project" : "library") as "project" | "library",
+        embedding: vectors[i] ?? [],
+        text: chunk.text,
+        metadata: {
+          bookName: book.sourceFileName,
+          category: book.category,
+          sectionTitle: chunk.sectionTitle ?? "",
+          pageNumber: chunk.pageNumber ?? 0,
+        },
+      }))
+      .filter((record) => record.embedding.length > 0);
+    const UPSERT_BATCH_SIZE = 200;
+    for (let i = 0; i < records.length; i += UPSERT_BATCH_SIZE) {
+      try {
+        await vectorStore.upsert(records.slice(i, i + UPSERT_BATCH_SIZE));
+      } catch (err) {
+        errors.push(`Vector upsert batch ${i} failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    if (records.length > 0 && errors.length === 0) {
+      await store.updateKnowledgeBook(bookId, { status: "indexed" }).catch(() => {});
+    }
+    return { bookId, chunkCount: ordered.length, embedded: records.length, skipped: false, errors };
+  }
+
+  /** Embedder + index status without exposing any key material. */
+  async embeddingStatus(store: PrismaApiStore): Promise<{ enabled: boolean; provider: string | null; model: string | null; dimensions: number | null; baseUrl: string | null; keySource: string | null; vectors: { project: number; library: number } | null; error?: string }> {
+    const config = await resolveEmbeddingConfig(store);
+    if (!config) {
+      return { enabled: false, provider: null, model: null, dimensions: null, baseUrl: null, keySource: null, vectors: null };
+    }
+    try {
+      const vectorStore = getVectorStore(store.organizationId ?? "default");
+      const [project, library] = await Promise.all([
+        vectorStore.count({ scope: "project" }),
+        vectorStore.count({ scope: "library" }),
+      ]);
+      return { enabled: true, provider: config.provider, model: config.model ?? null, dimensions: config.dimensions ?? null, baseUrl: config.baseUrl ?? null, keySource: config.source, vectors: { project, library } };
+    } catch (err) {
+      return { enabled: true, provider: config.provider, model: config.model ?? null, dimensions: config.dimensions ?? null, baseUrl: config.baseUrl ?? null, keySource: config.source, vectors: null, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
   async indexKnowledgeDocument(
     documentId: string,
     store: PrismaApiStore,
@@ -816,7 +941,7 @@ export class KnowledgeService {
       errors.push(`Vector cleanup failed: ${err instanceof Error ? err.message : String(err)}`);
     }
 
-    const embeddingCfg = getEmbeddingConfig();
+    const embeddingCfg = await resolveEmbeddingConfig(store);
     if (embeddingCfg && savedChunks.length > 0) {
       try {
         const embedder = createEmbedder({
@@ -916,7 +1041,7 @@ export class KnowledgeService {
     const keywordResults: SearchResult[] = [];
 
     // Vector search (async, non-blocking)
-    const embeddingCfg = getEmbeddingConfig();
+    const embeddingCfg = await resolveEmbeddingConfig(store);
     const vectorPromise = embeddingCfg ? (async () => {
       try {
         const embedder = createEmbedder({

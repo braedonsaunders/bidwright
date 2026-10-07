@@ -1065,6 +1065,12 @@ export interface EstimateCalibrationFeedback {
   corrections: Array<Record<string, unknown>>;
   lessons: Array<Record<string, unknown>>;
   notes: string;
+  /** Estimator review state. Only approved rows contribute approvedLessons to future estimates. */
+  reviewStatus?: "pending" | "approved" | "rejected";
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNotes?: string;
+  approvedLessons?: Array<Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
 }
