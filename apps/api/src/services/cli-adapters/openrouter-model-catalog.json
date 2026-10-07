@@ -1668,6 +1668,11 @@
     "anthropic/claude-opus-5.5": 1000000,
     "anthropic/claude-sonnet-5.5": 1000000,
     "openai/gpt-6.1-sol": 1050000,
-    "google/gemini-3.1-pro-preview": 1048576
+    "google/gemini-3.1-pro-preview": 1048576,
+    "~openai/gpt-mini-latest": 400000,
+    "~anthropic/claude-sonnet-latest": 1000000,
+    "~anthropic/claude-opus-latest": 1000000,
+    "~google/gemini-pro-latest": 1048576,
+    "~moonshotai/kimi-latest": 1048576
   }
 }
