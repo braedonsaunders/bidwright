@@ -594,11 +594,30 @@ function targetMatchesDrawingDrivenPackage(entry: Record<string, any>, targetTex
   return candidates.some((candidate) => target.includes(candidate) || candidate.includes(target));
 }
 
+/** Selected claims whose evidence rests on a document that was replaced or removed. */
+function staleClaimEvidence(claims: Array<Record<string, any>>, sourceDocuments: unknown[]): string[] {
+  const documents = new Map(sourceDocuments.map(asRecord).map((doc) => [String(doc.id ?? ""), doc]));
+  if (documents.size === 0) return [];
+  const stale: string[] = [];
+  for (const claim of claims) {
+    for (const evidence of asArray(claim.evidence).map(asRecord)) {
+      const documentId = String(evidence.documentId ?? "").trim();
+      if (!documentId.startsWith("doc_")) continue;
+      const doc = documents.get(documentId);
+      const recorded = String(evidence.sourceChecksum ?? "").trim();
+      if (!doc) stale.push(`${String(claim.claimId ?? "?")} (document ${documentId} is no longer in the project)`);
+      else if (recorded && doc.checksum && String(doc.checksum) !== recorded) stale.push(`${String(claim.claimId ?? "?")} (document ${documentId} changed since the claim was saved)`);
+    }
+  }
+  return [...new Set(stale)];
+}
+
 function validateDrawingEvidenceEngineForPricing(
   strategy: any,
   drawingDrivenPackages: Array<Record<string, any>>,
   targetText = "",
   evidenceBasis?: Record<string, any> | null,
+  scope: { rowPackageId?: string | null; sourceDocuments?: unknown[] } = {},
 ) {
   if (drawingDrivenPackages.length === 0) return null;
   const claimIds = evidenceBasisClaimIds(evidenceBasis);
@@ -655,8 +674,27 @@ function validateDrawingEvidenceEngineForPricing(
       return `Selected drawing evidence has unresolved contradictions: ${[...stored, ...detected].join("; ")}. Reconcile the specific selected claim(s), choose the governing claim, or carry an explicit assumption before pricing this drawing-driven line.`;
     }
 
-    if (!latestVerification || !latestVerification.status) {
-      return "Independent drawing evidence verification has not run. Call verifyDrawingEvidenceLedger before pricing drawing-driven quantity lines.";
+    if (scope.rowPackageId) {
+      const foreign = selectedClaims.filter((claim) => String(claim.packageId ?? "").trim() && String(claim.packageId).trim() !== scope.rowPackageId);
+      if (foreign.length > 0) {
+        return `This row is priced for package ${scope.rowPackageId}, but drawing claim(s) ${foreign.map((claim) => `${String(claim.claimId)} (package ${String(claim.packageId)})`).join(", ")} belong to another package. Cite this package's own claims, or save one for it.`;
+      }
+    }
+    const stale = staleClaimEvidence(selectedClaims, scope.sourceDocuments ?? []);
+    if (stale.length > 0) {
+      return `Selected drawing evidence claim(s) rest on outdated sources: ${stale.join("; ")}. Re-read the current document and save a new claim.`;
+    }
+
+    // A passing ledger verifier, or each cited claim's own mechanical check
+    // from saveDrawingEvidenceClaim, lets this row be priced. Finalize still
+    // requires a ledger-wide verifier pass.
+    const mechanicallyChecked = selectedClaims.length > 0 && selectedClaims.every((claim) => normalizedText(asRecord(claim.mechanicalCheck).status) === "passed");
+    if ((!latestVerification || !latestVerification.status) && !mechanicallyChecked) {
+      const failedChecks = selectedClaims.filter((claim) => normalizedText(asRecord(claim.mechanicalCheck).status) === "failed");
+      if (failedChecks.length > 0) {
+        return `Cited claim(s) failed their save-time check: ${failedChecks.map((claim) => `${String(claim.claimId)}: ${asArray(asRecord(claim.mechanicalCheck).problems).slice(0, 2).join("; ")}`).join(" | ")}. Reconcile or replace them before pricing.`;
+      }
+      return "Independent drawing evidence verification has not run. Call verifyDrawingEvidenceLedger, or re-save the cited claims so each carries a passed save-time check, before pricing drawing-driven quantity lines.";
     }
     if (normalizedText(latestVerification.status) === "failed") {
       const verificationText = normalizedText(JSON.stringify(latestVerification));
@@ -694,6 +732,91 @@ function validateDrawingEvidenceEngineForPricing(
   }
 
   return null;
+}
+
+// ── Pricing readiness: whole-strategy or one declared package ─────────────
+//
+// Round 3 (2026-10-07): Opus and Sonnet researched for 90 minutes and never
+// priced a row, because the first worksheet needed every strategy section
+// (scope, execution plan, assumptions, package plan) and the first drawing row
+// needed the whole visual audit and a ledger-wide verifier pass. A row may now
+// be priced for ONE package as soon as that package is declared, bound and
+// scoped, with every per-row evidence gate unchanged. The missing sections and
+// the other packages stay finalize blockers; nothing here marks the project
+// ready.
+
+export interface PricingReadiness {
+  ok: boolean;
+  mode: "full" | "incremental";
+  reason?: string;
+  packageId?: string | null;
+  packageName?: string | null;
+  /** What finalize will still reject; reported, never waived. */
+  finalizeBlockers: string[];
+}
+
+function strategySections(strategy: any) {
+  return {
+    scopeGraph: !!strategy && Object.keys(asRecord(strategy.scopeGraph)).length > 0,
+    executionPlan: !!strategy && Object.keys(asRecord(strategy.executionPlan)).length > 0,
+    assumptions: !!strategy && Array.isArray(strategy.assumptions) && strategy.assumptions.length > 0,
+    packagePlan: !!strategy && Array.isArray(strategy.packagePlan) && strategy.packagePlan.length > 0,
+    reconcileReport: !!strategy && Object.keys(asRecord(strategy.reconcileReport)).length > 0,
+  };
+}
+
+/** The packagePlan entry a worksheet is bound to (by id, bound name, or package name). */
+export function resolveWorksheetPackage(strategy: any, worksheet: { id?: unknown; name?: unknown } | null | undefined): { entry: Record<string, any> | null; reason?: string } {
+  const plans = asArray(strategy?.packagePlan).map(asRecord);
+  if (!worksheet || (!worksheet.id && !worksheet.name)) return { entry: null, reason: "the row's worksheet was not found" };
+  const id = String(worksheet.id ?? "").trim();
+  const name = normalizedText(worksheet.name);
+  const matches = plans.filter((plan) => {
+    const bindings = asRecord(plan.bindings);
+    return (id && asArray(bindings.worksheetIds).map(String).includes(id))
+      || (name && asArray(bindings.worksheetNames).map(normalizedText).includes(name))
+      || (name && normalizedText(plan.name ?? plan.packageName) === name);
+  });
+  if (matches.length === 1) return { entry: matches[0] };
+  if (matches.length === 0) return { entry: null, reason: `worksheet "${String(worksheet.name ?? id)}" is not bound to a packagePlan entry (bindings.worksheetIds or worksheetNames, or a package of the same name)` };
+  return { entry: null, reason: `worksheet "${String(worksheet.name ?? id)}" is bound to more than one package (${matches.map((plan) => String(plan.id ?? plan.name)).join(", ")})` };
+}
+
+function packageScopeProblem(strategy: any, entry: Record<string, any>): string | null {
+  const scopeItems = asArray(asRecord(strategy?.scopeGraph).scopeItems).map(asRecord);
+  const known = new Set(scopeItems.map((item) => String(item.id ?? "").trim()).filter(Boolean));
+  const packageId = String(entry.id ?? entry.packageId ?? "").trim();
+  const refs = asArray(entry.scopeRefs).map((ref) => String(ref ?? "").trim()).filter(Boolean);
+  const ownedByPackage = scopeItems.some((item) => packageId && String(item.packageId ?? "") === packageId);
+  if (refs.length === 0 && !ownedByPackage) return `package ${packageId || entry.name} has no scopeRefs into scopeGraph.scopeItems`;
+  const missing = refs.filter((ref) => !known.has(ref));
+  if (missing.length > 0) return `package ${packageId || entry.name} cites scope items not in scopeGraph: ${missing.join(", ")}`;
+  return null;
+}
+
+export function strategyPricingReadiness(strategy: any, gate: "createWorksheet" | "createWorksheetItem", worksheet?: { id?: unknown; name?: unknown } | null): PricingReadiness {
+  const has = strategySections(strategy);
+  const finalizeBlockers = [
+    ...(has.executionPlan ? [] : ["executionPlan"]),
+    ...(has.assumptions ? [] : ["assumptions"]),
+    ...(has.reconcileReport ? [] : ["reconcileReport"]),
+    ...asArray(strategy?.packagePlan).map(asRecord)
+      .filter((plan) => asArray(asRecord(plan.bindings).worksheetIds).length === 0 && asArray(asRecord(plan.bindings).worksheetNames).length === 0)
+      .map((plan) => `package ${String(plan.id ?? plan.name)} has no bound worksheet`),
+  ];
+  const full = has.scopeGraph && has.executionPlan && has.assumptions && has.packagePlan;
+  const mode: PricingReadiness["mode"] = full ? "full" : "incremental";
+  if (!has.scopeGraph) return { ok: false, mode, reason: "Save scopeGraph (saveEstimateScopeGraph or saveEstimateStrategyStages) with at least the package you are about to price.", finalizeBlockers };
+  if (!has.packagePlan) return { ok: false, mode, reason: "Save packagePlan with at least the package you are about to price (id, name, scopeRefs).", finalizeBlockers };
+  if (gate === "createWorksheet") return { ok: true, mode, finalizeBlockers };
+  const resolved = resolveWorksheetPackage(strategy, worksheet);
+  if (full) return { ok: true, mode, packageId: resolved.entry ? String(resolved.entry.id ?? "") : null, packageName: resolved.entry ? String(resolved.entry.name ?? "") : null, finalizeBlockers };
+  if (!resolved.entry) {
+    return { ok: false, mode, reason: `Incremental pricing prices one declared package at a time, and ${resolved.reason}. Bind it in packagePlan (bindings.worksheetIds) or save executionPlan and assumptions for whole-estimate pricing.`, finalizeBlockers };
+  }
+  const scopeProblem = packageScopeProblem(strategy, resolved.entry);
+  if (scopeProblem) return { ok: false, mode, reason: `Incremental pricing needs the row's package scoped: ${scopeProblem}.`, packageId: String(resolved.entry.id ?? ""), finalizeBlockers };
+  return { ok: true, mode, packageId: String(resolved.entry.id ?? ""), packageName: String(resolved.entry.name ?? ""), finalizeBlockers };
 }
 
 const LINE_EVIDENCE_BASIS_TYPES = [
@@ -1391,7 +1514,7 @@ function nativeViewEvidence(views: EvidenceViewRecord[]) {
 }
 
 /** The audit gate, with the native page/tile views it cites resolved from the server first. */
-export async function validateVisualTakeoffAuditWithNativeViews(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null): Promise<string | null> {
+export async function validateVisualTakeoffAuditWithNativeViews(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null, rowPackageId: string | null = null): Promise<string | null> {
   const audit = asRecord(asRecord(strategy?.scopeGraph).visualTakeoffAudit);
   const ids = auditViewIds(audit, evidenceBasis);
   let views: EvidenceViewRecord[] = [];
@@ -1400,10 +1523,10 @@ export async function validateVisualTakeoffAuditWithNativeViews(ws: any, strateg
     // Views the server cannot confirm simply do not count.
     if (!("error" in result)) views = result.views;
   }
-  return validateVisualTakeoffAuditForPricing(ws, strategy, targetText, evidenceBasis, views);
+  return validateVisualTakeoffAuditForPricing(ws, strategy, targetText, evidenceBasis, views, rowPackageId);
 }
 
-export function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null, nativeViews: EvidenceViewRecord[] = []): string | null {
+export function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null, nativeViews: EvidenceViewRecord[] = [], rowPackageId: string | null = null): string | null {
   const drawingDocs = asArray(ws.sourceDocuments).filter(isDrawingLikeSourceDocument);
   if (drawingDocs.length === 0) return null;
   if (!lineEvidenceBasisRequiresDrawing(evidenceBasis)) return null;
@@ -1435,13 +1558,18 @@ export function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, tar
     return `Full-page drawing evidence is only overview evidence. No targeted crop/region evidence is recorded yet. Read the specific detail, symbol, schedule, dimension, or table region that drives scope with readDrawingTile or inspectDrawingRegion, save a drawing evidence claim citing that viewId, cite it in zoomEvidence[].viewId, then re-save saveEstimateScopeGraph before creating worksheets/items.`;
   }
 
-  if (audit.completedBeforePricing !== true) {
+  const auditPackages = asArray(audit.drawingDrivenPackages).filter((entry: any) => entry && typeof entry === "object" && !Array.isArray(entry)) as Array<Record<string, any>>;
+  const rowAuditEntry = rowPackageId ? auditPackages.find((entry) => String(entry.packageId ?? entry.id ?? "") === rowPackageId) ?? null : null;
+  const rowPackageAuditComplete = !!rowAuditEntry && (rowAuditEntry.completed === true || rowAuditEntry.completedBeforePricing === true || ["reviewed", "complete", "completed", "verified"].includes(normalizedText(rowAuditEntry.status)));
+  if (audit.completedBeforePricing !== true && !rowPackageAuditComplete) {
+    if (rowPackageId) {
+      return `Incremental pricing of package ${rowPackageId}: its visualTakeoffAudit.drawingDrivenPackages entry must exist with completed: true (after reading its pages and crops), or set visualTakeoffAudit.completedBeforePricing: true once every package is audited.`;
+    }
     return `saveEstimateScopeGraph.visualTakeoffAudit.completedBeforePricing must be true before creating worksheets/items. Re-save the scope graph after the atlas search, targeted inspection, evidence claims, and ledger verification are complete.`;
   }
 
-  const drawingDrivenPackages = asArray(audit.drawingDrivenPackages).filter(
-    (entry: any) => entry && typeof entry === "object" && !Array.isArray(entry),
-  ) as Array<Record<string, any>>;
+  // Incremental: only the row's own package is checked here; the others stay finalize blockers.
+  const drawingDrivenPackages = rowAuditEntry ? [rowAuditEntry] : auditPackages;
   const notDrawingDrivenReason = String(audit.notDrawingDrivenReason ?? "").trim();
 
   if (drawingDrivenPackages.length === 0) {
@@ -1494,7 +1622,7 @@ export function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, tar
     return `visualTakeoffAudit is incomplete for drawing-driven packages.${overview}${deep}${actualOverview}${actualDeep} Re-save saveEstimateScopeGraph after recording atlas/page evidence plus targeted crop/ledger evidence for each drawing-driven package. Symbol scan/count evidence is optional and only belongs after a specific small symbol or cropped region has been identified.`;
   }
 
-  const drawingEvidenceGate = validateDrawingEvidenceEngineForPricing(strategy, drawingDrivenPackages, targetText, evidenceBasis);
+  const drawingEvidenceGate = validateDrawingEvidenceEngineForPricing(strategy, drawingDrivenPackages, targetText, evidenceBasis, { rowPackageId, sourceDocuments: asArray(ws.sourceDocuments) });
   if (drawingEvidenceGate) return drawingEvidenceGate;
 
   return null;
@@ -1799,6 +1927,8 @@ function worksheetTreeSummary(ws: any) {
       price?: number | null;
       uom?: string | null;
       quantity?: number | null;
+      /** Worksheet the row goes into; resolves the row's declared package. */
+      worksheetId?: string | null;
     },
   ): Promise<string | null> {
     const ws = await getWs();
@@ -1835,18 +1965,19 @@ function worksheetTreeSummary(ws: any) {
     const benchmarkingEnabled = (ws as any)?.meta?.benchmarkingEnabled === true;
     const hasBenchmarks = !!strategy && Object.keys(strategy.benchmarkProfile || {}).length > 0;
 
-    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasScopeGraph) {
-      return `Estimate strategy is incomplete. Call saveEstimateScopeGraph before creating worksheets or items.`;
+    // Whole-estimate or one declared package (strategyPricingReadiness).
+    let rowPackageId: string | null = null;
+    if (gate === "createWorksheet" || gate === "createWorksheetItem") {
+      const targetWorksheet = lineEvidence?.worksheetId
+        ? asArray(worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === lineEvidence.worksheetId) ?? { id: lineEvidence.worksheetId }
+        : null;
+      const readiness = strategyPricingReadiness(strategy, gate, targetWorksheet);
+      if (!readiness.ok) {
+        return `${readiness.reason} Finalize will still require: ${readiness.finalizeBlockers.join("; ") || "nothing listed yet"}.`;
+      }
+      rowPackageId = readiness.mode === "incremental" ? readiness.packageId ?? null : null;
     }
-    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasExecutionPlan) {
-      return `Execution model not saved yet. Call saveEstimateExecutionPlan before creating worksheets or items.`;
-    }
-    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasAssumptions) {
-      return `Assumptions are not persisted yet. Call saveEstimateAssumptions before creating worksheets or items.`;
-    }
-    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && !hasPackagePlan) {
-      return `Commercial/package structure is missing. Call saveEstimatePackagePlan before creating worksheets or items.`;
-    }
+    void hasScopeGraph; void hasExecutionPlan; void hasAssumptions; void hasPackagePlan;
     if (benchmarkingEnabled && gate === "createWorksheetItem" && !hasBenchmarks) {
       return `Historical benchmark pass has not been run. Call recomputeEstimateBenchmarks and saveEstimateAdjustments before creating detailed line items.`;
     }
@@ -1893,6 +2024,7 @@ function worksheetTreeSummary(ws: any) {
           strategy,
           targetText,
           lineEvidence?.evidenceBasis ?? null,
+          rowPackageId,
         );
         if (visualTakeoffGate) return visualTakeoffGate;
       }
@@ -1930,6 +2062,7 @@ function worksheetTreeSummary(ws: any) {
     input.description,
     input.sourceNotes,
   ].filter(Boolean).join(" "), {
+    worksheetId: input.worksheetId ?? null,
     evidenceBasis: input.evidenceBasis ?? null,
     derivation: input.derivation ?? null,
     tierUnits: input.tierUnits ?? null,
@@ -1958,6 +2091,14 @@ function worksheetTreeSummary(ws: any) {
     };
   }
   const autoWarnings: string[] = [];
+  {
+    // Readiness telemetry: which package this row was priced under, and what
+    // finalize will still require. Information only; nothing is enforced here.
+    const readiness = strategyPricingReadiness(wsForGate.estimateStrategy ?? null, "createWorksheetItem", targetWorksheet ?? { id: input.worksheetId });
+    if (readiness.ok && readiness.mode === "incremental") {
+      autoWarnings.push(`Priced incrementally for package ${readiness.packageId}${readiness.packageName ? ` (${readiness.packageName})` : ""}. Finalize still requires: ${readiness.finalizeBlockers.join("; ") || "a ledger verifier pass and the reconcile report"}.`);
+    }
+  }
   for (const key of ["entityName", "description", "sourceNotes"] as const) {
     (rest as any)[key] = stripLeakedToolParameterMarkup((rest as any)[key]);
   }
@@ -2735,6 +2876,7 @@ function worksheetTreeSummary(ws: any) {
         input.description,
         input.sourceNotes,
       ].filter(Boolean).join(" "), {
+        worksheetId: input.worksheetId ?? null,
         evidenceBasis: input.evidenceBasis,
         derivation: input.derivation ?? null,
         tierUnits: positiveTierUnits,
@@ -2882,10 +3024,12 @@ function worksheetTreeSummary(ws: any) {
     },
     async ({ operations }) => {
       const prepared: Array<Record<string, unknown>> = [];
+      const readinessNotes = new Set<string>();
       const problems = await collectBatchOperationProblems(operations, async (operation) => {
         if (operation.op === "create") {
           const result = await prepareCreateWorksheetItem({ ...operation.item, worksheetId: operation.worksheetId });
           if ("error" in result) return result.error;
+          for (const warning of result.autoWarnings) if (warning.startsWith("Priced incrementally")) readinessNotes.add(warning);
           prepared.push({ op: "create", ref: operation.ref, worksheetId: result.worksheetId, item: result.body });
           return null;
         }
@@ -2916,6 +3060,7 @@ function worksheetTreeSummary(ws: any) {
           applied: results.length,
           results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId })),
           estimateTotals: data?.estimateTotals ?? null,
+          ...(readinessNotes.size > 0 ? { pricingReadiness: [...readinessNotes] } : {}),
         }) }] };
       } catch (error) {
         const message = (error as Error)?.message ?? String(error);

@@ -2395,10 +2395,43 @@ export async function resolveClaimEvidenceViews(evidence: JsonRecord[], fetchVie
       ...(view.bbox && typeof view.bbox === "object" ? { bbox: view.bbox } : {}),
       tool: String(view.tool ?? ""),
       imageHash: String(view.imageHash ?? ""),
+      // Which document version the view was rendered from; pricing rejects the
+      // claim if the document is later replaced or removed.
+      ...(view.sourceChecksum ? { sourceChecksum: String(view.sourceChecksum) } : {}),
       imageHashVerifiedAt: new Date().toISOString(),
     };
   });
   return { evidence: resolved, failures };
+}
+
+/**
+ * Save-time mechanical check of one claim: the same evidence rules the ledger
+ * verifier applies to it (schema, server-resolved views, crop tool, hash,
+ * atlas regions; all already enforced before save) plus contradiction with
+ * claims already in the ledger. It is evidence bookkeeping, not a review of
+ * whether the quantity is right, and it never replaces the ledger-wide
+ * verifier that finalize requires.
+ */
+export function mechanicalClaimCheck(claim: JsonRecord, contradictions: unknown[]): JsonRecord {
+  const claimId = String(claim.claimId ?? claim.id ?? "");
+  const key = claimKey(claim);
+  const involved = asArray(contradictions).map(asRecord).filter((entry) =>
+    asArray(entry.claimIds).map(String).includes(claimId) || String(entry.key ?? "") === key,
+  );
+  const sourceChecksums = Object.fromEntries(
+    asArray(claim.evidence).map(asRecord)
+      .filter((evidence) => evidence.viewId && evidence.sourceChecksum)
+      .map((evidence) => [String(evidence.viewId), String(evidence.sourceChecksum)]),
+  );
+  return {
+    kind: "mechanical_on_save",
+    status: involved.length > 0 ? "failed" : "passed",
+    checkedAt: new Date().toISOString(),
+    checks: ["schema", "server_views_resolved", "crop_tool_and_hash", "atlas_regions", "no_contradiction"],
+    problems: involved.map((entry) => String(entry.message ?? entry.key ?? "contradiction with another claim")),
+    sourceChecksums,
+    note: "Mechanical evidence check only; not a human review of the quantity.",
+  };
 }
 
 export function validateClaimEvidence(claim: JsonRecord, atlas?: DrawingAtlas) {
@@ -3020,11 +3053,13 @@ export function registerDrawingEvidenceTools(server: McpServer) {
         const savedClaim = claimToSave as JsonRecord;
         const savedClaimId = String(savedClaim.claimId ?? savedClaim.id);
         const withoutExisting = claims.filter((entry) => String(entry.claimId ?? entry.id) !== savedClaimId);
+        const contradictionsAfterSave = detectContradictions([claimToSave, ...withoutExisting]);
+        (claimToSave as JsonRecord).mechanicalCheck = mechanicalClaimCheck(claimToSave as JsonRecord, contradictionsAfterSave);
         const nextClaims = [claimToSave, ...withoutExisting];
         return {
           ...state,
           claims: nextClaims,
-          contradictions: detectContradictions(nextClaims),
+          contradictions: contradictionsAfterSave,
         };
       });
       const contradictions = asArray(engine.contradictions);
@@ -3044,7 +3079,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
               ? "Reconcile contradictions or carry an explicit assumption before pricing/finalize."
             : highAuthorityReviewWarnings.length > 0
               ? "Claim saved with high-authority review warnings. Inspect the suggested sources and save a competing claim if they govern the same quantity field."
-              : "Claim saved. Use getDrawingEvidenceLedger or verifyDrawingEvidenceLedger before pricing/finalize.",
+              : "Claim saved with a passed save-time check; rows citing it can be priced for its package. Run verifyDrawingEvidenceLedger before finalize.",
         }, null, 2) }],
       };
     },
