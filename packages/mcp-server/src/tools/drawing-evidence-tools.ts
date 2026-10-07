@@ -2363,9 +2363,13 @@ export async function resolveClaimEvidenceViews(evidence: JsonRecord[], fetchVie
   let views: JsonRecord[];
   try {
     views = await fetchViews(ids);
-  } catch {
-    // Unverifiable: leave entries as sent; visual methods still need a hash.
-    return { evidence, failures: [] };
+  } catch (error) {
+    // Fail closed: a cited view that cannot be verified must not lend the
+    // agent's own imageHash/tool any trust.
+    return {
+      evidence,
+      failures: [`Could not verify cited viewId(s) ${ids.join(", ")} against the evidence view service (${(error as Error)?.message ?? String(error)}). Retry saveDrawingEvidenceClaim once the service responds.`],
+    };
   }
   const byId = new Map(views.map((view) => [String(view.id ?? ""), view]));
   const failures: string[] = [];
@@ -2381,12 +2385,15 @@ export async function resolveClaimEvidenceViews(evidence: JsonRecord[], fetchVie
     if (entry.documentId && viewDocumentId && String(entry.documentId) !== viewDocumentId) {
       failures.push(`evidence[${index}] cites document ${String(entry.documentId)} but view ${viewId} is of ${viewDocumentId}.`);
     }
+    // Every visual field comes from the server record, including a null bbox
+    // for a full-page view; nothing the caller sent for these is kept.
+    const { bbox: _callerBbox, ...rest } = entry;
     return {
-      ...entry,
-      documentId: viewDocumentId || entry.documentId,
-      pageNumber: Number(view.pageNumber) || entry.pageNumber,
-      bbox: view.bbox && typeof view.bbox === "object" ? view.bbox : entry.bbox,
-      tool: String(view.tool ?? entry.tool ?? ""),
+      ...rest,
+      documentId: viewDocumentId || null,
+      pageNumber: Number.isFinite(Number(view.pageNumber)) ? Number(view.pageNumber) : null,
+      ...(view.bbox && typeof view.bbox === "object" ? { bbox: view.bbox } : {}),
+      tool: String(view.tool ?? ""),
       imageHash: String(view.imageHash ?? ""),
       imageHashVerifiedAt: new Date().toISOString(),
     };

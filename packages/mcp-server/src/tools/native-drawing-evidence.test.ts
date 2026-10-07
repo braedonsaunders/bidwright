@@ -55,6 +55,22 @@ test("a full-page view is not accepted as visual-count crop evidence", async () 
   assert.ok(failures.some((failure) => /targeted crop/.test(failure)), failures.join(" | "));
 });
 
+test("a view lookup failure rejects the claim instead of trusting the agent's hash and tool", async () => {
+  const plausible = [{ ...fixture.tileVisualCountClaim.evidence[0], imageHash: "f".repeat(64), tool: "inspectDrawingRegion" }];
+  const { failures } = await resolveClaimEvidenceViews(plausible, async () => { throw new Error("503 Service Unavailable"); });
+  assert.match(failures.join(" "), /Could not verify cited viewId\(s\) view-e65fed29/);
+});
+
+test("a full-page server view clears a caller-supplied bbox, so a page cannot pose as a crop", async () => {
+  const posing = [{ documentId: PLATFORM_DOC, pageNumber: 4, viewId: PAGE, tool: "readDrawingTile", bbox: { x: 0.1, y: 0.1, width: 0.2, height: 0.2 }, imageHash: "e".repeat(64) }];
+  const { evidence, failures } = await resolveClaimEvidenceViews(posing, fetchServerViews);
+  assert.deepEqual(failures, []);
+  assert.equal("bbox" in evidence[0], false);
+  assert.equal(evidence[0].tool, "readDrawingPage");
+  assert.equal(evidence[0].imageHash, serverViews[PAGE].imageHash);
+  assert.ok(validateClaimEvidence({ ...fixture.tileVisualCountClaim, evidence }).some((failure) => /needs regionId or bbox|targeted crop/.test(failure)));
+});
+
 // ── visual takeoff audit ──────────────────────────────────────────────────
 
 const ws = {
