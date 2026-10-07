@@ -158,6 +158,7 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
     }
 
     if (message.method) {
+      if (message.method === "thread/tokenUsage/updated") emit({ type: "broker.usage", usage: message.params?.tokenUsage });
       if (shouldForwardCodexNotification(message, request)) emit(message);
       if (message.method === "turn/completed" && turnCompletion) {
         const status = String(message.params?.turn?.status || "completed");

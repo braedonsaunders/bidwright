@@ -40,6 +40,9 @@ import {
 import { RichTextEditor } from "@/components/rich-text-editor";
 import { FileBrowser, type FileBrowserProps } from "@/components/workspace/file-browser";
 import { ScheduleTab } from "@/components/workspace/schedule-tab";
+import { DrawingViewer } from "@/components/workspace/vision-chat-widgets";
+import type { DrawingToolEvidence } from "@/lib/drawing-tool-evidence";
+import { resolveApiUrl } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 /* ─── Types ─── */
@@ -53,6 +56,8 @@ interface DocumentationTabProps {
   apply: (next: WorkspaceResponse) => void;
   packages?: FileBrowserProps["packages"];
   highlightDocumentId?: string;
+  evidence?: DrawingToolEvidence;
+  onDismissEvidence?: () => void;
   selectedWorksheet?: FileBrowserProps["selectedWorksheet"];
   modelEditorChannelName?: string;
   onOpenInTakeoff?: FileBrowserProps["onOpenInTakeoff"];
@@ -78,6 +83,8 @@ export function DocumentationTab({
   apply,
   packages,
   highlightDocumentId,
+  evidence,
+  onDismissEvidence,
   selectedWorksheet,
   modelEditorChannelName,
   onOpenInTakeoff,
@@ -127,6 +134,15 @@ export function DocumentationTab({
         </div>
       )}
 
+      {evidence && activeTab === "knowledge" && (
+        <div className="shrink-0 space-y-1">
+          <div className="flex items-center justify-between text-xs text-fg/60">
+            <span>{workspace.sourceDocuments.find((doc) => doc.id === evidence.documentId)?.fileName || "Drawing evidence"} · Page {evidence.pageNumber}{evidence.bbox ? " · Selected region" : ""}</span>
+            <button onClick={onDismissEvidence} className="hover:text-fg">Close evidence</button>
+          </div>
+          <DrawingViewer {...evidence} imageUrl={resolveApiUrl(`/api/vision/views/${encodeURIComponent(evidence.viewId)}/image`)} />
+        </div>
+      )}
       <div className="flex-1 min-h-0 flex flex-col">
         {activeTab === "knowledge" && (
           <FileBrowser

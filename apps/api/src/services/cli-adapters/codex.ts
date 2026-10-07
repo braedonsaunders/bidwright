@@ -307,7 +307,9 @@ async function listModels(opts: { customPath?: string }): Promise<CliModelOption
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   const events: SSEEventData[] = [];
 
-  if (msg.type === "broker.error") {
+  if (msg.type === "broker.usage") {
+    events.push({ type: "progress", data: { phase: "Usage", usage: msg.usage, costUsd: null } });
+  } else if (msg.type === "broker.error") {
     events.push({ type: "error", data: { message: msg.message || "Runtime broker failed" } });
   } else if (msg.method === "turn/started") {
     events.push({ type: "progress", data: { phase: "Running", detail: "Turn started" } });

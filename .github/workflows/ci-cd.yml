@@ -105,6 +105,7 @@ jobs:
           apps/api/src/services/claude-md-generator.test.ts
           packages/mcp-server/src/tool-access.test.ts
           scripts/eval/evidence-metrics.test.ts
+          apps/web/lib/drawing-tool-evidence.test.ts
           apps/api/src/services/dataset-search-fitness.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
