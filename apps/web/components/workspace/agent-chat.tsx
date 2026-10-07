@@ -213,10 +213,10 @@ function defaultCliModel(runtime: CliRuntime, runtimeMap?: CliRuntimeMap | null)
     const def = list.find((m) => (m as any).isDefault) || list[0];
     return def.id;
   }
-  if (runtime === "codex") return "gpt-5.4";
+  if (runtime === "codex") return "gpt-6.1-sol";
   if (runtime === "openrouter") return "~openai/gpt-latest";
-  if (runtime === "gemini") return "gemini-2.5-pro";
-  if (runtime === "opencode") return "anthropic/claude-sonnet-4-5";
+  if (runtime === "gemini") return "gemini-3.1-pro-preview";
+  if (runtime === "opencode") return "anthropic/claude-sonnet-5-5";
   return "sonnet";
 }
 
