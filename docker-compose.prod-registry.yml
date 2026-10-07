@@ -94,7 +94,7 @@ services:
     deploy:
       resources:
         limits:
-          memory: 2g
+          memory: 6g
     # The API retains access to legacy project storage. AppKit launches only
     # agent subprocesses as the configured unprivileged identity and drops
     # capabilities before the requested command starts.
