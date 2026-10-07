@@ -31,6 +31,7 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { request as httpsRequest } from "node:https";
 import type { Socket } from "node:net";
 import { connect as tlsConnect } from "node:tls";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import type { AddressInfo } from "node:net";
 
 export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
@@ -46,10 +47,22 @@ const DROPPED_REQUEST_HEADERS = new Set([
 const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade", "trailer",
 ]);
-// fetch decodes compressed bodies, so on that path the original encoding and
-// length no longer describe the bytes we forward. The tunnelled path streams
-// the upstream's raw bytes and must keep both.
+// When the bridge decodes a body (fetch always does; the tunnel does when the
+// client did not ask for that encoding) the original encoding and length no
+// longer describe the bytes forwarded.
 const DECODED_BODY_HEADERS = new Set(["content-encoding", "content-length"]);
+
+/** A decoder for a content-encoding the client did not accept, or null to pass bytes through. */
+function decoderFor(contentEncoding: string | undefined, acceptEncoding: string | undefined) {
+  const encoding = String(contentEncoding ?? "").trim().toLowerCase();
+  if (!encoding || encoding === "identity") return null;
+  const accepted = String(acceptEncoding ?? "").toLowerCase().split(",").map((entry) => entry.split(";")[0].trim());
+  if (accepted.includes(encoding) || accepted.includes("*")) return null;
+  if (encoding === "gzip" || encoding === "x-gzip") return createGunzip();
+  if (encoding === "deflate") return createInflate();
+  if (encoding === "br") return createBrotliDecompress();
+  return null;
+}
 
 export interface OpenRouterCacheProxyOptions {
   /** The session's OpenRouter key; callers must present it as their Bearer token. */
@@ -195,6 +208,15 @@ function tunnelledRequest(
         const headers: Record<string, string> = {};
         for (const [name, value] of Object.entries(upstreamResponse.headers)) {
           if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
+        }
+        // Codex sends no Accept-Encoding and cannot decode a compressed SSE
+        // stream, so decode anything the client did not ask for.
+        const decoder = decoderFor(headers["content-encoding"], init.headers["accept-encoding"]);
+        if (decoder) {
+          upstreamResponse.pipe(decoder);
+          upstreamResponse.on("error", (error) => decoder.destroy(error));
+          resolve({ status: upstreamResponse.statusCode ?? 502, headers, body: decoder, decoded: true });
+          return;
         }
         resolve({ status: upstreamResponse.statusCode ?? 502, headers, body: upstreamResponse, decoded: false });
       });
