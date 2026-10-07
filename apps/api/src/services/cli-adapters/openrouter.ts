@@ -22,6 +22,7 @@ import type {
 import { codexAdapter } from "./codex.js";
 import { MCP_TOOL_TIMEOUT_SEC } from "./shared.js";
 import { createRuntimeBrokerPlan } from "../runtime-broker.js";
+import { writeOpenRouterModelCatalog } from "./openrouter-model-catalog.js";
 
 const DEFAULT_MODEL = "~openai/gpt-latest";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
@@ -87,7 +88,7 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
   ];
 }
 
-function buildOpenRouterProviderArgs(metadata?: OpenRouterModelMetadata): string[] {
+function buildOpenRouterProviderArgs(metadata: OpenRouterModelMetadata, catalogPath: string): string[] {
   const args = [
     "-c",
     'model_provider="openrouter"',
@@ -99,6 +100,8 @@ function buildOpenRouterProviderArgs(metadata?: OpenRouterModelMetadata): string
     'model_providers.openrouter.env_key="OPENROUTER_API_KEY"',
     "-c",
     'model_providers.openrouter.wire_api="responses"',
+    "-c",
+    `model_catalog_json=${JSON.stringify(catalogPath)}`,
   ];
   if (metadata) {
     args.push(
@@ -152,6 +155,7 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
   }
   const model = ctx.model || DEFAULT_MODEL;
   const modelMetadata = await fetchOpenRouterModelMetadata(apiKey, model);
+  const catalog = await writeOpenRouterModelCatalog(ctx.projectDir, model, modelMetadata?.contextWindow);
 
   return createRuntimeBrokerPlan(
     {
@@ -163,10 +167,10 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
       resumeSessionId,
       codexCommand: codexCommand(ctx.customCliPath),
       appServerArgs: [
-        ...buildOpenRouterProviderArgs(modelMetadata),
+        ...buildOpenRouterProviderArgs(catalog, catalog.path),
         ...buildMcpConfigArgs(ctx),
       ],
-      suppressUnknownModelMetadataWarning: Boolean(modelMetadata),
+      suppressUnknownModelMetadataWarning: false,
     },
     { OPENROUTER_API_KEY: apiKey },
   );

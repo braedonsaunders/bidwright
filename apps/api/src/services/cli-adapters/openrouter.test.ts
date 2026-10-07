@@ -6,6 +6,7 @@ import { test } from "node:test";
 
 import { openRouterAdapter } from "./openrouter.js";
 import type { SpawnCtx } from "./types.js";
+import { buildOpenRouterModelCatalog, writeOpenRouterModelCatalog } from "./openrouter-model-catalog.js";
 
 test("OpenRouter uses Codex App Server config without putting the API key in argv", async () => {
   const projectDir = await mkdtemp(join(tmpdir(), "bidwright-openrouter-adapter-"));
@@ -74,7 +75,15 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
       true,
     );
     assert.equal(request.appServerArgs.includes("model_context_window=1050000"), true);
-    assert.equal(request.suppressUnknownModelMetadataWarning, true);
+    assert.equal(request.suppressUnknownModelMetadataWarning, false);
+    const catalogArgument = request.appServerArgs.find((arg: string) => arg.startsWith("model_catalog_json="));
+    assert.ok(catalogArgument);
+    const catalogPath = JSON.parse(catalogArgument.slice("model_catalog_json=".length));
+    const catalog = JSON.parse(await readFile(catalogPath, "utf8"));
+    const selected = catalog.models.find((entry: { slug: string }) => entry.slug === request.model);
+    assert.equal(selected.max_context_window, 1_050_000);
+    assert.deepEqual(selected.truncation_policy, { mode: "bytes", limit: 200_000 });
+    assert.equal(JSON.stringify(catalog).includes("sk-or-test-secret"), false);
     assert.equal(JSON.stringify(request).includes("sk-or-test-secret"), false);
     assert.equal(JSON.stringify(request).includes("test-mcp-token"), false);
 
@@ -137,11 +146,59 @@ test("OpenRouter supplies catalog metadata for arbitrary exact model ids", async
     });
     const requestPath = plan.args[plan.promptHandling.index];
     const request = JSON.parse(await readFile(requestPath, "utf8"));
-    assert.equal(request.suppressUnknownModelMetadataWarning, true);
+    assert.equal(request.suppressUnknownModelMetadataWarning, false);
     assert.equal(request.appServerArgs.includes("model_context_window=1048576"), true);
     assert.equal(request.appServerArgs.includes("model_auto_compact_token_limit=838860"), true);
   } finally {
     globalThis.fetch = originalFetch;
+    await rm(projectDir, { recursive: true, force: true });
+  }
+});
+
+test("OpenRouter catalog raises actual maximums without borrowing GPT capabilities", () => {
+  for (const model of ["anthropic/claude-opus-5.5", "moonshotai/kimi-k3", "new-provider/new-image-model"]) {
+    const { catalog } = buildOpenRouterModelCatalog(model, 1_000_000);
+    const selected = catalog.models[0];
+    assert.equal(selected.slug, model);
+    assert.equal(selected.context_window, 1_000_000);
+    assert.equal(selected.max_context_window, 1_000_000);
+    assert.equal(selected.effective_context_window_percent, 95);
+    assert.equal(selected.auto_compact_token_limit, null);
+    assert.equal(selected.shell_type, "unified_exec");
+    assert.equal(selected.use_responses_lite, false);
+    assert.equal(selected.supports_image_detail_original, false);
+    assert.equal(selected.tool_mode, undefined);
+    assert.ok(selected.model_messages);
+    assert.deepEqual(selected.experimental_supported_tools, []);
+  }
+  const gpt = buildOpenRouterModelCatalog("openai/gpt-6.1-sol", 1_050_000).catalog.models[0];
+  assert.equal(gpt.tool_mode, "code_mode_only");
+  assert.equal(gpt.use_responses_lite, true);
+  assert.equal(gpt.max_context_window, 1_050_000);
+});
+
+test("OpenRouter uses known windows during metadata outages and rejects unknown windows", () => {
+  assert.equal(buildOpenRouterModelCatalog("anthropic/claude-opus-5.5").contextWindow, 1_000_000);
+  assert.equal(buildOpenRouterModelCatalog("anthropic/claude-opus-5.5", 500_000).contextWindow, 500_000);
+  for (const invalid of [0, -1, NaN, 1.2, Infinity]) {
+    assert.throws(() => buildOpenRouterModelCatalog("unknown/model", invalid), /Cannot determine/);
+  }
+  assert.throws(() => buildOpenRouterModelCatalog("unknown/model"), /Cannot determine/);
+});
+
+test("OpenRouter catalogs are immutable across models and complete during concurrent starts", async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), "bidwright-openrouter-catalog-"));
+  try {
+    const [opus, opusAgain, kimi] = await Promise.all([
+      writeOpenRouterModelCatalog(projectDir, "anthropic/claude-opus-5.5"),
+      writeOpenRouterModelCatalog(projectDir, "anthropic/claude-opus-5.5"),
+      writeOpenRouterModelCatalog(projectDir, "moonshotai/kimi-k3"),
+    ]);
+    assert.equal(opus.path, opusAgain.path);
+    assert.notEqual(opus.path, kimi.path);
+    assert.equal(JSON.parse(await readFile(opus.path, "utf8")).models[0].slug, "anthropic/claude-opus-5.5");
+    assert.equal(JSON.parse(await readFile(kimi.path, "utf8")).models[0].max_context_window, 1_048_576);
+  } finally {
     await rm(projectDir, { recursive: true, force: true });
   }
 });
