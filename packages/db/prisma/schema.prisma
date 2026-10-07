@@ -1069,6 +1069,34 @@ model SymbolTemplate {
   @@index([sourceDocumentId])
 }
 
+/// One image the server rendered and returned to an agent through an MCP tool.
+/// Drawing-based quantities cite these ids, so a claim can be traced to the
+/// exact pixels (imageHash) of the exact source revision (sourceChecksum).
+/// A row proves delivery to the agent's tool call, not that a model looked.
+model EvidenceView {
+  id             String   @id
+  projectId      String
+  runId          String?
+  sessionId      String?
+  documentId     String?
+  fileNodeId     String?
+  sourceChecksum String?
+  pageNumber     Int
+  bbox           Json?
+  rotation       Int      @default(0)
+  dpi            Int
+  imageWidth     Int
+  imageHeight    Int
+  imageHash      String
+  cropPath       String?
+  tool           String
+  textSnippet    String?
+  createdAt      DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([runId])
+}
+
 // ── AI Runs ───────────────────────────────────────────────────────────────
 
 // ── Model Assets & 3D Takeoff ─────────────────────────────────────────────

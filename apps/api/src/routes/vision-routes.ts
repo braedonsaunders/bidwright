@@ -152,6 +152,76 @@ function asRecord(value: unknown): Record<string, any> {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, any> : {};
 }
 
+/**
+ * Persist one image delivered to an agent tool call as an EvidenceView, with
+ * the exact PNG bytes kept outside the agent's working directory.
+ */
+async function recordEvidenceView(input: {
+  projectId: string;
+  doc: any;
+  documentId: string;
+  recordView: unknown;
+  defaultTool: string;
+  image: string;
+  imageHash?: string;
+  pageNumber: number;
+  bbox: { x: number; y: number; width: number; height: number } | null;
+  rotation: number;
+  dpi: number;
+  width: number;
+  height: number;
+  textSnippet?: string;
+}): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  const { mkdir, writeFile } = await import("node:fs/promises");
+  const { dirname } = await import("node:path");
+  const record = asRecord(input.recordView);
+  const viewId = `view-${randomUUID()}`;
+  const png = Buffer.from(input.image.replace(/^data:image\/\w+;base64,/, ""), "base64");
+  const cropRelPath = ["evidence-views", input.projectId, `${viewId}.png`].join("/");
+  await mkdir(dirname(resolveApiPath(cropRelPath)), { recursive: true });
+  await writeFile(resolveApiPath(cropRelPath), png);
+  const isFileNode = input.doc?.source === "file_node";
+  const sourceId = String(input.doc?.id ?? input.documentId);
+  await prisma.evidenceView.create({
+    data: {
+      id: viewId,
+      projectId: input.projectId,
+      runId: typeof record.runId === "string" && record.runId ? record.runId : null,
+      sessionId: typeof record.sessionId === "string" && record.sessionId ? record.sessionId : null,
+      documentId: isFileNode ? null : sourceId,
+      fileNodeId: isFileNode ? sourceId : null,
+      sourceChecksum: typeof input.doc?.checksum === "string" && input.doc.checksum ? input.doc.checksum : null,
+      pageNumber: input.pageNumber,
+      bbox: (input.bbox ?? undefined) as any,
+      rotation: input.rotation,
+      dpi: input.dpi,
+      imageWidth: input.width,
+      imageHeight: input.height,
+      imageHash: input.imageHash || createHash("sha256").update(png).digest("hex"),
+      cropPath: cropRelPath,
+      tool: typeof record.tool === "string" && record.tool ? record.tool : input.defaultTool,
+      textSnippet: input.textSnippet ? input.textSnippet.slice(0, 2000) : null,
+    },
+  });
+  return viewId;
+}
+
+function clampInt(value: unknown, min: number, max: number): number | undefined {
+  const number = typeof value === "string" ? Number(value) : value;
+  if (typeof number !== "number" || !Number.isFinite(number)) return undefined;
+  return Math.min(max, Math.max(min, Math.round(number)));
+}
+
+function normalizedBoxOrUndefined(value: unknown) {
+  const box = asRecord(value);
+  const parts = [box.x, box.y, box.width, box.height].map(Number);
+  if (parts.some((part) => !Number.isFinite(part))) return undefined;
+  const [x, y, width, height] = parts;
+  if (width <= 0 || height <= 0 || x < 0 || y < 0 || x + width > 1.0001 || y + height > 1.0001) return undefined;
+  return { x, y, width, height };
+}
+
 function sanitizeJsonForPostgres(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value === null || value === undefined) return value;
   if (typeof value === "string") return value.replace(/\u0000/g, "").replace(/\\u0000/gi, "");
@@ -1258,7 +1328,125 @@ export async function visionRoutes(app: FastifyInstance) {
         fileName: resolved.doc.fileName,
       });
     }
+    if (body.recordView && result.image) {
+      const region = asRecord(body.region);
+      const imageWidth = Number(region.imageWidth);
+      const imageHeight = Number(region.imageHeight);
+      const bbox = body.region && imageWidth > 0 && imageHeight > 0
+        ? {
+            x: Number(region.x) / imageWidth,
+            y: Number(region.y) / imageHeight,
+            width: Number(region.width) / imageWidth,
+            height: Number(region.height) / imageHeight,
+          }
+        : null;
+      const viewId = await recordEvidenceView({
+        projectId,
+        doc: resolved.doc,
+        documentId,
+        recordView: body.recordView,
+        defaultTool: body.region ? "zoomDrawingRegion" : "renderDrawingPage",
+        image: result.image,
+        pageNumber: (body.pageNumber as number) ?? 1,
+        bbox,
+        rotation: 0,
+        dpi: Number((result as any).dpi ?? body.dpi ?? 0) || 0,
+        width: result.width ?? 0,
+        height: result.height ?? 0,
+      });
+      return { ...result, viewId };
+    }
     return result;
+  });
+
+  // ── POST /api/vision/read-page ─────────────────────────────────────────
+  // The agent reading a drawing page itself: an upright image sized to what
+  // the model sees natively, the positioned text layer, layout regions and a
+  // tile grid (overview), or a zoomed tile/bbox. Every image returned here is
+  // recorded as an EvidenceView so quantities can cite the exact pixels.
+  // Body: { projectId, documentId, pageNumber, mode, tile?, bbox?, maxEdge?, dpi?, rotation?, recordView? }
+  app.post("/api/vision/read-page", async (request, reply) => {
+    const body = request.body as Record<string, unknown>;
+    const projectId = typeof body.projectId === "string" ? body.projectId : "";
+    const documentId = typeof body.documentId === "string" ? body.documentId : "";
+    if (!projectId || !documentId) return reply.code(400).send({ message: "projectId and documentId required" });
+    const mode = body.mode === "tile" ? "tile" : "overview";
+
+    const resolved = await resolveDocPdf(request.store!, projectId, documentId);
+    if ("error" in resolved) return reply.code(resolved.status).send({ message: resolved.error });
+
+    const { readPdfPage } = await import("@bidwright/vision");
+    const maxEdge = clampInt(body.maxEdge, 512, 4096) ?? clampInt(process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE, 512, 4096) ?? 1568;
+    const result = await readPdfPage({
+      pdfPath: resolved.absPath,
+      pageNumber: clampInt(body.pageNumber, 1, 100_000) ?? 1,
+      mode,
+      tile: typeof body.tile === "string" ? body.tile : undefined,
+      bbox: normalizedBoxOrUndefined(body.bbox),
+      maxEdge,
+      dpi: clampInt(body.dpi, 36, 600),
+      rotation: clampInt(body.rotation, 0, 359),
+    });
+    await repairStoredNativePdfPageCount(resolved.doc, result.pageCount);
+    if (!result.success || !result.image || !result.imageHash) {
+      const status = result.code === "page_out_of_range" || result.code === "unknown_tile" || result.code === "missing_region" || result.code === "empty_region" ? 400 : 500;
+      return reply.code(status).send({ success: false, message: result.error, code: result.code, pageCount: result.pageCount, documentId });
+    }
+
+    // Index builds (the drawing atlas) read layout without handing the image
+    // to a model; those reads are not evidence and leave no view behind.
+    if (body.record === false) {
+      return { ...result, viewId: null, documentId: String(resolved.doc?.id ?? documentId), fileName: resolved.doc?.fileName ?? null };
+    }
+
+    const viewId = await recordEvidenceView({
+      projectId,
+      doc: resolved.doc,
+      documentId,
+      recordView: body.recordView,
+      defaultTool: mode === "tile" ? "readDrawingTile" : "readDrawingPage",
+      image: result.image,
+      imageHash: result.imageHash,
+      pageNumber: result.pageNumber ?? 1,
+      bbox: mode === "tile" ? result.bbox ?? null : null,
+      rotation: result.rotation ?? 0,
+      dpi: result.dpi ?? 0,
+      width: result.width ?? 0,
+      height: result.height ?? 0,
+      textSnippet: (result.textLines ?? []).map((line) => line.text).join("\n"),
+    });
+    return { ...result, viewId, documentId: String(resolved.doc?.id ?? documentId), fileName: resolved.doc?.fileName ?? null };
+  });
+
+  // ── GET /api/vision/views ──────────────────────────────────────────────
+  // Look up recorded evidence views by id or by agent run.
+  // Query: projectId (required), ids=v1,v2 | runId
+  app.get("/api/vision/views", async (request, reply) => {
+    const query = request.query as Record<string, string | undefined>;
+    const projectId = query.projectId ?? "";
+    if (!projectId || !(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
+    const ids = (query.ids ?? "").split(",").map((id) => id.trim()).filter(Boolean).slice(0, 500);
+    if (ids.length === 0 && !query.runId) return reply.code(400).send({ message: "ids or runId required" });
+    const views = await prisma.evidenceView.findMany({
+      where: { projectId, ...(ids.length > 0 ? { id: { in: ids } } : {}), ...(query.runId ? { runId: query.runId } : {}) },
+      orderBy: { createdAt: "asc" },
+      take: 1000,
+    });
+    return { views, missingIds: ids.filter((id) => !views.some((view) => view.id === id)) };
+  });
+
+  // ── GET /api/vision/views/:viewId/image ────────────────────────────────
+  // The exact PNG an agent was given, for citations and question previews.
+  app.get("/api/vision/views/:viewId/image", async (request, reply) => {
+    const { viewId } = request.params as { viewId: string };
+    const view = await prisma.evidenceView.findUnique({ where: { id: viewId } });
+    if (!view || !view.cropPath || !(await request.store!.getProject(view.projectId))) {
+      return reply.code(404).send({ message: "View not found" });
+    }
+    const bytes = await readFile(resolveApiPath(view.cropPath)).catch(() => null);
+    if (!bytes) return reply.code(404).send({ message: "View image is no longer on disk" });
+    reply.header("Cache-Control", "private, max-age=86400, immutable");
+    return reply.type("image/png").send(bytes);
   });
 
   // ── POST /api/vision/project-image ────────────────────────────────────

@@ -24,6 +24,84 @@ const boundingBoxSchema = {
   imageHeight: z.coerce.number().describe("Total height of the rendered image this bbox refers to"),
 };
 
+/** Ask the API to record the image it returns as citable evidence. */
+export function recordViewPayload(tool: string) {
+  return {
+    tool,
+    runId: process.env.BIDWRIGHT_RUN_ID || undefined,
+    sessionId: process.env.BIDWRIGHT_SESSION_ID || undefined,
+  };
+}
+
+// Images handed to the model in this MCP session. A run that pages through a
+// large set keeps going, but past the budget it must zoom deliberately rather
+// than re-render whole sheets.
+let deliveredImageCount = 0;
+
+function imageBudget(): number {
+  const configured = Number(process.env.BIDWRIGHT_AGENT_IMAGE_BUDGET);
+  return Number.isFinite(configured) && configured > 0 ? configured : 120;
+}
+
+function imageMaxEdge(): number | undefined {
+  const configured = Number(process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE);
+  return Number.isFinite(configured) && configured > 0 ? configured : undefined;
+}
+
+async function readDrawingImage(input: {
+  documentId: string;
+  pageNumber: number;
+  mode: "overview" | "tile";
+  tile?: string;
+  bbox?: { x: number; y: number; width: number; height: number };
+  rotation?: number;
+}) {
+  if (deliveredImageCount >= imageBudget()) {
+    return { content: [{ type: "text" as const, text: `Image budget for this run (${imageBudget()}) is used up. Work from the views you already have (their viewIds stay valid), or ask the user before reading more pages.` }] };
+  }
+  const result = await apiPost<Record<string, any>>("/api/vision/read-page", {
+    projectId: getProjectId(),
+    documentId: input.documentId,
+    pageNumber: input.pageNumber,
+    mode: input.mode,
+    tile: input.tile,
+    bbox: input.bbox,
+    rotation: input.rotation,
+    maxEdge: imageMaxEdge(),
+    recordView: {
+      tool: input.mode === "tile" ? "readDrawingTile" : "readDrawingPage",
+      runId: process.env.BIDWRIGHT_RUN_ID || undefined,
+      sessionId: process.env.BIDWRIGHT_SESSION_ID || undefined,
+    },
+  }).catch((error: unknown) => ({ success: false, message: error instanceof Error ? error.message : String(error) }) as Record<string, any>);
+
+  const base64 = typeof result.image === "string" ? result.image.match(/^data:image\/png;base64,(.+)$/)?.[1] : undefined;
+  if (!result.success || !base64) {
+    return { content: [{ type: "text" as const, text: `Could not read the page: ${result.message ?? result.error ?? "unknown error"}` }] };
+  }
+  deliveredImageCount += 1;
+
+  const { image: _image, imageHash: _hash, duration_ms: _ms, ...meta } = result;
+  if (meta.grid) {
+    meta.grid = { rows: meta.grid.rows, cols: meta.grid.cols, tileIds: (meta.grid.tiles ?? []).map((tile: { id: string }) => tile.id) };
+  }
+  return {
+    content: [
+      { type: "image" as const, data: base64, mimeType: "image/png" as const },
+      {
+        type: "text" as const,
+        text: JSON.stringify({
+          ...meta,
+          imagesRemaining: Math.max(0, imageBudget() - deliveredImageCount),
+          note: input.mode === "overview"
+            ? "Cite viewId for quantities taken from this image. Zoom with readDrawingTile (grid tile id or regions[].bbox) before relying on small text, dimensions or counts."
+            : "Cite viewId for quantities taken from this image.",
+        }),
+      },
+    ],
+  };
+}
+
 const drawingAnalysisPresetSchema = z.enum([
   "generic",
   "mechanical_piping",
@@ -333,6 +411,50 @@ COMMON PITFALLS:
 
   // ── renderDrawingPage ──────────────────────────────────────
   server.tool(
+    "readDrawingPage",
+    `Look at a drawing page yourself. This is the primary way to read drawings: you get the sheet as an upright image sized for you to see clearly, plus its real text layer with positions, its layout regions (views/details/tables) and a zoom grid.
+
+USE IT FOR every drawing that drives scope or quantity, page by page. Then zoom with readDrawingTile on the views, notes, schedules and dimensions you will rely on. Dimensions and notes on CAD sheets are often drawn as strokes (vectorTextLikely=true): they are NOT in textLines and can only be read from the image, so zoom until you can read them.
+
+OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] (id, kind, label, normalized bbox), grid (rows x cols tile ids like "r2c3"), textLines[] (exact text + normalized bbox in the image frame), and vectorTextLikely.
+
+EVIDENCE: every image carries a viewId. Cite viewIds in evidenceBasis.quantity.viewIds for any quantity you take from a drawing, and only for images you actually examined. Quote textLines verbatim when a note drives a quantity. Stacked fractions are split in the text layer (e.g. "for 3" + "4\" SS epoxy anchor" is "for 3/4\" SS epoxy anchor"); confirm such values in the image.
+
+Works with source document ids and Files-area file ids.`,
+    {
+      documentId: z.string().describe("Source document id or Files-area file id of the PDF"),
+      pageNumber: z.coerce.number().int().min(1).default(1).describe("Page number (1-based)"),
+      rotation: z.coerce.number().int().optional().describe("Override auto-orientation, degrees clockwise (0/90/180/270). Normally omit."),
+    },
+    async ({ documentId, pageNumber, rotation }) => readDrawingImage({ documentId, pageNumber, mode: "overview", rotation }),
+  );
+
+  server.tool(
+    "readDrawingTile",
+    `Zoom into part of a drawing page you have already opened with readDrawingPage. Pass a tile id from its grid (e.g. "r2c3") or a region bbox from its regions[] (normalized 0..1, same frame as the overview image). Returns a sharp image of just that area plus the text inside it, and a viewId to cite.
+
+Use it to read dimensions, callouts, notes, schedules, base-plate/anchor details, and to count repeated items (columns, base plates, anchors, supports). When you count, count in the image and say what you counted where; if the text says one thing and the picture another, say so and ask.`,
+    {
+      documentId: z.string().describe("Same documentId used with readDrawingPage"),
+      pageNumber: z.coerce.number().int().min(1).default(1),
+      tile: z.string().optional().describe("Tile id from readDrawingPage grid, e.g. \"r1c2\""),
+      bbox: z.object({
+        x: z.coerce.number().min(0).max(1),
+        y: z.coerce.number().min(0).max(1),
+        width: z.coerce.number().gt(0).max(1),
+        height: z.coerce.number().gt(0).max(1),
+      }).optional().describe("Normalized region in the overview image frame (e.g. a regions[].bbox, optionally padded)"),
+      rotation: z.coerce.number().int().optional().describe("Use the rotation readDrawingPage reported if you overrode it there."),
+    },
+    async ({ documentId, pageNumber, tile, bbox, rotation }) => {
+      if (!tile && !bbox) {
+        return { content: [{ type: "text" as const, text: "Pass a tile id from readDrawingPage's grid or a bbox from its regions." }] };
+      }
+      return readDrawingImage({ documentId, pageNumber, mode: "tile", tile, bbox, rotation });
+    },
+  );
+
+  server.tool(
     "renderDrawingPage",
     `Render a construction drawing PDF page to an image so you can visually inspect it.
 
@@ -361,6 +483,7 @@ COMMON PITFALLS:
         documentId,
         pageNumber,
         dpi,
+        recordView: recordViewPayload("renderDrawingPage"),
       });
 
       if (!result.success || !result.image) {
@@ -390,6 +513,7 @@ COMMON PITFALLS:
               pageCount: result.pageCount,
               pageNumber,
               dpi,
+              viewId: result.viewId ?? null,
               note: "Use imageWidth and imageHeight as the coordinate space for bounding boxes in zoomDrawingRegion and countSymbols tools. If this sheet affects scope or quantity, follow this overview with a targeted zoomDrawingRegion before marking visual inspection complete. Use countSymbols only after identifying a tight representative symbol box.",
             }, null, 2),
           },
@@ -428,6 +552,7 @@ COMMON PITFALLS:
         pageNumber,
         dpi: 300, // Always high-res for zoom
         region,
+        recordView: recordViewPayload("zoomDrawingRegion"),
       });
 
       if (!result.success || !result.image) {
@@ -452,6 +577,7 @@ COMMON PITFALLS:
               zoomedWidth: result.width,
               zoomedHeight: result.height,
               originalRegion: region,
+              viewId: result.viewId ?? null,
               note: "This is a high-res crop. To count symbols, use the ORIGINAL region coordinates (from renderDrawingPage's coordinate space) with countSymbols — not the zoomed image dimensions.",
             }, null, 2),
           },
@@ -1692,6 +1818,7 @@ COMMON PITFALLS:
         pageNumber,
         dpi: 300,
         region: titleBlockRegion,
+        recordView: recordViewPayload("detectScale"),
       });
 
       if (!zoomResult.success || !zoomResult.image) {
@@ -1714,6 +1841,7 @@ COMMON PITFALLS:
             type: "text" as const,
             text: JSON.stringify({
               region: "title block (bottom-right)",
+              viewId: zoomResult.viewId ?? null,
               pageWidth: fullRender.pageWidth,
               pageHeight: fullRender.pageHeight,
               imageWidth: w,

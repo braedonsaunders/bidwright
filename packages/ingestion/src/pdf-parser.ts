@@ -781,6 +781,8 @@ async function azureParsePdf(
 
 interface AzureAnalyzeResult {
   content: string;
+  /** "markdown" when outputContentFormat=markdown was requested. */
+  contentFormat?: string;
   pages?: AzurePage[];
   tables?: AzureTable[];
   keyValuePairs?: AzureKeyValuePair[];
@@ -792,7 +794,9 @@ interface AzurePage {
   pageNumber: number;
   width: number;
   height: number;
-  lines?: Array<{ content: string }>;
+  unit?: string;
+  spans?: Array<{ offset: number; length: number }>;
+  lines?: Array<{ content: string; polygon?: number[] }>;
   selectionMarks?: Array<{ state: string; confidence: number }>;
 }
 
@@ -974,6 +978,10 @@ function mapAzureDocumentFields(documents: AzureDocument[]) {
 /**
  * Map Azure Document Intelligence result to our ParsedDocument format.
  */
+function round4(value: number): number {
+  return Math.round(value * 10_000) / 10_000;
+}
+
 function mapAzureResult(
   result: AzureAnalyzeResult,
   filename: string,
@@ -989,7 +997,29 @@ function mapAzureResult(
   for (const azurePage of azurePages) {
     const pageNumber = azurePage.pageNumber;
     const lines = azurePage.lines ?? [];
-    const pageContent = lines.map((l) => l.content).join('\n');
+    // With markdown output Azure's own page slices keep headings, tables and
+    // figure markers; rebuilding from lines would throw that structure away.
+    const markdownContent = result.contentFormat === 'markdown' && azurePage.spans?.length
+      ? azurePage.spans.map((span) => result.content.slice(span.offset, span.offset + span.length)).join('')
+      : '';
+    const pageContent = markdownContent.trim() ? markdownContent : lines.map((l) => l.content).join('\n');
+    const pageWidth = azurePage.width || 0;
+    const pageHeight = azurePage.height || 0;
+    const positionedLines = pageWidth > 0 && pageHeight > 0
+      ? lines.flatMap((line) => {
+          const box = polygonToBbox(line.polygon);
+          if (!box || !line.content.trim()) return [];
+          return [{
+            text: line.content,
+            bbox: {
+              x: round4(box.x / pageWidth),
+              y: round4(box.y / pageHeight),
+              width: round4(box.width / pageWidth),
+              height: round4(box.height / pageHeight),
+            },
+          }];
+        })
+      : [];
 
     // Get paragraphs for this page to extract sections
     const pageParagraphs = (result.paragraphs ?? []).filter(
@@ -997,7 +1027,13 @@ function mapAzureResult(
     );
     const sections = extractSectionsFromParagraphs(pageParagraphs, pageNumber);
 
-    pages.push({ pageNumber, content: pageContent, sections });
+    pages.push({
+      pageNumber,
+      content: pageContent,
+      sections,
+      size: pageWidth > 0 && pageHeight > 0 ? { width: pageWidth, height: pageHeight, unit: azurePage.unit ?? 'inch' } : undefined,
+      lines: positionedLines.length > 0 ? positionedLines : undefined,
+    });
   }
 
   // Map Azure tables to ExtractedTable format
