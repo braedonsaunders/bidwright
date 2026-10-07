@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { compactLaborDiagnostics, compactLaborUnitRow } from "./response-compaction.js";
 import { z } from "zod";
 import { sourceRefArray } from "./source-refs.js";
 import { apiGet, apiPost, getProjectId, projectPath } from "../api-client.js";
@@ -784,25 +785,32 @@ function compactLaborUnit(unit: Record<string, unknown>, q?: string): CompactLab
   };
 }
 
-function compactLaborUnitsPayload(payload: unknown, q?: string) {
+function compactLaborUnitsPayload(payload: unknown, q?: string, options: { includeDiagnostics?: boolean } = {}) {
   const object = asObject(payload);
   const units = unitsFromPayload(payload);
   const total = numberValue(object.total) ?? units.length;
   const offset = numberValue(object.offset) ?? 0;
-  const diagnostics = object.diagnostics
+  // Measured 2026-10-07: ~1.3k chars per candidate row and multi-KB
+  // diagnostics per call drove listLaborUnits to ~130k chars in one estimate
+  // run. Rows now carry only what shortlisting and plumbing need; diagnostics
+  // reduce to term hits unless explicitly requested.
+  const diagnostics = options.includeDiagnostics
     ? compactUnknownValue(object.diagnostics, { depth: 3, maxString: 240, maxArray: 10, maxKeys: 14 })
-    : undefined;
+    : compactLaborDiagnostics(object.diagnostics);
+  const hasMore = offset + units.length < total;
   return {
     total,
     offset,
     returned: units.length,
-    hasMore: offset + units.length < total,
-    units: units.map((unit) => compactLaborUnit(unit, q)),
+    hasMore,
+    nextOffset: hasMore ? offset + units.length : null,
+    omitted: Math.max(0, total - offset - units.length),
+    units: units.map((unit) => compactLaborUnitRow(unit, laborUnitBasis(unit, q))),
     diagnostics,
     guidance: [
-      "Results are compact candidate rows; the estimator decides exact/similar/context/unusable.",
-      "Use libraryId/category/className/subClassName from listLaborUnitTree to narrow broad searches.",
-      "Use getLaborUnit with a laborUnitId when one compact row needs deeper sourceRef/metadata inspection.",
+      "Compact candidate rows: id/code/name/path/hoursNormal per outputUom/basis. The estimator decides exact/similar/context/unusable.",
+      "Narrow broad searches with libraryId/category/className/subClassName from listLaborUnitTree; page with offset=nextOffset.",
+      "getLaborUnit(laborUnitId) returns the full record (description, sourceRef, metadata, tags) for a shortlisted candidate.",
     ],
   };
 }
@@ -1342,12 +1350,14 @@ export function registerResourceTools(server: McpServer) {
       className: z.string().optional(),
       subClassName: z.string().optional(),
       libraryId: z.string().optional(),
-      limit: z.coerce.number().int().positive().max(50).default(10),
+      limit: z.coerce.number().int().positive().max(25).default(10),
       offset: z.coerce.number().int().min(0).optional(),
+      includeDiagnostics: z.boolean().default(false).describe("Return full search diagnostics instead of the compact term-hit summary."),
     },
     async (input) => {
-      const data = await apiGet(`/api/labor-units/units${queryString(input)}`);
-      return { content: [{ type: "text" as const, text: JSON.stringify(compactLaborUnitsPayload(data, input.q), null, 2) }] };
+      const { includeDiagnostics, ...query } = input;
+      const data = await apiGet(`/api/labor-units/units${queryString(query)}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(compactLaborUnitsPayload(data, input.q, { includeDiagnostics }), null, 2) }] };
     },
   );
 
