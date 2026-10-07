@@ -7,7 +7,9 @@ import { join } from "node:path";
 // Agent memory lives in the project directory (CWD of the CLI)
 const MEMORY_PATH = join(process.cwd(), "agent-memory.json");
 
-const ASK_USER_POLL_MS = 1500;
+const ASK_USER_POLL_MS = Number(process.env.BIDWRIGHT_ASK_USER_POLL_MS) > 0 ? Number(process.env.BIDWRIGHT_ASK_USER_POLL_MS) : 1500;
+// ~30 s of the server reporting the question as neither pending nor answered.
+const ASK_USER_DROPPED_POLLS = 20;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -77,6 +79,7 @@ export function registerSystemTools(server: McpServer) {
         });
 
         const questionId = created.questionId;
+        let unknownPolls = 0;
 
         while (true) {
           await sleep(ASK_USER_POLL_MS);
@@ -89,6 +92,20 @@ export function registerSystemTools(server: McpServer) {
 
           if (status.answered && typeof status.answer === "string") {
             return { content: [{ type: "text" as const, text: `User answered: ${status.answer}` }] };
+          }
+
+          // A question the server no longer knows about will never be answered.
+          // Waiting on it hangs the run with nothing visible to the user, so
+          // hand control back after a short grace period.
+          unknownPolls = status.pending ? 0 : unknownPolls + 1;
+          if (unknownPolls >= ASK_USER_DROPPED_POLLS) {
+            return {
+              isError: true,
+              content: [{
+                type: "text" as const,
+                text: "Your question is no longer pending on the server, so no answer will arrive. Ask it again with askUser, or continue with the most defensible option and record it as an explicit assumption.",
+              }],
+            };
           }
         }
       } catch (err: any) {
