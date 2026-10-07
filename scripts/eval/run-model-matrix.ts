@@ -7,7 +7,7 @@ import { createRequire } from "node:module";
 const args = process.argv.slice(2);
 const value = (flag: string, fallback?: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback;
 const sourceProject = value("--project-id", "project-92c0a6f3-b9c6-42d0-9ff0-1f078ba8a823")!;
-const api = value("--api-url", process.env.BIDWRIGHT_API_URL || "https://bidwright.rassaun.com")!;
+const api = value("--api-url", process.env.BIDWRIGHT_API_URL || "https://bidwright.rassaun.com/proxy")!;
 const output = resolve(value("--out", `.bidwright/evals/matrix-${Date.now()}`)!);
 const models = (value("--models", "openrouter:moonshotai/kimi-k3,claude-code:claude-opus-5-5,codex:gpt-6.1-sol,claude-code:claude-sonnet-5-5")!).split(",").map((entry) => {
   const split = entry.indexOf(":");

@@ -10,19 +10,20 @@
   },
   "expected": {
     "anchorsPerBasePlate": 1,
-    "mainFramePosts": 4,
+    "mainFramePosts": null,
     "stairLandingPosts": 2,
-    "basePlates": 6,
-    "anchors": 6,
+    "basePlates": null,
+    "anchors": null,
     "groutCubicFeetPerPlateAtOneInchDepth": 0.037037037037037035,
-    "groutCubicFeetBeforeWaste": 0.2222222222222222,
+    "groutCubicFeetBeforeWaste": null,
     "anchorLength": null
   },
   "verification": {
     "reviewer": "thr_dmphhungk4",
     "corroboratingReviewer": "thr_aystpu7h8w",
-    "method": "Original page 4 plan and both elevations; four main-frame corner posts plus two outer stair-landing posts. Landing inner edge connects to the main-frame beam.",
-    "uncertaintyPolicy": "Counts other than six require annotated source review; do not automatically pass five or seven. Anchor length is unspecified and requires an explicit assumption or clarification. Procurement bag counts depend on actual product yield, waste, and minimum purchase units.",
-    "evaluationOnly": true
+    "method": "Source p.4 plan and both elevations. Root identifies five distinct plan post symbols; second reviewer initially inferred six (four main plus two landing). Sixth location requires pixel evidence; exact total is deliberately withheld pending reconciliation.",
+    "uncertaintyPolicy": "Do not grade total post/anchor counts until the disputed main upper-left junction is resolved. One anchor per base plate is verified. Anchor length is unspecified. Procurement bag counts depend on actual product yield, waste, and minimum purchase units.",
+    "evaluationOnly": true,
+    "status": "count_disputed"
   }
 }

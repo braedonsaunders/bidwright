@@ -5,7 +5,7 @@ import { readFile, writeFile } from "node:fs/promises";
 
 const argv = process.argv.slice(2);
 const option = (name: string, fallback = "") => argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback;
-const api = option("--api-url", process.env.BIDWRIGHT_API_URL || "https://bidwright.rassaun.com").replace(/\/$/, "");
+const api = option("--api-url", process.env.BIDWRIGHT_API_URL || "https://bidwright.rassaun.com/proxy").replace(/\/$/, "");
 const source = option("--project-id", "project-92c0a6f3-b9c6-42d0-9ff0-1f078ba8a823");
 const runtime = option("--runtime", "openrouter");
 const model = option("--model", "moonshotai/kimi-k3");
