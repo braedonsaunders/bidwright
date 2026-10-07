@@ -341,6 +341,7 @@ COMMON PITFALLS:
       const result = await apiPost("/api/vision/project-image", {
         projectId: getProjectId(),
         fileNodeId,
+        recordView: recordViewPayload("inspectProjectImage"),
       });
       const match = String(result.image ?? "").match(/^data:([^;]+);base64,(.+)$/);
       if (!result.success || !match) {
@@ -367,6 +368,7 @@ COMMON PITFALLS:
               fileName: result.fileName,
               mimeType: result.mimeType,
               size: result.size,
+              viewId: result.viewId ?? null,
               note: "The preceding content is the original project image. Base conclusions on the visible pixels, not the file name.",
             }, null, 2),
           },

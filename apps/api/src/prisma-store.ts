@@ -40,6 +40,7 @@ import {
   derivationInvalidatedByFields,
   derivationReferencesItem,
   derivationReferencesDocument,
+  evaluateProcurementLink,
   markDerivationStale,
   normalizeLineDerivation,
   stageAfterSavingSections,
@@ -6288,13 +6289,29 @@ export class PrismaApiStore {
       await this.db.knowledgeDocument.deleteMany({ where: { id: { in: documentIds } } });
     }
 
+    // Evidence views carry no FK to Project (they must outlive a replaced
+    // document), so remove them with the project.
+    await this.db.evidenceView.deleteMany({ where: { projectId } });
+
     // Prisma cascade deletes handle other child entities
+    // Rows without a Prisma relation to Project do not cascade: derivation
+    // history and project-scoped vectors must go explicitly or they leak when
+    // test clones are removed.
+    await this.db.lineDerivationEvent.deleteMany({ where: { projectId } }).catch(() => undefined);
+    await this.db.$executeRawUnsafe(
+      `DELETE FROM vector_records WHERE project_id = $1 AND organization_id = $2`,
+      projectId,
+      this.organizationId,
+    ).catch(() => undefined); // table may not exist on a deployment without embeddings
+
     await this.db.project.delete({ where: { id: projectId } });
 
     // Clean up files on disk (best-effort, don't fail the delete if cleanup fails)
     const dirsToRemove: string[] = [
       // Project file uploads: projects/{projectId}/
       resolveApiPath("projects", projectId),
+      // Exact images agents were shown: evidence-views/{projectId}/
+      resolveApiPath("evidence-views", projectId),
       // Workspace state: workspaces/{projectId}.json
       resolveApiPath(relativeWorkspacePath(projectId)),
     ];
@@ -6683,6 +6700,33 @@ export class PrismaApiStore {
 
     const visualTakeoffIssues = this.validateVisualTakeoffCoverage(existing?.scopeGraph, workspace);
     validationIssues.push(...visualTakeoffIssues);
+
+    // Declared installed/procurement links are re-evaluated here so a
+    // mismatch introduced after the agent's gate (web edit, batch) still
+    // blocks finalize instead of being accepted silently.
+    const lineItemsForProcurement = workspace.estimate.lineItems ?? [];
+    const itemLookup = new Map(lineItemsForProcurement.map((item) => [item.id, item]));
+    for (const item of lineItemsForProcurement) {
+      const procurement = item.derivation?.procurement;
+      if (!procurement) continue;
+      const result = evaluateProcurementLink(procurement, {
+        purchaseQuantity: Number(item.quantity ?? 0),
+        purchaseUom: item.uom ?? null,
+        resolveItem: (itemId) => {
+          const linked = itemLookup.get(itemId);
+          return linked ? { quantity: Number(linked.quantity ?? 0), uom: linked.uom ?? null, derivation: linked.derivation ?? null, entityName: linked.entityName } : null;
+        },
+      });
+      for (const issue of result.issues.filter((entry) => entry.severity === "error")) {
+        validationIssues.push({
+          code: "procurement_mismatch",
+          itemId: item.id,
+          entityName: item.entityName,
+          detail: issue.code,
+          message: `Procurement does not cover the installed requirement on "${item.entityName}": ${issue.message}`,
+        });
+      }
+    }
 
     const readinessValidation = validateEstimateWorkspace(workspace as any, {
       ruleSetIds: ["readiness"],

@@ -177,8 +177,9 @@ async function recordEvidenceView(input: {
   const { dirname } = await import("node:path");
   const record = asRecord(input.recordView);
   const viewId = `view-${randomUUID()}`;
-  const png = Buffer.from(input.image.replace(/^data:image\/\w+;base64,/, ""), "base64");
-  const cropRelPath = ["evidence-views", input.projectId, `${viewId}.png`].join("/");
+  const extension = /^data:image\/jpe?g;/i.test(input.image) ? "jpg" : /^data:image\/webp;/i.test(input.image) ? "webp" : "png";
+  const png = Buffer.from(input.image.replace(/^data:image\/[\w+.-]+;base64,/, ""), "base64");
+  const cropRelPath = ["evidence-views", input.projectId, `${viewId}.${extension}`].join("/");
   await mkdir(dirname(resolveApiPath(cropRelPath)), { recursive: true });
   await writeFile(resolveApiPath(cropRelPath), png);
   const isFileNode = input.doc?.source === "file_node";
@@ -1446,7 +1447,8 @@ export async function visionRoutes(app: FastifyInstance) {
     const bytes = await readFile(resolveApiPath(view.cropPath)).catch(() => null);
     if (!bytes) return reply.code(404).send({ message: "View image is no longer on disk" });
     reply.header("Cache-Control", "private, max-age=86400, immutable");
-    return reply.type("image/png").send(bytes);
+    const type = view.cropPath.endsWith(".jpg") ? "image/jpeg" : view.cropPath.endsWith(".webp") ? "image/webp" : "image/png";
+    return reply.type(type).send(bytes);
   });
 
   // ── POST /api/vision/project-image ────────────────────────────────────
@@ -1484,13 +1486,31 @@ export async function visionRoutes(app: FastifyInstance) {
       return reply.code(status).send({ message });
     }
 
+    const image = `data:${mimeType};base64,${bytes.toString("base64")}`;
+    const viewId = body.recordView
+      ? await recordEvidenceView({
+          projectId,
+          doc: { id: node.id, fileName: node.name, source: "file_node", checksum: (node as any).checksum ?? null },
+          documentId: node.id,
+          recordView: body.recordView,
+          defaultTool: "inspectProjectImage",
+          image,
+          pageNumber: 1,
+          bbox: null,
+          rotation: 0,
+          dpi: 0,
+          width: 0,
+          height: 0,
+        })
+      : null;
     return {
       success: true,
       fileNodeId: node.id,
       fileName: node.name,
       mimeType,
       size: bytes.byteLength,
-      image: `data:${mimeType};base64,${bytes.toString("base64")}`,
+      image,
+      viewId,
     };
   });
 

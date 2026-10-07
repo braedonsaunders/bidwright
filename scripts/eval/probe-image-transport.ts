@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 import { randomInt } from "node:crypto";
 import { deflateSync } from "node:zlib";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 
 const argv = process.argv.slice(2);
 const option = (name: string, fallback = "") => argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback;
@@ -34,6 +34,8 @@ const png = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR"
 const copied = await request(`/projects/${source}/copy`, { resetEstimate: true });
 const projectId = copied.workspace?.project?.id;
 if (!projectId || projectId === source) throw new Error("No isolated clone; refusing to continue.");
+if (process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER) await appendFile(process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER,
+  `${projectId} C pixel-probe-${model.replace(/[^a-z0-9._-]/gi, "_")} ${new Date().toISOString()}\n`);
 let active = false;
 const stop = async () => { if (active) await request(`/api/cli/${projectId}/stop`, {}).catch(() => {}); active = false; };
 const interrupt = () => { void stop().finally(() => process.exit(130)); };
@@ -60,9 +62,15 @@ try {
   let observed: unknown;
   try { observed = JSON.parse(answer.match(/\[[\s\S]*?\]/)?.[0] || "null"); } catch { observed = null; }
   const inspected = events.some((event) => /inspectProjectImage/.test(event.data?.toolId || ""));
-  const passed = status?.status === "completed" && inspected && JSON.stringify(observed) === JSON.stringify(expected);
+  // Full native access is deliberate in Bidwright. The probe must nevertheless
+  // isolate MCP image delivery: a shell/Python decode or native image view would
+  // answer the colors without demonstrating this particular transport path.
+  const alternateImagePaths = events.filter((event) => event.type === "image_view" ||
+    (event.type === "tool_call" && /^(command_execution|Bash|Read|shell|exec_command|view_image|read_file|python)$/i.test(String(event.data?.toolId || ""))))
+    .map((event) => ({ type: event.type, toolId: event.data?.toolId ?? null }));
+  const passed = status?.status === "completed" && inspected && alternateImagePaths.length === 0 && JSON.stringify(observed) === JSON.stringify(expected);
   const result = { runtime, model, sourceProject: source, projectId, runId: started.sessionId, status: status?.status,
-    passed, expected, observed, inspected, answer, note: "Pass demonstrates pixels reached this runtime/model on this attempt; it does not validate drawing interpretation." };
+    passed, expected, observed, inspected, alternateImagePaths, answer, note: "Pass demonstrates pixels reached this runtime/model on this attempt; it does not validate drawing interpretation." };
   await writeFile(option("--out", `image-probe-${Date.now()}.json`), JSON.stringify(result, null, 2), { mode: 0o600 });
   console.log(JSON.stringify(result, null, 2));
   if (!passed) process.exitCode = 1;

@@ -136,7 +136,16 @@ ENV BIDWRIGHT_CAD_PYTHON=/opt/cad-venv/bin/python
 # Codex App Server is still delivered by the Codex binary. Claude runs through
 # the supported Agent SDK dependency bundled with the API instead of a global
 # interactive Claude Code install.
-RUN npm install -g @openai/codex
+# The agent sandbox points /proc/self/exe at /usr/local/bin/codex, so Codex
+# looks for its helper binaries (codex-code-mode-host, ...) next to that path.
+# Without the links, GPT models fail to route tools before any MCP call.
+RUN npm install -g @openai/codex \
+  && CODEX_VENDOR_BIN="$(dirname "$(find "$(npm root -g)/@openai/codex/node_modules/@openai" -path '*/vendor/*/bin/codex' -type f | head -1)")" \
+  && test -x "${CODEX_VENDOR_BIN}/codex-code-mode-host" \
+  && for helper in "${CODEX_VENDOR_BIN}"/*; do \
+       name="$(basename "${helper}")"; \
+       [ "${name}" = "codex" ] || ln -sf "${helper}" "/usr/local/bin/${name}"; \
+     done
 RUN npm install -g playwright@1.58.2 \
   && playwright install --with-deps chromium \
   && npm uninstall -g playwright \

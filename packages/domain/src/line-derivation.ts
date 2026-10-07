@@ -73,6 +73,29 @@ export interface LineDerivationInvalidation {
   newValue?: unknown;
 }
 
+/**
+ * Explicit installed-vs-procurement relationship for a purchase row. The link
+ * is declared, never inferred from shared views, so unrelated rows are not
+ * compared. Either `suppliesItemId` (optionally with `installedFromInput`, an
+ * input name on that row's derivation) or an explicit `installedQuantity`
+ * must identify what this purchase has to cover.
+ */
+export interface LineDerivationProcurement {
+  /** Worksheet item id of the installed/labour row this purchase supplies. */
+  suppliesItemId?: string | null;
+  /** Name of a derivation input on the linked row that holds the installed count (defaults to that row's quantity). */
+  installedFromInput?: string | null;
+  /** Explicit installed requirement when no row link exists. */
+  installedQuantity?: number | null;
+  installedUom?: string | null;
+  /** Base units per purchase unit: rods per pack, anchors per cartridge, ft³ per bag. */
+  packSize?: number | null;
+  /** Fraction added for waste/breakage, e.g. 0.15. */
+  wasteFactor?: number | null;
+  /** Required when supplied base units exceed twice the requirement. */
+  surplusRationale?: string | null;
+}
+
 export interface LineDerivation {
   version: number;
   target: LineDerivationTarget;
@@ -83,6 +106,7 @@ export interface LineDerivation {
   computedAt?: string | null;
   invalidatedBy?: LineDerivationInvalidation[];
   notes?: string | null;
+  procurement?: LineDerivationProcurement | null;
 }
 
 export interface LineDerivationIssue {
@@ -557,7 +581,7 @@ export function reconcileProcurementQuantities(input: ProcurementReconciliationI
     issues.push({
       severity: "error",
       code: "procurement_shortfall",
-      message: `Purchasing ${input.purchaseQuantity} ${input.purchaseUom ?? "units"}${packaged ? ` × ${packSize}` : ""} supplies ${suppliedBaseUnits} but ${input.installedQuantity} ${input.installedUom ?? "EA"} are installed. Buy at least ${requiredPurchaseQuantity}.`,
+      message: `Purchasing ${input.purchaseQuantity} ${input.purchaseUom ?? "units"}${packaged ? ` × ${packSize}` : ""} supplies ${suppliedBaseUnits} but ${input.installedQuantity} ${input.installedUom ?? "EA"} are installed — short by ${input.installedQuantity - suppliedBaseUnits}. Buy at least ${requiredPurchaseQuantity}.`,
     });
   } else if (suppliedBaseUnits > input.installedQuantity * 2 && input.installedQuantity > 0) {
     issues.push({
@@ -567,6 +591,139 @@ export function reconcileProcurementQuantities(input: ProcurementReconciliationI
     });
   }
   return { ok: !issues.some((issue) => issue.severity === "error"), issues, suppliedBaseUnits, requiredPurchaseQuantity };
+}
+
+const RATE_OR_TIME_UOMS = new Set(["HR", "HRS", "HOUR", "HOURS", "MH", "DAY", "DAYS", "WK", "WEEK", "WEEKS", "MO", "MONTH", "MONTHS", "SHIFT", "CREW", "LS", "LUMP", "LUMPSUM", "%"]);
+
+/** UOMs whose row quantity is time, crew, or lump-sum rather than a physical count. */
+export function isRateOrTimeUom(uom: string | null | undefined) {
+  return RATE_OR_TIME_UOMS.has(String(uom ?? "").trim().toUpperCase());
+}
+
+const UOM_SYNONYM_GROUPS: string[][] = [
+  ["EA", "EACH", "EACHES", "PC", "PCS", "PIECE", "PIECES", "NO", "NOS", "UNIT", "UNITS"],
+  ["FT", "FEET", "FOOT", "LF", "LIN FT", "LINFT"],
+  ["M", "METRE", "METRES", "METER", "METERS", "LM"],
+  ["IN", "INCH", "INCHES"],
+  ["MM", "MILLIMETRE", "MILLIMETRES", "MILLIMETER", "MILLIMETERS"],
+  ["SF", "SQFT", "SQ FT", "FT2", "FT²"],
+  ["SM", "M2", "M²", "SQM", "SQ M"],
+  ["CF", "CUFT", "CU FT", "FT3", "FT³"],
+  ["CM3", "M3", "M³", "CUM", "CU M"],
+  ["LB", "LBS", "POUND", "POUNDS"],
+  ["KG", "KGS", "KILOGRAM", "KILOGRAMS"],
+  ["HR", "HRS", "HOUR", "HOURS", "MH"],
+];
+const UOM_CANONICAL = new Map<string, string>();
+for (const group of UOM_SYNONYM_GROUPS) for (const member of group) UOM_CANONICAL.set(member, group[0]);
+
+/** Same unit, allowing spelling/abbreviation synonyms (EA/each, FT/feet). Never a conversion. */
+export function uomsEquivalent(a: string | null | undefined, b: string | null | undefined) {
+  const left = String(a ?? "").trim().toUpperCase();
+  const right = String(b ?? "").trim().toUpperCase();
+  if (!left || !right) return true; // nothing to conflict with
+  if (left === right) return true;
+  return (UOM_CANONICAL.get(left) ?? left) === (UOM_CANONICAL.get(right) ?? right);
+}
+
+export interface ProcurementLinkContext {
+  /** The purchase row being checked. */
+  purchaseQuantity: number;
+  purchaseUom?: string | null;
+  /** Resolve a linked row: returns its quantity/uom and derivation, or null when unknown. */
+  resolveItem?: (itemId: string) => { quantity: number; uom?: string | null; derivation?: LineDerivation | null; entityName?: string | null } | null;
+}
+
+export interface ProcurementLinkResult {
+  ok: boolean;
+  issues: LineDerivationIssue[];
+  installedQuantity: number | null;
+  installedSource: "explicit" | "linked_quantity" | "linked_input" | null;
+  suppliedBaseUnits: number | null;
+  requiredPurchaseQuantity: number | null;
+}
+
+/**
+ * Evaluate a declared installed/procurement relationship. Shortfalls are
+ * errors; a surplus above 2x needs a written rationale; a packaged UOM
+ * without packSize is an error because nothing can be reconciled.
+ */
+export function evaluateProcurementLink(
+  procurement: LineDerivationProcurement | null | undefined,
+  context: ProcurementLinkContext,
+): ProcurementLinkResult {
+  const none: ProcurementLinkResult = { ok: true, issues: [], installedQuantity: null, installedSource: null, suppliedBaseUnits: null, requiredPurchaseQuantity: null };
+  if (!procurement) return none;
+  const issues: LineDerivationIssue[] = [];
+
+  let installedQuantity: number | null = null;
+  let installedSource: ProcurementLinkResult["installedSource"] = null;
+  let installedUom: string | null | undefined = procurement.installedUom ?? null;
+  const linkedId = String(procurement.suppliesItemId ?? "").trim();
+  if (linkedId) {
+    const linked = context.resolveItem?.(linkedId) ?? null;
+    if (!linked) {
+      issues.push({ severity: "error", code: "procurement_link_unresolved", message: `procurement.suppliesItemId '${linkedId}' does not resolve to a worksheet item in this revision.` });
+    } else if (procurement.installedFromInput) {
+      const input = (linked.derivation?.inputs ?? []).find((entry) => entry.name === procurement.installedFromInput);
+      if (!input || !Number.isFinite(input.value)) {
+        issues.push({ severity: "error", code: "procurement_input_missing", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} has no derivation input named '${procurement.installedFromInput}'.` });
+      } else if (procurement.installedUom && !uomsEquivalent(procurement.installedUom, input.unit)) {
+        // An explicit unit must never reinterpret the sourced number
+        // (10 FT labelled M would silently become 10 M).
+        issues.push({ severity: "error", code: "procurement_unit_conflict", message: `procurement.installedUom '${procurement.installedUom}' conflicts with linked input '${input.name}' whose unit is '${input.unit}'. Units are not converted here: source a separately converted input on that row (e.g. '${input.name}${String(procurement.installedUom).replace(/[^A-Za-z0-9]/g, "")}') and link that instead, or drop installedUom to use the input's unit.` });
+      } else {
+        installedQuantity = input.value;
+        installedUom = installedUom ?? input.unit ?? null;
+        installedSource = "linked_input";
+      }
+    } else if (isRateOrTimeUom(linked.uom)) {
+      // A labour/rate row's quantity is crew or rate units (2 crew, 1 LS),
+      // not a physical count. Comparing packs against it would be meaningless.
+      const candidates = (linked.derivation?.inputs ?? []).filter((entry) => entry.perInstance !== true && !isRateOrTimeUom(entry.unit)).map((entry) => entry.name);
+      issues.push({ severity: "error", code: "procurement_requirement_ambiguous", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} is a ${linked.uom ?? "rate"} row; its quantity (${linked.quantity}) is crew/rate units, not an installed count. Set procurement.installedFromInput to the physical-count input on that row${candidates.length > 0 ? ` (one of: ${candidates.join(", ")})` : ""}, or give installedQuantity explicitly.` });
+    } else if (procurement.installedUom && !uomsEquivalent(procurement.installedUom, linked.uom)) {
+      issues.push({ severity: "error", code: "procurement_unit_conflict", message: `procurement.installedUom '${procurement.installedUom}' conflicts with linked row ${linkedId} whose UOM is '${linked.uom}'. Units are not converted here: give installedQuantity in the row's unit, or link a converted derivation input via installedFromInput.` });
+    } else {
+      installedQuantity = linked.quantity;
+      installedUom = installedUom ?? linked.uom ?? null;
+      installedSource = "linked_quantity";
+    }
+  } else if (typeof procurement.installedQuantity === "number" && Number.isFinite(procurement.installedQuantity)) {
+    installedQuantity = procurement.installedQuantity;
+    installedSource = "explicit";
+  } else {
+    issues.push({ severity: "error", code: "procurement_requirement_missing", message: "procurement needs suppliesItemId (optionally installedFromInput) or an explicit installedQuantity so the purchase can be reconciled against what is installed." });
+  }
+  if (issues.length > 0 || installedQuantity === null) {
+    return { ok: false, issues, installedQuantity, installedSource, suppliedBaseUnits: null, requiredPurchaseQuantity: null };
+  }
+
+  const reconciled = reconcileProcurementQuantities({
+    installedQuantity,
+    installedUom,
+    purchaseQuantity: context.purchaseQuantity,
+    purchaseUom: context.purchaseUom ?? null,
+    packSize: procurement.packSize ?? null,
+    wasteFactor: procurement.wasteFactor ?? null,
+  });
+  for (const issue of reconciled.issues) {
+    if (issue.code === "procurement_excess") {
+      const rationale = String(procurement.surplusRationale ?? "").trim();
+      if (rationale.length >= 20) continue; // explained surplus is acceptable (minimum pack, spares)
+      issues.push({ severity: "error", code: "procurement_excess_unexplained", message: `${issue.message} Add procurement.surplusRationale (>= 20 chars), e.g. "minimum one cartridge; remainder is spares".` });
+      continue;
+    }
+    issues.push(issue);
+  }
+  return {
+    ok: !issues.some((issue) => issue.severity === "error"),
+    issues,
+    installedQuantity,
+    installedSource,
+    suppliedBaseUnits: reconciled.suppliedBaseUnits,
+    requiredPurchaseQuantity: reconciled.requiredPurchaseQuantity,
+  };
 }
 
 export type LinearUnit = "in" | "ft" | "mm" | "cm" | "m";
@@ -718,5 +875,24 @@ export function normalizeLineDerivation(value: unknown): LineDerivation | null {
     computedAt: (raw.computedAt as string | null | undefined) ?? null,
     invalidatedBy: Array.isArray(raw.invalidatedBy) ? (raw.invalidatedBy as LineDerivationInvalidation[]) : [],
     notes: (raw.notes as string | null | undefined) ?? null,
+    procurement: normalizeProcurement(raw.procurement),
   };
+}
+
+function normalizeProcurement(value: unknown): LineDerivationProcurement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const num = (entry: unknown) => (entry === undefined || entry === null || entry === "" ? null : Number.isFinite(Number(entry)) ? Number(entry) : null);
+  const str = (entry: unknown) => (entry === undefined || entry === null ? null : String(entry).trim() || null);
+  const normalized: LineDerivationProcurement = {
+    suppliesItemId: str(raw.suppliesItemId),
+    installedFromInput: str(raw.installedFromInput),
+    installedQuantity: num(raw.installedQuantity),
+    installedUom: str(raw.installedUom),
+    packSize: num(raw.packSize ?? raw.yieldPerUnit),
+    wasteFactor: num(raw.wasteFactor),
+    surplusRationale: str(raw.surplusRationale),
+  };
+  const meaningful = Object.values(normalized).some((entry) => entry !== null);
+  return meaningful ? normalized : null;
 }
