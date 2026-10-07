@@ -81,7 +81,7 @@ function buildSettingsJson(
   return JSON.stringify(
     {
       permissions: {
-        defaultMode: "acceptEdits",
+        defaultMode: "bypassPermissions",
         allow: [...permissions],
       },
       mcpServers: {
@@ -406,7 +406,6 @@ export const claudeCodeAdapter: CliAdapter = {
       {
         transport: "claude-agent-sdk",
         projectDir: ctx.projectDir,
-        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "sonnet",
         reasoningEffort: ctx.reasoningEffort,
@@ -426,7 +425,6 @@ export const claudeCodeAdapter: CliAdapter = {
       {
         transport: "claude-agent-sdk",
         projectDir: ctx.projectDir,
-        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "sonnet",
         reasoningEffort: ctx.reasoningEffort,

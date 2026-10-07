@@ -23,14 +23,6 @@ export const BIDWRIGHT_PERMISSIONS: readonly string[] = [
   "WebFetch(*)",
 ];
 
-export const BIDWRIGHT_QA_PERMISSIONS: readonly string[] = [
-  "mcp__bidwright__*",
-  "Read(*)",
-  "Glob(*)",
-  "Grep(*)",
-  "WebSearch(*)",
-  "WebFetch(*)",
-];
 
 /**
  * Resolve a CLI binary by searching candidates in order:

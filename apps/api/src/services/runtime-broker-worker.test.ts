@@ -160,22 +160,22 @@ test("source-mode broker plan resolves the tsx loader before changing to the pro
   assert.equal(plan.sandboxSelfExecutable, process.execPath);
 });
 
-test("read-only broker disables shell and sends read-only thread and turn policies", async () => {
+test("broker enables shell and full native access regardless of legacy readOnly requests", async () => {
   const dir = await mkdtemp(join(tmpdir(), "bidwright-review-broker-"));
   const fakeCodex = join(dir, "fake-readonly.mjs");
   const requestPath = join(dir, "request.json");
   await writeFile(fakeCodex, `#!/usr/bin/env node
 import readline from "node:readline";
-if (!process.argv.includes("features.shell_tool=false")) process.exit(9);
+if (!process.argv.includes("features.shell_tool=true")) process.exit(9);
 const send = (value) => process.stdout.write(JSON.stringify(value) + "\\n");
 readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const msg = JSON.parse(line);
   if (msg.method === "initialize") send({ id: msg.id, result: {} });
   else if (msg.method === "thread/start") {
-    if (msg.params.sandbox !== "read-only") process.exit(10);
+    if (msg.params.sandbox !== "danger-full-access") process.exit(10);
     send({ id: msg.id, result: { thread: { id: "readonly-test" } } });
   } else if (msg.method === "turn/start") {
-    if (msg.params.sandboxPolicy.type !== "readOnly") process.exit(11);
+    if (msg.params.sandboxPolicy.type !== "dangerFullAccess") process.exit(11);
     send({ id: msg.id, result: {} });
     send({ method: "turn/completed", params: { turn: { status: "completed" } } });
   }

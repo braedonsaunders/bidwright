@@ -77,6 +77,13 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     assert.equal(request.suppressUnknownModelMetadataWarning, true);
     assert.equal(JSON.stringify(request).includes("sk-or-test-secret"), false);
     assert.equal(JSON.stringify(request).includes("test-mcp-token"), false);
+
+    const qaPlan = await openRouterAdapter.buildSpawnPlan({ ...ctx, mcpEnv: { ...ctx.mcpEnv, BIDWRIGHT_AGENT_MODE: "qa" } });
+    const qaRequest = JSON.parse(await readFile(qaPlan.args[qaPlan.promptHandling.index], "utf8"));
+    assert.equal(qaRequest.readOnly, undefined);
+    assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.default_tools_approval_mode="approve"'));
+    assert.ok(!qaRequest.appServerArgs.some((arg: string) => arg.includes("tools.updateWorksheetItem.")));
+
   } finally {
     globalThis.fetch = originalFetch;
     await rm(projectDir, { recursive: true, force: true });

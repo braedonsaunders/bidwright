@@ -11,7 +11,6 @@ export type RuntimeBrokerRequest =
   | {
       transport: "codex-app-server";
       projectDir: string;
-      readOnly?: boolean;
       prompt: string;
       model: string;
       reasoningEffort: AgentReasoningEffort;
@@ -23,7 +22,6 @@ export type RuntimeBrokerRequest =
   | {
       transport: "claude-agent-sdk";
       projectDir: string;
-      readOnly?: boolean;
       prompt: string;
       model: string;
       reasoningEffort: AgentReasoningEffort;
