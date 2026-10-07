@@ -581,7 +581,7 @@ export function reconcileProcurementQuantities(input: ProcurementReconciliationI
     issues.push({
       severity: "error",
       code: "procurement_shortfall",
-      message: `Purchasing ${input.purchaseQuantity} ${input.purchaseUom ?? "units"}${packaged ? ` × ${packSize}` : ""} supplies ${suppliedBaseUnits} but ${input.installedQuantity} ${input.installedUom ?? "EA"} are installed. Buy at least ${requiredPurchaseQuantity}.`,
+      message: `Purchasing ${input.purchaseQuantity} ${input.purchaseUom ?? "units"}${packaged ? ` × ${packSize}` : ""} supplies ${suppliedBaseUnits} but ${input.installedQuantity} ${input.installedUom ?? "EA"} are installed — short by ${input.installedQuantity - suppliedBaseUnits}. Buy at least ${requiredPurchaseQuantity}.`,
     });
   } else if (suppliedBaseUnits > input.installedQuantity * 2 && input.installedQuantity > 0) {
     issues.push({
@@ -591,6 +591,13 @@ export function reconcileProcurementQuantities(input: ProcurementReconciliationI
     });
   }
   return { ok: !issues.some((issue) => issue.severity === "error"), issues, suppliedBaseUnits, requiredPurchaseQuantity };
+}
+
+const RATE_OR_TIME_UOMS = new Set(["HR", "HRS", "HOUR", "HOURS", "MH", "DAY", "DAYS", "WK", "WEEK", "WEEKS", "MO", "MONTH", "MONTHS", "SHIFT", "CREW", "LS", "LUMP", "LUMPSUM", "%"]);
+
+/** UOMs whose row quantity is time, crew, or lump-sum rather than a physical count. */
+export function isRateOrTimeUom(uom: string | null | undefined) {
+  return RATE_OR_TIME_UOMS.has(String(uom ?? "").trim().toUpperCase());
 }
 
 export interface ProcurementLinkContext {
@@ -640,6 +647,11 @@ export function evaluateProcurementLink(
         installedUom = installedUom ?? input.unit ?? null;
         installedSource = "linked_input";
       }
+    } else if (isRateOrTimeUom(linked.uom)) {
+      // A labour/rate row's quantity is crew or rate units (2 crew, 1 LS),
+      // not a physical count. Comparing packs against it would be meaningless.
+      const candidates = (linked.derivation?.inputs ?? []).filter((entry) => entry.perInstance !== true && !isRateOrTimeUom(entry.unit)).map((entry) => entry.name);
+      issues.push({ severity: "error", code: "procurement_requirement_ambiguous", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} is a ${linked.uom ?? "rate"} row; its quantity (${linked.quantity}) is crew/rate units, not an installed count. Set procurement.installedFromInput to the physical-count input on that row${candidates.length > 0 ? ` (one of: ${candidates.join(", ")})` : ""}, or give installedQuantity explicitly.` });
     } else {
       installedQuantity = linked.quantity;
       installedUom = installedUom ?? linked.uom ?? null;

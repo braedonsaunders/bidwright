@@ -322,6 +322,7 @@ test("regression: a material row buying 2 x 10 rods for a labour row installing 
   assert.match(error!, /does not reconcile/);
   assert.match(error!, /32 installed via linked_input/);
   assert.match(error!, /supplies 20 but 32/);
+  assert.match(error!, /short by 12/);
   assert.match(error!, /Buy at least 4/);
 });
 

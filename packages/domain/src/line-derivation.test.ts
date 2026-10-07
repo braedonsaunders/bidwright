@@ -251,7 +251,22 @@ test("procurement links must name a requirement and resolve their linked row", (
   assert.ok(unresolved.issues.some((issue) => issue.code === "procurement_link_unresolved"));
   const noPack = evaluateProcurementLink({ installedQuantity: 32 }, { purchaseQuantity: 2, purchaseUom: "BOX", resolveItem });
   assert.ok(noPack.issues.some((issue) => issue.code === "pack_size_unknown"));
-  const linkedQuantity = evaluateProcurementLink({ suppliesItemId: "li-labour" }, { purchaseQuantity: 2, purchaseUom: "EA", resolveItem });
-  assert.equal(linkedQuantity.installedSource, "linked_quantity");
-  assert.equal(linkedQuantity.ok, true, "2 EA purchased for a linked row with quantity 2 reconciles");
+  // The labour row's quantity is 2 crew units, not 2 anchors: linking without
+  // naming the physical-count input must be refused, not silently compared.
+  const ambiguous = evaluateProcurementLink({ suppliesItemId: "li-labour", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem });
+  assert.equal(ambiguous.ok, false);
+  const issue = ambiguous.issues.find((entry) => entry.code === "procurement_requirement_ambiguous");
+  assert.ok(issue);
+  assert.match(issue!.message, /installedFromInput/);
+  assert.match(issue!.message, /anchors/);
+});
+
+test("a physical-count row can be linked by quantity; units stay distinct", () => {
+  const resolvePhysical = (itemId: string) => (itemId === "li-plates" ? { quantity: 5, uom: "EA", entityName: "Base plates set", derivation: null } : null);
+  const onePack = evaluateProcurementLink({ suppliesItemId: "li-plates", packSize: 10 }, { purchaseQuantity: 1, purchaseUom: "PK", resolveItem: resolvePhysical });
+  assert.equal(onePack.installedSource, "linked_quantity");
+  assert.equal(onePack.ok, true, "1 pack of 10 for 5 installed is a 5-unit surplus within 2x; no rationale needed");
+  assert.equal(onePack.suppliedBaseUnits, 10);
+  const short = evaluateProcurementLink({ installedQuantity: 32, installedUom: "EA", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem: resolvePhysical });
+  assert.match(short.issues[0].message, /short by 12/);
 });
