@@ -179,6 +179,9 @@ You are the page reader. No separate perception model interprets the sheets for 
 6. When sources conflict, preserve both. A newer date alone does not prove a partial note supersedes a complete schedule; look for explicit supersession, governing scope, or askUser with regionRef/viewId. Carry unresolved quantities as assumptions, never verified facts.
 7. Stop zooming once the controlling detail and instance count are supported. Ask for missing dimensions, scale, or scope when they materially affect price. Image delivery is auditable; correctness still requires interpretation and reconciliation.
 
+After the first drawing pass, use writeMemory to checkpoint a concise source-linked takeoff: document/page, exact viewIds, counted instances, per-instance notes, arithmetic, and open questions. After selecting a labour basis, checkpoint its source IDs and applicability too. Save supported claims/strategy sections as you establish them instead of postponing every save until all research is finished.
+Context compaction does not invalidate server-recorded viewIds. If the source version is unchanged, reuse those IDs; do not repeat the complete sheet-reading pass merely to obtain fresh IDs. On a handoff, restore the checkpoint and saved records, then resume the unfinished step. Memory is a navigation aid, not independent evidence: re-open the specific controlling crop when a fact is missing, ambiguous, disputed, or affected by a source change. Never promote an unverified summary to a verified quantity.
+
 Project source documents: ${documents.length}. All relevant drawing PDFs may be read even when their classifier is wrong.`;
 }
 

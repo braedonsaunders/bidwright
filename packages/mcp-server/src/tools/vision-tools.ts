@@ -48,6 +48,43 @@ function imageMaxEdge(): number | undefined {
   return Number.isFinite(configured) && configured > 0 ? configured : undefined;
 }
 
+type NormBox = { x: number; y: number; width: number; height: number };
+
+/** "x,y,w,h" at 3 decimals: the same box the image uses, at ~1/6 the tokens. */
+function compactBox(box: NormBox | undefined): string | undefined {
+  if (!box) return undefined;
+  return [box.x, box.y, box.width, box.height].map((value) => Number(value).toFixed(3).replace(/0+$/, "").replace(/\.$/, "")).join(",");
+}
+
+// The image is what the model reads; text lines are for quoting exact strings.
+// Every page read stays in the conversation, so keep the default small.
+const COMPACT_TEXT_LINES = { overview: 40, tile: 80 } as const;
+
+export function parseBox(value: string | NormBox | undefined): NormBox | undefined {
+  if (!value || typeof value !== "string") return value as NormBox | undefined;
+  const [x, y, width, height] = value.split(",").map((part) => Number(part.trim()));
+  return { x, y, width, height };
+}
+
+export function compactPageReadMeta(meta: Record<string, any>, mode: "overview" | "tile", fullText: boolean) {
+  const lines = Array.isArray(meta.textLines) ? meta.textLines : [];
+  const limit = fullText ? lines.length : COMPACT_TEXT_LINES[mode];
+  const shown = lines.slice(0, limit).map((line: { text: string; bbox?: NormBox }) =>
+    fullText ? { text: line.text, bbox: line.bbox } : `${line.text} @${compactBox(line.bbox) ?? ""}`);
+  const total = Number(meta.textLinesTotal ?? lines.length);
+  const { textLines: _lines, textLinesTotal: _total, textLinesTruncated: _truncated, regions, grid, ...rest } = meta;
+  return {
+    ...rest,
+    ...(grid ? { grid: { rows: grid.rows, cols: grid.cols, tileIds: (grid.tiles ?? []).map((tile: { id: string }) => tile.id) } } : {}),
+    ...(Array.isArray(regions) ? {
+      regions: regions.map((region: { id: string; kind: string; label?: string; bbox?: NormBox }) =>
+        [region.id, region.kind, region.label ? `"${region.label}"` : "", `@${compactBox(region.bbox) ?? ""}`].filter(Boolean).join(" ")),
+    } : {}),
+    textLines: shown,
+    ...(total > shown.length ? { textLinesOmitted: total - shown.length, textLinesHint: "Zoom with readDrawingTile to read the rest, or pass fullText:true." } : {}),
+  };
+}
+
 async function readDrawingImage(input: {
   documentId: string;
   pageNumber: number;
@@ -55,6 +92,7 @@ async function readDrawingImage(input: {
   tile?: string;
   bbox?: { x: number; y: number; width: number; height: number };
   rotation?: number;
+  fullText?: boolean;
 }) {
   if (deliveredImageCount >= imageBudget()) {
     return { content: [{ type: "text" as const, text: `Image budget for this run (${imageBudget()}) is used up. Work from the views you already have (their viewIds stay valid), or ask the user before reading more pages.` }] };
@@ -81,10 +119,8 @@ async function readDrawingImage(input: {
   }
   deliveredImageCount += 1;
 
-  const { image: _image, imageHash: _hash, duration_ms: _ms, ...meta } = result;
-  if (meta.grid) {
-    meta.grid = { rows: meta.grid.rows, cols: meta.grid.cols, tileIds: (meta.grid.tiles ?? []).map((tile: { id: string }) => tile.id) };
-  }
+  const { image: _image, imageHash: _hash, duration_ms: _ms, ...raw } = result;
+  const meta = compactPageReadMeta(raw, input.mode, input.fullText === true);
   return {
     content: [
       { type: "image" as const, data: base64, mimeType: "image/png" as const },
@@ -418,7 +454,7 @@ COMMON PITFALLS:
 
 USE IT FOR every drawing that drives scope or quantity, page by page. Then zoom with readDrawingTile on the views, notes, schedules and dimensions you will rely on. Dimensions and notes on CAD sheets are often drawn as strokes (vectorTextLikely=true): they are NOT in textLines and can only be read from the image, so zoom until you can read them.
 
-OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] (id, kind, label, normalized bbox), grid (rows x cols tile ids like "r2c3"), textLines[] (exact text + normalized bbox in the image frame), and vectorTextLikely.
+OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] ("R3 view \"label\" @x,y,w,h", normalized to the image), grid (rows x cols tile ids like "r2c3"), textLines[] ("exact text @x,y,w,h", up to 40; fullText:true for all), and vectorTextLikely. Every @x,y,w,h is normalized 0..1 in THIS image's frame, after rotation (x right, y down from the top-left of the image you see), and can be passed straight to readDrawingTile as bbox. fullText:true adds full per-line boxes only when you need every line.
 
 EVIDENCE: every image carries a viewId. Cite viewIds in evidenceBasis.quantity.viewIds for any quantity you take from a drawing, and only for images you actually examined. Quote textLines verbatim when a note drives a quantity. Stacked fractions are split in the text layer (e.g. "for 3" + "4\" SS epoxy anchor" is "for 3/4\" SS epoxy anchor"); confirm such values in the image.
 
@@ -427,8 +463,9 @@ Works with source document ids and Files-area file ids.`,
       documentId: z.string().describe("Source document id or Files-area file id of the PDF"),
       pageNumber: z.coerce.number().int().min(1).default(1).describe("Page number (1-based)"),
       rotation: z.coerce.number().int().optional().describe("Override auto-orientation, degrees clockwise (0/90/180/270). Normally omit."),
+      fullText: z.boolean().optional().describe("Return every text line with full boxes. Default returns up to 40 lines as \"text @x,y,w,h\"."),
     },
-    async ({ documentId, pageNumber, rotation }) => readDrawingImage({ documentId, pageNumber, mode: "overview", rotation }),
+    async ({ documentId, pageNumber, rotation, fullText }) => readDrawingImage({ documentId, pageNumber, mode: "overview", rotation, fullText }),
   );
 
   server.tool(
@@ -440,19 +477,23 @@ Use it to read dimensions, callouts, notes, schedules, base-plate/anchor details
       documentId: z.string().describe("Same documentId used with readDrawingPage"),
       pageNumber: z.coerce.number().int().min(1).default(1),
       tile: z.string().optional().describe("Tile id from readDrawingPage grid, e.g. \"r1c2\""),
-      bbox: z.object({
-        x: z.coerce.number().min(0).max(1),
-        y: z.coerce.number().min(0).max(1),
-        width: z.coerce.number().gt(0).max(1),
-        height: z.coerce.number().gt(0).max(1),
-      }).optional().describe("Normalized region in the overview image frame (e.g. a regions[].bbox, optionally padded)"),
+      bbox: z.union([
+        z.string().regex(/^\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*,\s*[\d.]+\s*$/),
+        z.object({
+          x: z.coerce.number().min(0).max(1),
+          y: z.coerce.number().min(0).max(1),
+          width: z.coerce.number().gt(0).max(1),
+          height: z.coerce.number().gt(0).max(1),
+        }),
+      ]).optional().describe("Normalized region in the overview image frame: a region's \"x,y,w,h\" from readDrawingPage (optionally padded), or {x,y,width,height}"),
       rotation: z.coerce.number().int().optional().describe("Use the rotation readDrawingPage reported if you overrode it there."),
+      fullText: z.boolean().optional().describe("Return every text line in the tile with full boxes. Default returns up to 80 lines as \"text @x,y,w,h\"."),
     },
-    async ({ documentId, pageNumber, tile, bbox, rotation }) => {
+    async ({ documentId, pageNumber, tile, bbox, rotation, fullText }) => {
       if (!tile && !bbox) {
         return { content: [{ type: "text" as const, text: "Pass a tile id from readDrawingPage's grid or a bbox from its regions." }] };
       }
-      return readDrawingImage({ documentId, pageNumber, mode: "tile", tile, bbox, rotation });
+      return readDrawingImage({ documentId, pageNumber, mode: "tile", tile, bbox: parseBox(bbox), rotation, fullText });
     },
   );
 
