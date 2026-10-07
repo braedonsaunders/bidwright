@@ -139,6 +139,8 @@ interface PendingQuestionPrompt {
   allowMultiple?: boolean;
   context?: string;
   questions?: PendingQuestionStep[];
+  viewId?: string;
+  regionRef?: { documentId?: string; pageNumber?: number; viewId?: string };
 }
 
 interface IntakeStatusResult {
@@ -852,6 +854,7 @@ function appendTimelineEvent(events: any[] | undefined, event: any): any[] {
       allowMultiple: event?.data?.allowMultiple === true,
       context: event?.data?.context || "",
       questions: event?.data?.questions || [],
+      viewId: event?.data?.viewId, regionRef: event?.data?.regionRef,
     };
 
     if (prompt.question && hasAskUserEvent(timeline, prompt)) {
@@ -898,8 +901,24 @@ function ensurePromptTimelineEvent(events: any[] | undefined, prompt: PendingQue
       allowMultiple: prompt.allowMultiple === true,
       context: prompt.context || "",
       questions: prompt.questions || [],
+      viewId: prompt.viewId, regionRef: prompt.regionRef,
     },
   });
+}
+
+function QuestionEvidence({ prompt }: { prompt: PendingQuestionPrompt }) {
+  const viewId = prompt.viewId || prompt.regionRef?.viewId;
+  const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [viewId]);
+  if (!viewId) return null;
+  const url = resolveApiUrl(`/api/vision/views/${encodeURIComponent(viewId)}/image`);
+  return <figure className="my-2 rounded border border-line p-2">
+    {failed ? <p>Drawing preview unavailable. Open the evidence image to retry.</p> :
+      <a href={url} target="_blank" rel="noreferrer"><img src={url} alt="Drawing detail referenced by the agent's question" className="max-h-80 w-full object-contain" onError={() => setFailed(true)} /></a>}
+    <figcaption className="mt-1 text-[11px] text-fg/60">
+      <a href={url} target="_blank" rel="noreferrer">Open cited drawing detail{prompt.regionRef?.pageNumber ? ` · page ${prompt.regionRef.pageNumber}` : ""}</a>
+    </figcaption>
+  </figure>;
 }
 
 function PendingQuestionCard({
@@ -968,6 +987,7 @@ function PendingQuestionCard({
         <AlertTriangle className="h-3 w-3" />
         Agent needs your input
       </div>
+      <QuestionEvidence prompt={prompt} />
       {prompt.context && (
         <p className="mt-1 text-[11px] leading-relaxed text-fg/50">{prompt.context}</p>
       )}
@@ -1161,6 +1181,7 @@ function QuestionTranscriptCard({
         <AlertTriangle className="h-3 w-3" />
         Agent asked for input
       </div>
+      <QuestionEvidence prompt={prompt} />
       {prompt.context && (
         <p className="text-[11px] text-fg/50">{prompt.context}</p>
       )}
@@ -3169,6 +3190,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
             allowMultiple: data.allowMultiple === true,
             context: data.context,
             questions: data.questions,
+            viewId: data.viewId, regionRef: data.regionRef,
           });
         }
       } catch {}
@@ -3405,6 +3427,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               allowMultiple: q.allowMultiple === true,
               context: q.context,
               questions: q.questions,
+              viewId: q.viewId, regionRef: q.regionRef,
             });
           } else {
             setCliPendingQuestion(null);

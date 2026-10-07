@@ -375,6 +375,12 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
           },
         });
       }
+    } else if (["imageView", "image_view", "view_image"].includes(item.type) && completed) {
+      events.push({ type: "image_view", data: {
+        toolUseId: item.id, source: "native", path: item.path || item.imagePath,
+        status: item.status || "completed", evidenceViewId: null,
+        auditOnly: true,
+      } });
     } else if (item.type === "agentMessage" && completed) {
       events.push({
         type: "message",
@@ -384,7 +390,8 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
       const content = Array.isArray(item.summary)
         ? item.summary.map((part: any) => part?.text || String(part)).join("\n")
         : item.text || item.summary || "Thinking...";
-      events.push({ type: "thinking", data: { content } });
+      if (String(content).trim()) events.push({ type: "thinking", data: { content } });
+      else events.push({ type: "progress", data: { phase: "Working", detail: "Evaluating evidence" } });
     }
   } else if (msg.method === "item/agentMessage/delta") {
     // The authoritative full message arrives in item/completed. Suppressing
@@ -531,7 +538,7 @@ export const codexAdapter: CliAdapter = {
   displayName: "Codex",
   installHint: "Not installed — see openai.com/codex",
   pathSettingKey: "codexPath",
-  defaultModel: "gpt-5.4",
+  defaultModel: "gpt-6.1-sol",
   primaryInstructionFile: "AGENTS.md",
   instructionFiles: ["AGENTS.md", "codex.md"],
 
@@ -566,7 +573,7 @@ export const codexAdapter: CliAdapter = {
   },
 
   normalizeModel(modelId) {
-    return modelId && isCodexModelId(modelId) ? modelId : "gpt-5.4";
+    return modelId && isCodexModelId(modelId) ? modelId : "gpt-6.1-sol";
   },
 
   async listModels(opts) {
@@ -600,8 +607,9 @@ export const codexAdapter: CliAdapter = {
       {
         transport: "codex-app-server",
         projectDir: ctx.projectDir,
+        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
-        model: ctx.model || "gpt-5.4",
+        model: ctx.model || "gpt-6.1-sol",
         reasoningEffort: ctx.reasoningEffort,
         codexCommand: cliCmd,
         appServerArgs: buildMcpConfigArgs(ctx),
@@ -621,8 +629,9 @@ export const codexAdapter: CliAdapter = {
       {
         transport: "codex-app-server",
         projectDir: ctx.projectDir,
+        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
-        model: ctx.model || "gpt-5.4",
+        model: ctx.model || "gpt-6.1-sol",
         reasoningEffort: ctx.reasoningEffort,
         resumeSessionId: ctx.sessionId,
         codexCommand: cliCmd,

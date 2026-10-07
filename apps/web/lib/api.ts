@@ -5680,6 +5680,8 @@ export async function getCliPendingQuestion(projectId: string) {
     options?: string[];
     allowMultiple?: boolean;
     context?: string;
+    viewId?: string;
+    regionRef?: { viewId?: string; documentId?: string; pageNumber?: number };
     questions?: Array<{
       id?: string;
       prompt: string;

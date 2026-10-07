@@ -100,6 +100,11 @@ jobs:
           apps/api/src/services/agent-host/writable-path-ownership.test.ts
           apps/api/src/services/cli-adapters/codex.test.ts
           apps/api/src/services/cli-conversation.test.ts
+          apps/api/src/services/session-continuity.test.ts
+          apps/api/src/services/instruction-restore.test.ts
+          apps/api/src/services/claude-md-generator.test.ts
+          packages/mcp-server/src/tool-access.test.ts
+          scripts/eval/evidence-metrics.test.ts
           apps/api/src/services/dataset-search-fitness.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
