@@ -473,3 +473,16 @@ test("a non-zero by-others LS subcontract priced from a vendor quote type keeps 
   });
   assert.match(error ?? "", /Composite LS/);
 });
+
+test("the same cite repeated in the quantity and pricing axes counts once for the composite rule", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Material", uom: "LS", quantity: 1, cost: 25000,
+    sourceNotes: "Stainless platform materials package priced from a single vendor total.",
+    evidenceBasis: {
+      quantity: { type: "document_quantity", rationale: "Scope from the platform drawing page two.", sourceRefs: ["doc_f14748c7-4b90-487e-b4b1-897fcddd37e5 p2"] },
+      pricing: { type: "material_quote", sourceRefs: ["doc_f14748c7-4b90-487e-b4b1-897fcddd37e5  P2"] },
+    },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /Composite LS/);
+});

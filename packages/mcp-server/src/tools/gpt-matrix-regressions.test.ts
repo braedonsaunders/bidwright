@@ -93,3 +93,52 @@ test("GPT's applied 96 h erection row is flagged assumption-dominated by the qua
   assert.equal(issue!.severity, "warning", "visible, never error/critical, so a draft still saves and finalize is not blocked");
   assert.match(issue!.message, /crewMembers, crewDays, hoursPerDay/);
 });
+
+// ── finalize readiness: declared $0 rows vs accidental zeros ──────────────
+
+async function zeroRuleIssues(items: Array<Record<string, unknown>>, assumptions: unknown[] | null = fixture.assumptions) {
+  const { validateEstimateWorkspace } = await import("@bidwright/domain");
+  const workspace = { worksheets: [{ id: "ws", name: "Fabrication", items }], ...(assumptions ? { estimateStrategy: { assumptions } } : {}) };
+  const result = validateEstimateWorkspace(workspace as any, { ruleIds: ["worksheet.pricing.zero_cost_or_price"] } as any);
+  return result.issues.filter((issue: any) => issue.ruleId === "worksheet.pricing.zero_cost_or_price");
+}
+
+test("GPT's $0 fabrication-by-others placeholder, as stored, does not block finalize", async () => {
+  const item = fixture.zeroFabricationPlaceholder.item;
+  // createWorksheetItem stores the basis under sourceEvidence.evidenceBasis.
+  const stored = { id: "li-zero", worksheetId: "ws", entityName: item.entityName, category: item.category, quantity: item.quantity, uom: item.uom, cost: 0, price: 0, sourceEvidence: { evidenceBasis: item.evidenceBasis } };
+  const issues = await zeroRuleIssues([stored]);
+  assert.equal(issues.length, 1);
+  assert.equal(issues[0].severity, "info", "reported for review, never error");
+  assert.match(issues[0].message, /no charge as a declared subcontract \(A-INTERFACES\)/);
+});
+
+test("accidental zero rows still block finalize", async () => {
+  const base = { worksheetId: "ws", category: "Material", quantity: 4, uom: "EA", cost: 0, price: 0 };
+  const issues = await zeroRuleIssues([
+    { ...base, id: "li-a", entityName: "No basis at all" },
+    { ...base, id: "li-b", entityName: "Material quote with assumption", sourceEvidence: { evidenceBasis: { pricing: { type: "material_quote", assumptionIds: ["A-INTERFACES"] } } } },
+    { ...base, id: "li-c", entityName: "Allowance with no assumption or instruction", sourceEvidence: { evidenceBasis: { pricing: { type: "allowance", sourceRefs: ["user:", { kind: "user" }] } } } },
+  ]);
+  assert.deepEqual(issues.map((issue: any) => issue.severity), ["error", "error", "error"]);
+});
+
+test("an explicit user instruction also declares a no-charge allowance", async () => {
+  const issues = await zeroRuleIssues([{ id: "li-d", worksheetId: "ws", entityName: "Owner-supplied hoist", category: "Subcontractor", quantity: 1, uom: "LS", cost: 0, price: 0, sourceEvidence: { evidenceBasis: { pricing: { type: "allowance", sourceRefs: [{ kind: "user", ref: "Owner supplies the hoist" }] } } } }]);
+  assert.equal(issues[0].severity, "info");
+});
+
+test("a $0 row citing an assumption that was never saved stays an error", async () => {
+  const item = fixture.zeroFabricationPlaceholder.item;
+  const orphan = { id: "li-orphan", worksheetId: "ws", entityName: item.entityName, category: item.category, quantity: 1, uom: "LS", cost: 0, price: 0, sourceEvidence: { evidenceBasis: { ...item.evidenceBasis, pricing: { ...item.evidenceBasis.pricing, assumptionIds: ["A-NEVER-SAVED"] } } } };
+  assert.equal((await zeroRuleIssues([orphan]))[0].severity, "error");
+  // and without any strategy on the workspace, an assumption id alone is not enough
+  const stored = { ...orphan, id: "li-nostrategy", sourceEvidence: { evidenceBasis: item.evidenceBasis } };
+  assert.equal((await zeroRuleIssues([stored], null))[0].severity, "error");
+});
+
+test("a negative-cost row is never treated as a declared no-charge placeholder", async () => {
+  const item = fixture.zeroFabricationPlaceholder.item;
+  const credit = { id: "li-credit", worksheetId: "ws", entityName: "Credit", category: item.category, quantity: 1, uom: "LS", cost: -500, price: -500, sourceEvidence: { evidenceBasis: item.evidenceBasis } };
+  assert.equal((await zeroRuleIssues([credit]))[0].severity, "error");
+});
