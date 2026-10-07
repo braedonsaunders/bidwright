@@ -1,6 +1,8 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sourceRefArray } from "./source-refs.js";
+import { clipText, compactRateItem, compactScheduleSummary, paginate, shouldIncludeRates } from "./response-compaction.js";
+const clipCatalogText = (value: unknown) => clipText(value, 80);
 import { apiGet, apiPost, apiPatch, apiDelete, projectPath, getRevisionId } from "../api-client.js";
 import {
   rollupWorksheetUnits,
@@ -1394,21 +1396,10 @@ function rateScheduleItemMatches(item: any, schedule: any, input: { q?: string |
 }
 
 function compactRateScheduleItem(item: any, schedule: any, options: { includeRates?: boolean } = {}) {
-  return {
-    rateScheduleItemId: item.id,
-    scheduleId: schedule.id,
-    scheduleName: schedule.name,
-    forCategory: schedule.category,
-    name: item.name,
-    code: item.code,
-    unit: item.unit,
-    description: compactText(item.description, 160),
-    rates: options.includeRates === false ? undefined : item.rates,
-    costRates: options.includeRates === false ? undefined : item.costRates,
-    burden: item.burden,
-    perDiem: item.perDiem,
-    tierIds: scheduleTiers(schedule).map((tier) => tier.id),
-  };
+  // Schedule name/category/tier ids are emitted once per schedule next to the
+  // page (see listRateScheduleItems); repeating them per row cost ~40% of
+  // every rate listing on the 2026-10-07 matrix runs.
+  return compactRateItem(item, schedule, { includeRates: options.includeRates !== false });
 }
 
 /** Parameter shape of createWorksheetItem; shared with batchEditWorksheetItems. */
@@ -2136,7 +2127,8 @@ function worksheetTreeSummary(ws: any) {
       scheduleId: z.string().optional().describe("Optional imported revision schedule id filter for rate schedule items."),
       limit: z.coerce.number().int().positive().max(100).default(25),
       offset: z.coerce.number().int().min(0).default(0),
-      includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps in the item page."),
+      includeRates: z.boolean().optional().describe("Include rate/cost-rate maps in the item page. Default: included when q/category/scheduleId narrows or the page is <= 25 rows."),
+      catalogLimit: z.coerce.number().int().positive().max(100).default(25).describe("Max catalog items returned; the omitted count is reported."),
     },
     async (input) => {
       const data = await apiGet(projectPath("/workspace"));
@@ -2156,26 +2148,32 @@ function worksheetTreeSummary(ws: any) {
         usesRateSchedule: (ec.itemSource ?? "freeform") === "rate_schedule",
       }));
 
-      const allRateItems: any[] = [];
+      const allRateMatches: Array<{ item: any; schedule: any }> = [];
       for (const rs of (ws.rateSchedules || [])) {
         for (const item of (rs.items || [])) {
-          if (rateScheduleItemMatches(item, rs, input)) {
-            allRateItems.push(compactRateScheduleItem(item, rs, { includeRates: input.includeRates }));
-          }
+          if (rateScheduleItemMatches(item, rs, input)) allRateMatches.push({ item, schedule: rs });
         }
       }
-      const rateItemPage = pageSlice(allRateItems, input, 100);
+      const rateMatchPage = paginate(allRateMatches, input, { defaultLimit: 25, maxLimit: 100 });
+      const rateNarrowed = !!(input.q || input.category || input.scheduleId);
+      const rateIncludeRates = shouldIncludeRates({ includeRates: input.includeRates, narrowed: rateNarrowed, returned: rateMatchPage.page.length });
+      const rateItemPage = {
+        ...rateMatchPage,
+        page: rateMatchPage.page.map((entry) => compactRateItem(entry.item, entry.schedule, { includeRates: rateIncludeRates })),
+      };
 
-      const catalogItems: any[] = [];
+      const allCatalogItems: any[] = [];
       for (const cat of (ws.catalogs || [])) {
         for (const item of (ws.catalogItems || []).filter((ci: any) => ci.catalogId === cat.id)) {
-          catalogItems.push({
-            catalogItemId: item.id, name: item.name, code: item.code,
+          allCatalogItems.push({
+            catalogItemId: item.id, name: clipCatalogText(item.name), code: item.code,
             unit: item.unit, unitCost: item.unitCost, unitPrice: item.unitPrice,
             catalogName: cat.name, catalogKind: cat.kind,
           });
         }
       }
+      const catalogPage = paginate(allCatalogItems, { limit: input.catalogLimit, offset: 0 }, { defaultLimit: 25, maxLimit: 100 });
+      const catalogItems = catalogPage.page;
 
       // Fetch org-level rate schedules available for import
       let orgSchedules: any[] = [];
@@ -2184,9 +2182,9 @@ function worksheetTreeSummary(ws: any) {
         orgSchedules = (orgData.schedules || orgData || [])
           .filter((s: any) => !input.category || normalizedText(s.category) === normalizedText(input.category))
           .filter((s: any) => !input.q || [s.name, s.description, s.category, ...(s.items || []).slice(0, 10).map((item: any) => item.name)].some((value) => matchesText(value, input.q)))
-          .map((s: any) => summarizeRateSchedule(s, { includeSampleItems: false }));
+          .map((s: any) => compactScheduleSummary(s, { includeTiers: "names" }));
       } catch {}
-      const orgSchedulePage = pageSlice(orgSchedules, { limit: Math.min(input.limit, 10), offset: input.offset }, 25);
+      const orgSchedulePage = paginate(orgSchedules, { limit: Math.min(input.limit, 10), offset: input.offset }, { defaultLimit: 10, maxLimit: 25 });
 
       const rateScheduleCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
       const catalogCats = entityCategories.filter((c: any) => c.itemSource === "catalog");
@@ -2194,7 +2192,7 @@ function worksheetTreeSummary(ws: any) {
       let instructions = "";
       if (rateScheduleCats.length > 0) {
         const names = rateScheduleCats.map((c: any) => c.name).join(", ");
-        if (allRateItems.length > 0 || (ws.rateSchedules || []).length > 0) {
+        if (allRateMatches.length > 0 || (ws.rateSchedules || []).length > 0) {
           instructions += `Categories [${names}] use rate schedules. Link items via rateScheduleItemId. Use listRateScheduleItems with q/category/scheduleId to fetch specific item IDs instead of dumping every rate item. `;
         } else if (orgSchedules.length > 0) {
           instructions += `Categories [${names}] use rate schedules but NONE are imported into this quote yet. ` +
@@ -2278,20 +2276,33 @@ function worksheetTreeSummary(ws: any) {
             offset: rateItemPage.offset,
             limit: rateItemPage.limit,
             hasMore: rateItemPage.hasMore,
+            nextOffset: rateItemPage.nextOffset,
+            omitted: rateItemPage.omitted,
+            ratesIncluded: rateIncludeRates,
+            ratesOmitted: rateIncludeRates ? 0 : rateItemPage.page.length,
+            schedules: (ws.rateSchedules || [])
+              .filter((schedule: any) => rateItemPage.page.some((row: any) => row.scheduleId === String(schedule.id ?? "")))
+              .map((schedule: any) => compactScheduleSummary(schedule, { includeTiers: "full" })),
             items: rateItemPage.page,
-            note: "This is paginated. Use listRateScheduleItems with q/category/scheduleId to retrieve focused item IDs.",
+            note: rateIncludeRates
+              ? "Paginated; rates keyed by tier name, tier ids in schedules[].tiers. Use listRateScheduleItems with q/category/scheduleId for focused lookups."
+              : "Paginated; rates omitted on this broad page — narrow with q/category/scheduleId or pass includeRates:true.",
           } : undefined,
           availableOrgSchedules: orgSchedulePage.total > 0 && (ws.rateSchedules || []).length === 0 ? {
             total: orgSchedulePage.total,
             offset: orgSchedulePage.offset,
             limit: orgSchedulePage.limit,
             hasMore: orgSchedulePage.hasMore,
+            nextOffset: orgSchedulePage.nextOffset,
+            omitted: orgSchedulePage.omitted,
             schedules: orgSchedulePage.page,
           } : undefined,
           catalogItems: {
-            total: catalogItems.length,
-            shown: Math.min(catalogItems.length, 50),
-            items: catalogItems.slice(0, 50),
+            total: allCatalogItems.length,
+            shown: catalogItems.length,
+            omitted: catalogPage.omitted,
+            items: catalogItems,
+            note: catalogPage.omitted > 0 ? `${catalogPage.omitted} catalog items not shown; use searchCatalogs or raise catalogLimit.` : undefined,
           },
           defaultMarkup: revisionDefaultMarkup,
           instructions,
@@ -2916,7 +2927,8 @@ function worksheetTreeSummary(ws: any) {
       scope: z.string().default("global").describe("Rate schedule scope. Usually global for importable org schedules."),
       limit: z.coerce.number().int().positive().max(25).default(12),
       offset: z.coerce.number().int().min(0).default(0),
-      includeSampleItems: z.boolean().default(true).describe("Include up to 5 item names per schedule for orientation."),
+      includeSampleItems: z.boolean().default(false).describe("Include up to 3 item names per schedule for orientation (only applied when q or category narrows the list)."),
+      includeTiers: z.boolean().default(false).describe("Include tier ids/names per schedule. Default returns tier names only; ids come with the imported schedule via listRateScheduleItems."),
     },
     async (input) => {
       const data = await apiGet(`/api/rate-schedules${input.scope ? `?scope=${encodeURIComponent(input.scope)}` : ""}`);
@@ -2931,15 +2943,20 @@ function worksheetTreeSummary(ws: any) {
             ...asArray(schedule.items).slice(0, 20).map((item: any) => `${item.name} ${item.code ?? ""}`),
           ].some((value) => matchesText(value, input.q));
         })
-        .map((schedule: any) => summarizeRateSchedule(schedule, { includeSampleItems: input.includeSampleItems && (!!input.q || !!input.category) }));
-      const page = pageSlice(filtered, input, 25);
+        .map((schedule: any) => compactScheduleSummary(schedule, {
+          includeTiers: input.includeTiers ? "ids" : "names",
+          sampleItemCount: input.includeSampleItems && (!!input.q || !!input.category) ? 3 : 0,
+        }));
+      const page = paginate(filtered, input, { defaultLimit: 12, maxLimit: 25 });
       return { content: [{ type: "text" as const, text: JSON.stringify({
         total: page.total,
         offset: page.offset,
         limit: page.limit,
         hasMore: page.hasMore,
+        nextOffset: page.nextOffset,
+        omitted: page.omitted,
         schedules: page.page,
-        note: "This is a compact index. Call importRateSchedule with a schedule ID to import it. If you need to inspect an org schedule's items first, call getRateSchedule with scheduleId plus q/limit/offset.",
+        note: "Compact index: tier names and item counts only. Call importRateSchedule with a schedule ID to import it; inspect an org schedule's items first with getRateSchedule (scheduleId + q/limit/offset). Pass includeTiers:true for tier ids.",
       }, null, 2) }] };
     }
   );
@@ -2950,25 +2967,32 @@ function worksheetTreeSummary(ws: any) {
     {
       scheduleId: z.string().describe("Org-level rate schedule id from listRateSchedules."),
       q: z.string().optional().describe("Optional item search within this schedule."),
-      limit: z.coerce.number().int().positive().max(200).default(50),
+      limit: z.coerce.number().int().positive().max(100).default(25),
       offset: z.coerce.number().int().min(0).default(0),
-      includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps for returned items."),
+      includeRates: z.boolean().optional().describe("Include rate/cost-rate maps. Default: included when q narrows or the page is <= 25 rows; omitted (with ratesOmitted count) for broad pages. Pass true to force."),
     },
     async (input) => {
       const schedule = await apiGet(`/api/rate-schedules/${encodeURIComponent(input.scheduleId)}`);
       const matchingItems = asArray((schedule as any).items)
         .filter((item: any) => rateScheduleItemMatches(item, schedule, { q: input.q }));
-      const page = pageSlice(matchingItems, input, 200);
+      const page = paginate(matchingItems, input, { defaultLimit: 25, maxLimit: 100 });
+      const includeRates = shouldIncludeRates({ includeRates: input.includeRates, narrowed: !!input.q, returned: page.page.length });
       return { content: [{ type: "text" as const, text: JSON.stringify({
-        schedule: summarizeRateSchedule(schedule, { includeSampleItems: false }),
+        schedule: compactScheduleSummary(schedule, { includeTiers: "full" }),
         items: {
           total: page.total,
           offset: page.offset,
           limit: page.limit,
           hasMore: page.hasMore,
-          rows: page.page.map((item: any) => compactRateScheduleItem(item, schedule, { includeRates: input.includeRates })),
+          nextOffset: page.nextOffset,
+          omitted: page.omitted,
+          ratesIncluded: includeRates,
+          ratesOmitted: includeRates ? 0 : page.page.length,
+          rows: page.page.map((item: any) => compactRateItem(item, schedule, { includeRates })),
         },
-        note: "Items are paginated. Use q/offset/limit to inspect more without overflowing the tool response.",
+        note: includeRates
+          ? "Rates are keyed by tier name; tier ids are in schedule.tiers. Use q/offset/limit to inspect more."
+          : "Broad page: rates omitted to keep the response small. Narrow with q or pass includeRates:true to see rates.",
       }, null, 2) }] };
     },
   );
@@ -3003,43 +3027,44 @@ function worksheetTreeSummary(ws: any) {
       category: z.string().optional().describe("Filter by schedule category (e.g. 'labour', 'equipment')"),
       q: z.string().optional().describe("Search item name, code, unit, schedule name, or category."),
       scheduleId: z.string().optional().describe("Filter by imported revision schedule id."),
-      limit: z.coerce.number().int().positive().max(200).default(50),
+      limit: z.coerce.number().int().positive().max(100).default(25),
       offset: z.coerce.number().int().min(0).default(0),
-      includeRates: z.boolean().default(true).describe("Include rate/cost-rate maps for returned items."),
+      includeRates: z.boolean().optional().describe("Include rate/cost-rate maps. Default: included when q/category/scheduleId narrows the query or the page is <= 25 rows; omitted (with ratesOmitted count) for broad pages. Pass true to force."),
     },
     async (input) => {
       const data = await apiGet(projectPath("/workspace"));
       const ws = data.workspace || data;
-      const items: any[] = [];
+      const matched: Array<{ item: any; schedule: any }> = [];
       for (const rs of (ws.rateSchedules || [])) {
         if (input.scheduleId && rs.id !== input.scheduleId) continue;
         if (input.category && normalizedText(rs.category) !== normalizedText(input.category)) continue;
         for (const item of (rs.items || [])) {
-          if (rateScheduleItemMatches(item, rs, input)) {
-            items.push(compactRateScheduleItem(item, rs, { includeRates: input.includeRates }));
-          }
+          if (rateScheduleItemMatches(item, rs, input)) matched.push({ item, schedule: rs });
         }
       }
-      const page = pageSlice(items, input, 200);
+      const page = paginate(matched, input, { defaultLimit: 25, maxLimit: 100 });
+      const narrowed = !!(input.q || input.scheduleId || input.category);
+      const includeRates = shouldIncludeRates({ includeRates: input.includeRates, narrowed, returned: page.page.length });
+      const scheduleIdsOnPage = new Set(page.page.map((entry) => String(entry.schedule.id ?? "")));
       return { content: [{ type: "text" as const, text: JSON.stringify({
         total: page.total,
         offset: page.offset,
         limit: page.limit,
         hasMore: page.hasMore,
+        nextOffset: page.nextOffset,
+        omitted: page.omitted,
+        ratesIncluded: includeRates,
+        ratesOmitted: includeRates ? 0 : page.page.length,
+        // Schedule-level fields (tier ids for tierUnits, category) once per schedule on this page.
         schedules: (ws.rateSchedules || [])
-          .filter((schedule: any) => !input.scheduleId || schedule.id === input.scheduleId)
-          .filter((schedule: any) => !input.category || normalizedText(schedule.category) === normalizedText(input.category))
-          .map((schedule: any) => ({
-            id: schedule.id,
-            name: schedule.name,
-            category: schedule.category,
-            itemCount: asArray(schedule.items).length,
-            tiers: scheduleTiers(schedule),
-          })),
-        items: page.page,
-        note: page.hasMore
-          ? "More items exist. Refine with q/category/scheduleId or increase offset."
-          : "Use rateScheduleItemId plus tierIds/tierUnits when creating rate-backed worksheet rows.",
+          .filter((schedule: any) => scheduleIdsOnPage.has(String(schedule.id ?? "")))
+          .map((schedule: any) => compactScheduleSummary(schedule, { includeTiers: "full" })),
+        items: page.page.map((entry) => compactRateItem(entry.item, entry.schedule, { includeRates })),
+        note: [
+          page.hasMore ? `More items exist (${page.omitted} not shown). Refine with q/category/scheduleId or pass offset=${page.nextOffset}.` : "All matching items shown.",
+          includeRates ? "Rates are keyed by tier name; tier ids for tierUnits are in schedules[].tiers." : "Broad page: rates omitted. Narrow with q/category/scheduleId or pass includeRates:true.",
+          "Use rateScheduleItemId plus tierUnits when creating rate-backed worksheet rows.",
+        ].join(" "),
       }, null, 2) }] };
     }
   );
