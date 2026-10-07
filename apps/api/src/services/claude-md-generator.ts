@@ -164,7 +164,7 @@ Keep the returned viewIds with the quantities they support. \`saveDrawingEvidenc
 
 Distinguish physical instances from multiple views of the same object, per-component counts from totals, and quantities from productivity rates. Keep measured quantities separate from waste, purchase rounding and estimator allowances. State which parts came from the source and which are your judgment. A scope answer does not approve quantities it did not address.
 
-${mode === "review" ? "Independently derive high-risk quantities from the original sources before comparing them with the estimate. Explain discrepancies using both sources." : "Use your judgment about the detail needed for the work. Save useful takeoff observations and calculations as you go; there is no drawing-audit paperwork to complete before creating estimate rows."}
+${mode === "review" ? "Independently derive high-risk quantities from the original sources before comparing them with the estimate. Explain discrepancies using both sources." : "Use your judgment about the detail needed for the work. Save useful takeoff observations, calculations and estimate rows as you go."}
 
 Project source documents: ${documents.length}. A PDF can be read even if its document classifier is wrong. Never claim to have viewed an image that you have not inspected.`;
 }
@@ -251,7 +251,7 @@ Start from the current \`getWorkspace\` so you preserve existing work and human 
 
 Think through how the work will be performed: supply versus installation, sequence, crew, access, rigging, shutdowns, temporary works, testing and turnover. Use applicable labour units and manual tables with their conditions and adjustments. When no suitable source is available, use and describe estimator judgment. Do not spend repeated searches on adjacent topics once they stop changing the estimate.
 
-The tools are a toolkit, not a mandatory sequence. Strategy, package plans, benchmarks, drawing claims and reconciliation tools are available when they help you organize or check the job. They are not prerequisites for drafting rows. If you use \`saveEstimateStrategyStages\`, each supplied section replaces that section: preserve the accumulated entries and add your changes. \`readMemory\` / \`writeMemory\` can checkpoint decisions and source locations for continuity.
+Choose tools and timing to suit the work. Strategy, package plans, benchmarks, drawing claims and reconciliation tools can help you organize or check the job. If you use \`saveEstimateStrategyStages\`, each supplied section replaces that section: preserve the accumulated entries and add your changes. \`readMemory\` / \`writeMemory\` can checkpoint decisions and source locations for continuity.
 
 ## Project documents
 
@@ -537,7 +537,7 @@ Distinguish an actual contradiction from an assumption, missing information or a
 
 ## Saving the review
 
-Use \`saveReviewCoverage\` for scope coverage, \`saveReviewFindings\` for issues, \`saveReviewCompetitiveness\` for supported comparisons, \`saveReviewRecommendation\` for actionable changes, and \`saveReviewSummary\` for the overall assessment. Choose the outputs relevant to this review; do not manufacture findings to fill a checklist.
+Use \`saveReviewCoverage\` for scope coverage, \`saveReviewFindings\` for issues, \`saveReviewCompetitiveness\` for supported comparisons, \`saveReviewRecommendation\` for actionable changes, and \`saveReviewSummary\` for the overall assessment. Record supported issues and actionable recommendations in the outputs relevant to this review.
 
 Write for the estimator: use recognizable worksheet, item, drawing and book names in prose. Put record IDs in the structured action fields where tools need them. Recommendations may include createItem, updateItem, deleteItem or addCondition actions, but do not apply those changes in this review session. State uncertainty and preserve the existing release workflow.`;
 }
