@@ -1232,6 +1232,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
   const urlIntake = searchParams.get("intake");
   const urlPersona = searchParams.get("persona");
 
+  const [agentDocumentEvidence, setAgentDocumentEvidence] = useState<Extract<AgentNavigationIntent, { type: "document" }> | null>(null);
   const [searchHighlight, setSearchHighlight] = useState<SearchNavigationTarget | null>(null);
 
   const openPluginTools = useCallback((target?: PluginToolsTarget) => {
@@ -1605,6 +1606,7 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
     }
 
     if (intent.type === "document") {
+      setAgentDocumentEvidence(intent);
       handleSearchNavigate({ tab: "documents", documentId: intent.documentId });
       return;
     }
@@ -2300,6 +2302,8 @@ export function ProjectWorkspace({ initialData }: { initialData: WorkspaceRespon
                     filesRefreshKey={filesRefreshKey}
                     apply={apply}
                     packages={data.packages}
+                    evidence={agentDocumentEvidence?.evidence}
+                    onDismissEvidence={() => setAgentDocumentEvidence(null)}
                     highlightDocumentId={searchHighlight && "documentId" in searchHighlight ? searchHighlight.documentId : undefined}
                     selectedWorksheet={selectedModelWorksheet}
                     modelEditorChannelName={modelEditorSyncChannelName}
