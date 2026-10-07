@@ -991,7 +991,7 @@ export function validateLineEvidenceBasisForPricing(ws: any, input: {
   }
 
   if (declaredClaimIds.length > 0 && !lineEvidenceBasisRequiresDrawing(basis)) {
-    return "Drawing evidence claim IDs belong to quantity provenance. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and place the claim IDs in evidenceBasis.quantity.drawingClaimIds. Put material_quote, knowledge_labor, rate_schedule, subcontract, equipment_rental, or allowance under evidenceBasis.pricing when that source sets the price/rate.";
+    return "Drawing evidence claim IDs belong to quantity provenance. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and place the claim IDs in evidenceBasis.quantity.drawingClaimIds. Put material_quote, knowledge_labor, rate_schedule, subcontract, equipment_rental, or allowance under evidenceBasis.pricing when that source sets the price/rate. If the drawing only shows the scope and this row's quantity (e.g. labour hours) comes from a crew assumption or labour unit, leave drawingClaimIds off this row, keep quantity.type assumption or knowledge_labor, and cite the drawing in sourceRefs instead.";
   }
 
   if (lineEvidenceBasisRequiresDrawing(basis)) {

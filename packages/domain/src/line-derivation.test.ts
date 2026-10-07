@@ -303,3 +303,27 @@ test("an explicit installedUom may not reinterpret a linked input's unit; synony
   assert.equal(uomsEquivalent("FT", "M"), false);
   assert.equal(uomsEquivalent("", "M"), true, "a missing unit cannot conflict");
 });
+
+test("rate and time inputs are never compared with per-instance count callouts", () => {
+  // 2026-10-07 GPT matrix: "baseDrillHoursPerHole = 0.24 HR/EA" was compared
+  // with "(1) 1\" dia hole" and the labour row was rejected.
+  const text = { ref: "view-40fa", text: '8x8x5/8" Base Plate c/w (1) 1" dia hole for 3/4" SS epoxy anchor 1" epoxy grout' };
+  const derivation = (input: Record<string, unknown>) => ({ formula: "a * b", inputs: [{ name: "installedDeckFastenings", value: 80, unit: "EA" }, input], result: { value: 0, unit: "HR" } }) as any;
+  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "baseDrillHoursPerHole", value: 0.24, unit: "HR/EA" }), [text]), [], "HR/EA rate");
+  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "drillHoursPerHole", value: 0.24, unit: "HR" }), [text]), [], "time unit");
+  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "minutesPerHole", value: 15 }), [text]), [], "rate-like name, no unit");
+  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "costPerAnchor", value: 12.5, unit: "CAD/EA", perInstance: true }), [text]), [], "explicit perInstance on a money rate");
+  // a count of things per plate is still checked
+  const flagged = detectPerInstanceContradictions(derivation({ name: "holesPerPlate", value: 2, unit: "EA" }), [text]);
+  assert.equal(flagged.length, 1);
+  assert.equal(flagged[0].inputName, "holesPerPlate");
+});
+
+test("plural input names match singular callout words", () => {
+  const text = { ref: "v", text: 'Base Plate c/w (1) 1" dia hole for 3/4" SS epoxy anchor' };
+  for (const name of ["holesPerPlate", "anchorsPerPlate", "boltsPerClip"]) {
+    const derivation = { formula: "x", inputs: [{ name, value: 3, unit: "EA" }], result: { value: 3, unit: "EA" } } as any;
+    const expected = name === "boltsPerClip" ? 0 : 1;
+    assert.equal(detectPerInstanceContradictions(derivation, [text]).length, expected, name);
+  }
+});

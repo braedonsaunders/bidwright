@@ -468,8 +468,17 @@ const STOP_TERMS = new Set([
   "count", "qty", "quantity", "number", "total", "plate", "plates", "base",
 ]);
 
+/**
+ * Plural to singular for matching input names against callout phrases.
+ * Stripping a bare "es" turned "holes" into "hol", so a holesPerPlate input
+ * never matched a "(1) 1\" dia hole" callout.
+ */
 function stem(term: string) {
-  return term.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/(es|s)$/, "");
+  const word = term.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/(ches|shes|sses|xes|zes)$/.test(word)) return word.slice(0, -2);
+  if (/ies$/.test(word) && word.length > 4) return `${word.slice(0, -3)}y`;
+  if (/[^s]s$/.test(word)) return word.slice(0, -1);
+  return word;
 }
 
 function instanceTerms(input: LineDerivationInput): string[] {
@@ -484,7 +493,22 @@ function instanceTerms(input: LineDerivationInput): string[] {
   )];
 }
 
+/**
+ * Rates, durations and money are never instance counts. "baseDrillHoursPerHole
+ * = 0.24 HR/EA" was compared with a drawing's "(1) 1\" dia hole" callout and
+ * the row was rejected (2026-10-07 GPT matrix). A per-instance count is a
+ * count of things, so anything with a rate/time unit or a rate-like name is
+ * excluded, even when the agent marked it perInstance.
+ */
+function isRateLikeInput(input: LineDerivationInput) {
+  const unit = String(input.unit ?? "").trim();
+  if (unit.includes("/") || isRateOrTimeUom(unit)) return true;
+  const words = String(input.name ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  return /\b(hours?|hrs?|mh|minutes?|mins?|days?|duration|rate|rates|cost|price|dollars?|productivity|factor|percent|pct)\b/.test(words);
+}
+
 function isPerInstanceInput(input: LineDerivationInput) {
+  if (isRateLikeInput(input)) return false;
   if (input.perInstance === true) return true;
   const name = String(input.name ?? "").toLowerCase();
   return /per[A-Z_]|_per_|per\b|each|every/.test(input.name ?? "") || /per|each/.test(name);
