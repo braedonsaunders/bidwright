@@ -85,6 +85,10 @@ export interface ParsedPage {
   content: string;
   sections: PageSection[];
   images?: PageImage[];
+  /** Page size in the OCR unit (inches for Azure DI v4 PDFs). */
+  size?: { width: number; height: number; unit: string };
+  /** OCR lines with positions normalized 0..1 to the page, when the parser provides them. */
+  lines?: Array<{ text: string; bbox: { x: number; y: number; width: number; height: number } }>;
 }
 
 /** A heading-delimited section within a page. */

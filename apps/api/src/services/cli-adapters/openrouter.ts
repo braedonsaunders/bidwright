@@ -155,6 +155,7 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
     {
       transport: "codex-app-server",
       projectDir: ctx.projectDir,
+      readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
       prompt: ctx.prompt,
       model,
       reasoningEffort: ctx.reasoningEffort,

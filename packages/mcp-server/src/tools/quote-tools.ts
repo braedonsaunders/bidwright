@@ -2,7 +2,14 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sourceRefArray } from "./source-refs.js";
 import { apiGet, apiPost, apiPatch, apiDelete, projectPath, getRevisionId } from "../api-client.js";
-import { rollupWorksheetUnits } from "@bidwright/domain";
+import {
+  rollupWorksheetUnits,
+  normalizeLineDerivation,
+  validateLineDerivation,
+  detectPerInstanceContradictions,
+  type LineDerivation,
+} from "@bidwright/domain";
+import { getProjectId } from "../api-client.js";
 
 /**
  * Convert plain text with newlines to HTML paragraphs.
@@ -703,6 +710,28 @@ const LINE_EVIDENCE_BASIS_TYPES = [
   "mixed",
 ] as const;
 
+/** Zod shape for a per-line derivation (see LineDerivation in @bidwright/domain). */
+const derivationSchema = z.object({
+  target: z.enum(["quantity", "tierUnits", "cost", "price"]).default("quantity").describe("Which row value the formula reproduces. Default quantity; use tierUnits for rate-schedule hours."),
+  formula: z.string().describe("Arithmetic over input names, e.g. 'basePlates * anchorsPerPlate' or 'ceil(anchors / anchorsPerCartridge)'. Supports + - * / ^ ( ) ceil floor round min max sqrt."),
+  inputs: z.array(z.object({
+    name: z.string().describe("Identifier used in the formula."),
+    value: z.coerce.number(),
+    unit: z.string().nullable().optional(),
+    perInstance: z.boolean().optional().describe("true when this is a per-instance factor (per plate, per column, per valve). These are checked against explicit callouts in the cited text."),
+    instanceOf: z.string().nullable().optional().describe("Noun the per-instance factor applies to, e.g. 'base plate'."),
+    source: z.object({
+      kind: z.enum(["view", "claim", "text", "document", "rateItem", "laborUnit", "dataset", "book", "catalog", "vendorQuote", "assumption", "user", "web", "item", "manual"]),
+      ref: z.string().describe("viewId, claimId, documentId#page, rate/labour/dataset/book id, assumption id, askUser questionId, URL, worksheet item id, or 'estimator' for manual."),
+      excerpt: z.string().nullable().optional().describe("Short quote of the text/value that supplied this input."),
+    }),
+    note: z.string().nullable().optional(),
+  })).min(1),
+  result: z.object({ value: z.coerce.number(), unit: z.string().nullable().optional() }),
+  status: z.enum(["draft", "verified", "reviewed"]).default("draft"),
+  notes: z.string().nullable().optional(),
+}).passthrough();
+
 const DRAWING_QUANTITY_BASIS_TYPES = [
   "drawing_quantity",
   "visual_takeoff",
@@ -850,8 +879,9 @@ function compositeMaterialThreshold(): number {
   return 5000; // applies to Material/Subcontractor rows priced at >= $5K with no structured pricing link
 }
 
-function validateLineEvidenceBasisForPricing(ws: any, input: {
+export function validateLineEvidenceBasisForPricing(ws: any, input: {
   evidenceBasis?: Record<string, any> | null;
+  strategy?: any;
   sourceNotes?: string;
   laborUnitId?: string | null;
   rateScheduleItemId?: string | null;
@@ -868,9 +898,10 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
   uom?: string | null;
   quantity?: number | null;
 }) {
-  const drawingDocs = asArray(ws.sourceDocuments).filter(isDrawingLikeSourceDocument);
-  if (drawingDocs.length === 0) return null;
-
+  // Applies to EVERY project. The old classifier short-circuit returned null
+  // when no SourceDocument was typed "drawing", which is exactly how the
+  // Alexanderwerk ZIP-only quote priced 32 invented anchors with no evidence
+  // check at all.
   const basis = asRecord(input.evidenceBasis);
   const type = normalizedText(basis.type);
   const quantityType = evidenceAxisType(basis, "quantity");
@@ -880,7 +911,7 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
   const missingDeclaredClaimIds = mentionedClaimIds.filter((id) => !declaredClaimIds.includes(id));
   if (!type && !quantityType && !pricingType) {
     return [
-      "Line evidence basis is required because this project contains drawings.",
+      "Line evidence basis is required on every priced row.",
       "Prefer evidenceBasis.quantity.type and evidenceBasis.pricing.type so quantity provenance and pricing/rate provenance are separate.",
       "Legacy evidenceBasis.type is still accepted as a single-source shorthand. Use one of:",
       LINE_EVIDENCE_BASIS_TYPES.join(", "),
@@ -935,6 +966,17 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
   if ((type === "assumption" || quantityType === "assumption" || pricingType === "assumption") && assumptionIds.length === 0 && rationale.length < 40) {
     return "evidenceBasis assumption basis requires assumptionIds from saveEstimateAssumptions or a substantive rationale.";
   }
+  if (assumptionIds.length > 0) {
+    // assumptionIds used to be accepted unresolved — any non-empty string
+    // passed. They must name assumptions that were actually saved.
+    const savedAssumptionIds = new Set(
+      asArray(input.strategy?.assumptions).map((entry) => String(asRecord(entry).id ?? "").trim()).filter(Boolean),
+    );
+    const unknownAssumptionIds = assumptionIds.filter((id) => !savedAssumptionIds.has(id));
+    if (unknownAssumptionIds.length > 0) {
+      return `assumptionIds not found among saved assumptions: ${unknownAssumptionIds.join(", ")}. Call saveEstimateAssumptions with these ids first, or getEstimateStrategy to see the saved ids.`;
+    }
+  }
 
   // Category-aware citation discipline (domain-agnostic)
   const entityType = categoryEntityType(ws, input.categoryId, input.category);
@@ -974,6 +1016,173 @@ function validateLineEvidenceBasisForPricing(ws: any, input: {
       const hasComponentEvidence = compositionCount >= 2 || structuredRefs >= 2;
       if (!hasComponentEvidence) {
         return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs (${STRUCTURED_SOURCE_REF_HINT}), or 2+ resourceComposition.resources.`;
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Dollar value above which an assumption-based quantity must be confirmed with the user. */
+function assumptionQuantityDollarThreshold() {
+  const raw = Number(process.env.BIDWRIGHT_ASSUMPTION_QTY_DOLLAR_THRESHOLD ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : 2500;
+}
+
+/** Labour hours above which an assumption-based quantity must be confirmed with the user. */
+function assumptionQuantityHoursThreshold() {
+  const raw = Number(process.env.BIDWRIGHT_ASSUMPTION_QTY_HOURS_THRESHOLD ?? "");
+  return Number.isFinite(raw) && raw > 0 ? raw : 24;
+}
+
+interface EvidenceViewRecord {
+  id: string;
+  documentId?: string | null;
+  fileNodeId?: string | null;
+  pageNumber?: number | null;
+  tool?: string | null;
+  imageHash?: string | null;
+  textSnippet?: string | null;
+}
+
+/**
+ * Fetch EvidenceView rows (images the server actually delivered to the model).
+ * Fails closed: if the service is unavailable the caller must not price a
+ * drawing-driven row on unverifiable view ids.
+ */
+type EvidenceViewFetcher = (viewIds: string[]) => Promise<{ views: EvidenceViewRecord[]; missingIds: string[] } | { error: string }>;
+
+async function fetchEvidenceViews(viewIds: string[]): Promise<{ views: EvidenceViewRecord[]; missingIds: string[] } | { error: string }> {
+  if (viewIds.length === 0) return { views: [], missingIds: [] };
+  try {
+    const params = new URLSearchParams({ projectId: getProjectId(), ids: viewIds.join(",") });
+    const data = await apiGet<any>(`/api/vision/views?${params}`);
+    const views = asArray(data?.views).map(asRecord) as EvidenceViewRecord[];
+    const found = new Set(views.map((view) => String(view.id ?? "")));
+    const missingIds = [
+      ...asArray(data?.missingIds).map((id) => String(id ?? "")),
+      ...viewIds.filter((id) => !found.has(id)),
+    ].filter((id, index, all) => id && all.indexOf(id) === index);
+    return { views, missingIds };
+  } catch (error) {
+    return { error: (error as Error)?.message ?? String(error) };
+  }
+}
+
+/**
+ * Line-level checks that make a quantity traceable to pixels and arithmetic:
+ *  - drawing-driven quantities cite >=1 viewId that the server actually
+ *    delivered to the model (EvidenceView), not just a claim id;
+ *  - drawing-driven quantities carry a derivation (formula + sourced inputs)
+ *    that reproduces the row quantity;
+ *  - per-instance inputs in the derivation are compared, deterministically,
+ *    with explicit callouts in the cited view text and in the agent's own
+ *    quoted excerpts ("(1) hole" vs a claimed 4 per plate);
+ *  - assumption-based quantities above a $/hours threshold need an askUser
+ *    confirmation recorded on the evidence basis.
+ */
+let evidenceViewFetcher: EvidenceViewFetcher = fetchEvidenceViews;
+
+/** Test seam: replace the EvidenceView lookup so gate rules can run without an API. */
+export function __setEvidenceViewFetcherForTests(fetcher: EvidenceViewFetcher | null) {
+  evidenceViewFetcher = fetcher ?? fetchEvidenceViews;
+}
+
+export async function validateTraceableQuantityForPricing(ws: any, input: {
+  evidenceBasis?: Record<string, any> | null;
+  derivation?: Record<string, any> | null;
+  quantity?: number | null;
+  tierUnits?: Record<string, number> | null;
+  cost?: number | null;
+  price?: number | null;
+  categoryId?: string | null;
+  category?: string | null;
+  strategy?: any;
+}): Promise<string | null> {
+  const basis = asRecord(input.evidenceBasis);
+  const quantityAxis = asRecord(basis.quantity);
+  const quantityType = evidenceAxisType(basis, "quantity") || normalizedText(basis.type);
+  const requiresDrawing = lineEvidenceBasisRequiresDrawing(basis);
+  const viewIds = collectEvidenceAxisArray(basis, "viewIds");
+  const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
+  const tierUnitTotal = Object.values(input.tierUnits ?? {}).reduce((sum, value) => sum + (Number.isFinite(Number(value)) ? Number(value) : 0), 0);
+
+  // ── viewIds for drawing-driven quantities ──
+  let views: EvidenceViewRecord[] = [];
+  if (requiresDrawing && viewIds.length === 0) {
+    return "Drawing-driven quantity requires evidenceBasis.quantity.viewIds: the viewId(s) returned with the image by readDrawingPage / readDrawingTile (or inspectDrawingRegion) that visually prove the count or measurement. A claim id or extracted text alone is not visual evidence; render and look at the region, then cite its viewId.";
+  }
+  if (viewIds.length > 0) {
+    const result = await evidenceViewFetcher(viewIds);
+    if ("error" in result) {
+      return `Could not verify evidenceBasis.quantity.viewIds against the evidence view service (${result.error}). Drawing-driven rows cannot be priced on unverifiable view ids; retry once the view service responds, or cite viewIds returned in this session.`;
+    }
+    if (result.missingIds.length > 0) {
+      return `evidenceBasis.quantity.viewIds not found for this project: ${result.missingIds.join(", ")}. Use only viewIds returned by readDrawingPage / readDrawingTile / inspectDrawingRegion in this project.`;
+    }
+    views = result.views;
+  }
+
+  // ── derivation ──
+  const derivation: LineDerivation | null = normalizeLineDerivation(input.derivation);
+  if (requiresDrawing && !derivation) {
+    return "Drawing-driven quantities need a derivation so the number is traceable: derivation = { formula: 'basePlates * anchorsPerPlate', inputs: [{ name, value, unit?, perInstance?, instanceOf?, source: { kind: view|claim|text|rateItem|laborUnit|assumption|user|..., ref, excerpt? } }], result: { value, unit } }. Mark per-instance factors (per plate, per column) with perInstance: true.";
+  }
+  if (derivation) {
+    const target = derivation.target ?? "quantity";
+    const expectedValue = target === "tierUnits"
+      ? tierUnitTotal * (quantity || 1)
+      : target === "cost" ? (Number.isFinite(input.cost) ? Number(input.cost) : null)
+      : target === "price" ? (Number.isFinite(input.price) ? Number(input.price) : null)
+      : quantity;
+    const issues = validateLineDerivation(derivation, { expectedValue }).filter((issue) => issue.severity === "error");
+    if (issues.length > 0) {
+      return `Derivation is not valid: ${issues.slice(0, 4).map((issue) => issue.message).join(" ")}`;
+    }
+    if (requiresDrawing) {
+      const viewSourced = derivation.inputs.some((entry) => entry.source?.kind === "view" || entry.source?.kind === "claim");
+      if (!viewSourced) {
+        return "At least one derivation input for a drawing-driven quantity must come from source.kind 'view' (a viewId you looked at) or 'claim' (a saved evidence claim). Text/manual inputs alone do not establish a count from a drawing.";
+      }
+    }
+
+    // ── per-instance contradiction check (deterministic) ──
+    const texts: Array<{ ref: string; text: string }> = [];
+    for (const view of views) {
+      if (view.textSnippet) texts.push({ ref: String(view.id), text: String(view.textSnippet) });
+    }
+    const claimIds = evidenceBasisClaimIds(basis);
+    if (claimIds.length > 0) {
+      const claims = asArray(drawingEvidenceEngine(input.strategy).claims).map(asRecord);
+      for (const claim of claims) {
+        const claimId = String(claim.claimId ?? claim.id ?? "");
+        if (!claimIds.includes(claimId)) continue;
+        for (const evidence of asArray(claim.evidence).map(asRecord)) {
+          const text = [evidence.sourceText, evidence.result].filter(Boolean).join(" ");
+          if (text) texts.push({ ref: claimId, text });
+        }
+      }
+    }
+    for (const entry of derivation.inputs) {
+      if (entry.source?.excerpt) texts.push({ ref: entry.source.ref, text: String(entry.source.excerpt) });
+    }
+    const contradictions = detectPerInstanceContradictions(derivation, texts);
+    if (contradictions.length > 0) {
+      const first = contradictions[0];
+      return `Per-instance contradiction: derivation input '${first.inputName}' = ${first.claimedValue} but the cited text (${first.ref}) says "${first.excerpt}" (${first.textValue} per instance). Either correct the input to what the drawing/spec states, or cite the view/text that actually shows ${first.claimedValue} per instance. Totals are not accepted as proof of a per-instance count.`;
+    }
+  }
+
+  // ── assumption-based quantity above threshold needs user confirmation ──
+  if (quantityType === "assumption") {
+    const confirmation = asRecord(quantityAxis.userConfirmation ?? basis.userConfirmation);
+    const confirmed = String(confirmation.questionId ?? "").trim().length > 0 && String(confirmation.answer ?? "").trim().length > 0;
+    if (!confirmed) {
+      const unit = Number.isFinite(input.price) && Number(input.price) > 0 ? Number(input.price) : Number.isFinite(input.cost) ? Number(input.cost) : 0;
+      const rowDollar = unit * Math.max(quantity, 1);
+      const rowHours = tierUnitTotal * Math.max(quantity, 1);
+      if (rowDollar >= assumptionQuantityDollarThreshold() || rowHours >= assumptionQuantityHoursThreshold()) {
+        return `This row's quantity is assumption-based and the row is significant (${rowDollar > 0 ? `~$${Math.round(rowDollar).toLocaleString()}` : `${rowHours} h`}). Confirm the quantity with the estimator via askUser and record it as evidenceBasis.quantity.userConfirmation = { questionId, answer }, or cite document/drawing evidence (viewIds + derivation) instead of an assumption.`;
       }
     }
   }
@@ -1273,13 +1482,15 @@ function worksheetTreeSummary(ws: any) {
   //
   // Chain: updateQuote → importRateSchedule → createWorksheet → createWorksheetItem
 
-  type GateTarget = "importRateSchedule" | "createWorksheet" | "createWorksheetItem";
+  type GateTarget = "importRateSchedule" | "createWorksheet" | "createWorksheetItem" | "updateWorksheetItem";
 
   async function checkGate(
     gate: GateTarget,
     targetText = "",
     lineEvidence?: {
       evidenceBasis?: Record<string, any> | null;
+      derivation?: Record<string, any> | null;
+      tierUnits?: Record<string, number> | null;
       sourceNotes?: string;
       laborUnitId?: string | null;
       rateScheduleItemId?: string | null;
@@ -1346,9 +1557,10 @@ function worksheetTreeSummary(ws: any) {
       return `Historical benchmark pass has not been run. Call recomputeEstimateBenchmarks and saveEstimateAdjustments before creating detailed line items.`;
     }
 
-    if (gate === "createWorksheetItem") {
+    if (gate === "createWorksheetItem" || gate === "updateWorksheetItem") {
       const lineBasisGate = validateLineEvidenceBasisForPricing(ws, {
         evidenceBasis: lineEvidence?.evidenceBasis ?? null,
+        strategy,
         sourceNotes: lineEvidence?.sourceNotes,
         laborUnitId: lineEvidence?.laborUnitId,
         rateScheduleItemId: lineEvidence?.rateScheduleItemId,
@@ -1367,14 +1579,30 @@ function worksheetTreeSummary(ws: any) {
       });
       if (lineBasisGate) return lineBasisGate;
 
-      const visualTakeoffGate = validateVisualTakeoffAuditForPricing(
-        ws,
+      const traceabilityGate = await validateTraceableQuantityForPricing(ws, {
+        evidenceBasis: lineEvidence?.evidenceBasis ?? null,
+        derivation: lineEvidence?.derivation ?? null,
+        quantity: lineEvidence?.quantity ?? null,
+        tierUnits: lineEvidence?.tierUnits ?? null,
+        cost: lineEvidence?.cost ?? null,
+        price: lineEvidence?.price ?? null,
+        categoryId: lineEvidence?.categoryId ?? null,
+        category: lineEvidence?.category ?? null,
         strategy,
-        targetText,
-        lineEvidence?.evidenceBasis ?? null,
-      );
-      if (visualTakeoffGate) return visualTakeoffGate;
+      });
+      if (traceabilityGate) return traceabilityGate;
+
+      if (gate === "createWorksheetItem") {
+        const visualTakeoffGate = validateVisualTakeoffAuditForPricing(
+          ws,
+          strategy,
+          targetText,
+          lineEvidence?.evidenceBasis ?? null,
+        );
+        if (visualTakeoffGate) return visualTakeoffGate;
+      }
     }
+    if (gate === "updateWorksheetItem") return null; // edits skip the strategy-stage prerequisites below
 
     // Gate 2: rate schedules required for createWorksheet and createWorksheetItem
     if ((gate === "createWorksheet" || gate === "createWorksheetItem") && needsRateSchedules && !hasRateSchedules) {
@@ -1831,6 +2059,8 @@ function worksheetTreeSummary(ws: any) {
         quantity: z.object({
           type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies the row quantity, labour hours, duration, or count."),
           drawingClaimIds: z.array(z.string()).default([]).describe("Required when quantity.type is drawing_quantity, visual_takeoff, drawing_table, or drawing_note."),
+          viewIds: z.array(z.string()).default([]).describe("REQUIRED for drawing-driven quantities: viewId(s) returned with the image by readDrawingPage / readDrawingTile / inspectDrawingRegion that visually prove the count or measurement."),
+          userConfirmation: z.object({ questionId: z.string(), answer: z.string() }).passthrough().optional().describe("askUser questionId + answer when the estimator confirmed an assumption-based quantity."),
           quantityDriver: z.string().optional().describe("Formula or driver behind quantity/hours/duration."),
           sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
@@ -1847,7 +2077,8 @@ function worksheetTreeSummary(ws: any) {
         sourceRefs: sourceRefArray("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
         assumptionIds: z.array(z.string()).default([]).describe("Saved assumption IDs when the row is assumption-backed."),
         rationale: z.string().optional().describe("Why this source class is appropriate and how it supports the line."),
-      }).passthrough().optional().describe("Line-level evidence contract. Required when drawings exist. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
+      }).passthrough().optional().describe("Line-level evidence contract. Required on every priced row. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
+      derivation: derivationSchema.nullable().optional().describe("How the quantity was derived: formula + sourced inputs + result. Required when quantity is drawing-driven; recommended for every row whose quantity is not read directly from a BOM/schedule."),
       classification: z.record(z.unknown()).optional().describe("Optional construction classification JSON, e.g. { masterformat: '03 30 00' }."),
       costCode: z.string().nullable().optional().describe("Optional internal cost code used by cost-code rollups."),
       phaseId: z.string().optional().describe("Phase ID"),
@@ -1868,6 +2099,8 @@ function worksheetTreeSummary(ws: any) {
         input.sourceNotes,
       ].filter(Boolean).join(" "), {
         evidenceBasis: input.evidenceBasis ?? null,
+        derivation: input.derivation ?? null,
+        tierUnits: input.tierUnits ?? null,
         sourceNotes: input.sourceNotes,
         laborUnitId: input.laborUnitId,
         rateScheduleItemId: input.rateScheduleItemId,
@@ -2073,6 +2306,8 @@ function worksheetTreeSummary(ws: any) {
         quantity: z.object({
           type: z.enum(LINE_EVIDENCE_BASIS_TYPES),
           drawingClaimIds: z.array(z.string()).default([]),
+          viewIds: z.array(z.string()).default([]).describe("REQUIRED for drawing-driven quantities: viewId(s) from readDrawingPage / readDrawingTile / inspectDrawingRegion."),
+          userConfirmation: z.object({ questionId: z.string(), answer: z.string() }).passthrough().optional(),
           quantityDriver: z.string().optional(),
           sourceRefs: sourceRefArray(),
           assumptionIds: z.array(z.string()).default([]),
@@ -2090,6 +2325,7 @@ function worksheetTreeSummary(ws: any) {
         assumptionIds: z.array(z.string()).default([]),
         rationale: z.string().optional(),
       }).passthrough().describe("Line-level evidence contract. Use quantity/pricing axes."),
+      derivation: derivationSchema.nullable().optional().describe("How the hours/quantity were derived: formula + sourced inputs + result. Required when quantity is drawing-driven; strongly recommended for every labour row (e.g. 'units * hoursPerUnit')."),
       classification: z.record(z.unknown()).optional(),
       costCode: z.string().nullable().optional(),
     },
@@ -2149,6 +2385,8 @@ function worksheetTreeSummary(ws: any) {
         input.sourceNotes,
       ].filter(Boolean).join(" "), {
         evidenceBasis: input.evidenceBasis,
+        derivation: input.derivation ?? null,
+        tierUnits: positiveTierUnits,
         sourceNotes: input.sourceNotes,
         laborUnitId: input.laborUnitId,
         rateScheduleItemId: input.rateScheduleItemId,
@@ -2177,6 +2415,7 @@ function worksheetTreeSummary(ws: any) {
           ...asRecord(input.sourceEvidence),
           evidenceBasis: input.evidenceBasis,
         },
+        derivation: input.derivation ?? undefined,
         classification: input.classification,
         costCode: input.costCode,
         phaseId: input.phaseId,
@@ -2235,6 +2474,8 @@ function worksheetTreeSummary(ws: any) {
       phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
       sourceNotes: z.string().optional(),
       catalogItemId: z.string().nullable().optional().describe("Catalog item ID for catalog-backed categories. Pass null to clear."),
+      evidenceBasis: z.record(z.unknown()).optional().describe("Replace the row's line-level evidence contract (same shape as createWorksheetItem.evidenceBasis). Required when the change alters quantity/hours and the existing basis no longer supports it."),
+      derivation: derivationSchema.nullable().optional().describe("Replace the row's derivation (formula + sourced inputs + result) so it reproduces the new quantity/hours. Pass null to clear. If quantity/uom/tierUnits change without a new derivation, the existing one is marked stale."),
     },
     async ({ itemId, catalogItemId, ...patch }) => {
       if (catalogItemId !== undefined) (patch as any).itemId = catalogItemId;
@@ -2242,6 +2483,68 @@ function worksheetTreeSummary(ws: any) {
       if ((patch as any).markup !== undefined && (patch as any).markup > 1) {
         (patch as any).markup = (patch as any).markup / 100;
       }
+
+      // Reject empty / no-op updates. Kimi-class runtimes have been observed
+      // dropping every argument but itemId; those calls used to return
+      // "Updated item" while changing nothing, which hid the failure.
+      const providedKeys = Object.keys(patch).filter((key) => (patch as any)[key] !== undefined);
+      if (providedKeys.length === 0) {
+        return {
+          content: [{ type: "text" as const, text: `updateWorksheetItem for ${itemId} arrived with no fields to change — only itemId came through. Nothing was updated. Re-send with the fields you intend to change (for example quantity + derivation, or price + sourceNotes); if the arguments keep being dropped, send one field per call.` }],
+          isError: true,
+        };
+      }
+
+      const ws = await getWs();
+      const existing: Record<string, any> | undefined = asArray(ws.worksheets).map(asRecord)
+        .flatMap((worksheet) => asArray(worksheet.items).map(asRecord).map((item): Record<string, any> => ({ ...item, worksheetName: worksheet.name })))
+        .find((item) => String(item.id ?? "") === itemId);
+      if (!existing) {
+        return { content: [{ type: "text" as const, text: `Worksheet item ${itemId} was not found in the current revision. Call getWorkspace or searchItems to find the right itemId.` }], isError: true };
+      }
+
+      // Re-gate when the change touches what the row claims or how much it costs.
+      const gatedFields = ["quantity", "uom", "tierUnits", "cost", "price", "markup", "rateScheduleItemId", "laborUnitId", "evidenceBasis", "derivation", "categoryId", "category"];
+      const existingSourceEvidence = asRecord(existing.sourceEvidence);
+      const mergedEvidenceBasis = (patch as any).evidenceBasis !== undefined
+        ? asRecord((patch as any).evidenceBasis)
+        : asRecord(existingSourceEvidence.evidenceBasis);
+      const mergedDerivation = (patch as any).derivation !== undefined ? (patch as any).derivation : existing.derivation ?? null;
+      if (providedKeys.some((key) => gatedFields.includes(key))) {
+        const merged: Record<string, any> = { ...existing, ...patch };
+        const gateError = await checkGate("updateWorksheetItem", [existing.worksheetName, merged.entityName, merged.description, merged.sourceNotes].filter(Boolean).join(" "), {
+          evidenceBasis: Object.keys(mergedEvidenceBasis).length > 0 ? mergedEvidenceBasis : null,
+          derivation: mergedDerivation,
+          tierUnits: (merged.tierUnits as Record<string, number> | undefined) ?? null,
+          sourceNotes: String(merged.sourceNotes ?? ""),
+          laborUnitId: merged.laborUnitId ?? null,
+          rateScheduleItemId: merged.rateScheduleItemId ?? null,
+          sourceEvidence: existingSourceEvidence,
+          categoryId: merged.categoryId ?? null,
+          category: merged.category ?? null,
+          costResourceId: merged.costResourceId ?? null,
+          effectiveCostId: merged.effectiveCostId ?? null,
+          itemId: merged.itemId ?? null,
+          resourceComposition: merged.resourceComposition ?? null,
+          cost: Number.isFinite(merged.cost) ? Number(merged.cost) : null,
+          price: Number.isFinite(merged.price) ? Number(merged.price) : null,
+          uom: merged.uom ?? null,
+          quantity: Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
+        });
+        if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
+      }
+
+      // evidenceBasis lives inside sourceEvidence on the persisted row.
+      if ((patch as any).evidenceBasis !== undefined) {
+        const { evidenceBasis, ...restPatch } = patch as any;
+        (restPatch as any).sourceEvidence = {
+          ...existingSourceEvidence,
+          ...asRecord((patch as any).sourceEvidence),
+          evidenceBasis,
+        };
+        patch = restPatch;
+      }
+
       const data = await apiPatch(projectPath(`/worksheet-items/${itemId}`), patch);
       invalidateWs();
       const updated = (data as any)?.item || (data as any)?.worksheetItem || data || {};
@@ -2270,6 +2573,31 @@ function worksheetTreeSummary(ws: any) {
       await apiDelete(projectPath(`/worksheet-items/${itemId}`));
       invalidateWs();
       return { content: [{ type: "text" as const, text: `Deleted item ${itemId}` }] };
+    }
+  );
+
+  // ── getLineDerivation ─────────────────────────────────────
+  server.tool(
+    "getLineDerivation",
+    [
+      "Read the persisted derivation ledger for one worksheet row: the formula, every input with its source (viewId, claimId, document text, rate item, labour unit, assumption, user answer), the result, its status (draft | verified | reviewed | stale), and the full version/invalidation history.",
+      "Use this to answer 'how did you get this number?'. Answer FROM the trace. If the row has no derivation, say so and re-derive with evidence instead of reconstructing from memory.",
+    ].join(" "),
+    { itemId: z.string().describe("Worksheet item ID") },
+    async ({ itemId }) => {
+      try {
+        const data = await apiGet<any>(`/api/estimate/${getProjectId()}/items/${encodeURIComponent(itemId)}/derivation`);
+        const derivation = data?.derivation ?? null;
+        const guidance = derivation
+          ? derivation.status === "stale"
+            ? "This derivation is STALE: an input or the row itself changed after it was recorded (see invalidatedBy / history). Re-derive before quoting the number."
+            : "Answer from this trace: quote the formula, each input value with its source ref, and the result."
+          : "No derivation is recorded for this row. Do not reconstruct a rationale from memory; say the basis is unrecorded, then re-derive it with evidence (readDrawingTile viewIds, document text, rate/labour ids) and save it via updateWorksheetItem.derivation.";
+        return { content: [{ type: "text" as const, text: JSON.stringify({ ...data, guidance }, null, 2) }] };
+      } catch (error) {
+        const message = (error as Error)?.message ?? String(error);
+        return { content: [{ type: "text" as const, text: `Could not read derivation for ${itemId}: ${message}` }], isError: true };
+      }
     }
   );
 

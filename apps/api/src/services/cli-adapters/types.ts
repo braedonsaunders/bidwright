@@ -40,7 +40,8 @@ export interface SSEEventData {
     | "progress"
     | "error"
     | "status"
-    | "file_read";
+    | "file_read"
+    | "image_view";
   data: unknown;
 }
 
@@ -68,6 +69,11 @@ export interface McpEnv {
   BIDWRIGHT_PROJECT_ID: string;
   BIDWRIGHT_REVISION_ID: string;
   BIDWRIGHT_QUOTE_ID: string;
+  BIDWRIGHT_AGENT_IMAGE_MAX_EDGE?: string;
+  BIDWRIGHT_AGENT_IMAGE_BUDGET?: string;
+  BIDWRIGHT_RUN_ID?: string;
+  BIDWRIGHT_SESSION_ID?: string;
+  BIDWRIGHT_REVIEW_ONLY?: string;
   BIDWRIGHT_AGENT_MODE: "qa" | "assist_edit" | "build_estimate";
 }
 

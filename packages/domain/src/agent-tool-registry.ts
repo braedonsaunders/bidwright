@@ -105,6 +105,7 @@ export const AGENT_TOOL_REGISTRY = {
   deleteModelTakeoffLink: { id: "deleteModelTakeoffLink", displayName: "Delete model link", category: "model", mutates: true },
 
   getEstimateStrategy: { id: "getEstimateStrategy", displayName: "Read estimate strategy", category: "strategy" },
+  getLineDerivation: { id: "getLineDerivation", displayName: "Read line derivation", category: "strategy" },
   saveEstimateScopeGraph: { id: "saveEstimateScopeGraph", displayName: "Save scope graph", category: "strategy", mutates: true },
   saveEstimateExecutionPlan: { id: "saveEstimateExecutionPlan", displayName: "Save execution plan", category: "strategy", mutates: true },
   saveEstimateAssumptions: { id: "saveEstimateAssumptions", displayName: "Save assumptions", category: "strategy", mutates: true },

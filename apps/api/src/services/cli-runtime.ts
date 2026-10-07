@@ -1,3 +1,5 @@
+import { preserveCurrentInstructions } from "./instruction-restore.js";
+import { compatibleSession } from "./session-continuity.js";
 /**
  * CLI Runtime Service
  *
@@ -351,6 +353,9 @@ async function persistSessionState(
       ownerPid: process.pid,
       runtime: session.runtime,
       sessionId: session.sessionId,
+      agentMode: session._spawnOpts?.agentMode || "build_estimate",
+      model: session._spawnOpts?.model,
+      reviewOnly: session._spawnOpts?.reviewOnly === true,
       startedAt: session.startedAt,
       status: session.status,
       ...extra,
@@ -400,6 +405,9 @@ function buildMcpEnv(opts: {
   revisionId?: string;
   quoteId?: string;
   agentMode?: AgentChatMode;
+  aiRunId?: string;
+  providerSessionId?: string;
+  reviewOnly?: boolean;
 }): McpEnv {
   return {
     BIDWRIGHT_API_URL: opts.apiBaseUrl || "http://localhost:4001",
@@ -408,6 +416,11 @@ function buildMcpEnv(opts: {
     BIDWRIGHT_REVISION_ID: opts.revisionId || "",
     BIDWRIGHT_QUOTE_ID: opts.quoteId || "",
     BIDWRIGHT_AGENT_MODE: opts.agentMode || "build_estimate",
+    BIDWRIGHT_RUN_ID: opts.aiRunId || "",
+    BIDWRIGHT_SESSION_ID: opts.providerSessionId || "",
+    BIDWRIGHT_REVIEW_ONLY: opts.reviewOnly ? "true" : "false",
+    BIDWRIGHT_AGENT_IMAGE_MAX_EDGE: process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE || "1568",
+    BIDWRIGHT_AGENT_IMAGE_BUDGET: process.env.BIDWRIGHT_AGENT_IMAGE_BUDGET || "120",
   };
 }
 
@@ -562,6 +575,9 @@ export interface SpawnSessionOpts {
   /** Internal guard preventing an endless final-answer recovery loop. */
   completionRecoveryAttempt?: number;
   agentMode?: AgentChatMode;
+  aiRunId?: string;
+  providerSessionId?: string;
+  reviewOnly?: boolean;
   /**
    * The Bidwright user this session belongs to. In server mode the runtime
    * resolves this to a per-user agent-home dir (CLAUDE_CONFIG_DIR / CODEX_HOME
@@ -807,17 +823,17 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   // bubble up because spawning against a half-restored workspace is
   // worse than a clear "couldn't restore your project" message.
   const workspaceStorage = getWorkspaceStorage();
-  if (workspaceStorage.ready()) {
+  if (!opts.reviewOnly && workspaceStorage.ready()) {
     const wsKey = workspaceStorageKey({
       organizationId: opts.organizationId,
       projectId: opts.projectId,
     });
     try {
-      const restored = await restoreWorkspaceIfPresent({
+      const restored = await preserveCurrentInstructions(opts.projectDir, () => restoreWorkspaceIfPresent({
         storage: workspaceStorage,
         key: wsKey,
         targetDir: opts.projectDir,
-      });
+      }));
       if (restored) {
         console.log(
           `[cli:spawn] restored workspace from snapshot key=${wsKey} project=${opts.projectId}`,
@@ -905,7 +921,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   // exits (multi-host hosted SaaS so the user's files follow them across
   // pool members). No-op when WORKSPACE_STORAGE_PROVIDER is unset (every
   // self-host / desktop deploy).
-  if (workspaceStorage.ready()) {
+  if (!opts.reviewOnly && workspaceStorage.ready()) {
     const wsKey = workspaceStorageKey({
       organizationId: opts.organizationId,
       projectId: opts.projectId,
@@ -1055,6 +1071,7 @@ export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession
   }
 
   let sessionId = session?.sessionId;
+  let savedIdentity = session?._spawnOpts as import("./session-continuity.js").SessionIdentity | undefined;
   let runtime: AgentRuntime | undefined = opts.runtime || session?.runtime;
 
   if (!sessionId) {
@@ -1062,8 +1079,9 @@ export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession
     if (existsSync(sessionJsonPath)) {
       const saved = JSON.parse(await readFile(sessionJsonPath, "utf-8"));
       if (saved.sessionId) {
+        savedIdentity = saved;
         sessionId = saved.sessionId;
-        runtime = (saved.runtime as string) || runtime;
+        runtime = runtime || (saved.runtime as string);
       }
     }
   }
@@ -1072,9 +1090,14 @@ export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession
     throw new Error("No session to resume for this project");
   }
 
+  if (!compatibleSession(savedIdentity || {}, { ...opts, runtime })) {
+    return spawnSession({ ...opts, runtime: runtime || "claude-code", prompt: opts.prompt || "Read the current instruction file and restore current workspace/derivation state before continuing." });
+  }
+
   return spawnResumedSession(
     {
       ...opts,
+      providerSessionId: sessionId,
       runtime: runtime || "claude-code",
       prompt: opts.prompt ?? "",
     },
@@ -1104,17 +1127,17 @@ async function spawnResumedSession(
   // user landed on a host that doesn't have the local copy (stateless
   // pool) we pull the snapshot down before the adapter scaffolds.
   const resumeWorkspaceStorage = getWorkspaceStorage();
-  if (resumeWorkspaceStorage.ready()) {
+  if (!opts.reviewOnly && resumeWorkspaceStorage.ready()) {
     const wsKey = workspaceStorageKey({
       organizationId: opts.organizationId,
       projectId: opts.projectId,
     });
     try {
-      const restored = await restoreWorkspaceIfPresent({
+      const restored = await preserveCurrentInstructions(opts.projectDir, () => restoreWorkspaceIfPresent({
         storage: resumeWorkspaceStorage,
         key: wsKey,
         targetDir: opts.projectDir,
-      });
+      }));
       if (restored) {
         console.log(
           `[cli:resume] restored workspace from snapshot key=${wsKey} project=${opts.projectId}`,
@@ -1207,7 +1230,7 @@ async function spawnResumedSession(
   // resumed session also persists its final state to remote storage.
   // No-op when WORKSPACE_STORAGE_PROVIDER is unset.
   const resumeStorage = getWorkspaceStorage();
-  if (resumeStorage.ready()) {
+  if (!opts.reviewOnly && resumeStorage.ready()) {
     const wsKey = workspaceStorageKey({
       organizationId: opts.organizationId,
       projectId: opts.projectId,

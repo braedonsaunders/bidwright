@@ -1,3 +1,4 @@
+import { join } from "node:path";
 /**
  * Quote Review Routes
  *
@@ -319,6 +320,7 @@ async function requireProjectAccess(request: FastifyRequest, reply: FastifyReply
 }
 
 export function registerReviewRoutes(app: FastifyInstance) {
+  const savedReviewSections = new Map<string, Set<string>>();
 
   // ── Start Review Session ──────────────────────────────────
   app.post("/api/review/:projectId/start", async (request, reply) => {
@@ -362,7 +364,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
       storagePath: d.storagePath || "",
     }));
 
-    const projectDir = resolveProjectDir(projectId);
+    const reviewId = `review-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
+    const projectDir = join(resolveProjectDir(projectId), ".bidwright-reviews", reviewId);
     const reviewContext = await getQuoteReviewContext(projectId);
 
     // Symlink global knowledge books
@@ -418,8 +421,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
       maxConcurrentSubAgents: integrations.maxConcurrentSubAgents ?? 2,
     });
 
+    savedReviewSections.set(reviewId, new Set());
     // Create QuoteReview record
-    const reviewId = `review-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
     await prisma.quoteReview.create({
       data: {
         id: reviewId,
@@ -463,8 +466,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
     const instructionFile = adapter.primaryInstructionFile;
     const initialPrompt = `Read ${instructionFile} now. The agent has three first-class search lanes: queryProjectFile for THIS project's source documents, queryKnowledgeBook for GLOBAL estimator manuals/handbooks/codes, queryKnowledgeDataset for STRUCTURED productivity/rate tables. Drill in via readDocumentText, getDocumentStructured, getBookPage; use queryLibrary / listLaborUnits / listRateScheduleItems / searchCatalogs for the structured cost/labour/rate corpora. Do not read large JSONL snapshots, all-library.search.txt, or files-manifest.jsonl wholesale. Execute the FULL review workflow:
 
-1. Call getWorkspace — understand the complete estimate structure, all worksheets and line items
-2. Read EVERY project document (specs, RFQs, BOMs, drawings) using Read tool on documents/ folder
+1. Independently inspect source drawings with readDrawingPage/readDrawingTile and record high-risk per-instance factors, physical counts, dimensions and uncertainty before consulting priced quantities.
+2. Call getWorkspace, then getLineDerivation for important rows; compare your independent observations against saved derivations. Read the relevant specs, RFQs, BOMs and schedules.
 3. Use queryProjectFile / queryKnowledgeBook / queryKnowledgeDataset to find rate/productivity/cost evidence relevant to each priced row, then read knowledge book chapters via readDocumentText. Treat search results as candidate retrieval only; the review agent decides relevance and source authority.
 4. Cross-reference: for each spec section/requirement, check if a corresponding line item exists in the estimate
 5. Call saveReviewCoverage with the scope coverage checklist
@@ -506,6 +509,9 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
         googleApiKey: integrations.geminiKey || undefined,
         openrouterApiKey: integrations.openrouterKey || undefined,
         reasoningEffort,
+        agentMode: "qa",
+        reviewOnly: true,
+        aiRunId: sessionId,
       });
 
       // Persist events to DB
@@ -551,10 +557,16 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
             data: { status: finalStatus },
           });
           // Mark review as completed/failed
-          await prisma.quoteReview.update({
-            where: { id: reviewId },
-            data: { status: finalStatus === "completed" ? "completed" : "failed" },
-          });
+          const sections = savedReviewSections.get(reviewId);
+          const complete = finalStatus === "completed" && ["coverage", "findings", "competitiveness", "summary"].every((section) => sections?.has(section));
+          await prisma.quoteReview.update({ where: { id: reviewId }, data: { status: complete ? "completed" : "failed" } });
+          if (complete) {
+            const current = await getQuoteReviewContext(projectId);
+            if (current.currentRevisionId === revision.id && current.quoteUpdatedAt === reviewContext.quoteUpdatedAt) {
+              await store.markEstimateReviewCompleted(projectId, revision.id, reviewId);
+            }
+          }
+          savedReviewSections.delete(reviewId);
         } catch (err) {
           console.error(`[review] Failed to persist final status for ${sessionId}:`, err);
         }
@@ -647,7 +659,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
       data: any;
     };
 
-    if (!section || !data) {
+    if (!["coverage", "findings", "competitiveness", "recommendations", "summary"].includes(section) || !data) {
       return reply.code(400).send({ error: "section and data required" });
     }
 
@@ -686,14 +698,10 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
         where: { id: review.id },
         data: { [section]: nextValue },
       });
-      if (section === "summary") {
-        const store = request.store;
-        if (store) {
-          await store.markEstimateReviewCompleted(projectId, review.revisionId, review.id).catch(() => null);
-        }
-      }
+
     }
 
+    savedReviewSections.get(review.id)?.add(section);
     return { ok: true, section, reviewId: review.id };
   });
 

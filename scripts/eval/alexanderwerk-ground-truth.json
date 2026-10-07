@@ -1,0 +1,29 @@
+{
+  "projectId": "project-92c0a6f3-b9c6-42d0-9ff0-1f078ba8a823",
+  "quoteNumber": "JT-261002-0001",
+  "scope": "Mechanical installation including platform installation; exclude platform fabrication and electrical work",
+  "source": {
+    "file": "2025-05-26 Layouts and Platforms-Signed.pdf",
+    "sha256": "c866af5ab0b8c3f9c3729907224d9fb0b23c9f5184f9c6b0ab57cbddbab51c6b",
+    "page": 4,
+    "sheet": "Platform Framing Arrangement"
+  },
+  "expected": {
+    "anchorsPerBasePlate": 1,
+    "mainFramePosts": null,
+    "stairLandingPosts": 2,
+    "basePlates": null,
+    "anchors": null,
+    "groutCubicFeetPerPlateAtOneInchDepth": 0.037037037037037035,
+    "groutCubicFeetBeforeWaste": null,
+    "anchorLength": null
+  },
+  "verification": {
+    "reviewer": "thr_dmphhungk4",
+    "corroboratingReviewer": "thr_aystpu7h8w",
+    "method": "Source p.4 plan and both elevations. Root identifies five distinct plan post symbols; second reviewer initially inferred six (four main plus two landing). Sixth location requires pixel evidence; exact total is deliberately withheld pending reconciliation.",
+    "uncertaintyPolicy": "Do not grade total post/anchor counts until the disputed main upper-left junction is resolved. One anchor per base plate is verified. Anchor length is unspecified. Procurement bag counts depend on actual product yield, waste, and minimum purchase units.",
+    "evaluationOnly": true,
+    "status": "count_disputed"
+  }
+}

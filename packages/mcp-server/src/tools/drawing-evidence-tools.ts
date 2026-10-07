@@ -6,6 +6,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 
 import { apiGet, apiPatch, apiPost, getProjectId } from "../api-client.js";
+import { recordViewPayload } from "./vision-tools.js";
 
 const ENGINE_VERSION = 3;
 const DEFAULT_RENDER_DPIS = [72, 150];
@@ -424,7 +425,7 @@ function tableText(table: JsonRecord) {
   return [headers, rows, String(table.rawMarkdown ?? "")].filter(Boolean).join("\n");
 }
 
-function pageStructuredText(doc: JsonRecord, pageNumber: number) {
+function pageStructuredText(doc: JsonRecord, pageNumber: number, hasPageText = false) {
   const structured = asRecord(doc.structuredData);
   const tables = asArray(structured.tables)
     .filter((table) => Number(asRecord(table).pageNumber ?? 1) === pageNumber)
@@ -436,7 +437,11 @@ function pageStructuredText(doc: JsonRecord, pageNumber: number) {
       return !Number.isFinite(page) || page === pageNumber;
     })
     .map((pair) => JSON.stringify(pair));
-  return [doc.extractedText ? compactText(doc.extractedText, 1_500) : "", ...tables, ...kvs].filter(Boolean).join("\n");
+  // The document-wide text sample used to stand in for page text, which gave
+  // every sheet of a set the same sheet number and title. Only fall back to it
+  // when the page has no text of its own.
+  const documentSample = !hasPageText && doc.extractedText ? compactText(doc.extractedText, 1_500) : "";
+  return [documentSample, ...tables, ...kvs].filter(Boolean).join("\n");
 }
 
 function clampRegion(
@@ -487,6 +492,113 @@ function makeRegion(input: Omit<DrawingRegion, "id" | "visualEmbeddingHash">): D
     id: regionId(withoutId),
     ...withoutId,
   };
+}
+
+interface PageLayout {
+  rotation: number;
+  pageText: string;
+  textLines: Array<{ text: string; pageBbox?: { x: number; y: number; width: number; height: number } }>;
+  regions: Array<{ id: string; kind: string; label?: string; pageBbox?: { x: number; y: number; width: number; height: number } }>;
+  vectorTextLikely: boolean;
+}
+
+/** The page's own text and layout regions, from the same reader the agent uses. */
+async function readPageLayout(documentId: string, pageNumber: number, warnings: string[], fileName: string): Promise<PageLayout | null> {
+  try {
+    const result = await apiPost<JsonRecord>("/api/vision/read-page", {
+      projectId: getProjectId(),
+      documentId,
+      pageNumber,
+      mode: "overview",
+      maxEdge: 768,
+      record: false,
+    });
+    if (!result.success) {
+      warnings.push(`Layout read failed for ${fileName} page ${pageNumber}: ${result.message ?? result.error ?? "unknown"}`);
+      return null;
+    }
+    const textLines = asArray(result.textLines).map((line) => asRecord(line) as PageLayout["textLines"][number]);
+    return {
+      rotation: Number(result.rotation ?? 0),
+      pageText: textLines.map((line) => line.text).join("\n"),
+      textLines,
+      regions: asArray(result.regions).map((region) => asRecord(region) as PageLayout["regions"][number]).filter((region) => region.pageBbox),
+      vectorTextLikely: result.vectorTextLikely === true,
+    };
+  } catch (error) {
+    warnings.push(`Layout read error for ${fileName} page ${pageNumber}: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/** Azure positioned OCR text for one page (scanned sheets have no PDF text layer). */
+function azurePageText(doc: JsonRecord, pageNumber: number) {
+  const page = asArray(asRecord(doc.structuredData).pageText)
+    .map((entry) => asRecord(entry))
+    .find((entry) => Number(entry.pageNumber) === pageNumber);
+  if (!page) return "";
+  return compactText(asArray(page.lines).map((line) => String(asRecord(line).text ?? "")).join("\n"), 4_000);
+}
+
+function layoutRegionType(kind: string, text: string, label: string) {
+  if (kind === "table") return tableRegionType(text);
+  const lower = `${label}\n${text}`.toLowerCase();
+  if (/\b(rev\.?|revision|drawn by|checked|approved|drawing no|dwg no|scale)\b/.test(lower) && text.length < 1_200) return "title_block";
+  if (/\b(legend|symbols?|abbreviations)\b/.test(lower)) return "legend";
+  if (/\b(general notes|notes?:)\b/.test(lower)) return "notes";
+  if (/\b(elevation|section|detail|conn|connection|typ\.?)\b/.test(lower)) return "detail";
+  return "plan_view";
+}
+
+function layoutRegions(args: {
+  doc: JsonRecord;
+  pageNumber: number;
+  imageWidth: number;
+  imageHeight: number;
+  sheetNumber: string | null;
+  sheetTitle: string | null;
+  discipline: string | null;
+  packageTags: string[];
+  layout: PageLayout;
+  pageImageHash: string | null;
+}) {
+  const textIn = (box: { x: number; y: number; width: number; height: number }) => args.layout.textLines
+    .filter((line) => {
+      const lb = line.pageBbox;
+      if (!lb) return false;
+      const cx = lb.x + lb.width / 2;
+      const cy = lb.y + lb.height / 2;
+      return cx >= box.x && cx <= box.x + box.width && cy >= box.y && cy <= box.y + box.height;
+    })
+    .map((line) => line.text)
+    .join("\n");
+
+  return args.layout.regions.flatMap((region) => {
+    const box = region.pageBbox;
+    if (!box) return [];
+    const text = textIn(box);
+    const label = region.label || (region.kind === "table" ? "table" : "drawing view");
+    const regionType = layoutRegionType(region.kind, text, label);
+    return [makeRegion({
+      documentId: String(args.doc.id),
+      fileName: String(args.doc.fileName ?? ""),
+      pageNumber: args.pageNumber,
+      regionType,
+      label: `${label} (${region.id})`,
+      bbox: proportionalRegion(args.imageWidth, args.imageHeight, box.x, box.y, box.width, box.height),
+      text: compactText([
+        text,
+        args.layout.vectorTextLikely ? "Dimensions/notes on this sheet are drawn as vector strokes: read them from the image (readDrawingTile), not this text." : "",
+      ].filter(Boolean).join("\n"), 900),
+      source: region.kind === "table" ? "pdf_layout_table" : "pdf_layout_geometry",
+      confidence: region.kind === "table" ? 0.8 : 0.7,
+      sheetNumber: args.sheetNumber,
+      sheetTitle: args.sheetTitle,
+      discipline: args.discipline,
+      packageTags: args.packageTags,
+      imageHash: args.pageImageHash,
+    })];
+  });
 }
 
 function semanticPageRegions(args: {
@@ -1076,6 +1188,19 @@ async function findWorkspaceDocument(documentId: string) {
   return asArray(ws.sourceDocuments).map(asRecord).find((doc) => String(doc.id ?? "") === documentId) ?? null;
 }
 
+/**
+ * Accept either a SourceDocument id or a Files-area FileNode id. A FileNode
+ * (for example a PDF the agent saved out of an archive) is promoted to a real
+ * source document first, so it gets pages, extraction and atlas eligibility.
+ */
+export async function resolveSourceDocumentId(id: string): Promise<string> {
+  const trimmed = id.trim();
+  if (await findWorkspaceDocument(trimmed)) return trimmed;
+  if (!trimmed.startsWith("fn-")) return trimmed;
+  const promoted = await apiPost<JsonRecord>(`/projects/${getProjectId()}/documents/from-file-node`, { fileNodeId: trimmed }).catch(() => null);
+  return typeof promoted?.id === "string" ? promoted.id : trimmed;
+}
+
 async function getStrategy() {
   const data = await apiGet<{ strategy: JsonRecord | null }>(`/api/estimate/${getProjectId()}/strategy`);
   return data.strategy ? asRecord(data.strategy) : null;
@@ -1398,7 +1523,13 @@ async function buildAtlas(options: { force?: boolean; renderDpis?: number[]; max
         nativeLayerNames.length ? `PDF layers: ${nativeLayerNames.join(", ")}` : "",
         nativeTextSample ? `PDF native text sample:\n${nativeTextSample}` : "",
       ].filter(Boolean).join("\n");
-      const structuredText = [pageStructuredText(doc, pageNumber), nativeText].filter(Boolean).join("\n");
+      const layout = await readPageLayout(String(doc.id), pageNumber, warnings, String(doc.fileName ?? ""));
+      const structuredText = [
+        layout?.pageText ?? "",
+        azurePageText(doc, pageNumber),
+        pageStructuredText(doc, pageNumber, Boolean(layout?.pageText)),
+        nativeText,
+      ].filter(Boolean).join("\n");
       const sheetNumber = inferSheetNumber(String(doc.fileName ?? ""), structuredText);
       const sheetTitle = inferSheetTitle(String(doc.fileName ?? ""), structuredText);
       const discipline = inferDiscipline(String(doc.fileName ?? ""), structuredText);
@@ -1472,7 +1603,7 @@ async function buildAtlas(options: { force?: boolean; renderDpis?: number[]; max
         } : null,
       });
 
-      regions.push(...semanticPageRegions({
+      const layoutRegionList = layout ? layoutRegions({
         doc,
         pageNumber,
         imageWidth,
@@ -1481,8 +1612,24 @@ async function buildAtlas(options: { force?: boolean; renderDpis?: number[]; max
         sheetTitle,
         discipline,
         packageTags,
-        text: structuredText,
-      }));
+        layout,
+        pageImageHash,
+      }) : [];
+      if (layoutRegionList.length > 0) {
+        regions.push(...layoutRegionList);
+      } else {
+        regions.push(...semanticPageRegions({
+          doc,
+          pageNumber,
+          imageWidth,
+          imageHeight,
+          sheetNumber,
+          sheetTitle,
+          discipline,
+          packageTags,
+          text: structuredText,
+        }));
+      }
       regions.push(...tableRegions({
         doc,
         pageNumber,
@@ -2307,10 +2454,10 @@ export function registerDrawingEvidenceTools(server: McpServer) {
       maxPagesPerDocument: z.coerce.number().int().positive().optional().describe("Optional safety cap for the immediate atlas rebuild."),
     },
     async (input) => {
-      const documentId = input.documentId.trim();
+      const documentId = await resolveSourceDocumentId(input.documentId);
       const doc = await findWorkspaceDocument(documentId);
       if (!doc) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, message: `Document ${documentId} was not found in this project.` }, null, 2) }] };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, message: `Document ${input.documentId} was not found in this project (neither a source document nor a file in the Files area).` }, null, 2) }] };
       }
       if (isIgnoredSourceDocument(doc.fileName) || isIgnoredSourceDocument(doc.storagePath)) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, message: "Ignored archive metadata files cannot be added to the drawing atlas.", documentId, fileName: doc.fileName }, null, 2) }] };
@@ -2419,10 +2566,10 @@ export function registerDrawingEvidenceTools(server: McpServer) {
       maxPagesPerDocument: z.coerce.number().int().positive().optional().describe("Optional safety cap for the immediate atlas rebuild."),
     },
     async (input) => {
-      const documentId = input.documentId.trim();
+      const documentId = await resolveSourceDocumentId(input.documentId);
       const doc = await findWorkspaceDocument(documentId);
       if (!doc) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, message: `Document ${documentId} was not found in this project.` }, null, 2) }] };
+        return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, message: `Document ${input.documentId} was not found in this project (neither a source document nor a file in the Files area).` }, null, 2) }] };
       }
       if (isIgnoredSourceDocument(doc.fileName) || isIgnoredSourceDocument(doc.storagePath)) {
         return { content: [{ type: "text" as const, text: JSON.stringify({ success: false, message: "Ignored archive metadata files cannot be promoted to drawing evidence.", documentId, fileName: doc.fileName }, null, 2) }] };
@@ -2601,9 +2748,13 @@ export function registerDrawingEvidenceTools(server: McpServer) {
             pageNumber: entry.region.pageNumber,
             dpi: 150,
             region: entry.region.bbox,
+            recordView: recordViewPayload("searchDrawingRegions"),
           }).catch(() => null);
           const base64Match = String(render?.image ?? "").match(/^data:image\/png;base64,(.+)$/);
-          if (base64Match) content.push({ type: "image" as const, data: base64Match[1], mimeType: "image/png" as const });
+          if (base64Match) {
+            content.push({ type: "image" as const, data: base64Match[1], mimeType: "image/png" as const });
+            content.push({ type: "text" as const, text: `Thumbnail above: region ${entry.region.id}, viewId ${render?.viewId ?? "unrecorded"}` });
+          }
         }
       }
 
@@ -2650,6 +2801,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
         pageNumber,
         dpi: input.dpi,
         region: bbox,
+        recordView: recordViewPayload("inspectDrawingRegion"),
       });
       if (!result.success || !result.image) {
         return { content: [{ type: "text" as const, text: `Failed to inspect region: ${result.error ?? result.message ?? "unknown error"}` }] };
@@ -2671,6 +2823,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
         bbox,
         dpi: input.dpi,
         imageHash: hash,
+        viewId: typeof result.viewId === "string" ? result.viewId : null,
         cropPath: saved?.filePath ?? null,
         question: input.question ?? null,
         claim: input.claim ?? null,

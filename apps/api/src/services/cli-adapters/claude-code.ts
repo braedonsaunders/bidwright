@@ -298,6 +298,8 @@ function parseEvent(msg: any, state: ParserState): SSEEventData[] {
       type: "progress",
       data: {
         phase: "Turn complete",
+        usage: msg.usage,
+        costUsd: typeof msg.total_cost_usd === "number" ? msg.total_cost_usd : null,
         detail:
           typeof msg.result === "string" ? msg.result.substring(0, 200) : "Processing...",
       },
@@ -404,6 +406,7 @@ export const claudeCodeAdapter: CliAdapter = {
       {
         transport: "claude-agent-sdk",
         projectDir: ctx.projectDir,
+        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "sonnet",
         reasoningEffort: ctx.reasoningEffort,
@@ -423,6 +426,7 @@ export const claudeCodeAdapter: CliAdapter = {
       {
         transport: "claude-agent-sdk",
         projectDir: ctx.projectDir,
+        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "sonnet",
         reasoningEffort: ctx.reasoningEffort,

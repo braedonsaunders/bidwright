@@ -4,12 +4,21 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { evidenceMetrics } from "../eval/evidence-metrics.js";
 
 const execFileAsync = promisify(execFile);
+const activeEvalRuns = new Map<string, () => Promise<void>>();
+async function stopActiveEvalRuns() {
+  await Promise.allSettled([...activeEvalRuns.values()].map((stop) => stop()));
+  activeEvalRuns.clear();
+}
+for (const signal of ["SIGINT", "SIGTERM"] as const) {
+  process.once(signal, () => { void stopActiveEvalRuns().finally(() => process.exit(130)); });
+}
 
 type Json = Record<string, unknown>;
 
-type Runtime = "claude-code" | "codex" | "gemini" | "opencode";
+type Runtime = "claude-code" | "codex" | "gemini" | "opencode" | "openrouter";
 type RunMode = "full-intake" | "manual-question";
 
 interface Args {
@@ -39,6 +48,7 @@ interface Args {
   repeat: number;
   repeatDelaySeconds: number;
   copyProjectPerRun: boolean;
+  reingestArchives: boolean;
   prepareOnly: boolean;
   autoAnswerQuestions: boolean;
   questionAnswer?: string;
@@ -390,6 +400,7 @@ interface CaseReport {
   documentMetrics: DocumentMetrics;
   estimateMetrics: EstimateMetrics;
   humanQuoteMetrics?: HumanQuoteMetrics;
+  evidenceMetrics?: ReturnType<typeof evidenceMetrics>;
   quality: QualityScore;
   findings: string[];
   artifacts: {
@@ -567,7 +578,7 @@ Options:
   --project-id <id>                Reuse an already-ingested project instead of uploading zips
   --cases <dir>                    Directory of .zip cases
   --out <dir>                      Output directory. Default: ./.bidwright/evals/<timestamp>
-  --runtime <runtime>              claude-code | codex | gemini | opencode. Default: claude-code
+  --runtime <runtime>              claude-code | codex | gemini | opencode | openrouter. Default: claude-code
   --model <model>                  Runtime model override
   --persona-id <id>                Estimator persona id
   --scope <text>                   Scope/commercial instruction override
@@ -584,6 +595,7 @@ Options:
   --max-cases <n>                  Limit cases for a smoke run
   --repeat <n>                     Run each case repeatedly. Default: 1
   --repeat-delay-seconds <n>       Delay between repeated runs. Default: 0
+  --reingest-archives              Expand legacy archives on the fresh copy before intake
   --no-copy-project-per-run        Reuse the same project directly instead of copying it for each attempt
   --prepare-only                   Upload/extract documents and stop before starting an agent
   --no-auto-answer-questions       Do not auto-answer blocking askUser prompts during eval runs
@@ -639,6 +651,7 @@ function parseArgs(argv: string[]): Args {
     stallMinutes: Number(process.env.BIDWRIGHT_EVAL_STALL_MINUTES || 8),
     repeat: Number(process.env.BIDWRIGHT_EVAL_REPEAT || 1),
     repeatDelaySeconds: Number(process.env.BIDWRIGHT_EVAL_REPEAT_DELAY_SECONDS || 0),
+    reingestArchives: false,
     copyProjectPerRun: process.env.BIDWRIGHT_EVAL_COPY_PROJECT_PER_RUN !== "false",
     prepareOnly: false,
     autoAnswerQuestions: process.env.BIDWRIGHT_EVAL_AUTO_ANSWER_QUESTIONS !== "false",
@@ -738,6 +751,9 @@ function parseArgs(argv: string[]): Args {
       case "--repeat-delay-seconds":
         args.repeatDelaySeconds = Number(next());
         break;
+      case "--reingest-archives":
+        args.reingestArchives = true;
+        break;
       case "--no-copy-project-per-run":
         args.copyProjectPerRun = false;
         break;
@@ -773,9 +789,10 @@ function parseArgs(argv: string[]): Args {
   } else {
     args.outDir = path.resolve(args.outDir);
   }
+  if (args.reingestArchives && (!args.projectId || !args.copyProjectPerRun)) throw new Error("Archive reingestion requires a copied project; refusing to mutate the source.");
   args.apiUrl = args.apiUrl.replace(/\/+$/, "");
 
-  if (!["claude-code", "codex", "gemini", "opencode"].includes(args.runtime)) {
+  if (!["claude-code", "codex", "gemini", "opencode", "openrouter"].includes(args.runtime)) {
     throw new Error(`Unsupported runtime: ${args.runtime}`);
   }
   if (!["full-intake", "manual-question"].includes(args.mode)) {
@@ -983,6 +1000,7 @@ async function main() {
       : "";
     log(`\n[${index + 1}/${cases.length}] ${evalCase.zipName}${repeatLabel}`);
     const report = await runCase(client, args, evalCase).catch(async (error) => {
+      if (!args.keepRunning) await stopActiveEvalRuns();
       const failed = await buildFailedCaseReport(args, evalCase, error);
       await persistCaseReport(failed, args.outDir);
       return failed;
@@ -1115,7 +1133,15 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
       quote = getObject(copiedWorkspace.quote);
       revision = getObject(copiedWorkspace.currentRevision);
       projectId = getString(project.id);
-      if (!projectId) throw new Error("Project copy response did not include workspace.project.id");
+      if (!projectId || projectId === args.projectId) throw new Error("Project copy did not return an isolated project; refusing to run.");
+      if (args.reingestArchives) {
+        const documents = Array.isArray(copiedWorkspace.sourceDocuments) ? copiedWorkspace.sourceDocuments as Json[] : [];
+        for (const document of documents) {
+          if (/\.(zip|7z|rar)$/i.test(getString(document.fileName))) {
+            await client.requestJson(`/projects/${projectId}/documents/${getString(document.id)}/reingest`, { method: "POST", body: {} });
+          }
+        }
+      }
       await appendLiveNote(monitor, `Copied prepared project for fresh agent attempt: ${args.projectId} -> ${projectId}. Estimate artifacts were reset; source documents and extraction evidence were preserved.`);
     } else {
       const workspaceResponse = await client.requestJson<Json>(`/projects/${args.projectId}/workspace`);
@@ -1228,8 +1254,11 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
   });
   const completedAt = new Date();
 
+  const viewsResponse = await client.requestJson<Json>(`/api/vision/views?projectId=${encodeURIComponent(projectId)}`).catch(() => null);
+  const measuredEvidence = evidenceMetrics(workspace, Array.isArray(viewsResponse?.data.views) ? viewsResponse!.data.views as Json[] : []);
   const report: CaseReport = {
     caseId: evalCase.id,
+    evidenceMetrics: measuredEvidence,
     baseCaseId: evalCase.baseId,
     iteration: evalCase.iteration,
     repeatTotal: evalCase.repeatTotal,
@@ -1283,8 +1312,12 @@ async function runIntake(client: ApiClient, args: Args, projectId: string, scope
     },
   });
   const sessionId = getString(start.data.sessionId);
+  activeEvalRuns.set(projectId, async () => {
+    await client.requestJson(`/api/cli/${projectId}/stop`, { method: "POST", body: {} });
+  });
   await appendLiveNote(monitor, `Started full intake session: ${sessionId || "unknown"}`);
   const status = await waitForAgentRun(client, args, projectId, sessionId, "full intake", monitor);
+  activeEvalRuns.delete(projectId);
   return buildRunReport("full intake", "intake", sessionId, status);
 }
 
@@ -1301,8 +1334,12 @@ async function runQuestion(client: ApiClient, args: Args, projectId: string, que
     },
   });
   const sessionId = getString(start.data.sessionId);
+  activeEvalRuns.set(projectId, async () => {
+    await client.requestJson(`/api/cli/${projectId}/stop`, { method: "POST", body: {} });
+  });
   await appendLiveNote(monitor, `Started ${label} session: ${sessionId || "unknown"}\n\nQuestion: ${question}`);
   const status = await waitForAgentRun(client, args, projectId, sessionId, label, monitor);
+  activeEvalRuns.delete(projectId);
   return buildRunReport(label, "question", sessionId, status);
 }
 
@@ -3860,7 +3897,8 @@ function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-main().catch((error) => {
+main().catch(async (error) => {
+  await stopActiveEvalRuns();
   process.stderr.write(`${error instanceof Error ? error.stack || error.message : String(error)}\n`);
   process.exitCode = 1;
 });

@@ -57,8 +57,45 @@ async function detectOllama(): Promise<boolean> {
   }
 }
 
-function getEmbeddingConfig(): { provider: "openai" | "local"; apiKey?: string; baseUrl?: string; model?: string; dimensions?: number } | null {
-  const provider = process.env.EMBEDDING_PROVIDER as "openai" | "local" | undefined;
+type HostedEmbeddingProvider = "openai" | "openai-small" | "cohere" | "voyage" | "gemini";
+
+const HOSTED_EMBEDDING_PROVIDERS: Record<HostedEmbeddingProvider, { envKeys: string[]; model: string; dimensions: number }> = {
+  openai: { envKeys: ["EMBEDDING_API_KEY", "OPENAI_API_KEY"], model: "text-embedding-3-large", dimensions: 1024 },
+  "openai-small": { envKeys: ["EMBEDDING_API_KEY", "OPENAI_API_KEY"], model: "text-embedding-3-small", dimensions: 1024 },
+  cohere: { envKeys: ["EMBEDDING_API_KEY", "COHERE_API_KEY"], model: "embed-v4", dimensions: 1024 },
+  voyage: { envKeys: ["EMBEDDING_API_KEY", "VOYAGE_API_KEY"], model: "voyage-3-large", dimensions: 1024 },
+  gemini: { envKeys: ["EMBEDDING_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY"], model: "text-embedding-004", dimensions: 768 },
+};
+
+/**
+ * Embedding configuration for hybrid search.
+ *
+ * Until 2026-10 only `EMBEDDING_PROVIDER=local` (TEI/Ollama) or an
+ * auto-detected local Ollama ever produced a config, so in the Docker/prod
+ * shape vector search was silently off and every "hybrid" query was lexical.
+ * Hosted providers are now honoured from env; the dimension defaults to 1024
+ * to match the `vector(1024)` column (OpenAI models accept a `dimensions`
+ * request parameter; override with EMBEDDING_DIMENSIONS only if the column
+ * is changed to match).
+ */
+export function getEmbeddingConfig(): { provider: "openai" | "cohere" | "voyage" | "gemini" | "local"; apiKey?: string; baseUrl?: string; model?: string; dimensions?: number } | null {
+  const provider = (process.env.EMBEDDING_PROVIDER ?? "").trim() as HostedEmbeddingProvider | "local" | "";
+
+  if (provider && provider !== "local" && provider in HOSTED_EMBEDDING_PROVIDERS) {
+    const spec = HOSTED_EMBEDDING_PROVIDERS[provider as HostedEmbeddingProvider];
+    const apiKey = spec.envKeys.map((key) => process.env[key]?.trim()).find(Boolean);
+    if (!apiKey) {
+      return null; // configured but unusable; keyword search carries the load
+    }
+    return {
+      // "openai-small" is the OpenAI provider with the small model, not a separate adapter.
+      provider: provider === "openai-small" ? "openai" : provider,
+      apiKey,
+      baseUrl: process.env.EMBEDDING_BASE_URL || undefined,
+      model: process.env.EMBEDDING_MODEL || spec.model,
+      dimensions: parseInt(process.env.EMBEDDING_DIMENSIONS || String(spec.dimensions), 10),
+    };
+  }
 
   // Explicit local provider (TEI / Ollama)
   if (provider === "local") {

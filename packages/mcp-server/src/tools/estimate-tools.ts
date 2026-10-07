@@ -509,7 +509,10 @@ export function registerEstimateTools(server: McpServer) {
       const strategy = data?.workspace?.estimateStrategy ?? null;
       const candidateCount = strategy?.benchmarkProfile?.candidateCount ?? 0;
       const actions = strategy?.benchmarkProfile?.suggestedActions?.length ?? 0;
-      return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: ${candidateCount}. Suggested actions: ${actions}.` }] };
+      if (candidateCount === 0) {
+        return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: 0. No benchmark adjustments apply; a no-comparables adjustment plan was recorded automatically, so saveEstimateAdjustments is NOT required. Proceed to worksheets/items on document, vendor, rate-schedule, and library evidence. The final saveEstimateReconcile is still mandatory.` }] };
+      }
+      return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: ${candidateCount}. Suggested actions: ${actions}. Record how they change the approach with saveEstimateAdjustments before pricing.` }] };
     },
   );
 

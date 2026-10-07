@@ -15,7 +15,7 @@
 
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { isAgentToolMutating } from "@bidwright/domain";
+import { isToolAllowed } from "./tool-access.js";
 import { registerQuoteTools } from "./tools/quote-tools.js";
 import { registerKnowledgeTools } from "./tools/knowledge-tools.js";
 import { registerSystemTools } from "./tools/system-tools.js";
@@ -35,16 +35,17 @@ const server = new McpServer({
   version: "0.1.0",
 });
 
-const readOnlyMode = process.env.BIDWRIGHT_AGENT_MODE === "qa";
+const reviewOnly = process.env.BIDWRIGHT_REVIEW_ONLY === "true";
+const readOnlyMode = process.env.BIDWRIGHT_AGENT_MODE === "qa" || reviewOnly;
 if (readOnlyMode) {
   const rawTool = (server as any).tool.bind(server);
   (server as any).tool = (name: string, ...args: unknown[]) => {
-    if (isAgentToolMutating(name)) return undefined;
+    if (!isToolAllowed(name, process.env.BIDWRIGHT_AGENT_MODE, reviewOnly)) return undefined;
     return rawTool(name, ...args);
   };
   const rawRegisterTool = (server as any).registerTool.bind(server);
   (server as any).registerTool = (name: string, ...args: unknown[]) => {
-    if (isAgentToolMutating(name)) return undefined;
+    if (!isToolAllowed(name, process.env.BIDWRIGHT_AGENT_MODE, reviewOnly)) return undefined;
     return rawRegisterTool(name, ...args);
   };
 }
