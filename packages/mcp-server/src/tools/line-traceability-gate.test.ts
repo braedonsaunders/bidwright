@@ -159,7 +159,7 @@ test("4 anchors per plate is rejected when the cited view text says (1) hole", a
 
 test("the contradiction is caught from the agent's own excerpt even without a view snippet", async () => {
   __setEvidenceViewFetcherForTests(async (ids) => ({
-    views: ids.map((id) => ({ id, pageNumber: 4, tool: "readDrawingTile", imageHash: "x", textSnippet: "" })),
+    views: ids.map((id) => ({ id, documentId: "doc_platform", sourceChecksum: "platform-v1", pageNumber: 4, tool: "readDrawingTile", imageHash: "x", textSnippet: "" })),
     missingIds: [],
   }));
   const error = await validateTraceableQuantityForPricing(zipOnlyWorkspace, {
@@ -259,4 +259,20 @@ test("a view of the current document version passes the staleness check", async 
     strategy,
   });
   assert.equal(error, null);
+});
+
+test("a Files-area-only view with no source document identity fails closed with the promotion action", async () => {
+  __setEvidenceViewFetcherForTests(async (ids) => ({
+    views: ids.map((id) => ({ id, documentId: null, fileNodeId: "fn-2f6e3094", sourceChecksum: null, pageNumber: 4, tool: "readDrawingTile", imageHash: "h", textSnippet: platformNote })),
+    missingIds: [],
+  }));
+  const error = await validateTraceableQuantityForPricing(zipOnlyWorkspace, {
+    evidenceBasis: { quantity: { type: "drawing_quantity", viewIds: ["view-plan"] }, pricing: { type: "allowance" } },
+    derivation: anchorDerivation(1),
+    quantity: 6,
+    strategy,
+  });
+  assert.match(error!, /not a registered source document/);
+  assert.match(error!, /fn-2f6e3094/);
+  assert.match(error!, /promotePdfToDrawingEvidence/);
 });
