@@ -142,3 +142,19 @@ test("a negative-cost row is never treated as a declared no-charge placeholder",
   const credit = { id: "li-credit", worksheetId: "ws", entityName: "Credit", category: item.category, quantity: 1, uom: "LS", cost: -500, price: -500, sourceEvidence: { evidenceBasis: item.evidenceBasis } };
   assert.equal((await zeroRuleIssues([credit]))[0].severity, "error");
 });
+
+test("round-3 GPT deck drilling row (80 fastenings via an assumption-method claim) is flagged and stays draft", async () => {
+  const { validateEstimateWorkspace } = await import("@bidwright/domain");
+  const row = fixture.round3DeckDrillRow;
+  assert.equal(fixture.round3DeckAllowanceClaim.method, "assumption");
+  assert.deepEqual(row.derivation.reviewFlags, [], "unflagged as persisted on sha-913e488");
+  const workspace = {
+    worksheets: [{ id: "ws", name: "SS Platform", items: [{ ...row, worksheetId: "ws" }] }],
+    estimateStrategy: { assumptions: fixture.assumptions, summary: { drawingEvidenceEngine: { claims: [fixture.round3DeckAllowanceClaim] } } },
+  };
+  const result = validateEstimateWorkspace(workspace as any, { ruleIds: ["worksheet.evidence.assumed_derivation_unreviewed"] } as any);
+  const issue = result.issues.find((entry: any) => entry.ruleId === "worksheet.evidence.assumed_derivation_unreviewed");
+  assert.ok(issue, "now flagged");
+  assert.match(issue!.message, /fasteningLocations/);
+  assert.equal(row.derivation.status, "draft");
+});

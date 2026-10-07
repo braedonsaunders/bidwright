@@ -937,11 +937,44 @@ const UNVERIFIED_SOURCE_KINDS = new Set<LineDerivationSourceKind>(["assumption",
  * assumption. A value of 1 sourced from evidence does not size anything, so
  * the row is assumption-dominated.
  */
-export function summarizeDerivationAssumptions(derivation: LineDerivation | null | undefined) {
+/**
+ * Lookups that let assumption flags follow references. A derivation input that
+ * cites a claim whose method is "assumption" is as assumed as one citing the
+ * assumption directly (round-3 GPT carried 80 deck fastenings that way and the
+ * row was unflagged). An input that cites another worksheet item inherits the
+ * same-named input of that item's derivation, or the item's own dominance.
+ */
+export interface DerivationSourceLookup {
+  claimMethod?: (claimId: string) => string | null | undefined;
+  itemDerivation?: (itemId: string) => LineDerivation | null | undefined;
+}
+
+const MAX_REFERENCE_DEPTH = 8;
+
+function inputIsAssumed(input: LineDerivationInput, lookup: DerivationSourceLookup, visited: Set<string>): boolean {
+  const kind = input.source?.kind;
+  const ref = String(input.source?.ref ?? "").trim();
+  if (UNVERIFIED_SOURCE_KINDS.has(kind)) return true;
+  if (kind === "claim") return String(lookup.claimMethod?.(ref) ?? "").trim().toLowerCase() === "assumption";
+  if (kind === "item" && ref && lookup.itemDerivation) {
+    // A reference cycle or an over-long chain cannot establish a source: treat as assumed.
+    if (visited.has(ref) || visited.size >= MAX_REFERENCE_DEPTH) return true;
+    const linked = lookup.itemDerivation(ref);
+    if (!linked) return false;
+    const next = new Set(visited).add(ref);
+    const sameName = linked.inputs.find((candidate) => candidate.name === input.name);
+    if (sameName) return inputIsAssumed(sameName, lookup, next);
+    return summarize(linked, lookup, next).dominated;
+  }
+  return false;
+}
+
+function summarize(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup, visited: Set<string>) {
   const inputs = derivation?.inputs ?? [];
-  const assumed = inputs.filter((input) => UNVERIFIED_SOURCE_KINDS.has(input.source?.kind));
+  const assumed = inputs.filter((input) => inputIsAssumed(input, lookup, visited));
+  const assumedNames = new Set(assumed.map((input) => input.name));
   const sizing = inputs.filter((input) => Number.isFinite(input.value) && input.value !== 1 && input.value !== 0);
-  const dominated = assumed.length > 0 && sizing.length > 0 && sizing.every((input) => UNVERIFIED_SOURCE_KINDS.has(input.source?.kind));
+  const dominated = assumed.length > 0 && sizing.length > 0 && sizing.every((input) => assumedNames.has(input.name));
   return {
     assumedInputs: assumed.map((input) => input.name),
     assumptionRefs: [...new Set(assumed.map((input) => input.source?.ref).filter(Boolean))] as string[],
@@ -949,9 +982,21 @@ export function summarizeDerivationAssumptions(derivation: LineDerivation | null
   };
 }
 
+/**
+ * Which inputs of a derivation are assumed, and whether assumptions set its
+ * magnitude. On the 2026-10-07 GPT matrix a 96 h platform-erection row was
+ * labelled drawing_quantity because one input, "installationPackages = 1",
+ * cited a view; crewMembers 3 × crewDays 4 × hoursPerDay 8 all came from an
+ * assumption. A value of 1 sourced from evidence does not size anything, so
+ * the row is assumption-dominated.
+ */
+export function summarizeDerivationAssumptions(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup = {}) {
+  return summarize(derivation, lookup, new Set());
+}
+
 /** Review flags recomputed on every write; callers cannot supply or clear them. */
-export function flagDerivationAssumptions(derivation: LineDerivation): LineDerivationReviewFlag[] {
-  const summary = summarizeDerivationAssumptions(derivation);
+export function flagDerivationAssumptions(derivation: LineDerivation, lookup: DerivationSourceLookup = {}): LineDerivationReviewFlag[] {
+  const summary = summarizeDerivationAssumptions(derivation, lookup);
   if (summary.assumedInputs.length === 0) return [];
   const refs = summary.assumptionRefs.length > 0 ? ` (${summary.assumptionRefs.join(", ")})` : "";
   if (summary.dominated) {
@@ -966,6 +1011,23 @@ export function flagDerivationAssumptions(derivation: LineDerivation): LineDeriv
     message: `Some inputs are assumed${refs}: ${summary.assumedInputs.join(", ")}.`,
     inputs: summary.assumedInputs,
   }];
+}
+
+/** Lookup built from a strategy's Drawing Evidence Engine claims and a set of rows' derivations. */
+export function derivationSourceLookup(claims: unknown, items: Array<{ id?: unknown; derivation?: unknown }>): DerivationSourceLookup {
+  const methods = new Map<string, string>();
+  for (const claim of Array.isArray(claims) ? claims : []) {
+    const record = (claim ?? {}) as Record<string, unknown>;
+    const id = String(record.claimId ?? record.id ?? "").trim();
+    if (id) methods.set(id, String(record.method ?? ""));
+  }
+  const derivations = new Map<string, LineDerivation>();
+  for (const item of items) {
+    const id = String(item.id ?? "").trim();
+    const derivation = normalizeLineDerivation(item.derivation);
+    if (id && derivation) derivations.set(id, derivation);
+  }
+  return { claimMethod: (id) => methods.get(id) ?? null, itemDerivation: (id) => derivations.get(id) ?? null };
 }
 
 function normalizeProcurement(value: unknown): LineDerivationProcurement | null {
