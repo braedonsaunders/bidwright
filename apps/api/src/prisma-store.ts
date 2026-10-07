@@ -40,6 +40,7 @@ import {
   derivationInvalidatedByFields,
   derivationReferencesItem,
   derivationReferencesDocument,
+  evaluateProcurementLink,
   markDerivationStale,
   normalizeLineDerivation,
   stageAfterSavingSections,
@@ -6683,6 +6684,33 @@ export class PrismaApiStore {
 
     const visualTakeoffIssues = this.validateVisualTakeoffCoverage(existing?.scopeGraph, workspace);
     validationIssues.push(...visualTakeoffIssues);
+
+    // Declared installed/procurement links are re-evaluated here so a
+    // mismatch introduced after the agent's gate (web edit, batch) still
+    // blocks finalize instead of being accepted silently.
+    const lineItemsForProcurement = workspace.estimate.lineItems ?? [];
+    const itemLookup = new Map(lineItemsForProcurement.map((item) => [item.id, item]));
+    for (const item of lineItemsForProcurement) {
+      const procurement = item.derivation?.procurement;
+      if (!procurement) continue;
+      const result = evaluateProcurementLink(procurement, {
+        purchaseQuantity: Number(item.quantity ?? 0),
+        purchaseUom: item.uom ?? null,
+        resolveItem: (itemId) => {
+          const linked = itemLookup.get(itemId);
+          return linked ? { quantity: Number(linked.quantity ?? 0), uom: linked.uom ?? null, derivation: linked.derivation ?? null, entityName: linked.entityName } : null;
+        },
+      });
+      for (const issue of result.issues.filter((entry) => entry.severity === "error")) {
+        validationIssues.push({
+          code: "procurement_mismatch",
+          itemId: item.id,
+          entityName: item.entityName,
+          detail: issue.code,
+          message: `Procurement does not cover the installed requirement on "${item.entityName}": ${issue.message}`,
+        });
+      }
+    }
 
     const readinessValidation = validateEstimateWorkspace(workspace as any, {
       ruleSetIds: ["readiness"],
