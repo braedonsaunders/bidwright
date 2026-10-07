@@ -5,7 +5,7 @@ export function assertPromptCachingOverride(value: unknown): void {
   }
 }
 
-export function resolveRunPromptCaching(requested: unknown, previous?: unknown): boolean {
+export function resolveRunPromptCaching(requested: unknown, previous?: unknown, configured = false): boolean {
   assertPromptCachingOverride(requested);
-  return typeof requested === "boolean" ? requested : typeof previous === "boolean" ? previous : false;
+  return typeof requested === "boolean" ? requested : typeof previous === "boolean" ? previous : configured;
 }

@@ -1376,7 +1376,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const adapter = getAdapter(runtime);
     const model = normalizeCliModel(runtime, body.model ?? integrationsEarly.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrationsEarly.agentReasoningEffort);
-    const promptCaching = resolveRunPromptCaching(body.promptCaching);
+    const promptCaching = resolveRunPromptCaching(body.promptCaching, undefined, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
 
     // Generate per-runtime instruction files (CLAUDE.md / AGENTS.md / GEMINI.md)
     const params = {
@@ -1627,7 +1627,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         : "claude-code";
     const model = normalizeCliModel(runtime, body.model ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
-    const promptCaching = resolveRunPromptCaching(body.promptCaching, (latestRun?.input as any)?.promptCaching);
+    const promptCaching = resolveRunPromptCaching(body.promptCaching, (latestRun?.input as any)?.promptCaching, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
     await prepareCliAgentWorkspace({ request, workspace, projectId, runtime, mode });
     const resumePrompt = buildResumePrompt(runtime, mode, body.prompt);
     const aiRunId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -1783,7 +1783,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         : "claude-code";
     const model = normalizeCliModel(runtime, requestedModel ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(requestedEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
-    const promptCaching = resolveRunPromptCaching(requestedPromptCaching, (latestRun?.input as any)?.promptCaching);
+    const promptCaching = resolveRunPromptCaching(requestedPromptCaching, (latestRun?.input as any)?.promptCaching, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
     const prepared = await prepareCliAgentWorkspace({
       request,
       workspace,
