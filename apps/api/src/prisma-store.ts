@@ -7596,10 +7596,16 @@ export class PrismaApiStore {
       // not one undifferentiated hit per document. Falls back to a whole-
       // document hit when the text carries no page delimiters.
       if (kinds.has("text") && doc.extractedText && doc.extractedText.length > 0) {
-        const pages = doc.extractedText.split(PAGE_DELIMITER);
+        // Same page derivation as the semantic index: positioned per-page text
+        // first, then ingestion delimiters, so both lanes agree on page numbers.
+        const derivedPages = derivePagesForIndexing(doc.extractedText, doc.structuredData);
+        const pages = derivedPages && derivedPages.length > 1
+          ? derivedPages
+          : doc.extractedText.split(PAGE_DELIMITER).map((text, index) => ({ pageNumber: index + 1, text }));
         if (pages.length > 1) {
           const pageHits: Hit[] = [];
-          pages.forEach((pageText, index) => {
+          pages.forEach((page) => {
+            const pageText = page.text;
             if (!pageText || !pageText.trim()) return;
             const match = scoreEstimatorSearchText(profile, pageText, doc.fileName);
             if (!match) return;
@@ -7608,7 +7614,7 @@ export class PrismaApiStore {
               fileName: doc.fileName,
               documentType: doc.documentType ?? null,
               kind: "text",
-              pageNumber: index + 1,
+              pageNumber: page.pageNumber,
               snippet: bestSnippet(pageText, 320),
               score: match.score,
               coverage: match.coverage,
