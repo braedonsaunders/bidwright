@@ -5,6 +5,7 @@
  */
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { findPendingQuestionEvent } from "../services/cli-question-history.js";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, probeLiveAgent, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
 import {
   startLoginSession,
@@ -632,56 +633,20 @@ function findPendingCliQuestionFromEvents(
   events: PersistedCliEvent[],
   questionId?: string,
 ): PendingQuestionState | null {
-  let pending: PendingQuestionState | null = null;
-
-  for (const event of events) {
-    const data = (event.data || {}) as Record<string, unknown>;
-    if (event.type === "askUser") {
-      const id = typeof data.questionId === "string"
-        ? data.questionId
-        : typeof data.id === "string"
-          ? data.id
-          : null;
-      if (questionId && id !== questionId) continue;
-      if (!id && questionId) continue;
-      pending = {
-        id: id || "",
-        question: typeof data.question === "string" ? data.question : "",
-        options: Array.isArray(data.options) ? data.options as string[] : [],
-        allowMultiple: data.allowMultiple === true,
-        context: typeof data.context === "string" ? data.context : "",
-        viewId: typeof data.viewId === "string" ? data.viewId : undefined,
-        regionRef: data.regionRef as PendingQuestionState["regionRef"],
-        questions: Array.isArray(data.questions) ? data.questions as CliQuestionStep[] : [],
-        createdAt: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
-      };
-      continue;
-    }
-
-    if (!pending) continue;
-
-    if (event.type === "userAnswer") {
-      const answerQuestionId = typeof data.questionId === "string" ? data.questionId : null;
-      if (!pending.id || !answerQuestionId || answerQuestionId === pending.id) {
-        pending = null;
-      }
-      continue;
-    }
-
-    if (event.type === "askUserTimeout") {
-      const timeoutQuestionId = typeof data.questionId === "string" ? data.questionId : null;
-      if (!pending.id || !timeoutQuestionId || timeoutQuestionId === pending.id) {
-        pending = null;
-      }
-      continue;
-    }
-
-    // If the agent emitted any later activity after the question, it is no longer
-    // blocked on that prompt even if the original askUser never received a userAnswer.
-    pending = null;
-  }
-
-  return pending;
+  const event = findPendingQuestionEvent(events, questionId);
+  if (!event) return null;
+  const data = (event.data || {}) as Record<string, unknown>;
+  return {
+    id: typeof data.questionId === "string" ? data.questionId : typeof data.id === "string" ? data.id : "",
+    question: typeof data.question === "string" ? data.question : "",
+    options: Array.isArray(data.options) ? data.options as string[] : [],
+    allowMultiple: data.allowMultiple === true,
+    context: typeof data.context === "string" ? data.context : "",
+    viewId: typeof data.viewId === "string" ? data.viewId : undefined,
+    regionRef: data.regionRef as PendingQuestionState["regionRef"],
+    questions: Array.isArray(data.questions) ? data.questions as CliQuestionStep[] : [],
+    createdAt: typeof event.timestamp === "string" ? event.timestamp : new Date().toISOString(),
+  };
 }
 
 function hasCliQuestionEvent(events: PersistedCliEvent[], questionId: string): boolean {
