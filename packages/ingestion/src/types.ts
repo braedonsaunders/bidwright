@@ -45,6 +45,21 @@ export interface SourceDocumentStructuredData {
     headers: string[];
     rows: string[][];
     rawMarkdown: string;
+    /** Cell text with page-inch bboxes (Azure), for legends and schedules. */
+    cells?: Array<{
+      rowIndex: number;
+      columnIndex: number;
+      content: string;
+      kind?: string;
+      bbox?: { x: number; y: number; width: number; height: number };
+    }>;
+  }>;
+  /** Positioned OCR text per page, normalized 0..1 boxes (Azure line polygons). */
+  pageText?: Array<{
+    pageNumber: number;
+    size?: { width: number; height: number; unit: string };
+    lines: Array<{ text: string; bbox: { x: number; y: number; width: number; height: number } }>;
+    truncated?: boolean;
   }>;
   keyValuePairs?: Array<{ key: string; value: string; confidence: number }>;
   documentFields?: Array<{

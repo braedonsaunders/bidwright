@@ -26,7 +26,7 @@ export function registerSystemTools(server: McpServer) {
   // ── askUser — block until the user responds ──────────────
   server.tool(
     "askUser",
-    "MANDATORY: Ask the user a clarifying question and WAIT for their response. Use this BEFORE making any assumptions about scope, subcontracting, labour basis, scheduling, or other ambiguous details. The question will appear in the UI and the user can respond. This tool BLOCKS until the user answers — do not proceed without the answer.",
+    "MANDATORY: Ask the user a clarifying question and WAIT for their response. Use this BEFORE making any assumptions about scope, subcontracting, labour basis, scheduling, or other ambiguous details. When the question is about something on a drawing (a count, a note, a detail), pass the viewId of the image you are looking at so the user sees the same thing. The question will appear in the UI and the user can respond. This tool BLOCKS until the user answers — do not proceed without the answer.",
     {
       // Optional because this tool tells the model to prefer `questions` for
       // multi-part asks, and it then omits the singular field — which failed
@@ -37,8 +37,15 @@ export function registerSystemTools(server: McpServer) {
       allowMultiple: z.boolean().optional().describe("Set true when the top-level options support multiple selections"),
       context: z.string().optional().describe("Brief context explaining why you need this information"),
       questions: z.array(askUserQuestionSchema).optional().describe("Optional structured list of related questions. Prefer this when asking more than one thing at a time."),
+      viewId: z.string().optional().describe("viewId of a drawing image you are asking about (from readDrawingPage/readDrawingTile). The user sees that exact image next to the question."),
+      regionRef: z.object({
+        documentId: z.string(),
+        pageNumber: z.coerce.number().int().min(1),
+        bbox: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+        viewId: z.string().optional(),
+      }).optional().describe("Where on a drawing the question is about, so the user can open the page at that spot."),
     },
-    async ({ question, options, allowMultiple, context, questions }) => {
+    async ({ question, options, allowMultiple, context, questions, viewId, regionRef }) => {
       const projectId = process.env.BIDWRIGHT_PROJECT_ID || "";
       if (!projectId) {
         return { content: [{ type: "text" as const, text: "Error: No project ID configured" }] };
@@ -65,6 +72,8 @@ export function registerSystemTools(server: McpServer) {
           allowMultiple,
           context,
           questions,
+          ...(viewId ? { viewId } : {}),
+          ...(regionRef ? { regionRef: { ...regionRef, viewId: regionRef.viewId ?? viewId } } : {}),
         });
 
         const questionId = created.questionId;

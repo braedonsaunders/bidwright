@@ -45,6 +45,7 @@ const PRODUCT_VERSION = (() => {
 })();
 import {
   DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
+  extractArchiveEntries,
   ingestCustomerPackage,
   isAzureDocumentIntelligenceModel,
   normalizeAzureDocumentIntelligenceFeatures,
@@ -1742,54 +1743,66 @@ async function captureHumanEstimateFeedback(
   }).catch(() => null);
 }
 
-async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
-  const multipartUpload = await saveMultipartPackageUpload(request);
-  const sourceKind = multipartUpload.fields.sourceKind ?? "project";
-  const projectId = (projectIdOverride ?? multipartUpload.fields.projectId)?.trim();
-
-  if (projectIdOverride && multipartUpload.fields.projectId && multipartUpload.fields.projectId.trim() !== projectIdOverride) {
-    reply.code(400);
+/** Stage a single uploaded archive buffer exactly as the package uploader would. */
+async function stageArchiveBufferAsPackage(originalFileName: string, fileBuffer: Buffer): Promise<MultipartPackageUpload> {
+  const packageId = `pkg-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const safeFileName = sanitizeFileName(originalFileName) || "upload.zip";
+  if (isZipUpload(originalFileName)) {
+    const storagePath = resolveApiPath(relativePackageArchivePath(packageId, safeFileName));
+    await mkdir(path.dirname(storagePath), { recursive: true });
+    await writeFile(storagePath, fileBuffer);
     return {
-      message: "Multipart projectId does not match the route projectId"
+      packageId,
+      fields: {},
+      originalFileName,
+      storagePath,
+      totalBytes: fileBuffer.byteLength,
+      checksum: createHash("sha256").update(fileBuffer).digest("hex"),
     };
   }
 
-  let targetProjectId = projectId ?? null;
-  if (targetProjectId) {
-    const existingProject = await store.getProject(targetProjectId);
-    if (!existingProject) {
-      reply.code(404);
-      return {
-        message: "Project not found"
-      };
-    }
-  } else {
-    const createdProject = await store.createProject(createProjectInputFromUpload(multipartUpload.fields, multipartUpload.originalFileName));
-    targetProjectId = createdProject.project.id;
-  }
-
-  if (!targetProjectId) {
-    reply.code(400);
+  // 7z / rar / tar: expand through the same libarchive path the package
+  // uploader uses, into a synthetic ZIP the ingestion pipeline can read.
+  const stagingDir = resolveApiPath("packages", packageId, "staging");
+  const stagingPath = path.join(stagingDir, safeFileName);
+  await mkdir(stagingDir, { recursive: true });
+  try {
+    await writeFile(stagingPath, fileBuffer);
+    const archiveName = `${path.basename(safeFileName, path.extname(safeFileName)) || "archive"}.zip`;
+    const storagePath = resolveApiPath(relativePackageArchivePath(packageId, archiveName));
+    await writeSyntheticArchive(storagePath, [{
+      originalFileName,
+      safeFileName,
+      relativePath: safeFileName,
+      stagingPath,
+      size: fileBuffer.byteLength,
+    }]);
     return {
-      message: "Project could not be resolved for package upload"
+      packageId,
+      fields: {},
+      originalFileName,
+      storagePath,
+      totalBytes: (await stat(storagePath)).size,
+      checksum: await hashFile(storagePath),
     };
+  } finally {
+    await rm(stagingDir, { recursive: true, force: true }).catch(() => {});
   }
+}
 
-  // Sync customerId so the project's clientName + quote's customer fields are
-  // populated. Run on both the new-project path (where createProject's
-  // resolveCustomerSelection is the primary applier but can be bypassed if
-  // the customerId is missing from CreateProjectInput) and the existing-
-  // project upload path. assignProjectCustomer is idempotent against a
-  // customer that is already correctly assigned.
-  const ingestCustomerId = multipartUpload.fields.customerId?.trim();
-  if (ingestCustomerId) {
-    await store.assignProjectCustomer(targetProjectId, ingestCustomerId);
-  }
-
-  const packageName =
-    multipartUpload.fields.packageName?.trim() ||
-    path.basename(multipartUpload.originalFileName, path.extname(multipartUpload.originalFileName));
-
+/**
+ * Registers a staged archive as a package, writes placeholder SourceDocuments
+ * so the file browser shows every file immediately, and starts extraction in
+ * the background. Shared by the package uploader and the Documents uploader,
+ * so an archive dropped on either one ends up as the same set of documents.
+ */
+async function startPackageIngestForProject(
+  store: PrismaApiStore,
+  multipartUpload: MultipartPackageUpload,
+  targetProjectId: string,
+  packageName: string,
+  sourceKind: Parameters<PrismaApiStore["registerUploadedPackage"]>[0]["sourceKind"],
+): Promise<string[]> {
   await store.registerUploadedPackage({
     packageId: multipartUpload.packageId,
     projectId: targetProjectId,
@@ -1806,8 +1819,8 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
   // UPDATE these records with extracted text, page counts, and Azure DI data.
   const placeholderDocIds: string[] = [];
   try {
-    const zipData = await readFile(multipartUpload.storagePath);
-    const zip = await JSZip.loadAsync(zipData);
+    const archiveEntries = await extractArchiveEntries(multipartUpload.storagePath);
+    const archiveEntryByPath = new Map(archiveEntries.map((entry) => [entry.path, entry]));
     const now = new Date();
     const usedDocumentNames = new Set<string>();
 
@@ -1816,14 +1829,15 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     await mkdir(docsDir, { recursive: true });
 
     const entries: string[] = [];
-    zip.forEach((relativePath, entry) => {
-      if (!entry.dir && !relativePath.startsWith("__MACOSX") && !relativePath.startsWith(".")) {
+    for (const archiveEntry of archiveEntries) {
+      const relativePath = archiveEntry.path;
+      if (!relativePath.startsWith(".")) {
         const ext = path.extname(relativePath).toLowerCase();
         if ([".pdf", ".xlsx", ".xls", ".xlsm", ".ods", ".csv", ".tsv", ".docx", ".doc", ".rtf", ".pptx", ".html", ".htm", ".mhtml", ".mht", ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp", ".dwg", ".dxf", ".msg", ".eml", ".txt", ".xml", ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml", ".nwd", ".nwf", ".nwc"].includes(ext)) {
           entries.push(relativePath);
         }
       }
-    });
+    }
 
     for (const relativePath of entries) {
       const sanitized = reserveUniqueArchivePath(usedDocumentNames, sanitizeArchiveFilePath(relativePath, path.basename(relativePath)));
@@ -1834,14 +1848,14 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
 
       // Extract file to disk FIRST so storagePath is valid
       try {
-        const zipEntry = zip.file(relativePath);
+        const zipEntry = archiveEntryByPath.get(relativePath);
         if (zipEntry) {
-          const fileData = await zipEntry.async("nodebuffer");
+          const fileData = Buffer.from(zipEntry.bytes);
           const diskPath = path.join(docsDir, ...sanitized.split("/"));
           await mkdir(path.dirname(diskPath), { recursive: true });
           await writeFile(diskPath, fileData);
         } else {
-          console.error("[upload] zip.file() returned null for:", relativePath);
+          console.error("[upload] archive entry missing for:", relativePath);
         }
       } catch (extractErr) {
         console.error("[upload] Failed to extract:", relativePath, extractErr instanceof Error ? extractErr.message : extractErr);
@@ -1911,6 +1925,59 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
   }).catch((err) => {
     console.error(`[ingestion] Package ${multipartUpload.packageId} failed:`, err);
   });
+
+  return placeholderDocIds;
+}
+
+async function ingestUploadForProject(store: PrismaApiStore, request: FastifyRequest, reply: FastifyReply, projectIdOverride?: string) {
+  const multipartUpload = await saveMultipartPackageUpload(request);
+  const sourceKind = multipartUpload.fields.sourceKind ?? "project";
+  const projectId = (projectIdOverride ?? multipartUpload.fields.projectId)?.trim();
+
+  if (projectIdOverride && multipartUpload.fields.projectId && multipartUpload.fields.projectId.trim() !== projectIdOverride) {
+    reply.code(400);
+    return {
+      message: "Multipart projectId does not match the route projectId"
+    };
+  }
+
+  let targetProjectId = projectId ?? null;
+  if (targetProjectId) {
+    const existingProject = await store.getProject(targetProjectId);
+    if (!existingProject) {
+      reply.code(404);
+      return {
+        message: "Project not found"
+      };
+    }
+  } else {
+    const createdProject = await store.createProject(createProjectInputFromUpload(multipartUpload.fields, multipartUpload.originalFileName));
+    targetProjectId = createdProject.project.id;
+  }
+
+  if (!targetProjectId) {
+    reply.code(400);
+    return {
+      message: "Project could not be resolved for package upload"
+    };
+  }
+
+  // Sync customerId so the project's clientName + quote's customer fields are
+  // populated. Run on both the new-project path (where createProject's
+  // resolveCustomerSelection is the primary applier but can be bypassed if
+  // the customerId is missing from CreateProjectInput) and the existing-
+  // project upload path. assignProjectCustomer is idempotent against a
+  // customer that is already correctly assigned.
+  const ingestCustomerId = multipartUpload.fields.customerId?.trim();
+  if (ingestCustomerId) {
+    await store.assignProjectCustomer(targetProjectId, ingestCustomerId);
+  }
+
+  const packageName =
+    multipartUpload.fields.packageName?.trim() ||
+    path.basename(multipartUpload.originalFileName, path.extname(multipartUpload.originalFileName));
+
+  const placeholderDocIds = await startPackageIngestForProject(store, multipartUpload, targetProjectId, packageName, sourceKind);
 
   // Return project info — all files are already on disk and SourceDocument records exist
   const project = await store.getProject(targetProjectId);
@@ -2612,33 +2679,34 @@ export function buildServer() {
     return request.store!.listDocuments(projectId);
   });
 
-  app.post("/projects/:projectId/documents/upload", async (request, reply) => {
-    const { projectId } = request.params as { projectId: string };
-    const project = await request.store!.getProject(projectId);
-    if (!project) {
-      return reply.code(404).send({ message: "Project not found" });
-    }
+  async function ingestDocumentUpload(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    projectId: string,
+    originalFileName: string,
+    fileBuffer: Buffer,
+    fields: Record<string, string>,
+  ) {
 
-    const fields: Record<string, string> = {};
-    let fileBuffer: Buffer | null = null;
-    let originalFileName = "";
-    let fileSeen = false;
-
-    for await (const part of request.parts()) {
-      if (part.type === "file") {
-        if (fileSeen) {
-          return reply.code(400).send({ message: "Only one file per upload" });
-        }
-        fileSeen = true;
-        originalFileName = part.filename || "unnamed";
-        fileBuffer = await part.toBuffer();
-      } else {
-        fields[part.fieldname] = Array.isArray(part.value) ? part.value.join("") : String(part.value);
-      }
-    }
-
-    if (!fileSeen || !fileBuffer) {
-      return reply.code(400).send({ message: "A file is required" });
+    // An archive is a container of documents, not a document. Hand it to the
+    // package ingest path so every drawing inside becomes its own source
+    // document instead of one opaque "zip" with no text and one page.
+    if (isExpandableArchiveUpload(originalFileName)) {
+      const multipartUpload = await stageArchiveBufferAsPackage(originalFileName, fileBuffer);
+      const packageName = path.basename(originalFileName, path.extname(originalFileName));
+      const placeholderDocIds = await startPackageIngestForProject(request.store!, multipartUpload, projectId, packageName, "project");
+      const documents = placeholderDocIds.length > 0
+        ? await prisma.sourceDocument.findMany({ where: { projectId, id: { in: placeholderDocIds } } })
+        : [];
+      reply.code(201);
+      return {
+        archive: true,
+        packageId: multipartUpload.packageId,
+        documents,
+        documentCount: documents.length,
+        status: "processing",
+        message: `Expanded ${originalFileName} into ${documents.length} documents. Text extraction running in background.`,
+      };
     }
 
     const safeName = sanitizeFileName(originalFileName);
@@ -2836,6 +2904,121 @@ export function buildServer() {
 
     reply.code(201);
     return document;
+  }
+
+  app.post("/projects/:projectId/documents/upload", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+
+    const fields: Record<string, string> = {};
+    let fileBuffer: Buffer | null = null;
+    let originalFileName = "";
+    let fileSeen = false;
+
+    for await (const part of request.parts()) {
+      if (part.type === "file") {
+        if (fileSeen) {
+          return reply.code(400).send({ message: "Only one file per upload" });
+        }
+        fileSeen = true;
+        originalFileName = part.filename || "unnamed";
+        fileBuffer = await part.toBuffer();
+      } else {
+        fields[part.fieldname] = Array.isArray(part.value) ? part.value.join("") : String(part.value);
+      }
+    }
+
+    if (!fileSeen || !fileBuffer) {
+      return reply.code(400).send({ message: "A file is required" });
+    }
+    return ingestDocumentUpload(request, reply, projectId, originalFileName, fileBuffer, fields);
+  });
+
+  // Re-run ingestion for an existing source document from its stored bytes.
+  // An archive that was stored as one opaque document (the pre-fix Documents
+  // upload behaviour) is expanded into its files and the opaque record removed.
+  app.post("/projects/:projectId/documents/:docId/reingest", async (request, reply) => {
+    const { projectId, docId } = request.params as { projectId: string; docId: string };
+    const doc = await prisma.sourceDocument.findFirst({ where: { id: docId, projectId } });
+    if (!doc || !(await request.store!.getProject(projectId))) {
+      return reply.code(404).send({ message: "Document not found" });
+    }
+    if (!doc.storagePath) {
+      return reply.code(400).send({ message: "Document has no stored file to re-ingest" });
+    }
+    const fileBuffer = await readFile(resolveApiPath(doc.storagePath)).catch(() => null);
+    if (!fileBuffer) {
+      return reply.code(404).send({ message: `Stored file is missing: ${doc.storagePath}` });
+    }
+    const fileName = path.posix.basename(doc.fileName.replace(/^file\//, "")) || doc.fileName;
+    const result = await ingestDocumentUpload(request, reply, projectId, fileName, fileBuffer, {
+      ...(doc.documentType && doc.documentType !== "reference" ? { documentType: doc.documentType } : {}),
+    }) as Record<string, unknown>;
+    if (result && (result as { archive?: boolean }).archive) {
+      await request.store!.deleteDocument(projectId, docId).catch(() => undefined);
+      return { ...result, replacedDocumentId: docId };
+    }
+    if (result && typeof result.id === "string" && result.id !== docId) {
+      await request.store!.deleteDocument(projectId, docId).catch(() => undefined);
+      return { ...result, replacedDocumentId: docId };
+    }
+    return result;
+  });
+
+  // Promote a file already in the Files area (FileNode) to a source document.
+  // Idempotent per file: the promoted document id is remembered on the node.
+  app.post("/projects/:projectId/documents/from-file-node", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const body = (request.body ?? {}) as { fileNodeId?: string; documentType?: string };
+    const fileNodeId = typeof body.fileNodeId === "string" ? body.fileNodeId.trim() : "";
+    if (!fileNodeId) {
+      return reply.code(400).send({ message: "fileNodeId is required" });
+    }
+    const node = await prisma.fileNode.findFirst({ where: { id: fileNodeId, projectId } });
+    if (!node || node.type !== "file" || !node.storagePath) {
+      return reply.code(404).send({ message: "File not found in this project" });
+    }
+    const metadata = (node.metadata && typeof node.metadata === "object" ? node.metadata : {}) as Record<string, unknown>;
+    const existingId = typeof metadata.sourceDocumentId === "string" ? metadata.sourceDocumentId : "";
+    if (existingId) {
+      const existing = await prisma.sourceDocument.findFirst({ where: { id: existingId, projectId } });
+      if (existing) return existing;
+    }
+    const fileBuffer = await readFile(resolveApiPath(node.storagePath));
+    const fields: Record<string, string> = {};
+    if (body.documentType) fields.documentType = String(body.documentType);
+    const document = await ingestDocumentUpload(request, reply, projectId, node.name, fileBuffer, fields) as { id?: string };
+    if (document?.id) {
+      await prisma.fileNode.update({
+        where: { id: node.id },
+        data: { metadata: { ...metadata, sourceDocumentId: document.id } as any },
+      }).catch(() => {});
+    }
+    return document;
+  });
+
+  // JSON twin of /documents/upload for the agent: a PDF it pulled out of an
+  // email or archive becomes a real source document (pages, extraction,
+  // drawing atlas eligibility) instead of a plain file in the Files area.
+  app.post("/projects/:projectId/documents/import", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const project = await request.store!.getProject(projectId);
+    if (!project) {
+      return reply.code(404).send({ message: "Project not found" });
+    }
+    const body = (request.body ?? {}) as { fileName?: string; contentBase64?: string; documentType?: string; folderPath?: string };
+    const fileName = typeof body.fileName === "string" ? body.fileName.trim() : "";
+    if (!fileName || typeof body.contentBase64 !== "string" || !body.contentBase64) {
+      return reply.code(400).send({ message: "fileName and contentBase64 are required" });
+    }
+    const fileBuffer = Buffer.from(body.contentBase64, "base64");
+    const fields: Record<string, string> = {};
+    if (body.documentType) fields.documentType = String(body.documentType);
+    if (body.folderPath) fields.folderPath = String(body.folderPath);
+    return ingestDocumentUpload(request, reply, projectId, fileName, fileBuffer, fields);
   });
 
   app.patch("/projects/:projectId/documents/:docId", async (request, reply) => {

@@ -142,6 +142,12 @@ export function knowledgeCategoryFromDocType(docType: string): "estimating" | "l
 }
 
 export function inferPageCount(document: IngestionReport["documents"][number], chunks: DocumentChunk[]) {
+  // The extractor knows the real page count; text chunks are 1800-character
+  // windows and say nothing about pages.
+  const extractedPageCount = Number(document.metadata?.pageCount);
+  if (Number.isSafeInteger(extractedPageCount) && extractedPageCount > 0) {
+    return extractedPageCount;
+  }
   const relatedChunks = chunks.filter((chunk) => chunk.documentId === document.id);
   if (relatedChunks.length > 0) {
     return Math.max(1, relatedChunks.length);

@@ -108,6 +108,7 @@ jobs:
           apps/api/src/services/pdf-attachments.test.ts
           apps/api/src/services/vendor-evidence-lines.test.ts
           packages/ingestion/src/pdf-parser.test.ts
+          packages/ingestion/src/zip.test.ts
           packages/domain/src/pdf-layout.test.ts
           packages/vision/src/python-runtime.test.ts
           apps/api/src/services/revision-copy.test.ts
@@ -168,6 +169,12 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Verify agent page reader (orientation, sizing, layout regions)
+        run: |
+          python -m venv "${RUNNER_TEMP}/vision-venv"
+          "${RUNNER_TEMP}/vision-venv/bin/pip" install --disable-pip-version-check PyMuPDF numpy opencv-python-headless
+          cd packages/vision/python && "${RUNNER_TEMP}/vision-venv/bin/python" -m unittest tools.test_page_reader
 
       - name: Install pinned CAD runtime and sandbox
         run: |

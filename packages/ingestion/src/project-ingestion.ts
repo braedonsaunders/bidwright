@@ -63,6 +63,46 @@ function tryReadAsciiText(bytes: Uint8Array): string {
   return sample;
 }
 
+// Positioned OCR lines let tools quote and locate text on scanned sheets,
+// where the PDF itself has no text layer. Capped so a 300-page spec does not
+// turn one row into megabytes.
+const MAX_POSITIONED_LINES_PER_PAGE = 1500;
+const MAX_POSITIONED_LINES_PER_DOCUMENT = 20_000;
+
+function positionedPageText(doc: ParsedDocument): NonNullable<SourceDocumentStructuredData['pageText']> {
+  const pages: NonNullable<SourceDocumentStructuredData['pageText']> = [];
+  let total = 0;
+  for (const page of doc.pages) {
+    if (!page.lines?.length || total >= MAX_POSITIONED_LINES_PER_DOCUMENT) continue;
+    const room = Math.min(MAX_POSITIONED_LINES_PER_PAGE, MAX_POSITIONED_LINES_PER_DOCUMENT - total);
+    const lines = page.lines.slice(0, room);
+    total += lines.length;
+    pages.push({
+      pageNumber: page.pageNumber,
+      size: page.size,
+      lines,
+      ...(page.lines.length > lines.length ? { truncated: true } : {}),
+    });
+  }
+  return pages;
+}
+
+// Large-format sheets (bigger than 11x17) carry small dimension and note text
+// that standard OCR resolution drops. Read the MediaBox sizes straight from
+// the PDF bytes; compressed object streams simply fall back to standard OCR.
+const LARGE_FORMAT_POINTS = 17 * 72 + 1;
+
+export function pdfHasLargeFormatPage(bytes: Uint8Array): boolean {
+  const sample = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.byteLength, 8 * 1024 * 1024)).toString('latin1');
+  const pattern = /\/MediaBox\s*\[\s*(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s+(-?[\d.]+)\s*\]/g;
+  for (const match of sample.matchAll(pattern)) {
+    const width = Math.abs(Number(match[3]) - Number(match[1]));
+    const height = Math.abs(Number(match[4]) - Number(match[2]));
+    if (Math.max(width, height) > LARGE_FORMAT_POINTS) return true;
+  }
+  return false;
+}
+
 function structuredDataFromParsedDocument(doc: ParsedDocument): SourceDocumentStructuredData | undefined {
   const structuredData: SourceDocumentStructuredData = {};
   if (doc.tables.length > 0) {
@@ -71,7 +111,12 @@ function structuredDataFromParsedDocument(doc: ParsedDocument): SourceDocumentSt
       headers: table.headers,
       rows: table.rows,
       rawMarkdown: table.rawMarkdown,
+      ...(table.cells && table.cells.length > 0 ? { cells: table.cells } : {}),
     }));
+  }
+  const pageText = positionedPageText(doc);
+  if (pageText.length > 0) {
+    structuredData.pageText = pageText;
   }
   if (doc.metadata.keyValuePairs && doc.metadata.keyValuePairs.length > 0) {
     structuredData.keyValuePairs = doc.metadata.keyValuePairs;
@@ -85,6 +130,7 @@ function structuredDataFromParsedDocument(doc: ParsedDocument): SourceDocumentSt
 
   const hasStructuredData = Boolean(
     structuredData.tables ||
+    structuredData.pageText ||
     structuredData.keyValuePairs ||
     structuredData.documentFields ||
     structuredData.selectionMarks,
@@ -121,6 +167,12 @@ function parsedDocumentHasContent(doc: ParsedDocument): boolean {
  * - Images: metadata placeholder
  * - Text: direct read
  */
+function withHighResolutionForLargeSheets<T extends string>(features: T[] | undefined, ext: string, bytes: Uint8Array): T[] | undefined {
+  if (!PDF_EXTENSIONS.has(ext) || !pdfHasLargeFormatPage(bytes)) return features;
+  const current = features ?? [];
+  return current.includes('ocrHighResolution' as T) ? current : [...current, 'ocrHighResolution' as T];
+}
+
 async function extractTextFromEntry(
   entry: ArchiveEntry,
   azureConfig?: AzureExtractionConfig,
@@ -138,7 +190,7 @@ async function extractTextFromEntry(
         azureEndpoint: azureConfig?.endpoint,
         azureKey: azureConfig?.key,
         azureModel: azureConfig?.model ?? 'prebuilt-layout',
-        azureFeatures: azureConfig?.features,
+        azureFeatures: withHighResolutionForLargeSheets(azureConfig?.features, ext, entry.bytes),
         azureQueryFields: azureConfig?.queryFields,
         options: { outputFormat: azureConfig?.outputContentFormat },
       });

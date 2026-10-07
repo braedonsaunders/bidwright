@@ -746,6 +746,8 @@ export function registerKnowledgeTools(server: McpServer) {
       sourcePath: z.string().optional().describe("Path to a file you already wrote. Copied as-is — use this for spreadsheets, PDFs, or anything binary."),
       content: z.string().optional().describe("Text content, when you are composing the document inline rather than from a file."),
       parentId: z.string().optional().describe("Optional folder node id; omit for the project root."),
+      asSourceDocument: z.boolean().default(false).describe("Set true when the file is SOURCE material you extracted (a drawing/spec/RFQ PDF pulled from an email or archive), not a deliverable you authored. It is ingested as a project source document with pages and extraction so drawing tools (readDrawingPage, atlas, evidence) can use it."),
+      documentType: z.enum(["drawing", "spec", "rfq", "addendum", "reference"]).optional().describe("With asSourceDocument: the document type. Use drawing for any drawing/layout/detail sheet."),
     },
     async (input) => {
       try {
@@ -771,6 +773,18 @@ export function registerKnowledgeTools(server: McpServer) {
 
         if (!name) {
           return { content: [{ type: "text" as const, text: "Error: name is required when passing content." }] };
+        }
+
+        if (input.asSourceDocument) {
+          const contentBase64 = encoding === "base64" ? payloadContent : Buffer.from(payloadContent, "utf8").toString("base64");
+          const document = await apiPost<{ id?: string; fileName?: string; pageCount?: number; documentType?: string; documents?: Array<{ id: string; fileName: string }> }>(
+            projectPath("/documents/import"),
+            { fileName: name, contentBase64, documentType: input.documentType },
+          );
+          const summary = Array.isArray(document.documents)
+            ? `Expanded into ${document.documents.length} source documents: ${document.documents.map((doc) => `${doc.fileName} (${doc.id})`).join(", ")}.`
+            : `Ingested "${document.fileName ?? name}" as source document ${document.id} (${document.pageCount ?? "?"} pages, type ${document.documentType ?? "reference"}).`;
+          return { content: [{ type: "text" as const, text: `${summary} Use readDrawingPage with this documentId to look at its pages.` }] };
         }
 
         const node = await apiPost<{ id: string; name: string; size?: number }>(

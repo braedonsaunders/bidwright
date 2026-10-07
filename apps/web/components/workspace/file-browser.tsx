@@ -127,6 +127,7 @@ import {
   updateSourceDocument,
   uploadFile,
   uploadSourceDocument,
+  sourceDocumentsFromUpload,
 } from "@/lib/api";
 import type { SourceDocumentStructuredData } from "@/lib/api";
 import {
@@ -1879,8 +1880,8 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
           const node = await uploadFile(projectId, file, parentId);
           setUserNodes((prev) => [...prev, node]);
         } else {
-          const document = await uploadSourceDocument(projectId, file, { documentType });
-          setSourceDocuments((prev) => [...prev, document]);
+          const uploaded = sourceDocumentsFromUpload(await uploadSourceDocument(projectId, file, { documentType }));
+          setSourceDocuments((prev) => [...prev, ...uploaded]);
         }
       }
       notifyFilesMutated();

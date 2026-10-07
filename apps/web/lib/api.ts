@@ -4019,11 +4019,24 @@ export function getDocumentDownloadUrl(projectId: string, docId: string, inline 
   return resolveApiUrl(`/projects/${projectId}/documents/${docId}/download${inline ? "?inline=1" : ""}`);
 }
 
+export interface ArchiveDocumentUploadResult {
+  archive: true;
+  packageId: string;
+  documents: SourceDocument[];
+  documentCount: number;
+  status: string;
+  message: string;
+}
+
+/**
+ * Upload one file as a source document. Archives come back as the list of
+ * documents expanded from them, so callers should use `sourceDocumentsFromUpload`.
+ */
 export async function uploadSourceDocument(
   projectId: string,
   file: File,
   input: { documentType?: string; folderPath?: string } = {}
-): Promise<SourceDocument> {
+): Promise<SourceDocument | ArchiveDocumentUploadResult> {
   const formData = new FormData();
   formData.append("file", file);
   if (input.documentType) formData.append("documentType", input.documentType);
@@ -4045,6 +4058,10 @@ export async function uploadSourceDocument(
   }
 
   return response.json();
+}
+
+export function sourceDocumentsFromUpload(result: SourceDocument | ArchiveDocumentUploadResult): SourceDocument[] {
+  return "archive" in result && result.archive ? result.documents : [result as SourceDocument];
 }
 
 export async function updateSourceDocument(
