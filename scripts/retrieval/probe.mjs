@@ -3,8 +3,11 @@
  * Retrieval probe: proves whether hybrid (semantic + lexical) search is live
  * for a deployment, and that known project/labour phrases are retrievable.
  *
- *   node scripts/retrieval/probe.mjs --api https://host/api --token <session> --project <projectId> \
- *     --q "base plate anchor" --q "millwright setting hours"
+ *   node scripts/retrieval/probe.mjs --api https://host/api --token-file ~/.bb/thread-storage/agent-secrets/bidwright-session.token \
+ *     --project <projectId> --q "base plate anchor" --q "millwright setting hours"
+ *
+ * Credentials never go on the command line: use --token-file <path> (first
+ * line is the token) or the env vars BIDWRIGHT_AUTH_TOKEN / BIDWRIGHT_AUTH_TOKEN_FILE.
  *
  * Exit code 0 = hybrid lane active and every query returned at least one hit.
  * Exit code 2 = embedder/index missing (lexical only). Exit code 3 = a query returned no hits.
@@ -17,7 +20,21 @@ const opt = (name, fallback) => {
 };
 const queries = args.flatMap((value, index) => (value === "--q" ? [args[index + 1]] : []));
 const api = (opt("api", process.env.BIDWRIGHT_API_URL ?? "http://localhost:4000")).replace(/\/$/, "");
-const token = opt("token", process.env.BIDWRIGHT_AUTH_TOKEN ?? "");
+import { readFileSync } from "node:fs";
+const tokenFile = opt("token-file", process.env.BIDWRIGHT_AUTH_TOKEN_FILE ?? "");
+let token = process.env.BIDWRIGHT_AUTH_TOKEN ?? "";
+if (tokenFile) {
+  try {
+    token = readFileSync(tokenFile, "utf8").split(/\r?\n/)[0].trim();
+  } catch (error) {
+    console.error(`Could not read token file: ${error.message ?? error}`);
+    process.exit(1);
+  }
+}
+if (args.includes("--token")) {
+  console.error("Refusing --token on the command line (it leaks into shell history and process lists). Use --token-file or BIDWRIGHT_AUTH_TOKEN.");
+  process.exit(1);
+}
 const projectId = opt("project", process.env.BIDWRIGHT_PROJECT_ID ?? "");
 if (!projectId) { console.error("--project <projectId> is required"); process.exit(1); }
 if (queries.length === 0) queries.push("base plate anchor", "epoxy grout", "labour hours install");
