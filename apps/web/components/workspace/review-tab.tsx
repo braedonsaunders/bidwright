@@ -53,9 +53,10 @@ import { formatMoney } from "@/lib/format";
 import { buildReviewLabelIndex, segmentReviewText, type ReviewLabel } from "@/lib/review-labels";
 import { cn } from "@/lib/utils";
 import type { QualityFinding, QualityPanelSummary } from "./quality-panel";
+import { CalibrationReviewPanel } from "./calibration-review-panel";
 import type { ResourceSummaryRow } from "./resource-summary-panel";
 
-type ReviewSubTab = "quality" | "coverage" | "gaps" | "competitiveness" | "productivity" | "recommendations";
+type ReviewSubTab = "quality" | "coverage" | "gaps" | "competitiveness" | "productivity" | "recommendations" | "calibration";
 
 interface ReviewTabProps {
   workspace: ProjectWorkspaceData;
@@ -2113,6 +2114,7 @@ export function ReviewTab({
       { id: "competitiveness", label: "Competitiveness", count: (competitiveness.overestimates?.length || 0) + (competitiveness.underestimates?.length || 0) },
       { id: "productivity", label: "Productivity", count: productivityBenchmarks.length },
       { id: "recommendations", label: "Recommendations", count: recommendations.filter((item) => item.status === "open").length },
+      { id: "calibration", label: "Calibration", count: (workspace.estimateFeedback ?? []).filter((entry) => (entry.reviewStatus ?? "pending") === "pending").length },
     ],
     [coverage.length, findings.length, competitiveness.overestimates?.length, competitiveness.underestimates?.length, productivityBenchmarks.length, qualityFindings.length, recommendations],
   );
@@ -2214,6 +2216,7 @@ export function ReviewTab({
             {subTab === "gaps" ? <motion.div key="gaps" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full min-h-0"><GapsRisksSubTab findings={findings} editable={editMode && !isRunning} busy={isPending} onChange={(items) => saveReviewPatch({ findings: items })} /></motion.div> : null}
             {subTab === "competitiveness" ? <motion.div key="competitiveness" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full min-h-0"><CompetitivenessSubTab data={competitiveness} editable={editMode && !isRunning} busy={isPending} onChange={(next) => saveReviewPatch({ competitiveness: next })} /></motion.div> : null}
             {subTab === "productivity" ? <motion.div key="productivity" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full min-h-0"><ProductivitySubTab data={competitiveness} editable={editMode && !isRunning} busy={isPending} onChange={(next) => saveReviewPatch({ competitiveness: next })} /></motion.div> : null}
+            {subTab === "calibration" ? <motion.div key="calibration" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full min-h-0"><CalibrationReviewPanel projectId={projectId} onError={onError} /></motion.div> : null}
             {subTab === "recommendations" ? <motion.div key="recommendations" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.12 }} className="h-full min-h-0"><RecommendationsSubTab recommendations={recommendations} editable={editMode && !isRunning} busy={isPending} projectId={projectId} onApply={handleApply} onError={onError} onRefreshReview={loadReview} onChange={(next) => saveReviewPatch({ recommendations: next })} /></motion.div> : null}
           </AnimatePresence>
         )}
