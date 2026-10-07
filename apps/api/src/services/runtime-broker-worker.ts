@@ -36,7 +36,7 @@ async function runClaude(request: Extract<RuntimeBrokerRequest, { transport: "cl
       persistSession: true,
       settingSources: ["project"],
       systemPrompt: { type: "preset", preset: "claude_code" },
-      tools: request.readOnly ? ["Read", "Glob", "Grep", "WebSearch", "WebFetch"] : { type: "preset", preset: "claude_code" },
+      tools: { type: "preset", preset: "claude_code" },
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       mcpServers: {
@@ -102,7 +102,7 @@ export function shouldForwardCodexNotification(
 }
 
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
-  const child = spawn(request.codexCommand, ["app-server", ...request.appServerArgs, ...(request.readOnly ? ["-c", "features.shell_tool=false"] : [])], {
+  const child = spawn(request.codexCommand, ["app-server", ...request.appServerArgs, "-c", "features.shell_tool=true"], {
     cwd: request.projectDir,
     env: process.env,
     stdio: ["pipe", "pipe", "pipe"],
@@ -158,6 +158,7 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
     }
 
     if (message.method) {
+      if (message.method === "thread/tokenUsage/updated") emit({ type: "broker.usage", usage: message.params?.tokenUsage });
       if (shouldForwardCodexNotification(message, request)) emit(message);
       if (message.method === "turn/completed" && turnCompletion) {
         const status = String(message.params?.turn?.status || "completed");
@@ -212,13 +213,13 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
             model: request.model,
             cwd: request.projectDir,
             approvalPolicy: "never",
-            sandbox: request.readOnly ? "read-only" : "danger-full-access",
+            sandbox: "danger-full-access",
           })
         : requestRpc("thread/start", {
             model: request.model,
             cwd: request.projectDir,
             approvalPolicy: "never",
-            sandbox: request.readOnly ? "read-only" : "danger-full-access",
+            sandbox: "danger-full-access",
             serviceName: "bidwright",
           }),
       exited,
@@ -238,7 +239,7 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
         model: request.model,
         effort: normalizedEffort(request.reasoningEffort),
         approvalPolicy: "never",
-        sandboxPolicy: request.readOnly ? { type: "readOnly" } : { type: "externalSandbox", networkAccess: "enabled" },
+        sandboxPolicy: { type: "dangerFullAccess" },
       }),
       exited,
     ]);

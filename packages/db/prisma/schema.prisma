@@ -1526,12 +1526,21 @@ model EstimateCalibrationFeedback {
   corrections   Json              @default("[]")
   lessons       Json              @default("[]")
   notes         String            @default("")
+  // Reviewed-only learning. Captured lessons stay in `lessons` until an
+  // estimator approves them; only `approvedLessons` on rows with
+  // reviewStatus = "approved" are ever retrieved for future estimates.
+  reviewStatus    String    @default("pending") // pending | approved | rejected
+  reviewedAt      DateTime?
+  reviewedBy      String?
+  reviewNotes     String    @default("")
+  approvedLessons Json      @default("[]")
   createdAt     DateTime          @default(now())
   updatedAt     DateTime          @updatedAt
 
   @@index([projectId])
   @@index([revisionId])
   @@index([strategyId])
+  @@index([reviewStatus])
 }
 
 // ── Citations ─────────────────────────────────────────────────────────────

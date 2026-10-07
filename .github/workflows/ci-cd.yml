@@ -99,12 +99,15 @@ jobs:
           apps/api/src/services/agent-host/demo-sandbox-exemption.test.ts
           apps/api/src/services/agent-host/writable-path-ownership.test.ts
           apps/api/src/services/cli-adapters/codex.test.ts
+          apps/api/src/services/cli-adapters/openrouter.test.ts
+          apps/api/src/services/cli-adapters/mcp-approval-policy.test.ts
           apps/api/src/services/cli-conversation.test.ts
           apps/api/src/services/session-continuity.test.ts
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
           packages/mcp-server/src/tool-access.test.ts
           scripts/eval/evidence-metrics.test.ts
+          apps/web/lib/drawing-tool-evidence.test.ts
           apps/api/src/services/dataset-search-fitness.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
@@ -142,6 +145,7 @@ jobs:
           packages/mcp-server/src/tools/evidence-gate-contract.test.ts
           packages/mcp-server/src/tools/line-traceability-gate.test.ts
           packages/domain/src/line-derivation.test.ts
+          packages/domain/src/estimate-strategy-stages.test.ts
           apps/api/src/revision-rate-schedule-scoping.test.ts
           apps/api/src/answer-resumes-run.test.ts
           apps/api/src/quote-status-source.test.ts
@@ -205,6 +209,7 @@ jobs:
         run: >
           pnpm --filter @bidwright/web exec tsx --test
           components/workspace/review-tab.test.tsx
+          components/workspace/calibration-review-panel.test.tsx
 
       - name: Validate production compose
         run: |

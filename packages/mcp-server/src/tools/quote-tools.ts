@@ -7,6 +7,7 @@ import {
   normalizeLineDerivation,
   validateLineDerivation,
   detectPerInstanceContradictions,
+  collectBatchOperationProblems,
   type LineDerivation,
 } from "@bidwright/domain";
 import { getProjectId } from "../api-client.js";
@@ -1039,10 +1040,40 @@ interface EvidenceViewRecord {
   id: string;
   documentId?: string | null;
   fileNodeId?: string | null;
+  sourceChecksum?: string | null;
   pageNumber?: number | null;
   tool?: string | null;
   imageHash?: string | null;
   textSnippet?: string | null;
+}
+
+/**
+ * A view is only evidence for the document version it was rendered from.
+ * Reject views whose source document is gone from the project (replaced or
+ * deleted) or whose recorded checksum no longer matches the current file.
+ */
+function staleEvidenceViewError(views: EvidenceViewRecord[], ws: any): string | null {
+  const docs = asArray(ws.sourceDocuments).map(asRecord);
+  for (const view of views) {
+    const documentId = String(view.documentId ?? "").trim();
+    if (!documentId) {
+      // A Files-area (FileNode) view has no SourceDocument identity or
+      // checksum to compare, so its source version cannot be established.
+      // Fail closed rather than treat it as equivalent to document evidence.
+      const fileNodeId = String(view.fileNodeId ?? "").trim();
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, rendered from a Files-area file${fileNodeId ? ` (${fileNodeId})` : ""} that is not a registered source document, so its version cannot be verified. Register it first — readDrawingPage / readDrawingTile / promotePdfToDrawingEvidence accept the FileNode id and promote it to a SourceDocument — then re-read the page from the resulting documentId and cite that viewId.`;
+    }
+    const doc = docs.find((entry) => String(entry.id ?? "") === documentId);
+    if (!doc) {
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, taken of document ${documentId}, which is no longer a source document in this project (replaced or removed). Re-read the current document with readDrawingPage / readDrawingTile and cite the new viewId.`;
+    }
+    const current = String(doc.checksum ?? "").trim();
+    const recorded = String(view.sourceChecksum ?? "").trim();
+    if (current && recorded && current !== recorded) {
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, which was rendered from an earlier version of "${String(doc.fileName ?? documentId)}" (source checksum changed). Re-read the current page and cite the new viewId; prior-run views are valid only while the source file is unchanged.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1121,6 +1152,8 @@ export async function validateTraceableQuantityForPricing(ws: any, input: {
       return `evidenceBasis.quantity.viewIds not found for this project: ${result.missingIds.join(", ")}. Use only viewIds returned by readDrawingPage / readDrawingTile / inspectDrawingRegion in this project.`;
     }
     views = result.views;
+    const staleError = staleEvidenceViewError(views, ws);
+    if (staleError) return staleError;
   }
 
   // ── derivation ──
@@ -1347,6 +1380,88 @@ function compactRateScheduleItem(item: any, schedule: any, options: { includeRat
     tierIds: scheduleTiers(schedule).map((tier) => tier.id),
   };
 }
+
+/** Parameter shape of createWorksheetItem; shared with batchEditWorksheetItems. */
+const createWorksheetItemShape = {
+  worksheetId: z.string().describe("ID of the worksheet"),
+  entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
+  categoryId: z.string().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this over category name so renames cannot affect the row."),
+  category: z.string().optional().describe("Category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use categoryId when available."),
+  entityType: z.string().optional().describe("Legacy entity type/category type. The server canonicalizes this from categoryId when provided."),
+  description: z.string().default("").describe("Description with document reference and assumptions"),
+  quantity: z.coerce.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
+  uom: z.string().default("EA").describe("Unit of measure — MUST be from the category's validUoms (see getItemConfig). Server rejects invalid UOMs and auto-corrects to the category default."),
+  cost: z.coerce.number().optional().describe("Editable unit cost for freeform/unit-cost categories only. Do not pass for tiered/rate categories; Bidwright calculates those from rateScheduleItemId and tierUnits."),
+  markup: z.coerce.number().optional().describe("Markup percentage for markup-eligible categories only. Do not pass for tiered/rate categories."),
+  price: z.coerce.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
+  tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
+  rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
+  itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
+  costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from queryLibrary/recommendCostSource."),
+  effectiveCostId: z.string().nullable().optional().describe("Effective cost ID from cost intelligence. Preserve this when a priced effective_cost candidate is selected."),
+  laborUnitId: z.string().nullable().optional().describe("Labor unit ID for labour productivity sources."),
+  resourceComposition: z.record(z.unknown()).optional().describe("Structured resource rollup from a search candidate, recommendation, or assembly expansion."),
+  sourceEvidence: z.record(z.unknown()).optional().describe("Structured provenance from a search candidate, recommendation, or source document."),
+  evidenceBasis: z.object({
+    type: z.enum(LINE_EVIDENCE_BASIS_TYPES).optional().describe("Legacy single-source shorthand. Prefer quantity.type plus pricing.type when quantity and price/rate come from different sources."),
+    quantity: z.object({
+      type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies the row quantity, labour hours, duration, or count."),
+      drawingClaimIds: z.array(z.string()).default([]).describe("Required when quantity.type is drawing_quantity, visual_takeoff, drawing_table, or drawing_note."),
+      viewIds: z.array(z.string()).default([]).describe("REQUIRED for drawing-driven quantities: viewId(s) returned with the image by readDrawingPage / readDrawingTile / inspectDrawingRegion that visually prove the count or measurement."),
+      userConfirmation: z.object({ questionId: z.string(), answer: z.string() }).passthrough().optional().describe("askUser questionId + answer when the estimator confirmed an assumption-based quantity."),
+      quantityDriver: z.string().optional().describe("Formula or driver behind quantity/hours/duration."),
+      sourceRefs: sourceRefArray(),
+      assumptionIds: z.array(z.string()).default([]),
+      rationale: z.string().optional(),
+    }).passthrough().optional(),
+    pricing: z.object({
+      type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies unit cost, rate, productivity, markup basis, or allowance value."),
+      sourceRefs: sourceRefArray(),
+      assumptionIds: z.array(z.string()).default([]),
+      rationale: z.string().optional(),
+    }).passthrough().optional(),
+    quantityDriver: z.string().optional().describe("Short explanation of what drives quantity, hours, duration, or allowance."),
+    drawingClaimIds: z.array(z.string()).default([]).describe("Legacy location for drawing quantity claim IDs. Prefer evidenceBasis.quantity.drawingClaimIds."),
+    sourceRefs: sourceRefArray("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
+    assumptionIds: z.array(z.string()).default([]).describe("Saved assumption IDs when the row is assumption-backed."),
+    rationale: z.string().optional().describe("Why this source class is appropriate and how it supports the line."),
+  }).passthrough().optional().describe("Line-level evidence contract. Required on every priced row. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
+  derivation: derivationSchema.nullable().optional().describe("How the quantity was derived: formula + sourced inputs + result. Required when quantity is drawing-driven; recommended for every row whose quantity is not read directly from a BOM/schedule."),
+  classification: z.record(z.unknown()).optional().describe("Optional construction classification JSON, e.g. { masterformat: '03 30 00' }."),
+  costCode: z.string().nullable().optional().describe("Optional internal cost code used by cost-code rollups."),
+  phaseId: z.string().optional().describe("Phase ID"),
+  sourceNotes: z.string().default("").describe(
+    "MANDATORY: knowledge book refs, dataset lookups, correction factors applied, web search URLs/findings, assumptions for this item"
+  ),
+};
+
+/** Parameter shape of updateWorksheetItem; shared with batchEditWorksheetItems. */
+const updateWorksheetItemShape = {
+  itemId: z.string().describe("Line item ID"),
+  entityName: z.string().optional(),
+  categoryId: z.string().nullable().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this when changing category."),
+  category: z.string().optional(),
+  description: z.string().optional(),
+  quantity: z.coerce.number().optional(),
+  uom: z.string().optional(),
+  cost: z.coerce.number().optional(),
+  markup: z.coerce.number().optional(),
+  price: z.coerce.number().optional(),
+  rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass null to clear. When changing this, also pass tierUnits."),
+  costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID. Pass null to clear."),
+  effectiveCostId: z.string().nullable().optional().describe("Effective cost ID. Pass null to clear."),
+  laborUnitId: z.string().nullable().optional().describe("Labor unit ID. Pass null to clear."),
+  resourceComposition: z.record(z.unknown()).optional(),
+  sourceEvidence: z.record(z.unknown()).optional(),
+  tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. REQUIRED when rateScheduleItemId changes."),
+  classification: z.record(z.unknown()).optional().describe("Construction classification JSON, e.g. { masterformat: '03 30 00' }."),
+  costCode: z.string().nullable().optional().describe("Internal cost code. Pass null to clear."),
+  phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
+  sourceNotes: z.string().optional(),
+  catalogItemId: z.string().nullable().optional().describe("Catalog item ID for catalog-backed categories. Pass null to clear."),
+  evidenceBasis: z.record(z.unknown()).optional().describe("Replace the row's line-level evidence contract (same shape as createWorksheetItem.evidenceBasis). Required when the change alters quantity/hours and the existing basis no longer supports it."),
+  derivation: derivationSchema.nullable().optional().describe("Replace the row's derivation (formula + sourced inputs + result) so it reproduces the new quantity/hours. Pass null to clear. If quantity/uom/tierUnits change without a new derivation, the existing one is marked stale."),
+};
 
 export function registerQuoteTools(server: McpServer) {
 
@@ -1616,6 +1731,264 @@ function worksheetTreeSummary(ws: any) {
     }
 
     return null; // all gates passed
+  }
+
+  /**
+   * Everything createWorksheetItem does before the POST: truncation check,
+   * gate, category/rate/catalog resolution, UOM and markup normalisation.
+   * Shared with batchEditWorksheetItems so batched rows get identical checks.
+   */
+  async function prepareCreateWorksheetItem(input: any): Promise<{ error: string } | { worksheetId: string; body: Record<string, any>; rest: Record<string, any>; cat: string; autoWarnings: string[] }> {
+  if (looksLikeTruncatedItemPayload(input as Record<string, any>)) {
+    return { error: TRUNCATED_ITEM_PAYLOAD_MESSAGE };
+  }
+  const wsForGate = await getWs();
+  const targetWorksheet = asArray(wsForGate.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
+  const gateError = await checkGate("createWorksheetItem", [
+    targetWorksheet?.name,
+    input.entityName,
+    input.description,
+    input.sourceNotes,
+  ].filter(Boolean).join(" "), {
+    evidenceBasis: input.evidenceBasis ?? null,
+    derivation: input.derivation ?? null,
+    tierUnits: input.tierUnits ?? null,
+    sourceNotes: input.sourceNotes,
+    laborUnitId: input.laborUnitId,
+    rateScheduleItemId: input.rateScheduleItemId,
+    sourceEvidence: input.sourceEvidence,
+    categoryId: input.categoryId ?? null,
+    category: input.category ?? null,
+    costResourceId: input.costResourceId ?? null,
+    effectiveCostId: input.effectiveCostId ?? null,
+    itemId: input.itemId ?? null,
+    resourceComposition: input.resourceComposition ?? null,
+    cost: input.cost ?? null,
+    price: input.price ?? null,
+    uom: input.uom ?? null,
+    quantity: input.quantity ?? null,
+  });
+  if (gateError) return { error: gateError };
+
+  const { worksheetId, evidenceBasis, ...rest } = input;
+  if (evidenceBasis) {
+    rest.sourceEvidence = {
+      ...asRecord(rest.sourceEvidence),
+      evidenceBasis,
+    };
+  }
+  const autoWarnings: string[] = [];
+  for (const key of ["entityName", "description", "sourceNotes"] as const) {
+    (rest as any)[key] = stripLeakedToolParameterMarkup((rest as any)[key]);
+  }
+  if (!rest.category && !rest.categoryId && rest.rateScheduleItemId) {
+    const matchingSchedule = asArray(wsForGate.rateSchedules).map(asRecord).find((schedule) =>
+      asArray(schedule.items).some((item) => String(asRecord(item).id ?? "") === String(rest.rateScheduleItemId))
+    );
+    if (matchingSchedule) {
+      const scheduleCategory = String(matchingSchedule.category ?? "");
+      const categoryMatch = asArray(wsForGate.entityCategories).map(asRecord).find((category) =>
+        normalizeCategoryToolKey(category.name) === normalizeCategoryToolKey(scheduleCategory) ||
+        normalizeCategoryToolKey(category.entityType) === normalizeCategoryToolKey(scheduleCategory)
+      );
+      if (categoryMatch) {
+        rest.categoryId = String(categoryMatch.id ?? "");
+        rest.category = String(categoryMatch.name ?? scheduleCategory);
+        rest.entityType = String(categoryMatch.entityType ?? scheduleCategory);
+        autoWarnings.push(`Inferred category "${rest.category}" from rateScheduleItemId ${rest.rateScheduleItemId}.`);
+      }
+    }
+  }
+  const requestedCategory = rest.category;
+  const requestedCategoryId = rest.categoryId;
+  if (!requestedCategory && !requestedCategoryId) {
+    return { error: "ERROR: categoryId or category is required. Prefer the stable categoryId from getItemConfig." };
+  }
+  let resolvedCategory: any = null;
+
+  // ── Dynamic validation from workspace (entity categories + rate schedules) ──
+  try {
+    const ws = await getWs(); // reuses cached fetch from gate check
+    const entityCategories = ws.entityCategories || [];
+    const catConfig = findEntityCategory(entityCategories, {
+      categoryId: requestedCategoryId,
+      category: requestedCategory,
+      entityType: rest.entityType,
+    });
+
+    if (catConfig) {
+      resolvedCategory = catConfig;
+      rest.categoryId = catConfig.id;
+      rest.category = catConfig.name;
+      rest.entityType = catConfig.entityType;
+      const src = catConfig.itemSource || "freeform";
+      const calcType = catConfig.calculationType || "manual";
+      const requiresRateSchedule = src === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
+
+      // Validate UOM against category's validUoms
+      const validUoms: string[] = catConfig.validUoms || [];
+      if (validUoms.length > 0) {
+        if (!rest.uom || rest.uom === "EA") {
+          // Auto-correct to category default if UOM was omitted or left as generic default
+          if (!validUoms.includes(rest.uom || "EA")) {
+            rest.uom = catConfig.defaultUom || validUoms[0];
+          }
+        } else if (!validUoms.includes(rest.uom)) {
+          const requestedUom = rest.uom;
+          rest.uom = catConfig.defaultUom || validUoms[0];
+          autoWarnings.push(`UOM "${requestedUom}" is not valid for category "${catConfig.name}"; used "${rest.uom}" instead. Valid UOMs: ${validUoms.join(", ")}.`);
+        }
+      }
+
+      // Validate itemSource requirements
+      if (requiresRateSchedule && !rest.rateScheduleItemId) {
+        return { error: `ERROR: Category "${catConfig.name}" is system-calculated from a rate schedule — rateScheduleItemId is required.\n1. Call listRateScheduleItems with q/category filters\n2. Set rateScheduleItemId to a valid item ID\n3. Provide quantity and positive tierUnits only; Bidwright calculates cost and price.` };
+      }
+      if (src === "catalog" && !rest.itemId) {
+        return { error: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call queryLibrary or getItemConfig, then retry with a valid itemId.` };
+      }
+
+      // Validate rateScheduleItemId actually exists in revision rate schedules
+      if (rest.rateScheduleItemId) {
+        const rateSchedules = ws.rateSchedules || [];
+        const allRsItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({ id: i.id, name: i.name, code: i.code })));
+        const match = allRsItems.find((ri: any) => ri.id === rest.rateScheduleItemId);
+        if (!match) {
+          const available = allRsItems.slice(0, 15).map((ri: any) => `"${ri.name}" (${ri.id})`).join(", ");
+          return { error: `ERROR: rateScheduleItemId "${rest.rateScheduleItemId}" does not match any rate schedule item in this revision.` +
+            (available ? `\nAvailable items: ${available}` : `\nNo rate schedule items found. Call getItemConfig to check available items.`) +
+            `\nFix the rateScheduleItemId and retry.` };
+        }
+      }
+
+      // Validate itemId actually exists in catalogs
+      if (rest.itemId) {
+        const catalogItems = (ws.catalogItems || []);
+        const catalogs = ws.catalogs || [];
+        const allCatItems = catalogs.flatMap((c: any) => [
+          ...(c.items || []).map((ci: any) => ({ id: ci.id, name: ci.name })),
+          ...catalogItems.filter((ci: any) => ci.catalogId === c.id).map((ci: any) => ({ id: ci.id, name: ci.name })),
+        ]);
+        const match = allCatItems.find((ci: any) => ci.id === rest.itemId);
+        if (!match) {
+          return { error: `ERROR: itemId "${rest.itemId}" does not match any catalog item. Call getItemConfig to check available catalog items, then retry with a valid itemId.` };
+        }
+      }
+
+      // Validate calculationType requirements
+      const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
+      if (requiresRateSchedule && !hasTierUnits) {
+        return { error: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so positive tierUnits are required. Provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price.` };
+      }
+      if (requiresRateSchedule) {
+        const suppliedCalculatedValue = [rest.cost, rest.markup, rest.price].some((value) => value !== undefined && Number(value) !== 0);
+        if (suppliedCalculatedValue) {
+          return { error: `ERROR: Do not pass cost, markup, or price for "${catConfig.name}" rows. They are calculated by Bidwright from rateScheduleItemId, quantity, and tierUnits.` };
+        }
+        delete rest.cost;
+        delete rest.markup;
+        delete rest.price;
+      }
+
+      // Auto-apply default markup for markup-eligible categories when not explicitly set
+      if (!requiresRateSchedule && catConfig.editableFields?.markup && rest.markup === undefined) {
+        const rev = ws.currentRevision || {};
+        const revMarkup: number = rev.defaultMarkup ?? 0;
+        if (revMarkup > 0) {
+          // Revision stores markup as decimal (0.15 for 15%) — pass through directly
+          rest.markup = revMarkup > 1 ? revMarkup / 100 : revMarkup;
+        }
+      }
+    }
+  } catch {
+    // Workspace not available — let API-level validation handle it
+  }
+
+  // Normalize markup to decimal: agent may send 15 for 15%, DB stores 0.15
+  if (rest.markup !== undefined) {
+    rest.markup = rest.markup > 1 ? rest.markup / 100 : rest.markup;
+  }
+  const cat = resolvedCategory?.name ?? requestedCategory ?? rest.category;
+  if (!cat) {
+    return { error: "ERROR: categoryId could not be resolved from the current workspace. Call getItemConfig and retry with a valid categoryId or category name." };
+  }
+  const body = { ...rest, category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat };
+    return { worksheetId, body, rest, cat, autoWarnings };
+  }
+
+  /**
+   * Everything updateWorksheetItem does before the PATCH: markup
+   * normalisation, empty-patch rejection, row lookup, re-gating of claim or
+   * cost changes, and nesting evidenceBasis into sourceEvidence. Shared with
+   * batchEditWorksheetItems.
+   */
+  async function prepareUpdateWorksheetItem(itemId: string, catalogItemId: string | null | undefined, patchInput: Record<string, any>): Promise<{ error: string } | { patch: Record<string, any> }> {
+    let patch: Record<string, any> = { ...patchInput };
+  if (catalogItemId !== undefined) (patch as any).itemId = catalogItemId;
+  // Normalize markup to decimal: agent sends 15 for 15%, DB stores 0.15
+  if ((patch as any).markup !== undefined && (patch as any).markup > 1) {
+    (patch as any).markup = (patch as any).markup / 100;
+  }
+
+  // Reject empty / no-op updates. Kimi-class runtimes have been observed
+  // dropping every argument but itemId; those calls used to return
+  // "Updated item" while changing nothing, which hid the failure.
+  const providedKeys = Object.keys(patch).filter((key) => (patch as any)[key] !== undefined);
+  if (providedKeys.length === 0) {
+    return { error: `updateWorksheetItem for ${itemId} arrived with no fields to change — only itemId came through. Nothing was updated. Re-send with the fields you intend to change (for example quantity + derivation, or price + sourceNotes); if the arguments keep being dropped, send one field per call.` };
+  }
+
+  const ws = await getWs();
+  const existing: Record<string, any> | undefined = asArray(ws.worksheets).map(asRecord)
+    .flatMap((worksheet) => asArray(worksheet.items).map(asRecord).map((item): Record<string, any> => ({ ...item, worksheetName: worksheet.name })))
+    .find((item) => String(item.id ?? "") === itemId);
+  if (!existing) {
+    return { error: `Worksheet item ${itemId} was not found in the current revision. Call getWorkspace or searchItems to find the right itemId.` };
+  }
+
+  // Re-gate when the change touches what the row claims or how much it costs.
+  const gatedFields = ["quantity", "uom", "tierUnits", "cost", "price", "markup", "rateScheduleItemId", "laborUnitId", "evidenceBasis", "derivation", "categoryId", "category"];
+  const existingSourceEvidence = asRecord(existing.sourceEvidence);
+  const mergedEvidenceBasis = (patch as any).evidenceBasis !== undefined
+    ? asRecord((patch as any).evidenceBasis)
+    : asRecord(existingSourceEvidence.evidenceBasis);
+  const mergedDerivation = (patch as any).derivation !== undefined ? (patch as any).derivation : existing.derivation ?? null;
+  if (providedKeys.some((key) => gatedFields.includes(key))) {
+    const merged: Record<string, any> = { ...existing, ...patch };
+    const gateError = await checkGate("updateWorksheetItem", [existing.worksheetName, merged.entityName, merged.description, merged.sourceNotes].filter(Boolean).join(" "), {
+      evidenceBasis: Object.keys(mergedEvidenceBasis).length > 0 ? mergedEvidenceBasis : null,
+      derivation: mergedDerivation,
+      tierUnits: (merged.tierUnits as Record<string, number> | undefined) ?? null,
+      sourceNotes: String(merged.sourceNotes ?? ""),
+      laborUnitId: merged.laborUnitId ?? null,
+      rateScheduleItemId: merged.rateScheduleItemId ?? null,
+      sourceEvidence: existingSourceEvidence,
+      categoryId: merged.categoryId ?? null,
+      category: merged.category ?? null,
+      costResourceId: merged.costResourceId ?? null,
+      effectiveCostId: merged.effectiveCostId ?? null,
+      itemId: merged.itemId ?? null,
+      resourceComposition: merged.resourceComposition ?? null,
+      cost: Number.isFinite(merged.cost) ? Number(merged.cost) : null,
+      price: Number.isFinite(merged.price) ? Number(merged.price) : null,
+      uom: merged.uom ?? null,
+      quantity: Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
+    });
+    if (gateError) return { error: gateError };
+  }
+
+  // evidenceBasis lives inside sourceEvidence on the persisted row.
+  if ((patch as any).evidenceBasis !== undefined) {
+    const { evidenceBasis, ...restPatch } = patch as any;
+    (restPatch as any).sourceEvidence = {
+      ...existingSourceEvidence,
+      ...asRecord((patch as any).sourceEvidence),
+      evidenceBasis,
+    };
+    patch = restPatch;
+  }
+
+    return { patch };
   }
 
   // ── getWorkspace ──────────────────────────────────────────
@@ -2034,233 +2407,11 @@ function worksheetTreeSummary(ws: any) {
   server.tool(
     "createWorksheetItem",
     `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For tiered/rate categories, provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price. Use the rate item name as entityName and put task details in the description field, NOT in entityName. For freeform categories, provide quantity plus the editable unit cost/price basis. UOM must be from the category's validUoms list. When drawings exist, every row must include evidenceBasis. Prefer the two-axis form: evidenceBasis.quantity declares where the quantity/hours/duration came from, and evidenceBasis.pricing declares where the unit cost/rate/productivity came from. Drawing/takeoff quantities use drawing_quantity/visual_takeoff/drawing_table/drawing_note under evidenceBasis.quantity and must cite Drawing Evidence Engine claim IDs; pricing can separately be material_quote, rate_schedule, knowledge_labor, vendor_quote, equipment_rental, subcontract, allowance, indirect, assumption, document_quantity, or mixed.`,
-    {
-      worksheetId: z.string().describe("ID of the worksheet"),
-      entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
-      categoryId: z.string().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this over category name so renames cannot affect the row."),
-      category: z.string().optional().describe("Category name from getItemConfig (e.g. 'Labour', 'Equipment', 'Material', 'Consumables'). Use categoryId when available."),
-      entityType: z.string().optional().describe("Legacy entity type/category type. The server canonicalizes this from categoryId when provided."),
-      description: z.string().default("").describe("Description with document reference and assumptions"),
-      quantity: z.coerce.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
-      uom: z.string().default("EA").describe("Unit of measure — MUST be from the category's validUoms (see getItemConfig). Server rejects invalid UOMs and auto-corrects to the category default."),
-      cost: z.coerce.number().optional().describe("Editable unit cost for freeform/unit-cost categories only. Do not pass for tiered/rate categories; Bidwright calculates those from rateScheduleItemId and tierUnits."),
-      markup: z.coerce.number().optional().describe("Markup percentage for markup-eligible categories only. Do not pass for tiered/rate categories."),
-      price: z.coerce.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
-      tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
-      rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
-      itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
-      costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from queryLibrary/recommendCostSource."),
-      effectiveCostId: z.string().nullable().optional().describe("Effective cost ID from cost intelligence. Preserve this when a priced effective_cost candidate is selected."),
-      laborUnitId: z.string().nullable().optional().describe("Labor unit ID for labour productivity sources."),
-      resourceComposition: z.record(z.unknown()).optional().describe("Structured resource rollup from a search candidate, recommendation, or assembly expansion."),
-      sourceEvidence: z.record(z.unknown()).optional().describe("Structured provenance from a search candidate, recommendation, or source document."),
-      evidenceBasis: z.object({
-        type: z.enum(LINE_EVIDENCE_BASIS_TYPES).optional().describe("Legacy single-source shorthand. Prefer quantity.type plus pricing.type when quantity and price/rate come from different sources."),
-        quantity: z.object({
-          type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies the row quantity, labour hours, duration, or count."),
-          drawingClaimIds: z.array(z.string()).default([]).describe("Required when quantity.type is drawing_quantity, visual_takeoff, drawing_table, or drawing_note."),
-          viewIds: z.array(z.string()).default([]).describe("REQUIRED for drawing-driven quantities: viewId(s) returned with the image by readDrawingPage / readDrawingTile / inspectDrawingRegion that visually prove the count or measurement."),
-          userConfirmation: z.object({ questionId: z.string(), answer: z.string() }).passthrough().optional().describe("askUser questionId + answer when the estimator confirmed an assumption-based quantity."),
-          quantityDriver: z.string().optional().describe("Formula or driver behind quantity/hours/duration."),
-          sourceRefs: sourceRefArray(),
-          assumptionIds: z.array(z.string()).default([]),
-          rationale: z.string().optional(),
-        }).passthrough().optional(),
-        pricing: z.object({
-          type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies unit cost, rate, productivity, markup basis, or allowance value."),
-          sourceRefs: sourceRefArray(),
-          assumptionIds: z.array(z.string()).default([]),
-          rationale: z.string().optional(),
-        }).passthrough().optional(),
-        quantityDriver: z.string().optional().describe("Short explanation of what drives quantity, hours, duration, or allowance."),
-        drawingClaimIds: z.array(z.string()).default([]).describe("Legacy location for drawing quantity claim IDs. Prefer evidenceBasis.quantity.drawingClaimIds."),
-        sourceRefs: sourceRefArray("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
-        assumptionIds: z.array(z.string()).default([]).describe("Saved assumption IDs when the row is assumption-backed."),
-        rationale: z.string().optional().describe("Why this source class is appropriate and how it supports the line."),
-      }).passthrough().optional().describe("Line-level evidence contract. Required on every priced row. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
-      derivation: derivationSchema.nullable().optional().describe("How the quantity was derived: formula + sourced inputs + result. Required when quantity is drawing-driven; recommended for every row whose quantity is not read directly from a BOM/schedule."),
-      classification: z.record(z.unknown()).optional().describe("Optional construction classification JSON, e.g. { masterformat: '03 30 00' }."),
-      costCode: z.string().nullable().optional().describe("Optional internal cost code used by cost-code rollups."),
-      phaseId: z.string().optional().describe("Phase ID"),
-      sourceNotes: z.string().default("").describe(
-        "MANDATORY: knowledge book refs, dataset lookups, correction factors applied, web search URLs/findings, assumptions for this item"
-      ),
-    },
+    createWorksheetItemShape,
     async (input) => {
-      if (looksLikeTruncatedItemPayload(input as Record<string, any>)) {
-        return { content: [{ type: "text" as const, text: TRUNCATED_ITEM_PAYLOAD_MESSAGE }] };
-      }
-      const wsForGate = await getWs();
-      const targetWorksheet = asArray(wsForGate.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
-      const gateError = await checkGate("createWorksheetItem", [
-        targetWorksheet?.name,
-        input.entityName,
-        input.description,
-        input.sourceNotes,
-      ].filter(Boolean).join(" "), {
-        evidenceBasis: input.evidenceBasis ?? null,
-        derivation: input.derivation ?? null,
-        tierUnits: input.tierUnits ?? null,
-        sourceNotes: input.sourceNotes,
-        laborUnitId: input.laborUnitId,
-        rateScheduleItemId: input.rateScheduleItemId,
-        sourceEvidence: input.sourceEvidence,
-        categoryId: input.categoryId ?? null,
-        category: input.category ?? null,
-        costResourceId: input.costResourceId ?? null,
-        effectiveCostId: input.effectiveCostId ?? null,
-        itemId: input.itemId ?? null,
-        resourceComposition: input.resourceComposition ?? null,
-        cost: input.cost ?? null,
-        price: input.price ?? null,
-        uom: input.uom ?? null,
-        quantity: input.quantity ?? null,
-      });
-      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
-
-      const { worksheetId, evidenceBasis, ...rest } = input;
-      if (evidenceBasis) {
-        rest.sourceEvidence = {
-          ...asRecord(rest.sourceEvidence),
-          evidenceBasis,
-        };
-      }
-      const autoWarnings: string[] = [];
-      for (const key of ["entityName", "description", "sourceNotes"] as const) {
-        (rest as any)[key] = stripLeakedToolParameterMarkup((rest as any)[key]);
-      }
-      if (!rest.category && !rest.categoryId && rest.rateScheduleItemId) {
-        const matchingSchedule = asArray(wsForGate.rateSchedules).map(asRecord).find((schedule) =>
-          asArray(schedule.items).some((item) => String(asRecord(item).id ?? "") === String(rest.rateScheduleItemId))
-        );
-        if (matchingSchedule) {
-          const scheduleCategory = String(matchingSchedule.category ?? "");
-          const categoryMatch = asArray(wsForGate.entityCategories).map(asRecord).find((category) =>
-            normalizeCategoryToolKey(category.name) === normalizeCategoryToolKey(scheduleCategory) ||
-            normalizeCategoryToolKey(category.entityType) === normalizeCategoryToolKey(scheduleCategory)
-          );
-          if (categoryMatch) {
-            rest.categoryId = String(categoryMatch.id ?? "");
-            rest.category = String(categoryMatch.name ?? scheduleCategory);
-            rest.entityType = String(categoryMatch.entityType ?? scheduleCategory);
-            autoWarnings.push(`Inferred category "${rest.category}" from rateScheduleItemId ${rest.rateScheduleItemId}.`);
-          }
-        }
-      }
-      const requestedCategory = rest.category;
-      const requestedCategoryId = rest.categoryId;
-      if (!requestedCategory && !requestedCategoryId) {
-        return { content: [{ type: "text" as const, text: "ERROR: categoryId or category is required. Prefer the stable categoryId from getItemConfig." }], isError: true };
-      }
-      let resolvedCategory: any = null;
-
-      // ── Dynamic validation from workspace (entity categories + rate schedules) ──
-      try {
-        const ws = await getWs(); // reuses cached fetch from gate check
-        const entityCategories = ws.entityCategories || [];
-        const catConfig = findEntityCategory(entityCategories, {
-          categoryId: requestedCategoryId,
-          category: requestedCategory,
-          entityType: rest.entityType,
-        });
-
-        if (catConfig) {
-          resolvedCategory = catConfig;
-          rest.categoryId = catConfig.id;
-          rest.category = catConfig.name;
-          rest.entityType = catConfig.entityType;
-          const src = catConfig.itemSource || "freeform";
-          const calcType = catConfig.calculationType || "manual";
-          const requiresRateSchedule = src === "rate_schedule" || calcType === "tiered_rate" || calcType === "duration_rate";
-
-          // Validate UOM against category's validUoms
-          const validUoms: string[] = catConfig.validUoms || [];
-          if (validUoms.length > 0) {
-            if (!rest.uom || rest.uom === "EA") {
-              // Auto-correct to category default if UOM was omitted or left as generic default
-              if (!validUoms.includes(rest.uom || "EA")) {
-                rest.uom = catConfig.defaultUom || validUoms[0];
-              }
-            } else if (!validUoms.includes(rest.uom)) {
-              const requestedUom = rest.uom;
-              rest.uom = catConfig.defaultUom || validUoms[0];
-              autoWarnings.push(`UOM "${requestedUom}" is not valid for category "${catConfig.name}"; used "${rest.uom}" instead. Valid UOMs: ${validUoms.join(", ")}.`);
-            }
-          }
-
-          // Validate itemSource requirements
-          if (requiresRateSchedule && !rest.rateScheduleItemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is system-calculated from a rate schedule — rateScheduleItemId is required.\n1. Call listRateScheduleItems with q/category filters\n2. Set rateScheduleItemId to a valid item ID\n3. Provide quantity and positive tierUnits only; Bidwright calculates cost and price.` }], isError: true };
-          }
-          if (src === "catalog" && !rest.itemId) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call queryLibrary or getItemConfig, then retry with a valid itemId.` }], isError: true };
-          }
-
-          // Validate rateScheduleItemId actually exists in revision rate schedules
-          if (rest.rateScheduleItemId) {
-            const rateSchedules = ws.rateSchedules || [];
-            const allRsItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({ id: i.id, name: i.name, code: i.code })));
-            const match = allRsItems.find((ri: any) => ri.id === rest.rateScheduleItemId);
-            if (!match) {
-              const available = allRsItems.slice(0, 15).map((ri: any) => `"${ri.name}" (${ri.id})`).join(", ");
-              return { content: [{ type: "text" as const, text: `ERROR: rateScheduleItemId "${rest.rateScheduleItemId}" does not match any rate schedule item in this revision.` +
-                (available ? `\nAvailable items: ${available}` : `\nNo rate schedule items found. Call getItemConfig to check available items.`) +
-                `\nFix the rateScheduleItemId and retry.` }], isError: true };
-            }
-          }
-
-          // Validate itemId actually exists in catalogs
-          if (rest.itemId) {
-            const catalogItems = (ws.catalogItems || []);
-            const catalogs = ws.catalogs || [];
-            const allCatItems = catalogs.flatMap((c: any) => [
-              ...(c.items || []).map((ci: any) => ({ id: ci.id, name: ci.name })),
-              ...catalogItems.filter((ci: any) => ci.catalogId === c.id).map((ci: any) => ({ id: ci.id, name: ci.name })),
-            ]);
-            const match = allCatItems.find((ci: any) => ci.id === rest.itemId);
-            if (!match) {
-              return { content: [{ type: "text" as const, text: `ERROR: itemId "${rest.itemId}" does not match any catalog item. Call getItemConfig to check available catalog items, then retry with a valid itemId.` }], isError: true };
-            }
-          }
-
-          // Validate calculationType requirements
-          const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
-          if (requiresRateSchedule && !hasTierUnits) {
-            return { content: [{ type: "text" as const, text: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so positive tierUnits are required. Provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price.` }], isError: true };
-          }
-          if (requiresRateSchedule) {
-            const suppliedCalculatedValue = [rest.cost, rest.markup, rest.price].some((value) => value !== undefined && Number(value) !== 0);
-            if (suppliedCalculatedValue) {
-              return { content: [{ type: "text" as const, text: `ERROR: Do not pass cost, markup, or price for "${catConfig.name}" rows. They are calculated by Bidwright from rateScheduleItemId, quantity, and tierUnits.` }], isError: true };
-            }
-            delete rest.cost;
-            delete rest.markup;
-            delete rest.price;
-          }
-
-          // Auto-apply default markup for markup-eligible categories when not explicitly set
-          if (!requiresRateSchedule && catConfig.editableFields?.markup && rest.markup === undefined) {
-            const rev = ws.currentRevision || {};
-            const revMarkup: number = rev.defaultMarkup ?? 0;
-            if (revMarkup > 0) {
-              // Revision stores markup as decimal (0.15 for 15%) — pass through directly
-              rest.markup = revMarkup > 1 ? revMarkup / 100 : revMarkup;
-            }
-          }
-        }
-      } catch {
-        // Workspace not available — let API-level validation handle it
-      }
-
-      // Normalize markup to decimal: agent may send 15 for 15%, DB stores 0.15
-      if (rest.markup !== undefined) {
-        rest.markup = rest.markup > 1 ? rest.markup / 100 : rest.markup;
-      }
-      const cat = resolvedCategory?.name ?? requestedCategory ?? rest.category;
-      if (!cat) {
-        return { content: [{ type: "text" as const, text: "ERROR: categoryId could not be resolved from the current workspace. Call getItemConfig and retry with a valid categoryId or category name." }], isError: true };
-      }
-      const body = { ...rest, category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat };
+      const prepared = await prepareCreateWorksheetItem(input);
+      if ("error" in prepared) return { content: [{ type: "text" as const, text: prepared.error }], isError: true };
+      const { worksheetId, body, rest, cat, autoWarnings } = prepared;
       try {
         const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
         invalidateWs();
@@ -2451,100 +2602,11 @@ function worksheetTreeSummary(ws: any) {
   server.tool(
     "updateWorksheetItem",
     "Update an existing line item. Only provided fields are changed. When re-pointing an item at a different rate-schedule item (e.g. swapping MECH labour for SHOP labour), pass BOTH rateScheduleItemId AND tierUnits in the same call — the server keeps the previously persisted tierUnits otherwise, leaving stale tier IDs that price to $0.",
-    {
-      itemId: z.string().describe("Line item ID"),
-      entityName: z.string().optional(),
-      categoryId: z.string().nullable().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this when changing category."),
-      category: z.string().optional(),
-      description: z.string().optional(),
-      quantity: z.coerce.number().optional(),
-      uom: z.string().optional(),
-      cost: z.coerce.number().optional(),
-      markup: z.coerce.number().optional(),
-      price: z.coerce.number().optional(),
-      rateScheduleItemId: z.string().nullable().optional().describe("Rate schedule item ID. Pass null to clear. When changing this, also pass tierUnits."),
-      costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID. Pass null to clear."),
-      effectiveCostId: z.string().nullable().optional().describe("Effective cost ID. Pass null to clear."),
-      laborUnitId: z.string().nullable().optional().describe("Labor unit ID. Pass null to clear."),
-      resourceComposition: z.record(z.unknown()).optional(),
-      sourceEvidence: z.record(z.unknown()).optional(),
-      tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier — keys are tier IDs (or tier names; server resolves) for the rate schedule referenced by rateScheduleItemId. REQUIRED when rateScheduleItemId changes."),
-      classification: z.record(z.unknown()).optional().describe("Construction classification JSON, e.g. { masterformat: '03 30 00' }."),
-      costCode: z.string().nullable().optional().describe("Internal cost code. Pass null to clear."),
-      phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
-      sourceNotes: z.string().optional(),
-      catalogItemId: z.string().nullable().optional().describe("Catalog item ID for catalog-backed categories. Pass null to clear."),
-      evidenceBasis: z.record(z.unknown()).optional().describe("Replace the row's line-level evidence contract (same shape as createWorksheetItem.evidenceBasis). Required when the change alters quantity/hours and the existing basis no longer supports it."),
-      derivation: derivationSchema.nullable().optional().describe("Replace the row's derivation (formula + sourced inputs + result) so it reproduces the new quantity/hours. Pass null to clear. If quantity/uom/tierUnits change without a new derivation, the existing one is marked stale."),
-    },
+    updateWorksheetItemShape,
     async ({ itemId, catalogItemId, ...patch }) => {
-      if (catalogItemId !== undefined) (patch as any).itemId = catalogItemId;
-      // Normalize markup to decimal: agent sends 15 for 15%, DB stores 0.15
-      if ((patch as any).markup !== undefined && (patch as any).markup > 1) {
-        (patch as any).markup = (patch as any).markup / 100;
-      }
-
-      // Reject empty / no-op updates. Kimi-class runtimes have been observed
-      // dropping every argument but itemId; those calls used to return
-      // "Updated item" while changing nothing, which hid the failure.
-      const providedKeys = Object.keys(patch).filter((key) => (patch as any)[key] !== undefined);
-      if (providedKeys.length === 0) {
-        return {
-          content: [{ type: "text" as const, text: `updateWorksheetItem for ${itemId} arrived with no fields to change — only itemId came through. Nothing was updated. Re-send with the fields you intend to change (for example quantity + derivation, or price + sourceNotes); if the arguments keep being dropped, send one field per call.` }],
-          isError: true,
-        };
-      }
-
-      const ws = await getWs();
-      const existing: Record<string, any> | undefined = asArray(ws.worksheets).map(asRecord)
-        .flatMap((worksheet) => asArray(worksheet.items).map(asRecord).map((item): Record<string, any> => ({ ...item, worksheetName: worksheet.name })))
-        .find((item) => String(item.id ?? "") === itemId);
-      if (!existing) {
-        return { content: [{ type: "text" as const, text: `Worksheet item ${itemId} was not found in the current revision. Call getWorkspace or searchItems to find the right itemId.` }], isError: true };
-      }
-
-      // Re-gate when the change touches what the row claims or how much it costs.
-      const gatedFields = ["quantity", "uom", "tierUnits", "cost", "price", "markup", "rateScheduleItemId", "laborUnitId", "evidenceBasis", "derivation", "categoryId", "category"];
-      const existingSourceEvidence = asRecord(existing.sourceEvidence);
-      const mergedEvidenceBasis = (patch as any).evidenceBasis !== undefined
-        ? asRecord((patch as any).evidenceBasis)
-        : asRecord(existingSourceEvidence.evidenceBasis);
-      const mergedDerivation = (patch as any).derivation !== undefined ? (patch as any).derivation : existing.derivation ?? null;
-      if (providedKeys.some((key) => gatedFields.includes(key))) {
-        const merged: Record<string, any> = { ...existing, ...patch };
-        const gateError = await checkGate("updateWorksheetItem", [existing.worksheetName, merged.entityName, merged.description, merged.sourceNotes].filter(Boolean).join(" "), {
-          evidenceBasis: Object.keys(mergedEvidenceBasis).length > 0 ? mergedEvidenceBasis : null,
-          derivation: mergedDerivation,
-          tierUnits: (merged.tierUnits as Record<string, number> | undefined) ?? null,
-          sourceNotes: String(merged.sourceNotes ?? ""),
-          laborUnitId: merged.laborUnitId ?? null,
-          rateScheduleItemId: merged.rateScheduleItemId ?? null,
-          sourceEvidence: existingSourceEvidence,
-          categoryId: merged.categoryId ?? null,
-          category: merged.category ?? null,
-          costResourceId: merged.costResourceId ?? null,
-          effectiveCostId: merged.effectiveCostId ?? null,
-          itemId: merged.itemId ?? null,
-          resourceComposition: merged.resourceComposition ?? null,
-          cost: Number.isFinite(merged.cost) ? Number(merged.cost) : null,
-          price: Number.isFinite(merged.price) ? Number(merged.price) : null,
-          uom: merged.uom ?? null,
-          quantity: Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
-        });
-        if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
-      }
-
-      // evidenceBasis lives inside sourceEvidence on the persisted row.
-      if ((patch as any).evidenceBasis !== undefined) {
-        const { evidenceBasis, ...restPatch } = patch as any;
-        (restPatch as any).sourceEvidence = {
-          ...existingSourceEvidence,
-          ...asRecord((patch as any).sourceEvidence),
-          evidenceBasis,
-        };
-        patch = restPatch;
-      }
-
+      const prepared = await prepareUpdateWorksheetItem(itemId, catalogItemId, patch);
+      if ("error" in prepared) return { content: [{ type: "text" as const, text: prepared.error }], isError: true };
+      patch = prepared.patch as any;
       const data = await apiPatch(projectPath(`/worksheet-items/${itemId}`), patch);
       invalidateWs();
       const updated = (data as any)?.item || (data as any)?.worksheetItem || data || {};
@@ -2597,6 +2659,66 @@ function worksheetTreeSummary(ws: any) {
       } catch (error) {
         const message = (error as Error)?.message ?? String(error);
         return { content: [{ type: "text" as const, text: `Could not read derivation for ${itemId}: ${message}` }], isError: true };
+      }
+    }
+  );
+
+  // ── batchEditWorksheetItems ───────────────────────────────
+  server.tool(
+    "batchEditWorksheetItems",
+    [
+      "Create, update, and delete several worksheet lines in ONE atomic call.",
+      "Every operation is checked with the same gates as createWorksheetItem / updateWorksheetItem (evidence basis, viewIds, derivation, assumption resolution, category/rate validation) BEFORE anything is sent; if any operation fails, the whole batch is rejected with every problem listed and nothing is applied.",
+      "The server then applies all operations in one database transaction; a server-side failure rolls back the entire batch.",
+      "Use it to add a worksheet's rows together, or to apply a correction that touches several dependent rows at once. Max 100 operations.",
+    ].join(" "),
+    {
+      operations: z.array(z.discriminatedUnion("op", [
+        z.object({ op: z.literal("create"), ref: z.string().optional().describe("Your label for this operation, echoed in results/problems."), worksheetId: z.string(), item: z.object(createWorksheetItemShape).omit({ worksheetId: true }) }),
+        z.object({ op: z.literal("update"), ref: z.string().optional(), itemId: z.string(), patch: z.object(updateWorksheetItemShape).omit({ itemId: true }) }),
+        z.object({ op: z.literal("delete"), ref: z.string().optional(), itemId: z.string() }),
+      ])).min(1).max(100),
+    },
+    async ({ operations }) => {
+      const prepared: Array<Record<string, unknown>> = [];
+      const problems = await collectBatchOperationProblems(operations, async (operation) => {
+        if (operation.op === "create") {
+          const result = await prepareCreateWorksheetItem({ ...operation.item, worksheetId: operation.worksheetId });
+          if ("error" in result) return result.error;
+          prepared.push({ op: "create", ref: operation.ref, worksheetId: result.worksheetId, item: result.body });
+          return null;
+        }
+        if (operation.op === "update") {
+          const { catalogItemId, ...patch } = operation.patch as Record<string, any>;
+          const result = await prepareUpdateWorksheetItem(operation.itemId, catalogItemId, patch);
+          if ("error" in result) return result.error;
+          prepared.push({ op: "update", ref: operation.ref, itemId: operation.itemId, patch: result.patch });
+          return null;
+        }
+        prepared.push({ op: "delete", ref: operation.ref, itemId: operation.itemId });
+        return null;
+      });
+      if (problems.length > 0) {
+        return { content: [{ type: "text" as const, text: JSON.stringify({
+          applied: 0,
+          rejected: operations.length,
+          message: `${problems.length} of ${operations.length} operations failed validation; nothing was applied. Fix every listed problem and resend the whole batch.`,
+          problems,
+        }, null, 2) }], isError: true };
+      }
+      try {
+        const data = await apiPost<any>(projectPath("/worksheet-items/batch"), { operations: prepared });
+        invalidateWs();
+        const results = asArray(data?.results).map(asRecord);
+        return { content: [{ type: "text" as const, text: toolUiText(`Applied ${results.length} worksheet operations atomically.`, {
+          kind: "worksheet_items.batch_applied",
+          applied: results.length,
+          results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId })),
+          estimateTotals: data?.estimateTotals ?? null,
+        }) }] };
+      } catch (error) {
+        const message = (error as Error)?.message ?? String(error);
+        return { content: [{ type: "text" as const, text: `Batch rolled back; nothing was applied. ${message}` }], isError: true };
       }
     }
   );

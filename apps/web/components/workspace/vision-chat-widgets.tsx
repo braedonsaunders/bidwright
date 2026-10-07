@@ -10,6 +10,9 @@ import {
   XCircle,
   ZoomIn,
 } from "lucide-react";
+import { normalizeAgentToolId } from "@bidwright/domain";
+import { resolveApiUrl } from "@/lib/api";
+import { drawingToolEvidence } from "@/lib/drawing-tool-evidence";
 import { cn } from "@/lib/utils";
 
 // ─── Types ────────────────────────────────────────────────────────────────
@@ -316,6 +319,9 @@ export function ProgressIndicator({
 
 /** Vision tool IDs that we render rich widgets for */
 const VISION_TOOL_IDS = new Set([
+  "readDrawingPage",
+  "readDrawingTile",
+  "inspectDrawingRegion",
   "renderDrawingPage",
   "zoomDrawingRegion",
   "countSymbols",
@@ -324,9 +330,7 @@ const VISION_TOOL_IDS = new Set([
 ]);
 
 export function isVisionTool(toolId: string): boolean {
-  // Handle both plain tool IDs and prefixed ones (e.g. "vision.renderDrawingPage")
-  const baseName = toolId.includes(".") ? toolId.split(".").pop()! : toolId;
-  return VISION_TOOL_IDS.has(baseName);
+  return VISION_TOOL_IDS.has(normalizeAgentToolId(toolId));
 }
 
 /**
@@ -342,7 +346,10 @@ export function VisionToolWidget({
   input: unknown;
   result: { success: boolean; data?: unknown; error?: string; duration_ms?: number };
 }) {
-  const baseName = toolId.includes(".") ? toolId.split(".").pop()! : toolId;
+  const baseName = normalizeAgentToolId(toolId);
+  if (!isVisionTool(toolId)) return null;
+  const evidence = drawingToolEvidence(result.data, input);
+  if (evidence) return <DrawingViewer {...evidence} imageUrl={resolveApiUrl(`/api/vision/views/${encodeURIComponent(evidence.viewId)}/image`)} />;
 
   // Show progress indicator while tool is still running (no result yet)
   const isPending = !result.data && !result.error && result.duration_ms === 0;

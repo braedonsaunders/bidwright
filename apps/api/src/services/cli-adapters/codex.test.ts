@@ -55,3 +55,11 @@ test("native image views remain auditable without minting drawing evidence", () 
   assert.equal((parsed[0]?.data as any).evidenceViewId, null);
   assert.equal((parsed[0]?.data as any).auditOnly, true);
 });
+
+test("broker usage preserves aggregate token metrics without claiming a billing cost", () => {
+  const usage = { total: { inputTokens: 100, outputTokens: 20, cachedInputTokens: 50 } };
+  const events = codexAdapter.parseEvent({ type: "broker.usage", usage }, parserState());
+  assert.equal(events[0].type, "progress");
+  assert.deepEqual((events[0].data as any).usage, usage);
+  assert.equal((events[0].data as any).costUsd, null);
+});

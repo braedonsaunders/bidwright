@@ -45,7 +45,6 @@ import { removeLegacyRuntimeCredentials } from "./runtime-config-security.js";
 import { hasFinalAssistantAnswer, type CliConversationEvent } from "./cli-conversation.js";
 import {
   BIDWRIGHT_PERMISSIONS,
-  BIDWRIGHT_QA_PERMISSIONS,
   environmentReferences,
 } from "./cli-adapters/shared.js";
 import {
@@ -865,7 +864,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     mcpRunner,
     mcpArgs,
     mcpEnv,
-    permissions: [...(opts.agentMode === "qa" ? BIDWRIGHT_QA_PERMISSIONS : BIDWRIGHT_PERMISSIONS)],
+    permissions: [...BIDWRIGHT_PERMISSIONS],
     isWin,
     isResume: false,
     agentHomeDir,
@@ -899,7 +898,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     isWin,
     "run",
     opts.userId,
-    opts.agentMode === "qa" ? "read-only" : "read-write",
+    "read-write",
   );
 
   const events = new EventEmitter();
@@ -1165,7 +1164,7 @@ async function spawnResumedSession(
     mcpRunner,
     mcpArgs,
     mcpEnv,
-    permissions: [...(opts.agentMode === "qa" ? BIDWRIGHT_QA_PERMISSIONS : BIDWRIGHT_PERMISSIONS)],
+    permissions: [...BIDWRIGHT_PERMISSIONS],
     isWin,
     isResume: true,
     agentHomeDir,
@@ -1200,7 +1199,7 @@ async function spawnResumedSession(
     isWin,
     "resume",
     opts.userId,
-    opts.agentMode === "qa" ? "read-only" : "read-write",
+    "read-write",
   );
 
   const events = sharedEvents ?? new EventEmitter();

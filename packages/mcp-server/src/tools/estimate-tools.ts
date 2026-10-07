@@ -252,7 +252,15 @@ function summarizeStrategyForTool(data: { strategy: Record<string, unknown> | nu
       summary: summarizeStrategySummary(strategy.summary),
     },
     feedbackCount: data.feedback?.length ?? 0,
-    feedbackSample: (data.feedback ?? []).slice(0, 5).map((entry) => compactForStrategyTool(entry, { maxArray: 4, maxString: 220 })),
+    // Only estimator-approved lessons are surfaced; unreviewed captures are
+    // counted but never shown, so the agent cannot learn from unvetted deltas.
+    feedbackPendingReview: (data.feedback ?? []).filter((entry) => String((entry as any).reviewStatus ?? "pending") === "pending").length,
+    approvedLessons: (data.feedback ?? [])
+      .filter((entry) => String((entry as any).reviewStatus ?? "") === "approved")
+      .flatMap((entry) => (Array.isArray((entry as any).approvedLessons) ? (entry as any).approvedLessons : []))
+      .slice(0, 10)
+      .map((entry) => compactForStrategyTool(entry, { maxArray: 4, maxString: 220 })),
+    lessonsNote: "Call listCalibrationLessons for approved lessons from other projects in this organization.",
     note: "Default response is compact to avoid oversized tool output. Request a specific section with {\"section\":\"scopeGraph\"} when you need more detail.",
   };
 }
@@ -532,6 +540,66 @@ export function registerEstimateTools(server: McpServer) {
     async ({ adjustments }) => {
       await apiPost(`/api/estimate/${getProjectId()}/strategy/section`, { section: "adjustmentPlan", data: adjustments });
       return { content: [{ type: "text" as const, text: `Saved ${adjustments.length} benchmark adjustments` }] };
+    },
+  );
+
+  server.tool(
+    "saveEstimateStrategyStages",
+    [
+      "Save several strategy sections in ONE atomic call instead of separate saveEstimateScopeGraph / saveEstimateExecutionPlan / saveEstimateAssumptions / saveEstimatePackagePlan / saveEstimateAdjustments round trips.",
+      "Every section is validated first; if any is invalid nothing is saved and the per-section issues are returned. The stage advances to the furthest section saved.",
+      "Section shapes are identical to the single-section tools. Use this at the start of an estimate to persist scope + execution + assumptions + packages together.",
+    ].join(" "),
+    {
+      scopeGraph: z.record(z.unknown()).optional().describe("Same shape as saveEstimateScopeGraph input."),
+      executionPlan: z.record(z.unknown()).optional().describe("Same shape as saveEstimateExecutionPlan input."),
+      assumptions: z.array(z.record(z.unknown())).optional().describe("Same shape as saveEstimateAssumptions.assumptions."),
+      packagePlan: z.array(z.record(z.unknown())).optional().describe("Same shape as saveEstimatePackagePlan.packages."),
+      adjustmentPlan: z.array(z.record(z.unknown())).optional().describe("Same shape as saveEstimateAdjustments.adjustments."),
+      reconcileReport: z.record(z.unknown()).optional().describe("Same shape as saveEstimateReconcile input."),
+    },
+    async (input) => {
+      const sections = Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined));
+      if (Object.keys(sections).length === 0) {
+        return { content: [{ type: "text" as const, text: "ERROR: provide at least one section (scopeGraph, executionPlan, assumptions, packagePlan, adjustmentPlan, reconcileReport)." }], isError: true };
+      }
+      try {
+        const data = await apiPost<any>(`/api/estimate/${getProjectId()}/strategy/sections`, { sections });
+        return { content: [{ type: "text" as const, text: `Saved ${(data?.savedSections ?? []).length} strategy sections atomically (${(data?.savedSections ?? []).join(", ")}). Stage: ${data?.currentStage ?? "unknown"}.` }] };
+      } catch (error) {
+        const message = (error as Error)?.message ?? String(error);
+        return { content: [{ type: "text" as const, text: `Atomic strategy save rejected; nothing was saved. ${message}` }], isError: true };
+      }
+    },
+  );
+
+  server.tool(
+    "listCalibrationLessons",
+    [
+      "Read estimator-APPROVED calibration lessons from past estimates in this organization (what the AI got wrong and how the human corrected it).",
+      "Only reviewed and approved lessons are returned; unreviewed captures are never shown. Use the query/tags to pull lessons relevant to the current trade, scope, or quantity type before deriving quantities and hours.",
+    ].join(" "),
+    {
+      query: z.string().optional().describe("Free text, e.g. 'anchor count base plate' or 'millwright setting hours'."),
+      tags: z.array(z.string()).optional().describe("Trade/scope tags, e.g. ['structural','anchors']."),
+      limit: z.coerce.number().int().positive().max(50).default(12),
+      includeThisProject: z.boolean().default(false).describe("By default lessons from the current project are excluded so the agent is not fed its own unreviewed context."),
+    },
+    async (input) => {
+      const params = new URLSearchParams();
+      if (input.query) params.set("q", input.query);
+      if (input.tags && input.tags.length > 0) params.set("tags", input.tags.join(","));
+      params.set("limit", String(input.limit));
+      if (!input.includeThisProject) params.set("excludeProjectId", getProjectId());
+      const data = await apiGet<any>(`/api/estimate/calibration-lessons?${params}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        policy: "approved_only",
+        count: data?.count ?? 0,
+        lessons: data?.lessons ?? [],
+        guidance: (data?.count ?? 0) > 0
+          ? "Apply relevant lessons explicitly: cite the lesson in sourceNotes or the derivation note of the rows it influenced."
+          : "No approved lessons match. Proceed on document, drawing, and library evidence.",
+      }, null, 2) }] };
     },
   );
 

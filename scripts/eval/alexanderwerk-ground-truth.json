@@ -10,20 +10,45 @@
   },
   "expected": {
     "anchorsPerBasePlate": 1,
-    "mainFramePosts": null,
+    "mainFramePosts": 3,
     "stairLandingPosts": 2,
-    "basePlates": null,
-    "anchors": null,
+    "basePlates": 5,
+    "anchors": 5,
     "groutCubicFeetPerPlateAtOneInchDepth": 0.037037037037037035,
-    "groutCubicFeetBeforeWaste": null,
+    "groutCubicFeetBeforeWaste": 0.18518518518518517,
     "anchorLength": null
   },
   "verification": {
     "reviewer": "thr_dmphhungk4",
-    "corroboratingReviewer": "thr_aystpu7h8w",
-    "method": "Source p.4 plan and both elevations. Root identifies five distinct plan post symbols; second reviewer initially inferred six (four main plus two landing). Sixth location requires pixel evidence; exact total is deliberately withheld pending reconciliation.",
-    "uncertaintyPolicy": "Do not grade total post/anchor counts until the disputed main upper-left junction is resolved. One anchor per base plate is verified. Anchor length is unspecified. Procurement bag counts depend on actual product yield, waste, and minimum purchase units.",
+    "method": "All three reviewers reconciled five distinct plan post symbols against both elevations: two outer stair-landing posts, main top-right, main bottom-left and main bottom-right. The main/landing inner-left junction is a tube-to-tube beam cleat, not a sixth post. Long-side elevation shows three projected stations representing five physical posts.",
+    "uncertaintyPolicy": "Five anchors passes the count check; four or six requires source review; thirty-two is unsupported. Anchor length remains unspecified and requires an explicit assumption or clarification. Procurement bags depend on product yield and minimum purchase units.",
     "evaluationOnly": true,
-    "status": "count_disputed"
+    "status": "reconciled",
+    "corroboratingReviewers": [
+      "thr_aystpu7h8w",
+      "thr_gfpihj5efr"
+    ],
+    "planPostCentersIn1568x1212Overview": [
+      [
+        300,
+        160
+      ],
+      [
+        380,
+        160
+      ],
+      [
+        490,
+        255
+      ],
+      [
+        300,
+        580
+      ],
+      [
+        490,
+        580
+      ]
+    ]
   }
 }

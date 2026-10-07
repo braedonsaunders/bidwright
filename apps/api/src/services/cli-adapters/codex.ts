@@ -8,6 +8,7 @@
  * suppresses the well-known noisy patterns plus HTML stack-trace spans.
  */
 
+import { bidwrightMcpApprovalArgs } from "./mcp-approval-policy.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
@@ -140,6 +141,7 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     // bounded independently, so this only needs to cover human think time.
     "-c",
     `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
+    ...bidwrightMcpApprovalArgs(),
   ];
 }
 
@@ -307,7 +309,9 @@ async function listModels(opts: { customPath?: string }): Promise<CliModelOption
 function parseEvent(msg: any, state: ParserState): SSEEventData[] {
   const events: SSEEventData[] = [];
 
-  if (msg.type === "broker.error") {
+  if (msg.type === "broker.usage") {
+    events.push({ type: "progress", data: { phase: "Usage", usage: msg.usage, costUsd: null } });
+  } else if (msg.type === "broker.error") {
     events.push({ type: "error", data: { message: msg.message || "Runtime broker failed" } });
   } else if (msg.method === "turn/started") {
     events.push({ type: "progress", data: { phase: "Running", detail: "Turn started" } });
@@ -607,7 +611,6 @@ export const codexAdapter: CliAdapter = {
       {
         transport: "codex-app-server",
         projectDir: ctx.projectDir,
-        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "gpt-6.1-sol",
         reasoningEffort: ctx.reasoningEffort,
@@ -629,7 +632,6 @@ export const codexAdapter: CliAdapter = {
       {
         transport: "codex-app-server",
         projectDir: ctx.projectDir,
-        readOnly: ctx.mcpEnv.BIDWRIGHT_AGENT_MODE === "qa",
         prompt: ctx.prompt,
         model: ctx.model || "gpt-6.1-sol",
         reasoningEffort: ctx.reasoningEffort,

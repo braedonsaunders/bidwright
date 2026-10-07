@@ -24,6 +24,8 @@ import {
   resolveApiUrl,
 } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { VisionToolWidget } from "@/components/workspace/vision-chat-widgets";
+import { drawingToolEvidence, type DrawingToolEvidence } from "@/lib/drawing-tool-evidence";
 import { MarkdownRenderer } from "@/components/markdown-renderer";
 
 // Types
@@ -94,7 +96,7 @@ export interface AgentRunState {
 export type AgentNavigationIntent =
   | { type: "setup"; field?: string; label?: string }
   | { type: "worksheet"; worksheetId?: string; itemId?: string; label?: string }
-  | { type: "document"; documentId: string; label?: string }
+  | { type: "document"; documentId: string; label?: string; evidence?: DrawingToolEvidence }
   | { type: "summarize"; label?: string };
 
 interface AgentUiEvent {
@@ -211,10 +213,10 @@ function defaultCliModel(runtime: CliRuntime, runtimeMap?: CliRuntimeMap | null)
     const def = list.find((m) => (m as any).isDefault) || list[0];
     return def.id;
   }
-  if (runtime === "codex") return "gpt-5.4";
+  if (runtime === "codex") return "gpt-6.1-sol";
   if (runtime === "openrouter") return "~openai/gpt-latest";
-  if (runtime === "gemini") return "gemini-2.5-pro";
-  if (runtime === "opencode") return "anthropic/claude-sonnet-4-5";
+  if (runtime === "gemini") return "gemini-3.1-pro-preview";
+  if (runtime === "opencode") return "anthropic/claude-sonnet-5-5";
   return "sonnet";
 }
 
@@ -1445,7 +1447,9 @@ function extractStructuredToolResult(raw: unknown, resultEnvelope?: Record<strin
 
   const primaryObject =
     jsonObjects.find((entry) => !!(entry as any).uiEvent) ||
+    jsonObjects.find((entry) => !!(entry as any).viewId) ||
     jsonObjects.find((entry) => !!(entry as any).success || !!(entry as any).message) ||
+    jsonObjects[0] ||
     (parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null);
   const uiEvent = ((primaryObject as any)?.uiEvent || (primaryObject as any)?.bidwrightUiEvent || null) as AgentUiEvent | null;
   const sideEffects = Array.isArray((primaryObject as any)?.sideEffects)
@@ -1607,6 +1611,8 @@ function navigationIntentFromTool(tool: ToolCallEntry): AgentNavigationIntent | 
     };
   }
   if (kind === "summary_preset.applied") return { type: "summarize", label: tool.result.message || "Summary updated" };
+  const evidence = drawingToolEvidence(tool.result.data, tool.input);
+  if (evidence?.documentId) return { type: "document", documentId: evidence.documentId, evidence, label: `Page ${evidence.pageNumber}` };
   if (ui?.documentId) return { type: "document", documentId: String(ui.documentId), label: tool.result.message || "Document opened" };
   return null;
 }
@@ -1998,7 +2004,13 @@ function ToolExpandedContent({ tool, onNavigate }: { tool: ToolCallEntry; onNavi
         </div>
       )}
 
-      {tool.result.images?.length ? (
+      <VisionToolWidget toolId={tool.toolId} input={tool.input} result={tool.result} />
+      {intent?.type === "document" && intent.evidence && onNavigate && (
+        <button onClick={() => void onNavigate(intent)} className="inline-flex items-center gap-1 text-accent hover:underline">
+          <Navigation className="h-3 w-3" /> Open page {intent.evidence.pageNumber} evidence in Documents
+        </button>
+      )}
+      {!drawingToolEvidence(tool.result.data, tool.input) && tool.result.images?.length ? (
         <div className="grid gap-2 sm:grid-cols-2">
           {tool.result.images.slice(0, 2).map((image, index) => (
             <div key={`${image.imageUrl}-${index}`} className="overflow-hidden rounded-md border border-line/60 bg-bg/45">

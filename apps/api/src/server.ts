@@ -155,7 +155,7 @@ import {
   aiSuggestEquipment
 } from "./services/ai-service.js";
 import { executePluginSearchDataSource } from "./services/plugin-search-data-source.js";
-import { knowledgeService, getEmbeddingConfig } from "./services/knowledge-service.js";
+import { knowledgeService, resolveEmbeddingConfig } from "./services/knowledge-service.js";
 import { documentTypeFromIngestion } from "./calc-utils.js";
 import { inferPageCount, knowledgeCategoryFromDocType } from "./store/mappers.js";
 import {
@@ -1721,6 +1721,96 @@ function shouldCaptureHumanEstimateFeedback(request: FastifyRequest): boolean {
   return actor === "" || actor === "web";
 }
 
+
+/**
+ * Category / rate-schedule / catalog checks for a new worksheet item. Shared
+ * by the single-row route and the transactional batch route. Returns a 400
+ * payload when the item is not acceptable, otherwise null.
+ */
+async function validateWorksheetItemCreatePayload(
+  store: PrismaApiStore,
+  projectId: string,
+  data: z.infer<typeof createWorksheetItemSchema>,
+): Promise<Record<string, unknown> | null> {
+      const entityCategories = await store.listEntityCategories();
+      const matchedCategory = data.categoryId
+        ? entityCategories.find((ec: any) => ec.id === data.categoryId)
+        : entityCategories.find(
+            (ec: any) =>
+              ec.name === data.category ||
+              ec.entityType === data.entityType
+          );
+
+      if (data.categoryId && !matchedCategory) {
+        return ({
+          message: `categoryId "${data.categoryId}" is not configured for this organization.`,
+          hint: "Call getEntityCategories or quote.getItemConfig, then retry with a valid categoryId.",
+        });
+      }
+
+      if (matchedCategory) {
+        const itemSrc = (matchedCategory as any).itemSource;
+
+        // Rate-schedule-backed categories MUST link to a concrete imported rate item.
+        if (itemSrc === "rate_schedule") {
+          if (!data.rateScheduleItemId) {
+            // Check if rate schedules exist for this project
+            const rateSchedules = await store.listRevisionRateSchedules(projectId);
+            const relevantItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({
+              id: i.id, name: i.name, code: i.code, scheduleName: rs.name,
+            })));
+
+            if (relevantItems.length > 0) {
+              return ({
+                message: `Category "${data.category}" requires a rateScheduleItemId. You cannot create items with made-up rates. Choose from the available rate schedule items.`,
+                availableItems: relevantItems.slice(0, 20),
+                hint: "Call quote.getItemConfig to see all available rate schedule items, then pass rateScheduleItemId when creating this item.",
+              });
+            }
+            // No rate schedules at all — warn but allow
+            return ({
+              message: `Category "${data.category}" requires rate schedule items but none are imported. Import a rate schedule first using rateSchedule.import, then create items with a valid rateScheduleItemId.`,
+              hint: "Call rateSchedule.list to see available master schedules, then rateSchedule.import to import one.",
+            });
+          }
+
+          // Validate that the rateScheduleItemId actually exists
+          const rateSchedules = await store.listRevisionRateSchedules(projectId);
+          const allRateItemIds = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => i.id));
+          if (!allRateItemIds.includes(data.rateScheduleItemId)) {
+            const relevantItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({
+              id: i.id, name: i.name, code: i.code, scheduleName: rs.name,
+            })));
+            return ({
+              message: `rateScheduleItemId "${data.rateScheduleItemId}" does not exist. Choose from the available rate schedule items.`,
+              availableItems: relevantItems.slice(0, 20),
+              hint: "Call quote.getItemConfig to see all available rate schedule items.",
+            });
+          }
+
+        }
+
+        // Catalog-backed categories should use a valid catalogItemId when catalogs are configured
+        if (itemSrc === "catalog" && !data.itemId && !data.rateScheduleItemId) {
+          const catalogs = await store.listCatalogs?.() ?? [];
+          const linkedCatalogId = (matchedCategory as any).catalogId as string | null | undefined;
+          const catKind = (matchedCategory as any).entityType?.toLowerCase();
+          const relevantCatalog = catalogs.find((c: any) =>
+            linkedCatalogId ? c.id === linkedCatalogId : c.kind?.toLowerCase() === catKind,
+          );
+          if (relevantCatalog) {
+            return ({
+              message: `Category "${data.category}" is catalog-backed. Set itemId to a valid catalog item ID, or set cost directly if no catalog is configured.`,
+              hint: "Call quote.getItemConfig to see available catalog items.",
+            });
+          }
+          // No catalog configured for this category — allow freeform
+        }
+      }
+
+  return null;
+}
+
 /** Mutation context for the store: who is editing, for derivation invalidation and calibration. */
 function worksheetMutationContext(request: FastifyRequest): WorksheetItemMutationContext {
   const actor = requestActor(request);
@@ -3140,82 +3230,8 @@ export function buildServer() {
       });
     }
 
-    // ── Validate item against entity category configuration ──
-    const entityCategories = await request.store!.listEntityCategories();
-    const matchedCategory = parsed.data.categoryId
-      ? entityCategories.find((ec: any) => ec.id === parsed.data.categoryId)
-      : entityCategories.find(
-          (ec: any) =>
-            ec.name === parsed.data.category ||
-            ec.entityType === parsed.data.entityType
-        );
-
-    if (parsed.data.categoryId && !matchedCategory) {
-      return reply.code(400).send({
-        message: `categoryId "${parsed.data.categoryId}" is not configured for this organization.`,
-        hint: "Call getEntityCategories or quote.getItemConfig, then retry with a valid categoryId.",
-      });
-    }
-
-    if (matchedCategory) {
-      const itemSrc = (matchedCategory as any).itemSource;
-
-      // Rate-schedule-backed categories MUST link to a concrete imported rate item.
-      if (itemSrc === "rate_schedule") {
-        if (!parsed.data.rateScheduleItemId) {
-          // Check if rate schedules exist for this project
-          const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);
-          const relevantItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({
-            id: i.id, name: i.name, code: i.code, scheduleName: rs.name,
-          })));
-
-          if (relevantItems.length > 0) {
-            return reply.code(400).send({
-              message: `Category "${parsed.data.category}" requires a rateScheduleItemId. You cannot create items with made-up rates. Choose from the available rate schedule items.`,
-              availableItems: relevantItems.slice(0, 20),
-              hint: "Call quote.getItemConfig to see all available rate schedule items, then pass rateScheduleItemId when creating this item.",
-            });
-          }
-          // No rate schedules at all — warn but allow
-          return reply.code(400).send({
-            message: `Category "${parsed.data.category}" requires rate schedule items but none are imported. Import a rate schedule first using rateSchedule.import, then create items with a valid rateScheduleItemId.`,
-            hint: "Call rateSchedule.list to see available master schedules, then rateSchedule.import to import one.",
-          });
-        }
-
-        // Validate that the rateScheduleItemId actually exists
-        const rateSchedules = await request.store!.listRevisionRateSchedules(projectId);
-        const allRateItemIds = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => i.id));
-        if (!allRateItemIds.includes(parsed.data.rateScheduleItemId)) {
-          const relevantItems = rateSchedules.flatMap((rs: any) => (rs.items || []).map((i: any) => ({
-            id: i.id, name: i.name, code: i.code, scheduleName: rs.name,
-          })));
-          return reply.code(400).send({
-            message: `rateScheduleItemId "${parsed.data.rateScheduleItemId}" does not exist. Choose from the available rate schedule items.`,
-            availableItems: relevantItems.slice(0, 20),
-            hint: "Call quote.getItemConfig to see all available rate schedule items.",
-          });
-        }
-
-      }
-
-      // Catalog-backed categories should use a valid catalogItemId when catalogs are configured
-      if (itemSrc === "catalog" && !parsed.data.itemId && !parsed.data.rateScheduleItemId) {
-        const catalogs = await request.store!.listCatalogs?.() ?? [];
-        const linkedCatalogId = (matchedCategory as any).catalogId as string | null | undefined;
-        const catKind = (matchedCategory as any).entityType?.toLowerCase();
-        const relevantCatalog = catalogs.find((c: any) =>
-          linkedCatalogId ? c.id === linkedCatalogId : c.kind?.toLowerCase() === catKind,
-        );
-        if (relevantCatalog) {
-          return reply.code(400).send({
-            message: `Category "${parsed.data.category}" is catalog-backed. Set itemId to a valid catalog item ID, or set cost directly if no catalog is configured.`,
-            hint: "Call quote.getItemConfig to see available catalog items.",
-          });
-        }
-        // No catalog configured for this category — allow freeform
-      }
-    }
+    const createRejection = await validateWorksheetItemCreatePayload(request.store!, projectId, parsed.data);
+    if (createRejection) return reply.code(400).send(createRejection);
 
     const mutationContext = worksheetMutationContext(request);
     const createResult = deltaResponse
@@ -3392,6 +3408,58 @@ export function buildServer() {
       });
     }
     return payload;
+  });
+
+  // ── Transactional batch edits ───────────────────────────────────────────
+  // Every operation is validated up front (schema + category/rate checks for
+  // creates); then the store applies them in ONE transaction. Any failure rolls
+  // back the entire batch and returns the failing operation.
+  app.post("/projects/:projectId/worksheet-items/batch", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    const parsed = z.object({
+      operations: z.array(z.discriminatedUnion("op", [
+        z.object({ op: z.literal("create"), ref: z.string().optional(), worksheetId: z.string().min(1), item: createWorksheetItemSchema }),
+        z.object({ op: z.literal("update"), ref: z.string().optional(), itemId: z.string().min(1), patch: worksheetItemPatchSchema }),
+        z.object({ op: z.literal("delete"), ref: z.string().optional(), itemId: z.string().min(1) }),
+      ])).min(1).max(100),
+    }).safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ message: "Invalid batch payload", issues: parsed.error.flatten() });
+    }
+
+    const rejections: Array<{ index: number; ref?: string; op: string; rejection: Record<string, unknown> }> = [];
+    for (const [index, operation] of parsed.data.operations.entries()) {
+      if (operation.op !== "create") continue;
+      const rejection = await validateWorksheetItemCreatePayload(request.store!, projectId, operation.item);
+      if (rejection) rejections.push({ index, ref: operation.ref, op: operation.op, rejection });
+    }
+    if (rejections.length > 0) {
+      return reply.code(400).send({ message: "Batch rejected before any change was applied.", rejections });
+    }
+
+    try {
+      const outcome = await request.store!.batchWorksheetItemMutations(
+        projectId,
+        parsed.data.operations.map((operation) => operation.op === "create"
+          ? { op: "create" as const, ref: operation.ref, worksheetId: operation.worksheetId, item: operation.item as Record<string, unknown> }
+          : operation.op === "update"
+            ? { op: "update" as const, ref: operation.ref, itemId: operation.itemId, patch: operation.patch as Record<string, unknown> }
+            : { op: "delete" as const, ref: operation.ref, itemId: operation.itemId }),
+        worksheetMutationContext(request),
+      );
+      return {
+        ok: true,
+        atomic: true,
+        applied: outcome.results.length,
+        results: outcome.results,
+        currentRevision: outcome.snapshot?.currentRevision ?? null,
+        estimateTotals: outcome.snapshot?.estimateTotals ?? null,
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const status = /not found/i.test(message) ? 404 : 409;
+      return reply.code(status).send({ message, rolledBack: true });
+    }
   });
 
   app.delete("/projects/:projectId/worksheet-items/:itemId", async (request, reply) => {
@@ -6470,6 +6538,54 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     }
   });
 
+  // ── Embedding index operations ────────────────────────────────────────
+  // Status (never includes key material), per-book re-embed, and a bulk
+  // re-embed for deployments that ingested books before an embedder existed.
+  app.get("/knowledge/embedding-status", async (request) => {
+    return knowledgeService.embeddingStatus(request.store!);
+  });
+
+  app.post("/knowledge/books/:bookId/reindex", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    try {
+      return await knowledgeService.reembedKnowledgeBook(bookId, request.store!);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return reply.code(/not found/i.test(message) ? 404 : 500).send({ message });
+    }
+  });
+
+  app.post("/knowledge/reindex-books", async (request, reply) => {
+    const body = (request.body ?? {}) as { scope?: "project" | "global"; projectId?: string; limit?: number };
+    const status = await knowledgeService.embeddingStatus(request.store!);
+    if (!status.enabled) {
+      return reply.code(409).send({ message: "No embedder configured. Set EMBEDDING_PROVIDER (e.g. openrouter) and ensure the provider key exists in env or org integrations.", status });
+    }
+    const books = (await request.store!.listKnowledgeBooks(body.projectId)).filter((book) => {
+      if (body.scope && book.scope !== body.scope) return false;
+      if (body.projectId && book.scope === "project" && book.projectId !== body.projectId) return false;
+      return book.status !== "failed" && book.status !== "uploading";
+    });
+    const limit = Math.max(1, Math.min(Number(body.limit ?? 200), 1000));
+    const results: Array<Record<string, unknown>> = [];
+    for (const book of books.slice(0, limit)) {
+      try {
+        results.push(await knowledgeService.reembedKnowledgeBook(book.id, request.store!));
+      } catch (err) {
+        results.push({ bookId: book.id, chunkCount: 0, embedded: 0, skipped: true, errors: [err instanceof Error ? err.message : String(err)] });
+      }
+    }
+    return {
+      ok: true,
+      booksConsidered: books.length,
+      booksProcessed: results.length,
+      embedded: results.reduce((sum, result) => sum + Number(result.embedded ?? 0), 0),
+      failures: results.filter((result) => Array.isArray(result.errors) && (result.errors as unknown[]).length > 0).length,
+      results,
+      status: await knowledgeService.embeddingStatus(request.store!),
+    };
+  });
+
   app.post("/knowledge/documents/:documentId/reindex", async (request, reply) => {
     const { documentId } = request.params as { documentId: string };
     try {
@@ -6603,7 +6719,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     // books at ingest, so when an embedder is configured we fuse semantic
     // chunk hits (with page numbers) into the lexical page hits by reciprocal
     // rank. Without an embedder this is a no-op and the response is unchanged.
-    if (!getEmbeddingConfig() || (parsedKinds && !parsedKinds.includes("text"))) return lexical;
+    if (!(await resolveEmbeddingConfig(request.store!)) || (parsedKinds && !parsedKinds.includes("text"))) return lexical;
     try {
       const semantic = await knowledgeService.search(q, {
         scope: "project",

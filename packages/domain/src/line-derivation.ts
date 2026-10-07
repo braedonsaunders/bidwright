@@ -636,6 +636,27 @@ export function derivationReferencesItem(derivation: LineDerivation | null | und
   return derivation.inputs.some((input) => input.source?.kind === "item" && String(input.source.ref ?? "") === itemId);
 }
 
+/**
+ * Does this derivation rest on a given source document? True when an input
+ * cites one of the document's evidence views, or cites document text/claims
+ * whose ref is the document id (optionally suffixed with #page).
+ */
+export function derivationReferencesDocument(
+  derivation: LineDerivation | null | undefined,
+  documentId: string,
+  viewIdsForDocument: Iterable<string> = [],
+): boolean {
+  if (!derivation || !Array.isArray(derivation.inputs) || !documentId) return false;
+  const views = new Set(viewIdsForDocument);
+  return derivation.inputs.some((input) => {
+    const kind = input.source?.kind;
+    const ref = String(input.source?.ref ?? "");
+    if (kind === "view") return views.has(ref);
+    if (kind === "text" || kind === "document") return ref === documentId || ref.startsWith(`${documentId}#`);
+    return false;
+  });
+}
+
 export function markDerivationStale(derivation: LineDerivation, invalidation: LineDerivationInvalidation): LineDerivation {
   return {
     ...derivation,

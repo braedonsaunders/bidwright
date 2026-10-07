@@ -248,7 +248,7 @@ export async function settingsRoutes(app: FastifyInstance): Promise<void> {
 
     const settings = await request.store!.getSettings();
     const provider = settings.integrations.llmProvider || "anthropic";
-    const model = settings.integrations.llmModel || "claude-sonnet-4-20250514";
+    const model = settings.integrations.llmModel || "claude-sonnet-5-5";
     const providerKeyMap: Record<string, string> = {
       anthropic: settings.integrations.anthropicKey,
       openai: settings.integrations.openaiKey,

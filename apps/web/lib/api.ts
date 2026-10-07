@@ -1050,8 +1050,29 @@ export interface EstimateCalibrationFeedback {
   corrections: Array<Record<string, unknown>>;
   lessons: Array<Record<string, unknown>>;
   notes: string;
+  /** Estimator review state. Only approved rows contribute approvedLessons to future estimates. */
+  reviewStatus?: "pending" | "approved" | "rejected";
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
+  reviewNotes?: string;
+  approvedLessons?: Array<Record<string, unknown>>;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface CalibrationLesson {
+  lesson: string;
+  tags?: string[];
+  context?: string | null;
+  evidence?: string | null;
+}
+
+export interface ApprovedCalibrationLesson extends CalibrationLesson {
+  feedbackId: string;
+  projectId: string;
+  projectName?: string | null;
+  reviewedAt?: string | null;
+  reviewedBy?: string | null;
 }
 
 export interface ProjectWorkspaceData {
@@ -1652,6 +1673,29 @@ export async function getProjectWorkspace(projectId: string) {
 
 export async function getEstimateStrategy(projectId: string) {
   return apiRequest<{ strategy: EstimateStrategy | null; feedback: EstimateCalibrationFeedback[] }>(`/api/estimate/${projectId}/strategy`);
+}
+
+/** Estimator review of a captured calibration feedback row (approve promotes lessons). */
+export async function reviewEstimateFeedback(
+  projectId: string,
+  feedbackId: string,
+  body: { status: "approved" | "rejected" | "pending"; approvedLessons?: Array<CalibrationLesson | string>; reviewNotes?: string },
+) {
+  return apiRequest<{ ok: boolean; feedback: EstimateCalibrationFeedback }>(`/api/estimate/${projectId}/feedback/${encodeURIComponent(feedbackId)}/review`, {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+}
+
+/** Approved-only calibration lessons across the organization. */
+export async function listCalibrationLessons(params: { q?: string; tags?: string[]; limit?: number; excludeProjectId?: string } = {}) {
+  const search = new URLSearchParams();
+  if (params.q) search.set("q", params.q);
+  if (params.tags && params.tags.length > 0) search.set("tags", params.tags.join(","));
+  if (params.limit) search.set("limit", String(params.limit));
+  if (params.excludeProjectId) search.set("excludeProjectId", params.excludeProjectId);
+  const query = search.toString();
+  return apiRequest<{ lessons: ApprovedCalibrationLesson[]; count: number; policy: string }>(`/api/estimate/calibration-lessons${query ? `?${query}` : ""}`);
 }
 
 export async function recomputeEstimateBenchmarks(projectId: string) {
