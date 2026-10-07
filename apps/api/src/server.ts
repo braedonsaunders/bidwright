@@ -2535,6 +2535,9 @@ export function buildServer() {
 
   app.get("/projects/:projectId/workspace", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await request.store!.getProject(projectId))) {
+      return reply.code(404).send({ message: "Project workspace not found" });
+    }
     const payload = await buildWorkspaceResponse(request.store!, projectId);
 
     if (!payload) {
