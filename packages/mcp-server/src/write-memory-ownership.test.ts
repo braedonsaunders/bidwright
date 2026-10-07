@@ -28,9 +28,16 @@ test("writeMemory replaces a memory file it cannot open for writing", async () =
     const result = await client.callTool({ name: "writeMemory", arguments: { section: "progress", content: "Alexanderwerk sheet read" } });
     assert.notEqual(result.isError, true, JSON.stringify(result.content));
     const saved = JSON.parse(await readFile(memoryPath, "utf8"));
-    assert.equal(saved.progress, "Alexanderwerk sheet read");
-    // What the API wrote is kept alongside.
+    // One canonical shape for agent, API and UI; nothing the API wrote is lost.
+    assert.equal(saved.sections.progress, "Alexanderwerk sheet read");
     assert.equal(saved.sections.ingestion_results, "3 documents");
+    // Parallel tool calls must not drop each other's sections.
+    await Promise.all(["a", "b", "c", "d", "e"].map((section) =>
+      client.callTool({ name: "writeMemory", arguments: { section, content: `value ${section}` } })));
+    const after = JSON.parse(await readFile(memoryPath, "utf8"));
+    for (const section of ["a", "b", "c", "d", "e", "progress", "ingestion_results"]) {
+      assert.ok(after.sections[section], `section ${section} survived`);
+    }
     await client.close();
   } finally {
     process.chdir(previousCwd);

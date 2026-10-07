@@ -1,11 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
+import { normalizeAgentMemory, setAgentMemorySection } from "@bidwright/domain";
 import { apiGet, apiPost, projectPath } from "../api-client.js";
 import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 // Agent memory lives in the project directory (CWD of the CLI)
 const MEMORY_PATH = join(process.cwd(), "agent-memory.json");
+
+// Serialises this process's memory read-modify-writes so parallel tool calls
+// cannot drop each other's sections. (Separate processes still race; the
+// rename keeps the file whole either way.)
+let memoryWriteChain: Promise<unknown> = Promise.resolve();
 
 const ASK_USER_POLL_MS = Number(process.env.BIDWRIGHT_ASK_USER_POLL_MS) > 0 ? Number(process.env.BIDWRIGHT_ASK_USER_POLL_MS) : 1500;
 // ~30 s of the server reporting the question as neither pending nor answered.
@@ -121,8 +127,7 @@ export function registerSystemTools(server: McpServer) {
     {},
     async () => {
       try {
-        const raw = await readFile(MEMORY_PATH, "utf-8");
-        const memory = JSON.parse(raw);
+        const memory = normalizeAgentMemory(JSON.parse(await readFile(MEMORY_PATH, "utf-8")));
         return { content: [{ type: "text" as const, text: JSON.stringify(memory, null, 2) }] };
       } catch {
         return { content: [{ type: "text" as const, text: "{}" }] };
@@ -139,17 +144,19 @@ export function registerSystemTools(server: McpServer) {
       content: z.string().describe("Content to write to this section"),
     },
     async ({ section, content }) => {
-      let memory: Record<string, string> = {};
-      try {
-        const raw = await readFile(MEMORY_PATH, "utf-8");
-        memory = JSON.parse(raw);
-      } catch {}
-      memory[section] = content;
-      // Write-then-rename: replaces the file even if another identity created
-      // it, as long as the project directory is ours to write.
-      const tmpPath = `${MEMORY_PATH}.${process.pid}.${Date.now()}.tmp`;
-      await writeFile(tmpPath, JSON.stringify(memory, null, 2), "utf-8");
-      await rename(tmpPath, MEMORY_PATH);
+      const write = memoryWriteChain.then(async () => {
+        let raw: unknown = null;
+        try { raw = JSON.parse(await readFile(MEMORY_PATH, "utf-8")); } catch {}
+        // One shape for agent, API and UI; older flat keys are folded in, never dropped.
+        const memory = setAgentMemorySection(normalizeAgentMemory(raw), section, content);
+        // Write-then-rename: replaces the file even if another identity created
+        // it, as long as the project directory is ours to write.
+        const tmpPath = `${MEMORY_PATH}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2, 8)}.tmp`;
+        await writeFile(tmpPath, JSON.stringify(memory, null, 2), "utf-8");
+        await rename(tmpPath, MEMORY_PATH);
+      });
+      memoryWriteChain = write.catch(() => undefined);
+      await write;
       return { content: [{ type: "text" as const, text: `Saved to memory section: ${section}` }] };
     }
   );

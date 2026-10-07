@@ -110,7 +110,7 @@ import {
   type LineItemSearchSourceType,
 } from "./prisma-store.js";
 import { prisma } from "@bidwright/db";
-import { getExtendedWorksheetUnitBreakdown } from "@bidwright/domain";
+import { getExtendedWorksheetUnitBreakdown, normalizeAgentMemory, setAgentMemorySection } from "@bidwright/domain";
 import {
   relativePackageArchivePath,
   relativeProjectFilePath,
@@ -2018,10 +2018,13 @@ async function startPackageIngestForProject(
       }).join("\n");
 
       const memPath = resolveApiPath("projects", targetProjectId!, "agent-memory.json");
-      let memory: any = { sections: {}, updatedAt: null };
-      try { memory = JSON.parse(await readFile(memPath, "utf8")); } catch {}
-      memory.sections["ingestion_results"] = `## Document Ingestion Complete\n\n${docs.length} documents extracted from package:\n\n${summary}`;
-      memory.updatedAt = new Date().toISOString();
+      let raw: unknown = null;
+      try { raw = JSON.parse(await readFile(memPath, "utf8")); } catch {}
+      const memory = setAgentMemorySection(
+        normalizeAgentMemory(raw),
+        "ingestion_results",
+        `## Document Ingestion Complete\n\n${docs.length} documents extracted from package:\n\n${summary}`,
+      );
       await writeProjectMemoryFile(memPath, JSON.stringify(memory, null, 2));
     } catch {}
   }).catch((err) => {
@@ -2710,10 +2713,9 @@ export function buildServer() {
     const { projectId } = request.params as { projectId: string };
     const memPath = resolveApiPath("projects", projectId, "agent-memory.json");
     try {
-      const raw = await readFile(memPath, "utf8");
-      return JSON.parse(raw);
+      return normalizeAgentMemory(JSON.parse(await readFile(memPath, "utf8")));
     } catch {
-      return { sections: {}, updatedAt: null };
+      return normalizeAgentMemory(null);
     }
   });
 
@@ -2722,18 +2724,11 @@ export function buildServer() {
     const body = request.body as { section: string; content: string; append?: boolean };
     const memPath = resolveApiPath("projects", projectId, "agent-memory.json");
 
-    let memory: { sections: Record<string, string>; updatedAt: string | null } = { sections: {}, updatedAt: null };
-    try {
-      const raw = await readFile(memPath, "utf8");
-      memory = JSON.parse(raw);
-    } catch {}
-
-    if (body.append && memory.sections[body.section]) {
-      memory.sections[body.section] += "\n" + body.content;
-    } else {
-      memory.sections[body.section] = body.content;
-    }
-    memory.updatedAt = new Date().toISOString();
+    let raw: unknown = null;
+    try { raw = JSON.parse(await readFile(memPath, "utf8")); } catch {}
+    // A flat file written by an older agent tool has no `sections`; reading it
+    // as-is crashed here.
+    const memory = setAgentMemorySection(normalizeAgentMemory(raw), body.section, body.content, body.append === true);
 
     await writeProjectMemoryFile(memPath, JSON.stringify(memory, null, 2));
     return memory;
