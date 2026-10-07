@@ -51,6 +51,7 @@ interface Args {
   reingestArchives: boolean;
   prepareOnly: boolean;
   autoAnswerQuestions: boolean;
+  stopOnQuestion: boolean;
   questionAnswer?: string;
   keepRunning: boolean;
   live: boolean;
@@ -600,6 +601,7 @@ Options:
   --no-copy-project-per-run        Reuse the same project directly instead of copying it for each attempt
   --prepare-only                   Upload/extract documents and stop before starting an agent
   --no-auto-answer-questions       Do not auto-answer blocking askUser prompts during eval runs
+  --stop-on-question              Record needs_clarification and stop when a human answer is required
   --question-answer <text>         Auto-answer text for blocking askUser prompts
   --keep-running                   Do not call stop on timeout
   --no-live                        Disable the live observer dossier
@@ -655,6 +657,7 @@ function parseArgs(argv: string[]): Args {
     reingestArchives: false,
     copyProjectPerRun: process.env.BIDWRIGHT_EVAL_COPY_PROJECT_PER_RUN !== "false",
     prepareOnly: false,
+    stopOnQuestion: false,
     autoAnswerQuestions: process.env.BIDWRIGHT_EVAL_AUTO_ANSWER_QUESTIONS !== "false",
     questionAnswer: process.env.BIDWRIGHT_EVAL_QUESTION_ANSWER,
     keepRunning: false,
@@ -760,6 +763,10 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--prepare-only":
         args.prepareOnly = true;
+        break;
+      case "--stop-on-question":
+        args.stopOnQuestion = true;
+        args.autoAnswerQuestions = false;
         break;
       case "--no-auto-answer-questions":
         args.autoAnswerQuestions = false;
@@ -1407,6 +1414,14 @@ async function waitForAgentRun(
       lastProgressAt = Date.now();
     }
     await observeRunEvents(monitor, label, sessionId, lastStatus, runEvents);
+    if (args.stopOnQuestion && findUnansweredAskUserEvent(runEvents)) {
+      const pending = await client.requestJson<Json>(`/api/cli/${projectId}/pending-question`).catch(() => null);
+      if (pending?.data.pending === true) {
+        await client.requestJson<Json>(`/api/cli/${projectId}/stop`, { method: "POST", body: {} }).catch(() => null);
+        await appendLiveNote(monitor, `${label} requires a human answer. Recorded needs_clarification; no assumptions were approved automatically. Stop requested.`);
+        return { ...lastStatus, status: "needs_clarification", events: runEvents };
+      }
+    }
     await maybeAnswerPendingQuestion(client, args, projectId, label, monitor, answeredQuestions, runEvents);
 
     if (Date.now() - lastLog > 20_000 || runEvents.length !== lastEventCount) {

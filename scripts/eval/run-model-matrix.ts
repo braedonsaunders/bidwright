@@ -16,7 +16,7 @@ const models = (value("--models", "openrouter:moonshotai/kimi-k3,claude-code:cla
 });
 const scope = value("--scope", "Mechanical installation of Alexanderwerk and Servo-Lift equipment, including platform installation. Exclude platform fabrication and electrical work. Do not price customer-supplied equipment as new supply.")!;
 const plan = { sourceProject, api, models, repeat: Number(value("--repeat", "1")), scope, output,
-  copyProjectPerRun: true, reingestArchives: true, autoAnswer: false, referenceFile: resolve("scripts/eval/alexanderwerk-ground-truth.json") };
+  copyProjectPerRun: true, reingestArchives: true, autoAnswer: false, stopOnQuestion: true, referenceFile: resolve("scripts/eval/alexanderwerk-ground-truth.json") };
 if (!args.includes("--execute")) {
   console.log(JSON.stringify({ ...plan, instruction: "Pass --execute and authenticated environment or --token-file to run. Each attempt copies and resets the source estimate." }, null, 2));
 } else {
@@ -28,7 +28,7 @@ if (!args.includes("--execute")) {
     const destination = join(output, `${candidate.runtime}-${candidate.model.replace(/[^a-z0-9._-]/gi, "_")}`);
     const cmd = ["--import", createRequire(import.meta.url).resolve("tsx"), resolve("scripts/agent-evals/run-agent-evals.ts"),
       "--api-url", api, "--project-id", sourceProject, "--runtime", candidate.runtime, "--model", candidate.model,
-      "--out", destination, "--scope", scope, "--repeat", String(plan.repeat), "--reingest-archives", "--no-auto-answer-questions"];
+      "--out", destination, "--scope", scope, "--repeat", String(plan.repeat), "--reingest-archives", "--no-auto-answer-questions", "--stop-on-question"];
     const tokenFile = value("--token-file");
     if (tokenFile) cmd.push("--token-file", tokenFile);
     const log = await open(`${destination}.log`, "w", 0o600);
