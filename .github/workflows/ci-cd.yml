@@ -149,6 +149,8 @@ jobs:
           packages/mcp-server/src/tools/source-refs.test.ts
           packages/mcp-server/src/tools/evidence-gate-contract.test.ts
           packages/mcp-server/src/tools/line-traceability-gate.test.ts
+          packages/mcp-server/src/tools/gpt-matrix-regressions.test.ts
+          packages/mcp-server/src/tools/native-drawing-evidence.test.ts
           packages/domain/src/line-derivation.test.ts
           packages/domain/src/estimate-strategy-stages.test.ts
           apps/api/src/services/page-provenance.test.ts
