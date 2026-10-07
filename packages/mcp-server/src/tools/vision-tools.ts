@@ -454,7 +454,7 @@ COMMON PITFALLS:
 
 USE IT FOR every drawing that drives scope or quantity, page by page. Then zoom with readDrawingTile on the views, notes, schedules and dimensions you will rely on. Dimensions and notes on CAD sheets are often drawn as strokes (vectorTextLikely=true): they are NOT in textLines and can only be read from the image, so zoom until you can read them.
 
-OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] ("R3 view \"label\" @x,y,w,h", normalized to the image), grid (rows x cols tile ids like "r2c3"), textLines[] ("exact text @x,y,w,h", up to 40; fullText:true for all), and vectorTextLikely.
+OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] ("R3 view \"label\" @x,y,w,h", normalized to the image), grid (rows x cols tile ids like "r2c3"), textLines[] ("exact text @x,y,w,h", up to 40; fullText:true for all), and vectorTextLikely. Every @x,y,w,h is normalized 0..1 in THIS image's frame, after rotation (x right, y down from the top-left of the image you see), and can be passed straight to readDrawingTile as bbox. fullText:true adds full per-line boxes only when you need every line.
 
 EVIDENCE: every image carries a viewId. Cite viewIds in evidenceBasis.quantity.viewIds for any quantity you take from a drawing, and only for images you actually examined. Quote textLines verbatim when a note drives a quantity. Stacked fractions are split in the text layer (e.g. "for 3" + "4\" SS epoxy anchor" is "for 3/4\" SS epoxy anchor"); confirm such values in the image.
 
