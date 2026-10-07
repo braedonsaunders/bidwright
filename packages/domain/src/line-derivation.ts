@@ -115,7 +115,17 @@ export interface LineDerivationReviewFlag {
   code: "assumed_inputs" | "assumption_dominated";
   message: string;
   inputs: string[];
+  /**
+   * For assumption_dominated: what the evidence inputs (all factors of 1)
+   * actually establish. physical_count = a drawing count of a real object
+   * (legitimate "1 machine x assumed hours"); scope_only = a package/lot/scope
+   * factor; unclassified = no positive physical evidence either way;
+   * assumption_only = no evidence input at all.
+   */
+  basis?: DominatedEvidenceBasis;
 }
+
+export type DominatedEvidenceBasis = "physical_count" | "scope_only" | "unclassified" | "assumption_only";
 
 export interface LineDerivationIssue {
   severity: "error" | "warning";
@@ -921,6 +931,7 @@ function normalizeReviewFlags(value: unknown): LineDerivationReviewFlag[] {
       code: entry.code as LineDerivationReviewFlag["code"],
       message: String(entry.message ?? ""),
       inputs: Array.isArray(entry.inputs) ? entry.inputs.map(String) : [],
+      ...(["physical_count", "scope_only", "unclassified", "assumption_only"].includes(String(entry.basis)) ? { basis: entry.basis as DominatedEvidenceBasis } : {}),
     }));
 }
 
@@ -946,6 +957,7 @@ const UNVERIFIED_SOURCE_KINDS = new Set<LineDerivationSourceKind>(["assumption",
  */
 export interface DerivationSourceLookup {
   claimMethod?: (claimId: string) => string | null | undefined;
+  claimInfo?: (claimId: string) => { method: string; unit: string; quantityName: string } | null | undefined;
   itemDerivation?: (itemId: string) => LineDerivation | null | undefined;
 }
 
@@ -969,11 +981,26 @@ function inputIsAssumed(input: LineDerivationInput, lookup: DerivationSourceLook
   return false;
 }
 
+const FORMULA_FUNCTION_NAMES = new Set(["ceil", "floor", "round", "min", "max", "abs", "sqrt", "pow"]);
+
+/**
+ * Inputs the formula actually uses. Round-3 GPT attached evidence inputs
+ * (2 interfaces, 12 fixing locations) to a "mechanics * crewDuration" row; they
+ * do not size the result and must not make it look evidence-backed. With no
+ * parseable formula every input is treated as used.
+ */
+function formulaInputs(derivation: LineDerivation): LineDerivationInput[] {
+  const identifiers = new Set((String(derivation.formula ?? "").match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).filter((name) => !FORMULA_FUNCTION_NAMES.has(name.toLowerCase())));
+  if (identifiers.size === 0) return derivation.inputs;
+  const used = derivation.inputs.filter((input) => identifiers.has(input.name));
+  return used.length > 0 ? used : derivation.inputs;
+}
+
 function summarize(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup, visited: Set<string>) {
   const inputs = derivation?.inputs ?? [];
   const assumed = inputs.filter((input) => inputIsAssumed(input, lookup, visited));
   const assumedNames = new Set(assumed.map((input) => input.name));
-  const sizing = inputs.filter((input) => Number.isFinite(input.value) && input.value !== 1 && input.value !== 0);
+  const sizing = (derivation ? formulaInputs(derivation) : []).filter((input) => Number.isFinite(input.value) && input.value !== 1 && input.value !== 0);
   const dominated = assumed.length > 0 && sizing.length > 0 && sizing.every((input) => assumedNames.has(input.name));
   return {
     assumedInputs: assumed.map((input) => input.name),
@@ -994,16 +1021,59 @@ export function summarizeDerivationAssumptions(derivation: LineDerivation | null
   return summarize(derivation, lookup, new Set());
 }
 
+const SCOPE_ONLY_UNITS = new Set(["LOT", "LOTS", "LS", "LUMP", "LUMPSUM", "SCOPE", "PKG", "PACKAGE", "PACKAGES"]);
+const COUNT_UNITS = new Set(["EA", "EACH", "PC", "PCS", "PIECE", "PIECES", "NO", "NOS", "UNIT", "UNITS"]);
+const PHYSICAL_COUNT_METHODS = new Set(["visual_count", "bom_table", "drawing_table", "takeoff"]);
+const SCOPE_ONLY_NAME = /\b(packages?|scope|lots?|work assembl(?:y|ies))\b/;
+
+function words(value: string) {
+  return value.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
+}
+
+/**
+ * What a factor-of-1 evidence input establishes. Scope-only needs an explicit
+ * LOT/LS/SCOPE/PKG unit or package/scope/lot/work-assembly naming. Physical
+ * needs positive evidence: a counting claim (visual_count, BOM/drawing table,
+ * or takeoff) in a count unit. Everything else, including SET and bare view
+ * inputs, stays unclassified.
+ */
+export function classifyFactorOneEvidence(input: LineDerivationInput, lookup: DerivationSourceLookup = {}): "physical_count" | "scope_only" | "unclassified" {
+  const claim = input.source?.kind === "claim" ? lookup.claimInfo?.(String(input.source.ref ?? "").trim()) : null;
+  const units = [input.unit, claim?.unit].map((unit) => String(unit ?? "").trim().toUpperCase()).filter(Boolean);
+  const names = words(`${input.name ?? ""} ${claim?.quantityName ?? ""}`);
+  if (units.some((unit) => SCOPE_ONLY_UNITS.has(unit)) || SCOPE_ONLY_NAME.test(names)) return "scope_only";
+  if (claim && PHYSICAL_COUNT_METHODS.has(claim.method.trim().toLowerCase()) && units.length > 0 && units.every((unit) => COUNT_UNITS.has(unit))) return "physical_count";
+  return "unclassified";
+}
+
+function dominatedBasis(derivation: LineDerivation, assumedNames: Set<string>, lookup: DerivationSourceLookup): DominatedEvidenceBasis {
+  const evidence = formulaInputs(derivation).filter((input) => !assumedNames.has(input.name) && ["view", "claim"].includes(String(input.source?.kind)));
+  if (evidence.length === 0) return "assumption_only";
+  const kinds = evidence.map((input) => classifyFactorOneEvidence(input, lookup));
+  if (kinds.includes("physical_count")) return "physical_count";
+  if (kinds.includes("scope_only")) return "scope_only";
+  return "unclassified";
+}
+
+const DOMINATED_BASIS_TEXT: Record<DominatedEvidenceBasis, string> = {
+  physical_count: "The drawing counts a physical object; the hours per object are assumed.",
+  scope_only: "The drawing only confirms the scope exists (a package/lot factor of 1); it does not size the hours.",
+  unclassified: "The evidence inputs are factors of 1 that do not establish a physical count.",
+  assumption_only: "No input comes from a drawing, document, or library.",
+};
+
 /** Review flags recomputed on every write; callers cannot supply or clear them. */
 export function flagDerivationAssumptions(derivation: LineDerivation, lookup: DerivationSourceLookup = {}): LineDerivationReviewFlag[] {
   const summary = summarizeDerivationAssumptions(derivation, lookup);
   if (summary.assumedInputs.length === 0) return [];
   const refs = summary.assumptionRefs.length > 0 ? ` (${summary.assumptionRefs.join(", ")})` : "";
   if (summary.dominated) {
+    const basis = dominatedBasis(derivation, new Set(summary.assumedInputs), lookup);
     return [{
       code: "assumption_dominated",
-      message: `Every input that sizes this result is assumed${refs}: ${summary.assumedInputs.join(", ")}. Evidence inputs only contribute a factor of 1.`,
+      message: `Every input that sizes this result is assumed${refs}: ${summary.assumedInputs.join(", ")}. ${DOMINATED_BASIS_TEXT[basis]}`,
       inputs: summary.assumedInputs,
+      basis,
     }];
   }
   return [{
@@ -1013,13 +1083,41 @@ export function flagDerivationAssumptions(derivation: LineDerivation, lookup: De
   }];
 }
 
+export type HourBasisCategory = "sourced" | "partly_assumed" | "assumed_physical_count" | "assumed_scope_only" | "assumed_unclassified" | "assumed_only" | "no_derivation";
+
+/** Which basis a row's hours rest on, from its derivation's sources, never from the evidence-basis label. */
+export function classifyHourBasis(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup = {}): HourBasisCategory {
+  if (!derivation || derivation.inputs.length === 0) return "no_derivation";
+  const [flag] = flagDerivationAssumptions(derivation, lookup);
+  if (!flag) return "sourced";
+  if (flag.code === "assumed_inputs") return "partly_assumed";
+  switch (flag.basis) {
+    case "physical_count": return "assumed_physical_count";
+    case "scope_only": return "assumed_scope_only";
+    case "assumption_only": return "assumed_only";
+    default: return "assumed_unclassified";
+  }
+}
+
+/** Hours per basis across rows; `hoursOf` gives a row's extended hours. */
+export function summarizeHourBasis<T extends { derivation?: unknown }>(rows: T[], hoursOf: (row: T) => number, lookup: DerivationSourceLookup = {}): Record<HourBasisCategory, number> {
+  const totals: Record<HourBasisCategory, number> = { sourced: 0, partly_assumed: 0, assumed_physical_count: 0, assumed_scope_only: 0, assumed_unclassified: 0, assumed_only: 0, no_derivation: 0 };
+  for (const row of rows) {
+    const hours = Number(hoursOf(row));
+    if (!Number.isFinite(hours) || hours <= 0) continue;
+    totals[classifyHourBasis(normalizeLineDerivation(row.derivation), lookup)] += hours;
+  }
+  for (const key of Object.keys(totals) as HourBasisCategory[]) totals[key] = Math.round(totals[key] * 100) / 100;
+  return totals;
+}
+
 /** Lookup built from a strategy's Drawing Evidence Engine claims and a set of rows' derivations. */
 export function derivationSourceLookup(claims: unknown, items: Array<{ id?: unknown; derivation?: unknown }>): DerivationSourceLookup {
-  const methods = new Map<string, string>();
+  const info = new Map<string, { method: string; unit: string; quantityName: string }>();
   for (const claim of Array.isArray(claims) ? claims : []) {
     const record = (claim ?? {}) as Record<string, unknown>;
     const id = String(record.claimId ?? record.id ?? "").trim();
-    if (id) methods.set(id, String(record.method ?? ""));
+    if (id) info.set(id, { method: String(record.method ?? ""), unit: String(record.unit ?? ""), quantityName: String(record.quantityName ?? record.claim ?? "") });
   }
   const derivations = new Map<string, LineDerivation>();
   for (const item of items) {
@@ -1027,7 +1125,7 @@ export function derivationSourceLookup(claims: unknown, items: Array<{ id?: unkn
     const derivation = normalizeLineDerivation(item.derivation);
     if (id && derivation) derivations.set(id, derivation);
   }
-  return { claimMethod: (id) => methods.get(id) ?? null, itemDerivation: (id) => derivations.get(id) ?? null };
+  return { claimMethod: (id) => info.get(id)?.method ?? null, claimInfo: (id) => info.get(id) ?? null, itemDerivation: (id) => derivations.get(id) ?? null };
 }
 
 function normalizeProcurement(value: unknown): LineDerivationProcurement | null {
