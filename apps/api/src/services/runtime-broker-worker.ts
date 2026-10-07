@@ -3,7 +3,7 @@ import { readFile, unlink } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 import type { RuntimeBrokerRequest } from "./runtime-broker.js";
-import { startOpenRouterCacheProxy } from "./cli-adapters/openrouter-cache-proxy.js";
+import { openRouterPromptCacheEnabled, startOpenRouterCacheProxy } from "./cli-adapters/openrouter-cache-proxy.js";
 
 function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -103,7 +103,11 @@ export function shouldForwardCodexNotification(
 }
 
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
-  if (!request.openRouterPromptCache) return runCodexProcess(request);
+  // Off until the bridge can be reached through the sandbox's egress proxy:
+  // with HTTP_PROXY set and NO_PROXY empty, Codex's request to the loopback
+  // bridge went to the egress proxy, which refuses loopback (403
+  // EgressDenied), so every Claude run failed. Opt in per deployment.
+  if (!request.openRouterPromptCache || !openRouterPromptCacheEnabled(process.env)) return runCodexProcess(request);
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OpenRouter prompt caching requires the provider API key.");
   const proxy = await startOpenRouterCacheProxy({ apiKey });

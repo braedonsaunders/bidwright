@@ -59,6 +59,11 @@ export interface OpenRouterCacheProxy {
   close(): Promise<void>;
 }
 
+/** The bridge is opt-in per deployment until its egress path is proven there. */
+export function openRouterPromptCacheEnabled(env: NodeJS.ProcessEnv): boolean {
+  return env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on";
+}
+
 export function isAnthropicModel(model: string): boolean {
   return /^~?anthropic\//i.test(model.trim());
 }

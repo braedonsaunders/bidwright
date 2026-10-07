@@ -4,7 +4,7 @@ import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import test from "node:test";
 
-import { isAnthropicModel, startOpenRouterCacheProxy, withCacheControl } from "./openrouter-cache-proxy.js";
+import { isAnthropicModel, openRouterPromptCacheEnabled, startOpenRouterCacheProxy, withCacheControl } from "./openrouter-cache-proxy.js";
 
 const KEY = "sk-or-test-key";
 
@@ -194,4 +194,10 @@ test("a backpressured client that disconnects never strands the handler", async 
     await proxy.close();
     await upstream.close();
   }
+});
+
+test("the bridge stays off unless the deployment opts in", () => {
+  assert.equal(openRouterPromptCacheEnabled({}), false);
+  assert.equal(openRouterPromptCacheEnabled({ BIDWRIGHT_OPENROUTER_PROMPT_CACHE: "1" }), false);
+  assert.equal(openRouterPromptCacheEnabled({ BIDWRIGHT_OPENROUTER_PROMPT_CACHE: "on" }), true);
 });
