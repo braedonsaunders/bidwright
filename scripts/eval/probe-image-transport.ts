@@ -1,7 +1,7 @@
 #!/usr/bin/env tsx
 import { randomInt } from "node:crypto";
 import { deflateSync } from "node:zlib";
-import { readFile, writeFile } from "node:fs/promises";
+import { appendFile, readFile, writeFile } from "node:fs/promises";
 
 const argv = process.argv.slice(2);
 const option = (name: string, fallback = "") => argv.includes(name) ? argv[argv.indexOf(name) + 1] : fallback;
@@ -34,6 +34,8 @@ const png = Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]), chunk("IHDR"
 const copied = await request(`/projects/${source}/copy`, { resetEstimate: true });
 const projectId = copied.workspace?.project?.id;
 if (!projectId || projectId === source) throw new Error("No isolated clone; refusing to continue.");
+if (process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER) await appendFile(process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER,
+  `${projectId} C pixel-probe-${model.replace(/[^a-z0-9._-]/gi, "_")} ${new Date().toISOString()}\n`);
 let active = false;
 const stop = async () => { if (active) await request(`/api/cli/${projectId}/stop`, {}).catch(() => {}); active = false; };
 const interrupt = () => { void stop().finally(() => process.exit(130)); };
