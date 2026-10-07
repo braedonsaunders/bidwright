@@ -20,7 +20,7 @@ export function evidenceMetrics(workspace: RecordLike, views: RecordLike[]) {
     if (!derivation?.formula) missingDerivations++;
     if (derivation?.status === "stale") staleDerivations++;
     return { id: item.id, name: item.name || item.description || item.entityName, quantity: item.quantity,
-      unit: item.unit, derivation, viewIds };
+      unit: item.uom ?? item.unit, derivation, viewIds };
   });
   return { itemCount: items.length, drawingRows, linkedDrawingRows,
     groundedDrawingCoverage: drawingRows ? linkedDrawingRows / drawingRows : null,
