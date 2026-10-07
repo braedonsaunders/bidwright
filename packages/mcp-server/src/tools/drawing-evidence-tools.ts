@@ -2790,7 +2790,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
           thumbnailAvailableViaInspectDrawingRegion: true,
         })),
         documentsNotInAtlas: input.documentIds?.filter((documentId) => !atlas.regions.some((region) => region.documentId === documentId)) ?? [],
-        next: "Call inspectDrawingRegion with the best 1-4 regionIds, prioritizing any high-authority table/spec/schedule matches before lower-context visual counts. State the claim/question you are checking, then saveDrawingEvidenceClaim with the returned imageHash and bbox.",
+        next: "Look at the best 1-4 regions, prioritizing high-authority table/spec/schedule matches before lower-context visual counts: inspectDrawingRegion with the regionId, or readDrawingPage/readDrawingTile on that page. State the claim you are checking, then saveDrawingEvidenceClaim citing the returned viewId. If you already read that area with readDrawingTile, cite that viewId instead of inspecting again.",
       };
 
       const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: "image/png" }> = [
@@ -2824,7 +2824,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     [
       "Render a selected atlas region as a targeted high-resolution crop.",
       "Use this after searchDrawingRegions and before any drawing-driven quantity claim. This is the visual evidence primitive for the ledger.",
-      "The returned metadata includes bbox, regionId, imageHash, and cropPath. Put those into saveDrawingEvidenceClaim only after the crop itself proves the value.",
+      "Returns the crop and a viewId. Cite that viewId in saveDrawingEvidenceClaim only after the crop itself proves the value; the server fills the hash and geometry. If you already read this area with readDrawingTile, cite that viewId and skip this call.",
     ].join(" "),
     {
       regionId: z.string().optional().describe("Region ID returned by searchDrawingRegions. Preferred."),
@@ -2917,7 +2917,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
                 snippet: compactText(atlasRegion.text, 900),
                 quantityHints: extractRepeatedMarkHints(atlasRegion.text, `${input.question ?? ""} ${input.claim ?? ""}`),
               } : null,
-              note: "Inspect the returned crop visually. If the crop proves a quantity, call saveDrawingEvidenceClaim with evidence containing documentId, pageNumber, regionId, bbox, tool:'inspectDrawingRegion', imageHash, and cropPath. For repeated structural marks, count physical occurrences/placements; unique mark IDs are not a quantity when the same mark appears more than once. Do not save the pre-crop hypothesis as fact unless the image supports it.",
+              note: "Inspect the returned crop visually. If the crop proves a quantity, call saveDrawingEvidenceClaim with evidence [{ viewId: evidenceRef.viewId, result: what you read }]; the server fills document, page, bbox, tool and hash. For repeated structural marks, count physical occurrences/placements; unique mark IDs are not a quantity when the same mark appears more than once. Do not save the pre-crop hypothesis as fact unless the image supports it.",
             }, null, 2),
           },
         ],
@@ -2929,6 +2929,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     "saveDrawingEvidenceClaim",
     [
       "Persist an evidence-ledger claim for a drawing-driven quantity or scope fact.",
+      "For visual evidence, cite the viewId of the image you already examined (from readDrawingTile, readDrawingPage or inspectDrawingRegion) in evidence[].viewId. The server fills imageHash, document, page, bbox and tool from that view. Do not re-open or re-inspect a region you have already read just to obtain a hash, and never type an imageHash yourself.",
       "Every drawing-driven worksheet quantity needs one of these before pricing: visual_count, bom_table, drawing_table, ocr_text, takeoff, assumption, library, or vendor_quote.",
       "Use method bom_table for formal quantity sources including BOMs, line lists, bid sheets, quote sheets, takeoff tables, parts lists, schedules, spec sheets, vendor quotes, model BOMs, spreadsheets, or CSVs.",
       "If another source gives a conflicting value, save a separate claim for each source using the same packageId/quantityName/unit so the ledger can detect the conflict.",
@@ -2954,14 +2955,15 @@ export function registerDrawingEvidenceTools(server: McpServer) {
         z.array(z.object({
         documentId: z.string().nullish(),
         pageNumber: z.coerce.number().int().positive().nullish(),
+        viewId: z.string().nullish().describe("viewId of the image you examined (readDrawingTile/readDrawingPage/inspectDrawingRegion). The server fills imageHash, document, page, bbox and tool from it."),
         regionId: z.string().nullish(),
         bbox: z.record(z.unknown()).nullish(),
         tool: z.string().nullish(),
-        result: z.string().nullish(),
-        imageHash: z.string().nullish(),
-        cropPath: z.string().nullish(),
+        result: z.string().nullish().describe("What you read or counted in that image."),
+        imageHash: z.string().nullish().describe("Leave empty: filled by the server from viewId."),
+        cropPath: z.string().nullish().describe("Leave empty: filled by the server from viewId."),
         sourceText: z.string().nullish(),
-        imageHashVerifiedAt: z.string().nullish(),
+        imageHashVerifiedAt: z.string().nullish().describe("Set by the server."),
         }).passthrough()).default([]),
       ) as unknown as z.ZodType<Array<Record<string, unknown>>>,
       reconciliation: z.object({

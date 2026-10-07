@@ -130,8 +130,8 @@ async function readDrawingImage(input: {
           ...meta,
           imagesRemaining: Math.max(0, imageBudget() - deliveredImageCount),
           note: input.mode === "overview"
-            ? "Cite viewId for quantities taken from this image. Zoom with readDrawingTile (grid tile id or regions[].bbox) before relying on small text, dimensions or counts."
-            : "Cite viewId for quantities taken from this image.",
+            ? "Cite this viewId (saveDrawingEvidenceClaim evidence[].viewId, evidenceBasis.quantity.viewIds) for quantities taken from this image; the server supplies the hash. Zoom with readDrawingTile before relying on small text, dimensions or counts."
+            : "Cite this viewId (saveDrawingEvidenceClaim evidence[].viewId, evidenceBasis.quantity.viewIds) for quantities read in this tile; the server supplies the hash and box. No need to re-inspect this area.",
         }),
       },
     ],

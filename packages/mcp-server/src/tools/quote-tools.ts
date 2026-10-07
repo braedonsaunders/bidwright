@@ -677,7 +677,7 @@ function validateDrawingEvidenceEngineForPricing(
       .slice(0, 6)
       .map((entry) => String(entry.packageId ?? entry.packageName ?? "unnamed package"))
       .join(", ");
-    return `Drawing evidence ledger is missing usable claims for drawing-driven package(s): ${names}. SaveDrawingEvidenceClaim must include document/page/region/bbox/tool/result/imageHash for visual quantities, or BOM/OCR/assumption evidence for non-visual quantities.`;
+    return `Drawing evidence ledger is missing usable claims for drawing-driven package(s): ${names}. For visual quantities, saveDrawingEvidenceClaim with evidence[].viewId of a tile or crop you already read (readDrawingTile or inspectDrawingRegion); the server fills the hash and geometry. For non-visual quantities, use BOM/OCR/assumption evidence.`;
   }
 
   if (unresolvedStoredContradictions.length > 0 || detectedContradictions.length > 0) {
