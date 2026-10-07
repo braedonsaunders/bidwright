@@ -360,6 +360,46 @@ export function createDefaultEstimateValidationRegistry() {
 }
 
 /** Convenience entry point for the default BidWright estimate validation rule set. */
+// ── declared no-charge rows ─────────────────────────────────────────────────
+
+function rowEvidenceBasis(item: EstimateValidationWorksheetItemLike): Record<string, any> {
+  const fromEvidence = (item.sourceEvidence && typeof item.sourceEvidence === "object" ? (item.sourceEvidence as Record<string, any>).evidenceBasis : null);
+  const direct = (item as Record<string, any>).evidenceBasis;
+  const basis = fromEvidence ?? direct;
+  return basis && typeof basis === "object" && !Array.isArray(basis) ? basis as Record<string, any> : {};
+}
+
+function basisList(basis: Record<string, any>, key: string): unknown[] {
+  return [basis[key], basis.quantity?.[key], basis.pricing?.[key]].flatMap((value) => (Array.isArray(value) ? value : []));
+}
+
+const NO_CHARGE_PRICING_TYPES = new Set(["allowance", "subcontract"]);
+
+/**
+ * Mirrors the pricing gate's honest path for a $0 lump sum: pricing type
+ * allowance or subcontract, backed by a saved assumption id or an explicit
+ * user instruction ("user: …" or {kind:"user", ref}). An accidental zero row
+ * (no basis, or a material/vendor quote basis) is still an error.
+ */
+function isDeclaredNoChargeRow(item: EstimateValidationWorksheetItemLike): boolean {
+  const basis = rowEvidenceBasis(item);
+  const pricingType = String(basis.pricing?.type ?? basis.pricingType ?? basis.type ?? "").trim().toLowerCase();
+  if (!NO_CHARGE_PRICING_TYPES.has(pricingType)) return false;
+  const assumptionIds = basisList(basis, "assumptionIds").map((value) => String(value ?? "").trim()).filter(Boolean);
+  const userRefs = basisList(basis, "sourceRefs").filter((ref) => {
+    if (ref && typeof ref === "object") return String((ref as Record<string, unknown>).kind ?? "").toLowerCase() === "user" && String((ref as Record<string, unknown>).ref ?? "").trim().length >= 2;
+    return /^(user|client|owner|customer|estimator)\s*[:\-]\s*\S{2,}/i.test(String(ref ?? ""));
+  });
+  return assumptionIds.length > 0 || userRefs.length > 0;
+}
+
+function noChargeBasisLabel(item: EstimateValidationWorksheetItemLike): string {
+  const basis = rowEvidenceBasis(item);
+  const pricingType = String(basis.pricing?.type ?? basis.type ?? "").trim().toLowerCase();
+  const assumptionIds = basisList(basis, "assumptionIds").map(String).filter(Boolean);
+  return `${pricingType}${assumptionIds.length ? ` (${assumptionIds.join(", ")})` : " (user instruction)"}`;
+}
+
 export function validateEstimateWorkspace(
   workspace: EstimateValidationWorkspaceLike,
   options: EstimateValidationOptions = {},
@@ -422,7 +462,7 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
     weight: 12,
     ruleSets: ["default", "readiness"],
     validate(context) {
-      return context.rows.flatMap((row) => {
+      return context.rows.flatMap((row): EstimateValidationIssueInput[] => {
         const quantity = toFiniteNumber(row.item.quantity);
         if (quantity <= 0) {
           return [];
@@ -435,6 +475,19 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         }
 
         const bothZero = cost <= 0 && price <= 0;
+        // A row the estimate deliberately carries at $0 (fabrication by
+        // others, owner-supplied equipment) is declared as such on its
+        // evidence basis; it is reported, not treated as missing pricing.
+        if (bothZero && isDeclaredNoChargeRow(row.item)) {
+          return [{
+            message: `Worksheet item "${displayItemName(row.item)}" is carried at no charge as a declared ${noChargeBasisLabel(row.item)}.`,
+            severity: "info",
+            element: itemRef(row),
+            suggestions: ["Confirm the no-charge scope with the client before issuing the quote."],
+            details: { quantity, cost, price, noCharge: true },
+            scoreImpact: 0,
+          }];
+        }
         return [{
           message: bothZero
             ? `Worksheet item "${displayItemName(row.item)}" has zero cost and zero price.`
