@@ -350,3 +350,126 @@ test("one cartridge for 5 anchors passes only with an explained surplus", async 
   const explained = await validateTraceableQuantityForPricing(workspaceWithLabourRow, { evidenceBasis: basis, derivation: cartridge("Minimum purchase is one 330 ml cartridge; remainder is spares."), quantity: 1, uom: "CARTRIDGE", strategy });
   assert.equal(explained, null);
 });
+
+// ── user-directed lump sums: no components to cite (2026-10-07 GPT matrix) ──
+
+const subWorkspace = {
+  ...zipOnlyWorkspace,
+  sourceDocuments: [...zipOnlyWorkspace.sourceDocuments, { id: "doc_f14748c7-4b90-487e-b4b1-897fcddd37e5", fileName: "Platform.pdf", fileType: "pdf", documentType: "drawing", checksum: "p" }, { id: "doc_aa11bb22cc33", fileName: "Details.pdf", fileType: "pdf", documentType: "drawing", checksum: "d" }],
+  entityCategories: [...zipOnlyWorkspace.entityCategories, { id: "ecat-sub", name: "Subcontractor", entityType: "Subcontractor" }],
+};
+const commercialStrategy = { ...strategy, assumptions: [...strategy.assumptions, { id: "A-INTERFACES", statement: "Client-directed commercial packages carried as instructed." }] };
+
+test("a $0 by-others LS placeholder citing a saved assumption is not held to the composite-component rule", () => {
+  // Exact row GPT-6.1 Sol sent at 19:08:33; rejected before this fix.
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 0,
+    sourceNotes: "Authoritative user commercial instruction: fabrication excluded and carried only as a $0 subcontract placeholder.",
+    evidenceBasis: {
+      quantity: { type: "subcontract", sourceRefs: ["User scope item3"], rationale: "One commercial placeholder package directed by user." },
+      pricing: { type: "subcontract", sourceRefs: ["doc_f14748c7-4b90-487e-b4b1-897fcddd37e5 p4"], assumptionIds: ["A-INTERFACES"], rationale: "User fixes fabrication placeholder at $0." },
+    },
+    strategy: commercialStrategy,
+  });
+  assert.equal(error, null);
+});
+
+test("a client-fixed $25,000 LS allowance passes with a saved assumption and an object user ref", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 25000, price: 25000,
+    sourceNotes: "Authoritative user instruction fixes ceiling raise/room modifications at a $25,000 subcontract allowance.",
+    evidenceBasis: {
+      quantity: { type: "subcontract", assumptionIds: ["A-INTERFACES"], sourceRefs: ["doc_f14748c7-4b90-487e-b4b1-897fcddd37e5 p2"] },
+      pricing: { type: "allowance", assumptionIds: ["A-INTERFACES"], sourceRefs: [{ kind: "user", ref: "Other commercial decisions", amount: 25000, currency: "CAD" }], rationale: "Exact user-directed allowance." },
+    },
+    strategy: commercialStrategy,
+  });
+  assert.equal(error, null);
+});
+
+test("a user-fixed allowance with only an explicit user instruction ref (no assumption) is accepted", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 25000,
+    sourceNotes: "Client fixed the ceiling raise at a $25,000 allowance in the scope call.",
+    evidenceBasis: { quantity: { type: "subcontract", rationale: "One package per client direction." }, pricing: { type: "allowance", sourceRefs: [{ kind: "user", ref: "Other commercial decisions" }] } },
+    strategy: commercialStrategy,
+  });
+  assert.equal(error, null);
+});
+
+test("a $25,000 LS material quote is still held to the composite rule, and the message names the allowance path", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Material", uom: "LS", quantity: 1, cost: 25000,
+    sourceNotes: "Stainless platform materials package priced from a single vendor total.",
+    evidenceBasis: { quantity: { type: "assumption", assumptionIds: ["A-INTERFACES"] }, pricing: { type: "material_quote", assumptionIds: ["A-INTERFACES"], sourceRefs: ["doc_f14748c7-4b90-487e-b4b1-897fcddd37e5 p4"] } },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /Composite LS/);
+  assert.match(error ?? "", /allowance\|subcontract plus a saved assumptionId/);
+});
+
+test("a free-text user claim alone does not satisfy a non-commercial pricing type", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Material", uom: "EA", quantity: 4, cost: 120,
+    sourceNotes: "User said four anchors.",
+    evidenceBasis: { quantity: { type: "document_quantity", rationale: "Anchor count relayed by the client during the scope call." }, pricing: { type: "material_quote", sourceRefs: [{ kind: "user", ref: "scope call" }] } },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /Material\/Sub\/Equip\/Allowance row needs/);
+});
+
+test("object source refs are flattened instead of becoming [object Object]", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Material", uom: "LS", quantity: 1, cost: 9000,
+    sourceNotes: "Grout and anchor package from two cited drawing pages.",
+    evidenceBasis: {
+      quantity: { type: "document_quantity", rationale: "Two cited drawing pages give the anchor and grout scope." },
+      pricing: { type: "material_quote", sourceRefs: [{ kind: "document", ref: "doc_f14748c7-4b90-487e-b4b1-897fcddd37e5", page: 4 }, { documentId: "doc_aa11bb22cc33", page: 2 }] },
+    },
+    strategy: commercialStrategy,
+  });
+  assert.equal(error, null, "two object document cites count as two structured refs");
+});
+
+test("empty object refs and bare 'user:' prefixes do not count as evidence", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 25000,
+    sourceNotes: "Ceiling raise allowance carried per direction from the scope review meeting.",
+    evidenceBasis: { quantity: { type: "subcontract", rationale: "One package per client direction in scope review." }, pricing: { type: "allowance", sourceRefs: [{ kind: "user" }, {}, "user:", "user: "] } },
+    strategy: commercialStrategy,
+  });
+  assert.ok(error, "no real instruction, assumption, or component was cited");
+});
+
+test("a cited document id that is not in the project is rejected, not counted", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Material", uom: "LS", quantity: 1, cost: 9000,
+    sourceNotes: "Grout and anchor package from two cited drawing pages.",
+    evidenceBasis: {
+      quantity: { type: "document_quantity", rationale: "Two cited drawing pages give the anchor and grout scope." },
+      pricing: { type: "material_quote", sourceRefs: [{ kind: "document", ref: "doc_f14748c7-4b90-487e-b4b1-897fcddd37e5", page: 4 }, "doc_deadbeef0000 p9"] },
+    },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /not in this project: doc_deadbeef0000/);
+});
+
+test("an allowance citing an unsaved assumption is still rejected", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 25000,
+    sourceNotes: "Ceiling raise allowance carried per client direction from the scope review.",
+    evidenceBasis: { quantity: { type: "subcontract", rationale: "One package per client direction in scope review." }, pricing: { type: "allowance", assumptionIds: ["A-NOT-SAVED"] } },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /assumptionIds not found among saved assumptions: A-NOT-SAVED/);
+});
+
+test("a non-zero by-others LS subcontract priced from a vendor quote type keeps the composite rule", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 18000,
+    sourceNotes: "Rigging subcontract carried as one lump sum from a single page reference.",
+    evidenceBasis: { quantity: { type: "subcontract", rationale: "One rigging package for the servo-lift set." }, pricing: { type: "vendor_quote", sourceRefs: ["doc_f14748c7-4b90-487e-b4b1-897fcddd37e5 p2"] } },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /Composite LS/);
+});

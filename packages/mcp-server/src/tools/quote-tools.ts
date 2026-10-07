@@ -774,15 +774,60 @@ function evidenceAxisType(evidenceBasis: Record<string, any>, axis: "quantity" |
   return normalizedText(nested.type ?? evidenceBasis[`${axis}Type`] ?? evidenceBasis.type);
 }
 
+/**
+ * Agents often cite sources as objects ({kind, ref, page}) rather than
+ * strings. String() turned those into "[object Object]", so a real document
+ * cite counted as zero structured refs and the row was rejected for a missing
+ * cite it had supplied. Objects are flattened to "kind:ref pN" so the same
+ * string rules apply.
+ */
+function evidenceRefToString(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "object") return String(value).trim();
+  const ref = value as Record<string, unknown>;
+  const id = [ref.ref, ref.id, ref.documentId, ref.url, ref.uri].find((candidate) => typeof candidate === "string" && candidate.trim());
+  if (typeof id !== "string") return "";
+  const kind = typeof ref.kind === "string" ? ref.kind.trim() : typeof ref.type === "string" ? ref.type.trim() : "";
+  const page = ref.page ?? ref.pageNumber;
+  const base = kind && !id.trim().toLowerCase().startsWith(`${kind.toLowerCase()}:`) ? `${kind}:${id.trim()}` : id.trim();
+  return page !== undefined && page !== null && String(page).trim() ? `${base} p${String(page).trim()}` : base;
+}
+
 function collectEvidenceAxisArray(evidenceBasis: Record<string, any>, key: string) {
   return [
     ...asArray(evidenceBasis[key]),
     ...asArray(asRecord(evidenceBasis.quantity)[key]),
     ...asArray(asRecord(evidenceBasis.pricing)[key]),
   ]
-    .map((value) => String(value ?? "").trim())
+    .map(evidenceRefToString)
     .filter(Boolean);
 }
+
+/** Refs naming a direct instruction from the estimator/client, e.g. {kind:"user", ref:"scope item 3"} or "user: scope item 3". */
+function userInstructionRefCount(basis: Record<string, any>): number {
+  return collectEvidenceAxisArray(basis, "sourceRefs").filter((ref) => /^(user|client|owner|customer|estimator)\s*[:\-]\s*\S{2,}/i.test(ref)).length;
+}
+
+/**
+ * Document ids cited in sourceRefs ("doc_<id>", "document:<id>", "doc:<id>")
+ * that are not SourceDocuments of this project. A pattern-only check let any
+ * well-formed id count as evidence; an invented or copied id must not.
+ * Only checked when the workspace lists its documents.
+ */
+function unresolvedDocumentRefs(ws: any, basis: Record<string, any>): string[] {
+  const docs = asArray(ws?.sourceDocuments).map((doc) => String(asRecord(doc).id ?? "").trim()).filter(Boolean);
+  if (docs.length === 0) return [];
+  const known = new Set(docs);
+  const unresolved: string[] = [];
+  for (const ref of collectEvidenceAxisArray(basis, "sourceRefs")) {
+    const match = /^(?:(?:doc|document):\s*)?(doc_[A-Za-z0-9-]{6,})/i.exec(ref);
+    if (match && !known.has(match[1])) unresolved.push(match[1]);
+  }
+  return [...new Set(unresolved)];
+}
+
+/** Pricing types whose amount is a single commercial number, not a sum of components. */
+const USER_DIRECTED_COMMERCIAL_PRICING_TYPES = new Set(["allowance", "subcontract"]);
 
 function claimIdsMentionedInLine(input: {
   evidenceBasis?: Record<string, any> | null;
@@ -991,6 +1036,11 @@ export function validateLineEvidenceBasisForPricing(ws: any, input: {
     }
   }
 
+  const unresolvedDocs = unresolvedDocumentRefs(ws, basis);
+  if (unresolvedDocs.length > 0) {
+    return `sourceRefs cite documents that are not in this project: ${unresolvedDocs.join(", ")}. Cite a documentId from listDocuments/readDocumentText.`;
+  }
+
   // Category-aware citation discipline (domain-agnostic)
   const entityType = categoryEntityType(ws, input.categoryId, input.category);
   const structuredRefs = structuredSourceRefCount(basis);
@@ -1019,16 +1069,28 @@ export function validateLineEvidenceBasisForPricing(ws: any, input: {
     const hasStructuredLink = !!(input.costResourceId || input.effectiveCostId || input.itemId);
     const hasStructuredRef = structuredRefs > 0;
     const hasComposition = compositionCount > 0;
-    if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition) {
+    const hasUserDirection = USER_DIRECTED_COMMERCIAL_PRICING_TYPES.has(pricingType || type) && userInstructionRefCount(basis) > 0;
+    if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition && !hasUserDirection) {
       return `Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}); or assumptionIds; or resourceComposition.resources.`;
     }
 
-    // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence
+    // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence.
+    // Two cases have no components to cite, and demanding two refs only invites
+    // a padded or invented second cite (2026-10-07 GPT matrix: a $0
+    // fabrication-by-others placeholder and a client-fixed $25,000 allowance
+    // were rejected four times):
+    //   - a zero-value row (nothing is being priced);
+    //   - an allowance/subcontract amount fixed by a saved assumption or an
+    //     explicit user instruction. The assumption is resolved above and is
+    //     shown in review, so the number stays traceable.
     const isLumpSum = String(input.uom ?? "").toUpperCase() === "LS";
-    if ((isLumpSum || rowDollar >= compositeMaterialThreshold()) && !hasStructuredLink) {
+    const isZeroValue = cost === 0 && price === 0;
+    const isUserDirectedCommercial = USER_DIRECTED_COMMERCIAL_PRICING_TYPES.has(pricingType || type)
+      && (hasAssumptionIds || userInstructionRefCount(basis) > 0);
+    if ((isLumpSum || rowDollar >= compositeMaterialThreshold()) && !hasStructuredLink && !isZeroValue && !isUserDirectedCommercial) {
       const hasComponentEvidence = compositionCount >= 2 || structuredRefs >= 2;
       if (!hasComponentEvidence) {
-        return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs (${STRUCTURED_SOURCE_REF_HINT}), or 2+ resourceComposition.resources.`;
+        return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs (${STRUCTURED_SOURCE_REF_HINT}), or 2+ resourceComposition.resources. A client-fixed allowance/subcontract amount instead needs pricing.type allowance|subcontract plus a saved assumptionId or a "user: <instruction>" ref.`;
       }
     }
   }
