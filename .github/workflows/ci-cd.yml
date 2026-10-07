@@ -207,6 +207,7 @@ jobs:
         run: >
           pnpm --filter @bidwright/web exec tsx --test
           components/workspace/review-tab.test.tsx
+          components/workspace/calibration-review-panel.test.tsx
 
       - name: Validate production compose
         run: |
