@@ -57,6 +57,7 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     const request = JSON.parse(await readFile(requestPath, "utf8"));
     assert.equal(request.transport, "codex-app-server");
     assert.equal(request.model, "openai/gpt-6.1-sol");
+    assert.equal(request.openRouterPromptCache, false);
     assert.equal(request.appServerArgs.includes('model_provider="openrouter"'), true);
     assert.equal(
       request.appServerArgs.includes(
@@ -92,6 +93,13 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     assert.equal(qaRequest.readOnly, undefined);
     assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.default_tools_approval_mode="approve"'));
     assert.ok(!qaRequest.appServerArgs.some((arg: string) => arg.includes("tools.updateWorksheetItem.")));
+
+    for (const model of ["anthropic/claude-opus-5.5", "~anthropic/claude-opus-latest"]) {
+      const cachedPlan = await openRouterAdapter.buildSpawnPlan({ ...ctx, model });
+      const cachedRequest = JSON.parse(await readFile(cachedPlan.args[cachedPlan.promptHandling.index], "utf8"));
+      assert.equal(cachedRequest.openRouterPromptCache, true);
+      assert.equal(JSON.stringify(cachedRequest).includes("sk-or-test-secret"), false);
+    }
 
     // New/default sessions still start if metadata is temporarily unavailable;
     // the retired alias is translated to an exact model with verified metadata.
