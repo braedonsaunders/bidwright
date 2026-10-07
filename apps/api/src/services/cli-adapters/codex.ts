@@ -8,6 +8,7 @@
  * suppresses the well-known noisy patterns plus HTML stack-trace spans.
  */
 
+import { bidwrightMcpApprovalArgs } from "./mcp-approval-policy.js";
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
@@ -140,6 +141,7 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     // bounded independently, so this only needs to cover human think time.
     "-c",
     `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
+    ...bidwrightMcpApprovalArgs(ctx.mcpEnv),
   ];
 }
 

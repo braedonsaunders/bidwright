@@ -10,6 +10,7 @@
  * config overrides contain the environment variable name, never its value.
  */
 
+import { bidwrightMcpApprovalArgs } from "./mcp-approval-policy.js";
 import type {
   CliAdapter,
   CliAuthStatus,
@@ -82,6 +83,7 @@ function buildMcpConfigArgs(ctx: SpawnCtx): string[] {
     // before the estimator could answer them.
     "-c",
     `mcp_servers.bidwright.tool_timeout_sec=${MCP_TOOL_TIMEOUT_SEC}`,
+    ...bidwrightMcpApprovalArgs(ctx.mcpEnv),
   ];
 }
 
