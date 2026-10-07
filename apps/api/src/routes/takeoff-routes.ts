@@ -622,10 +622,10 @@ export async function takeoffRoutes(app: FastifyInstance) {
       // because it doesn't exist as a vision endpoint on the OpenRouter
       // model catalog).
       const defaultModelByProvider: Record<string, string> = {
-        anthropic: "claude-sonnet-4-5",
-        openai: "gpt-4o",
-        openrouter: "anthropic/claude-sonnet-4-5",
-        gemini: "gemini-2.0-flash",
+        anthropic: "claude-sonnet-5-5",
+        openai: "gpt-6.1-sol",
+        openrouter: "anthropic/claude-sonnet-5.5",
+        gemini: "gemini-3.8-flash",
         lmstudio: "lmstudio-community/Llama-3.2-11B-Vision-Instruct-GGUF",
       };
       model =

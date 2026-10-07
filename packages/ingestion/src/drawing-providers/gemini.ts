@@ -15,7 +15,7 @@ import type {
 } from "./types.js";
 import { hashFingerprint, encodeBase64 } from "./util.js";
 
-const DEFAULT_MODEL = "gemini-2.5-pro";
+const DEFAULT_MODEL = "gemini-3.1-pro-preview";
 
 interface GeminiCfg {
   apiKey: string;

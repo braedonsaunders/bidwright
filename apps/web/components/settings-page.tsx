@@ -1913,7 +1913,7 @@ export function SettingsPage({
                           type="text"
                           value={settings.integrations.drawingExtractionModel}
                           onChange={(e) => updateIntegrations({ drawingExtractionModel: e.target.value })}
-                          placeholder="gemini-2.5-pro"
+                          placeholder="gemini-3.1-pro-preview"
                         />
                       </div>
                     </div>
