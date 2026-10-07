@@ -200,6 +200,19 @@ export async function estimateRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
+  // Per-line derivation ledger: current formula/inputs/result plus history.
+  // Q&A answers "how did you get this number" from here instead of memory.
+  app.get("/api/estimate/:projectId/items/:itemId/derivation", async (request, reply) => {
+    const { projectId, itemId } = request.params as { projectId: string; itemId: string };
+    try {
+      return await request.store!.getLineDerivation(projectId, itemId);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (/not found/i.test(message)) return reply.code(404).send({ error: message });
+      throw error;
+    }
+  });
+
   app.post("/api/estimate/:projectId/benchmarks/recompute", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     await request.store!.recomputeEstimateBenchmarks(projectId);

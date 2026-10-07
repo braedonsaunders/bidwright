@@ -423,6 +423,12 @@ model WorksheetItem {
   sourceAssembly     Assembly?         @relation("WorksheetItemSourceAssembly", fields: [sourceAssemblyId], references: [id], onDelete: SetNull)
   assemblyInstanceId String?
   assemblyInstance   AssemblyInstance? @relation(fields: [assemblyInstanceId], references: [id], onDelete: SetNull)
+  // Per-line derivation ledger (current version). Shape: LineDerivation in
+  // @bidwright/domain — formula + inputs (each with a source ref) + result +
+  // status (draft | verified | reviewed | stale). History lives in
+  // LineDerivationEvent. Null for rows created before the ledger existed or
+  // by hand without a derivation.
+  derivation         Json?
 
   pickupLinks       PickupLink[]
 
@@ -2554,4 +2560,31 @@ model ExternalRecord {
   @@index([integrationId])
   @@index([mappedTo])
   @@index([fetchedAt])
+}
+
+// ── Line derivation history ──────────────────────────────────────────────
+//
+// Append-only record of every derivation version written for a worksheet
+// item, plus the invalidations that marked one stale (an input edit, a human
+// override, a dependency change). WorksheetItem.derivation holds the current
+// version; this table answers "what did it say before, and why did it change".
+
+model LineDerivationEvent {
+  id            String   @id @default(cuid())
+  projectId     String
+  revisionId    String
+  itemId        String
+  version       Int
+  // "saved" | "stale" | "verified" | "reviewed" | "human_edit" | "dependency_changed" | "deleted"
+  cause         String
+  // "agent" | "human" | "system"
+  actorKind     String   @default("system")
+  actorRef      String?
+  derivation    Json
+  // Field-level diff for human edits: [{ field, before, after }]
+  changes       Json     @default("[]")
+  createdAt     DateTime @default(now())
+
+  @@index([projectId, itemId, createdAt])
+  @@index([revisionId])
 }
