@@ -2344,7 +2344,57 @@ function mergeExistingClaim(existing: JsonRecord, next: JsonRecord): JsonRecord 
   };
 }
 
-function validateClaimEvidence(claim: JsonRecord, atlas?: DrawingAtlas) {
+/**
+ * Native readDrawingTile / readDrawingPage / inspectDrawingRegion calls are
+ * recorded server-side as EvidenceView rows. A claim that cites a viewId takes
+ * imageHash, document, page, bbox and tool from that row: the model is never
+ * handed the hash, so before this a tile-backed visual count could not be
+ * saved honestly (2026-10-07 GPT matrix, "Platform base plates 5"). A viewId
+ * the server never delivered for this project is rejected.
+ */
+async function fetchViewsById(ids: string[]): Promise<JsonRecord[]> {
+  const params = new URLSearchParams({ projectId: getProjectId(), ids: ids.join(",") });
+  return asArray((await apiGet<JsonRecord>(`/api/vision/views?${params}`))?.views).map(asRecord);
+}
+
+export async function resolveClaimEvidenceViews(evidence: JsonRecord[], fetchViews: (ids: string[]) => Promise<JsonRecord[]> = fetchViewsById): Promise<{ evidence: JsonRecord[]; failures: string[] }> {
+  const ids = [...new Set(evidence.map((entry) => String(entry.viewId ?? "").trim()).filter(Boolean))];
+  if (ids.length === 0) return { evidence, failures: [] };
+  let views: JsonRecord[];
+  try {
+    views = await fetchViews(ids);
+  } catch {
+    // Unverifiable: leave entries as sent; visual methods still need a hash.
+    return { evidence, failures: [] };
+  }
+  const byId = new Map(views.map((view) => [String(view.id ?? ""), view]));
+  const failures: string[] = [];
+  const resolved = evidence.map((entry, index) => {
+    const viewId = String(entry.viewId ?? "").trim();
+    if (!viewId) return entry;
+    const view = byId.get(viewId);
+    if (!view) {
+      failures.push(`evidence[${index}].viewId ${viewId} was not delivered to this project. Cite a viewId returned by readDrawingPage, readDrawingTile, or inspectDrawingRegion in this session.`);
+      return entry;
+    }
+    const viewDocumentId = String(view.documentId ?? view.fileNodeId ?? "");
+    if (entry.documentId && viewDocumentId && String(entry.documentId) !== viewDocumentId) {
+      failures.push(`evidence[${index}] cites document ${String(entry.documentId)} but view ${viewId} is of ${viewDocumentId}.`);
+    }
+    return {
+      ...entry,
+      documentId: viewDocumentId || entry.documentId,
+      pageNumber: Number(view.pageNumber) || entry.pageNumber,
+      bbox: view.bbox && typeof view.bbox === "object" ? view.bbox : entry.bbox,
+      tool: String(view.tool ?? entry.tool ?? ""),
+      imageHash: String(view.imageHash ?? ""),
+      imageHashVerifiedAt: new Date().toISOString(),
+    };
+  });
+  return { evidence: resolved, failures };
+}
+
+export function validateClaimEvidence(claim: JsonRecord, atlas?: DrawingAtlas) {
   const failures: string[] = [];
   const method = normalizedText(claim.method);
   const evidence = asArray(claim.evidence).map(asRecord);
@@ -2359,11 +2409,11 @@ function validateClaimEvidence(claim: JsonRecord, atlas?: DrawingAtlas) {
     if (entry.regionId && atlas && !findRegion(atlas, String(entry.regionId))) failures.push(`evidence[${index}] regionId is not in the current atlas.`);
     if (["visual_count", "takeoff"].includes(method)) {
       if (!entry.regionId && !entry.bbox) failures.push(`visual evidence[${index}] needs regionId or bbox.`);
-      if (!entry.imageHash) failures.push(`visual evidence[${index}] needs imageHash from inspectDrawingRegion.`);
+      if (!entry.imageHash) failures.push(`visual evidence[${index}] needs the viewId returned by readDrawingTile/inspectDrawingRegion (the server fills imageHash from it).`);
       const tool = normalizedText(entry.tool);
-      const inspectedCropTool = ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols"].some((name) => tool.includes(name));
+      const inspectedCropTool = ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols", "readdrawingtile"].some((name) => tool.replace(/\s+/g, "").includes(name));
       if (!inspectedCropTool) {
-        failures.push(`visual evidence[${index}] must come from a targeted inspected crop tool such as inspectDrawingRegion, not search-only metadata.`);
+        failures.push(`visual evidence[${index}] must come from a targeted crop (readDrawingTile or inspectDrawingRegion, cite its viewId), not a full page or search-only metadata.`);
       }
     }
     if (["bom_table", "drawing_table", "ocr_text"].includes(method) && !entry.sourceText && !entry.regionId) {
@@ -2941,8 +2991,10 @@ export function registerDrawingEvidenceTools(server: McpServer) {
           }, null, 2) }],
         };
       }
+      const resolvedViews = await resolveClaimEvidenceViews(asArray(claim.evidence).map(asRecord));
+      claim.evidence = resolvedViews.evidence as typeof claim.evidence;
       const claimToSave = existingClaim ? mergeExistingClaim(existingClaim, claim) : claim;
-      const validationFailures = validateClaimEvidence(claimToSave, atlas);
+      const validationFailures = [...resolvedViews.failures, ...validateClaimEvidence(claimToSave, atlas)];
       if (validationFailures.length > 0) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({

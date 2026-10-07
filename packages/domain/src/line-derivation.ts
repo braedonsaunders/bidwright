@@ -107,6 +107,14 @@ export interface LineDerivation {
   invalidatedBy?: LineDerivationInvalidation[];
   notes?: string | null;
   procurement?: LineDerivationProcurement | null;
+  /** Server-computed review flags (see flagDerivationAssumptions). Never trusted from the caller. */
+  reviewFlags?: LineDerivationReviewFlag[];
+}
+
+export interface LineDerivationReviewFlag {
+  code: "assumed_inputs" | "assumption_dominated";
+  message: string;
+  inputs: string[];
 }
 
 export interface LineDerivationIssue {
@@ -468,8 +476,17 @@ const STOP_TERMS = new Set([
   "count", "qty", "quantity", "number", "total", "plate", "plates", "base",
 ]);
 
+/**
+ * Plural to singular for matching input names against callout phrases.
+ * Stripping a bare "es" turned "holes" into "hol", so a holesPerPlate input
+ * never matched a "(1) 1\" dia hole" callout.
+ */
 function stem(term: string) {
-  return term.toLowerCase().replace(/[^a-z0-9]/g, "").replace(/(es|s)$/, "");
+  const word = term.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (/(ches|shes|sses|xes|zes)$/.test(word)) return word.slice(0, -2);
+  if (/ies$/.test(word) && word.length > 4) return `${word.slice(0, -3)}y`;
+  if (/[^s]s$/.test(word)) return word.slice(0, -1);
+  return word;
 }
 
 function instanceTerms(input: LineDerivationInput): string[] {
@@ -484,7 +501,22 @@ function instanceTerms(input: LineDerivationInput): string[] {
   )];
 }
 
+/**
+ * Rates, durations and money are never instance counts. "baseDrillHoursPerHole
+ * = 0.24 HR/EA" was compared with a drawing's "(1) 1\" dia hole" callout and
+ * the row was rejected (2026-10-07 GPT matrix). A per-instance count is a
+ * count of things, so anything with a rate/time unit or a rate-like name is
+ * excluded, even when the agent marked it perInstance.
+ */
+function isRateLikeInput(input: LineDerivationInput) {
+  const unit = String(input.unit ?? "").trim();
+  if (unit.includes("/") || isRateOrTimeUom(unit)) return true;
+  const words = String(input.name ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
+  return /\b(hours?|hrs?|mh|minutes?|mins?|days?|duration|rate|rates|cost|price|dollars?|productivity|factor|percent|pct)\b/.test(words);
+}
+
 function isPerInstanceInput(input: LineDerivationInput) {
+  if (isRateLikeInput(input)) return false;
   if (input.perInstance === true) return true;
   const name = String(input.name ?? "").toLowerCase();
   return /per[A-Z_]|_per_|per\b|each|every/.test(input.name ?? "") || /per|each/.test(name);
@@ -876,7 +908,64 @@ export function normalizeLineDerivation(value: unknown): LineDerivation | null {
     invalidatedBy: Array.isArray(raw.invalidatedBy) ? (raw.invalidatedBy as LineDerivationInvalidation[]) : [],
     notes: (raw.notes as string | null | undefined) ?? null,
     procurement: normalizeProcurement(raw.procurement),
+    reviewFlags: normalizeReviewFlags(raw.reviewFlags),
   };
+}
+
+function normalizeReviewFlags(value: unknown): LineDerivationReviewFlag[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (entry && typeof entry === "object" ? entry as Record<string, unknown> : {}))
+    .filter((entry) => entry.code === "assumed_inputs" || entry.code === "assumption_dominated")
+    .map((entry) => ({
+      code: entry.code as LineDerivationReviewFlag["code"],
+      message: String(entry.message ?? ""),
+      inputs: Array.isArray(entry.inputs) ? entry.inputs.map(String) : [],
+    }));
+}
+
+// ── Assumed inputs ─────────────────────────────────────────────────────────
+
+/** Sources that are the estimator's or agent's judgement rather than a document, view, library or answer. */
+const UNVERIFIED_SOURCE_KINDS = new Set<LineDerivationSourceKind>(["assumption", "manual"]);
+
+/**
+ * Which inputs of a derivation are assumed, and whether assumptions set its
+ * magnitude. On the 2026-10-07 GPT matrix a 96 h platform-erection row was
+ * labelled drawing_quantity because one input, "installationPackages = 1",
+ * cited a view; crewMembers 3 × crewDays 4 × hoursPerDay 8 all came from an
+ * assumption. A value of 1 sourced from evidence does not size anything, so
+ * the row is assumption-dominated.
+ */
+export function summarizeDerivationAssumptions(derivation: LineDerivation | null | undefined) {
+  const inputs = derivation?.inputs ?? [];
+  const assumed = inputs.filter((input) => UNVERIFIED_SOURCE_KINDS.has(input.source?.kind));
+  const sizing = inputs.filter((input) => Number.isFinite(input.value) && input.value !== 1 && input.value !== 0);
+  const dominated = assumed.length > 0 && sizing.length > 0 && sizing.every((input) => UNVERIFIED_SOURCE_KINDS.has(input.source?.kind));
+  return {
+    assumedInputs: assumed.map((input) => input.name),
+    assumptionRefs: [...new Set(assumed.map((input) => input.source?.ref).filter(Boolean))] as string[],
+    dominated,
+  };
+}
+
+/** Review flags recomputed on every write; callers cannot supply or clear them. */
+export function flagDerivationAssumptions(derivation: LineDerivation): LineDerivationReviewFlag[] {
+  const summary = summarizeDerivationAssumptions(derivation);
+  if (summary.assumedInputs.length === 0) return [];
+  const refs = summary.assumptionRefs.length > 0 ? ` (${summary.assumptionRefs.join(", ")})` : "";
+  if (summary.dominated) {
+    return [{
+      code: "assumption_dominated",
+      message: `Every input that sizes this result is assumed${refs}: ${summary.assumedInputs.join(", ")}. Evidence inputs only contribute a factor of 1.`,
+      inputs: summary.assumedInputs,
+    }];
+  }
+  return [{
+    code: "assumed_inputs",
+    message: `Some inputs are assumed${refs}: ${summary.assumedInputs.join(", ")}.`,
+    inputs: summary.assumedInputs,
+  }];
 }
 
 function normalizeProcurement(value: unknown): LineDerivationProcurement | null {

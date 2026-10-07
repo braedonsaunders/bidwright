@@ -1,3 +1,5 @@
+import { flagDerivationAssumptions, normalizeLineDerivation } from "./line-derivation";
+
 export type EstimateValidationSeverity = "info" | "warning" | "error" | "critical";
 
 export type EstimateValidationCategory =
@@ -696,6 +698,36 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
             });
           }
         }
+      }
+      return issues;
+    },
+  },
+  {
+    id: "worksheet.evidence.assumed_derivation_unreviewed",
+    name: "Assumed derivation inputs are reviewed",
+    description: "A row whose quantity or hours are sized by assumptions, even when labelled drawing-driven, stays visible until an estimator reviews it. Never blocks a draft.",
+    severity: "warning",
+    category: "evidence",
+    weight: 8,
+    ruleSets: ["default", "readiness"],
+    validate(context) {
+      const issues: EstimateValidationIssueInput[] = [];
+      for (const row of context.rows) {
+        const derivation = normalizeLineDerivation((row.item as Record<string, unknown>).derivation);
+        if (!derivation || derivation.status === "reviewed" || derivation.status === "stale") continue;
+        const [flag] = flagDerivationAssumptions(derivation);
+        if (!flag) continue;
+        const dominated = flag.code === "assumption_dominated";
+        issues.push({
+          message: `"${displayItemName(row.item)}" ${dominated ? "is sized entirely by assumptions" : "uses assumed inputs"} and has not been reviewed by an estimator. ${flag.message}`,
+          severity: dominated ? "warning" : "info",
+          element: itemRef(row),
+          suggestions: [
+            "Confirm the assumed inputs, replace them with a sourced value, or mark the derivation reviewed.",
+          ],
+          details: { flag: flag.code, inputs: flag.inputs, derivationStatus: derivation.status },
+          scoreImpact: dominated ? 0.6 : 0.2,
+        });
       }
       return issues;
     },

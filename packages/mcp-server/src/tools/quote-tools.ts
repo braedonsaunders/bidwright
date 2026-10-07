@@ -560,8 +560,8 @@ function claimHasUsableDrawingEvidence(claimValue: unknown) {
     return evidence.some((entry) =>
       (entry.regionId || Object.keys(asRecord(entry.bbox)).length > 0) &&
       String(entry.imageHash ?? "").trim().length >= 16 &&
-      ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols"].some((name) =>
-        normalizedText(entry.tool).includes(name)
+      ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols", "readdrawingtile"].some((name) =>
+        normalizedText(entry.tool).replace(/\s+/g, "").includes(name)
       )
     );
   }
@@ -991,7 +991,7 @@ export function validateLineEvidenceBasisForPricing(ws: any, input: {
   }
 
   if (declaredClaimIds.length > 0 && !lineEvidenceBasisRequiresDrawing(basis)) {
-    return "Drawing evidence claim IDs belong to quantity provenance. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and place the claim IDs in evidenceBasis.quantity.drawingClaimIds. Put material_quote, knowledge_labor, rate_schedule, subcontract, equipment_rental, or allowance under evidenceBasis.pricing when that source sets the price/rate.";
+    return "Drawing evidence claim IDs belong to quantity provenance. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and place the claim IDs in evidenceBasis.quantity.drawingClaimIds. Put material_quote, knowledge_labor, rate_schedule, subcontract, equipment_rental, or allowance under evidenceBasis.pricing when that source sets the price/rate. If the drawing only shows the scope and this row's quantity (e.g. labour hours) comes from a crew assumption or labour unit, leave drawingClaimIds off this row, keep quantity.type assumption or knowledge_labor, and cite the drawing in sourceRefs instead.";
   }
 
   if (lineEvidenceBasisRequiresDrawing(basis)) {
@@ -1119,6 +1119,9 @@ interface EvidenceViewRecord {
   tool?: string | null;
   imageHash?: string | null;
   textSnippet?: string | null;
+  bbox?: Record<string, unknown> | null;
+  imageWidth?: number | null;
+  imageHeight?: number | null;
 }
 
 /**
@@ -1317,7 +1320,84 @@ export async function validateTraceableQuantityForPricing(ws: any, input: {
   return null;
 }
 
-function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null): string | null {
+/** View ids cited as page overview (renderedPages) and as targeted crops (zoomEvidence) by one audit package. */
+function auditPackageViewIds(entry: Record<string, any>) {
+  const ids = (values: unknown[]) => [...new Set(values.map((value) => String(value ?? "").trim()).filter((id) => /^view-/.test(id)))];
+  return {
+    pages: ids(asArray(entry.renderedPages).map((page) => asRecord(page).viewId)),
+    crops: ids(asArray(entry.zoomEvidence).map((zoom) => asRecord(zoom).viewId)),
+  };
+}
+
+/** Audit-cited plus row-cited view ids, bounded to what the agent actually named. */
+function auditViewIds(audit: Record<string, any>, evidenceBasis?: Record<string, any> | null): string[] {
+  const ids = [
+    ...asArray(audit.drawingDrivenPackages).flatMap((entry) => {
+      if (!entry || typeof entry !== "object") return [];
+      const cited = auditPackageViewIds(entry as Record<string, any>);
+      return [...cited.pages, ...cited.crops];
+    }),
+    ...collectEvidenceAxisArray(asRecord(evidenceBasis), "viewIds"),
+  ];
+  return [...new Set(ids.filter((id) => /^view-/.test(id)))].slice(0, 500);
+}
+
+/**
+ * readDrawingTile / inspectDrawingRegion views carry a bbox (normalised 0-1 for
+ * tiles, pixels with image dimensions for region inspections). A readDrawingPage
+ * view has none and is the whole page.
+ */
+function nativeViewRegion(view: EvidenceViewRecord): Record<string, number> | null {
+  const box = asRecord(view.bbox);
+  const x = Number(box.x), y = Number(box.y), width = Number(box.width), height = Number(box.height);
+  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
+  const frameWidth = Number(box.imageWidth ?? NaN);
+  const frameHeight = Number(box.imageHeight ?? NaN);
+  if (Number.isFinite(frameWidth) && Number.isFinite(frameHeight)) return { x, y, width, height, imageWidth: frameWidth, imageHeight: frameHeight };
+  if (x <= 1 && y <= 1 && width <= 1 && height <= 1) return { x, y, width, height, imageWidth: 1, imageHeight: 1 };
+  return null;
+}
+
+/**
+ * Server EvidenceView rows are the authoritative record of what the model was
+ * shown. A full-page view is overview evidence; a targeted crop is crop
+ * evidence. A crop is never promoted to a page overview.
+ */
+function nativeViewEvidence(views: EvidenceViewRecord[]) {
+  const pages: Array<{ documentId: string; pageNumber: number }> = [];
+  const crops: Array<{ documentId: string; pageNumber: number; region: Record<string, any> }> = [];
+  const pageViewIds = new Set<string>();
+  const cropViewIds = new Set<string>();
+  for (const view of views) {
+    const documentId = String(view.documentId ?? view.fileNodeId ?? "").trim();
+    const pageNumber = Number(view.pageNumber);
+    if (!documentId || !Number.isFinite(pageNumber)) continue;
+    const region = nativeViewRegion(view);
+    if (region && isTargetedZoomRegion(region)) {
+      crops.push({ documentId, pageNumber, region });
+      cropViewIds.add(view.id);
+    } else {
+      pages.push({ documentId, pageNumber });
+      pageViewIds.add(view.id);
+    }
+  }
+  return { pages, crops, pageViewIds, cropViewIds };
+}
+
+/** The audit gate, with the native page/tile views it cites resolved from the server first. */
+export async function validateVisualTakeoffAuditWithNativeViews(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null): Promise<string | null> {
+  const audit = asRecord(asRecord(strategy?.scopeGraph).visualTakeoffAudit);
+  const ids = auditViewIds(audit, evidenceBasis);
+  let views: EvidenceViewRecord[] = [];
+  if (ids.length > 0) {
+    const result = await evidenceViewFetcher(ids);
+    // Views the server cannot confirm simply do not count.
+    if (!("error" in result)) views = result.views;
+  }
+  return validateVisualTakeoffAuditForPricing(ws, strategy, targetText, evidenceBasis, views);
+}
+
+export function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null, nativeViews: EvidenceViewRecord[] = []): string | null {
   const drawingDocs = asArray(ws.sourceDocuments).filter(isDrawingLikeSourceDocument);
   if (drawingDocs.length === 0) return null;
   if (!lineEvidenceBasisRequiresDrawing(evidenceBasis)) return null;
@@ -1325,21 +1405,28 @@ function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText
   const scopeGraph = asRecord(strategy?.scopeGraph);
   const audit = asRecord(scopeGraph.visualTakeoffAudit);
   const evidence = collectVisualToolEvidence(ws);
+  const native = nativeViewEvidence(nativeViews);
+  evidence.renderedPages += native.pages.length;
+  evidence.zoomedRegions += native.crops.length;
+  evidence.renderedPageCalls.push(...native.pages);
+  evidence.zoomRegionCalls.push(...native.crops);
+  const packageHasNativePage = (entry: Record<string, any>) => auditPackageViewIds(entry).pages.some((id) => native.pageViewIds.has(id));
+  const packageHasNativeCrop = (entry: Record<string, any>) => auditPackageViewIds(entry).crops.some((id) => native.cropViewIds.has(id));
   const engine = drawingEvidenceEngine(strategy);
   const hasLedgerEvidence = Object.keys(asRecord(engine.atlas)).length > 0 && asArray(engine.claims).some(claimHasUsableDrawingEvidence);
   const drawingNames = drawingDocs.slice(0, 5).map((doc: any) => doc.fileName).join("; ");
   const sampleLine = drawingNames ? ` Detected drawing PDFs include: ${drawingNames}.` : "";
 
   if (Object.keys(audit).length === 0) {
-    return `Visual drawing takeoff audit is missing from saveEstimateScopeGraph.${sampleLine} Before creating worksheets/items, call buildDrawingAtlas, searchDrawingRegions, inspectDrawingRegion on the specific detail/symbol/table region that drives scope, saveDrawingEvidenceClaim, verifyDrawingEvidenceLedger, and re-save saveEstimateScopeGraph with visualTakeoffAudit.`;
+    return `Visual drawing takeoff audit is missing from saveEstimateScopeGraph.${sampleLine} Before creating worksheets/items, read the relevant drawing page (readDrawingPage) and the detail/symbol/table region that drives scope (readDrawingTile or inspectDrawingRegion), saveDrawingEvidenceClaim citing those viewIds, verifyDrawingEvidenceLedger, and re-save saveEstimateScopeGraph with visualTakeoffAudit (renderedPages[].viewId = page views, zoomEvidence[].viewId = crop views).`;
   }
 
   if (!hasLedgerEvidence && evidence.renderedPages === 0) {
-    return `No actual atlas/render evidence is recorded for this drawing package.${sampleLine} Build the Drawing Evidence Engine atlas or render at least one relevant drawing page, then re-save saveEstimateScopeGraph.visualTakeoffAudit before creating worksheets/items.`;
+    return `No actual atlas/render evidence is recorded for this drawing package.${sampleLine} Read at least one relevant drawing page with readDrawingPage and cite its viewId in visualTakeoffAudit.drawingDrivenPackages[].renderedPages[].viewId (a tile is not a page overview), then re-save saveEstimateScopeGraph before creating worksheets/items.`;
   }
 
   if (!hasLedgerEvidence && evidence.zoomedRegions === 0) {
-    return `Full-page drawing evidence is only overview evidence. No targeted crop/region evidence is recorded yet. Inspect the specific detail, symbol, schedule, dimension, or table region that drives scope, save a drawing evidence claim, then re-save saveEstimateScopeGraph.visualTakeoffAudit before creating worksheets/items.`;
+    return `Full-page drawing evidence is only overview evidence. No targeted crop/region evidence is recorded yet. Read the specific detail, symbol, schedule, dimension, or table region that drives scope with readDrawingTile or inspectDrawingRegion, save a drawing evidence claim citing that viewId, cite it in zoomEvidence[].viewId, then re-save saveEstimateScopeGraph before creating worksheets/items.`;
   }
 
   if (audit.completedBeforePricing !== true) {
@@ -1362,15 +1449,18 @@ function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText
   const packagesMissingDeepEvidence = drawingDrivenPackages.filter((entry) =>
     !hasLedgerEvidence && !hasAuditArrayEvidence(entry, ["zoomEvidence"]),
   );
+  // An entry citing a viewId is checked against that server view only.
   const packagesMissingActualOverview = drawingDrivenPackages.filter((entry) =>
     !hasLedgerEvidence &&
     asArray(entry.renderedPages).length > 0 &&
-    !asArray(entry.renderedPages).some((page) => visualPageEvidenceMatchesActual(page, evidence.renderedPageCalls)),
+    !packageHasNativePage(entry) &&
+    !asArray(entry.renderedPages).some((page) => !asRecord(page).viewId && visualPageEvidenceMatchesActual(page, evidence.renderedPageCalls)),
   );
   const packagesMissingActualZoom = drawingDrivenPackages.filter((entry) =>
     !hasLedgerEvidence &&
     asArray(entry.zoomEvidence).length > 0 &&
-    !asArray(entry.zoomEvidence).some((zoom) => visualZoomEvidenceMatchesActual(zoom, evidence.zoomRegionCalls)),
+    !packageHasNativeCrop(entry) &&
+    !asArray(entry.zoomEvidence).some((zoom) => !asRecord(zoom).viewId && visualZoomEvidenceMatchesActual(zoom, evidence.zoomRegionCalls)),
   );
 
   if (
@@ -1792,7 +1882,7 @@ function worksheetTreeSummary(ws: any) {
       if (traceabilityGate) return traceabilityGate;
 
       if (gate === "createWorksheetItem") {
-        const visualTakeoffGate = validateVisualTakeoffAuditForPricing(
+        const visualTakeoffGate = await validateVisualTakeoffAuditWithNativeViews(
           ws,
           strategy,
           targetText,
