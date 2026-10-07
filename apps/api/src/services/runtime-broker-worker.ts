@@ -3,6 +3,7 @@ import { readFile, unlink } from "node:fs/promises";
 import { createInterface } from "node:readline";
 
 import type { RuntimeBrokerRequest } from "./runtime-broker.js";
+import { startOpenRouterCacheProxy } from "./cli-adapters/openrouter-cache-proxy.js";
 
 function emit(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -102,6 +103,25 @@ export function shouldForwardCodexNotification(
 }
 
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
+  if (!request.openRouterPromptCache) return runCodexProcess(request);
+  const apiKey = process.env.OPENROUTER_API_KEY;
+  if (!apiKey) throw new Error("OpenRouter prompt caching requires the provider API key.");
+  const proxy = await startOpenRouterCacheProxy({ apiKey });
+  try {
+    return await runCodexProcess({
+      ...request,
+      appServerArgs: [
+        ...request.appServerArgs,
+        "-c",
+        `model_providers.openrouter.base_url=${JSON.stringify(proxy.baseUrl)}`,
+      ],
+    });
+  } finally {
+    await proxy.close();
+  }
+}
+
+async function runCodexProcess(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
   const child = spawn(request.codexCommand, ["app-server", ...request.appServerArgs, "-c", "features.shell_tool=true"], {
     cwd: request.projectDir,
     env: process.env,

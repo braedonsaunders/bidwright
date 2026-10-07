@@ -17,6 +17,8 @@ export type RuntimeBrokerRequest =
       resumeSessionId?: string;
       codexCommand: string;
       appServerArgs: string[];
+      /** Anthropic via OpenRouter requires an explicit cache opt-in. */
+      openRouterPromptCache?: boolean;
       suppressUnknownModelMetadataWarning?: boolean;
     }
   | {

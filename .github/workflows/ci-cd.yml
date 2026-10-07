@@ -101,6 +101,8 @@ jobs:
           apps/api/src/services/agent-host/knowledge-mounts.test.ts
           apps/api/src/services/cli-adapters/codex.test.ts
           apps/api/src/services/cli-adapters/openrouter.test.ts
+          apps/api/src/services/cli-reasoning-effort.test.ts
+          apps/api/src/services/cli-adapters/openrouter-cache-proxy.test.ts
           apps/api/src/services/cli-adapters/mcp-approval-policy.test.ts
           apps/api/src/services/cli-conversation.test.ts
           apps/api/src/services/cli-question-history.test.ts
@@ -152,6 +154,8 @@ jobs:
           packages/mcp-server/src/tools/line-traceability-gate.test.ts
           packages/mcp-server/src/tools/gpt-matrix-regressions.test.ts
           packages/mcp-server/src/tools/native-drawing-evidence.test.ts
+          packages/mcp-server/src/native-claim-instructions.test.ts
+          packages/mcp-server/src/tools/progressive-pricing.test.ts
           packages/domain/src/line-derivation.test.ts
           packages/domain/src/agent-memory.test.ts
           packages/domain/src/estimate-strategy-stages.test.ts

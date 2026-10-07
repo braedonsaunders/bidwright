@@ -11,3 +11,9 @@ test("active estimate instructions require native pixels and traceable calculati
 test("review instructions require independent source reading before comparing priced quantities", () => {
   assert.match(buildReviewClaudeMdContent(params), /independently derive high-risk quantities/);
 });
+
+test("package pricing progresses without a global research barrier or timer", () => {
+  const text = buildCompactClaudeMdContent(params);
+  for (const required of ["Bind it to exactly one package", "Each save replaces the whole section", "returned worksheetId before adding rows", "claim.packageId exactly equals the packagePlan entry id", "mechanicalCheck.status passed", "server fills imageHash", "unfinished packages still block finalization", "complete executionPlan", "verifyDrawingEvidenceLedger for the whole estimate"]) assert.ok(text.includes(required), required);
+  for (const obsolete of ["by its midpoint", "Save strategy before detailed pricing:", "Before worksheets/items, search"]) assert.ok(!text.includes(obsolete), obsolete);
+});
