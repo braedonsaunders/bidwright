@@ -7,7 +7,7 @@ import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
+import { access, chown, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -2022,8 +2022,7 @@ async function startPackageIngestForProject(
       try { memory = JSON.parse(await readFile(memPath, "utf8")); } catch {}
       memory.sections["ingestion_results"] = `## Document Ingestion Complete\n\n${docs.length} documents extracted from package:\n\n${summary}`;
       memory.updatedAt = new Date().toISOString();
-      await mkdir(path.dirname(memPath), { recursive: true });
-      await writeFile(memPath, JSON.stringify(memory, null, 2), "utf8");
+      await writeProjectMemoryFile(memPath, JSON.stringify(memory, null, 2));
     } catch {}
   }).catch((err) => {
     console.error(`[ingestion] Package ${multipartUpload.packageId} failed:`, err);
@@ -2094,6 +2093,25 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     status: "processing",
     message: `Package uploaded. ${placeholderDocIds.length} documents ready. Text extraction running in background.`,
   };
+}
+
+/**
+ * Write a project's agent-memory.json as the project directory's owner.
+ * The API runs as root but agents run sandboxed as the launcher identity, so a
+ * root-owned 0644 memory file made every agent writeMemory fail with EACCES.
+ */
+async function writeProjectMemoryFile(memPath: string, content: string) {
+  const dir = path.dirname(memPath);
+  await mkdir(dir, { recursive: true });
+  const tmp = `${memPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, content, "utf8");
+  try {
+    const owner = await stat(dir);
+    await chown(tmp, owner.uid, owner.gid);
+  } catch {
+    // Not running as root (desktop/dev): the file already has our identity.
+  }
+  await rename(tmp, memPath);
 }
 
 export function buildServer() {
@@ -2717,8 +2735,7 @@ export function buildServer() {
     }
     memory.updatedAt = new Date().toISOString();
 
-    await mkdir(path.dirname(memPath), { recursive: true });
-    await writeFile(memPath, JSON.stringify(memory, null, 2), "utf8");
+    await writeProjectMemoryFile(memPath, JSON.stringify(memory, null, 2));
     return memory;
   });
 

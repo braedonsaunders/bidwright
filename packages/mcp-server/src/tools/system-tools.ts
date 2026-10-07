@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, projectPath } from "../api-client.js";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rename, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 // Agent memory lives in the project directory (CWD of the CLI)
@@ -145,7 +145,11 @@ export function registerSystemTools(server: McpServer) {
         memory = JSON.parse(raw);
       } catch {}
       memory[section] = content;
-      await writeFile(MEMORY_PATH, JSON.stringify(memory, null, 2), "utf-8");
+      // Write-then-rename: replaces the file even if another identity created
+      // it, as long as the project directory is ours to write.
+      const tmpPath = `${MEMORY_PATH}.${process.pid}.${Date.now()}.tmp`;
+      await writeFile(tmpPath, JSON.stringify(memory, null, 2), "utf-8");
+      await rename(tmpPath, MEMORY_PATH);
       return { content: [{ type: "text" as const, text: `Saved to memory section: ${section}` }] };
     }
   );
