@@ -486,3 +486,27 @@ test("the same cite repeated in the quantity and pricing axes counts once for th
   });
   assert.match(error ?? "", /Composite LS/);
 });
+
+test("the material/sub rejection shows both honest paths for a client-directed amount", () => {
+  const error = validateLineEvidenceBasisForPricing(subWorkspace, {
+    category: "Subcontractor", uom: "LS", quantity: 1, cost: 25000,
+    sourceNotes: "Binding user commercial direction: Greystone ceiling raise carried at exactly $25,000 CAD.",
+    evidenceBasis: { quantity: { type: "allowance", sourceRefs: ["User commercial instruction: one Greystone package"] }, pricing: { type: "subcontract", sourceRefs: ["User fixed $25,000 subcontract allowance"], rationale: "Commercially decided; no labour rebuild." } },
+    strategy: commercialStrategy,
+  });
+  assert.match(error ?? "", /pricing\.assumptionIds/);
+  assert.match(error ?? "", /"user: /);
+  // the paths it names are accepted
+  for (const pricing of [
+    { type: "subcontract", assumptionIds: ["A-INTERFACES"] },
+    { type: "subcontract", sourceRefs: ["user: carry Greystone at $25,000"] },
+    { type: "subcontract", sourceRefs: [{ kind: "user", ref: "carry Greystone at $25,000" }] },
+  ]) {
+    assert.equal(validateLineEvidenceBasisForPricing(subWorkspace, {
+      category: "Subcontractor", uom: "LS", quantity: 1, cost: 25000,
+      sourceNotes: "Binding user commercial direction: Greystone ceiling raise carried at exactly $25,000 CAD.",
+      evidenceBasis: { quantity: { type: "allowance", rationale: "One Greystone package per client direction." }, pricing },
+      strategy: commercialStrategy,
+    }), null, JSON.stringify(pricing));
+  }
+});
