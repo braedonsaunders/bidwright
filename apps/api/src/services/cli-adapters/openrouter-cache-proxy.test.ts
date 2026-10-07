@@ -3,6 +3,7 @@ import { createServer, request as httpRequest, type IncomingMessage, type Server
 import { once } from "node:events";
 import { createConnection, type AddressInfo, type Socket } from "node:net";
 import test from "node:test";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 import { isAnthropicModel, openRouterPromptCacheEnabled, startOpenRouterCacheProxy, withCacheControl } from "./openrouter-cache-proxy.js";
 
@@ -352,5 +353,65 @@ test("upstream tunnel failures surface as 502, not a hang", async () => {
   } finally {
     await proxy.close();
     await egress.close();
+  }
+});
+
+test("through the CONNECT tunnel, compressed SSE and errors reach Codex decodable", async () => {
+  const sse = "event: response.created\ndata: {\"id\":\"r1\"}\n\nevent: response.completed\ndata: {}\n\n";
+  const error = JSON.stringify({ error: { message: "rate limited" } });
+  let mode: "sse" | "error" = "sse";
+  const upstream = await mockUpstream((_req, res) => {
+    const body = gzipSync(mode === "sse" ? sse : error);
+    res.writeHead(mode === "sse" ? 200 : 429, {
+      "content-type": mode === "sse" ? "text/event-stream" : "application/json",
+      "content-encoding": "gzip",
+      "content-length": String(body.length),
+    });
+    res.end(body);
+  });
+  const upstreamPort = Number(new URL(upstream.base).port);
+  const egress = await mockEgressProxy((_host, port) => port === upstreamPort);
+  const proxy = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: upstream.base, upstreamProxyUrl: egress.url });
+  try {
+    const raw = (status: number, acceptEncoding?: string) => new Promise<{ status: number; headers: IncomingMessage["headers"]; body: Buffer }>((resolve, reject) => {
+      const { port } = new URL(proxy.baseUrl);
+      const headers: Record<string, string> = { authorization: `Bearer ${KEY}` };
+      if (acceptEncoding) headers["accept-encoding"] = acceptEncoding;
+      const req = httpRequest({ host: "127.0.0.1", port, path: "/api/v1/responses", method: "POST", headers }, (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (chunk: Buffer) => chunks.push(chunk));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks) }));
+      });
+      req.on("error", reject);
+      req.end(JSON.stringify({ model: "anthropic/claude-opus-5.5" }));
+      void status;
+    });
+
+    // Codex: no Accept-Encoding, cannot decode. It must get plain text.
+    const forCodex = await raw(200);
+    assert.equal(forCodex.status, 200);
+    assert.equal(forCodex.headers["content-encoding"], undefined);
+    assert.equal(forCodex.body.toString(), sse, "gzip SSE is decoded for a client that did not ask for gzip");
+
+    // A client that accepts gzip gets the upstream bytes untouched.
+    const streamed = await raw(200, "gzip, br");
+    assert.equal(streamed.headers["content-encoding"], "gzip");
+    assert.equal(gunzipSync(streamed.body).toString(), sse);
+
+    mode = "error";
+    const limitedPlain = await raw(429);
+    assert.equal(limitedPlain.status, 429);
+    assert.equal(limitedPlain.headers["content-encoding"], undefined);
+    assert.equal(limitedPlain.body.toString(), error, "gzip 429 is decoded for Codex");
+
+    const limited = await raw(429, "gzip");
+    assert.equal(limited.status, 429);
+    assert.equal(limited.headers["content-encoding"], "gzip");
+    assert.equal(limited.headers["content-length"], String(limited.body.length));
+    assert.equal(gunzipSync(limited.body).toString(), error, "gzip 429 body arrives intact and decodable");
+  } finally {
+    await proxy.close();
+    await egress.close();
+    await upstream.close();
   }
 });
