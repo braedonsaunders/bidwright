@@ -102,6 +102,7 @@ jobs:
           apps/api/src/services/cli-adapters/openrouter.test.ts
           apps/api/src/services/cli-adapters/mcp-approval-policy.test.ts
           apps/api/src/services/cli-conversation.test.ts
+          apps/api/src/services/cli-question-history.test.ts
           apps/api/src/services/session-continuity.test.ts
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
