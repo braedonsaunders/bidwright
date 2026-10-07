@@ -600,6 +600,32 @@ export function isRateOrTimeUom(uom: string | null | undefined) {
   return RATE_OR_TIME_UOMS.has(String(uom ?? "").trim().toUpperCase());
 }
 
+const UOM_SYNONYM_GROUPS: string[][] = [
+  ["EA", "EACH", "EACHES", "PC", "PCS", "PIECE", "PIECES", "NO", "NOS", "UNIT", "UNITS"],
+  ["FT", "FEET", "FOOT", "LF", "LIN FT", "LINFT"],
+  ["M", "METRE", "METRES", "METER", "METERS", "LM"],
+  ["IN", "INCH", "INCHES"],
+  ["MM", "MILLIMETRE", "MILLIMETRES", "MILLIMETER", "MILLIMETERS"],
+  ["SF", "SQFT", "SQ FT", "FT2", "FT²"],
+  ["SM", "M2", "M²", "SQM", "SQ M"],
+  ["CF", "CUFT", "CU FT", "FT3", "FT³"],
+  ["CM3", "M3", "M³", "CUM", "CU M"],
+  ["LB", "LBS", "POUND", "POUNDS"],
+  ["KG", "KGS", "KILOGRAM", "KILOGRAMS"],
+  ["HR", "HRS", "HOUR", "HOURS", "MH"],
+];
+const UOM_CANONICAL = new Map<string, string>();
+for (const group of UOM_SYNONYM_GROUPS) for (const member of group) UOM_CANONICAL.set(member, group[0]);
+
+/** Same unit, allowing spelling/abbreviation synonyms (EA/each, FT/feet). Never a conversion. */
+export function uomsEquivalent(a: string | null | undefined, b: string | null | undefined) {
+  const left = String(a ?? "").trim().toUpperCase();
+  const right = String(b ?? "").trim().toUpperCase();
+  if (!left || !right) return true; // nothing to conflict with
+  if (left === right) return true;
+  return (UOM_CANONICAL.get(left) ?? left) === (UOM_CANONICAL.get(right) ?? right);
+}
+
 export interface ProcurementLinkContext {
   /** The purchase row being checked. */
   purchaseQuantity: number;
@@ -642,6 +668,10 @@ export function evaluateProcurementLink(
       const input = (linked.derivation?.inputs ?? []).find((entry) => entry.name === procurement.installedFromInput);
       if (!input || !Number.isFinite(input.value)) {
         issues.push({ severity: "error", code: "procurement_input_missing", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} has no derivation input named '${procurement.installedFromInput}'.` });
+      } else if (procurement.installedUom && !uomsEquivalent(procurement.installedUom, input.unit)) {
+        // An explicit unit must never reinterpret the sourced number
+        // (10 FT labelled M would silently become 10 M).
+        issues.push({ severity: "error", code: "procurement_unit_conflict", message: `procurement.installedUom '${procurement.installedUom}' conflicts with linked input '${input.name}' whose unit is '${input.unit}'. Units are not converted here: source a separately converted input on that row (e.g. '${input.name}${String(procurement.installedUom).replace(/[^A-Za-z0-9]/g, "")}') and link that instead, or drop installedUom to use the input's unit.` });
       } else {
         installedQuantity = input.value;
         installedUom = installedUom ?? input.unit ?? null;
@@ -652,6 +682,8 @@ export function evaluateProcurementLink(
       // not a physical count. Comparing packs against it would be meaningless.
       const candidates = (linked.derivation?.inputs ?? []).filter((entry) => entry.perInstance !== true && !isRateOrTimeUom(entry.unit)).map((entry) => entry.name);
       issues.push({ severity: "error", code: "procurement_requirement_ambiguous", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} is a ${linked.uom ?? "rate"} row; its quantity (${linked.quantity}) is crew/rate units, not an installed count. Set procurement.installedFromInput to the physical-count input on that row${candidates.length > 0 ? ` (one of: ${candidates.join(", ")})` : ""}, or give installedQuantity explicitly.` });
+    } else if (procurement.installedUom && !uomsEquivalent(procurement.installedUom, linked.uom)) {
+      issues.push({ severity: "error", code: "procurement_unit_conflict", message: `procurement.installedUom '${procurement.installedUom}' conflicts with linked row ${linkedId} whose UOM is '${linked.uom}'. Units are not converted here: give installedQuantity in the row's unit, or link a converted derivation input via installedFromInput.` });
     } else {
       installedQuantity = linked.quantity;
       installedUom = installedUom ?? linked.uom ?? null;

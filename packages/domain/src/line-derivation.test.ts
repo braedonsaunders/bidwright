@@ -5,6 +5,7 @@ import {
   derivationInvalidatedByFields,
   derivationReferencesDocument,
   evaluateProcurementLink,
+  uomsEquivalent,
   evaluateDerivationFormula,
   extractPerInstanceCallouts,
   groutVolumeUnderPlates,
@@ -269,4 +270,36 @@ test("a physical-count row can be linked by quantity; units stay distinct", () =
   assert.equal(onePack.suppliedBaseUnits, 10);
   const short = evaluateProcurementLink({ installedQuantity: 32, installedUom: "EA", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem: resolvePhysical });
   assert.match(short.issues[0].message, /short by 12/);
+});
+
+test("an explicit installedUom may not reinterpret a linked input's unit; synonyms are fine", () => {
+  const pipeRow = {
+    quantity: 1, uom: "LS", entityName: "Install pipe",
+    derivation: {
+      version: 1, target: "quantity" as const, formula: "lengthFt", status: "draft" as const,
+      inputs: [{ name: "lengthFt", value: 10, unit: "FT", source: { kind: "view" as const, ref: "view-iso" } }],
+      result: { value: 10, unit: "FT" },
+    },
+  };
+  const resolve = (id: string) => (id === "li-pipe" ? pipeRow : null);
+  // 10 FT labelled as M must not become 10 M.
+  const conflict = evaluateProcurementLink(
+    { suppliesItemId: "li-pipe", installedFromInput: "lengthFt", installedUom: "M", packSize: 6 },
+    { purchaseQuantity: 2, purchaseUom: "LEN", resolveItem: resolve },
+  );
+  assert.equal(conflict.ok, false);
+  const issue = conflict.issues.find((entry) => entry.code === "procurement_unit_conflict");
+  assert.ok(issue);
+  assert.match(issue!.message, /lengthFtM/);
+  assert.equal(conflict.installedQuantity, null, "no requirement is derived from a conflicting unit");
+  // A synonym spelling is accepted and the number is kept.
+  const synonym = evaluateProcurementLink(
+    { suppliesItemId: "li-pipe", installedFromInput: "lengthFt", installedUom: "feet" },
+    { purchaseQuantity: 10, purchaseUom: "FT", resolveItem: resolve },
+  );
+  assert.equal(synonym.ok, true);
+  assert.equal(synonym.installedQuantity, 10);
+  assert.equal(uomsEquivalent("EA", "eaches"), true);
+  assert.equal(uomsEquivalent("FT", "M"), false);
+  assert.equal(uomsEquivalent("", "M"), true, "a missing unit cannot conflict");
 });
