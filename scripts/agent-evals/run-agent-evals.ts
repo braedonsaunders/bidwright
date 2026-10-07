@@ -1142,6 +1142,8 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
       revision = getObject(copiedWorkspace.currentRevision);
       projectId = getString(project.id);
       if (!projectId || projectId === args.projectId) throw new Error("Project copy did not return an isolated project; refusing to run.");
+      if (process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER) await appendFile(process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER,
+        `${projectId} C matrix-${String(args.model || args.runtime).replace(/[^a-z0-9._-]/gi, "_")} ${new Date().toISOString()}\n`);
       if (args.reingestArchives) {
         const documents = Array.isArray(copiedWorkspace.sourceDocuments) ? copiedWorkspace.sourceDocuments as Json[] : [];
         for (const document of documents) {
@@ -1262,8 +1264,15 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
   });
   const completedAt = new Date();
 
-  const viewsResponse = await client.requestJson<Json>(`/api/vision/views?projectId=${encodeURIComponent(projectId)}`).catch(() => null);
-  const measuredEvidence = evidenceMetrics(workspace, Array.isArray(viewsResponse?.data.views) ? viewsResponse!.data.views as Json[] : []);
+  const recordedViews = new Map<string, Json>();
+  const viewReadErrors: string[] = [];
+  for (const runId of new Set(runs.map((run) => run.sessionId).filter(Boolean))) {
+    try {
+      const response = await client.requestJson<Json>(`/api/vision/views?projectId=${encodeURIComponent(projectId)}&runId=${encodeURIComponent(runId!)}`);
+      for (const view of Array.isArray(response.data.views) ? response.data.views as Json[] : []) recordedViews.set(getString(view.id), view);
+    } catch (error) { viewReadErrors.push(String(error)); }
+  }
+  const measuredEvidence = { ...evidenceMetrics(workspace, [...recordedViews.values()]), viewReadErrors };
   const report: CaseReport = {
     caseId: evalCase.id,
     evidenceMetrics: measuredEvidence,
