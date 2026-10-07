@@ -15,7 +15,7 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({
     data: [{
-      id: "~openai/gpt-latest",
+      id: "openai/gpt-6.1-sol",
       context_length: 1_050_000,
       top_provider: { context_length: 1_050_000 },
     }],
@@ -56,7 +56,7 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     const requestPath = plan.args[plan.promptHandling.index];
     const request = JSON.parse(await readFile(requestPath, "utf8"));
     assert.equal(request.transport, "codex-app-server");
-    assert.equal(request.model, "~openai/gpt-latest");
+    assert.equal(request.model, "openai/gpt-6.1-sol");
     assert.equal(request.appServerArgs.includes('model_provider="openrouter"'), true);
     assert.equal(
       request.appServerArgs.includes(
@@ -93,6 +93,16 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.default_tools_approval_mode="approve"'));
     assert.ok(!qaRequest.appServerArgs.some((arg: string) => arg.includes("tools.updateWorksheetItem.")));
 
+    // New/default sessions still start if metadata is temporarily unavailable;
+    // the retired alias is translated to an exact model with verified metadata.
+    globalThis.fetch = async () => new Response("unavailable", { status: 503 });
+    for (const model of [undefined, "~openai/gpt-latest"]) {
+      const defaultPlan = await openRouterAdapter.buildSpawnPlan({ ...ctx, model });
+      const defaultRequest = JSON.parse(await readFile(defaultPlan.args[defaultPlan.promptHandling.index], "utf8"));
+      assert.equal(defaultRequest.model, "openai/gpt-6.1-sol");
+      assert.ok(defaultRequest.appServerArgs.includes("model_context_window=1050000"));
+    }
+
   } finally {
     globalThis.fetch = originalFetch;
     await rm(projectDir, { recursive: true, force: true });
@@ -101,8 +111,10 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
 
 test("OpenRouter runtime accepts only OpenRouter-style model ids and API-key auth", () => {
   assert.equal(openRouterAdapter.normalizeModel("anthropic/claude-sonnet-4.6"), "anthropic/claude-sonnet-4.6");
-  assert.equal(openRouterAdapter.normalizeModel("~openai/gpt-latest"), "~openai/gpt-latest");
-  assert.equal(openRouterAdapter.normalizeModel("gpt-5.4"), "~openai/gpt-latest");
+  assert.equal(openRouterAdapter.normalizeModel("~openai/gpt-latest"), "openai/gpt-6.1-sol");
+  assert.equal(openRouterAdapter.normalizeModel("gpt-5.4"), "openai/gpt-6.1-sol");
+  assert.equal(openRouterAdapter.normalizeModel(undefined), "openai/gpt-6.1-sol");
+  assert.equal(openRouterAdapter.defaultModel, "openai/gpt-6.1-sol");
   assert.deepEqual(
     openRouterAdapter.checkAuth({ apiKeys: { openrouter: "sk-or-test" } }),
     { authenticated: true, method: "api_key" },
@@ -187,6 +199,8 @@ test("OpenRouter uses known windows during metadata outages and rejects unknown 
     assert.throws(() => buildOpenRouterModelCatalog("unknown/model", invalid), /Cannot determine/);
   }
   assert.throws(() => buildOpenRouterModelCatalog("unknown/model"), /Cannot determine/);
+  assert.equal(buildOpenRouterModelCatalog("~openai/gpt-mini-latest").contextWindow, 400_000);
+  assert.equal(buildOpenRouterModelCatalog("~anthropic/claude-opus-latest").contextWindow, 1_000_000);
 });
 
 test("OpenRouter catalogs are immutable across models and complete during concurrent starts", async () => {

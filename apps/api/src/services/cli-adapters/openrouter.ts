@@ -24,7 +24,10 @@ import { MCP_TOOL_TIMEOUT_SEC } from "./shared.js";
 import { createRuntimeBrokerPlan } from "../runtime-broker.js";
 import { writeOpenRouterModelCatalog } from "./openrouter-model-catalog.js";
 
-const DEFAULT_MODEL = "~openai/gpt-latest";
+const DEFAULT_MODEL = "openai/gpt-6.1-sol";
+// This old alias is no longer advertised by OpenRouter. Resolve it explicitly
+// for saved settings rather than inventing metadata for an unavailable alias.
+const RETIRED_DEFAULT_ALIAS = "~openai/gpt-latest";
 const OPENROUTER_MODELS_URL = "https://openrouter.ai/api/v1/models";
 const MODEL_METADATA_TIMEOUT_MS = 5_000;
 
@@ -35,8 +38,8 @@ interface OpenRouterModelMetadata {
 const OPENROUTER_ALIAS_MODELS: CliModelOption[] = [
   {
     id: DEFAULT_MODEL,
-    name: "OpenAI GPT Latest",
-    description: "OpenRouter's current GPT agent alias",
+    name: "GPT-6.1 Sol",
+    description: "GPT-6.1 Sol through OpenRouter",
     isDefault: true,
   },
   {
@@ -153,7 +156,7 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
   if (!apiKey) {
     throw new Error("The OpenRouter runtime requires an OpenRouter API key.");
   }
-  const model = ctx.model || DEFAULT_MODEL;
+  const model = !ctx.model || ctx.model === RETIRED_DEFAULT_ALIAS ? DEFAULT_MODEL : ctx.model;
   const modelMetadata = await fetchOpenRouterModelMetadata(apiKey, model);
   const catalog = await writeOpenRouterModelCatalog(ctx.projectDir, model, modelMetadata?.contextWindow);
 
@@ -207,7 +210,7 @@ export const openRouterAdapter: CliAdapter = {
   },
 
   normalizeModel(modelId) {
-    return modelId && isOpenRouterModelId(modelId) ? modelId : DEFAULT_MODEL;
+    return modelId && modelId !== RETIRED_DEFAULT_ALIAS && isOpenRouterModelId(modelId) ? modelId : DEFAULT_MODEL;
   },
 
   async listModels() {

@@ -6,6 +6,9 @@ import templates from "./openrouter-model-catalog.json" with { type: "json" };
 // Pinned to the Codex version in Dockerfile.api. Preserve the bundled tool and
 // instruction capabilities: importing a GPT descriptor for Claude/Kimi would
 // silently switch them to GPT-specific code mode and Responses Lite.
+// The adjacent JSON carries upstream descriptors/instructions under Apache-2.0;
+// see openrouter-model-catalog.LICENSE and .NOTICE. The fallback descriptor is
+// reconstructed from model_info_from_slug() at the same pinned upstream tag.
 type ModelInfo = Record<string, unknown> & { slug: string };
 const bundled = templates.models as ModelInfo[];
 const knownWindows: Record<string, number> = templates.knownContextWindows;
