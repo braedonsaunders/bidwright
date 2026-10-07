@@ -401,6 +401,7 @@ interface CaseReport {
   estimateMetrics: EstimateMetrics;
   humanQuoteMetrics?: HumanQuoteMetrics;
   evidenceMetrics?: ReturnType<typeof evidenceMetrics>;
+  providerUsage?: { usage: unknown; costUsd: number | null; note: string };
   quality: QualityScore;
   findings: string[];
   artifacts: {
@@ -1259,6 +1260,11 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
   const report: CaseReport = {
     caseId: evalCase.id,
     evidenceMetrics: measuredEvidence,
+    providerUsage: (() => {
+      const usage = [...(finalStatus?.data.events || [])].reverse().find((event) => (event.data as any)?.usage)?.data as any;
+      return { usage: usage?.usage ?? null, costUsd: typeof usage?.costUsd === "number" ? usage.costUsd : null,
+        note: "Provider-reported values only. Missing billing cost is unknown, never zero. Cumulative usage may include resumed turns." };
+    })(),
     baseCaseId: evalCase.baseId,
     iteration: evalCase.iteration,
     repeatTotal: evalCase.repeatTotal,
