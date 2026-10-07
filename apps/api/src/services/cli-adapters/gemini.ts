@@ -12,7 +12,7 @@
  *   - Resume: `gemini --resume <session-id>` (writes session ids to settings)
  *   - Config: `<projectDir>/.gemini/settings.json` is auto-discovered
  *   - MCP servers: registered under `mcpServers` (matches Claude Code shape)
- *   - Models: bare model id (e.g. `gemini-2.5-pro`)
+ *   - Models: bare model id (e.g. `gemini-3.1-pro-preview`)
  */
 
 import { existsSync } from "node:fs";
@@ -40,7 +40,7 @@ import {
 
 const ADAPTER_ID = "gemini";
 
-const DEFAULT_MODEL = "gemini-2.5-pro";
+const DEFAULT_MODEL = "gemini-3.1-pro-preview";
 
 function getWindowsBinaryExtras(): string[] {
   if (process.platform !== "win32") return [];
@@ -53,19 +53,14 @@ function getWindowsBinaryExtras(): string[] {
 const STATIC_MODELS: CliModelOption[] = [
   {
     id: DEFAULT_MODEL,
-    name: "Gemini 2.5 Pro",
-    description: "Default — Google's frontier reasoning model",
+    name: "Gemini 3.1 Pro Preview",
+    description: "Default preview model; requires access through the configured Google account",
     isDefault: true,
   },
   {
-    id: "gemini-2.5-flash",
-    name: "Gemini 2.5 Flash",
-    description: "Faster, cheaper variant of 2.5 Pro",
-  },
-  {
-    id: "gemini-2.0-flash",
-    name: "Gemini 2.0 Flash",
-    description: "Previous-gen fast model",
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    description: "Lower-cost model; availability depends on the configured Google account",
   },
 ];
 

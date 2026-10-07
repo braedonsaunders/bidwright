@@ -13,7 +13,7 @@
  *   - Resume: `opencode run --continue` or `--session <id>`
  *   - Config: `<projectDir>/opencode.json` is read when cwd matches the project
  *   - MCP servers: registered under the top-level `mcp` key in `opencode.json`
- *   - Models: `<provider>/<model-id>` (e.g. `anthropic/claude-sonnet-4-5`)
+ *   - Models: `<provider>/<model-id>` (e.g. `anthropic/claude-sonnet-5-5`)
  */
 
 import { existsSync } from "node:fs";
@@ -41,7 +41,7 @@ import {
 
 const ADAPTER_ID = "opencode";
 
-const DEFAULT_MODEL = "anthropic/claude-sonnet-4-5";
+const DEFAULT_MODEL = "anthropic/claude-sonnet-5-5";
 
 function getWindowsBinaryExtras(): string[] {
   if (process.platform !== "win32") return [];
@@ -54,28 +54,23 @@ function getWindowsBinaryExtras(): string[] {
 const STATIC_MODELS: CliModelOption[] = [
   {
     id: DEFAULT_MODEL,
-    name: "Claude Sonnet 4.5 (via Anthropic)",
+    name: "Claude Sonnet 5.5 (via Anthropic)",
     description: "Default — strong general-purpose coding agent",
     isDefault: true,
   },
   {
-    id: "anthropic/claude-opus-4-5",
-    name: "Claude Opus 4.5 (via Anthropic)",
+    id: "anthropic/claude-opus-5-5",
+    name: "Claude Opus 5.5 (via Anthropic)",
     description: "Most capable Anthropic model for complex reasoning",
   },
   {
-    id: "openai/gpt-5",
-    name: "GPT-5 (via OpenAI)",
+    id: "openai/gpt-6.1-sol",
+    name: "GPT-6.1 Sol (via OpenAI)",
     description: "Frontier OpenAI model",
   },
   {
-    id: "openai/gpt-5-codex",
-    name: "GPT-5 Codex (via OpenAI)",
-    description: "OpenAI's coding-focused frontier model",
-  },
-  {
-    id: "google/gemini-2.5-pro",
-    name: "Gemini 2.5 Pro (via Google)",
+    id: "google/gemini-3.1-pro-preview",
+    name: "Gemini 3.1 Pro Preview (via Google)",
     description: "Google's frontier model",
   },
   {
