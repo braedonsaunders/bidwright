@@ -6289,6 +6289,10 @@ export class PrismaApiStore {
       await this.db.knowledgeDocument.deleteMany({ where: { id: { in: documentIds } } });
     }
 
+    // Evidence views carry no FK to Project (they must outlive a replaced
+    // document), so remove them with the project.
+    await this.db.evidenceView.deleteMany({ where: { projectId } });
+
     // Prisma cascade deletes handle other child entities
     await this.db.project.delete({ where: { id: projectId } });
 
@@ -6296,6 +6300,8 @@ export class PrismaApiStore {
     const dirsToRemove: string[] = [
       // Project file uploads: projects/{projectId}/
       resolveApiPath("projects", projectId),
+      // Exact images agents were shown: evidence-views/{projectId}/
+      resolveApiPath("evidence-views", projectId),
       // Workspace state: workspaces/{projectId}.json
       resolveApiPath(relativeWorkspacePath(projectId)),
     ];
