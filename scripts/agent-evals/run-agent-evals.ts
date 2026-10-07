@@ -440,6 +440,8 @@ const DEFAULT_REQUIRED_TOOLS = [
 ];
 
 const DEFAULT_EXPECTED_TOOLS = [
+  "readDrawingPage",
+  "readDrawingTile",
   "readDocumentText",
   "readSpreadsheet",
   "getDocumentStructured",
@@ -463,6 +465,8 @@ const DEFAULT_EXPECTED_TOOLS = [
 ];
 
 const DOCUMENT_READ_TOOLS = new Set([
+  "readDrawingPage",
+  "readDrawingTile",
   "readDocumentText",
   "readSpreadsheet",
   "getDocumentStructured",
@@ -515,7 +519,7 @@ const PHASE_TOOL_PATTERNS: Array<{
   },
   {
     phase: "drawing_deep_read",
-    matches: [/^buildDrawingAtlas$/, /^addSourceToDrawingAtlas$/, /^promotePdfToDrawingEvidence$/, /^searchDrawingRegions$/, /^inspectDrawingRegion$/, /^renderDrawingPage$/, /^zoomDrawingRegion$/, /^scanDrawingSymbols$/, /^countSymbols/, /^scanDrawingSignals$/, /^listDrawingPages$/],
+    matches: [/^readDrawingPage$/, /^readDrawingTile$/, /^buildDrawingAtlas$/, /^addSourceToDrawingAtlas$/, /^promotePdfToDrawingEvidence$/, /^searchDrawingRegions$/, /^inspectDrawingRegion$/, /^renderDrawingPage$/, /^zoomDrawingRegion$/, /^scanDrawingSymbols$/, /^countSymbols/, /^scanDrawingSignals$/, /^listDrawingPages$/],
     note: "inspected drawing sheets, symbols, or zoomed drawing regions",
   },
   {
@@ -550,7 +554,7 @@ const PHASE_TOOL_PATTERNS: Array<{
   },
   {
     phase: "worksheet_build",
-    matches: [/^updateQuote$/, /^createWorksheet$/, /^createWorksheetItem/, /^updateWorksheetItem$/, /^applySummaryPreset$/, /^recalculateTotals$/],
+    matches: [/^batchEditWorksheetItems$/, /^updateQuote$/, /^createWorksheet$/, /^createWorksheetItem/, /^updateWorksheetItem$/, /^applySummaryPreset$/, /^recalculateTotals$/],
     note: "committed estimate structure or priced rows",
   },
   {
@@ -1435,7 +1439,7 @@ async function waitForAgentRun(
     await observeRunEvents(monitor, label, sessionId, lastStatus, runEvents);
     if (args.stopOnQuestion && findUnansweredAskUserEvent(runEvents)) {
       const pending = await client.requestJson<Json>(`/api/cli/${projectId}/pending-question`).catch(() => null);
-      if (pending?.data.pending === true) {
+      if (pending?.data.answered !== true) {
         await client.requestJson<Json>(`/api/cli/${projectId}/stop`, { method: "POST", body: {} }).catch(() => null);
         await appendLiveNote(monitor, `${label} requires a human answer. Recorded needs_clarification; no assumptions were approved automatically. Stop requested.`);
         return { ...lastStatus, status: "needs_clarification", events: runEvents };
@@ -1515,7 +1519,7 @@ async function maybeAnswerPendingQuestion(
 }
 
 function findUnansweredAskUserEvent(events: CliEvent[]): Json | null {
-  const resolvedQuestionIds = new Set<string>();
+  const resolvedQuestionIds = new Set(events.filter((event) => event.type === "userAnswer" || event.type === "askUserTimeout").map((event) => getString(getObject(event.data).questionId) || getString(getObject(event.data).id)).filter(Boolean));
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     const data = getObject(event.data);
@@ -1756,7 +1760,7 @@ function buildMonitorWatchItems(run: RunReport, report?: CaseReport) {
   if (run.toolMetrics.byTool.scanDrawingSignals?.calls) {
     items.push("Inspect scanDrawingSignals outputs for noisy base64 or low-value payloads; if noisy, patch the tool contract before rerunning.");
   }
-  if (run.kind === "intake" && !run.toolMetrics.byTool.buildDrawingAtlas && (run.journeyMetrics.renderedDrawingPages > 0 || run.journeyMetrics.zoomedDrawingRegions > 0)) {
+  if (run.kind === "intake" && !run.toolMetrics.byTool.buildDrawingAtlas && !run.toolMetrics.byTool.readDrawingPage && (run.journeyMetrics.renderedDrawingPages > 0 || run.journeyMetrics.zoomedDrawingRegions > 0)) {
     items.push("The run used lower-level drawing tools without the Drawing Evidence Engine atlas; inspect whether crops were guessed instead of retrieved.");
   }
   if (run.kind === "intake" && run.toolMetrics.byTool.inspectDrawingRegion?.calls && !run.toolMetrics.byTool.saveDrawingEvidenceClaim?.calls) {
@@ -1924,7 +1928,7 @@ function analyzeTools(events: CliEvent[], requiredTools: string[], expectedTools
 
   const resultIds = new Set(results.map((result) => result.toolUseId).filter(Boolean));
   const unmatchedCalls = calls.filter((call) => call.toolUseId && !resultIds.has(call.toolUseId)).length;
-  const calledToolSet = new Set(calls.map((call) => call.toolId));
+  const calledToolSet = new Set(calls.flatMap((call) => [call.toolId, ...stageToolsForCall(call)]));
   const requiredMissing = requiredTools.filter((tool) => !calledToolSet.has(tool));
   const expectedMissing = expectedTools.filter((tool) => !calledToolSet.has(tool));
   const failedResults = results.filter((result) => !result.success).length;
@@ -1971,10 +1975,21 @@ function analyzeReasoning(events: CliEvent[]): ReasoningMetrics {
   return { thinkingEvents, thinkingChars, assistantMessages, assistantChars, progressEvents };
 }
 
+function stageToolsForCall(call: ToolCall): string[] {
+  if (STRATEGY_STAGE_TOOLS.has(call.toolId)) return [call.toolId];
+  if (call.toolId !== "saveEstimateStrategyStages") return [];
+  const input = getObject(parseMaybeJson(call.input));
+  const sections = getObject(input.sections);
+  const tools: Record<string, string> = {
+    scopeGraph: "saveEstimateScopeGraph", executionPlan: "saveEstimateExecutionPlan",
+    assumptions: "saveEstimateAssumptions", packagePlan: "saveEstimatePackagePlan",
+    adjustmentPlan: "saveEstimateAdjustments", reconcileReport: "saveEstimateReconcile",
+  };
+  return Object.keys(sections).flatMap((key) => tools[key] ? [tools[key]] : []);
+}
+
 function analyzeStages(calls: ToolCall[]): StageMetrics {
-  const savedStages = calls
-    .filter((call) => STRATEGY_STAGE_TOOLS.has(call.toolId))
-    .map((call) => call.toolId);
+  const savedStages = calls.flatMap(stageToolsForCall);
   const missingCriticalStages = DEFAULT_REQUIRED_TOOLS
     .filter((tool) => STRATEGY_STAGE_TOOLS.has(tool))
     .filter((tool) => !savedStages.includes(tool));
@@ -2021,8 +2036,8 @@ function analyzeEstimatorJourney(events: CliEvent[], calls: ToolCall[], kind: "i
   sequence.sort((a, b) => a.index - b.index);
   const phaseOrder = compressConsecutive(sequence.map((event) => event.phase));
   const returnsToDocuments = countReturnsToDocuments(phaseOrder);
-  const renderedDrawingPages = countToolCalls(calls, "renderDrawingPage");
-  const zoomedDrawingRegions = countToolCalls(calls, "zoomDrawingRegion");
+  const renderedDrawingPages = countToolCalls(calls, "renderDrawingPage") + countToolCalls(calls, "readDrawingPage");
+  const zoomedDrawingRegions = countToolCalls(calls, "zoomDrawingRegion") + countToolCalls(calls, "readDrawingTile");
   const symbolScans = countToolCalls(calls, "scanDrawingSymbols");
   const symbolImageScans = countSymbolImageScans(calls);
   const symbolCounts = countToolCalls(calls, "countSymbols") + countToolCalls(calls, "countSymbolsAllPages");
@@ -2096,7 +2111,7 @@ function countSymbolImageScans(calls: ToolCall[]) {
 
 function countActualVisualDrawingSignals(calls: ToolCall[]) {
   return calls.filter((call) => {
-    if (call.toolId === "inspectDrawingRegion" || call.toolId === "renderDrawingPage" || call.toolId === "zoomDrawingRegion" || call.toolId === "inspectDrawingTitleBlock") return true;
+    if (call.toolId === "readDrawingPage" || call.toolId === "readDrawingTile" || call.toolId === "inspectDrawingRegion" || call.toolId === "renderDrawingPage" || call.toolId === "zoomDrawingRegion" || call.toolId === "inspectDrawingTitleBlock") return true;
     return false;
   }).length;
 }
