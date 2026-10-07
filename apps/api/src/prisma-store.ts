@@ -5189,7 +5189,7 @@ export class PrismaApiStore {
       return evidence.some((entry) =>
         (entry.regionId || Object.keys(this.asEstimateObject(entry.bbox)).length > 0) &&
         String(entry.imageHash ?? "").trim().length >= 16 &&
-        ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols"].some((name) =>
+        ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols", "readdrawingtile"].some((name) =>
           this.normalizeEstimateBindingText(entry.tool).replace(/\s+/g, "").includes(name)
         )
       );
