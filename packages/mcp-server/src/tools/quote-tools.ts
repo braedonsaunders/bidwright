@@ -1077,7 +1077,7 @@ export function validateLineEvidenceBasisForPricing(ws: any, input: {
     const hasComposition = compositionCount > 0;
     const hasUserDirection = USER_DIRECTED_COMMERCIAL_PRICING_TYPES.has(pricingType || type) && userInstructionRefCount(basis) > 0;
     if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition && !hasUserDirection) {
-      return `Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}); or assumptionIds; or resourceComposition.resources.`;
+      return `Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}); or assumptionIds; or resourceComposition.resources. A client-directed allowance/subcontract amount: set pricing.type "allowance" or "subcontract" and cite either a saved assumption (pricing.assumptionIds: ["A-COMMERCIAL"]) or the instruction itself (pricing.sourceRefs: ["user: carry Greystone at $25,000"] or [{kind: "user", ref: "carry Greystone at $25,000"}]). Free text like "User fixed $25,000" is not a cite.`;
     }
 
     // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence.
