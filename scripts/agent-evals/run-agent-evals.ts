@@ -5,6 +5,7 @@ import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/p
 import path from "node:path";
 import { promisify } from "node:util";
 import { evidenceMetrics } from "../eval/evidence-metrics.js";
+import { findPendingQuestionEvent } from "../../apps/api/src/services/cli-question-history.js";
 
 const execFileAsync = promisify(execFile);
 const activeEvalRuns = new Map<string, () => Promise<void>>();
@@ -1519,33 +1520,19 @@ async function maybeAnswerPendingQuestion(
 }
 
 function findUnansweredAskUserEvent(events: CliEvent[]): Json | null {
-  const resolvedQuestionIds = new Set(events.filter((event) => event.type === "userAnswer" || event.type === "askUserTimeout").map((event) => getString(getObject(event.data).questionId) || getString(getObject(event.data).id)).filter(Boolean));
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    const data = getObject(event.data);
-
-    if (event.type === "userAnswer" || event.type === "askUserTimeout") {
-      const questionId = getString(data.questionId) || getString(data.id);
-      if (questionId) resolvedQuestionIds.add(questionId);
-      continue;
-    }
-
-    if (event.type !== "askUser") continue;
-
-    const questionId = getString(data.questionId) || getString(data.id);
-    if (!questionId || resolvedQuestionIds.has(questionId)) continue;
-    return {
-      pending: true,
-      questionId,
-      id: questionId,
-      question: getString(data.question),
-      options: Array.isArray(data.options) ? data.options : [],
-      allowMultiple: data.allowMultiple === true,
-      context: getString(data.context),
-      questions: Array.isArray(data.questions) ? data.questions : [],
-    };
-  }
-  return null;
+  const event = findPendingQuestionEvent(events);
+  if (!event) return null;
+  const data = getObject(event.data);
+  const questionId = getString(data.questionId) || getString(data.id);
+  if (!questionId) return null;
+  return {
+    pending: true, questionId, id: questionId,
+    question: getString(data.question),
+    options: Array.isArray(data.options) ? data.options : [],
+    allowMultiple: data.allowMultiple === true,
+    context: getString(data.context),
+    questions: Array.isArray(data.questions) ? data.questions : [],
+  };
 }
 
 function buildRunReport(label: string, kind: "intake" | "question", sessionId: string | undefined, status: CliStatus): RunReport {
