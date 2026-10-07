@@ -48,6 +48,8 @@ export interface OpenRouterCacheProxyOptions {
   shouldCache?: (model: string) => boolean;
   maxBodyBytes?: number;
   fetchImpl?: typeof fetch;
+  /** Called when a request handler has fully finished (tests use it to prove none hang). */
+  onRequestSettled?: () => void;
 }
 
 export interface OpenRouterCacheProxy {
@@ -100,7 +102,9 @@ function readBody(request: IncomingMessage, limit: number): Promise<Buffer> {
 
 function bearerMatches(header: string | string[] | undefined, apiKey: string): boolean {
   const value = Array.isArray(header) ? header[0] : header;
-  const presented = Buffer.from(String(value ?? "").replace(/^Bearer\s+/i, ""), "utf8");
+  const match = /^Bearer\s+(.+)$/i.exec(String(value ?? ""));
+  if (!match) return false;
+  const presented = Buffer.from(match[1], "utf8");
   const expected = Buffer.from(apiKey, "utf8");
   return presented.length === expected.length && timingSafeEqual(presented, expected);
 }
@@ -123,7 +127,11 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  const server = createServer(async (request, response) => {
+  const server = createServer((request, response) => {
+    handle(request, response).finally(() => options.onRequestSettled?.());
+  });
+
+  async function handle(request: IncomingMessage, response: ServerResponse) {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
     if (url.pathname.replace(/\/+$/, "") !== RESPONSES_PATH) {
       sendError(response, 404, "Only POST /api/v1/responses is forwarded");
@@ -176,13 +184,34 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
       }
       // Stream chunk by chunk so SSE events reach Codex as they arrive.
       const reader = upstreamResponse.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        if (!response.write(value)) {
-          await new Promise<void>((resolve) => response.once("drain", resolve));
+      try {
+        while (!abort.signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!response.write(value)) {
+            // Wait for the client to catch up, or for it to go away; a client
+            // that disconnects while backpressured must not strand this handler.
+            const drained = await new Promise<boolean>((resolve) => {
+              const finish = (ok: boolean) => {
+                response.off("drain", onDrain);
+                response.off("close", onClose);
+                response.off("error", onClose);
+                resolve(ok);
+              };
+              const onDrain = () => finish(true);
+              const onClose = () => finish(false);
+              response.on("drain", onDrain);
+              response.on("close", onClose);
+              response.on("error", onClose);
+            });
+            if (!drained) break;
+          }
         }
+      } finally {
+        await reader.cancel().catch(() => undefined);
+        reader.releaseLock();
       }
+      if (abort.signal.aborted || response.destroyed) return;
       response.end();
     } catch (error) {
       if (abort.signal.aborted) {
@@ -192,7 +221,7 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
       const status = (error as { status?: number }).status ?? 502;
       sendError(response, status, error instanceof Error ? error.message : String(error));
     }
-  });
+  }
 
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);

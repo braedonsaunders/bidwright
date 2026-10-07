@@ -115,6 +115,7 @@ test("only POST /api/v1/responses with this session's key is forwarded", async (
     });
     assert.equal((await post("/api/v1/responses")).status, 401);
     assert.equal((await post("/api/v1/responses", "Bearer sk-or-someone-else")).status, 401);
+    assert.equal((await post("/api/v1/responses", KEY)).status, 401, "a raw key without the Bearer scheme is refused");
     assert.equal((await post("/api/v1/chat/completions", `Bearer ${KEY}`)).status, 404);
     assert.equal((await post("/api/v1/../../etc/passwd", `Bearer ${KEY}`)).status, 404);
     assert.equal((await fetch(`${proxy.baseUrl}/responses`, { headers: { authorization: `Bearer ${KEY}` } })).status, 405);
@@ -156,6 +157,39 @@ test("a client that disconnects aborts the upstream request", async () => {
     });
     for (let i = 0; i < 50 && !upstream.seen[0]?.closedEarly; i += 1) await new Promise((r) => setTimeout(r, 20));
     assert.equal(upstream.seen[0]?.closedEarly, true, "upstream connection closed when the client left");
+  } finally {
+    await proxy.close();
+    await upstream.close();
+  }
+});
+
+test("a backpressured client that disconnects never strands the handler", async () => {
+  const chunk = "x".repeat(64 * 1024);
+  const upstream = await mockUpstream((_req, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" });
+    // Keep pushing far more than socket buffers hold, as fast as the proxy reads.
+    const pump = () => {
+      while (!res.destroyed && res.write(`data: ${chunk}\n\n`)) { /* fill */ }
+      if (!res.destroyed) res.once("drain", pump);
+    };
+    pump();
+  });
+  let settled = 0;
+  const proxy = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: upstream.base, onRequestSettled: () => { settled += 1; } });
+  try {
+    const { port } = new URL(proxy.baseUrl);
+    await new Promise<void>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port, path: "/api/v1/responses", method: "POST", headers: { authorization: `Bearer ${KEY}` } }, (res) => {
+        res.pause(); // stop reading: the proxy's writes start returning false
+        setTimeout(() => { req.destroy(); resolve(); }, 300);
+      });
+      req.on("error", () => undefined);
+      req.end(JSON.stringify({ model: "anthropic/claude-opus-5.5" }));
+      setTimeout(() => reject(new Error("no response")), 3000);
+    });
+    for (let i = 0; i < 100 && (settled === 0 || !upstream.seen[0]?.closedEarly); i += 1) await new Promise((r) => setTimeout(r, 20));
+    assert.equal(settled, 1, "the request handler finished after the client left");
+    assert.equal(upstream.seen[0]?.closedEarly, true, "the upstream stream was cancelled");
   } finally {
     await proxy.close();
     await upstream.close();
