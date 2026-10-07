@@ -28,3 +28,10 @@ test("an unrelated answer does not clear the question and a new question superse
   assert.equal(findPendingQuestionEvent([next, ask]), next);
   assert.equal(findPendingQuestionEvent([next, ask], "ask-1"), ask);
 });
+
+test("answering a replacement question does not revive the superseded question", () => {
+  const replacement = { ...ask, data: { questionId: "ask-2" }, timestamp: "2026-10-07T16:54:00.000Z" };
+  const answer = { type: "userAnswer", data: { questionId: "ask-2" }, timestamp: "2026-10-07T16:55:00.000Z" };
+  assert.equal(findPendingQuestionEvent([ask, replacement, answer]), null);
+  assert.equal(findPendingQuestionEvent([answer, replacement, ask]), null);
+});
