@@ -144,3 +144,13 @@ test("the truncation message tells the agent to change shape, not to retry", () 
   assert.match(message[1], /createRateScheduleWorksheetItem/, "points at the smaller tool");
   assert.match(message[1], /Do not retry the same way/i, "stops the retry loop");
 });
+
+test("batchEditWorksheetItems documents the exact operation shapes", () => {
+  // Round-3 GPT needed three calls to find the shape ({type,data}, flat fields, worksheetId inside item).
+  const start = source.indexOf('"batchEditWorksheetItems",');
+  const description = source.slice(start, source.indexOf("].join", start));
+  assert.match(description, /\{"op":"create","worksheetId":"worksheet-…","item":\{/);
+  assert.match(description, /\{"op":"update","itemId":"li-…","patch":\{/);
+  assert.match(description, /\{"op":"delete","itemId":"li-…"\}/);
+  assert.match(description, /no "type" or "data" key/);
+});
