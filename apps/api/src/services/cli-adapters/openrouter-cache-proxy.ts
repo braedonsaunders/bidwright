@@ -43,11 +43,13 @@ const DROPPED_REQUEST_HEADERS = new Set([
   "host", "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade",
   "te", "trailer", "content-length", "expect",
 ]);
-const DROPPED_RESPONSE_HEADERS = new Set([
+const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade", "trailer",
-  // fetch decodes compressed bodies, so the original encoding/length no longer apply.
-  "content-encoding", "content-length",
 ]);
+// fetch decodes compressed bodies, so on that path the original encoding and
+// length no longer describe the bytes we forward. The tunnelled path streams
+// the upstream's raw bytes and must keep both.
+const DECODED_BODY_HEADERS = new Set(["content-encoding", "content-length"]);
 
 export interface OpenRouterCacheProxyOptions {
   /** The session's OpenRouter key; callers must present it as their Bearer token. */
@@ -148,6 +150,8 @@ interface UpstreamResult {
   status: number;
   headers: Record<string, string>;
   body: AsyncIterable<Uint8Array> | null;
+  /** True when body bytes were decoded (fetch), so encoding/length headers must go. */
+  decoded: boolean;
 }
 
 /** POST to the upstream through an HTTP CONNECT proxy (the sandbox's egress proxy). */
@@ -192,7 +196,7 @@ function tunnelledRequest(
         for (const [name, value] of Object.entries(upstreamResponse.headers)) {
           if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
         }
-        resolve({ status: upstreamResponse.statusCode ?? 502, headers, body: upstreamResponse });
+        resolve({ status: upstreamResponse.statusCode ?? 502, headers, body: upstreamResponse, decoded: false });
       });
       upstreamRequest.once("error", reject);
       upstreamRequest.end(init.body);
@@ -301,12 +305,15 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
         const fetched = await fetchImpl(target, { method: "POST", headers: forwardHeaders, body: new Uint8Array(body), signal: abort.signal });
         const headers: Record<string, string> = {};
         fetched.headers.forEach((value, name) => { headers[name] = value; });
-        upstreamResult = { status: fetched.status, headers, body: fetched.body as AsyncIterable<Uint8Array> | null };
+        upstreamResult = { status: fetched.status, headers, body: fetched.body as AsyncIterable<Uint8Array> | null, decoded: true };
       }
 
       const responseHeaders: Record<string, string> = {};
       for (const [name, value] of Object.entries(upstreamResult.headers)) {
-        if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) responseHeaders[name] = value;
+        const lower = name.toLowerCase();
+        if (HOP_BY_HOP_RESPONSE_HEADERS.has(lower)) continue;
+        if (upstreamResult.decoded && DECODED_BODY_HEADERS.has(lower)) continue;
+        responseHeaders[name] = value;
       }
       response.writeHead(upstreamResult.status, responseHeaders);
       response.flushHeaders();
