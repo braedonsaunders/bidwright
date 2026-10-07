@@ -176,7 +176,7 @@ export interface IngestionRequest {
    * search hit carries the real page number. Omit when unknown; chunks then
    * have no page rather than a guessed one.
    */
-  pages?: Array<{ pageNumber: number; text: string }>;
+  pages?: Array<{ pageNumber: number | null; text: string }>;
   title: string;
   category: KnowledgeBook["category"];
   scope: KnowledgeBook["scope"];
@@ -617,7 +617,7 @@ export class KnowledgeService {
         }
       } else if (request.pages && request.pages.length > 0) {
         text = request.pages.map((page) => page.text).join("\n\n");
-        pageCount = Math.max(...request.pages.map((page) => page.pageNumber), request.pages.length);
+        pageCount = Math.max(...request.pages.map((page) => page.pageNumber ?? 0), request.pages.length);
       } else if (request.content) {
         text = request.content;
         pageCount = Math.max(1, Math.ceil(text.length / 3000));
@@ -636,6 +636,7 @@ export class KnowledgeService {
       // Page-aware path: chunk each known page separately so provenance is real.
       const chunkResults: ChunkResult[] = request.pages && request.pages.length > 0
         ? planPageChunks(request.pages, (pageText) => smartChunk(pageText, chunkConfig).map((cr) => ({ text: cr.text, sectionTitle: cr.sectionTitle })))
+            .map((chunk) => ({ text: chunk.text, sectionTitle: chunk.sectionTitle, pageNumber: chunk.pageNumber ?? undefined }))
         : smartChunk(text, chunkConfig);
 
       let chunkCount = 0;
