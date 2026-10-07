@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
 import { once } from "node:events";
-import type { AddressInfo } from "node:net";
+import { createConnection, type AddressInfo, type Socket } from "node:net";
 import test from "node:test";
 
 import { isAnthropicModel, startOpenRouterCacheProxy, withCacheControl } from "./openrouter-cache-proxy.js";
@@ -193,5 +193,158 @@ test("a backpressured client that disconnects never strands the handler", async 
   } finally {
     await proxy.close();
     await upstream.close();
+  }
+});
+
+// ── Sandbox egress: the bridge as the Codex child's HTTP_PROXY ────────────
+
+
+/** Minimal authenticated forward proxy standing in for the sandbox egress proxy. */
+async function mockEgressProxy(allow: (host: string, port: number) => boolean) {
+  const log: string[] = [];
+  const server = createServer((req, res) => {
+    // Plain-HTTP absolute-form forwarding.
+    if (req.headers["proxy-authorization"] !== `Basic ${Buffer.from("bidwright:s3cret").toString("base64")}`) {
+      log.push(`407 ${req.url}`);
+      res.writeHead(407).end();
+      return;
+    }
+    const target = new URL(req.url ?? "");
+    if (!allow(target.hostname, Number(target.port || 80))) {
+      log.push(`DENY ${target.host}`);
+      res.writeHead(403, { "content-type": "application/json" }).end(JSON.stringify({ error: "EgressDenied", host: target.hostname }));
+      return;
+    }
+    log.push(`HTTP ${target.host}${target.pathname}`);
+    const forwarded = httpRequest({ host: target.hostname, port: Number(target.port || 80), method: req.method, path: target.pathname + target.search, headers: { ...req.headers, host: target.host } }, (upstream) => {
+      res.writeHead(upstream.statusCode ?? 502, upstream.headers);
+      upstream.pipe(res);
+    });
+    req.pipe(forwarded);
+  });
+  server.on("connect", (req, clientSocket: Socket, head) => {
+    if (req.headers["proxy-authorization"] !== `Basic ${Buffer.from("bidwright:s3cret").toString("base64")}`) {
+      log.push(`407 CONNECT ${req.url}`);
+      clientSocket.end("HTTP/1.1 407 Proxy Authentication Required\r\n\r\n");
+      return;
+    }
+    const [host, port] = String(req.url).split(":");
+    if (!allow(host, Number(port))) {
+      log.push(`DENY CONNECT ${req.url}`);
+      clientSocket.end("HTTP/1.1 403 Forbidden\r\n\r\n");
+      return;
+    }
+    log.push(`CONNECT ${req.url}`);
+    const upstream = createConnection({ host, port: Number(port) }, () => {
+      clientSocket.write("HTTP/1.1 200 Connection Established\r\n\r\n");
+      if (head.length) upstream.write(head);
+      upstream.pipe(clientSocket);
+      clientSocket.pipe(upstream);
+    });
+    upstream.on("error", () => clientSocket.destroy());
+    clientSocket.on("error", () => upstream.destroy());
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  const { port } = server.address() as AddressInfo;
+  return { url: `http://bidwright:s3cret@127.0.0.1:${port}`, port, log, close: () => new Promise<void>((resolve) => { server.closeAllConnections(); server.close(() => resolve()); }) };
+}
+
+/** Send one absolute-form request through an HTTP proxy, as Codex/curl do with HTTP_PROXY. */
+function viaProxy(proxyUrl: string, target: string, init: { method?: string; headers?: Record<string, string>; body?: string } = {}) {
+  const proxy = new URL(proxyUrl);
+  return new Promise<{ status: number; body: string }>((resolve, reject) => {
+    const req = httpRequest({ host: proxy.hostname, port: Number(proxy.port), method: init.method ?? "GET", path: target, headers: init.headers ?? {} }, (res) => {
+      let body = "";
+      res.on("data", (chunk) => { body += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+    });
+    req.on("error", reject);
+    req.end(init.body);
+  });
+}
+
+test("childEnv points only HTTP_PROXY at the bridge, and only when there is an egress proxy", async () => {
+  const bare = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: "http://127.0.0.1:9/api/v1" });
+  const relaying = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: "http://127.0.0.1:9/api/v1", relayProxyUrl: "http://bidwright:s3cret@127.0.0.1:1" });
+  try {
+    assert.deepEqual(bare.childEnv, {});
+    const origin = relaying.baseUrl.replace(/\/api\/v1$/, "");
+    assert.deepEqual(relaying.childEnv, { HTTP_PROXY: origin, http_proxy: origin });
+    assert.ok(!("HTTPS_PROXY" in relaying.childEnv) && !("NO_PROXY" in relaying.childEnv));
+  } finally {
+    await bare.close();
+    await relaying.close();
+  }
+});
+
+test("as HTTP_PROXY: its own address is served here, everything else goes through the egress proxy", async () => {
+  const upstream = await mockUpstream((_req, res) => json(res, 200, { ok: true }));
+  const otherLoopbackService = await mockUpstream((_req, res) => json(res, 200, { leaked: true }));
+  const allowedSite = await mockUpstream((_req, res) => json(res, 200, { allowed: true }));
+  const allowedPort = Number(new URL(allowedSite.base).port);
+  const upstreamPort = Number(new URL(upstream.base).port);
+  // Egress allowlist: the mock OpenRouter and one "public" site; loopback services are not on it.
+  const egress = await mockEgressProxy((_host, port) => port === allowedPort || port === upstreamPort);
+  const proxy = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: upstream.base, relayProxyUrl: egress.url, upstreamProxyUrl: egress.url });
+  const bridgeProxy = proxy.childEnv.HTTP_PROXY;
+  try {
+    // Codex: absolute-form request for the bridge itself.
+    const own = await viaProxy(bridgeProxy, `${proxy.baseUrl}/responses`, { method: "POST", headers: { authorization: `Bearer ${KEY}`, "content-type": "application/json" }, body: JSON.stringify({ model: "anthropic/claude-opus-5.5" }) });
+    assert.equal(own.status, 200);
+    assert.deepEqual(JSON.parse(upstream.seen[0].body.toString()).cache_control, { type: "ephemeral" });
+    // ...and its upstream call was tunnelled through the egress proxy (allowlist applies).
+    assert.ok(egress.log.some((line) => line === `CONNECT 127.0.0.1:${upstreamPort}`), egress.log.join("; "));
+
+    // Bridge route without this session's key is still refused.
+    assert.equal((await viaProxy(bridgeProxy, `${proxy.baseUrl}/responses`, { method: "POST", body: "{}" })).status, 401);
+
+    // A shell child reaching another loopback service: relayed, and the egress proxy denies it.
+    const leak = await viaProxy(bridgeProxy, `${otherLoopbackService.base.replace(/\/api\/v1$/, "")}/secrets`);
+    assert.equal(leak.status, 403);
+    assert.match(leak.body, /EgressDenied/);
+    assert.equal(otherLoopbackService.seen.length, 0);
+
+    // Plain HTTP to an allowed host: relayed with the egress proxy's own credentials.
+    const allowed = await viaProxy(bridgeProxy, `${allowedSite.base}/ping`);
+    assert.equal(allowed.status, 200);
+    assert.ok(egress.log.some((line) => line.startsWith("HTTP 127.0.0.1:" + allowedPort)));
+    assert.ok(!egress.log.some((line) => line.startsWith("407")), "relayed requests carry the egress credentials");
+  } finally {
+    await proxy.close();
+    await egress.close();
+    await upstream.close();
+    await otherLoopbackService.close();
+    await allowedSite.close();
+  }
+});
+
+test("as HTTP_PROXY: CONNECT is refused (HTTPS keeps using the egress proxy)", async () => {
+  const proxy = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: "http://127.0.0.1:9/api/v1", relayProxyUrl: "http://bidwright:s3cret@127.0.0.1:1" });
+  try {
+    const { port } = new URL(proxy.baseUrl);
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = httpRequest({ host: "127.0.0.1", port, method: "CONNECT", path: "example.com:443" });
+      req.on("connect", (res, socket) => { socket.destroy(); resolve(res.statusCode ?? 0); });
+      req.on("response", (res) => resolve(res.statusCode ?? 0));
+      req.on("error", reject);
+      req.end();
+    });
+    assert.equal(status, 405);
+  } finally {
+    await proxy.close();
+  }
+});
+
+test("upstream tunnel failures surface as 502, not a hang", async () => {
+  const egress = await mockEgressProxy(() => false);
+  const proxy = await startOpenRouterCacheProxy({ apiKey: KEY, upstreamBaseUrl: "http://127.0.0.1:9/api/v1", upstreamProxyUrl: egress.url });
+  try {
+    const response = await fetch(`${proxy.baseUrl}/responses`, { method: "POST", headers: { authorization: `Bearer ${KEY}` }, body: JSON.stringify({ model: "anthropic/claude-opus-5.5" }) });
+    assert.equal(response.status, 502);
+    assert.ok(egress.log.some((line) => line.startsWith("DENY CONNECT")));
+  } finally {
+    await proxy.close();
+    await egress.close();
   }
 });
