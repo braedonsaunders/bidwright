@@ -908,9 +908,15 @@ function looksLikeStructuredSourceRef(ref: unknown): boolean {
   return false;
 }
 
+/**
+ * Distinct structured cites across the quantity and pricing axes. The same
+ * "doc_x p2" in both axes used to count twice, so one cite satisfied the
+ * composite rule's "2+ structured sourceRefs" (found by the 2026-10-07 live
+ * gate preflight).
+ */
 function structuredSourceRefCount(basis: Record<string, any>): number {
-  const all = collectEvidenceAxisArray(basis, "sourceRefs");
-  return all.filter(looksLikeStructuredSourceRef).length;
+  const all = collectEvidenceAxisArray(basis, "sourceRefs").filter(looksLikeStructuredSourceRef);
+  return new Set(all.map((ref) => ref.toLowerCase().replace(/\s+/g, " ").trim())).size;
 }
 
 function resourceCompositionEntryCount(composition: unknown): number {
