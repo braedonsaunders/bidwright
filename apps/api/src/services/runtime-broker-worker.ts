@@ -104,7 +104,7 @@ export function shouldForwardCodexNotification(
 
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
   // Enable only after validating the bridge with the deployment egress path.
-  if (!request.openRouterPromptCache || !openRouterPromptCacheEnabled(process.env)) return runCodexProcess(request);
+  if (!request.openRouterPromptCache || !(request.promptCaching ?? openRouterPromptCacheEnabled(process.env))) return runCodexProcess(request);
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OpenRouter prompt caching requires the provider API key.");
   const proxy = await startOpenRouterCacheProxy({

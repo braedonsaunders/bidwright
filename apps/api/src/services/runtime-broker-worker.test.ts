@@ -186,8 +186,14 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   assert.equal(result.code, 0, result.stderr);
 });
 
-test("cache bridge changes only the child HTTP proxy and remains deployment opt-in", async () => {
-  for (const enabled of [false, true]) {
+test("cache bridge is isolated per run and changes only the child HTTP proxy", async () => {
+  for (const { globalOn, canary, eligible, enabled } of [
+    { globalOn: false, canary: undefined, eligible: true, enabled: false },
+    { globalOn: true, canary: undefined, eligible: true, enabled: true },
+    { globalOn: false, canary: true, eligible: true, enabled: true },
+    { globalOn: true, canary: false, eligible: true, enabled: false },
+    { globalOn: false, canary: true, eligible: false, enabled: false },
+  ]) {
     const dir = await mkdtemp(join(tmpdir(), "bidwright-cache-broker-"));
     const fakeCodex = join(dir, "fake-codex.mjs");
     const capturePath = join(dir, "capture.json");
@@ -209,10 +215,10 @@ readline.createInterface({input:process.stdin}).on("line",line=>{
 });`, {mode:0o700});
     await writeFile(requestPath, JSON.stringify({transport:"codex-app-server", projectDir:dir,
       prompt:"transport only", model:"anthropic/claude-opus-5.5", reasoningEffort:"medium",
-      openRouterPromptCache:true, codexCommand:fakeCodex,
+      openRouterPromptCache:eligible, promptCaching:canary, codexCommand:fakeCodex,
       appServerArgs:['-c','model_providers.openrouter.base_url="https://openrouter.ai/api/v1"']}));
     const result = await runWorker(requestPath, {CODEX_API_KEY:"", OPENROUTER_API_KEY:"fake-provider-key",
-      BIDWRIGHT_OPENROUTER_PROMPT_CACHE:enabled ? "on" : "off",
+      BIDWRIGHT_OPENROUTER_PROMPT_CACHE:globalOn ? "on" : "off",
       HTTP_PROXY:originalProxy, http_proxy:originalProxy, HTTPS_PROXY:originalProxy, https_proxy:originalProxy, NO_PROXY:""});
     assert.equal(result.code, 0, result.stderr);
     const captured = JSON.parse(await readFile(capturePath,"utf8"));

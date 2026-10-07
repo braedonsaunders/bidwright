@@ -28,6 +28,7 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     prompt: "verify OpenRouter transport",
     model: "~openai/gpt-latest",
     reasoningEffort: "high",
+    promptCaching: true,
     customCliPath: fakeCodex,
     apiKeys: { openrouter: "sk-or-test-secret" },
     mcpRunner: "node",
@@ -61,6 +62,7 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     assert.equal(request.transport, "codex-app-server");
     assert.equal(request.model, "openai/gpt-6.1-sol");
     assert.equal(request.openRouterPromptCache, false);
+    assert.equal(request.promptCaching, true);
     assert.equal(request.appServerArgs.includes('model_provider="openrouter"'), true);
     assert.equal(
       request.appServerArgs.includes(

@@ -168,6 +168,7 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
       model,
       reasoningEffort: ctx.reasoningEffort,
       openRouterPromptCache: /^~?anthropic\//i.test(model),
+      promptCaching: ctx.promptCaching,
       resumeSessionId,
       codexCommand: codexCommand(ctx.customCliPath),
       appServerArgs: [

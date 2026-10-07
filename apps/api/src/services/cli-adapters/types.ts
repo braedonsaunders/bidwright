@@ -131,6 +131,8 @@ export interface SpawnCtx {
   prompt: string;
   model?: string;
   reasoningEffort: AgentReasoningEffort;
+  /** Explicit per-run cache canary; omitted uses the deployment default. */
+  promptCaching?: boolean;
   customCliPath?: string;
   apiKeys: ApiKeys;
   mcpRunner: string;

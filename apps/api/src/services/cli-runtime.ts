@@ -565,6 +565,7 @@ export interface SpawnSessionOpts {
   googleApiKey?: string;
   openrouterApiKey?: string;
   reasoningEffort?: string;
+  promptCaching?: boolean;
   completionMessage?: string;
   stoppedMessage?: string;
   failedMessagePrefix?: string;
@@ -875,6 +876,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
     prompt: opts.prompt,
     model: opts.model,
     reasoningEffort,
+    promptCaching: opts.promptCaching,
     customCliPath: opts.customCliPath,
     apiKeys,
     mcpRunner,
@@ -1175,6 +1177,7 @@ async function spawnResumedSession(
     prompt: resumePrompt,
     model: opts.model,
     reasoningEffort,
+    promptCaching: opts.promptCaching,
     customCliPath: opts.customCliPath,
     apiKeys,
     mcpRunner,
