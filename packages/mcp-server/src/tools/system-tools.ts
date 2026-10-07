@@ -96,14 +96,14 @@ export function registerSystemTools(server: McpServer) {
 
           // A question the server no longer knows about will never be answered.
           // Waiting on it hangs the run with nothing visible to the user, so
-          // hand control back after a short grace period.
+          // hand control back after a short grace period, as a failure.
           unknownPolls = status.pending ? 0 : unknownPolls + 1;
           if (unknownPolls >= ASK_USER_DROPPED_POLLS) {
             return {
               isError: true,
               content: [{
                 type: "text" as const,
-                text: "Your question is no longer pending on the server, so no answer will arrive. Ask it again with askUser, or continue with the most defensible option and record it as an explicit assumption.",
+                text: "Your question is no longer pending on the server, so no answer will arrive. This is a delivery failure, not an answer or an approval. Ask it again with askUser; if that also fails, stop and report that the question could not be delivered.",
               }],
             };
           }
