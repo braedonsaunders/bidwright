@@ -45,3 +45,13 @@ test("Codex App Server assistant messages and tool startup status remain visible
     { type: "progress", data: { phase: "Tools", detail: "bidwright ready" } },
   ]);
 });
+
+test("native image views remain auditable without minting drawing evidence", () => {
+  const parsed = codexAdapter.parseEvent({ method: "item/completed", params: { item: {
+    id: "image-1", type: "imageView", path: "/workspace/page.png", status: "completed",
+  } } }, parserState());
+  assert.equal(parsed[0]?.type, "image_view");
+  assert.equal((parsed[0]?.data as any).path, "/workspace/page.png");
+  assert.equal((parsed[0]?.data as any).evidenceViewId, null);
+  assert.equal((parsed[0]?.data as any).auditOnly, true);
+});
