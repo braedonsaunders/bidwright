@@ -23,13 +23,69 @@ import type { VectorHit, VectorRecord, VectorSearchOptions, VectorStore } from "
  * CREATE INDEX ON vector_records (project_id);
  * CREATE INDEX ON vector_records (scope);
  */
+const VECTOR_RECORDS_DDL = [
+  "CREATE EXTENSION IF NOT EXISTS vector",
+  `CREATE TABLE IF NOT EXISTS vector_records (
+    id TEXT PRIMARY KEY,
+    organization_id TEXT NOT NULL,
+    chunk_id TEXT NOT NULL,
+    document_id TEXT NOT NULL,
+    project_id TEXT,
+    scope TEXT NOT NULL DEFAULT 'project',
+    embedding vector(1024) NOT NULL,
+    text TEXT NOT NULL,
+    metadata JSONB DEFAULT '{}',
+    created_at TIMESTAMPTZ DEFAULT now()
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_vector_records_org ON vector_records (organization_id)",
+  "CREATE INDEX IF NOT EXISTS idx_vector_records_project ON vector_records (project_id)",
+  "CREATE INDEX IF NOT EXISTS idx_vector_records_scope ON vector_records (scope)",
+  "CREATE INDEX IF NOT EXISTS idx_vector_records_document ON vector_records (document_id)",
+  "CREATE INDEX IF NOT EXISTS idx_vector_records_embedding ON vector_records USING hnsw (embedding vector_cosine_ops)",
+];
+
+function isMissingRelationError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error);
+  return /42P01|relation "vector_records" does not exist/i.test(message);
+}
+
 export class PgVectorStore implements VectorStore {
+  private schemaEnsured = false;
+
   constructor(
     private queryFn: <T>(sql: string, params?: unknown[]) => Promise<T[]>,
     private organizationId: string,
   ) {}
 
+  /**
+   * Create the table and indexes if they are missing. The table used to be
+   * created only by a Postgres init hook that never ran against the shared
+   * cluster database, so every write failed with 42P01 until this existed.
+   */
+  async ensureSchema(): Promise<void> {
+    if (this.schemaEnsured) return;
+    for (const statement of VECTOR_RECORDS_DDL) {
+      await this.queryFn(statement);
+    }
+    this.schemaEnsured = true;
+  }
+
+  /** Run a query; on a missing-table error, create the schema once and retry. */
+  private async withSchema<T>(run: () => Promise<T>): Promise<T> {
+    try {
+      return await run();
+    } catch (error) {
+      if (!isMissingRelationError(error) || this.schemaEnsured) throw error;
+      await this.ensureSchema();
+      return run();
+    }
+  }
+
   async upsert(records: VectorRecord[]): Promise<void> {
+    return this.withSchema(() => this.upsertRaw(records));
+  }
+
+  private async upsertRaw(records: VectorRecord[]): Promise<void> {
     for (const record of records) {
       const vectorStr = `[${record.embedding.join(",")}]`;
       await this.queryFn(
@@ -45,6 +101,10 @@ export class PgVectorStore implements VectorStore {
   }
 
   async search(options: VectorSearchOptions): Promise<VectorHit[]> {
+    return this.withSchema(() => this.searchRaw(options));
+  }
+
+  private async searchRaw(options: VectorSearchOptions): Promise<VectorHit[]> {
     if (!options.queryVector) {
       throw new Error("queryVector is required for pgvector search. Embed the query first.");
     }
@@ -118,6 +178,10 @@ export class PgVectorStore implements VectorStore {
   }
 
   async delete(filter: { projectId?: string; documentId?: string; chunkId?: string }): Promise<number> {
+    return this.withSchema(() => this.deleteRaw(filter));
+  }
+
+  private async deleteRaw(filter: { projectId?: string; documentId?: string; chunkId?: string }): Promise<number> {
     const conditions: string[] = [`organization_id = $1`];
     const params: unknown[] = [this.organizationId];
     let idx = 2;
@@ -135,6 +199,10 @@ export class PgVectorStore implements VectorStore {
   }
 
   async count(filter?: { projectId?: string; scope?: string }): Promise<number> {
+    return this.withSchema(() => this.countRaw(filter));
+  }
+
+  private async countRaw(filter?: { projectId?: string; scope?: string }): Promise<number> {
     const conditions: string[] = [`organization_id = $1`];
     const params: unknown[] = [this.organizationId];
     let idx = 2;
