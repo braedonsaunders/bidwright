@@ -1,5 +1,6 @@
 import { randomUUID, createHash } from "node:crypto";
 import { hashPassword } from "./services/auth-service.js";
+import { derivePagesForIndexing } from "./services/page-provenance.js";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -10569,6 +10570,7 @@ export class PrismaApiStore {
           if (!doc.extractedText) continue;
           await knowledgeService.ingestDocument({
             content: doc.extractedText,
+            pages: derivePagesForIndexing(doc.extractedText, doc.structuredData) ?? undefined,
             title: doc.fileName,
             category: knowledgeCategoryFromDocType(doc.documentType),
             scope: "project",
