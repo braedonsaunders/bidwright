@@ -20,7 +20,8 @@ export function buildOpenRouterModelCatalog(model: string, liveContextWindow?: n
   const match = (slug: string) => bundled
     .filter((entry) => slug.startsWith(entry.slug))
     .sort((a, b) => b.slug.length - a.slug.length)[0];
-  const base = match(model) ?? match(model.slice(model.indexOf("/") + 1)) ?? templates.fallback;
+  const namespaced = /^([A-Za-z0-9_-]+)\/([^/]+)$/.exec(model);
+  const base = match(model) ?? (namespaced ? match(namespaced[2]) : undefined) ?? templates.fallback;
   const selected: ModelInfo = {
     ...structuredClone(base),
     slug: model,

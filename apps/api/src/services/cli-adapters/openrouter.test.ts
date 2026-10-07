@@ -175,6 +175,9 @@ test("OpenRouter catalog raises actual maximums without borrowing GPT capabiliti
   assert.equal(gpt.tool_mode, "code_mode_only");
   assert.equal(gpt.use_responses_lite, true);
   assert.equal(gpt.max_context_window, 1_050_000);
+  // Codex only strips a simple provider namespace, never an alias or nested path.
+  assert.equal(buildOpenRouterModelCatalog("~openai/gpt-6.1-sol", 1_050_000).catalog.models[0].use_responses_lite, false);
+  assert.equal(buildOpenRouterModelCatalog("org/path/gpt-6.1-sol", 1_050_000).catalog.models[0].use_responses_lite, false);
 });
 
 test("OpenRouter uses known windows during metadata outages and rejects unknown windows", () => {
