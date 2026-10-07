@@ -8,6 +8,7 @@ import {
   validateLineDerivation,
   detectPerInstanceContradictions,
   collectBatchOperationProblems,
+  evaluateProcurementLink,
   type LineDerivation,
 } from "@bidwright/domain";
 import { getProjectId } from "../api-client.js";
@@ -731,6 +732,15 @@ const derivationSchema = z.object({
   result: z.object({ value: z.coerce.number(), unit: z.string().nullable().optional() }),
   status: z.enum(["draft", "verified", "reviewed"]).default("draft"),
   notes: z.string().nullable().optional(),
+  procurement: z.object({
+    suppliesItemId: z.string().nullable().optional().describe("Worksheet item id of the installed/labour row this purchase supplies."),
+    installedFromInput: z.string().nullable().optional().describe("Derivation input name on that row holding the installed count (default: the row's quantity)."),
+    installedQuantity: z.coerce.number().nullable().optional().describe("Explicit installed requirement when there is no row to link."),
+    installedUom: z.string().nullable().optional(),
+    packSize: z.coerce.number().nullable().optional().describe("Base units per purchase unit: rods per pack, anchors per cartridge, ft3 per bag. REQUIRED when the row UOM is a package (PK, BOX, CARTRIDGE, BAG, ...)."),
+    wasteFactor: z.coerce.number().nullable().optional().describe("Fraction added for waste, e.g. 0.15."),
+    surplusRationale: z.string().nullable().optional().describe("Required (>= 20 chars) when supplied base units exceed twice the requirement, e.g. 'minimum one cartridge; remainder is spares'."),
+  }).passthrough().nullable().optional().describe("REQUIRED on material/consumable rows that supply an installed quantity priced on another row. Declares the link explicitly; the gate checks pack size, waste and shortfall/surplus against it."),
 }).passthrough();
 
 const DRAWING_QUANTITY_BASIS_TYPES = [
@@ -1123,6 +1133,7 @@ export async function validateTraceableQuantityForPricing(ws: any, input: {
   evidenceBasis?: Record<string, any> | null;
   derivation?: Record<string, any> | null;
   quantity?: number | null;
+  uom?: string | null;
   tierUnits?: Record<string, number> | null;
   cost?: number | null;
   price?: number | null;
@@ -1176,6 +1187,25 @@ export async function validateTraceableQuantityForPricing(ws: any, input: {
       const viewSourced = derivation.inputs.some((entry) => entry.source?.kind === "view" || entry.source?.kind === "claim");
       if (!viewSourced) {
         return "At least one derivation input for a drawing-driven quantity must come from source.kind 'view' (a viewId you looked at) or 'claim' (a saved evidence claim). Text/manual inputs alone do not establish a count from a drawing.";
+      }
+    }
+
+    // ── declared installed/procurement link ──
+    if (derivation.procurement) {
+      const items = asArray(ws.worksheets).map(asRecord).flatMap((worksheet) => asArray(worksheet.items).map(asRecord));
+      const procurementResult = evaluateProcurementLink(derivation.procurement, {
+        purchaseQuantity: quantity,
+        purchaseUom: input.uom ?? null,
+        resolveItem: (itemId) => {
+          const linked = items.find((entry) => String(entry.id ?? "") === itemId);
+          return linked
+            ? { quantity: Number(linked.quantity ?? 0), uom: String(linked.uom ?? "") || null, derivation: normalizeLineDerivation(linked.derivation), entityName: String(linked.entityName ?? "") || null }
+            : null;
+        },
+      });
+      const procurementErrors = procurementResult.issues.filter((issue) => issue.severity === "error");
+      if (procurementErrors.length > 0) {
+        return `Procurement does not reconcile with the installed requirement${procurementResult.installedQuantity !== null ? ` (${procurementResult.installedQuantity} installed via ${procurementResult.installedSource})` : ""}: ${procurementErrors.map((issue) => issue.message).join(" ")}`;
       }
     }
 
@@ -1698,6 +1728,7 @@ function worksheetTreeSummary(ws: any) {
         evidenceBasis: lineEvidence?.evidenceBasis ?? null,
         derivation: lineEvidence?.derivation ?? null,
         quantity: lineEvidence?.quantity ?? null,
+        uom: lineEvidence?.uom ?? null,
         tierUnits: lineEvidence?.tierUnits ?? null,
         cost: lineEvidence?.cost ?? null,
         price: lineEvidence?.price ?? null,

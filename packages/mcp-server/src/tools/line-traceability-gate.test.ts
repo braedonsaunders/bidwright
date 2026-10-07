@@ -276,3 +276,76 @@ test("a Files-area-only view with no source document identity fails closed with 
   assert.match(error!, /fn-2f6e3094/);
   assert.match(error!, /promotePdfToDrawingEvidence/);
 });
+
+// ── declared installed/procurement links ──────────────────────────────────
+
+const workspaceWithLabourRow = {
+  ...zipOnlyWorkspace,
+  worksheets: [{
+    id: "ws-platform",
+    name: "Work Platform",
+    items: [{
+      id: "li-labour",
+      entityName: "Drill and set anchors",
+      quantity: 2,
+      uom: "HR",
+      derivation: {
+        version: 1,
+        target: "tierUnits",
+        formula: "anchors * hoursPerAnchor",
+        inputs: [
+          { name: "anchors", value: 32, unit: "EA", source: { kind: "view", ref: "view-plan" } },
+          { name: "hoursPerAnchor", value: 0.375, unit: "HR", source: { kind: "laborUnit", ref: "lu-1" } },
+        ],
+        result: { value: 12, unit: "HR" },
+        status: "draft",
+      },
+    }],
+  }],
+};
+
+const rodDerivation = (packs: number, extra: Record<string, unknown> = {}) => ({
+  formula: "packs",
+  inputs: [{ name: "packs", value: packs, unit: "PK", source: { kind: "manual", ref: "estimator" }, note: "Hilti HAS-R sold in packs of 10 rods per distributor listing." }],
+  result: { value: packs, unit: "PK" },
+  procurement: { suppliesItemId: "li-labour", installedFromInput: "anchors", packSize: 10, ...extra },
+});
+
+test("regression: a material row buying 2 x 10 rods for a labour row installing 32 is rejected", async () => {
+  const error = await validateTraceableQuantityForPricing(workspaceWithLabourRow, {
+    evidenceBasis: { quantity: { type: "document_quantity", sourceRefs: ["doc_platform"] }, pricing: { type: "material_quote", sourceRefs: ["https://example.com/has-r"] } },
+    derivation: rodDerivation(2),
+    quantity: 2,
+    uom: "PK",
+    strategy,
+  });
+  assert.match(error!, /does not reconcile/);
+  assert.match(error!, /32 installed via linked_input/);
+  assert.match(error!, /supplies 20 but 32/);
+  assert.match(error!, /Buy at least 4/);
+});
+
+test("4 packs of 10 for 32 installed reconciles", async () => {
+  const error = await validateTraceableQuantityForPricing(workspaceWithLabourRow, {
+    evidenceBasis: { quantity: { type: "document_quantity", sourceRefs: ["doc_platform"] }, pricing: { type: "material_quote", sourceRefs: ["https://example.com/has-r"] } },
+    derivation: rodDerivation(4),
+    quantity: 4,
+    uom: "PK",
+    strategy,
+  });
+  assert.equal(error, null);
+});
+
+test("one cartridge for 5 anchors passes only with an explained surplus", async () => {
+  const basis = { quantity: { type: "document_quantity", sourceRefs: ["doc_platform"] }, pricing: { type: "material_quote", sourceRefs: ["https://example.com/hy200"] } };
+  const cartridge = (surplusRationale?: string) => ({
+    formula: "cartridges",
+    inputs: [{ name: "cartridges", value: 1, unit: "CARTRIDGE", source: { kind: "web", ref: "https://example.com/hy200", excerpt: "~19 anchors per 330 ml cartridge" } }],
+    result: { value: 1, unit: "CARTRIDGE" },
+    procurement: { installedQuantity: 5, installedUom: "EA", packSize: 19, ...(surplusRationale ? { surplusRationale } : {}) },
+  });
+  const unexplained = await validateTraceableQuantityForPricing(workspaceWithLabourRow, { evidenceBasis: basis, derivation: cartridge(), quantity: 1, uom: "CARTRIDGE", strategy });
+  assert.match(unexplained!, /surplusRationale/);
+  const explained = await validateTraceableQuantityForPricing(workspaceWithLabourRow, { evidenceBasis: basis, derivation: cartridge("Minimum purchase is one 330 ml cartridge; remainder is spares."), quantity: 1, uom: "CARTRIDGE", strategy });
+  assert.equal(explained, null);
+});

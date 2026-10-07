@@ -73,6 +73,29 @@ export interface LineDerivationInvalidation {
   newValue?: unknown;
 }
 
+/**
+ * Explicit installed-vs-procurement relationship for a purchase row. The link
+ * is declared, never inferred from shared views, so unrelated rows are not
+ * compared. Either `suppliesItemId` (optionally with `installedFromInput`, an
+ * input name on that row's derivation) or an explicit `installedQuantity`
+ * must identify what this purchase has to cover.
+ */
+export interface LineDerivationProcurement {
+  /** Worksheet item id of the installed/labour row this purchase supplies. */
+  suppliesItemId?: string | null;
+  /** Name of a derivation input on the linked row that holds the installed count (defaults to that row's quantity). */
+  installedFromInput?: string | null;
+  /** Explicit installed requirement when no row link exists. */
+  installedQuantity?: number | null;
+  installedUom?: string | null;
+  /** Base units per purchase unit: rods per pack, anchors per cartridge, ft³ per bag. */
+  packSize?: number | null;
+  /** Fraction added for waste/breakage, e.g. 0.15. */
+  wasteFactor?: number | null;
+  /** Required when supplied base units exceed twice the requirement. */
+  surplusRationale?: string | null;
+}
+
 export interface LineDerivation {
   version: number;
   target: LineDerivationTarget;
@@ -83,6 +106,7 @@ export interface LineDerivation {
   computedAt?: string | null;
   invalidatedBy?: LineDerivationInvalidation[];
   notes?: string | null;
+  procurement?: LineDerivationProcurement | null;
 }
 
 export interface LineDerivationIssue {
@@ -569,6 +593,95 @@ export function reconcileProcurementQuantities(input: ProcurementReconciliationI
   return { ok: !issues.some((issue) => issue.severity === "error"), issues, suppliedBaseUnits, requiredPurchaseQuantity };
 }
 
+export interface ProcurementLinkContext {
+  /** The purchase row being checked. */
+  purchaseQuantity: number;
+  purchaseUom?: string | null;
+  /** Resolve a linked row: returns its quantity/uom and derivation, or null when unknown. */
+  resolveItem?: (itemId: string) => { quantity: number; uom?: string | null; derivation?: LineDerivation | null; entityName?: string | null } | null;
+}
+
+export interface ProcurementLinkResult {
+  ok: boolean;
+  issues: LineDerivationIssue[];
+  installedQuantity: number | null;
+  installedSource: "explicit" | "linked_quantity" | "linked_input" | null;
+  suppliedBaseUnits: number | null;
+  requiredPurchaseQuantity: number | null;
+}
+
+/**
+ * Evaluate a declared installed/procurement relationship. Shortfalls are
+ * errors; a surplus above 2x needs a written rationale; a packaged UOM
+ * without packSize is an error because nothing can be reconciled.
+ */
+export function evaluateProcurementLink(
+  procurement: LineDerivationProcurement | null | undefined,
+  context: ProcurementLinkContext,
+): ProcurementLinkResult {
+  const none: ProcurementLinkResult = { ok: true, issues: [], installedQuantity: null, installedSource: null, suppliedBaseUnits: null, requiredPurchaseQuantity: null };
+  if (!procurement) return none;
+  const issues: LineDerivationIssue[] = [];
+
+  let installedQuantity: number | null = null;
+  let installedSource: ProcurementLinkResult["installedSource"] = null;
+  let installedUom: string | null | undefined = procurement.installedUom ?? null;
+  const linkedId = String(procurement.suppliesItemId ?? "").trim();
+  if (linkedId) {
+    const linked = context.resolveItem?.(linkedId) ?? null;
+    if (!linked) {
+      issues.push({ severity: "error", code: "procurement_link_unresolved", message: `procurement.suppliesItemId '${linkedId}' does not resolve to a worksheet item in this revision.` });
+    } else if (procurement.installedFromInput) {
+      const input = (linked.derivation?.inputs ?? []).find((entry) => entry.name === procurement.installedFromInput);
+      if (!input || !Number.isFinite(input.value)) {
+        issues.push({ severity: "error", code: "procurement_input_missing", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} has no derivation input named '${procurement.installedFromInput}'.` });
+      } else {
+        installedQuantity = input.value;
+        installedUom = installedUom ?? input.unit ?? null;
+        installedSource = "linked_input";
+      }
+    } else {
+      installedQuantity = linked.quantity;
+      installedUom = installedUom ?? linked.uom ?? null;
+      installedSource = "linked_quantity";
+    }
+  } else if (typeof procurement.installedQuantity === "number" && Number.isFinite(procurement.installedQuantity)) {
+    installedQuantity = procurement.installedQuantity;
+    installedSource = "explicit";
+  } else {
+    issues.push({ severity: "error", code: "procurement_requirement_missing", message: "procurement needs suppliesItemId (optionally installedFromInput) or an explicit installedQuantity so the purchase can be reconciled against what is installed." });
+  }
+  if (issues.length > 0 || installedQuantity === null) {
+    return { ok: false, issues, installedQuantity, installedSource, suppliedBaseUnits: null, requiredPurchaseQuantity: null };
+  }
+
+  const reconciled = reconcileProcurementQuantities({
+    installedQuantity,
+    installedUom,
+    purchaseQuantity: context.purchaseQuantity,
+    purchaseUom: context.purchaseUom ?? null,
+    packSize: procurement.packSize ?? null,
+    wasteFactor: procurement.wasteFactor ?? null,
+  });
+  for (const issue of reconciled.issues) {
+    if (issue.code === "procurement_excess") {
+      const rationale = String(procurement.surplusRationale ?? "").trim();
+      if (rationale.length >= 20) continue; // explained surplus is acceptable (minimum pack, spares)
+      issues.push({ severity: "error", code: "procurement_excess_unexplained", message: `${issue.message} Add procurement.surplusRationale (>= 20 chars), e.g. "minimum one cartridge; remainder is spares".` });
+      continue;
+    }
+    issues.push(issue);
+  }
+  return {
+    ok: !issues.some((issue) => issue.severity === "error"),
+    issues,
+    installedQuantity,
+    installedSource,
+    suppliedBaseUnits: reconciled.suppliedBaseUnits,
+    requiredPurchaseQuantity: reconciled.requiredPurchaseQuantity,
+  };
+}
+
 export type LinearUnit = "in" | "ft" | "mm" | "cm" | "m";
 
 const TO_METRES: Record<LinearUnit, number> = { in: 0.0254, ft: 0.3048, mm: 0.001, cm: 0.01, m: 1 };
@@ -718,5 +831,24 @@ export function normalizeLineDerivation(value: unknown): LineDerivation | null {
     computedAt: (raw.computedAt as string | null | undefined) ?? null,
     invalidatedBy: Array.isArray(raw.invalidatedBy) ? (raw.invalidatedBy as LineDerivationInvalidation[]) : [],
     notes: (raw.notes as string | null | undefined) ?? null,
+    procurement: normalizeProcurement(raw.procurement),
   };
+}
+
+function normalizeProcurement(value: unknown): LineDerivationProcurement | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const num = (entry: unknown) => (entry === undefined || entry === null || entry === "" ? null : Number.isFinite(Number(entry)) ? Number(entry) : null);
+  const str = (entry: unknown) => (entry === undefined || entry === null ? null : String(entry).trim() || null);
+  const normalized: LineDerivationProcurement = {
+    suppliesItemId: str(raw.suppliesItemId),
+    installedFromInput: str(raw.installedFromInput),
+    installedQuantity: num(raw.installedQuantity),
+    installedUom: str(raw.installedUom),
+    packSize: num(raw.packSize ?? raw.yieldPerUnit),
+    wasteFactor: num(raw.wasteFactor),
+    surplusRationale: str(raw.surplusRationale),
+  };
+  const meaningful = Object.values(normalized).some((entry) => entry !== null);
+  return meaningful ? normalized : null;
 }

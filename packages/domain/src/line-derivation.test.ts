@@ -4,6 +4,7 @@ import {
   detectPerInstanceContradictions,
   derivationInvalidatedByFields,
   derivationReferencesDocument,
+  evaluateProcurementLink,
   evaluateDerivationFormula,
   extractPerInstanceCallouts,
   groutVolumeUnderPlates,
@@ -195,4 +196,62 @@ test("derivationReferencesDocument sees views of the document and document#page 
   assert.equal(derivationReferencesDocument(derivation, "doc_1", []), true, "text input ref doc_1#4 belongs to the document");
   assert.equal(derivationReferencesDocument(derivation, "doc_other", ["view-zzz"]), false);
   assert.equal(derivationReferencesDocument(null, "doc_1", ["view-abc"]), false);
+});
+
+// ── declared installed/procurement links ──────────────────────────────────
+
+const labourRow = {
+  quantity: 2,
+  uom: "HR",
+  entityName: "Drill and set anchors",
+  derivation: {
+    ...anchorDerivation(1),
+    formula: "anchors * hoursPerAnchor",
+    inputs: [
+      { name: "anchors", value: 32, unit: "EA", source: { kind: "view" as const, ref: "view-plan" } },
+      { name: "hoursPerAnchor", value: 0.375, unit: "HR", source: { kind: "laborUnit" as const, ref: "lu-1" } },
+    ],
+    result: { value: 12, unit: "HR" },
+  },
+};
+const resolveItem = (itemId: string) => (itemId === "li-labour" ? labourRow : null);
+
+test("regression: 2 packs x 10 rods against 32 installed anchors is a shortfall", () => {
+  const result = evaluateProcurementLink(
+    { suppliesItemId: "li-labour", installedFromInput: "anchors", packSize: 10 },
+    { purchaseQuantity: 2, purchaseUom: "PK", resolveItem },
+  );
+  assert.equal(result.ok, false);
+  assert.equal(result.installedQuantity, 32);
+  assert.equal(result.installedSource, "linked_input");
+  assert.equal(result.suppliedBaseUnits, 20);
+  assert.equal(result.requiredPurchaseQuantity, 4);
+  assert.ok(result.issues.some((issue) => issue.code === "procurement_shortfall"));
+});
+
+test("1 cartridge covering 5 anchors passes when the surplus is explained, fails when it is not", () => {
+  const context = { purchaseQuantity: 1, purchaseUom: "CARTRIDGE", resolveItem };
+  const unexplained = evaluateProcurementLink({ installedQuantity: 5, installedUom: "EA", packSize: 19 }, context);
+  assert.equal(unexplained.ok, false);
+  assert.ok(unexplained.issues.some((issue) => issue.code === "procurement_excess_unexplained"));
+
+  const explained = evaluateProcurementLink(
+    { installedQuantity: 5, installedUom: "EA", packSize: 19, surplusRationale: "Minimum purchase is one 330 ml cartridge; remainder is spares." },
+    context,
+  );
+  assert.equal(explained.ok, true);
+  assert.equal(explained.suppliedBaseUnits, 19);
+  assert.equal(explained.requiredPurchaseQuantity, 1);
+});
+
+test("procurement links must name a requirement and resolve their linked row", () => {
+  const missing = evaluateProcurementLink({ packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem });
+  assert.ok(missing.issues.some((issue) => issue.code === "procurement_requirement_missing"));
+  const unresolved = evaluateProcurementLink({ suppliesItemId: "li-ghost", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem });
+  assert.ok(unresolved.issues.some((issue) => issue.code === "procurement_link_unresolved"));
+  const noPack = evaluateProcurementLink({ installedQuantity: 32 }, { purchaseQuantity: 2, purchaseUom: "BOX", resolveItem });
+  assert.ok(noPack.issues.some((issue) => issue.code === "pack_size_unknown"));
+  const linkedQuantity = evaluateProcurementLink({ suppliesItemId: "li-labour" }, { purchaseQuantity: 2, purchaseUom: "EA", resolveItem });
+  assert.equal(linkedQuantity.installedSource, "linked_quantity");
+  assert.equal(linkedQuantity.ok, true, "2 EA purchased for a linked row with quantity 2 reconciles");
 });
