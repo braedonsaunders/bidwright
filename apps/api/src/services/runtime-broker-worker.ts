@@ -103,14 +103,15 @@ export function shouldForwardCodexNotification(
 }
 
 async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
-  // Off until the bridge can be reached through the sandbox's egress proxy:
-  // with HTTP_PROXY set and NO_PROXY empty, Codex's request to the loopback
-  // bridge went to the egress proxy, which refuses loopback (403
-  // EgressDenied), so every Claude run failed. Opt in per deployment.
+  // Enable only after validating the bridge with the deployment egress path.
   if (!request.openRouterPromptCache || !openRouterPromptCacheEnabled(process.env)) return runCodexProcess(request);
   const apiKey = process.env.OPENROUTER_API_KEY;
   if (!apiKey) throw new Error("OpenRouter prompt caching requires the provider API key.");
-  const proxy = await startOpenRouterCacheProxy({ apiKey });
+  const proxy = await startOpenRouterCacheProxy({
+    apiKey,
+    relayProxyUrl: process.env.HTTP_PROXY || process.env.http_proxy,
+    upstreamProxyUrl: process.env.HTTPS_PROXY || process.env.https_proxy,
+  });
   try {
     return await runCodexProcess({
       ...request,
@@ -119,16 +120,16 @@ async function runCodex(request: Extract<RuntimeBrokerRequest, { transport: "cod
         "-c",
         `model_providers.openrouter.base_url=${JSON.stringify(proxy.baseUrl)}`,
       ],
-    });
+    }, { ...process.env, ...proxy.childEnv });
   } finally {
     await proxy.close();
   }
 }
 
-async function runCodexProcess(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>) {
+async function runCodexProcess(request: Extract<RuntimeBrokerRequest, { transport: "codex-app-server" }>, childEnv: NodeJS.ProcessEnv = process.env) {
   const child = spawn(request.codexCommand, ["app-server", ...request.appServerArgs, "-c", "features.shell_tool=true"], {
     cwd: request.projectDir,
-    env: process.env,
+    env: childEnv,
     stdio: ["pipe", "pipe", "pipe"],
   });
   if (!child.stdin || !child.stdout) {

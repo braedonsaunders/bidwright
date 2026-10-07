@@ -185,3 +185,53 @@ readline.createInterface({ input: process.stdin }).on("line", (line) => {
   const result = await runWorker(requestPath, { CODEX_API_KEY: "" });
   assert.equal(result.code, 0, result.stderr);
 });
+
+test("cache bridge changes only the child HTTP proxy and remains deployment opt-in", async () => {
+  for (const enabled of [false, true]) {
+    const dir = await mkdtemp(join(tmpdir(), "bidwright-cache-broker-"));
+    const fakeCodex = join(dir, "fake-codex.mjs");
+    const capturePath = join(dir, "capture.json");
+    const requestPath = join(dir, "request.json");
+    const originalProxy = "http://bidwright:fake-egress-secret@127.0.0.1:12345";
+    await writeFile(fakeCodex, `#!/usr/bin/env node
+import {writeFileSync} from "node:fs";
+import readline from "node:readline";
+writeFileSync(${JSON.stringify(capturePath)}, JSON.stringify({args:process.argv, http:process.env.HTTP_PROXY, lowerHttp:process.env.http_proxy, https:process.env.HTTPS_PROXY, lowerHttps:process.env.https_proxy, noProxy:process.env.NO_PROXY}));
+const send = value => process.stdout.write(JSON.stringify(value)+"\\n");
+readline.createInterface({input:process.stdin}).on("line",line=>{
+ const msg=JSON.parse(line);
+ if(msg.method==="initialize") send({id:msg.id,result:{}});
+ else if(msg.method==="thread/start") send({id:msg.id,result:{thread:{id:"cache-test"}}});
+ else if(msg.method==="turn/start") {
+  send({id:msg.id,result:{}});
+  send({method:"turn/completed",params:{turn:{status:"completed"}}});
+ }
+});`, {mode:0o700});
+    await writeFile(requestPath, JSON.stringify({transport:"codex-app-server", projectDir:dir,
+      prompt:"transport only", model:"anthropic/claude-opus-5.5", reasoningEffort:"medium",
+      openRouterPromptCache:true, codexCommand:fakeCodex,
+      appServerArgs:['-c','model_providers.openrouter.base_url="https://openrouter.ai/api/v1"']}));
+    const result = await runWorker(requestPath, {CODEX_API_KEY:"", OPENROUTER_API_KEY:"fake-provider-key",
+      BIDWRIGHT_OPENROUTER_PROMPT_CACHE:enabled ? "on" : "off",
+      HTTP_PROXY:originalProxy, http_proxy:originalProxy, HTTPS_PROXY:originalProxy, https_proxy:originalProxy, NO_PROXY:""});
+    assert.equal(result.code, 0, result.stderr);
+    const captured = JSON.parse(await readFile(capturePath,"utf8"));
+    assert.equal(captured.https, originalProxy);
+    assert.equal(captured.lowerHttps, originalProxy);
+    assert.equal(captured.noProxy, "");
+    const configs = captured.args.filter((arg:string)=>arg.startsWith("model_providers.openrouter.base_url="));
+    if (enabled) {
+      const bridgeUrl = JSON.parse(configs.at(-1).split("=").slice(1).join("="));
+      assert.match(bridgeUrl, /^http:\/\/127\.0\.0\.1:\d+\/api\/v1$/);
+      assert.equal(captured.http, new URL(bridgeUrl).origin);
+      assert.equal(captured.lowerHttp, captured.http);
+      await assert.rejects(fetch(bridgeUrl+"/responses", {signal:AbortSignal.timeout(1000)}));
+    } else {
+      assert.equal(configs.length,1);
+      assert.equal(captured.http,originalProxy);
+      assert.equal(captured.lowerHttp,originalProxy);
+    }
+    assert.equal(result.stdout.includes("fake-egress-secret"),false);
+    assert.equal(result.stderr.includes("fake-provider-key"),false);
+  }
+});
