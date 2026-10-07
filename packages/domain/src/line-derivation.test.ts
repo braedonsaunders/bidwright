@@ -438,11 +438,16 @@ test("dominated flags carry their basis and hour-basis totals come from sources,
     { derivation: library, hours: 3.75 },
     { derivation: null, hours: 10 },
   ];
-  const totals = summarizeHourBasis(rows, (row) => row.hours, lookup);
-  assert.equal(totals.assumed_physical_count, 24);
-  assert.equal(totals.assumed_scope_only, 32);
-  assert.equal(totals.sourced, 3.75);
-  assert.equal(totals.no_derivation, 10);
+  const summary = summarizeHourBasis(rows, (row) => row.hours, lookup);
+  assert.equal(summary.unit, "direct_labour_hours_before_estimate_factors");
+  assert.equal(summary.byBasis.assumed_physical_count, 24);
+  assert.equal(summary.byBasis.assumed_scope_only, 32);
+  assert.equal(summary.byBasis.sourced, 3.75);
+  assert.equal(summary.byBasis.no_derivation, 10);
+  assert.equal(summary.total, 69.75);
+  assert.equal(Object.values(summary.byBasis).reduce((a, b) => a + b, 0), summary.total, "categories partition the total");
+  // rows with zero direct labour hours (equipment duration, materials) are not counted
+  assert.equal(summarizeHourBasis([{ derivation: machine, hours: 0 }], (row) => row.hours, lookup).total, 0);
 });
 
 test("evidence inputs the formula does not use neither size the result nor set its basis", () => {

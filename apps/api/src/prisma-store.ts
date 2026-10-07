@@ -4405,7 +4405,7 @@ export class PrismaApiStore {
     // evidence-basis label): sourced, partly assumed, or assumed with a
     // physical drawing count / scope-only factor / nothing from a drawing.
     const strategyEngine = this.asEstimateObject(this.asEstimateObject((workspace as unknown as Record<string, unknown>).estimateStrategy).summary).drawingEvidenceEngine;
-    const hourBasis = summarizeHourBasis(items, (item) => this.estimateItemExtendedHours(item), derivationSourceLookup(this.asEstimateObject(strategyEngine).claims, items));
+    const hourBasisDirect = summarizeHourBasis(items, (item) => this.estimateItemExtendedHours(item), derivationSourceLookup(this.asEstimateObject(strategyEngine).claims, items));
 
     const zeroPricedItems = items.filter((item) => Number(item.price ?? 0) === 0 && this.estimateItemExtendedCost(item) === 0);
     const duplicateGroups = new Map<string, number>();
@@ -4440,7 +4440,13 @@ export class PrismaApiStore {
       worksheetCount,
       lineItemCount,
       zeroPriceItemCount: zeroPricedItems.length,
-      hourBasis,
+      // Direct labour hours by source; estimate factors (OT, productivity) are
+      // the difference to totalHours and are not attributed to a basis.
+      hourBasis: {
+        ...hourBasisDirect,
+        totalHoursWithFactors: Number(totalHours.toFixed(2)),
+        estimateFactorHours: Number((totalHours - hourBasisDirect.total).toFixed(2)),
+      },
       duplicateGroupCount: duplicateEntries.length,
       duplicateItemCount: duplicateEntries.reduce((sum, count) => sum + count, 0),
       // Per-category and per-analytics-bucket rolls — keyed by the org's own

@@ -1099,16 +1099,31 @@ export function classifyHourBasis(derivation: LineDerivation | null | undefined,
   }
 }
 
-/** Hours per basis across rows; `hoursOf` gives a row's extended hours. */
-export function summarizeHourBasis<T extends { derivation?: unknown }>(rows: T[], hoursOf: (row: T) => number, lookup: DerivationSourceLookup = {}): Record<HourBasisCategory, number> {
-  const totals: Record<HourBasisCategory, number> = { sourced: 0, partly_assumed: 0, assumed_physical_count: 0, assumed_scope_only: 0, assumed_unclassified: 0, assumed_only: 0, no_derivation: 0 };
+export interface HourBasisSummary {
+  /** What the numbers measure; always direct labour hours before estimate factors. */
+  unit: "direct_labour_hours_before_estimate_factors";
+  /** Sum of byBasis; equals the direct labour hours of the rows passed in. */
+  total: number;
+  byBasis: Record<HourBasisCategory, number>;
+}
+
+/**
+ * Hours per basis across rows. `hoursOf` must return a row's DIRECT labour
+ * hours (0 for equipment duration, materials, etc.); estimate factors are not
+ * classified and are reported separately by the caller. Every row lands in
+ * exactly one category, so byBasis always sums to total.
+ */
+export function summarizeHourBasis<T extends { derivation?: unknown }>(rows: T[], hoursOf: (row: T) => number, lookup: DerivationSourceLookup = {}): HourBasisSummary {
+  const byBasis: Record<HourBasisCategory, number> = { sourced: 0, partly_assumed: 0, assumed_physical_count: 0, assumed_scope_only: 0, assumed_unclassified: 0, assumed_only: 0, no_derivation: 0 };
+  let total = 0;
   for (const row of rows) {
     const hours = Number(hoursOf(row));
     if (!Number.isFinite(hours) || hours <= 0) continue;
-    totals[classifyHourBasis(normalizeLineDerivation(row.derivation), lookup)] += hours;
+    byBasis[classifyHourBasis(normalizeLineDerivation(row.derivation), lookup)] += hours;
+    total += hours;
   }
-  for (const key of Object.keys(totals) as HourBasisCategory[]) totals[key] = Math.round(totals[key] * 100) / 100;
-  return totals;
+  for (const key of Object.keys(byBasis) as HourBasisCategory[]) byBasis[key] = Math.round(byBasis[key] * 100) / 100;
+  return { unit: "direct_labour_hours_before_estimate_factors", total: Math.round(total * 100) / 100, byBasis };
 }
 
 /** Lookup built from a strategy's Drawing Evidence Engine claims and a set of rows' derivations. */
