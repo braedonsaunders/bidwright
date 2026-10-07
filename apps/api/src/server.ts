@@ -156,6 +156,7 @@ import {
 } from "./services/ai-service.js";
 import { executePluginSearchDataSource } from "./services/plugin-search-data-source.js";
 import { knowledgeService, resolveEmbeddingConfig } from "./services/knowledge-service.js";
+import { derivePagesForIndexing } from "./services/page-provenance.js";
 import { documentTypeFromIngestion } from "./calc-utils.js";
 import { inferPageCount, knowledgeCategoryFromDocType } from "./store/mappers.js";
 import {
@@ -2954,6 +2955,7 @@ export function buildServer() {
     if (extractedText.trim() && organizationId) {
       void knowledgeService.ingestDocument({
         content: extractedText,
+        pages: derivePagesForIndexing(extractedText, structuredData) ?? undefined,
         title: displayName,
         category: knowledgeCategoryFromDocType(documentType),
         scope: "project",
