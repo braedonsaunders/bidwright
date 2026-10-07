@@ -44,6 +44,7 @@ import {
   evaluateProcurementLink,
   markDerivationStale,
   normalizeLineDerivation,
+  flagDerivationAssumptions,
   stageAfterSavingSections,
   normalizeCalibrationLessons,
   scoreCalibrationLesson,
@@ -8589,7 +8590,7 @@ export class PrismaApiStore {
       laborUnitId: normalizedInput.laborUnitId ?? null,
       resourceComposition: normalizedInput.resourceComposition ?? {},
       sourceEvidence: normalizedInput.sourceEvidence ?? {},
-      derivation: this.prepareDerivationForWrite(normalizedInput.derivation, null),
+      derivation: this.prepareDerivationForWrite(normalizedInput.derivation, null, context),
     };
 
     // ── Validate rateScheduleItemId / itemId references ──────────────
@@ -9247,7 +9248,7 @@ export class PrismaApiStore {
     let nextDerivation: LineDerivation | null = previousDerivation;
     let derivationCause: string | null = null;
     if (derivationProvided) {
-      nextDerivation = this.prepareDerivationForWrite(patchDerivation, previousDerivation);
+      nextDerivation = this.prepareDerivationForWrite(patchDerivation, previousDerivation, context);
       derivationCause = nextDerivation ? "saved" : "deleted";
     } else if (previousDerivation) {
       const invalidating = derivationInvalidatedByFields(previousDerivation, fieldChanges.map((change) => change.field));
@@ -9589,17 +9590,25 @@ export class PrismaApiStore {
   private prepareDerivationForWrite(
     incoming: Record<string, unknown> | null | undefined,
     previous: LineDerivation | null,
+    context: WorksheetItemMutationContext = {},
   ): LineDerivation | null {
     if (incoming === null) return null;
     if (incoming === undefined) return previous;
     const normalized = normalizeLineDerivation(incoming);
     if (!normalized) return null;
+    const reviewFlags = flagDerivationAssumptions(normalized);
+    let status: LineDerivation["status"] = normalized.status === "stale" ? "draft" : normalized.status;
+    // An agent cannot mark its own assumptions reviewed or verified; only an
+    // estimator can. The row is still saved (drafts stay possible) and the
+    // flag surfaces as a quality warning until a human reviews it.
+    if (context.actorKind === "agent" && reviewFlags.length > 0 && (status === "reviewed" || status === "verified")) status = "draft";
     return {
       ...normalized,
       version: (previous?.version ?? 0) + 1,
       computedAt: normalized.computedAt ?? new Date().toISOString(),
-      status: normalized.status === "stale" ? "draft" : normalized.status,
+      status,
       invalidatedBy: [],
+      reviewFlags,
     };
   }
 

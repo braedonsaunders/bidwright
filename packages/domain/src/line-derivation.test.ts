@@ -11,6 +11,7 @@ import {
   groutVolumeUnderPlates,
   markDerivationStale,
   normalizeLineDerivation,
+  flagDerivationAssumptions,
   packsRequired,
   reconcileProcurementQuantities,
   validateLineDerivation,
@@ -326,4 +327,43 @@ test("plural input names match singular callout words", () => {
     const expected = name === "boltsPerClip" ? 0 : 1;
     assert.equal(detectPerInstanceContradictions(derivation, [text]).length, expected, name);
   }
+});
+
+test("assumption review flags: dominated when every sizing input is assumed, partial otherwise", () => {
+  const erection = normalizeLineDerivation({
+    target: "tierUnits", formula: "crewMembers * crewDays * hoursPerDay * installationPackages", status: "reviewed",
+    inputs: [
+      { name: "crewMembers", value: 3, unit: "persons", source: { kind: "assumption", ref: "A-CREW" } },
+      { name: "crewDays", value: 4, unit: "DAY", source: { kind: "assumption", ref: "A-CREW" } },
+      { name: "hoursPerDay", value: 8, unit: "HR/person-day", source: { kind: "assumption", ref: "A-CREW" } },
+      { name: "installationPackages", value: 1, unit: "SET", source: { kind: "view", ref: "view-e65fed29" } },
+    ],
+    result: { value: 96, unit: "HR" },
+  })!;
+  const [dominated] = flagDerivationAssumptions(erection);
+  assert.equal(dominated.code, "assumption_dominated");
+  assert.deepEqual(dominated.inputs, ["crewMembers", "crewDays", "hoursPerDay"]);
+  assert.match(dominated.message, /A-CREW/);
+
+  const deck = normalizeLineDerivation({
+    formula: "installedDeckFastenings * baseDrillHoursPerHole",
+    inputs: [
+      { name: "installedDeckFastenings", value: 80, unit: "EA", source: { kind: "assumption", ref: "A-DECK" } },
+      { name: "baseDrillHoursPerHole", value: 0.24, unit: "HR/EA", source: { kind: "laborUnit", ref: "lu-c5d4" } },
+    ],
+    result: { value: 19.2, unit: "HR" },
+  })!;
+  assert.equal(flagDerivationAssumptions(deck)[0].code, "assumed_inputs");
+
+  const sourced = normalizeLineDerivation({
+    formula: "basePlates * anchorsPerPlate",
+    inputs: [{ name: "basePlates", value: 5, source: { kind: "view", ref: "v1" } }, { name: "anchorsPerPlate", value: 1, source: { kind: "view", ref: "v2" } }],
+    result: { value: 5, unit: "EA" },
+  })!;
+  assert.deepEqual(flagDerivationAssumptions(sourced), []);
+});
+
+test("caller-supplied review flags with unknown codes are dropped on normalize", () => {
+  const normalized = normalizeLineDerivation({ formula: "a", inputs: [{ name: "a", value: 2, source: { kind: "view", ref: "v" } }], result: { value: 2 }, reviewFlags: [{ code: "approved_by_ai", message: "fine" }] })!;
+  assert.deepEqual(normalized.reviewFlags, []);
 });

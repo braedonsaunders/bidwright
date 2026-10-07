@@ -75,3 +75,21 @@ test("the same labour row with a real per-plate count that disagrees with the dr
   const error = await validateTraceableQuantityForPricing(ws, input);
   assert.match(error ?? "", /Per-instance contradiction: derivation input 'holesPerPlate' = 4/);
 });
+
+test("GPT's applied 96 h erection row is flagged assumption-dominated by the quality rule, without blocking", async () => {
+  const { validateEstimateWorkspace } = await import("@bidwright/domain");
+  const item = fixture.platformErectionLabourApplied.item;
+  // GPT sent status "reviewed". The API now stores agent-written derivations
+  // with assumed inputs as "draft" (prepareDerivationForWrite), so that is the
+  // persisted state the quality rule sees.
+  assert.equal(item.derivation.status, "reviewed");
+  item.derivation = { ...item.derivation, status: "draft" };
+  const workspace = {
+    worksheets: [{ id: item.worksheetId, name: "Platform", items: [{ id: "li-erection", worksheetId: item.worksheetId, entityName: item.entityName, category: item.category, quantity: item.quantity, uom: item.uom, tierUnits: item.tierUnits, sourceNotes: item.sourceNotes, derivation: item.derivation }] }],
+  };
+  const result = validateEstimateWorkspace(workspace as any, { ruleIds: ["worksheet.evidence.assumed_derivation_unreviewed"] } as any);
+  const issue = result.issues.find((entry: any) => entry.ruleId === "worksheet.evidence.assumed_derivation_unreviewed");
+  assert.ok(issue, JSON.stringify(result.issues).slice(0, 400));
+  assert.equal(issue!.severity, "warning", "visible, never error/critical, so a draft still saves and finalize is not blocked");
+  assert.match(issue!.message, /crewMembers, crewDays, hoursPerDay/);
+});

@@ -107,6 +107,14 @@ export interface LineDerivation {
   invalidatedBy?: LineDerivationInvalidation[];
   notes?: string | null;
   procurement?: LineDerivationProcurement | null;
+  /** Server-computed review flags (see flagDerivationAssumptions). Never trusted from the caller. */
+  reviewFlags?: LineDerivationReviewFlag[];
+}
+
+export interface LineDerivationReviewFlag {
+  code: "assumed_inputs" | "assumption_dominated";
+  message: string;
+  inputs: string[];
 }
 
 export interface LineDerivationIssue {
@@ -900,7 +908,64 @@ export function normalizeLineDerivation(value: unknown): LineDerivation | null {
     invalidatedBy: Array.isArray(raw.invalidatedBy) ? (raw.invalidatedBy as LineDerivationInvalidation[]) : [],
     notes: (raw.notes as string | null | undefined) ?? null,
     procurement: normalizeProcurement(raw.procurement),
+    reviewFlags: normalizeReviewFlags(raw.reviewFlags),
   };
+}
+
+function normalizeReviewFlags(value: unknown): LineDerivationReviewFlag[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((entry) => (entry && typeof entry === "object" ? entry as Record<string, unknown> : {}))
+    .filter((entry) => entry.code === "assumed_inputs" || entry.code === "assumption_dominated")
+    .map((entry) => ({
+      code: entry.code as LineDerivationReviewFlag["code"],
+      message: String(entry.message ?? ""),
+      inputs: Array.isArray(entry.inputs) ? entry.inputs.map(String) : [],
+    }));
+}
+
+// ── Assumed inputs ─────────────────────────────────────────────────────────
+
+/** Sources that are the estimator's or agent's judgement rather than a document, view, library or answer. */
+const UNVERIFIED_SOURCE_KINDS = new Set<LineDerivationSourceKind>(["assumption", "manual"]);
+
+/**
+ * Which inputs of a derivation are assumed, and whether assumptions set its
+ * magnitude. On the 2026-10-07 GPT matrix a 96 h platform-erection row was
+ * labelled drawing_quantity because one input, "installationPackages = 1",
+ * cited a view; crewMembers 3 × crewDays 4 × hoursPerDay 8 all came from an
+ * assumption. A value of 1 sourced from evidence does not size anything, so
+ * the row is assumption-dominated.
+ */
+export function summarizeDerivationAssumptions(derivation: LineDerivation | null | undefined) {
+  const inputs = derivation?.inputs ?? [];
+  const assumed = inputs.filter((input) => UNVERIFIED_SOURCE_KINDS.has(input.source?.kind));
+  const sizing = inputs.filter((input) => Number.isFinite(input.value) && input.value !== 1 && input.value !== 0);
+  const dominated = assumed.length > 0 && sizing.length > 0 && sizing.every((input) => UNVERIFIED_SOURCE_KINDS.has(input.source?.kind));
+  return {
+    assumedInputs: assumed.map((input) => input.name),
+    assumptionRefs: [...new Set(assumed.map((input) => input.source?.ref).filter(Boolean))] as string[],
+    dominated,
+  };
+}
+
+/** Review flags recomputed on every write; callers cannot supply or clear them. */
+export function flagDerivationAssumptions(derivation: LineDerivation): LineDerivationReviewFlag[] {
+  const summary = summarizeDerivationAssumptions(derivation);
+  if (summary.assumedInputs.length === 0) return [];
+  const refs = summary.assumptionRefs.length > 0 ? ` (${summary.assumptionRefs.join(", ")})` : "";
+  if (summary.dominated) {
+    return [{
+      code: "assumption_dominated",
+      message: `Every input that sizes this result is assumed${refs}: ${summary.assumedInputs.join(", ")}. Evidence inputs only contribute a factor of 1.`,
+      inputs: summary.assumedInputs,
+    }];
+  }
+  return [{
+    code: "assumed_inputs",
+    message: `Some inputs are assumed${refs}: ${summary.assumedInputs.join(", ")}.`,
+    inputs: summary.assumedInputs,
+  }];
 }
 
 function normalizeProcurement(value: unknown): LineDerivationProcurement | null {

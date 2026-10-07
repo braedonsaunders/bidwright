@@ -297,5 +297,102 @@
    },
    "laborUnitId": "lu-c5d4ae87-b975-445f-a6a3-05ac1895d3eb"
   }
+ },
+ "platformErectionLabourApplied": {
+  "op": "create",
+  "worksheetId": "worksheet-5b201193-461c-42f9-ad17-b90ed21a3c27",
+  "item": {
+   "worksheetId": "worksheet-5b201193-461c-42f9-ad17-b90ed21a3c27",
+   "category": "Labour",
+   "entityName": "MECH:Trade Labour",
+   "description": "Unpack, sort and erect knocked-down platform framing; level, bolt and position supplied deck panels",
+   "quantity": 1,
+   "uom": "HR",
+   "rateScheduleItemId": "rsi-72694a35-046e-4a27-8c01-dbbc98356578",
+   "tierUnits": {
+    "rst-03f82c0f-5895-4c5e-a0da-d84608852a45": 76.80000000000001,
+    "rst-74fa5833-cbb0-4351-8a53-da72ae54cfc1": 19.200000000000003
+   },
+   "sourceNotes": "Unpack, sort and erect knocked-down platform framing; level, bolt and position supplied deck panels. Quantity/hour basis: explicit activity crew-duration allowance A-CREW (person-hours), governed by doc_f14748c7-4b90-487e-b4b1-897fcddd37e5. Reviewed equipment manual introduction and structured labour candidates; no exact bespoke unit used. Price: Teva 2026 D2D (MECH), rsi-72694a35-046e-4a27-8c01-dbbc98356578, CAD. 80% regular / 20% overtime per user; no overtime productivity penalty. Foreman supervision/checkout priced separately.",
+   "evidenceBasis": {
+    "quantity": {
+     "type": "drawing_quantity",
+     "drawingClaimIds": [
+      "claim-5be53a738b98",
+      "claim-b5dec68253fc",
+      "claim-6f073aad955c"
+     ],
+     "viewIds": [
+      "view-e65fed29-0eb3-4b9d-b7e2-7eb9574fcd36",
+      "view-40fa7a7b-f3b1-4827-9f63-08896f5c05a6",
+      "view-8f90517d-1e93-4fb5-ba93-cf919b4a07be"
+     ],
+     "assumptionIds": [
+      "A-CREW"
+     ],
+     "sourceRefs": [
+      "doc_f14748c7-4b90-487e-b4b1-897fcddd37e5"
+     ],
+     "quantityDriver": "Unpack, sort and erect knocked-down platform framing; level, bolt and position supplied deck panels",
+     "rationale": "Physical scope from inspected source drawings; hours from identified allowance or productivity source."
+    },
+    "pricing": {
+     "type": "rate_schedule",
+     "sourceRefs": [
+      "rsi-72694a35-046e-4a27-8c01-dbbc98356578"
+     ],
+     "rationale": "Imported Teva mechanical regular/overtime rate tiers."
+    }
+   },
+   "derivation": {
+    "target": "tierUnits",
+    "formula": "(crewMembers * crewDays * hoursPerDay) * installationPackages",
+    "inputs": [
+     {
+      "name": "crewMembers",
+      "value": 3,
+      "unit": "persons",
+      "source": {
+       "kind": "assumption",
+       "ref": "A-CREW"
+      }
+     },
+     {
+      "name": "crewDays",
+      "value": 4,
+      "unit": "DAY",
+      "source": {
+       "kind": "assumption",
+       "ref": "A-CREW"
+      }
+     },
+     {
+      "name": "hoursPerDay",
+      "value": 8,
+      "unit": "HR/person-day",
+      "source": {
+       "kind": "assumption",
+       "ref": "A-CREW"
+      }
+     },
+     {
+      "name": "installationPackages",
+      "value": 1,
+      "unit": "SET",
+      "source": {
+       "kind": "view",
+       "ref": "view-e65fed29-0eb3-4b9d-b7e2-7eb9574fcd36"
+      },
+      "note": "One installation activity package for the physical assembly/system shown; duration is an estimating allowance, not a drawing productivity."
+     }
+    ],
+    "result": {
+     "value": 96,
+     "unit": "HR"
+    },
+    "notes": "Base person-hours before estimate factors. Tier allocation and rate extension performed by Bidwright.",
+    "status": "reviewed"
+   }
+  }
  }
 }
