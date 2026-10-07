@@ -21,7 +21,10 @@ import {
  */
 
 const zipOnlyWorkspace = {
-  sourceDocuments: [{ id: "doc_zip", fileName: "RE__RFQ.zip", fileType: "zip", documentType: "reference" }],
+  sourceDocuments: [
+    { id: "doc_zip", fileName: "RE__RFQ.zip", fileType: "zip", documentType: "reference", checksum: "zip-v1" },
+    { id: "doc_platform", fileName: "2025-05-26 Layouts and Platforms-Signed.pdf", fileType: "pdf", documentType: "drawing", checksum: "platform-v1" },
+  ],
   entityCategories: [
     { id: "ecat-material", name: "Material", entityType: "Material" },
     { id: "ecat-labour", name: "Labour", entityType: "Labour" },
@@ -50,7 +53,7 @@ test.beforeEach(() => {
   __setEvidenceViewFetcherForTests(async (ids) => ({
     views: ids
       .filter((id) => id === "view-plan" || id === "view-detail")
-      .map((id) => ({ id, documentId: "doc_platform", pageNumber: 4, tool: "readDrawingTile", imageHash: "abc", textSnippet: id === "view-detail" ? platformNote : "" })),
+      .map((id) => ({ id, documentId: "doc_platform", sourceChecksum: "platform-v1", pageNumber: 4, tool: "readDrawingTile", imageHash: "abc", textSnippet: id === "view-detail" ? platformNote : "" })),
     missingIds: ids.filter((id) => id !== "view-plan" && id !== "view-detail"),
   }));
 });
@@ -215,4 +218,45 @@ test("rate-schedule hours above the threshold also need confirmation", async () 
     strategy,
   });
   assert.match(blocked!, /40 h/);
+});
+
+// ── views are evidence for one document version only ─────────────────────
+
+test("a view rendered from an earlier version of the document is rejected", async () => {
+  __setEvidenceViewFetcherForTests(async (ids) => ({
+    views: ids.map((id) => ({ id, documentId: "doc_platform", sourceChecksum: "platform-v0", pageNumber: 4, tool: "readDrawingTile", imageHash: "old", textSnippet: platformNote })),
+    missingIds: [],
+  }));
+  const error = await validateTraceableQuantityForPricing(zipOnlyWorkspace, {
+    evidenceBasis: { quantity: { type: "drawing_quantity", viewIds: ["view-plan"] }, pricing: { type: "allowance" } },
+    derivation: anchorDerivation(1),
+    quantity: 6,
+    strategy,
+  });
+  assert.match(error!, /earlier version of "2025-05-26 Layouts and Platforms-Signed.pdf"/);
+  assert.match(error!, /source checksum changed/);
+});
+
+test("a view whose source document was replaced or removed is rejected", async () => {
+  __setEvidenceViewFetcherForTests(async (ids) => ({
+    views: ids.map((id) => ({ id, documentId: "doc_gone", sourceChecksum: "x", pageNumber: 1, tool: "readDrawingPage", imageHash: "h", textSnippet: "" })),
+    missingIds: [],
+  }));
+  const error = await validateTraceableQuantityForPricing(zipOnlyWorkspace, {
+    evidenceBasis: { quantity: { type: "drawing_quantity", viewIds: ["view-plan"] }, pricing: { type: "allowance" } },
+    derivation: anchorDerivation(1),
+    quantity: 6,
+    strategy,
+  });
+  assert.match(error!, /no longer a source document in this project/);
+});
+
+test("a view of the current document version passes the staleness check", async () => {
+  const error = await validateTraceableQuantityForPricing(zipOnlyWorkspace, {
+    evidenceBasis: { quantity: { type: "drawing_quantity", viewIds: ["view-plan", "view-detail"] }, pricing: { type: "allowance" } },
+    derivation: anchorDerivation(1),
+    quantity: 6,
+    strategy,
+  });
+  assert.equal(error, null);
 });

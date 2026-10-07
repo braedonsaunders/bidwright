@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   detectPerInstanceContradictions,
   derivationInvalidatedByFields,
+  derivationReferencesDocument,
   evaluateDerivationFormula,
   extractPerInstanceCallouts,
   groutVolumeUnderPlates,
@@ -186,4 +187,12 @@ test("normalizeLineDerivation tolerates loose JSON", () => {
   assert.equal(normalized!.result.value, 6);
   assert.equal(normalizeLineDerivation(null), null);
   assert.equal(normalizeLineDerivation([1, 2]), null);
+});
+
+test("derivationReferencesDocument sees views of the document and document#page text refs", () => {
+  const derivation = anchorDerivation(1);
+  assert.equal(derivationReferencesDocument(derivation, "doc_1", ["view-abc"]), true, "view input belongs to the document");
+  assert.equal(derivationReferencesDocument(derivation, "doc_1", []), true, "text input ref doc_1#4 belongs to the document");
+  assert.equal(derivationReferencesDocument(derivation, "doc_other", ["view-zzz"]), false);
+  assert.equal(derivationReferencesDocument(null, "doc_1", ["view-abc"]), false);
 });

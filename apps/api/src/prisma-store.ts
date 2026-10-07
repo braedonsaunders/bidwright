@@ -39,6 +39,7 @@ import type { SummaryBuilderConfig, SummaryPreset, LineDerivation } from "@bidwr
 import {
   derivationInvalidatedByFields,
   derivationReferencesItem,
+  derivationReferencesDocument,
   markDerivationStale,
   normalizeLineDerivation,
   stageAfterSavingSections,
@@ -7712,10 +7713,61 @@ export class PrismaApiStore {
     return mapSourceDocument(updated);
   }
 
+  /**
+   * A source document was replaced or removed: every derivation that rests
+   * on it (through one of its evidence views, or document text/claim refs)
+   * is no longer backed by the current file. Mark those rows stale and
+   * record why, so the agent re-reads the new version before pricing again.
+   * Views themselves stay in EvidenceView for audit; the gate rejects them
+   * by checksum/identity.
+   */
+  async markDerivationsStaleForDocument(projectId: string, documentId: string, input: { reason: "source_document_replaced" | "source_document_deleted"; actorRef?: string | null; fileName?: string | null }) {
+    const { revision } = await this.findCurrentRevision(projectId);
+    if (!revision) return { affected: 0 };
+    const views = await this.db.evidenceView.findMany({ where: { projectId, documentId }, select: { id: true } }).catch(() => [] as Array<{ id: string }>);
+    const viewIds = views.map((view) => view.id);
+    const rows = await this.db.worksheetItem.findMany({
+      where: { worksheet: { revisionId: revision.id } },
+      select: { id: true, derivation: true },
+    });
+    const nowIso = new Date().toISOString();
+    let affected = 0;
+    for (const row of rows) {
+      const derivation = normalizeLineDerivation(row.derivation);
+      if (!derivation || derivation.status === "stale") continue;
+      if (!derivationReferencesDocument(derivation, documentId, viewIds)) continue;
+      const stale = markDerivationStale(derivation, {
+        reason: input.reason,
+        at: nowIso,
+        by: input.actorRef ?? "system",
+        field: "sourceDocument",
+        previousValue: input.fileName ?? documentId,
+        newValue: null,
+      });
+      await this.db.worksheetItem.update({ where: { id: row.id }, data: { derivation: toPrismaJson(stale) } as any });
+      await this.recordLineDerivationEvent(projectId, revision.id, row.id, {
+        version: stale.version,
+        cause: "source_changed",
+        actorKind: "system",
+        actorRef: documentId,
+        derivation: stale,
+        changes: [{ field: "sourceDocument", before: input.fileName ?? documentId, after: null, reason: input.reason }],
+      });
+      affected += 1;
+    }
+    return { affected };
+  }
+
   async deleteDocument(projectId: string, documentId: string) {
     await this.requireProject(projectId);
     const document = await this.db.sourceDocument.findFirst({ where: { id: documentId, projectId } });
     if (!document) throw new Error(`Document ${documentId} not found`);
+
+    // Before the row goes: anything derived from this document is now unbacked.
+    await this.markDerivationsStaleForDocument(projectId, documentId, {
+      reason: "source_document_deleted",
+      fileName: document.fileName,
+    }).catch(() => ({ affected: 0 }));
 
     await this.db.sourceDocument.delete({ where: { id: documentId } });
 
