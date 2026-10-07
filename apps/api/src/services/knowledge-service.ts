@@ -1,4 +1,5 @@
 import type { PrismaApiStore } from "../prisma-store.js";
+import { planPageChunks } from "./page-provenance.js";
 import { createLLMAdapter, type TenantAiConfig } from "@bidwright/agent";
 import {
   DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
@@ -169,6 +170,13 @@ detectOllama().catch(() => {});
 export interface IngestionRequest {
   file?: { buffer: Buffer; filename: string; mimeType: string };
   content?: string;
+  /**
+   * Per-page text when the caller already knows page boundaries (project
+   * documents). Each page is chunked on its own so every chunk, vector and
+   * search hit carries the real page number. Omit when unknown; chunks then
+   * have no page rather than a guessed one.
+   */
+  pages?: Array<{ pageNumber: number | null; text: string }>;
   title: string;
   category: KnowledgeBook["category"];
   scope: KnowledgeBook["scope"];
@@ -607,6 +615,9 @@ export class KnowledgeService {
         if ((extracted as any).tables?.length > 0) {
           extractedTableData = (extracted as any).tables;
         }
+      } else if (request.pages && request.pages.length > 0) {
+        text = request.pages.map((page) => page.text).join("\n\n");
+        pageCount = Math.max(...request.pages.map((page) => page.pageNumber ?? 0), request.pages.length);
       } else if (request.content) {
         text = request.content;
         pageCount = Math.max(1, Math.ceil(text.length / 3000));
@@ -617,11 +628,16 @@ export class KnowledgeService {
       // ── Chunking ──
       const chunkStrategy = request.options?.chunkStrategy ?? "section-aware";
       const chunkSize = request.options?.chunkSize ?? 512;
-      const chunkResults = smartChunk(text, {
+      const chunkConfig = {
         strategy: chunkStrategy,
         chunkSize,
         overlap: chunkStrategy === "recursive" ? Math.floor(chunkSize * 0.1) : 0,
-      });
+      };
+      // Page-aware path: chunk each known page separately so provenance is real.
+      const chunkResults: ChunkResult[] = request.pages && request.pages.length > 0
+        ? planPageChunks(request.pages, (pageText) => smartChunk(pageText, chunkConfig).map((cr) => ({ text: cr.text, sectionTitle: cr.sectionTitle })))
+            .map((chunk) => ({ text: chunk.text, sectionTitle: chunk.sectionTitle, pageNumber: chunk.pageNumber ?? undefined }))
+        : smartChunk(text, chunkConfig);
 
       let chunkCount = 0;
       const errors: string[] = [];
