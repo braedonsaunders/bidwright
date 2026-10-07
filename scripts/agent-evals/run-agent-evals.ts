@@ -35,6 +35,7 @@ interface Args {
   outDir: string;
   runtime: Runtime;
   model?: string;
+  reasoningEffort?: string;
   personaId?: string;
   scope?: string;
   clientName?: string;
@@ -587,6 +588,7 @@ Options:
   --out <dir>                      Output directory. Default: ./.bidwright/evals/<timestamp>
   --runtime <runtime>              claude-code | codex | gemini | opencode | openrouter. Default: claude-code
   --model <model>                  Runtime model override
+  --reasoning-effort <effort>      Isolated run override: auto|low|medium|high|extra_high|max
   --persona-id <id>                Estimator persona id
   --scope <text>                   Scope/commercial instruction override
   --client-name <name>             Upload client name
@@ -647,6 +649,7 @@ function parseArgs(argv: string[]): Args {
     outDir: "",
     runtime: (process.env.BIDWRIGHT_AGENT_RUNTIME as Runtime) || "claude-code",
     model: process.env.BIDWRIGHT_AGENT_MODEL,
+    reasoningEffort: process.env.BIDWRIGHT_EVAL_REASONING_EFFORT,
     personaId: process.env.BIDWRIGHT_PERSONA_ID,
     scope: process.env.BIDWRIGHT_EVAL_SCOPE,
     clientName: process.env.BIDWRIGHT_EVAL_CLIENT_NAME,
@@ -720,6 +723,9 @@ function parseArgs(argv: string[]): Args {
         break;
       case "--model":
         args.model = next();
+        break;
+      case "--reasoning-effort":
+        args.reasoningEffort = next();
         break;
       case "--persona-id":
         args.personaId = next();
@@ -802,6 +808,7 @@ function parseArgs(argv: string[]): Args {
   } else {
     args.outDir = path.resolve(args.outDir);
   }
+  if (args.reasoningEffort !== undefined && !["auto", "low", "medium", "high", "extra_high", "max"].includes(args.reasoningEffort)) throw new Error("Invalid --reasoning-effort");
   if (args.reingestArchives && (!args.projectId || !args.copyProjectPerRun)) throw new Error("Archive reingestion requires a copied project; refusing to mutate the source.");
   args.apiUrl = args.apiUrl.replace(/\/+$/, "");
 
@@ -1339,6 +1346,7 @@ async function runIntake(client: ApiClient, args: Args, projectId: string, scope
       projectId,
       runtime: args.runtime,
       ...(args.model ? { model: args.model } : {}),
+      ...(args.reasoningEffort ? { reasoningEffort: args.reasoningEffort } : {}),
       ...(args.personaId ? { personaId: args.personaId } : {}),
       ...(scope ? { scope } : {}),
     },
@@ -1366,6 +1374,7 @@ async function runQuestion(client: ApiClient, args: Args, projectId: string, que
       message: question,
       runtime: args.runtime,
       ...(args.model ? { model: args.model } : {}),
+      ...(args.reasoningEffort ? { reasoningEffort: args.reasoningEffort } : {}),
       ...(args.personaId ? { personaId: args.personaId } : {}),
       ...(args.scope ? { scope: args.scope } : {}),
     },

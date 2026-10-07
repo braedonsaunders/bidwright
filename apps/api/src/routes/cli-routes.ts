@@ -6,6 +6,7 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { findPendingQuestionEvent } from "../services/cli-question-history.js";
+import { assertReasoningEffortOverride, normalizeCliReasoningEffort, resolveRunReasoningEffort } from "../services/cli-reasoning-effort.js";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, probeLiveAgent, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
 import {
   startLoginSession,
@@ -682,13 +683,6 @@ function normalizeCliModel(runtime: AgentRuntime, model: string | null | undefin
   return adapter.normalizeModel(model ?? null);
 }
 
-function normalizeCliReasoningEffort(value: unknown, mode: AgentChatMode = "build_estimate"): "auto" | "low" | "medium" | "high" | "extra_high" | "max" {
-  if (value === "auto" || value === "low" || value === "medium" || value === "high" || value === "extra_high" || value === "max") {
-    return value;
-  }
-  return mode === "qa" ? "medium" : "high";
-}
-
 const READY_INGESTION_STATUSES = new Set(["ready", "review", "quoted", "estimating"]);
 
 function ingestionStartBlock(project: { ingestionStatus?: unknown }) {
@@ -1285,8 +1279,10 @@ export function registerCliRoutes(app: FastifyInstance) {
       scope?: string;
       prompt?: string;
       personaId?: string;
+      reasoningEffort?: unknown;
     };
 
+    assertReasoningEffortOverride(body.reasoningEffort);
     const { projectId, scope, prompt } = body;
     const store = request.store!;
 
@@ -1376,7 +1372,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const runtime = resolveCliRuntime(body.runtime, integrationsEarly.agentRuntime);
     const adapter = getAdapter(runtime);
     const model = normalizeCliModel(runtime, body.model ?? integrationsEarly.agentModel);
-    const reasoningEffort = normalizeCliReasoningEffort(integrationsEarly.agentReasoningEffort);
+    const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrationsEarly.agentReasoningEffort);
 
     // Generate per-runtime instruction files (CLAUDE.md / AGENTS.md / GEMINI.md)
     const params = {
@@ -1447,7 +1443,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       kind: "cli-intake",
       status: "running",
       model: model || adapter.defaultModel,
-      input: { runtime, scope: effectiveScope, documentCount: documents.length, mode: "build_estimate" } as any,
+      input: { runtime, reasoningEffort, scope: effectiveScope, documentCount: documents.length, mode: "build_estimate" } as any,
       output: { events: seededEvents } as any,
     });
 
@@ -1588,8 +1584,9 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
    */
   async function startResumedSession(
     request: FastifyRequest,
-    body: { prompt?: string; model?: string; mode?: AgentChatMode },
+    body: { prompt?: string; model?: string; mode?: AgentChatMode; reasoningEffort?: unknown },
   ): Promise<{ sessionId: string; status: string }> {
+    assertReasoningEffortOverride(body.reasoningEffort);
     const { projectId } = request.params as { projectId: string };
     const projectDir = resolveProjectDir(projectId);
     const store = request.store!;
@@ -1623,7 +1620,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         ? integrations.agentRuntime
         : "claude-code";
     const model = normalizeCliModel(runtime, body.model ?? latestRun?.model ?? integrations.agentModel);
-    const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort, mode);
+    const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
     await prepareCliAgentWorkspace({ request, workspace, projectId, runtime, mode });
     const resumePrompt = buildResumePrompt(runtime, mode, body.prompt);
     const aiRunId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -1669,6 +1666,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         model,
         input: {
           runtime,
+          reasoningEffort,
           prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
@@ -1693,6 +1691,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         model,
         input: {
           runtime,
+          reasoningEffort,
           prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
@@ -1708,7 +1707,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
   }
 
   app.post("/api/cli/:projectId/resume", async (request, reply) => {
-    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode };
+    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode; reasoningEffort?: unknown };
     try {
       return await startResumedSession(request, body);
     } catch (err) {
@@ -1724,15 +1723,17 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
   // or returns error if a session is already running.
   app.post("/api/cli/:projectId/message", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope, mode: requestedMode } = (request.body || {}) as {
+    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope, mode: requestedMode, reasoningEffort: requestedEffort } = (request.body || {}) as {
       message: string;
       runtime?: AgentRuntime;
       model?: string;
       personaId?: string;
       scope?: string;
       mode?: AgentChatMode;
+      reasoningEffort?: unknown;
     };
 
+    assertReasoningEffortOverride(requestedEffort);
     if (!message) return reply.code(400).send({ error: "Message required" });
 
     const existing = getSession(projectId);
@@ -1769,7 +1770,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         ? integrations.agentRuntime
         : "claude-code";
     const model = normalizeCliModel(runtime, requestedModel ?? latestRun?.model ?? integrations.agentModel);
-    const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort, mode);
+    const reasoningEffort = resolveRunReasoningEffort(requestedEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
     const prepared = await prepareCliAgentWorkspace({
       request,
       workspace,
@@ -1823,6 +1824,7 @@ ${conversationContext || "No previous turns."}
       model,
       input: {
         runtime,
+        reasoningEffort,
         prompt: message,
         sessionPrompt: questionPrompt,
         followUp: true,
