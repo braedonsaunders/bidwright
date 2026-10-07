@@ -62,12 +62,12 @@ export function derivePagesForIndexing(
   const mapped = text.trim() ? pagesFromText(text, options) : null;
 
   if (positioned) {
-    // Positioned text is authoritative only when it actually covers the
-    // document. A scan whose cover page has a text layer but whose body is
-    // OCR-only would otherwise index just the cover and lose the body.
-    const coverage = textCoverage(positioned, text);
-    if (coverage >= 0.8 || !text.trim()) return positioned;
-    if (mapped && mapped.length >= positioned.length) return mapped; // complete mapping from the extractor wins
+    // A complete explicit mapping from the extractor is preferred over
+    // positioned text that may cover only part of the document.
+    if (mapped && mapped.length >= positioned.length) return mapped;
+    // Otherwise keep the known pages and EVERY unmatched remainder of the
+    // extracted text as page=null. No length threshold: a short OCR-only
+    // note such as "TYP 4" is source content and must stay searchable.
     const remainder = removeKnownText(text, positioned);
     return remainder ? [...positioned, { pageNumber: null, text: remainder }] : positioned;
   }
@@ -124,27 +124,19 @@ function pagesFromText(text: string, options: DerivePagesOptions): IndexablePage
 
 const normalize = (value: string) => value.replace(/\s+/g, " ").trim().toLowerCase();
 
-/** Fraction of the extracted text's characters that the positioned pages account for. */
-function textCoverage(pages: IndexablePage[], fullText: string): number {
-  const full = normalize(fullText).length;
-  if (full === 0) return 1;
-  const known = pages.reduce((sum, page) => sum + normalize(page.text).length, 0);
-  return Math.min(1, known / full);
-}
-
 /** Extracted text with each known positioned line removed once; what is left has no page. */
 function removeKnownText(fullText: string, pages: IndexablePage[]): string {
   let remainder = fullText;
   for (const page of pages) {
     for (const line of page.text.split("\n")) {
       const needle = line.trim();
-      if (needle.length < 3) continue;
+      if (!needle) continue;
       const at = remainder.indexOf(needle);
       if (at >= 0) remainder = remainder.slice(0, at) + remainder.slice(at + needle.length);
     }
   }
   remainder = remainder.replace(/\n\n--- Page Break ---\n\n|\f/g, "\n").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
-  return remainder.length >= 20 ? remainder : "";
+  return remainder; // any non-whitespace remainder is kept; nothing is dropped by size
 }
 
 /**

@@ -107,3 +107,22 @@ test("positioned pages that cover the document are used as-is", () => {
   });
   assert.deepEqual(pages?.map((page) => [page.pageNumber, page.text]), [[1, "alpha beta"], [2, "gamma delta"]]);
 });
+
+test("a short OCR-only quantity note survives alongside long positioned text", () => {
+  const longCover = Array.from({ length: 40 }, (_, i) => `General note ${i + 1}: contractor to verify all dimensions on site.`).join("\n");
+  const extracted = `${longCover}\nTYP 4`;
+  const pages = derivePagesForIndexing(extracted, {
+    pageText: [{ pageNumber: 1, lines: longCover.split("\n").map((text) => ({ text })) }],
+  });
+  assert.ok(pages);
+  assert.deepEqual(pages!.map((page) => page.pageNumber), [1, null]);
+  assert.equal(pages![1].text, "TYP 4", "the 5-character unmatched note is kept, not dropped by a length threshold");
+  assert.ok(!/TYP 4/.test(pages![0].text));
+});
+
+test("positioned pages with no unmatched remainder are returned as-is", () => {
+  const pages = derivePagesForIndexing("alpha beta\ngamma delta", {
+    pageText: [{ pageNumber: 1, lines: [{ text: "alpha beta" }] }, { pageNumber: 2, lines: [{ text: "gamma delta" }] }],
+  });
+  assert.deepEqual(pages?.map((page) => page.pageNumber), [1, 2]);
+});
