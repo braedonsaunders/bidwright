@@ -6294,6 +6294,16 @@ export class PrismaApiStore {
     await this.db.evidenceView.deleteMany({ where: { projectId } });
 
     // Prisma cascade deletes handle other child entities
+    // Rows without a Prisma relation to Project do not cascade: derivation
+    // history and project-scoped vectors must go explicitly or they leak when
+    // test clones are removed.
+    await this.db.lineDerivationEvent.deleteMany({ where: { projectId } }).catch(() => undefined);
+    await this.db.$executeRawUnsafe(
+      `DELETE FROM vector_records WHERE project_id = $1 AND organization_id = $2`,
+      projectId,
+      this.organizationId,
+    ).catch(() => undefined); // table may not exist on a deployment without embeddings
+
     await this.db.project.delete({ where: { id: projectId } });
 
     // Clean up files on disk (best-effort, don't fail the delete if cleanup fails)

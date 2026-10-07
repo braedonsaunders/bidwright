@@ -648,6 +648,8 @@ export class KnowledgeService {
       const embeddingCfg = await resolveEmbeddingConfig(store);
       if (embeddingCfg && chunkCount > 0 && request.options?.enableEmbeddings !== false) {
         try {
+          // Storage preflight before paid embedding generation.
+          await getVectorStore(request.organizationId ?? "default").ensureSchema();
           const embedder = createEmbedder({
             provider: embeddingCfg.provider,
             apiKey: embeddingCfg.apiKey,
@@ -791,7 +793,7 @@ export class KnowledgeService {
    * that previously ran lexical-only (books ingested then have chunks but no
    * vectors). Idempotent: vector ids are deterministic per book/chunk.
    */
-  async reembedKnowledgeBook(bookId: string, store: PrismaApiStore): Promise<{ bookId: string; chunkCount: number; embedded: number; skipped: boolean; errors: string[] }> {
+  async reembedKnowledgeBook(bookId: string, store: PrismaApiStore): Promise<{ bookId: string; chunkCount: number; embedded: number; generated?: number; skipped: boolean; errors: string[] }> {
     const errors: string[] = [];
     const book = await store.getKnowledgeBook(bookId);
     if (!book) throw new Error(`Knowledge book ${bookId} not found`);
@@ -799,6 +801,16 @@ export class KnowledgeService {
     if (!embeddingCfg) return { bookId, chunkCount: 0, embedded: 0, skipped: true, errors: ["No embedder configured (EMBEDDING_PROVIDER unset/disabled or no key)."] };
     const chunks = await store.listKnowledgeChunks(bookId);
     if (chunks.length === 0) return { bookId, chunkCount: 0, embedded: 0, skipped: true, errors: ["Book has no chunks to embed."] };
+
+    // Storage preflight BEFORE any paid embedding call: if the vector table
+    // is missing and cannot be created, stop here instead of generating
+    // thousands of vectors that fail at every upsert.
+    const vectorStore = getVectorStore(store.organizationId ?? "default");
+    try {
+      await vectorStore.ensureSchema();
+    } catch (err) {
+      return { bookId, chunkCount: chunks.length, embedded: 0, skipped: true, errors: [`Vector storage unavailable (preflight): ${err instanceof Error ? err.message : String(err)}`] };
+    }
 
     const embedder = createEmbedder({
       provider: embeddingCfg.provider,
@@ -819,7 +831,6 @@ export class KnowledgeService {
         for (let i = 0; i < batch.length; i += 1) vectors.push([]);
       }
     }
-    const vectorStore = getVectorStore(store.organizationId ?? "default");
     const records: VectorRecord[] = ordered
       .map((chunk, i) => ({
         id: `vec-${bookId}-${chunk.order ?? i}`,
@@ -838,17 +849,22 @@ export class KnowledgeService {
       }))
       .filter((record) => record.embedding.length > 0);
     const UPSERT_BATCH_SIZE = 200;
+    let stored = 0;
     for (let i = 0; i < records.length; i += UPSERT_BATCH_SIZE) {
+      const batch = records.slice(i, i + UPSERT_BATCH_SIZE);
       try {
-        await vectorStore.upsert(records.slice(i, i + UPSERT_BATCH_SIZE));
+        await vectorStore.upsert(batch);
+        stored += batch.length;
       } catch (err) {
         errors.push(`Vector upsert batch ${i} failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    if (records.length > 0 && errors.length === 0) {
+    if (stored > 0 && errors.length === 0) {
       await store.updateKnowledgeBook(bookId, { status: "indexed" }).catch(() => {});
     }
-    return { bookId, chunkCount: ordered.length, embedded: records.length, skipped: false, errors };
+    // `embedded` means STORED vectors. Generated-but-unstored vectors are not
+    // indexing progress; they are reported separately.
+    return { bookId, chunkCount: ordered.length, embedded: stored, generated: records.length, skipped: false, errors };
   }
 
   /** Embedder + index status without exposing any key material. */
