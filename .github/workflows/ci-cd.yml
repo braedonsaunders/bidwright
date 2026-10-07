@@ -138,6 +138,7 @@ jobs:
           packages/ingestion/src/drawing-providers/index.test.ts
           packages/mcp-server/src/project-image-tools.test.ts
           packages/mcp-server/src/ask-user-dropped.test.ts
+          packages/mcp-server/src/page-read-compaction.test.ts
           packages/mcp-server/src/model-tools.test.ts
           packages/mcp-server/src/knowledge-dataset-tools.test.ts
           packages/mcp-server/src/api-client.test.ts
