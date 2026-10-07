@@ -139,6 +139,7 @@ jobs:
           packages/ingestion/src/drawing-providers/index.test.ts
           packages/mcp-server/src/project-image-tools.test.ts
           packages/mcp-server/src/ask-user-dropped.test.ts
+          packages/mcp-server/src/write-memory-ownership.test.ts
           packages/mcp-server/src/page-read-compaction.test.ts
           packages/mcp-server/src/tools/response-compaction.test.ts
           packages/mcp-server/src/model-tools.test.ts
@@ -152,6 +153,7 @@ jobs:
           packages/mcp-server/src/tools/gpt-matrix-regressions.test.ts
           packages/mcp-server/src/tools/native-drawing-evidence.test.ts
           packages/domain/src/line-derivation.test.ts
+          packages/domain/src/agent-memory.test.ts
           packages/domain/src/estimate-strategy-stages.test.ts
           apps/api/src/services/page-provenance.test.ts
           apps/api/src/revision-rate-schedule-scoping.test.ts

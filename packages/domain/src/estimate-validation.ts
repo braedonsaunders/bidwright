@@ -1,4 +1,4 @@
-import { flagDerivationAssumptions, normalizeLineDerivation } from "./line-derivation";
+import { derivationSourceLookup, flagDerivationAssumptions, normalizeLineDerivation } from "./line-derivation";
 
 export type EstimateValidationSeverity = "info" | "warning" | "error" | "critical";
 
@@ -778,21 +778,25 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
     ruleSets: ["default", "readiness"],
     validate(context) {
       const issues: EstimateValidationIssueInput[] = [];
+      const strategy = (context.workspace.estimateStrategy ?? {}) as Record<string, any>;
+      const lookup = derivationSourceLookup(strategy.summary?.drawingEvidenceEngine?.claims, context.rows.map((row) => row.item as { id?: unknown; derivation?: unknown }));
       for (const row of context.rows) {
         const derivation = normalizeLineDerivation((row.item as Record<string, unknown>).derivation);
         if (!derivation || derivation.status === "reviewed" || derivation.status === "stale") continue;
-        const [flag] = flagDerivationAssumptions(derivation);
+        const [flag] = flagDerivationAssumptions(derivation, lookup);
         if (!flag) continue;
         const dominated = flag.code === "assumption_dominated";
+        // One real object x assumed hours is legitimate: visible, not a warning.
+        const warn = dominated && flag.basis !== "physical_count";
         issues.push({
           message: `"${displayItemName(row.item)}" ${dominated ? "is sized entirely by assumptions" : "uses assumed inputs"} and has not been reviewed by an estimator. ${flag.message}`,
-          severity: dominated ? "warning" : "info",
+          severity: warn ? "warning" : "info",
           element: itemRef(row),
           suggestions: [
             "Confirm the assumed inputs, replace them with a sourced value, or mark the derivation reviewed.",
           ],
-          details: { flag: flag.code, inputs: flag.inputs, derivationStatus: derivation.status },
-          scoreImpact: dominated ? 0.6 : 0.2,
+          details: { flag: flag.code, basis: flag.basis, inputs: flag.inputs, derivationStatus: derivation.status },
+          scoreImpact: warn ? 0.6 : 0.2,
         });
       }
       return issues;

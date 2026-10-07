@@ -693,5 +693,129 @@
     "result": "5 physical platform columns/base plates"
    }
   ]
+ },
+ "round3DeckDrillRow": {
+  "id": "li-43a42683-f951-455b-b834-bc4ea437d7b6",
+  "entityName": "MECH:Trade Labour",
+  "category": "Labour",
+  "quantity": 1,
+  "uom": "HR",
+  "tierUnits": {
+   "rst-9973065b-c56b-42e4-bc3e-7cb1187a403e": 3.84,
+   "rst-a1d27ba9-766c-404a-bfb9-cc40736ccb7a": 15.36
+  },
+  "laborUnitId": "lu-c5d4ae87-b975-445f-a6a3-05ac1895d3eb",
+  "sourceEvidence": {
+   "evidenceBasis": {
+    "pricing": {
+     "type": "knowledge_labor",
+     "sourceRefs": [
+      "rsi-c2b5ff66-7dd6-43c9-a70d-72915eda8469",
+      "lu-c5d4ae87-b975-445f-a6a3-05ac1895d3eb",
+      "ds-91dd7ada-5504-4639-afc2-9097dccc9c5d"
+     ],
+     "assumptionIds": [
+      "a-deck80",
+      "a-drill-factor"
+     ]
+    },
+    "quantity": {
+     "type": "drawing_quantity",
+     "viewIds": [
+      "view-7014727f-e66f-4aa3-a43d-722654fa1807"
+     ],
+     "rationale": "Physical assembly/installed quantity from source; duration or per-unit hours explicitly identified as estimator allowance unless library unit specified.",
+     "sourceRefs": [
+      "claim-d7e361c476c9"
+     ],
+     "assumptionIds": [
+      "a-deck80",
+      "a-drill-factor"
+     ],
+     "drawingClaimIds": [
+      "claim-d7e361c476c9"
+     ]
+    },
+    "sourceRefs": [],
+    "assumptionIds": [],
+    "drawingClaimIds": []
+   }
+  },
+  "derivation": {
+   "version": 1,
+   "target": "tierUnits",
+   "formula": "fasteningLocations*drillHoursPerHole",
+   "inputs": [
+    {
+     "name": "fasteningLocations",
+     "value": 80,
+     "unit": "EA",
+     "perInstance": false,
+     "instanceOf": null,
+     "source": {
+      "kind": "claim",
+      "ref": "claim-d7e361c476c9",
+      "excerpt": "80 locations is a carried estimating assumption; the drawing specifies the task but gives no count."
+     },
+     "note": null
+    },
+    {
+     "name": "drillHoursPerHole",
+     "value": 0.24,
+     "unit": "HR/EA",
+     "perInstance": false,
+     "instanceOf": null,
+     "source": {
+      "kind": "laborUnit",
+      "ref": "lu-c5d4ae87-b975-445f-a6a3-05ac1895d3eb",
+      "excerpt": "EPM field drilling table wall≤1/2in, hole≤3/4in; tapping and stainless factors separate."
+     },
+     "note": null
+    }
+   ],
+   "result": {
+    "value": 19.2,
+    "unit": "HR"
+   },
+   "status": "draft",
+   "computedAt": "2026-10-07T20:24:05.685Z",
+   "invalidatedBy": [],
+   "notes": "Base person-hours; rate tiers carry schedule allocation. Estimate factors applied separately.",
+   "procurement": null,
+   "reviewFlags": []
+  }
+ },
+ "round3DeckAllowanceClaim": {
+  "unit": "EA",
+  "value": 80,
+  "method": "assumption",
+  "claimId": "claim-d7e361c476c9",
+  "savedAt": "2026-10-07T20:12:43.904Z",
+  "evidence": [
+   {
+    "bbox": {
+     "x": 0.151,
+     "y": 0.118,
+     "width": 0.787,
+     "height": 0.657
+    },
+    "tool": "readDrawingTile",
+    "viewId": "view-7014727f-e66f-4aa3-a43d-722654fa1807",
+    "imageHash": "361819f738883327bdc7e55252c31e78d3ee33bf85b9ace5b44fa624c7e3e219",
+    "documentId": "doc_8e0ac7f6-55b8-463f-bd9c-eae8a76af2bb",
+    "pageNumber": 5,
+    "sourceText": "1/4-20 button head screws, drill and tap into tube",
+    "imageHashVerifiedAt": "2026-10-07T20:12:43.930Z"
+   }
+  ],
+  "packageId": "pkg-platform",
+  "rationale": "The response to clarification restated commercial scope only; it did not approve 80 holes. Screws owner supplied. Count remains an estimating assumption.",
+  "assumption": "No screw spacing/count in source. Carry 80 fastening locations as estimator labour allowance; fabricator layout governs installation.",
+  "confidence": "low",
+  "quantityName": "Deck field drill tap fastening allowance",
+  "reconciliation": {
+   "status": "carried_assumption",
+   "resolution": "Price explicit installation allowance; final screw layout unresolved."
+  }
  }
 }

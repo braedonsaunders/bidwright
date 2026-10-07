@@ -12,6 +12,9 @@ import {
   markDerivationStale,
   normalizeLineDerivation,
   flagDerivationAssumptions,
+  derivationSourceLookup,
+  classifyFactorOneEvidence,
+  summarizeHourBasis,
   packsRequired,
   reconcileProcurementQuantities,
   validateLineDerivation,
@@ -366,4 +369,102 @@ test("assumption review flags: dominated when every sizing input is assumed, par
 test("caller-supplied review flags with unknown codes are dropped on normalize", () => {
   const normalized = normalizeLineDerivation({ formula: "a", inputs: [{ name: "a", value: 2, source: { kind: "view", ref: "v" } }], result: { value: 2 }, reviewFlags: [{ code: "approved_by_ai", message: "fine" }] })!;
   assert.deepEqual(normalized.reviewFlags, []);
+});
+
+test("assumption flags follow claim and linked-row references, with a cycle guard", () => {
+  const deck = normalizeLineDerivation({
+    formula: "fasteningLocations * drillHoursPerHole",
+    inputs: [
+      { name: "fasteningLocations", value: 80, unit: "EA", source: { kind: "claim", ref: "claim-deck80" } },
+      { name: "drillHoursPerHole", value: 0.24, unit: "HR/EA", source: { kind: "laborUnit", ref: "lu-1" } },
+    ],
+    result: { value: 19.2, unit: "HR" },
+  })!;
+  assert.deepEqual(flagDerivationAssumptions(deck), [], "without a lookup the claim reads as evidence");
+  const lookup = derivationSourceLookup([{ claimId: "claim-deck80", method: "assumption" }, { claimId: "claim-plates", method: "visual_count" }], []);
+  const [flag] = flagDerivationAssumptions(deck, lookup);
+  assert.equal(flag.code, "assumed_inputs");
+  assert.deepEqual(flag.inputs, ["fasteningLocations"]);
+
+  // a visual_count claim stays evidence
+  const plates = normalizeLineDerivation({ formula: "a", inputs: [{ name: "basePlates", value: 5, source: { kind: "claim", ref: "claim-plates" } }], result: { value: 5 } })!;
+  assert.deepEqual(flagDerivationAssumptions(plates, lookup), []);
+
+  // chained: a material row takes installedAnchors from a labour row whose installedAnchors is assumed
+  const rows = [
+    { id: "li-labour", derivation: { formula: "x", inputs: [{ name: "installedAnchors", value: 8, source: { kind: "assumption", ref: "A-LIFT" } }], result: { value: 8 } } },
+    { id: "li-a", derivation: { formula: "x", inputs: [{ name: "n", value: 4, source: { kind: "item", ref: "li-b" } }], result: { value: 4 } } },
+    { id: "li-b", derivation: { formula: "x", inputs: [{ name: "n", value: 4, source: { kind: "item", ref: "li-a" } }], result: { value: 4 } } },
+  ];
+  const chained = derivationSourceLookup([], rows);
+  const material = normalizeLineDerivation({ formula: "ceil(installedAnchors / packSize)", inputs: [{ name: "installedAnchors", value: 8, source: { kind: "item", ref: "li-labour" } }, { name: "packSize", value: 10, source: { kind: "web", ref: "https://www.hilti.com" } }], result: { value: 1 } })!;
+  assert.equal(flagDerivationAssumptions(material, chained)[0].code, "assumed_inputs");
+  // a reference cycle terminates and is treated as unsourced
+  const cyclic = normalizeLineDerivation(rows[1].derivation)!;
+  assert.equal(flagDerivationAssumptions(cyclic, chained)[0]?.code, "assumption_dominated");
+});
+
+test("factor-of-1 evidence is classified narrowly: physical needs a counting claim in a count unit", () => {
+  const lookup = derivationSourceLookup([
+    { claimId: "c-wp200", method: "visual_count", unit: "EA", quantityName: "WP200 compactors" },
+    { claimId: "c-lot", method: "takeoff", unit: "LOT", quantityName: "Vendor hose connection lots" },
+    { claimId: "c-set", method: "takeoff", unit: "SET", quantityName: "Servo-Lift assembly" },
+    { claimId: "c-takeoff-ea", method: "takeoff", unit: "EA", quantityName: "ASBV mounting assemblies" },
+  ], []);
+  const one = (name: string, ref: string, unit = "EA") => ({ name, value: 1, unit, source: { kind: "claim" as const, ref } });
+  assert.equal(classifyFactorOneEvidence(one("equipment", "c-wp200"), lookup), "physical_count");
+  assert.equal(classifyFactorOneEvidence(one("lots", "c-lot", "LOT"), lookup), "scope_only");
+  assert.equal(classifyFactorOneEvidence(one("assembly", "c-set", "SET"), lookup), "unclassified", "SET is ambiguous");
+  assert.equal(classifyFactorOneEvidence(one("mountings", "c-takeoff-ea"), lookup), "physical_count", "a takeoff can count a real object");
+  assert.equal(classifyFactorOneEvidence({ name: "installationPackages", value: 1, unit: "SET", source: { kind: "view", ref: "v" } }, lookup), "scope_only", "package naming");
+  assert.equal(classifyFactorOneEvidence({ name: "units", value: 1, unit: "EA", source: { kind: "view", ref: "v" } }, lookup), "unclassified", "a bare view is not positive physical evidence");
+});
+
+test("dominated flags carry their basis and hour-basis totals come from sources, not labels", () => {
+  const lookup = derivationSourceLookup([
+    { claimId: "c-wp200", method: "visual_count", unit: "EA", quantityName: "WP200 compactors" },
+    { claimId: "c-lot", method: "takeoff", unit: "LOT", quantityName: "Vendor hose connection lots" },
+  ], []);
+  const crew = (evidence: Record<string, unknown>) => ({ formula: `${evidence.name} * mechanics * hours`, inputs: [evidence, { name: "mechanics", value: 3, source: { kind: "assumption", ref: "a-labour" } }, { name: "hours", value: 8, source: { kind: "assumption", ref: "a-labour" } }], result: { value: 24, unit: "HR" } });
+  const machine = normalizeLineDerivation(crew({ name: "equipment", value: 1, unit: "EA", source: { kind: "claim", ref: "c-wp200" } }))!;
+  const lot = normalizeLineDerivation(crew({ name: "packages", value: 1, unit: "LOT", source: { kind: "claim", ref: "c-lot" } }))!;
+  assert.equal(flagDerivationAssumptions(machine, lookup)[0].basis, "physical_count");
+  assert.match(flagDerivationAssumptions(machine, lookup)[0].message, /counts a physical object/);
+  assert.equal(flagDerivationAssumptions(lot, lookup)[0].basis, "scope_only");
+  const library = { formula: "n * h", inputs: [{ name: "n", value: 5, source: { kind: "claim", ref: "c-wp200" } }, { name: "h", value: 0.75, source: { kind: "laborUnit", ref: "lu-1" } }], result: { value: 3.75 } };
+  const rows = [
+    { derivation: machine, hours: 24 },
+    { derivation: lot, hours: 32 },
+    { derivation: library, hours: 3.75 },
+    { derivation: null, hours: 10 },
+  ];
+  const summary = summarizeHourBasis(rows, (row) => row.hours, lookup);
+  assert.equal(summary.unit, "direct_labour_hours_before_estimate_factors");
+  assert.equal(summary.byBasis.assumed_physical_count, 24);
+  assert.equal(summary.byBasis.assumed_scope_only, 32);
+  assert.equal(summary.byBasis.sourced, 3.75);
+  assert.equal(summary.byBasis.no_derivation, 10);
+  assert.equal(summary.total, 69.75);
+  assert.equal(Object.values(summary.byBasis).reduce((a, b) => a + b, 0), summary.total, "categories partition the total");
+  // rows with zero direct labour hours (equipment duration, materials) are not counted
+  assert.equal(summarizeHourBasis([{ derivation: machine, hours: 0 }], (row) => row.hours, lookup).total, 0);
+});
+
+test("evidence inputs the formula does not use neither size the result nor set its basis", () => {
+  // Round-3 GPT row: 24 h = mechanics 2 x crewDuration 12, with three unused evidence inputs attached.
+  const decorated = normalizeLineDerivation({
+    formula: "mechanics*crewDuration",
+    inputs: [
+      { name: "interfaces", value: 2, unit: "EA", source: { kind: "claim", ref: "c-int" } },
+      { name: "steelFixingLocations", value: 12, unit: "EA", source: { kind: "claim", ref: "c-fix" } },
+      { name: "platformAssembly", value: 1, unit: "EA", source: { kind: "claim", ref: "c-plat" } },
+      { name: "mechanics", value: 2, source: { kind: "assumption", ref: "a-labour" } },
+      { name: "crewDuration", value: 12, unit: "HR", source: { kind: "assumption", ref: "a-labour" } },
+    ],
+    result: { value: 24, unit: "HR" },
+  })!;
+  const lookup = derivationSourceLookup([{ claimId: "c-plat", method: "visual_count", unit: "EA", quantityName: "Work platforms" }], []);
+  const [flag] = flagDerivationAssumptions(decorated, lookup);
+  assert.equal(flag.code, "assumption_dominated");
+  assert.equal(flag.basis, "assumption_only", "the unused platform claim does not make it a physical count");
 });

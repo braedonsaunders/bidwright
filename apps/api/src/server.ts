@@ -7,7 +7,7 @@ import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
+import { access, chown, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,7 +110,7 @@ import {
   type LineItemSearchSourceType,
 } from "./prisma-store.js";
 import { prisma } from "@bidwright/db";
-import { getExtendedWorksheetUnitBreakdown } from "@bidwright/domain";
+import { getExtendedWorksheetUnitBreakdown, normalizeAgentMemory, setAgentMemorySection } from "@bidwright/domain";
 import {
   relativePackageArchivePath,
   relativeProjectFilePath,
@@ -2018,12 +2018,14 @@ async function startPackageIngestForProject(
       }).join("\n");
 
       const memPath = resolveApiPath("projects", targetProjectId!, "agent-memory.json");
-      let memory: any = { sections: {}, updatedAt: null };
-      try { memory = JSON.parse(await readFile(memPath, "utf8")); } catch {}
-      memory.sections["ingestion_results"] = `## Document Ingestion Complete\n\n${docs.length} documents extracted from package:\n\n${summary}`;
-      memory.updatedAt = new Date().toISOString();
-      await mkdir(path.dirname(memPath), { recursive: true });
-      await writeFile(memPath, JSON.stringify(memory, null, 2), "utf8");
+      let raw: unknown = null;
+      try { raw = JSON.parse(await readFile(memPath, "utf8")); } catch {}
+      const memory = setAgentMemorySection(
+        normalizeAgentMemory(raw),
+        "ingestion_results",
+        `## Document Ingestion Complete\n\n${docs.length} documents extracted from package:\n\n${summary}`,
+      );
+      await writeProjectMemoryFile(memPath, JSON.stringify(memory, null, 2));
     } catch {}
   }).catch((err) => {
     console.error(`[ingestion] Package ${multipartUpload.packageId} failed:`, err);
@@ -2094,6 +2096,25 @@ async function ingestUploadForProject(store: PrismaApiStore, request: FastifyReq
     status: "processing",
     message: `Package uploaded. ${placeholderDocIds.length} documents ready. Text extraction running in background.`,
   };
+}
+
+/**
+ * Write a project's agent-memory.json as the project directory's owner.
+ * The API runs as root but agents run sandboxed as the launcher identity, so a
+ * root-owned 0644 memory file made every agent writeMemory fail with EACCES.
+ */
+async function writeProjectMemoryFile(memPath: string, content: string) {
+  const dir = path.dirname(memPath);
+  await mkdir(dir, { recursive: true });
+  const tmp = `${memPath}.${process.pid}.${Date.now()}.tmp`;
+  await writeFile(tmp, content, "utf8");
+  try {
+    const owner = await stat(dir);
+    await chown(tmp, owner.uid, owner.gid);
+  } catch {
+    // Not running as root (desktop/dev): the file already has our identity.
+  }
+  await rename(tmp, memPath);
 }
 
 export function buildServer() {
@@ -2692,10 +2713,9 @@ export function buildServer() {
     const { projectId } = request.params as { projectId: string };
     const memPath = resolveApiPath("projects", projectId, "agent-memory.json");
     try {
-      const raw = await readFile(memPath, "utf8");
-      return JSON.parse(raw);
+      return normalizeAgentMemory(JSON.parse(await readFile(memPath, "utf8")));
     } catch {
-      return { sections: {}, updatedAt: null };
+      return normalizeAgentMemory(null);
     }
   });
 
@@ -2704,21 +2724,13 @@ export function buildServer() {
     const body = request.body as { section: string; content: string; append?: boolean };
     const memPath = resolveApiPath("projects", projectId, "agent-memory.json");
 
-    let memory: { sections: Record<string, string>; updatedAt: string | null } = { sections: {}, updatedAt: null };
-    try {
-      const raw = await readFile(memPath, "utf8");
-      memory = JSON.parse(raw);
-    } catch {}
+    let raw: unknown = null;
+    try { raw = JSON.parse(await readFile(memPath, "utf8")); } catch {}
+    // A flat file written by an older agent tool has no `sections`; reading it
+    // as-is crashed here.
+    const memory = setAgentMemorySection(normalizeAgentMemory(raw), body.section, body.content, body.append === true);
 
-    if (body.append && memory.sections[body.section]) {
-      memory.sections[body.section] += "\n" + body.content;
-    } else {
-      memory.sections[body.section] = body.content;
-    }
-    memory.updatedAt = new Date().toISOString();
-
-    await mkdir(path.dirname(memPath), { recursive: true });
-    await writeFile(memPath, JSON.stringify(memory, null, 2), "utf8");
+    await writeProjectMemoryFile(memPath, JSON.stringify(memory, null, 2));
     return memory;
   });
 

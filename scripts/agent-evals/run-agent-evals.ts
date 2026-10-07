@@ -1428,9 +1428,26 @@ async function waitForAgentRun(
   let lastProgressAt = Date.now();
   let lastLog = 0;
   const answeredQuestions = new Set<string>();
+  let observerDisconnected = false;
 
   while (Date.now() < deadline) {
-    const response = await client.requestJson<CliStatus>(`/api/cli/${projectId}/status`);
+    let response: ApiResponse<CliStatus>;
+    try {
+      response = await client.requestJson<CliStatus>(`/api/cli/${projectId}/status`);
+    } catch (error) {
+      if (!observerDisconnected) {
+        await appendLiveNote(monitor, `Observer connection lost: ${String(error)}. Server agent state is unknown; retrying without classifying a model stall.`);
+      }
+      observerDisconnected = true;
+      lastProgressAt = Date.now();
+      await sleep(args.pollSeconds * 1000);
+      continue;
+    }
+    if (observerDisconnected) {
+      await appendLiveNote(monitor, "Observer connection restored; recovered server-side events.");
+      lastProgressAt = Date.now();
+      observerDisconnected = false;
+    }
     lastStatus = response.data;
     const status = String(lastStatus.status || "none");
     const runEvents = sessionId ? sliceEventsForRun(lastStatus.events || [], sessionId) : (lastStatus.events || []);
@@ -1446,7 +1463,11 @@ async function waitForAgentRun(
         return { ...lastStatus, status: "needs_clarification", events: runEvents };
       }
     }
-    await maybeAnswerPendingQuestion(client, args, projectId, label, monitor, answeredQuestions, runEvents);
+    try {
+      await maybeAnswerPendingQuestion(client, args, projectId, label, monitor, answeredQuestions, runEvents);
+    } catch (error) {
+      await appendLiveNote(monitor, `Clarification delivery could not be confirmed: ${String(error)}. Retrying on the next poll; no answer is assumed delivered.`);
+    }
 
     if (Date.now() - lastLog > 20_000 || runEvents.length !== lastEventCount) {
       const tools = analyzeTools(runEvents, []);
@@ -1502,7 +1523,6 @@ async function maybeAnswerPendingQuestion(
 
   const questionId = getString(pendingData.questionId) || getString(pendingData.id) || stringifyForSearch(pendingData.question).slice(0, 80);
   if (!questionId || answeredQuestions.has(questionId)) return;
-  answeredQuestions.add(questionId);
 
   const question = getString(pendingData.question);
   const answer = args.questionAnswer || defaultEvalQuestionAnswer(question);
@@ -1517,6 +1537,7 @@ async function maybeAnswerPendingQuestion(
     method: "POST",
     body: { questionId, answer },
   });
+  answeredQuestions.add(questionId);
 }
 
 function findUnansweredAskUserEvent(events: CliEvent[]): Json | null {
