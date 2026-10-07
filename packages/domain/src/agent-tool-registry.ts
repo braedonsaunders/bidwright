@@ -106,6 +106,9 @@ export const AGENT_TOOL_REGISTRY = {
 
   getEstimateStrategy: { id: "getEstimateStrategy", displayName: "Read estimate strategy", category: "strategy" },
   getLineDerivation: { id: "getLineDerivation", displayName: "Read line derivation", category: "strategy" },
+  listCalibrationLessons: { id: "listCalibrationLessons", displayName: "Read approved calibration lessons", category: "strategy" },
+  saveEstimateStrategyStages: { id: "saveEstimateStrategyStages", displayName: "Save strategy stages (atomic)", category: "strategy", mutates: true },
+  batchEditWorksheetItems: { id: "batchEditWorksheetItems", displayName: "Batch edit worksheet lines (atomic)", category: "worksheet", mutates: true },
   saveEstimateScopeGraph: { id: "saveEstimateScopeGraph", displayName: "Save scope graph", category: "strategy", mutates: true },
   saveEstimateExecutionPlan: { id: "saveEstimateExecutionPlan", displayName: "Save execution plan", category: "strategy", mutates: true },
   saveEstimateAssumptions: { id: "saveEstimateAssumptions", displayName: "Save assumptions", category: "strategy", mutates: true },

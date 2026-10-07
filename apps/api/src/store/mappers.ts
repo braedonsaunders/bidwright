@@ -919,6 +919,11 @@ export function mapEstimateCalibrationFeedback(row: any): EstimateCalibrationFee
     corrections: (row.corrections as Array<Record<string, unknown>>) ?? [],
     lessons: (row.lessons as Array<Record<string, unknown>>) ?? [],
     notes: row.notes ?? "",
+    reviewStatus: (row.reviewStatus as "pending" | "approved" | "rejected" | undefined) ?? "pending",
+    reviewedAt: row.reviewedAt ? toISO(row.reviewedAt) : null,
+    reviewedBy: row.reviewedBy ?? null,
+    reviewNotes: row.reviewNotes ?? "",
+    approvedLessons: (row.approvedLessons as Array<Record<string, unknown>>) ?? [],
     createdAt: toISO(row.createdAt),
     updatedAt: toISO(row.updatedAt),
   };
