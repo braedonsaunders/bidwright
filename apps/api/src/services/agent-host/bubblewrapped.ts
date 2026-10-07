@@ -35,7 +35,11 @@ import type { ChildProcess } from "node:child_process";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 import { spawnBubblewrappedProcess } from "@braedonsaunders/appkit-process-sandbox";
 
+import { prisma } from "@bidwright/db";
+
+import { resolveApiPath, resolveKnowledgeDir } from "../../paths.js";
 import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
+import { authorizedKnowledgeMounts } from "./knowledge-mounts.js";
 import { stripBlankCredentialEnv } from "./env-sanitize.js";
 import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
@@ -137,6 +141,24 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       ...agentRuntimePaths,
     ];
 
+    // The workspace's knowledge/ links point into /data, which the sandbox
+    // masks; bind exactly the organisation's books back in, read-only.
+    const knowledgeMounts = await authorizedKnowledgeMounts(projectDir, {
+      knowledgeRoot: resolveKnowledgeDir(),
+      dataRoot: resolveApiPath(),
+      loadOrganizationBooks: async (projectId) => {
+        const project = await prisma.project.findUnique({ where: { id: projectId }, select: { organizationId: true } });
+        if (!project) return [];
+        return prisma.knowledgeBook.findMany({
+          where: { organizationId: project.organizationId, scope: "global", storagePath: { not: null } },
+          select: { storagePath: true },
+        });
+      },
+    }).catch((error: unknown) => {
+      console.warn(`[cli:spawn:bwrap] knowledge mounts skipped: ${error instanceof Error ? error.message : String(error)}`);
+      return [] as string[];
+    });
+
     // The API owns newly generated instruction and broker files as root, but
     // AppKit intentionally invokes bubblewrap as an unprivileged identity.
     // The project must be launcher-owned even when it is mounted read-only:
@@ -163,6 +185,7 @@ export const bubblewrappedHost: AgentRuntimeHost = {
         "/opt",
         "/app",
         ...(opts.workspaceAccess === "read-only" ? [projectDir] : []),
+        ...knowledgeMounts,
       ],
       maskedPaths: ["/data", "/home", "/root", "/var"],
       bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
