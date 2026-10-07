@@ -377,11 +377,19 @@ const NO_CHARGE_PRICING_TYPES = new Set(["allowance", "subcontract"]);
 
 /**
  * Mirrors the pricing gate's honest path for a $0 lump sum: pricing type
- * allowance or subcontract, backed by a saved assumption id or an explicit
+ * allowance or subcontract, backed by assumption ids that resolve to saved
+ * strategy assumptions, or by an explicit
  * user instruction ("user: …" or {kind:"user", ref}). An accidental zero row
  * (no basis, or a material/vendor quote basis) is still an error.
  */
-function isDeclaredNoChargeRow(item: EstimateValidationWorksheetItemLike): boolean {
+/** Ids of assumptions saved on the estimate strategy, or null when the workspace does not carry them. */
+function savedAssumptionIds(context: EstimateValidationContext): Set<string> | null {
+  const assumptions = (context.workspace.estimateStrategy as Record<string, unknown> | null | undefined)?.assumptions;
+  if (!Array.isArray(assumptions)) return null;
+  return new Set(assumptions.map((entry) => String((entry as Record<string, unknown>)?.id ?? "").trim()).filter(Boolean));
+}
+
+function isDeclaredNoChargeRow(item: EstimateValidationWorksheetItemLike, saved: Set<string> | null): boolean {
   const basis = rowEvidenceBasis(item);
   const pricingType = String(basis.pricing?.type ?? basis.pricingType ?? basis.type ?? "").trim().toLowerCase();
   if (!NO_CHARGE_PRICING_TYPES.has(pricingType)) return false;
@@ -390,7 +398,11 @@ function isDeclaredNoChargeRow(item: EstimateValidationWorksheetItemLike): boole
     if (ref && typeof ref === "object") return String((ref as Record<string, unknown>).kind ?? "").toLowerCase() === "user" && String((ref as Record<string, unknown>).ref ?? "").trim().length >= 2;
     return /^(user|client|owner|customer|estimator)\s*[:\-]\s*\S{2,}/i.test(String(ref ?? ""));
   });
-  return assumptionIds.length > 0 || userRefs.length > 0;
+  // Assumption ids must resolve against the saved strategy: rows written via
+  // the API or UI never passed the MCP gate's resolution check. When the
+  // workspace carries no strategy, only an explicit user instruction counts.
+  const assumptionsResolve = assumptionIds.length > 0 && saved !== null && assumptionIds.every((id) => saved.has(id));
+  return assumptionsResolve || userRefs.length > 0;
 }
 
 function noChargeBasisLabel(item: EstimateValidationWorksheetItemLike): string {
@@ -478,7 +490,8 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         // A row the estimate deliberately carries at $0 (fabrication by
         // others, owner-supplied equipment) is declared as such on its
         // evidence basis; it is reported, not treated as missing pricing.
-        if (bothZero && isDeclaredNoChargeRow(row.item)) {
+        // Exactly zero: a negative amount is a credit, never a no-charge row.
+        if (cost === 0 && price === 0 && isDeclaredNoChargeRow(row.item, savedAssumptionIds(context))) {
           return [{
             message: `Worksheet item "${displayItemName(row.item)}" is carried at no charge as a declared ${noChargeBasisLabel(row.item)}.`,
             severity: "info",

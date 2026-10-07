@@ -96,9 +96,10 @@ test("GPT's applied 96 h erection row is flagged assumption-dominated by the qua
 
 // ── finalize readiness: declared $0 rows vs accidental zeros ──────────────
 
-async function zeroRuleIssues(items: Array<Record<string, unknown>>) {
+async function zeroRuleIssues(items: Array<Record<string, unknown>>, assumptions: unknown[] | null = fixture.assumptions) {
   const { validateEstimateWorkspace } = await import("@bidwright/domain");
-  const result = validateEstimateWorkspace({ worksheets: [{ id: "ws", name: "Fabrication", items }] } as any, { ruleIds: ["worksheet.pricing.zero_cost_or_price"] } as any);
+  const workspace = { worksheets: [{ id: "ws", name: "Fabrication", items }], ...(assumptions ? { estimateStrategy: { assumptions } } : {}) };
+  const result = validateEstimateWorkspace(workspace as any, { ruleIds: ["worksheet.pricing.zero_cost_or_price"] } as any);
   return result.issues.filter((issue: any) => issue.ruleId === "worksheet.pricing.zero_cost_or_price");
 }
 
@@ -125,4 +126,19 @@ test("accidental zero rows still block finalize", async () => {
 test("an explicit user instruction also declares a no-charge allowance", async () => {
   const issues = await zeroRuleIssues([{ id: "li-d", worksheetId: "ws", entityName: "Owner-supplied hoist", category: "Subcontractor", quantity: 1, uom: "LS", cost: 0, price: 0, sourceEvidence: { evidenceBasis: { pricing: { type: "allowance", sourceRefs: [{ kind: "user", ref: "Owner supplies the hoist" }] } } } }]);
   assert.equal(issues[0].severity, "info");
+});
+
+test("a $0 row citing an assumption that was never saved stays an error", async () => {
+  const item = fixture.zeroFabricationPlaceholder.item;
+  const orphan = { id: "li-orphan", worksheetId: "ws", entityName: item.entityName, category: item.category, quantity: 1, uom: "LS", cost: 0, price: 0, sourceEvidence: { evidenceBasis: { ...item.evidenceBasis, pricing: { ...item.evidenceBasis.pricing, assumptionIds: ["A-NEVER-SAVED"] } } } };
+  assert.equal((await zeroRuleIssues([orphan]))[0].severity, "error");
+  // and without any strategy on the workspace, an assumption id alone is not enough
+  const stored = { ...orphan, id: "li-nostrategy", sourceEvidence: { evidenceBasis: item.evidenceBasis } };
+  assert.equal((await zeroRuleIssues([stored], null))[0].severity, "error");
+});
+
+test("a negative-cost row is never treated as a declared no-charge placeholder", async () => {
+  const item = fixture.zeroFabricationPlaceholder.item;
+  const credit = { id: "li-credit", worksheetId: "ws", entityName: "Credit", category: item.category, quantity: 1, uom: "LS", cost: -500, price: -500, sourceEvidence: { evidenceBasis: item.evidenceBasis } };
+  assert.equal((await zeroRuleIssues([credit]))[0].severity, "error");
 });
