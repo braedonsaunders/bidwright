@@ -1040,10 +1040,40 @@ interface EvidenceViewRecord {
   id: string;
   documentId?: string | null;
   fileNodeId?: string | null;
+  sourceChecksum?: string | null;
   pageNumber?: number | null;
   tool?: string | null;
   imageHash?: string | null;
   textSnippet?: string | null;
+}
+
+/**
+ * A view is only evidence for the document version it was rendered from.
+ * Reject views whose source document is gone from the project (replaced or
+ * deleted) or whose recorded checksum no longer matches the current file.
+ */
+function staleEvidenceViewError(views: EvidenceViewRecord[], ws: any): string | null {
+  const docs = asArray(ws.sourceDocuments).map(asRecord);
+  for (const view of views) {
+    const documentId = String(view.documentId ?? "").trim();
+    if (!documentId) {
+      // A Files-area (FileNode) view has no SourceDocument identity or
+      // checksum to compare, so its source version cannot be established.
+      // Fail closed rather than treat it as equivalent to document evidence.
+      const fileNodeId = String(view.fileNodeId ?? "").trim();
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, rendered from a Files-area file${fileNodeId ? ` (${fileNodeId})` : ""} that is not a registered source document, so its version cannot be verified. Register it first — readDrawingPage / readDrawingTile / promotePdfToDrawingEvidence accept the FileNode id and promote it to a SourceDocument — then re-read the page from the resulting documentId and cite that viewId.`;
+    }
+    const doc = docs.find((entry) => String(entry.id ?? "") === documentId);
+    if (!doc) {
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, taken of document ${documentId}, which is no longer a source document in this project (replaced or removed). Re-read the current document with readDrawingPage / readDrawingTile and cite the new viewId.`;
+    }
+    const current = String(doc.checksum ?? "").trim();
+    const recorded = String(view.sourceChecksum ?? "").trim();
+    if (current && recorded && current !== recorded) {
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, which was rendered from an earlier version of "${String(doc.fileName ?? documentId)}" (source checksum changed). Re-read the current page and cite the new viewId; prior-run views are valid only while the source file is unchanged.`;
+    }
+  }
+  return null;
 }
 
 /**
@@ -1122,6 +1152,8 @@ export async function validateTraceableQuantityForPricing(ws: any, input: {
       return `evidenceBasis.quantity.viewIds not found for this project: ${result.missingIds.join(", ")}. Use only viewIds returned by readDrawingPage / readDrawingTile / inspectDrawingRegion in this project.`;
     }
     views = result.views;
+    const staleError = staleEvidenceViewError(views, ws);
+    if (staleError) return staleError;
   }
 
   // ── derivation ──
