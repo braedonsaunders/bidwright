@@ -12,6 +12,8 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
   const projectDir = await mkdtemp(join(tmpdir(), "bidwright-openrouter-adapter-"));
   const fakeCodex = join(projectDir, "codex");
   await writeFile(fakeCodex, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+  const originalCacheFlag = process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE;
+  delete process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE;
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => new Response(JSON.stringify({
     data: [{
@@ -46,6 +48,7 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
   try {
     const plan = await openRouterAdapter.buildSpawnPlan(ctx);
     assert.equal(plan.extraEnv.OPENROUTER_API_KEY, "sk-or-test-secret");
+    assert.equal(plan.extraEnv.BIDWRIGHT_OPENROUTER_PROMPT_CACHE, "off");
     assert.equal(JSON.stringify(plan.args).includes("sk-or-test-secret"), false);
     assert.equal(JSON.stringify(plan.args).includes("test-mcp-token"), false);
 
@@ -94,13 +97,16 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     assert.ok(qaRequest.appServerArgs.includes('mcp_servers.bidwright.default_tools_approval_mode="approve"'));
     assert.ok(!qaRequest.appServerArgs.some((arg: string) => arg.includes("tools.updateWorksheetItem.")));
 
+    process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE = "on";
     for (const model of ["anthropic/claude-opus-5.5", "~anthropic/claude-opus-latest"]) {
       const cachedPlan = await openRouterAdapter.buildSpawnPlan({ ...ctx, model });
       const cachedRequest = JSON.parse(await readFile(cachedPlan.args[cachedPlan.promptHandling.index], "utf8"));
       assert.equal(cachedRequest.openRouterPromptCache, true);
+      assert.equal(cachedPlan.extraEnv.BIDWRIGHT_OPENROUTER_PROMPT_CACHE, "on");
       assert.equal(JSON.stringify(cachedRequest).includes("sk-or-test-secret"), false);
     }
 
+    delete process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE;
     // New/default sessions still start if metadata is temporarily unavailable;
     // the retired alias is translated to an exact model with verified metadata.
     globalThis.fetch = async () => new Response("unavailable", { status: 503 });
@@ -112,6 +118,8 @@ test("OpenRouter uses Codex App Server config without putting the API key in arg
     }
 
   } finally {
+    if (originalCacheFlag === undefined) delete process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE;
+    else process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE = originalCacheFlag;
     globalThis.fetch = originalFetch;
     await rm(projectDir, { recursive: true, force: true });
   }

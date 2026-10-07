@@ -176,7 +176,12 @@ async function buildPlan(ctx: SpawnCtx, resumeSessionId?: string): Promise<Spawn
       ],
       suppressUnknownModelMetadataWarning: false,
     },
-    { OPENROUTER_API_KEY: apiKey },
+    {
+      OPENROUTER_API_KEY: apiKey,
+      // The sandbox deliberately drops ambient env. Forward only this
+      // deployment opt-in, so disabling the bridge remains the default.
+      BIDWRIGHT_OPENROUTER_PROMPT_CACHE: process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on" ? "on" : "off",
+    },
   );
 }
 
