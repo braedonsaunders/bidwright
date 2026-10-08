@@ -41,6 +41,14 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    services:
+      reference-search-db:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: --health-cmd "pg_isready -U postgres" --health-interval 5s --health-timeout 5s --health-retries 10
 
     steps:
       - name: Check out repo
@@ -87,6 +95,17 @@ jobs:
       - name: Build worker
         run: pnpm --filter @bidwright/worker build
 
+      - name: Verify indexed reference search against PostgreSQL
+        env:
+          DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+          BIDWRIGHT_SEARCH_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
+        run: |
+          pnpm --filter @bidwright/ingestion build
+          pnpm --filter @bidwright/integrations build
+          pnpm --filter @bidwright/vector build
+          pnpm --filter @bidwright/db exec prisma db push --skip-generate
+          pnpm exec tsx --test apps/api/src/services/reference-search.integration.test.ts
+
       - name: Build web
         run: pnpm --filter @bidwright/web build
 
@@ -112,7 +131,6 @@ jobs:
           packages/mcp-server/src/tool-access.test.ts
           scripts/eval/evidence-metrics.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
-          apps/api/src/services/dataset-search-fitness.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
           apps/api/src/services/cli-run-selection.test.ts
@@ -157,6 +175,8 @@ jobs:
           packages/domain/src/line-derivation.test.ts
           packages/domain/src/agent-memory.test.ts
           packages/domain/src/estimate-strategy-stages.test.ts
+          apps/api/src/services/reference-book-pages.test.ts
+          apps/api/src/services/indexed-search.test.ts
           apps/api/src/services/page-provenance.test.ts
           apps/api/src/revision-rate-schedule-scoping.test.ts
           apps/api/src/answer-resumes-run.test.ts

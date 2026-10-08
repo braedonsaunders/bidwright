@@ -7,7 +7,7 @@ import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, chown, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
+import { access, chown, mkdir, readFile, rename, rm, stat, writeFile, symlink, realpath } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,7 @@ import {
 import { prisma } from "@bidwright/db";
 import { getExtendedWorksheetUnitBreakdown, normalizeAgentMemory, setAgentMemorySection } from "@bidwright/domain";
 import {
+  apiDataRoot,
   relativePackageArchivePath,
   relativeProjectFilePath,
   resolveApiPath,
@@ -130,7 +131,8 @@ import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
-import { datasetSearchFitnessAdjustment } from "./services/dataset-search-fitness.js";
+import { referenceBookPages, searchReferenceBookPages } from "./services/reference-book-pages.js";
+import { buildEstimatorSearchProfile, rankEstimatorSearchItems } from "./services/estimator-search.js";
 import { registerReviewRoutes } from "./routes/review-routes.js";
 import { estimateRoutes } from "./routes/estimate-routes.js";
 import { catalogRoutes } from "./routes/catalog-routes.js";
@@ -6561,70 +6563,63 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
 
   app.get("/knowledge/search", async (request) => {
     const { q, bookId, documentId, limit, scope } = (request.query ?? {}) as { q?: string; bookId?: string; documentId?: string; limit?: string; scope?: string };
-    const fetchLimit = limit ? parseInt(limit, 10) * 3 : 60;
     const normalizedScope = scope === "library" ? "global" : scope;
-    const [chunks, documentChunks] = await Promise.all([
-      documentId ? Promise.resolve([]) : request.store!.searchKnowledgeChunks(q ?? "", bookId, fetchLimit),
-      bookId ? Promise.resolve([]) : request.store!.searchKnowledgeDocumentChunks(q ?? "", documentId, fetchLimit),
-    ]);
+    return knowledgeService.search(q ?? "", {
+      organizationId: request.store!.organizationId,
+      bookId, documentId,
+      scope: normalizedScope === "global" || normalizedScope === "project" ? normalizedScope : "all",
+      limit: Math.max(1, Math.min(Number(limit) || 20, 40)),
+    }, request.store!);
+  });
 
-    // Enrich with book metadata and apply scope filtering
-    const bookCache = new Map<string, any>();
-    const enriched: any[] = [];
-    for (const chunk of chunks) {
-      let book = bookCache.get(chunk.bookId);
-      if (!book) {
-        book = await request.store!.getKnowledgeBook(chunk.bookId);
-        if (book) bookCache.set(chunk.bookId, book);
-      }
-      if (!book) continue;
+  app.get("/knowledge/books/:bookId/passage", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const { chunkId, chunkOrder, neighbors } = request.query as { chunkId?: string; chunkOrder?: string; neighbors?: string };
+    if (!chunkId && chunkOrder == null) return reply.code(400).send({ message: "Pass chunkId or chunkOrder from a search result" });
+    if (chunkOrder != null && (!Number.isInteger(Number(chunkOrder)) || Number(chunkOrder) < 0)) return reply.code(400).send({ message: "chunkOrder must be a non-negative integer" });
+    const passage = await request.store!.getKnowledgePassage(bookId, {
+      chunkId, chunkOrder: chunkOrder != null ? Number(chunkOrder) : undefined,
+    }, Math.max(0, Math.min(Number.isFinite(Number(neighbors)) ? Number(neighbors) : 1, 2)));
+    if (!passage) return reply.code(404).send({ message: "Book passage not found" });
+    return passage;
+  });
 
-      // Scope filtering
-      if (normalizedScope === "global" && book.scope !== "global") continue;
-      if (normalizedScope === "project" && book.scope !== "project") continue;
+  app.post("/knowledge/books/:bookId/read-page", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const parsed = z.object({ pageNumber: z.coerce.number().int().positive(), tile: z.string().optional(),
+      bbox: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional(),
+      maxEdge: z.number().int().min(256).max(3000).default(1568) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ message: "Pass a page number and optional tile or normalized bbox", issues: parsed.error.issues });
+    const book = await request.store!.getKnowledgeBook(bookId);
+    if (!book?.storagePath) return reply.code(404).send({ message: "Book or stored PDF not found" });
+    const root = await realpath(apiDataRoot);
+    let pdfPath: string;
+    try { pdfPath = await realpath(resolveApiPath(book.storagePath)); }
+    catch { return reply.code(404).send({ message: "Stored PDF not found" }); }
+    if (!pdfPath.startsWith(root + path.sep)) return reply.code(403).send({ message: "Book file is outside storage" });
+    const { readPdfPage } = await import("@bidwright/vision");
+    const result = await readPdfPage({ pdfPath, pageNumber: parsed.data.pageNumber,
+      mode: parsed.data.tile || parsed.data.bbox ? "tile" : "overview", tile: parsed.data.tile, bbox: parsed.data.bbox, maxEdge: parsed.data.maxEdge });
+    if (!result.success) return reply.code(result.code === "page_out_of_range" ? 400 : 422).send({ message: result.error, code: result.code });
+    return { ...result, bookId: book.id, bookName: book.name, sourceFileName: book.sourceFileName,
+      textLines: result.textLines?.slice(0, 40).map((line) => ({ text: line.text, bbox: line.bbox })), textLinesOmitted: Math.max(0, (result.textLines?.length ?? 0) - 40) };
+  });
 
-      enriched.push({
-        ...chunk,
-        bookName: book.name,
-        source: book.sourceFileName || book.name,
-        sourceType: "book",
-      });
-    }
-
-    const documentCache = new Map<string, any>();
-    const pageCache = new Map<string, any>();
-    for (const chunk of documentChunks) {
-      let doc = documentCache.get(chunk.documentId);
-      if (!doc) {
-        doc = await request.store!.getKnowledgeDocument(chunk.documentId);
-        if (doc) {
-          documentCache.set(chunk.documentId, doc);
-          const pages = await request.store!.listKnowledgeDocumentPages(chunk.documentId);
-          for (const page of pages) pageCache.set(page.id, page);
-        }
-      }
-      if (!doc) continue;
-      if (normalizedScope === "global" && doc.scope !== "global") continue;
-      if (normalizedScope === "project" && doc.scope !== "project") continue;
-      const page = chunk.pageId ? pageCache.get(chunk.pageId) : null;
-
-      enriched.push({
-        ...chunk,
-        sourceType: "document_page",
-        documentTitle: doc.title,
-        pageTitle: page?.title ?? "",
-        source: doc.title,
-      });
-    }
-
-    const finalLimit = limit ? parseInt(limit, 10) : 20;
-    return enriched
-      .sort((left, right) => {
-        const leftScore = Number(left.metadata?.searchMatch?.score ?? 0);
-        const rightScore = Number(right.metadata?.searchMatch?.score ?? 0);
-        return rightScore - leftScore;
-      })
-      .slice(0, finalLimit);
+  app.get("/knowledge/books/:bookId/search-pages", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    if (!q?.trim()) return reply.code(400).send({ message: "Pass a phrase to locate in the original PDF" });
+    const book = await request.store!.getKnowledgeBook(bookId);
+    if (!book?.storagePath) return reply.code(404).send({ message: "Book or stored PDF not found" });
+    let pdfPath: string;
+    try { pdfPath = await realpath(resolveApiPath(book.storagePath)); }
+    catch { return reply.code(404).send({ message: "Stored PDF not found" }); }
+    if (!pdfPath.startsWith(await realpath(apiDataRoot) + path.sep)) return reply.code(403).send({ message: "Book file is outside storage" });
+    const pages = await referenceBookPages(pdfPath);
+    const hits = searchReferenceBookPages(pages, q, Math.max(1, Math.min(Number(limit) || 8, 20)));
+    return { bookId, bookName: book.name, totalPages: pages.length, hits,
+      textAvailable: pages.some((page) => page.trim()),
+      note: "Page numbers are physical PDF pages, not printed handbook labels. These are matches in the original PDF text; inspect the page image for table layout and conditions." };
   });
 
   // ── GET /knowledge/project-corpus/search ─────────────────────────────────
@@ -6912,73 +6907,31 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.get("/datasets/search/global", async (request, reply) => {
     const { q, limit: limitStr } = (request.query ?? {}) as { q?: string; limit?: string };
     if (!q) return { results: [] };
-    const limit = parseInt(limitStr || "20");
-    const stop = new Set(["a", "an", "and", "as", "at", "by", "for", "from", "in", "of", "on", "or", "per", "the", "to", "with", "unit", "units", "row", "rows", "data", "dataset", "table"]);
-    const words = q
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim()
-      .split(/\s+/)
-      .filter((word) => (word.length > 1 || /^\d+(?:\.\d+)?$/.test(word)) && !stop.has(word));
-    // Sizes and quantities normally live in dataset rows rather than dataset
-    // metadata, so numeric tokens must not disqualify an otherwise relevant
-    // dataset before its rows are searched.
-    const anchorWords = words.filter((word) => word.length >= 6 && !/^\d+(?:\.\d+)?$/.test(word));
-
-    // Get all datasets
+    const limit = Math.max(1, Math.min(Number(limitStr) || 10, 25));
     const allDatasets = await request.store!.listDatasets();
-
-    // Score each dataset by name/tags/description match
-    const scored = allDatasets.map((d: any) => {
-      let score = 0;
-      const nameL = (d.name || "").toLowerCase();
-      const descL = (d.description || "").toLowerCase();
-      const tagsL = (d.tags || []).map((t: string) => t.toLowerCase());
-      const columnsL = Array.isArray(d.columns)
-        ? d.columns.map((column: any) => `${column.name ?? ""} ${column.label ?? ""} ${column.key ?? ""}`.toLowerCase())
-        : [];
-      let anchorMatches = 0;
-
-      for (const w of words) {
-        const isAnchor = anchorWords.includes(w);
-        let matched = false;
-        if (nameL.includes(w)) { score += isAnchor ? 5 : 3; matched = true; }
-        if (descL.includes(w)) { score += isAnchor ? 2 : 1; matched = true; }
-        if (tagsL.some((t: string) => t.includes(w))) { score += isAnchor ? 4 : 2; matched = true; }
-        if (columnsL.some((c: string) => c.includes(w))) { score += isAnchor ? 3 : 1.5; matched = true; }
-        if (matched && isAnchor) anchorMatches += 1;
+    const profile = buildEstimatorSearchProfile(q);
+    const metadata = rankEstimatorSearchItems(allDatasets, profile,
+      (d: any) => `${d.name} ${d.description} ${(d.tags ?? []).join(" ")} ${JSON.stringify(d.columns)}`, (d) => d.name);
+    const metadataById = new Map(metadata.map((entry) => [entry.item.id, entry]));
+    // Search actual rows too: dataset titles often do not name their operations.
+    // Four workers bound database pressure without serializing every source.
+    const candidates: any[] = [];
+    let cursor = 0;
+    await Promise.all(Array.from({ length: Math.min(4, allDatasets.length) }, async () => {
+      while (cursor < allDatasets.length) {
+        const d: any = allDatasets[cursor++];
+        const rows = await request.store!.searchDatasetRows(d.id, q);
+        const meta = metadataById.get(d.id);
+        const best = rows[0]?.data?._searchMatch as any;
+        if (!meta && !best) continue;
+        candidates.push({ datasetId: d.id, datasetName: d.name, description: d.description, tags: d.tags,
+          columns: d.columns, rowCount: d.rowCount, sourceBookId: d.sourceBookId, sourcePages: d.sourcePages,
+          score: (best?.score ?? 0) + (meta?.score ?? 0), matchedRows: rows.length,
+          sampleRows: rows.slice(0, 5).map((row) => row.data), samplesAreMatches: true });
       }
-      score += datasetSearchFitnessAdjustment(q, d);
-      return { dataset: d, score, anchorMatches };
-    });
-
-    // Filter to those with score > 0, sort by score
-    const matched = scored
-      .filter((s: any) => s.score > 0 && (anchorWords.length === 0 || s.anchorMatches > 0))
-      .sort((a: any, b: any) => b.score - a.score || b.anchorMatches - a.anchorMatches);
-
-    // For top matches, fetch sample rows
-    const results: any[] = [];
-    for (const m of matched.slice(0, Math.min(limit, 10))) {
-      const rowMatches = await request.store!.searchDatasetRows(m.dataset.id, q);
-      const rows = rowMatches.length > 0
-        ? { rows: rowMatches.slice(0, 5) }
-        : await request.store!.listDatasetRows(m.dataset.id, undefined, undefined, 5, 0);
-      results.push({
-        datasetId: m.dataset.id,
-        datasetName: m.dataset.name,
-        description: m.dataset.description,
-        tags: m.dataset.tags,
-        columns: m.dataset.columns,
-        rowCount: m.dataset.rowCount,
-        score: m.score,
-        anchorMatches: m.anchorMatches,
-        matchedRows: rowMatches.length,
-        sampleRows: rows.rows?.map((r: any) => r.data) || [],
-      });
-    }
-
-    return { results, total: matched.length };
+    }));
+    candidates.sort((a, b) => b.score - a.score || a.datasetId.localeCompare(b.datasetId));
+    return { results: candidates.slice(0, limit), total: candidates.length };
   });
 
   app.get("/datasets/:datasetId/search", async (request, reply) => {

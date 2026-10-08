@@ -75,12 +75,15 @@ function searchMatchMetadata(hit: any) {
 // (one screen), and keep ID fields the agent needs to drill in via
 // readDocumentText / getBookPage.
 function compactKnowledgeHit(h: any) {
-  const text = typeof h?.text === "string" ? h.text.replace(/\s+/g, " ").trim() : "";
+  const text = typeof (h?.excerpt ?? h?.text) === "string" ? (h.excerpt ?? h.text).trim() : "";
   const source = h?.source || h?.bookName;
   const documentTitle = h?.documentTitle && h?.documentTitle !== source ? h.documentTitle : undefined;
   const pageTitle = h?.pageTitle && h?.pageTitle !== h?.sectionTitle ? h.pageTitle : undefined;
   return {
-    text: text.length > 380 ? `${text.slice(0, 380)}...` : text,
+    id: h?.id,
+    bookId: h?.bookId,
+    chunkOrder: h?.chunkOrder,
+    text: text.length > 900 ? `${text.slice(0, 900)}...` : text,
     source,
     sourceType: h?.sourceType,
     documentTitle,
@@ -90,6 +93,7 @@ function compactKnowledgeHit(h: any) {
     documentId: h?.documentId,
     pageId: h?.pageId,
     score: h?.score ?? h?.metadata?.searchMatch?.score,
+    retrievalSources: h?.metadata?.retrievalSources,
     ...searchMatchMetadata(h),
   };
 }
@@ -139,6 +143,37 @@ function resolveQuery(input: { query?: string; q?: string }) {
 
 export function registerKnowledgeTools(server: McpServer) {
 
+  server.tool(
+    "searchEstimatingKnowledge",
+    "Search labour productivity units, PDF reference-book passages and structured datasets together. Use an operation + material + size/condition. Returns independent ranked shortlists with IDs, units and source context; book prose and dataset samples are not interchangeable rates. Drill into getLaborUnit, readKnowledgePassage, or queryKnowledgeDataset with exact filters.",
+    { query: z.string().min(1), sources: z.array(z.enum(["labor", "books", "datasets"])).default(["labor", "books", "datasets"]),
+      limit: z.coerce.number().int().positive().max(12).default(6) },
+    async ({ query, sources, limit }) => {
+      const results = await Promise.all(sources.map(async (source) => {
+        const params = new URLSearchParams({ q: query, limit: String(limit) });
+        try {
+          if (source === "books") {
+            params.set("scope", "global");
+            const data = await apiGet(`/knowledge/search?${params}`);
+            return { source, hits: (Array.isArray(data) ? data : data.results ?? []).map(compactKnowledgeHit) };
+          }
+          if (source === "labor") {
+            const data = await apiGet(`/api/labor-units/units?${params}`);
+            return { source, total: data.total, hits: (data.units ?? []).map((unit: any) => ({ id: unit.id, libraryId: unit.libraryId,
+              name: unit.name, description: compactValue(unit.description, 260),
+              path: [unit.category, unit.className, unit.subClassName].filter(Boolean).join(" › "),
+              hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
+          }
+          const data = await apiGet(`/datasets/search/global?${params}`);
+          return { source, hits: (data.results ?? []).map((d: any) => ({ datasetId: d.datasetId, name: d.datasetName,
+            description: compactValue(d.description, 240), sourceBookId: d.sourceBookId, sourcePages: d.sourcePages,
+            columns: d.columns, sampleRows: d.sampleRows?.slice(0, 3).map((row: any) => compactRow(row)), samplesAreMatches: d.samplesAreMatches })) };
+        } catch (error) { return { source, error: error instanceof Error ? error.message : String(error) }; }
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify({ query, results }) }] };
+    },
+  );
+
   // ── queryKnowledgeBook ────────────────────────────────────
   // Searches GLOBAL knowledge books only — the cross-project estimator
   // manuals, productivity handbooks, ASME codes, and any other reference
@@ -155,6 +190,7 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       query: z.string().optional().describe("Search phrase — be specific (trade + material + action + size/class + unit)."),
       q: z.string().optional().describe("Alias for query."),
+      bookId: z.string().optional().describe("Search within a reference book returned by an earlier search."),
       limit: z.coerce.number().int().positive().max(25).default(10).describe("Max results."),
     },
     async (input) => {
@@ -167,6 +203,7 @@ export function registerKnowledgeTools(server: McpServer) {
         };
       }
       const params = new URLSearchParams({ q: query, limit: String(limit), scope: "global" });
+      if (input.bookId) params.set("bookId", input.bookId);
       const data = await apiGet(`/knowledge/search?${params}`);
       const results = Array.isArray(data) ? data : (data.results || []);
       const hits = results.map((h: any) => compactKnowledgeHit(h));
@@ -178,12 +215,50 @@ export function registerKnowledgeTools(server: McpServer) {
           hits,
           guidance: [
             "Use matchedTerms to judge fit; refine with trade + material + action + size/class + unit (hours/LF, hours/ea, hours/ton) if top hits are context-only.",
-            "Drill into a hit with readDocumentText({documentId, pages, maxChars: 3000}) or getBookPage({bookId, pageNumber}) for the visual PDF page.",
+            "Read the full passage and neighboring table/header context with readKnowledgePassage({bookId, chunkId: id}); use getBookPage when the source has a page number, or searchBookPages to locate it in the original PDF.",
             "For productivity numbers in tabular form, queryKnowledgeDataset is usually more direct.",
           ],
         }, null, 2) }],
       };
     }
+  );
+
+  server.tool(
+    "readKnowledgePassage",
+    "Read a reference-book passage plus neighboring chunks, preserving source headings, table text, units and page numbers. Use the bookId and id from queryKnowledgeBook or searchEstimatingKnowledge. Works even when historical OCR has no page number.",
+    {
+      bookId: z.string().min(1),
+      chunkId: z.string().optional(),
+      chunkOrder: z.coerce.number().int().min(0).optional(),
+      neighbors: z.coerce.number().int().min(0).max(2).default(1),
+      maxChars: z.coerce.number().int().positive().max(30000).default(12000),
+    },
+    async ({ bookId, chunkId, chunkOrder, neighbors, maxChars }) => {
+      const params = new URLSearchParams({ neighbors: String(neighbors) });
+      if (chunkId) params.set("chunkId", chunkId);
+      if (chunkOrder != null) params.set("chunkOrder", String(chunkOrder));
+      const data = await apiGet(`/knowledge/books/${encodeURIComponent(bookId)}/passage?${params}`);
+      let remaining = maxChars;
+      const chunks = [...(data.chunks ?? [])].sort((a: any, b: any) => Number(b.id === data.chunkId) - Number(a.id === data.chunkId)).map((chunk: any) => {
+        const text = String(chunk.text ?? "");
+        const allocation = chunk.id === data.chunkId ? Math.min(text.length, maxChars) : Math.min(text.length, Math.floor(maxChars / Math.max(1, (data.chunks ?? []).length)));
+        const returned = text.slice(0, Math.max(0, Math.min(remaining, allocation)));
+        remaining -= returned.length;
+        return { id: chunk.id, order: chunk.order, sectionTitle: chunk.sectionTitle, pageNumber: chunk.pageNumber,
+          text: returned, omittedChars: text.length - returned.length };
+      }).sort((a: any, b: any) => a.order - b.order);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ book: data.book, chunkId: data.chunkId, chunks }) }] };
+    },
+  );
+
+  server.tool(
+    "searchBookPages",
+    "Locate a phrase in the original reference PDF and return actual physical page numbers and text. Use when a historical book-search hit has no page number, or to locate a table/footnote before viewing it with getBookPage. Searches embedded PDF text locally; scanned pages without a text layer cannot match here.",
+    { bookId: z.string().min(1), query: z.string().min(1), limit: z.coerce.number().int().positive().max(20).default(8) },
+    async ({ bookId, query, limit }) => {
+      const data = await apiGet(`/knowledge/books/${encodeURIComponent(bookId)}/search-pages?${new URLSearchParams({ q: query, limit: String(limit) })}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
+    },
   );
 
   // ── queryProjectFile ─────────────────────────────────────
@@ -269,10 +344,11 @@ export function registerKnowledgeTools(server: McpServer) {
           ? await apiPost(`/datasets/${datasetId}/query`, { filters })
           : query
             ? await apiGet(`/datasets/${datasetId}/search?${new URLSearchParams({ q: query })}`)
-            : await apiGet(`/datasets/${datasetId}/rows?${new URLSearchParams({ limit: String(offset + rowLimit) })}`);
+            : await apiGet(`/datasets/${datasetId}/rows?${new URLSearchParams({ limit: String(rowLimit), offset: String(offset) })}`);
         const dataset = await apiGet(`/datasets/${datasetId}`);
         const rawRows = Array.isArray(data) ? data : (Array.isArray(data.rows) ? data.rows : []);
-        const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset }, 50, 200);
+        const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset: browsing ? 0 : offset }, 50, 200);
+        page.offset = offset;
         if (browsing && typeof data?.total === "number") {
           page.total = data.total;
           page.hasMore = offset + page.rows.length < data.total;
@@ -312,6 +388,7 @@ export function registerKnowledgeTools(server: McpServer) {
       const results = (data.results || []).map((r: any) => ({
         datasetId: r.datasetId,
         name: r.datasetName,
+        sourceBookId: r.sourceBookId, sourcePages: r.sourcePages, samplesAreMatches: r.samplesAreMatches,
         description: compactValue(r.description, 240),
         tags: Array.isArray(r.tags) ? r.tags.slice(0, 8) : r.tags,
         columns: r.columns?.slice(0, 20).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
@@ -675,29 +752,24 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── getBookPage ──────────────────────────────────────────
   server.tool(
     "getBookPage",
-    "Get the file path and page details for a knowledge book page so you can read it directly. When search results reference a book and page number, use this to get the actual file path, then use the Read tool to view the real PDF page (with vision). This lets you see the original tables, diagrams, and formatting that OCR may have garbled.",
+    "View the actual PDF page of a reference book as an image with positioned text. Read source tables, column headings, units and footnotes directly; zoom with a tile from the overview grid or a normalized bbox. Uses bookId and pageNumber from search results. Returns the original file path too for native PDF reading.",
     {
-      bookId: z.string().describe("Knowledge book ID (from search results)"),
-      pageNumber: z.coerce.number().describe("Page number to view"),
+      bookId: z.string().min(1), pageNumber: z.coerce.number().int().positive(),
+      tile: z.string().optional().describe("Tile id from the overview grid, e.g. r1c2"),
+      bbox: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional().describe("Normalized 0..1 crop of the page"),
     },
-    async ({ bookId, pageNumber }) => {
-      const data = await apiGet(`/knowledge/books/${bookId}/info`);
-      const book = data.book || data;
-      if (!book || !book.storagePath) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Book not found or no file stored" }) }] };
-      }
-      // Return the file path relative to the project working directory
-      // The CLI agent can use Read tool with pages parameter to view it
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify({
-          bookName: book.name,
-          fileName: book.sourceFileName,
-          filePath: `../../${book.storagePath}`, // Relative to project workdir
-          pageNumber,
-          totalPages: book.pageCount,
-          hint: `Use the Read tool on the filePath with pages="${pageNumber}" to view this page visually. The PDF page will be rendered as an image so you can read tables and diagrams directly.`,
-        }, null, 2) }],
-      };
+    async ({ bookId, pageNumber, tile, bbox }) => {
+      const maxEdge = Math.max(256, Math.min(Number(process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE) || 1568, 3000));
+      const [page, info] = await Promise.all([
+        apiPost(`/knowledge/books/${encodeURIComponent(bookId)}/read-page`, { pageNumber, tile, bbox, maxEdge }),
+        apiGet(`/knowledge/books/${encodeURIComponent(bookId)}/info`),
+      ]);
+      const { image, ...metadata } = page;
+      const book = info.book || info;
+      const match = typeof image === "string" ? image.match(/^data:([^;]+);base64,(.+)$/s) : null;
+      const content: any[] = [{ type: "text", text: JSON.stringify({ ...metadata, filePath: book.storagePath ? `../../${book.storagePath}` : undefined }) }];
+      if (match) content.unshift({ type: "image", mimeType: match[1], data: match[2] });
+      return { content };
     }
   );
 

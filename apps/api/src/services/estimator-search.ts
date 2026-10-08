@@ -30,10 +30,10 @@ const ESTIMATE_SEARCH_STOPWORDS = new Set([
 
 export function normalizeEstimatorSearchText(value: unknown) {
   return String(value ?? "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+    .replace(/(\d)\s*\/\s*(\d)/g, "$1/$2")
+    .match(/[a-z][a-z0-9]*|\d+(?:-\d+\/\d+|\/\d+|\.\d+)?/g)?.join(" ") ?? "";
 }
 
 export function estimatorSearchTokens(value: unknown) {
@@ -41,7 +41,7 @@ export function estimatorSearchTokens(value: unknown) {
   if (!normalized) return [];
   return normalized
     .split(" ")
-    .filter((token) => (token.length > 1 || /^\d+(?:\.\d+)?$/.test(token)) && !ESTIMATE_SEARCH_STOPWORDS.has(token));
+    .filter((token) => (token.length > 1 || /^\d/.test(token)) && !ESTIMATE_SEARCH_STOPWORDS.has(token));
 }
 
 export function uniqueStrings(values: string[]) {
@@ -49,7 +49,7 @@ export function uniqueStrings(values: string[]) {
 }
 
 function singularPluralVariants(token: string) {
-  if (/^\d+(?:\.\d+)?$/.test(token)) return [token];
+  if (/^\d/.test(token)) return [token];
   if (token.endsWith("ies") && token.length > 4) return [token, `${token.slice(0, -3)}y`];
   if (token.endsWith("s") && token.length > 3) return [token, token.slice(0, -1)];
   return [token, `${token}s`];
@@ -104,7 +104,7 @@ export function lineItemAutocompleteTsQuery(value: unknown) {
 export function estimatorTermMatches(haystack: string, term: SearchProfileTerm) {
   const tokens = new Set(haystack.split(" "));
   return term.variants.some((variant) =>
-    /^\d+(?:\.\d+)?$/.test(variant) ? tokens.has(variant) : haystack.includes(variant),
+    /^\d/.test(variant) ? tokens.has(variant) : [...tokens].some((token) => token === variant || (variant.length >= 4 && token.startsWith(variant))),
   );
 }
 

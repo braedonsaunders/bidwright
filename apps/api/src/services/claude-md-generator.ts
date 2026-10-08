@@ -193,7 +193,7 @@ Choose the search tool that matches the information you need:
 | Cross-project estimator manuals & codes | \`queryKnowledgeBook\` | Global KnowledgeBooks (Estimators Piping/Mechanical/Equipment Manual, ASME B31.1/B31.3, etc.) |
 | Productivity/rate/weight tables | \`queryKnowledgeDataset\` | Structured Dataset rows |
 
-For cost candidates use \`queryLibrary\` / \`recommendCostSource\`; for labour-unit lookups use \`listLaborUnitTree\` / \`listLaborUnits\` / \`getLaborUnit\`; for catalog SKUs use \`searchCatalogs\`; for rate-schedule items use \`listRateScheduleItems\`. Drill into a hit with \`readDocumentText\` (any document) or \`getDocumentStructured\` (project docs only). Use \`getBookPage\` and the runtime image-reading tool to inspect a knowledge-book page visually.
+For reference research, \`searchEstimatingKnowledge\` searches books, labour units and datasets together; \`readKnowledgePassage\` expands a book hit with neighboring table context. When a historical hit lacks a page number, use \`searchBookPages\` to locate the original PDF page, then \`getBookPage\` to view the table directly. Search the actual operation and material, then use dataset filters for exact sizes and conditions. For cost candidates use \`queryLibrary\` / \`recommendCostSource\`; for labour-unit lookups use \`listLaborUnitTree\` / \`listLaborUnits\` / \`getLaborUnit\`; for catalog SKUs use \`searchCatalogs\`; for rate-schedule items use \`listRateScheduleItems\`. Drill into a hit with \`readDocumentText\` (any document) or \`getDocumentStructured\` (project docs only). Use \`getBookPage\` and the runtime image-reading tool to inspect a knowledge-book page visually.
 
 The \`${rootDir}/\` folder still contains compact text dumps you can \`rg\` for raw cross-cutting greps, but the canonical MCP tools above are the agent's primary search surface.
 Search results are candidates. Judge their relevance and conditions, and explain the source or estimator basis actually used in \`sourceNotes\`. Use the relevant resources; a search through every library is not a prerequisite to pricing.
@@ -469,7 +469,7 @@ ${documentList}
 
 ## Useful read-only tools
 
-getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, listProjectImages, inspectProjectImage, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath, webSearch (live web prices/specs when project sources cannot answer).
+getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocumentText, getDocumentStructured, readSpreadsheet, listProjectImages, inspectProjectImage, searchEstimatingKnowledge, readKnowledgePassage, searchBookPages, queryKnowledgeBook, queryKnowledgeDataset, queryLibrary, recommendCostSource, listLaborUnitTree, listLaborUnits, getLaborUnit, searchCatalogs, listRateScheduleItems, listDrawingPages, searchDrawingRegions, inspectDrawingRegion, renderDrawingPage, zoomDrawingRegion, calculateMath, webSearch (live web prices/specs when project sources cannot answer).
 `;
   for (const filename of ALL_INSTRUCTION_FILENAMES) {
     await writeFile(join(params.projectDir, filename), content, "utf-8");

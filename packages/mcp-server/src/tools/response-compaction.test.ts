@@ -95,7 +95,7 @@ test("a schedule summary carries tier names by default, ids on request, and expl
   assert.ok(JSON.stringify(compact).length < 400, `summary is ${JSON.stringify(compact).length} chars`);
 });
 
-test("a labour-unit row keeps id/code/hours/unit, collapses taxonomy, and drops prose", () => {
+test("a labour-unit row keeps id/code/hours/unit, collapses taxonomy, and preserves source context and numerical precision", () => {
   const unit = {
     id: "lu-1", code: "GCM-254-002-01",
     name: "Erect light structural steel platform framing, bolted connections, under 10 ft elevation, including shakeout and plumb",
@@ -106,13 +106,15 @@ test("a labour-unit row keeps id/code/hours/unit, collapses taxonomy, and drops 
   const row = compactLaborUnitRow(unit, { kind: "library", label: "Exact library unit match on 'platform' and 'structural steel' in class Platforms", matchType: "exact", sourceQuality: "high", confidence: 0.87654 });
   assert.equal(row.id, "lu-1");
   assert.equal(row.code, "GCM-254-002-01");
-  assert.equal(row.hoursNormal, 18.33);
+  assert.equal(row.hoursNormal, 18.333333);
   assert.equal(row.outputUom, "TON");
   assert.equal(row.path, "Mechanical › Structural Steel › Platforms › Light framing");
   assert.equal(row.basis.confidence, 0.88);
   assert.ok((row.basis.label ?? "").length <= 60);
-  assert.ok(!("description" in row) && !("sourceRef" in row) && !("matchType" in row), "prose and duplicated basis fields are gone");
-  assert.ok(JSON.stringify(row).length < 450, `row is ${JSON.stringify(row).length} chars`);
+  assert.equal(row.libraryId, "lib-1");
+  assert.deepEqual(row.sourceRef, { book: "x", page: 12 });
+  assert.ok((row.description ?? "").length <= 240);
+  assert.ok(JSON.stringify(row).length < 800, `row is ${JSON.stringify(row).length} chars`);
 });
 
 test("labour diagnostics reduce to term hits and slice count with truncated keys named", () => {
