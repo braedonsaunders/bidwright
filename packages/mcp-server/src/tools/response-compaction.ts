@@ -211,6 +211,10 @@ export interface CompactLaborUnitRow {
   name: string | undefined;
   /** "discipline › category › class › subclass" with empty segments dropped. */
   path: string | undefined;
+  libraryId?: string;
+  description?: string;
+  sourceRef?: unknown;
+  matchedTerms?: string[];
   outputUom: string | undefined;
   hoursNormal: number | undefined;
   entityCategoryType: string | undefined;
@@ -231,7 +235,7 @@ export function compactLaborUnitRow(
     .map((segment) => clipText(segment, 40))
     .filter((segment): segment is string => Boolean(segment))
     .join(" › ");
-  const hoursNormal = round2(unit.hoursNormal);
+  const hoursNormal = typeof unit.hoursNormal === "number" ? unit.hoursNormal : undefined;
   return {
     id: unit.id ? String(unit.id) : undefined,
     code: clipText(unit.code, 32),
@@ -239,6 +243,10 @@ export function compactLaborUnitRow(
     path: path || undefined,
     outputUom: unit.outputUom ? String(unit.outputUom) : undefined,
     hoursNormal,
+    libraryId: unit.libraryId,
+    description: clipText(unit.description, 240),
+    sourceRef: unit.sourceRef,
+    matchedTerms: unit.metadata?.searchMatch?.matchedTerms,
     entityCategoryType: unit.entityCategoryType ? String(unit.entityCategoryType) : undefined,
     basis: {
       kind: basis.kind,

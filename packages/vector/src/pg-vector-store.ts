@@ -123,6 +123,11 @@ export class PgVectorStore implements VectorStore {
       paramIdx++;
     }
 
+    if (options.documentId) {
+      conditions.push(`document_id = $${paramIdx++}`);
+      params.push(options.documentId);
+    }
+
     if (options.scope && options.scope !== "all") {
       conditions.push(`scope = $${paramIdx}`);
       params.push(options.scope);

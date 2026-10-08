@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from "node:crypto";
 import { hashPassword } from "./services/auth-service.js";
 import { derivePagesForIndexing } from "./services/page-provenance.js";
+import { LABOR_SEARCH_VECTOR, CHUNK_SEARCH_VECTOR, ROW_SEARCH_VECTOR, indexedSearchQuery, rankIndexedCandidates, datasetFilterPredicate } from "./services/indexed-search.js";
 import { createReadStream } from "node:fs";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -1873,10 +1874,6 @@ function laborUnitSearchText(unit: any) {
     unit.subClassName,
     unit.outputUom,
     unit.tags,
-    unit.metadata,
-    unit.library?.name,
-    unit.library?.provider,
-    unit.library?.description,
   ]);
 }
 
@@ -13359,23 +13356,36 @@ export class PrismaApiStore {
   private async findLaborUnitSearchCandidates(
     baseWhere: Record<string, unknown>,
     searchProfile: SearchProfile,
-    options: { perTermLimit?: number } = {},
+    options: { perTermLimit?: number; filters?: { libraryId?: string; provider?: string; category?: string | null; className?: string | null; subClassName?: string | null } } = {},
   ) {
-    const perTermLimit = Math.min(5000, Math.max(100, options.perTermLimit ?? 2000));
-    const rowsById = new Map<string, any>();
-    for (const term of searchProfile.terms) {
-      const rows = await (this.db as any).laborUnit.findMany({
-        where: {
-          ...baseWhere,
-          OR: laborUnitSearchOrFilters(term.variants.slice(0, 3)),
-        },
-        include: { library: true },
-        orderBy: [{ category: "asc" }, { className: "asc" }, { subClassName: "asc" }, { sortOrder: "asc" }],
-        take: perTermLimit,
-      });
-      for (const row of rows) rowsById.set(row.id, row);
+    const { webQuery, terms } = indexedSearchQuery(searchProfile.raw);
+    if (!terms.length) return [];
+    const params: unknown[] = [webQuery, terms, this.organizationId, 2000];
+    const vector = LABOR_SEARCH_VECTOR.replace(/"(\w+)"/g, 'u."$1"');
+    const conditions = ['(l."organizationId" = $3 OR l."organizationId" IS NULL)', `${vector} @@ websearch_to_tsquery('english', $1)`];
+    const filters = options.filters ?? {};
+    for (const key of ["libraryId", "provider", "category", "className", "subClassName"] as const) {
+      const value = filters[key]?.trim();
+      if (!value) continue;
+      params.push(value);
+      const position = `$${params.length}`;
+      if (key === "category" && /^labou?r$/i.test(value)) {
+        conditions.push(`(u."entityCategoryType" ILIKE '%lab%' OR u."category" ILIKE ${position})`);
+      } else {
+        const column = key === "provider" ? 'l."provider"' : key === "libraryId" ? 'u."libraryId"' : `u."${key}"`;
+        conditions.push(`${column} = ${position}`);
+      }
     }
-    return [...rowsById.values()];
+    const matches = await this.db.$queryRawUnsafe<Array<{ id: string; score: number; coverage: number; matchedTerms: string[] }>>(
+      `SELECT u.id, ts_rank_cd(${vector}, websearch_to_tsquery('english', $1), 2) AS score,
+        (SELECT avg((${vector} @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS coverage,
+        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term)) AS "matchedTerms"
+       FROM "LaborUnit" u JOIN "LaborUnitLibrary" l ON l.id = u."libraryId"
+       WHERE ${conditions.join(" AND ")} ORDER BY coverage DESC, score DESC, u.id LIMIT $4`, ...params);
+    if (!matches.length) return [];
+    const rank = new Map(matches.map((match) => [match.id, match]));
+    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } }, include: { library: true } });
+    return rows.map((row) => ({ ...row, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
   }
 
   async listLaborUnits(input: {
@@ -13430,16 +13440,11 @@ export class PrismaApiStore {
     if (andFilters.length > 0) where.AND = andFilters;
 
     if (searchProfile && searchProfile.terms.length > 0) {
-      const candidateRowLimit = 2000 * searchProfile.terms.length;
-      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000 });
+      const candidateRowLimit = 2000;
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
       const searchText = laborUnitSearchText;
       const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
-      const ranked = rankEstimatorSearchItems<any>(
-        candidateRows,
-        weightedProfile,
-        searchText,
-        laborUnitHeadingText,
-      );
+      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText);
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(1000, Math.max(1, input.limit ?? 250));
       return {
@@ -13507,16 +13512,11 @@ export class PrismaApiStore {
     const labelFor = (value: string | null | undefined, fallback: string) => value?.trim() || fallback;
 
     if (searchProfile && searchProfile.terms.length > 0) {
-      const candidateRowLimit = 2000 * searchProfile.terms.length;
-      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000 });
+      const candidateRowLimit = 2000;
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
       const searchText = laborUnitSearchText;
       const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
-      const ranked = rankEstimatorSearchItems<any>(
-        candidateRows,
-        weightedProfile,
-        searchText,
-        laborUnitHeadingText,
-      );
+      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText);
       const diagnostics = buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText);
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(parentType === "subclass" ? 1000 : 200, Math.max(1, input.limit ?? (parentType === "subclass" ? 250 : 50)));
@@ -17266,41 +17266,64 @@ export class PrismaApiStore {
     return mapKnowledgeChunk(chunk);
   }
 
-  async searchKnowledgeChunks(query: string, bookId?: string, limit = 20): Promise<KnowledgeChunk[]> {
-    const profile = buildEstimatorSearchProfile(query);
-    if (profile.terms.length === 0) return [];
-
-    const where: any = {};
-    if (bookId) {
-      const book = await this.getKnowledgeBook(bookId);
-      if (!book) return [];
-      where.bookId = book.id;
-    } else {
-      const bookIds = (await this.db.knowledgeBook.findMany({ where: { organizationId: this.organizationId }, select: { id: true } })).map((b) => b.id);
-      where.bookId = { in: bookIds };
-    }
-
-    const chunks = await this.db.knowledgeChunk.findMany({ where });
-    const ranked = rankEstimatorSearchItems(
-      chunks,
-      profile,
-      (chunk) => chunk.text,
-      (chunk) => chunk.sectionTitle,
-    ).slice(0, limit);
-
-    return ranked.map((entry) => mapKnowledgeChunk({
-      ...entry.item,
-      metadata: {
-        ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
-        searchMatch: {
-          score: Number(entry.score.toFixed(3)),
-          coverage: Number(entry.coverage.toFixed(3)),
-          matchedTerms: entry.matchedTerms,
-          matchedPhrases: entry.matchedPhrases,
-          anchorMatches: entry.anchorMatches,
-        },
-      },
+  private async indexedKnowledgeChunks(
+    table: "KnowledgeChunk" | "KnowledgeDocumentChunk", query: string, referenceId: string | undefined, limit: number,
+    options: { scope?: "global" | "project" | "all"; projectId?: string } = {},
+  ) {
+    const { webQuery, terms } = indexedSearchQuery(query);
+    if (!terms.length) return [];
+    const foreignKey = table === "KnowledgeChunk" ? "bookId" : "documentId";
+    const parent = table === "KnowledgeChunk" ? "KnowledgeBook" : "KnowledgeDocument";
+    const vector = CHUNK_SEARCH_VECTOR.replace(/"(\w+)"/g, 'c."$1"');
+    const rows = await this.db.$queryRawUnsafe<Array<Record<string, any>>>(`
+      SELECT c.*, ts_rank_cd(${vector}, websearch_to_tsquery('english', $1), 2) AS "searchScore",
+        (SELECT avg((${vector} @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS "searchCoverage",
+        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term)) AS "matchedTerms"
+      FROM "${table}" c JOIN "${parent}" b ON b.id = c."${foreignKey}"
+      WHERE b."organizationId" = $3 AND ($5::text IS NULL OR b.id = $5)
+        AND ($6::text IS NULL OR $6 = 'all' OR b.scope = $6)
+        AND ($7::text IS NULL OR b."projectId" = $7 OR (b.scope = 'global' AND $6::text IS DISTINCT FROM 'project'))
+        AND ${vector} @@ websearch_to_tsquery('english', $1)
+      ORDER BY "searchCoverage" DESC, "searchScore" DESC, c.id LIMIT $4`,
+      webQuery, terms, this.organizationId, Math.max(1, Math.min(limit, 200)), referenceId ?? null, options.scope ?? null, options.projectId ?? null);
+    return rows.map(({ searchScore, searchCoverage, matchedTerms, ...row }) => ({
+      ...row, metadata: { ...(row.metadata ?? {}), searchMatch: {
+        score: Number(searchCoverage) * 100 + Number(searchScore), coverage: Number(searchCoverage), matchedTerms,
+        scoring: "indexed_stemmed_coverage", matchedPhrases: [],
+      } },
     }));
+  }
+
+  async searchKnowledgeChunks(query: string, bookId?: string, limit = 20, options: { scope?: "global" | "project" | "all"; projectId?: string } = {}): Promise<KnowledgeChunk[]> {
+    return (await this.indexedKnowledgeChunks("KnowledgeChunk", query, bookId, limit, options)).map(mapKnowledgeChunk);
+  }
+
+  async resolveKnowledgeChunkReferences(refs: Array<{ bookId: string; chunkId: string; text: string }>) {
+    if (!refs.length) return new Map<string, KnowledgeChunk>();
+    const rows = await this.db.knowledgeChunk.findMany({ where: {
+      book: { organizationId: this.organizationId },
+      OR: refs.map((ref) => ({ bookId: ref.bookId,
+        ...(/^chunk-\d+$/.test(ref.chunkId) ? { order: Number(ref.chunkId.slice(6)) } : { id: ref.chunkId }) })),
+    } });
+    const resolved = new Map<string, KnowledgeChunk>();
+    for (const ref of refs) {
+      const chunk = rows.find((row) => row.bookId === ref.bookId && row.text === ref.text &&
+        (row.id === ref.chunkId || /^chunk-\d+$/.test(ref.chunkId) && row.order === Number(ref.chunkId.slice(6))));
+      if (chunk) resolved.set(`${ref.bookId}:${ref.chunkId}`, mapKnowledgeChunk(chunk));
+    }
+    return resolved;
+  }
+
+  async getKnowledgePassage(bookId: string, reference: { chunkId?: string; chunkOrder?: number }, neighbors = 1) {
+    const book = await this.getKnowledgeBook(bookId);
+    if (!book) return null;
+    const chunk = await this.db.knowledgeChunk.findFirst({ where: { bookId, ...(reference.chunkId ? { id: reference.chunkId } : { order: reference.chunkOrder ?? -1 }) } });
+    if (!chunk) return null;
+    const chunks = await this.db.knowledgeChunk.findMany({
+      where: { bookId, order: { gte: chunk.order - neighbors, lte: chunk.order + neighbors } }, orderBy: [{ order: "asc" }, { id: "asc" }],
+    });
+    return { book: { id: book.id, name: book.name, sourceFileName: book.sourceFileName, pageCount: book.pageCount },
+      chunkId: chunk.id, chunks: chunks.map(mapKnowledgeChunk) };
   }
 
   // ── Datasets ───────────────────────────────────────────────────────────
@@ -17568,43 +17591,8 @@ export class PrismaApiStore {
     return saved.map(mapKnowledgeDocumentChunk);
   }
 
-  async searchKnowledgeDocumentChunks(query: string, documentId?: string, limit = 20): Promise<KnowledgeDocumentChunk[]> {
-    const profile = buildEstimatorSearchProfile(query);
-    if (profile.terms.length === 0) return [];
-
-    const where: any = {};
-    if (documentId) {
-      const document = await this.requireKnowledgeDocument(documentId);
-      where.documentId = document.id;
-    } else {
-      const documentIds = (await this.db.knowledgeDocument.findMany({
-        where: { organizationId: this.organizationId },
-        select: { id: true },
-      })).map((document) => document.id);
-      where.documentId = { in: documentIds };
-    }
-
-    const chunks = await this.db.knowledgeDocumentChunk.findMany({ where });
-    const ranked = rankEstimatorSearchItems(
-      chunks,
-      profile,
-      (chunk) => chunk.text,
-      (chunk) => chunk.sectionTitle,
-    ).slice(0, limit);
-
-    return ranked.map((entry) => mapKnowledgeDocumentChunk({
-      ...entry.item,
-      metadata: {
-        ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
-        searchMatch: {
-          score: Number(entry.score.toFixed(3)),
-          coverage: Number(entry.coverage.toFixed(3)),
-          matchedTerms: entry.matchedTerms,
-          matchedPhrases: entry.matchedPhrases,
-          anchorMatches: entry.anchorMatches,
-        },
-      },
-    }));
+  async searchKnowledgeDocumentChunks(query: string, documentId?: string, limit = 20, options: { scope?: "global" | "project" | "all"; projectId?: string } = {}): Promise<KnowledgeDocumentChunk[]> {
+    return (await this.indexedKnowledgeChunks("KnowledgeDocumentChunk", query, documentId, limit, options)).map(mapKnowledgeDocumentChunk);
   }
 
   private _normalizeDatasetReference(value: string) {
@@ -17843,6 +17831,14 @@ export class PrismaApiStore {
       return { rows: [], total: 0 };
     }
 
+    if (!filter && !sort) {
+      const where = { datasetId: resolved.dataset.id };
+      const [rows, total] = await Promise.all([
+        resolved.client.datasetRow.findMany({ where, orderBy: [{ order: "asc" }, { id: "asc" }], skip: Math.max(0, offset), take: Math.max(1, Math.min(1000, limit)) }),
+        resolved.client.datasetRow.count({ where }),
+      ]);
+      return { rows: rows.map(mapDatasetRow), total };
+    }
     let rows = await resolved.client.datasetRow.findMany({
       where: { datasetId: resolved.dataset.id },
       orderBy: { order: "asc" },
@@ -17961,28 +17957,18 @@ export class PrismaApiStore {
     if (!resolved) {
       return [];
     }
-    const rows = await resolved.client.datasetRow.findMany({ where: { datasetId: resolved.dataset.id } });
-    const profile = buildEstimatorSearchProfile(query);
-    if (profile.terms.length === 0) return rows.map(mapDatasetRow);
-    return rankEstimatorSearchItems(
-      rows,
-      profile,
-      (row) => JSON.stringify(row.data ?? {}),
-      (row) => datasetRowIdentityText(row.data),
-    )
-      .map((entry) => mapDatasetRow({
-        ...entry.item,
-        data: {
-          ...((entry.item.data as Record<string, unknown> | null) ?? {}),
-          _searchMatch: {
-            score: Number(entry.score.toFixed(3)),
-            coverage: Number(entry.coverage.toFixed(3)),
-            matchedTerms: entry.matchedTerms,
-            matchedPhrases: entry.matchedPhrases,
-            anchorMatches: entry.anchorMatches,
-          },
-        },
-      }));
+    const { webQuery, terms } = indexedSearchQuery(query);
+    if (!terms.length) return (await this.listDatasetRows(datasetId, undefined, undefined, 100, 0)).rows;
+    const vector = ROW_SEARCH_VECTOR.replace('"data"', 'r."data"');
+    const rows = await resolved.client.$queryRawUnsafe(`
+      SELECT r.*, ts_rank_cd(${vector}, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
+        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term)) AS "_indexedMatchedTerms"
+      FROM "DatasetRow" r WHERE r."datasetId" = $3 AND ${vector} @@ websearch_to_tsquery('english', $1)
+      ORDER BY cardinality(ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term))) DESC,
+        "_indexedScore" DESC, r."order", r.id LIMIT 2000`, webQuery, terms, resolved.dataset.id) as any[];
+    return rankIndexedCandidates(rows, buildEstimatorSearchProfile(query), (row) => JSON.stringify(row.data ?? {}), (row) => datasetRowIdentityText(row.data))
+      .map((entry) => mapDatasetRow({ ...entry.item, data: { ...entry.item.data,
+        _searchMatch: { score: entry.score, coverage: entry.coverage, matchedTerms: entry.matchedTerms } } }));
   }
 
   async queryDataset(datasetId: string, filters: DatasetQueryFilter[]): Promise<DatasetRow[]> {
@@ -17990,15 +17976,10 @@ export class PrismaApiStore {
     if (!resolved) {
       return [];
     }
-    const rows = await resolved.client.datasetRow.findMany({ where: { datasetId: resolved.dataset.id } });
-    return rows
-      .map(mapDatasetRow)
-      .filter((r) => {
-        return filters.every((f) => {
-          const val = r.data[f.column];
-          return datasetValueMatchesFilter(val, f);
-        });
-      });
+    const params: unknown[] = [resolved.dataset.id];
+    const predicate = datasetFilterPredicate(filters, params);
+    const rows = await resolved.client.$queryRawUnsafe(`SELECT r.* FROM "DatasetRow" r WHERE r."datasetId" = $1 AND ${predicate} ORDER BY r."order", r.id`, ...params) as any[];
+    return rows.map(mapDatasetRow);
   }
 
   // ── Estimator Persona CRUD ──────────────────────────────────────────────

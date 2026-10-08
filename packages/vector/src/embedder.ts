@@ -155,6 +155,7 @@ function createOpenAIProvider(config: EmbeddingConfig): EmbeddingProvider {
         const data = await withRetry(() =>
           apiFetch(`${baseUrl}/embeddings`, {
             method: "POST",
+            signal: config.signal,
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
             body: JSON.stringify({ model, input: batch, dimensions }),
           })
@@ -198,6 +199,7 @@ function createCohereProvider(config: EmbeddingConfig): EmbeddingProvider {
         const data = await withRetry(() =>
           apiFetch(`${baseUrl}/embed`, {
             method: "POST",
+            signal: config.signal,
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
             body: JSON.stringify({
               model,
@@ -223,6 +225,7 @@ function createCohereProvider(config: EmbeddingConfig): EmbeddingProvider {
       const data = await withRetry(() =>
         apiFetch(`${baseUrl}/embed`, {
           method: "POST",
+            signal: config.signal,
           headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
           body: JSON.stringify({
             model,
@@ -258,6 +261,7 @@ function createVoyageProvider(config: EmbeddingConfig): EmbeddingProvider {
         const data = await withRetry(() =>
           apiFetch(`${baseUrl}/embeddings`, {
             method: "POST",
+            signal: config.signal,
             headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey}` },
             body: JSON.stringify({ model, input: batch, output_dimension: dimensions }),
           })
@@ -307,6 +311,7 @@ function createGeminiProvider(config: EmbeddingConfig): EmbeddingProvider {
         const data = await withRetry(() =>
           apiFetch(`${baseUrl}/models/${model}:batchEmbedContents?key=${apiKey}`, {
             method: "POST",
+            signal: config.signal,
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ requests }),
           })
@@ -324,6 +329,7 @@ function createGeminiProvider(config: EmbeddingConfig): EmbeddingProvider {
       const data = await withRetry(() =>
         apiFetch(`${baseUrl}/models/${model}:embedContent?key=${apiKey}`, {
           method: "POST",
+            signal: config.signal,
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             model: `models/${model}`,
@@ -361,6 +367,7 @@ function createLocalProvider(config: EmbeddingConfig): EmbeddingProvider {
           const data = await withRetry(() =>
             apiFetch(`${baseUrl}/embeddings`, {
               method: "POST",
+            signal: config.signal,
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ model, input: batch }),
             })
@@ -376,6 +383,7 @@ function createLocalProvider(config: EmbeddingConfig): EmbeddingProvider {
               const data = await withRetry(() =>
                 apiFetch(`${baseUrl}/embeddings`, {
                   method: "POST",
+            signal: config.signal,
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({ model, input: [text] }),
                 })

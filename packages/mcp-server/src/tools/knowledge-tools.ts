@@ -75,12 +75,15 @@ function searchMatchMetadata(hit: any) {
 // (one screen), and keep ID fields the agent needs to drill in via
 // readDocumentText / getBookPage.
 function compactKnowledgeHit(h: any) {
-  const text = typeof h?.text === "string" ? h.text.replace(/\s+/g, " ").trim() : "";
+  const text = typeof (h?.excerpt ?? h?.text) === "string" ? (h.excerpt ?? h.text).trim() : "";
   const source = h?.source || h?.bookName;
   const documentTitle = h?.documentTitle && h?.documentTitle !== source ? h.documentTitle : undefined;
   const pageTitle = h?.pageTitle && h?.pageTitle !== h?.sectionTitle ? h.pageTitle : undefined;
   return {
-    text: text.length > 380 ? `${text.slice(0, 380)}...` : text,
+    id: h?.id,
+    bookId: h?.bookId,
+    chunkOrder: h?.chunkOrder,
+    text: text.length > 900 ? `${text.slice(0, 900)}...` : text,
     source,
     sourceType: h?.sourceType,
     documentTitle,
@@ -90,6 +93,7 @@ function compactKnowledgeHit(h: any) {
     documentId: h?.documentId,
     pageId: h?.pageId,
     score: h?.score ?? h?.metadata?.searchMatch?.score,
+    retrievalSources: h?.metadata?.retrievalSources,
     ...searchMatchMetadata(h),
   };
 }
@@ -139,6 +143,37 @@ function resolveQuery(input: { query?: string; q?: string }) {
 
 export function registerKnowledgeTools(server: McpServer) {
 
+  server.tool(
+    "searchEstimatingKnowledge",
+    "Search labour productivity units, PDF reference-book passages and structured datasets together. Use an operation + material + size/condition. Returns independent ranked shortlists with IDs, units and source context; book prose and dataset samples are not interchangeable rates. Drill into getLaborUnit, readKnowledgePassage, or queryKnowledgeDataset with exact filters.",
+    { query: z.string().min(1), sources: z.array(z.enum(["labor", "books", "datasets"])).default(["labor", "books", "datasets"]),
+      limit: z.coerce.number().int().positive().max(12).default(6) },
+    async ({ query, sources, limit }) => {
+      const results = await Promise.all(sources.map(async (source) => {
+        const params = new URLSearchParams({ q: query, limit: String(limit) });
+        try {
+          if (source === "books") {
+            params.set("scope", "global");
+            const data = await apiGet(`/knowledge/search?${params}`);
+            return { source, hits: (Array.isArray(data) ? data : data.results ?? []).map(compactKnowledgeHit) };
+          }
+          if (source === "labor") {
+            const data = await apiGet(`/api/labor-units/units?${params}`);
+            return { source, total: data.total, hits: (data.units ?? []).map((unit: any) => ({ id: unit.id, libraryId: unit.libraryId,
+              name: unit.name, description: compactValue(unit.description, 260),
+              path: [unit.category, unit.className, unit.subClassName].filter(Boolean).join(" › "),
+              hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
+          }
+          const data = await apiGet(`/datasets/search/global?${params}`);
+          return { source, hits: (data.results ?? []).map((d: any) => ({ datasetId: d.datasetId, name: d.datasetName,
+            description: compactValue(d.description, 240), sourceBookId: d.sourceBookId, sourcePages: d.sourcePages,
+            columns: d.columns, sampleRows: d.sampleRows?.slice(0, 3).map((row: any) => compactRow(row)), samplesAreMatches: d.samplesAreMatches })) };
+        } catch (error) { return { source, error: error instanceof Error ? error.message : String(error) }; }
+      }));
+      return { content: [{ type: "text" as const, text: JSON.stringify({ query, results }) }] };
+    },
+  );
+
   // ── queryKnowledgeBook ────────────────────────────────────
   // Searches GLOBAL knowledge books only — the cross-project estimator
   // manuals, productivity handbooks, ASME codes, and any other reference
@@ -155,6 +190,7 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       query: z.string().optional().describe("Search phrase — be specific (trade + material + action + size/class + unit)."),
       q: z.string().optional().describe("Alias for query."),
+      bookId: z.string().optional().describe("Search within a reference book returned by an earlier search."),
       limit: z.coerce.number().int().positive().max(25).default(10).describe("Max results."),
     },
     async (input) => {
@@ -167,6 +203,7 @@ export function registerKnowledgeTools(server: McpServer) {
         };
       }
       const params = new URLSearchParams({ q: query, limit: String(limit), scope: "global" });
+      if (input.bookId) params.set("bookId", input.bookId);
       const data = await apiGet(`/knowledge/search?${params}`);
       const results = Array.isArray(data) ? data : (data.results || []);
       const hits = results.map((h: any) => compactKnowledgeHit(h));
@@ -178,12 +215,40 @@ export function registerKnowledgeTools(server: McpServer) {
           hits,
           guidance: [
             "Use matchedTerms to judge fit; refine with trade + material + action + size/class + unit (hours/LF, hours/ea, hours/ton) if top hits are context-only.",
-            "Drill into a hit with readDocumentText({documentId, pages, maxChars: 3000}) or getBookPage({bookId, pageNumber}) for the visual PDF page.",
+            "Read the full passage and neighboring table/header context with readKnowledgePassage({bookId, chunkId: id}); use getBookPage when the source has a page number.",
             "For productivity numbers in tabular form, queryKnowledgeDataset is usually more direct.",
           ],
         }, null, 2) }],
       };
     }
+  );
+
+  server.tool(
+    "readKnowledgePassage",
+    "Read a reference-book passage plus neighboring chunks, preserving source headings, table text, units and page numbers. Use the bookId and id from queryKnowledgeBook or searchEstimatingKnowledge. Works even when historical OCR has no page number.",
+    {
+      bookId: z.string().min(1),
+      chunkId: z.string().optional(),
+      chunkOrder: z.coerce.number().int().min(0).optional(),
+      neighbors: z.coerce.number().int().min(0).max(2).default(1),
+      maxChars: z.coerce.number().int().positive().max(30000).default(12000),
+    },
+    async ({ bookId, chunkId, chunkOrder, neighbors, maxChars }) => {
+      const params = new URLSearchParams({ neighbors: String(neighbors) });
+      if (chunkId) params.set("chunkId", chunkId);
+      if (chunkOrder != null) params.set("chunkOrder", String(chunkOrder));
+      const data = await apiGet(`/knowledge/books/${encodeURIComponent(bookId)}/passage?${params}`);
+      let remaining = maxChars;
+      const chunks = [...(data.chunks ?? [])].sort((a: any, b: any) => Number(b.id === data.chunkId) - Number(a.id === data.chunkId)).map((chunk: any) => {
+        const text = String(chunk.text ?? "");
+        const allocation = chunk.id === data.chunkId ? Math.min(text.length, maxChars) : Math.min(text.length, Math.floor(maxChars / Math.max(1, (data.chunks ?? []).length)));
+        const returned = text.slice(0, Math.max(0, Math.min(remaining, allocation)));
+        remaining -= returned.length;
+        return { id: chunk.id, order: chunk.order, sectionTitle: chunk.sectionTitle, pageNumber: chunk.pageNumber,
+          text: returned, omittedChars: text.length - returned.length };
+      }).sort((a: any, b: any) => a.order - b.order);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ book: data.book, chunkId: data.chunkId, chunks }) }] };
+    },
   );
 
   // ── queryProjectFile ─────────────────────────────────────
@@ -269,10 +334,11 @@ export function registerKnowledgeTools(server: McpServer) {
           ? await apiPost(`/datasets/${datasetId}/query`, { filters })
           : query
             ? await apiGet(`/datasets/${datasetId}/search?${new URLSearchParams({ q: query })}`)
-            : await apiGet(`/datasets/${datasetId}/rows?${new URLSearchParams({ limit: String(offset + rowLimit) })}`);
+            : await apiGet(`/datasets/${datasetId}/rows?${new URLSearchParams({ limit: String(rowLimit), offset: String(offset) })}`);
         const dataset = await apiGet(`/datasets/${datasetId}`);
         const rawRows = Array.isArray(data) ? data : (Array.isArray(data.rows) ? data.rows : []);
-        const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset }, 50, 200);
+        const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset: browsing ? 0 : offset }, 50, 200);
+        page.offset = offset;
         if (browsing && typeof data?.total === "number") {
           page.total = data.total;
           page.hasMore = offset + page.rows.length < data.total;
@@ -312,6 +378,7 @@ export function registerKnowledgeTools(server: McpServer) {
       const results = (data.results || []).map((r: any) => ({
         datasetId: r.datasetId,
         name: r.datasetName,
+        sourceBookId: r.sourceBookId, sourcePages: r.sourcePages, samplesAreMatches: r.samplesAreMatches,
         description: compactValue(r.description, 240),
         tags: Array.isArray(r.tags) ? r.tags.slice(0, 8) : r.tags,
         columns: r.columns?.slice(0, 20).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),

@@ -1,5 +1,6 @@
 import type { PrismaApiStore } from "../prisma-store.js";
 import { planPageChunks } from "./page-provenance.js";
+import { searchExcerpt } from "./indexed-search.js";
 import { createLLMAdapter, type TenantAiConfig } from "@bidwright/agent";
 import {
   DEFAULT_AZURE_DOCUMENT_INTELLIGENCE_FEATURES,
@@ -15,6 +16,16 @@ import type { KnowledgeBook, KnowledgeChunk, KnowledgeDocument, KnowledgeDocumen
 import { relativeKnowledgeBookPath, resolveApiPath } from "../paths.js";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+
+const queryEmbeddings = new Map<string, { until: number; promise: Promise<number[]> }>();
+async function cachedQueryEmbedding(key: string, create: () => Promise<number[]>) {
+  const cached = queryEmbeddings.get(key);
+  if (cached && cached.until > Date.now()) return cached.promise;
+  if (queryEmbeddings.size >= 256) queryEmbeddings.delete(queryEmbeddings.keys().next().value!);
+  const promise = create();
+  queryEmbeddings.set(key, { until: Date.now() + 15 * 60_000, promise });
+  try { return await promise; } catch (error) { queryEmbeddings.delete(key); throw error; }
+}
 
 // Lazy-initialized vector infrastructure (keyed by orgId)
 const _vectorStores = new Map<string, PgVectorStore>();
@@ -205,6 +216,8 @@ export interface IngestionResult {
 export interface SearchResult {
   id: string;
   text: string;
+  excerpt?: string;
+  chunkOrder?: number;
   score: number;
   source: string;
   sourceType?: "book" | "document_page" | "project_document";
@@ -1060,12 +1073,12 @@ export class KnowledgeService {
    * text-based search on knowledge chunks.
    */
   async search(query: string, options: SearchOptions = {}, store?: PrismaApiStore): Promise<SearchResult[]> {
+    if (!query.trim()) return [];
     const limit = options.limit ?? 20;
     const fetchLimit = limit * 2; // Fetch more for merging
 
     // ── Parallel: vector search + keyword search ──
-    // Hybrid Reciprocal Rank Fusion (RRF) proven optimal in autoresearch at 75% accuracy
-    // Any keyword weight 30-82% performs equally; we use 60/40 keyword/vector
+    // Fuse exact terminology and semantic retrieval without treating vector similarity as certainty.
     const KEYWORD_WEIGHT = 0.6;
     const VECTOR_WEIGHT = 0.4;
 
@@ -1082,8 +1095,11 @@ export class KnowledgeService {
           baseUrl: embeddingCfg.baseUrl,
           model: embeddingCfg.model,
           dimensions: embeddingCfg.dimensions,
+          signal: AbortSignal.timeout(Math.max(100, Number(process.env.BIDWRIGHT_SEARCH_EMBEDDING_TIMEOUT_MS) || 5000)),
         });
-        const queryVector = await embedder.embedQuery(query);
+        const queryVector = await cachedQueryEmbedding(
+          JSON.stringify([options.organizationId, embeddingCfg.provider, embeddingCfg.baseUrl, embeddingCfg.model, embeddingCfg.dimensions, query.trim()]),
+          () => embedder.embedQuery(query));
         const vectorStore = getVectorStore(options?.organizationId ?? "default");
         const scopeMap: Record<string, "project" | "library" | "all"> = {
           global: "library",
@@ -1094,11 +1110,15 @@ export class KnowledgeService {
           query,
           queryVector,
           projectId: options.projectId,
+          documentId: options.bookId ?? options.documentId,
           scope: options.scope ? scopeMap[options.scope] ?? "all" : "all",
           limit: fetchLimit,
           minScore: 0.15,
         });
 
+        const bookRefs = hits.filter((hit) => hit.record.metadata.sourceType !== "document_page")
+          .map((hit) => ({ bookId: hit.record.documentId, chunkId: hit.record.chunkId, text: hit.record.text }));
+        const resolvedChunks = await store!.resolveKnowledgeChunkReferences(bookRefs);
         for (const hit of hits) {
           const metadata = hit.record.metadata;
           const sourceType = String(metadata.sourceType ?? "book");
@@ -1117,8 +1137,12 @@ export class KnowledgeService {
               metadata,
             });
           } else {
+            const chunk = resolvedChunks.get(`${hit.record.documentId}:${hit.record.chunkId}`);
+            // A vector whose source chunk was removed/replaced is not a source passage.
+            if (!chunk) continue;
             vectorResults.push({
-              id: hit.record.id,
+              id: chunk.id,
+              chunkOrder: chunk.order,
               text: hit.record.text,
               score: hit.score,
               source: String(metadata.bookName ?? "unknown"),
@@ -1126,7 +1150,7 @@ export class KnowledgeService {
               bookId: hit.record.documentId,
               bookName: String(metadata.bookName ?? ""),
               sectionTitle: String(metadata.sectionTitle ?? "") || undefined,
-              pageNumber: metadata.pageNumber ? Number(metadata.pageNumber) : undefined,
+              pageNumber: chunk.pageNumber ?? undefined,
               metadata,
             });
           }
@@ -1139,16 +1163,16 @@ export class KnowledgeService {
     // Keyword search (always runs in parallel with vector)
     const keywordPromise = (async () => {
       const [chunks, documentChunks] = await Promise.all([
-        options.documentId ? Promise.resolve([]) : store!.searchKnowledgeChunks(query, options.bookId, fetchLimit),
-        options.bookId ? Promise.resolve([]) : store!.searchKnowledgeDocumentChunks(query, options.documentId, fetchLimit),
+        options.documentId ? Promise.resolve([]) : store!.searchKnowledgeChunks(query, options.bookId, fetchLimit, options),
+        options.bookId ? Promise.resolve([]) : store!.searchKnowledgeDocumentChunks(query, options.documentId, fetchLimit, options),
       ]);
 
       const bookIds = [...new Set(chunks.map((chunk) => chunk.bookId))];
       const bookMap = new Map<string, KnowledgeBook>();
-      for (const bid of bookIds) {
+      await Promise.all(bookIds.map(async (bid) => {
         const book = await store!.getKnowledgeBook(bid);
         if (book) bookMap.set(bid, book);
-      }
+      }));
 
       const filteredChunks = chunks.filter((chunk) => {
         const book = bookMap.get(chunk.bookId);
@@ -1178,6 +1202,7 @@ export class KnowledgeService {
 
         keywordResults.push({
           id: chunk.id,
+          chunkOrder: chunk.order,
           text: chunk.text,
           score,
           source: book?.sourceFileName ?? "unknown",
@@ -1193,14 +1218,14 @@ export class KnowledgeService {
       const documentIds = [...new Set(documentChunks.map((chunk) => chunk.documentId))];
       const documentMap = new Map<string, KnowledgeDocument>();
       const pageMap = new Map<string, KnowledgeDocumentPage>();
-      for (const did of documentIds) {
+      await Promise.all(documentIds.map(async (did) => {
         const document = await store!.getKnowledgeDocument(did);
         if (document) {
           documentMap.set(did, document);
           const pages = await store!.listKnowledgeDocumentPages(did);
           for (const page of pages) pageMap.set(page.id, page);
         }
-      }
+      }));
 
       const filteredDocumentChunks = documentChunks.filter((chunk) => {
         const document = documentMap.get(chunk.documentId);
@@ -1250,23 +1275,26 @@ export class KnowledgeService {
     // ── Hybrid Reciprocal Rank Fusion (RRF) ──
     // Merge keyword + vector results using rank-based scoring
     const merged = new Map<string, SearchResult & { hybridScore: number }>();
+    keywordResults.sort((left, right) => right.score - left.score);
+    const sourceKey = (hit: SearchResult) => `${hit.sourceType}:${hit.bookId ?? hit.documentId}:${hit.id}`;
 
     // Score keyword results by reciprocal rank
     keywordResults.forEach((r, i) => {
-      const key = r.id;
-      const rankScore = 1 / (i + 1);
-      merged.set(key, { ...r, hybridScore: rankScore * KEYWORD_WEIGHT });
+      const key = sourceKey(r);
+      const rankScore = 1 / (60 + i + 1);
+      merged.set(key, { ...r, metadata: { ...r.metadata, retrievalSources: ["lexical"] }, hybridScore: rankScore * KEYWORD_WEIGHT });
     });
 
     // Merge vector results — boost if already found by keyword
     vectorResults.forEach((r, i) => {
-      const key = r.id;
-      const rankScore = 1 / (i + 1);
+      const key = sourceKey(r);
+      const rankScore = 1 / (60 + i + 1);
       const existing = merged.get(key);
       if (existing) {
         existing.hybridScore += rankScore * VECTOR_WEIGHT;
+        existing.metadata = { ...existing.metadata, retrievalSources: ["lexical", "semantic"] };
       } else {
-        merged.set(key, { ...r, hybridScore: rankScore * VECTOR_WEIGHT });
+        merged.set(key, { ...r, metadata: { ...r.metadata, retrievalSources: ["semantic"] }, hybridScore: rankScore * VECTOR_WEIGHT });
       }
     });
 
@@ -1274,7 +1302,7 @@ export class KnowledgeService {
     const results: SearchResult[] = [...merged.values()]
       .sort((a, b) => b.hybridScore - a.hybridScore)
       .slice(0, limit)
-      .map(({ hybridScore, ...rest }) => ({ ...rest, score: hybridScore }));
+      .map(({ hybridScore, ...rest }) => ({ ...rest, excerpt: searchExcerpt(rest.text, query), score: hybridScore }));
 
     // Also search project source documents if requested
     if (options.includeProjectDocs && options.projectId) {

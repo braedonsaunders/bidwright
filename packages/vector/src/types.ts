@@ -17,6 +17,7 @@ export interface VectorRecord {
 export interface VectorSearchOptions {
   query: string;
   queryVector?: number[];
+  documentId?: string;
   projectId?: string;
   scope?: "project" | "library" | "all";
   documentKinds?: string[];
@@ -81,6 +82,8 @@ export interface EmbeddingProvider {
 
 /** Configuration for creating an embedding provider via `createEmbedder`. */
 export interface EmbeddingConfig {
+  /** Optional cancellation for latency-sensitive query embeddings. */
+  signal?: AbortSignal;
   provider: "openai" | "cohere" | "voyage" | "local" | "gemini";
   model?: string;
   apiKey?: string;
