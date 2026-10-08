@@ -4,7 +4,7 @@ import { buildEstimatorSearchProfile, uniqueStrings, normalizeEstimatorSearchTex
 // Source/library descriptions and arbitrary JSON metadata are deliberately not
 // repeated on every labour unit: they describe the book, not the operation.
 export const LABOR_SEARCH_VECTOR = String.raw`(
-  setweight(to_tsvector('english', regexp_replace(coalesce("name", '') || ' ' || coalesce("code", ''), '([[:lower:][:digit:]])([[:upper:]])', '\1 \2', 'g')), 'A') ||
+  setweight(to_tsvector('english', regexp_replace(coalesce("name", '') || ' ' || coalesce("code", ''), '([[:lower:]])([[:upper:]])', '\1 \2', 'g')), 'A') ||
   setweight(to_tsvector('english', coalesce("className", '') || ' ' || coalesce("subClassName", '')), 'A') ||
   setweight(to_tsvector('english', coalesce("description", '')), 'B') ||
   setweight(to_tsvector('english', coalesce("category", '') || ' ' || coalesce("discipline", '')), 'C')
@@ -13,7 +13,7 @@ export const CHUNK_SEARCH_VECTOR = `(
   setweight(to_tsvector('english', coalesce("sectionTitle", '')), 'A') ||
   setweight(to_tsvector('english', coalesce("text", '')), 'B')
 )`;
-export const ROW_SEARCH_VECTOR = String.raw`to_tsvector('english', regexp_replace("data"::text, '([[:lower:][:digit:]])([[:upper:]])', '\1 \2', 'g'))`;
+export const ROW_SEARCH_VECTOR = String.raw`to_tsvector('english', regexp_replace("data"::text, '([[:lower:]])([[:upper:]])', '\1 \2', 'g'))`;
 
 export function indexedSearchQuery(query: string) {
   const profile = buildEstimatorSearchProfile(query);
@@ -47,15 +47,15 @@ export function searchExcerpt(text: string, query: string, maxChars = 900) {
 }
 
 /** Combine database stemming with exact engineering-size matches. */
-export function rankIndexedCandidates<T>(items: T[], profile: SearchProfile, text: (item: T) => unknown, heading: (item: T) => unknown = () => "") {
+export function rankIndexedCandidates<T>(items: T[], profile: SearchProfile, text: (item: T) => unknown, heading: (item: T) => unknown = () => "", numericIdentity: (item: T) => unknown = text) {
   return items.map((item: any) => {
     const match = scoreEstimatorSearchText(profile, text(item), heading(item));
-    const normalized = normalizeEstimatorSearchText(text(item));
+    const normalized = normalizeEstimatorSearchText(numericIdentity(item));
     const stemmed = new Set<string>(item._indexedMatchedTerms ?? []);
     const matchedTerms = profile.terms.filter((term) => /^\d/.test(term.token)
       ? estimatorTermMatches(normalized, term) : stemmed.has(term.token) || match?.matchedTerms.includes(term.token)).map((term) => term.token);
     const coverage = profile.totalWeight ? profile.terms.reduce((sum, term) => sum + (matchedTerms.includes(term.token) ? term.weight : 0), 0) / profile.totalWeight : 0;
-    return { item: item as T, score: coverage * 100 + (match?.score ?? 0) + Number(item._indexedScore ?? 0), coverage,
+    return { item: item as T, score: matchedTerms.length / Math.max(1, profile.terms.length) * 100 + coverage * 10 + (match?.score ?? 0) * 0.1 + Number(item._indexedScore ?? 0), coverage,
       matchedTerms, matchedPhrases: match?.matchedPhrases ?? [], anchorMatches: profile.terms.filter((term) => term.isAnchor && matchedTerms.includes(term.token)).length };
   }).filter((entry) => entry.matchedTerms.length).sort((a, b) => b.score - a.score);
 }

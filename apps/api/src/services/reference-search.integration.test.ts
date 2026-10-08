@@ -10,7 +10,8 @@ test("indexed retrieval preserves operation/size relevance, source identity and 
   const db = new PrismaClient({ datasources: { db: { url } } });
   const org = `search-proof-${randomUUID()}`, other = `${org}-other`;
   try {
-    const migration = await readFile(new URL("../../../../packages/db/prisma/migrations/20261008010000_reference_search_indexes/migration.sql", import.meta.url), "utf8");
+    let migration = await readFile(new URL("../../../../packages/db/prisma/migrations/20261008010000_reference_search_indexes/migration.sql", import.meta.url), "utf8");
+    migration += '\n' + await readFile(new URL("../../../../packages/db/prisma/migrations/20261008020000_search_identifier_tokens/migration.sql", import.meta.url), "utf8");
     for (const sql of migration.split(";").filter((statement) => statement.trim())) await db.$executeRawUnsafe(sql);
     await db.organization.createMany({ data: [{ id: org, name: "Search proof", slug: org }, { id: other, name: "Other proof", slug: other }] });
     const library = await db.laborUnitLibrary.create({ data: { organizationId: org, name: "Manual", description: "adhesive anchor stainless drill tap" } });
@@ -55,6 +56,9 @@ test("indexed retrieval preserves operation/size relevance, source identity and 
     ] });
     const rows = await store.searchDatasetRows(dataset.id, "3 stainless butt weld");
     assert.equal(rows[0].data.size, "3");
+    const discovery = await store.searchDatasets("3 stainless butt weld", 5);
+    assert.equal(discovery.results[0].datasetId, dataset.id);
+    assert.equal(discovery.results[0].sampleRows[0].size, "3");
     const exact = await store.queryDataset(dataset.id, [{ column: "size", op: "eq", value: 3 }]);
     assert.equal(exact.length, 1);
     assert.equal(exact[0].data.size, "3");
@@ -63,7 +67,7 @@ test("indexed retrieval preserves operation/size relevance, source identity and 
     assert.equal(browse.rows[0].data.size, "3");
     // Verify the expression index can serve the actual search predicate.
     await db.$executeRawUnsafe("SET enable_seqscan = off");
-    const plan = await db.$queryRawUnsafe<any[]>(`EXPLAIN SELECT id FROM "DatasetRow" WHERE to_tsvector('english', regexp_replace("data"::text, '([[:lower:][:digit:]])([[:upper:]])', '\\1 \\2', 'g')) @@ websearch_to_tsquery('english', 'weld')`);
+    const plan = await db.$queryRawUnsafe<any[]>(`EXPLAIN SELECT id FROM "DatasetRow" WHERE to_tsvector('english', regexp_replace("data"::text, '([[:lower:]])([[:upper:]])', '\\1 \\2', 'g')) @@ websearch_to_tsquery('english', 'weld')`);
     assert.match(JSON.stringify(plan), /DatasetRow_reference_search_idx/);
   } finally {
     await db.organization.deleteMany({ where: { id: { in: [org, other] } } });

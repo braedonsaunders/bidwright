@@ -30,10 +30,10 @@ const ESTIMATE_SEARCH_STOPWORDS = new Set([
 
 export function normalizeEstimatorSearchText(value: unknown) {
   return String(value ?? "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
     .toLowerCase()
     .replace(/(\d)\s*\/\s*(\d)/g, "$1/$2")
-    .match(/[a-z][a-z0-9]*|\d+(?:-\d+\/\d+|\/\d+|\.\d+)?/g)?.join(" ") ?? "";
+    .match(/[a-z][a-z0-9]*|\d+[a-z][a-z0-9]*|\d+(?:-\d+\/\d+|\/\d+|\.\d+)?/g)?.join(" ") ?? "";
 }
 
 export function estimatorSearchTokens(value: unknown) {
@@ -102,10 +102,8 @@ export function lineItemAutocompleteTsQuery(value: unknown) {
 }
 
 export function estimatorTermMatches(haystack: string, term: SearchProfileTerm) {
-  const tokens = new Set(haystack.split(" "));
-  return term.variants.some((variant) =>
-    /^\d/.test(variant) ? tokens.has(variant) : [...tokens].some((token) => token === variant || (variant.length >= 4 && token.startsWith(variant))),
-  );
+  const padded = ` ${haystack} `;
+  return term.variants.some((variant) => padded.includes(` ${variant} `));
 }
 
 export function scoreEstimatorSearchText(profile: SearchProfile, textValue: unknown, headingValue: unknown = "") {
@@ -172,7 +170,7 @@ const DATASET_IDENTITY_COLUMN = /(?:^|_)(?:size|diameter|nominal|nps|dn|gauge|sc
 export function datasetRowIdentityText(data: unknown): string {
   if (!data || typeof data !== "object" || Array.isArray(data)) return "";
   return Object.entries(data as Record<string, unknown>)
-    .filter(([key, value]) => DATASET_IDENTITY_COLUMN.test(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2")) && (typeof value === "string" || typeof value === "number"))
+    .filter(([key, value]) => DATASET_IDENTITY_COLUMN.test(key.replace(/([a-z])([A-Z])/g, "$1_$2")) && (typeof value === "string" || typeof value === "number"))
     .map(([key, value]) => `${key} ${String(value)}`)
     .join(" ");
 }

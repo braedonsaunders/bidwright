@@ -23,3 +23,18 @@ test("book snippets find the requested passage and retain table line breaks", ()
   assert.match(excerpt, /0\.004/);
   assert.ok(excerpt.length < 510);
 });
+
+test("multi-term intent outranks an isolated rare word; numeric codes do not masquerade as sizes", () => {
+  const rows = [
+    { name: "Adhesive base", text: "adhesive base", _indexedMatchedTerms: ["adhesive"] },
+    { name: "3/4 drill anchors", text: "3/4 drill anchors", _indexedMatchedTerms: ["anchor", "drill"] },
+  ];
+  assert.equal(rankIndexedCandidates(rows, buildEstimatorSearchProfile("adhesive anchor 3/4 drill epoxy"), (row) => row.text)[0].item.name, rows[1].name);
+  const coded = [{ name: "3/4 inch", code: "item-3-4", _indexedMatchedTerms: ["3", "inch"] }];
+  assert.equal(rankIndexedCandidates(coded, buildEstimatorSearchProfile("3 inch"), (row) => `${row.name} ${row.code}`, (row) => row.name, (row) => row.name)[0].matchedTerms.includes("3"), false);
+});
+
+test("numeric identifiers stay whole and unrelated word prefixes do not count", () => {
+  assert.equal(rankEstimatorSearchItems(["304L alloy", "304 cost"], buildEstimatorSearchProfile("304L"), (row) => row)[0].item, "304L alloy");
+  assert.equal(rankEstimatorSearchItems(["butterfly valve"], buildEstimatorSearchProfile("butt weld"), (row) => row).length, 0);
+});
