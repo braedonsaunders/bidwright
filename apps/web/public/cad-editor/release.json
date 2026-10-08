@@ -1,0 +1,8 @@
+{
+  "productVersion": "0.3.0",
+  "viewerVersion": "1.7.4",
+  "dataModelVersion": "1.15.1",
+  "pipingSchemaVersion": 1,
+  "dwgVersion": "AC1015",
+  "features": ["isometric-grid", "measured-routing", "autosave", "cut-schedules", "weld-map", "pdf-package", "pcf", "native-dwg", "3d-review"]
+}
