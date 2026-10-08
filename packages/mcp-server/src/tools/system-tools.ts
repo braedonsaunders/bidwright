@@ -34,7 +34,7 @@ export function registerSystemTools(server: McpServer) {
   // ── askUser — block until the user responds ──────────────
   server.tool(
     "askUser",
-    "MANDATORY: Ask the user a clarifying question and WAIT for their response. Use this BEFORE making any assumptions about scope, subcontracting, labour basis, scheduling, or other ambiguous details. When the question is about something on a drawing (a count, a note, a detail), pass the viewId of the image you are looking at so the user sees the same thing. The question will appear in the UI and the user can respond. This tool BLOCKS until the user answers — do not proceed without the answer.",
+    "Ask the user a question and wait for the answer. Use it when you need information only they have (scope intent, client decisions, commercial terms) and a reasonable assumption would not do. When the question is about something on a drawing, pass the viewId of the image you are looking at so the user sees the same thing.",
     {
       // Optional because this tool tells the model to prefer `questions` for
       // multi-part asks, and it then omits the singular field — which failed
