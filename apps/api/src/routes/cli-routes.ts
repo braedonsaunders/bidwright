@@ -6,6 +6,7 @@
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { findPendingQuestionEvent } from "../services/cli-question-history.js";
+import { assertPromptCachingOverride, resolveRunPromptCaching } from "../services/cli-prompt-caching.js";
 import { assertReasoningEffortOverride, normalizeCliReasoningEffort, resolveRunReasoningEffort } from "../services/cli-reasoning-effort.js";
 import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, probeLiveAgent, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
 import {
@@ -1280,9 +1281,11 @@ export function registerCliRoutes(app: FastifyInstance) {
       prompt?: string;
       personaId?: string;
       reasoningEffort?: unknown;
+      promptCaching?: unknown;
     };
 
     assertReasoningEffortOverride(body.reasoningEffort);
+    assertPromptCachingOverride(body.promptCaching);
     const { projectId, scope, prompt } = body;
     const store = request.store!;
 
@@ -1373,6 +1376,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     const adapter = getAdapter(runtime);
     const model = normalizeCliModel(runtime, body.model ?? integrationsEarly.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrationsEarly.agentReasoningEffort);
+    const promptCaching = resolveRunPromptCaching(body.promptCaching, undefined, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
 
     // Generate per-runtime instruction files (CLAUDE.md / AGENTS.md / GEMINI.md)
     const params = {
@@ -1443,7 +1447,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       kind: "cli-intake",
       status: "running",
       model: model || adapter.defaultModel,
-      input: { runtime, reasoningEffort, scope: effectiveScope, documentCount: documents.length, mode: "build_estimate" } as any,
+      input: { runtime, reasoningEffort, promptCaching, scope: effectiveScope, documentCount: documents.length, mode: "build_estimate" } as any,
       output: { events: seededEvents } as any,
     });
 
@@ -1490,6 +1494,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         runtime,
         model,
         reasoningEffort,
+        promptCaching,
         authToken: extractAuthToken(request),
         apiBaseUrl: `http://localhost:${process.env.API_PORT || 4001}`,
         revisionId: revision.id,
@@ -1584,9 +1589,10 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
    */
   async function startResumedSession(
     request: FastifyRequest,
-    body: { prompt?: string; model?: string; mode?: AgentChatMode; reasoningEffort?: unknown },
+    body: { prompt?: string; model?: string; mode?: AgentChatMode; reasoningEffort?: unknown; promptCaching?: unknown },
   ): Promise<{ sessionId: string; status: string }> {
     assertReasoningEffortOverride(body.reasoningEffort);
+    assertPromptCachingOverride(body.promptCaching);
     const { projectId } = request.params as { projectId: string };
     const projectDir = resolveProjectDir(projectId);
     const store = request.store!;
@@ -1621,6 +1627,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         : "claude-code";
     const model = normalizeCliModel(runtime, body.model ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
+    const promptCaching = resolveRunPromptCaching(body.promptCaching, (latestRun?.input as any)?.promptCaching, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
     await prepareCliAgentWorkspace({ request, workspace, projectId, runtime, mode });
     const resumePrompt = buildResumePrompt(runtime, mode, body.prompt);
     const aiRunId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
@@ -1641,6 +1648,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
+        promptCaching,
         agentMode: mode,
         aiRunId,
         emitCompletionMessage: mode !== "qa",
@@ -1667,6 +1675,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         input: {
           runtime,
           reasoningEffort,
+          promptCaching,
           prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
@@ -1692,6 +1701,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         input: {
           runtime,
           reasoningEffort,
+          promptCaching,
           prompt: resumePrompt,
           resumed: true,
           resumeSourceAiRunId: latestRun?.id ?? null,
@@ -1707,7 +1717,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
   }
 
   app.post("/api/cli/:projectId/resume", async (request, reply) => {
-    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode; reasoningEffort?: unknown };
+    const body = (request.body || {}) as { prompt?: string; model?: string; mode?: AgentChatMode; reasoningEffort?: unknown; promptCaching?: unknown };
     try {
       return await startResumedSession(request, body);
     } catch (err) {
@@ -1723,7 +1733,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
   // or returns error if a session is already running.
   app.post("/api/cli/:projectId/message", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope, mode: requestedMode, reasoningEffort: requestedEffort } = (request.body || {}) as {
+    const { message, runtime: requestedRuntime, model: requestedModel, personaId, scope, mode: requestedMode, reasoningEffort: requestedEffort, promptCaching: requestedPromptCaching } = (request.body || {}) as {
       message: string;
       runtime?: AgentRuntime;
       model?: string;
@@ -1731,9 +1741,11 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
       scope?: string;
       mode?: AgentChatMode;
       reasoningEffort?: unknown;
+      promptCaching?: unknown;
     };
 
     assertReasoningEffortOverride(requestedEffort);
+    assertPromptCachingOverride(requestedPromptCaching);
     if (!message) return reply.code(400).send({ error: "Message required" });
 
     const existing = getSession(projectId);
@@ -1771,6 +1783,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         : "claude-code";
     const model = normalizeCliModel(runtime, requestedModel ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(requestedEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
+    const promptCaching = resolveRunPromptCaching(requestedPromptCaching, (latestRun?.input as any)?.promptCaching, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
     const prepared = await prepareCliAgentWorkspace({
       request,
       workspace,
@@ -1825,6 +1838,7 @@ ${conversationContext || "No previous turns."}
       input: {
         runtime,
         reasoningEffort,
+        promptCaching,
         prompt: message,
         sessionPrompt: questionPrompt,
         followUp: true,
@@ -1856,6 +1870,7 @@ ${conversationContext || "No previous turns."}
         organizationId: request.user?.organizationId ?? null,
         ...buildSpawnApiKeys(prepared.integrations),
         reasoningEffort,
+        promptCaching,
         emitCompletionMessage: false,
         requireFinalAssistantMessage: mode === "qa",
         agentMode: mode,

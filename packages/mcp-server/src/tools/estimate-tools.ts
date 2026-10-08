@@ -348,9 +348,9 @@ export function registerEstimateTools(server: McpServer) {
   server.tool(
     "saveEstimateScopeGraph",
     [
-      "Persist the structured scope graph after document review. Call before creating worksheets or assigning labour hours.",
-      "When drawings exist, include visualTakeoffAudit with actual Drawing Evidence Engine evidence.",
-      "For drawing-driven packages, atlas pages are overview evidence; include targeted inspectDrawingRegion crop/ledger evidence before pricing. Symbol tools are optional follow-ups after a specific small symbol/region is identified.",
+      "Persist the structured scope graph after document review.",
+      "visualTakeoffAudit can record which drawings drive which packages.",
+      "Full pages are overview evidence; tiles and region crops show detail. Symbol tools are optional follow-ups for a specific small symbol or region.",
     ].join(" "),
     {
       scopeItems: z.array(z.object({
@@ -378,7 +378,7 @@ export function registerEstimateTools(server: McpServer) {
       }).passthrough()).optional(),
       visualTakeoffAudit: z.object({
         drawingDrivenPackages: z.array(z.object({
-          packageId: z.string().describe("Required. The packageId from your package plan — not the package name."),
+          packageId: z.string().describe("The packageId from your package plan (not the package name)."),
           packageName: z.string().optional(),
           scopeRefs: z.array(z.string()).default([]),
           documentIds: z.array(z.string()).default([]),
@@ -398,7 +398,7 @@ export function registerEstimateTools(server: McpServer) {
         }).passthrough()).default([]),
         notDrawingDrivenReason: z.string().optional(),
         completedBeforePricing: z.boolean().default(false),
-      }).passthrough().default({ drawingDrivenPackages: [], completedBeforePricing: false }).describe("Required visual drawing audit when drawing-style PDFs exist. If a package quantity/scope comes from drawings, record Drawing Evidence Engine atlas/page evidence plus targeted inspectDrawingRegion crop evidence and saved ledger claims before worksheets/items. Put BOM/schedule/table extraction in tableEvidence, not zoomEvidence, unless you inspected a targeted table crop. Symbol scan/count evidence is optional and only for a specific small symbol or cropped region identified from the inspected visual."),
+      }).passthrough().default({ drawingDrivenPackages: [], completedBeforePricing: false }).describe("Optional record of drawing-driven packages and the page/crop viewIds or claims that support them."),
     },
     async (data) => {
       await apiPost(`/api/estimate/${getProjectId()}/strategy/section`, { section: "scopeGraph", data });
@@ -458,10 +458,10 @@ export function registerEstimateTools(server: McpServer) {
   server.tool(
     "saveEstimatePackagePlan",
     [
-      "Persist the package/commercial structure before detailed pricing. Use this to decide how scope will be grouped and whether each package is detailed, subcontracted, or allowance-based.",
-      "Every package must include exclusive bindings so finalization can prove which worksheet rows commercialize that package.",
+      "Persist the package/commercial structure: how scope is grouped and whether each package is detailed, subcontracted, or allowance-based.",
+      "Bindings link a package to the worksheet rows that price it.",
       "Before worksheets exist, bind to the exact planned worksheetNames and/or narrow textMatchers. After worksheets are created, call this again with worksheetIds.",
-      "Subcontract/allowance packages must bind only zero-hour subcontractor/allowance/commercial rows. Put self-perform supervision, coordination, or install support in a separate detailed package or General Conditions package.",
+      "Self-perform supervision, coordination or install support usually belongs in a detailed or General Conditions package rather than a subcontract/allowance package.",
     ].join(" "),
     {
       packages: z.array(z.object({
@@ -518,9 +518,9 @@ export function registerEstimateTools(server: McpServer) {
       const candidateCount = strategy?.benchmarkProfile?.candidateCount ?? 0;
       const actions = strategy?.benchmarkProfile?.suggestedActions?.length ?? 0;
       if (candidateCount === 0) {
-        return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: 0. No benchmark adjustments apply; a no-comparables adjustment plan was recorded automatically, so saveEstimateAdjustments is NOT required. Proceed to worksheets/items on document, vendor, rate-schedule, and library evidence. The final saveEstimateReconcile is still mandatory.` }] };
+        return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: 0. No benchmark adjustments apply; a no-comparables adjustment plan was recorded automatically, so there is nothing to adjust.` }] };
       }
-      return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: ${candidateCount}. Suggested actions: ${actions}. Record how they change the approach with saveEstimateAdjustments before pricing.` }] };
+      return { content: [{ type: "text" as const, text: `Benchmarks recomputed. Comparable jobs: ${candidateCount}. Suggested actions: ${actions}. Record any change of approach with saveEstimateAdjustments.` }] };
     },
   );
 
@@ -605,17 +605,17 @@ export function registerEstimateTools(server: McpServer) {
 
   server.tool(
     "saveEstimateReconcile",
-    "Persist the mandatory final self-review after all worksheets are populated. Capture omissions, outliers, duplicate scope, and final confidence. coverageChecks is the specialty-coverage audit and is enforced at finalize: enumerate every contractor-responsible package identified from the spec/scope-table/RFQ, set status='ok' once it is bound to the plan or carried as an explicit assumption, and provide coveredBy.packageId/coveredBy.worksheetIds (when in the plan) or coveredBy.assumptionId (when carried as a self-perform/out-of-scope assumption). Entries with status='warning' or status='missing' block finalize.",
+    "Persist a final self-review: omissions, outliers, duplicate scope, final confidence, and optional coverageChecks listing contractor-responsible packages and where each is covered (coveredBy.packageId / worksheetIds / assumptionId).",
     {
       coverageChecks: z.array(z.object({
         name: z.string().describe("Specialty package name as identified in the spec/scope-table (e.g. the heading or scope item)."),
-        status: z.enum(["ok", "warning", "missing"]).describe("'ok' once resolved; 'warning'/'missing' block finalize and signal unresolved scope coverage."),
+        status: z.enum(["ok", "warning", "missing"]).describe("'ok' once covered; 'warning'/'missing' mark coverage still open."),
         sourceRef: z.string().optional().describe("Where in the source documents this package was identified (document, page/section, table reference)."),
         coveredBy: z.object({
           packageId: z.string().optional().describe("Package plan ID covering this scope item."),
           worksheetIds: z.array(z.string()).default([]).describe("Worksheet IDs covering this scope item."),
           assumptionId: z.string().optional().describe("Saved assumption ID when the package is intentionally not in the plan (self-perform without dedicated line, or explicitly out of scope)."),
-        }).passthrough().optional().describe("Required when status='ok': bind to a plan entry via packageId/worksheetIds, or to a saved assumption via assumptionId."),
+        }).passthrough().optional().describe("Where this is covered: a plan entry (packageId/worksheetIds) or a saved assumption (assumptionId)."),
         notes: z.string().optional().describe("Commercial treatment and rationale for this coverage decision."),
       }).passthrough()).default([]),
       outliers: z.array(z.object({

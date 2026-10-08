@@ -33,16 +33,6 @@ export function recordViewPayload(tool: string) {
   };
 }
 
-// Images handed to the model in this MCP session. A run that pages through a
-// large set keeps going, but past the budget it must zoom deliberately rather
-// than re-render whole sheets.
-let deliveredImageCount = 0;
-
-function imageBudget(): number {
-  const configured = Number(process.env.BIDWRIGHT_AGENT_IMAGE_BUDGET);
-  return Number.isFinite(configured) && configured > 0 ? configured : 120;
-}
-
 function imageMaxEdge(): number | undefined {
   const configured = Number(process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE);
   return Number.isFinite(configured) && configured > 0 ? configured : undefined;
@@ -94,9 +84,6 @@ async function readDrawingImage(input: {
   rotation?: number;
   fullText?: boolean;
 }) {
-  if (deliveredImageCount >= imageBudget()) {
-    return { content: [{ type: "text" as const, text: `Image budget for this run (${imageBudget()}) is used up. Work from the views you already have (their viewIds stay valid), or ask the user before reading more pages.` }] };
-  }
   const result = await apiPost<Record<string, any>>("/api/vision/read-page", {
     projectId: getProjectId(),
     documentId: input.documentId,
@@ -117,7 +104,6 @@ async function readDrawingImage(input: {
   if (!result.success || !base64) {
     return { content: [{ type: "text" as const, text: `Could not read the page: ${result.message ?? result.error ?? "unknown error"}` }] };
   }
-  deliveredImageCount += 1;
 
   const { image: _image, imageHash: _hash, duration_ms: _ms, ...raw } = result;
   const meta = compactPageReadMeta(raw, input.mode, input.fullText === true);
@@ -128,10 +114,9 @@ async function readDrawingImage(input: {
         type: "text" as const,
         text: JSON.stringify({
           ...meta,
-          imagesRemaining: Math.max(0, imageBudget() - deliveredImageCount),
           note: input.mode === "overview"
-            ? "Cite this viewId (saveDrawingEvidenceClaim evidence[].viewId, evidenceBasis.quantity.viewIds) for quantities taken from this image; the server supplies the hash. Zoom with readDrawingTile before relying on small text, dimensions or counts."
-            : "Cite this viewId (saveDrawingEvidenceClaim evidence[].viewId, evidenceBasis.quantity.viewIds) for quantities read in this tile; the server supplies the hash and box. No need to re-inspect this area.",
+            ? "Zoom with readDrawingTile before relying on small text, dimensions or counts. viewId identifies this image if you want to reference it in source notes."
+            : "viewId identifies this image if you want to reference it in source notes.",
         }),
       },
     ],
@@ -456,7 +441,7 @@ USE IT FOR every drawing that drives scope or quantity, page by page. Then zoom 
 
 OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] ("R3 view \"label\" @x,y,w,h", normalized to the image), grid (rows x cols tile ids like "r2c3"), textLines[] ("exact text @x,y,w,h", up to 40; fullText:true for all), and vectorTextLikely. Every @x,y,w,h is normalized 0..1 in THIS image's frame, after rotation (x right, y down from the top-left of the image you see), and can be passed straight to readDrawingTile as bbox. fullText:true adds full per-line boxes only when you need every line.
 
-EVIDENCE: every image carries a viewId. Cite viewIds in evidenceBasis.quantity.viewIds for any quantity you take from a drawing, and only for images you actually examined. Quote textLines verbatim when a note drives a quantity. Stacked fractions are split in the text layer (e.g. "for 3" + "4\" SS epoxy anchor" is "for 3/4\" SS epoxy anchor"); confirm such values in the image.
+Every image carries a viewId you can mention in source notes so a reviewer can open the exact image. Quote textLines verbatim when a note drives a quantity. Stacked fractions are split in the text layer (e.g. "for 3" + "4\" SS epoxy anchor" is "for 3/4\" SS epoxy anchor"); confirm such values in the image.
 
 Works with source document ids and Files-area file ids.`,
     {
@@ -470,7 +455,7 @@ Works with source document ids and Files-area file ids.`,
 
   server.tool(
     "readDrawingTile",
-    `Zoom into part of a drawing page you have already opened with readDrawingPage. Pass a tile id from its grid (e.g. "r2c3") or a region bbox from its regions[] (normalized 0..1, same frame as the overview image). Returns a sharp image of just that area plus the text inside it, and a viewId to cite.
+    `Zoom into part of a drawing page you have already opened with readDrawingPage. Pass a tile id from its grid (e.g. "r2c3") or a region bbox from its regions[] (normalized 0..1, same frame as the overview image). Returns a sharp image of just that area plus the text inside it, and its viewId.
 
 Use it to read dimensions, callouts, notes, schedules, base-plate/anchor details, and to count repeated items (columns, base plates, anchors, supports). When you count, count in the image and say what you counted where; if the text says one thing and the picture another, say so and ask.`,
     {

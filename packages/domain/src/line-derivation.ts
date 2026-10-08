@@ -7,11 +7,9 @@
  * anchors?") is answered from a persisted trace instead of reconstructed from
  * memory, and so an edit to any input can mark dependent rows stale.
  *
- * Everything here is pure and deterministic. No LLM judgement is involved: the
- * per-instance contradiction check compares explicit callouts in cited text
- * ("(1) hole", "TYP 4", "2 PER PLATE") against the per-instance factor the
- * estimator claimed. It never compares against a row total, because a total
- * stays unknown until an instance count has been physically evidenced.
+ * Everything here is pure and deterministic: formula arithmetic, explicit
+ * units and conversions. Whether a cited source supports a value is for the
+ * estimator and reviewer to judge from the recorded inputs and sources.
  */
 
 export const LINE_DERIVATION_SOURCE_KINDS = [
@@ -107,25 +105,7 @@ export interface LineDerivation {
   invalidatedBy?: LineDerivationInvalidation[];
   notes?: string | null;
   procurement?: LineDerivationProcurement | null;
-  /** Server-computed review flags (see flagDerivationAssumptions). Never trusted from the caller. */
-  reviewFlags?: LineDerivationReviewFlag[];
 }
-
-export interface LineDerivationReviewFlag {
-  code: "assumed_inputs" | "assumption_dominated";
-  message: string;
-  inputs: string[];
-  /**
-   * For assumption_dominated: what the evidence inputs (all factors of 1)
-   * actually establish. physical_count = a drawing count of a real object
-   * (legitimate "1 machine x assumed hours"); scope_only = a package/lot/scope
-   * factor; unclassified = no positive physical evidence either way;
-   * assumption_only = no evidence input at all.
-   */
-  basis?: DominatedEvidenceBasis;
-}
-
-export type DominatedEvidenceBasis = "physical_count" | "scope_only" | "unclassified" | "assumption_only";
 
 export interface LineDerivationIssue {
   severity: "error" | "warning";
@@ -372,15 +352,11 @@ export function validateLineDerivation(
     const source = input.source;
     const kind = String(source?.kind ?? "").trim() as LineDerivationSourceKind;
     const ref = String(source?.ref ?? "").trim();
-    if (!kind || !(LINE_DERIVATION_SOURCE_KINDS as readonly string[]).includes(kind)) {
-      issues.push({ severity: "error", code: "input_source_kind", message: `Input '${name}' needs source.kind from: ${LINE_DERIVATION_SOURCE_KINDS.join(", ")}.`, inputName: name });
+    // A source is optional; when one is given its kind must be a known value.
+    if (kind && !(LINE_DERIVATION_SOURCE_KINDS as readonly string[]).includes(kind)) {
+      issues.push({ severity: "error", code: "input_source_kind", message: `Input '${name}' has source.kind '${kind}'; use one of: ${LINE_DERIVATION_SOURCE_KINDS.join(", ")}.`, inputName: name });
     }
-    if (!ref) {
-      issues.push({ severity: "error", code: "input_source_ref", message: `Input '${name}' needs source.ref (an id, URL, or document#page locator).`, inputName: name });
-    }
-    if (kind === "manual" && String(input.note ?? source?.excerpt ?? "").trim().length < 20) {
-      issues.push({ severity: "error", code: "manual_input_rationale", message: `Input '${name}' is manual; give a note of at least 20 characters explaining the basis.`, inputName: name });
-    }
+    void ref;
   }
 
   if (formula) {
@@ -418,156 +394,6 @@ export function validateLineDerivation(
   return issues;
 }
 
-// ── Per-instance callouts and contradictions ───────────────────────────────
-
-export interface PerInstanceCallout {
-  count: number;
-  /** The text around the number, normalized to lower case. */
-  phrase: string;
-  /** Pattern that produced the match. */
-  pattern: "parenthesized" | "per" | "typ" | "hyphenated" | "times" | "each";
-  index: number;
-}
-
-const CALLOUT_NOUN = "([a-z0-9\"'″′#/.\\- ]{0,48})";
-
-/**
- * Find explicit per-instance count callouts in drawing or spec text. Only
- * patterns that drafters use for per-instance counts are recognised; bare
- * numbers are ignored because they are usually dimensions or totals.
- */
-export function extractPerInstanceCallouts(text: string): PerInstanceCallout[] {
-  const source = String(text ?? "").replace(/\s+/g, " ");
-  const lowered = source.toLowerCase();
-  const callouts: PerInstanceCallout[] = [];
-  const push = (count: number, phrase: string, pattern: PerInstanceCallout["pattern"], index: number) => {
-    if (!Number.isFinite(count) || count <= 0 || count > 1000) return;
-    callouts.push({ count, phrase: phrase.trim(), pattern, index });
-  };
-
-  // (1) 1" dia hole   /  c/w (4) anchors
-  for (const match of lowered.matchAll(new RegExp(`\\((\\d{1,4})\\)\\s*${CALLOUT_NOUN}`, "g"))) {
-    push(Number(match[1]), `(${match[1]}) ${match[2] ?? ""}`, "parenthesized", match.index ?? 0);
-  }
-  // 4 PER PLATE / 2 EA PER COLUMN / 4 ANCHORS PER BASE PLATE
-  for (const match of lowered.matchAll(new RegExp(`\\b(\\d{1,4})\\s*(?:ea\\.?|each|pcs?|nos?\\.?)?\\s*${CALLOUT_NOUN}?\\bper\\b\\s*${CALLOUT_NOUN}`, "g"))) {
-    push(Number(match[1]), match[0], "per", match.index ?? 0);
-  }
-  // TYP 4 / TYP. (4) / 4 TYP / (4) TYP
-  for (const match of lowered.matchAll(/\btyp\.?\s*\(?(\d{1,4})\)?\b/g)) {
-    push(Number(match[1]), match[0], "typ", match.index ?? 0);
-  }
-  for (const match of lowered.matchAll(/\(?\b(\d{1,4})\)?\s*(?:places?\s*)?typ\.?\b/g)) {
-    push(Number(match[1]), match[0], "typ", match.index ?? 0);
-  }
-  // 4-HOLES / 4 HOLES / 4-BOLTS
-  for (const match of lowered.matchAll(/\b(\d{1,4})\s*[- ]\s*(holes?|bolts?|anchors?|studs?|rods?|lugs?|clips?|fasteners?|screws?|nuts?|washers?|places?|plcs?|pcs?|nos?)\b/g)) {
-    push(Number(match[1]), match[0], "hyphenated", match.index ?? 0);
-  }
-  // x4 / 4x (only when followed by a noun to avoid dimensions like 8x8)
-  for (const match of lowered.matchAll(/\b(?:x|×)\s*(\d{1,4})\s+(holes?|bolts?|anchors?|studs?|rods?|lugs?|clips?|fasteners?|screws?)\b/g)) {
-    push(Number(match[1]), match[0], "times", match.index ?? 0);
-  }
-
-  return callouts.sort((a, b) => a.index - b.index);
-}
-
-export interface PerInstanceContradiction {
-  inputName: string;
-  claimedValue: number;
-  textValue: number;
-  excerpt: string;
-  ref: string;
-  pattern: PerInstanceCallout["pattern"];
-}
-
-const STOP_TERMS = new Set([
-  "per", "each", "ea", "the", "and", "for", "with", "dia", "inch", "in", "mm", "ss", "typ", "of", "to", "at", "on",
-  "count", "qty", "quantity", "number", "total", "plate", "plates", "base",
-]);
-
-/**
- * Plural to singular for matching input names against callout phrases.
- * Stripping a bare "es" turned "holes" into "hol", so a holesPerPlate input
- * never matched a "(1) 1\" dia hole" callout.
- */
-function stem(term: string) {
-  const word = term.toLowerCase().replace(/[^a-z0-9]/g, "");
-  if (/(ches|shes|sses|xes|zes)$/.test(word)) return word.slice(0, -2);
-  if (/ies$/.test(word) && word.length > 4) return `${word.slice(0, -3)}y`;
-  if (/[^s]s$/.test(word)) return word.slice(0, -1);
-  return word;
-}
-
-function instanceTerms(input: LineDerivationInput): string[] {
-  const raw = [input.name, input.instanceOf ?? "", input.note ?? "", input.unit ?? ""].join(" ");
-  return [...new Set(
-    raw
-      .replace(/([a-z])([A-Z])/g, "$1 $2") // split camelCase
-      .toLowerCase()
-      .split(/[^a-z0-9]+/)
-      .map(stem)
-      .filter((term) => term.length >= 3 && !STOP_TERMS.has(term)),
-  )];
-}
-
-/**
- * Rates, durations and money are never instance counts. "baseDrillHoursPerHole
- * = 0.24 HR/EA" was compared with a drawing's "(1) 1\" dia hole" callout and
- * the row was rejected (2026-10-07 GPT matrix). A per-instance count is a
- * count of things, so anything with a rate/time unit or a rate-like name is
- * excluded, even when the agent marked it perInstance.
- */
-function isRateLikeInput(input: LineDerivationInput) {
-  const unit = String(input.unit ?? "").trim();
-  if (unit.includes("/") || isRateOrTimeUom(unit)) return true;
-  const words = String(input.name ?? "").replace(/([a-z])([A-Z])/g, "$1 $2").toLowerCase();
-  return /\b(hours?|hrs?|mh|minutes?|mins?|days?|duration|rate|rates|cost|price|dollars?|productivity|factor|percent|pct)\b/.test(words);
-}
-
-function isPerInstanceInput(input: LineDerivationInput) {
-  if (isRateLikeInput(input)) return false;
-  if (input.perInstance === true) return true;
-  const name = String(input.name ?? "").toLowerCase();
-  return /per[A-Z_]|_per_|per\b|each|every/.test(input.name ?? "") || /per|each/.test(name);
-}
-
-/**
- * Compare per-instance derivation inputs against explicit callouts in the
- * texts the row cites. Deterministic and per-instance only.
- */
-export function detectPerInstanceContradictions(
-  derivation: LineDerivation | null | undefined,
-  texts: Array<{ ref: string; text: string }>,
-): PerInstanceContradiction[] {
-  if (!derivation || !Array.isArray(derivation.inputs)) return [];
-  const contradictions: PerInstanceContradiction[] = [];
-  for (const input of derivation.inputs) {
-    if (!isPerInstanceInput(input)) continue;
-    if (typeof input.value !== "number" || !Number.isFinite(input.value)) continue;
-    const terms = instanceTerms(input);
-    if (terms.length === 0) continue;
-    for (const entry of texts) {
-      const callouts = extractPerInstanceCallouts(entry.text ?? "");
-      for (const callout of callouts) {
-        const phraseTerms = callout.phrase.split(/[^a-z0-9]+/).map(stem).filter(Boolean);
-        const related = phraseTerms.some((term) => terms.includes(term));
-        if (!related) continue;
-        if (callout.count === input.value) continue;
-        contradictions.push({
-          inputName: input.name,
-          claimedValue: input.value,
-          textValue: callout.count,
-          excerpt: callout.phrase.slice(0, 160),
-          ref: entry.ref,
-          pattern: callout.pattern,
-        });
-      }
-    }
-  }
-  return contradictions;
-}
-
 // ── Unit and procurement reconciliation ────────────────────────────────────
 
 export const PACKAGED_UOMS = ["PK", "PACK", "PKG", "BOX", "BX", "CTN", "CARTON", "CASE", "CS", "BAG", "PAIL", "ROLL", "RL", "KIT", "SET", "CART", "CARTRIDGE", "TUBE"] as const;
@@ -603,10 +429,17 @@ export interface ProcurementReconciliationResult {
 /** Check that what is bought covers what is installed. */
 export function reconcileProcurementQuantities(input: ProcurementReconciliationInput): ProcurementReconciliationResult {
   const issues: LineDerivationIssue[] = [];
-  const packaged = isPackagedUom(input.purchaseUom);
   const packSize = Number(input.packSize ?? NaN);
+  // An explicit packSize is the conversion (installed units per purchase unit)
+  // whatever the purchase UOM, e.g. 1 EA cartridge = 11.16 floz.
+  const packaged = isPackagedUom(input.purchaseUom) || (Number.isFinite(packSize) && packSize > 0);
   let suppliedBaseUnits: number | null = null;
   let requiredPurchaseQuantity: number | null = null;
+
+  if (!packaged && input.installedUom && input.purchaseUom && !uomsEquivalent(input.installedUom, input.purchaseUom)) {
+    issues.push({ severity: "error", code: "procurement_conversion_missing", message: `${input.installedQuantity} ${input.installedUom} are installed but the purchase unit is '${input.purchaseUom}'. Set procurement.packSize to ${input.installedUom} per ${input.purchaseUom}.` });
+    return { ok: false, issues, suppliedBaseUnits, requiredPurchaseQuantity };
+  }
 
   if (packaged && !(Number.isFinite(packSize) && packSize > 0)) {
     issues.push({ severity: "error", code: "pack_size_unknown", message: `Purchase UOM '${input.purchaseUom}' is a package unit; packSize (base units per package) is required to reconcile against ${input.installedQuantity} installed.` });
@@ -720,10 +553,9 @@ export function evaluateProcurementLink(
         installedSource = "linked_input";
       }
     } else if (isRateOrTimeUom(linked.uom)) {
-      // A labour/rate row's quantity is crew or rate units (2 crew, 1 LS),
-      // not a physical count. Comparing packs against it would be meaningless.
-      const candidates = (linked.derivation?.inputs ?? []).filter((entry) => entry.perInstance !== true && !isRateOrTimeUom(entry.unit)).map((entry) => entry.name);
-      issues.push({ severity: "error", code: "procurement_requirement_ambiguous", message: `Linked row ${linkedId}${linked.entityName ? ` ("${linked.entityName}")` : ""} is a ${linked.uom ?? "rate"} row; its quantity (${linked.quantity}) is crew/rate units, not an installed count. Set procurement.installedFromInput to the physical-count input on that row${candidates.length > 0 ? ` (one of: ${candidates.join(", ")})` : ""}, or give installedQuantity explicitly.` });
+      // A labour/rate row's quantity is crew or rate units, not an installed
+      // count; with no installedFromInput there is nothing to reconcile.
+      return none;
     } else if (procurement.installedUom && !uomsEquivalent(procurement.installedUom, linked.uom)) {
       issues.push({ severity: "error", code: "procurement_unit_conflict", message: `procurement.installedUom '${procurement.installedUom}' conflicts with linked row ${linkedId} whose UOM is '${linked.uom}'. Units are not converted here: give installedQuantity in the row's unit, or link a converted derivation input via installedFromInput.` });
     } else {
@@ -735,7 +567,7 @@ export function evaluateProcurementLink(
     installedQuantity = procurement.installedQuantity;
     installedSource = "explicit";
   } else {
-    issues.push({ severity: "error", code: "procurement_requirement_missing", message: "procurement needs suppliesItemId (optionally installedFromInput) or an explicit installedQuantity so the purchase can be reconciled against what is installed." });
+    return none; // no stated installed requirement: nothing to reconcile
   }
   if (issues.length > 0 || installedQuantity === null) {
     return { ok: false, issues, installedQuantity, installedSource, suppliedBaseUnits: null, requiredPurchaseQuantity: null };
@@ -749,15 +581,7 @@ export function evaluateProcurementLink(
     packSize: procurement.packSize ?? null,
     wasteFactor: procurement.wasteFactor ?? null,
   });
-  for (const issue of reconciled.issues) {
-    if (issue.code === "procurement_excess") {
-      const rationale = String(procurement.surplusRationale ?? "").trim();
-      if (rationale.length >= 20) continue; // explained surplus is acceptable (minimum pack, spares)
-      issues.push({ severity: "error", code: "procurement_excess_unexplained", message: `${issue.message} Add procurement.surplusRationale (>= 20 chars), e.g. "minimum one cartridge; remainder is spares".` });
-      continue;
-    }
-    issues.push(issue);
-  }
+  issues.push(...reconciled.issues);
   return {
     ok: !issues.some((issue) => issue.severity === "error"),
     issues,
@@ -918,229 +742,7 @@ export function normalizeLineDerivation(value: unknown): LineDerivation | null {
     invalidatedBy: Array.isArray(raw.invalidatedBy) ? (raw.invalidatedBy as LineDerivationInvalidation[]) : [],
     notes: (raw.notes as string | null | undefined) ?? null,
     procurement: normalizeProcurement(raw.procurement),
-    reviewFlags: normalizeReviewFlags(raw.reviewFlags),
   };
-}
-
-function normalizeReviewFlags(value: unknown): LineDerivationReviewFlag[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((entry) => (entry && typeof entry === "object" ? entry as Record<string, unknown> : {}))
-    .filter((entry) => entry.code === "assumed_inputs" || entry.code === "assumption_dominated")
-    .map((entry) => ({
-      code: entry.code as LineDerivationReviewFlag["code"],
-      message: String(entry.message ?? ""),
-      inputs: Array.isArray(entry.inputs) ? entry.inputs.map(String) : [],
-      ...(["physical_count", "scope_only", "unclassified", "assumption_only"].includes(String(entry.basis)) ? { basis: entry.basis as DominatedEvidenceBasis } : {}),
-    }));
-}
-
-// ── Assumed inputs ─────────────────────────────────────────────────────────
-
-/** Sources that are the estimator's or agent's judgement rather than a document, view, library or answer. */
-const UNVERIFIED_SOURCE_KINDS = new Set<LineDerivationSourceKind>(["assumption", "manual"]);
-
-/**
- * Which inputs of a derivation are assumed, and whether assumptions set its
- * magnitude. On the 2026-10-07 GPT matrix a 96 h platform-erection row was
- * labelled drawing_quantity because one input, "installationPackages = 1",
- * cited a view; crewMembers 3 × crewDays 4 × hoursPerDay 8 all came from an
- * assumption. A value of 1 sourced from evidence does not size anything, so
- * the row is assumption-dominated.
- */
-/**
- * Lookups that let assumption flags follow references. A derivation input that
- * cites a claim whose method is "assumption" is as assumed as one citing the
- * assumption directly (round-3 GPT carried 80 deck fastenings that way and the
- * row was unflagged). An input that cites another worksheet item inherits the
- * same-named input of that item's derivation, or the item's own dominance.
- */
-export interface DerivationSourceLookup {
-  claimMethod?: (claimId: string) => string | null | undefined;
-  claimInfo?: (claimId: string) => { method: string; unit: string; quantityName: string } | null | undefined;
-  itemDerivation?: (itemId: string) => LineDerivation | null | undefined;
-}
-
-const MAX_REFERENCE_DEPTH = 8;
-
-function inputIsAssumed(input: LineDerivationInput, lookup: DerivationSourceLookup, visited: Set<string>): boolean {
-  const kind = input.source?.kind;
-  const ref = String(input.source?.ref ?? "").trim();
-  if (UNVERIFIED_SOURCE_KINDS.has(kind)) return true;
-  if (kind === "claim") return String(lookup.claimMethod?.(ref) ?? "").trim().toLowerCase() === "assumption";
-  if (kind === "item" && ref && lookup.itemDerivation) {
-    // A reference cycle or an over-long chain cannot establish a source: treat as assumed.
-    if (visited.has(ref) || visited.size >= MAX_REFERENCE_DEPTH) return true;
-    const linked = lookup.itemDerivation(ref);
-    if (!linked) return false;
-    const next = new Set(visited).add(ref);
-    const sameName = linked.inputs.find((candidate) => candidate.name === input.name);
-    if (sameName) return inputIsAssumed(sameName, lookup, next);
-    return summarize(linked, lookup, next).dominated;
-  }
-  return false;
-}
-
-const FORMULA_FUNCTION_NAMES = new Set(["ceil", "floor", "round", "min", "max", "abs", "sqrt", "pow"]);
-
-/**
- * Inputs the formula actually uses. Round-3 GPT attached evidence inputs
- * (2 interfaces, 12 fixing locations) to a "mechanics * crewDuration" row; they
- * do not size the result and must not make it look evidence-backed. With no
- * parseable formula every input is treated as used.
- */
-function formulaInputs(derivation: LineDerivation): LineDerivationInput[] {
-  const identifiers = new Set((String(derivation.formula ?? "").match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? []).filter((name) => !FORMULA_FUNCTION_NAMES.has(name.toLowerCase())));
-  if (identifiers.size === 0) return derivation.inputs;
-  const used = derivation.inputs.filter((input) => identifiers.has(input.name));
-  return used.length > 0 ? used : derivation.inputs;
-}
-
-function summarize(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup, visited: Set<string>) {
-  const inputs = derivation?.inputs ?? [];
-  const assumed = inputs.filter((input) => inputIsAssumed(input, lookup, visited));
-  const assumedNames = new Set(assumed.map((input) => input.name));
-  const sizing = (derivation ? formulaInputs(derivation) : []).filter((input) => Number.isFinite(input.value) && input.value !== 1 && input.value !== 0);
-  const dominated = assumed.length > 0 && sizing.length > 0 && sizing.every((input) => assumedNames.has(input.name));
-  return {
-    assumedInputs: assumed.map((input) => input.name),
-    assumptionRefs: [...new Set(assumed.map((input) => input.source?.ref).filter(Boolean))] as string[],
-    dominated,
-  };
-}
-
-/**
- * Which inputs of a derivation are assumed, and whether assumptions set its
- * magnitude. On the 2026-10-07 GPT matrix a 96 h platform-erection row was
- * labelled drawing_quantity because one input, "installationPackages = 1",
- * cited a view; crewMembers 3 × crewDays 4 × hoursPerDay 8 all came from an
- * assumption. A value of 1 sourced from evidence does not size anything, so
- * the row is assumption-dominated.
- */
-export function summarizeDerivationAssumptions(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup = {}) {
-  return summarize(derivation, lookup, new Set());
-}
-
-const SCOPE_ONLY_UNITS = new Set(["LOT", "LOTS", "LS", "LUMP", "LUMPSUM", "SCOPE", "PKG", "PACKAGE", "PACKAGES"]);
-const COUNT_UNITS = new Set(["EA", "EACH", "PC", "PCS", "PIECE", "PIECES", "NO", "NOS", "UNIT", "UNITS"]);
-const PHYSICAL_COUNT_METHODS = new Set(["visual_count", "bom_table", "drawing_table", "takeoff"]);
-const SCOPE_ONLY_NAME = /\b(packages?|scope|lots?|work assembl(?:y|ies))\b/;
-
-function words(value: string) {
-  return value.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/[_-]+/g, " ").toLowerCase();
-}
-
-/**
- * What a factor-of-1 evidence input establishes. Scope-only needs an explicit
- * LOT/LS/SCOPE/PKG unit or package/scope/lot/work-assembly naming. Physical
- * needs positive evidence: a counting claim (visual_count, BOM/drawing table,
- * or takeoff) in a count unit. Everything else, including SET and bare view
- * inputs, stays unclassified.
- */
-export function classifyFactorOneEvidence(input: LineDerivationInput, lookup: DerivationSourceLookup = {}): "physical_count" | "scope_only" | "unclassified" {
-  const claim = input.source?.kind === "claim" ? lookup.claimInfo?.(String(input.source.ref ?? "").trim()) : null;
-  const units = [input.unit, claim?.unit].map((unit) => String(unit ?? "").trim().toUpperCase()).filter(Boolean);
-  const names = words(`${input.name ?? ""} ${claim?.quantityName ?? ""}`);
-  if (units.some((unit) => SCOPE_ONLY_UNITS.has(unit)) || SCOPE_ONLY_NAME.test(names)) return "scope_only";
-  if (claim && PHYSICAL_COUNT_METHODS.has(claim.method.trim().toLowerCase()) && units.length > 0 && units.every((unit) => COUNT_UNITS.has(unit))) return "physical_count";
-  return "unclassified";
-}
-
-function dominatedBasis(derivation: LineDerivation, assumedNames: Set<string>, lookup: DerivationSourceLookup): DominatedEvidenceBasis {
-  const evidence = formulaInputs(derivation).filter((input) => !assumedNames.has(input.name) && ["view", "claim"].includes(String(input.source?.kind)));
-  if (evidence.length === 0) return "assumption_only";
-  const kinds = evidence.map((input) => classifyFactorOneEvidence(input, lookup));
-  if (kinds.includes("physical_count")) return "physical_count";
-  if (kinds.includes("scope_only")) return "scope_only";
-  return "unclassified";
-}
-
-const DOMINATED_BASIS_TEXT: Record<DominatedEvidenceBasis, string> = {
-  physical_count: "The drawing counts a physical object; the hours per object are assumed.",
-  scope_only: "The drawing only confirms the scope exists (a package/lot factor of 1); it does not size the hours.",
-  unclassified: "The evidence inputs are factors of 1 that do not establish a physical count.",
-  assumption_only: "No input comes from a drawing, document, or library.",
-};
-
-/** Review flags recomputed on every write; callers cannot supply or clear them. */
-export function flagDerivationAssumptions(derivation: LineDerivation, lookup: DerivationSourceLookup = {}): LineDerivationReviewFlag[] {
-  const summary = summarizeDerivationAssumptions(derivation, lookup);
-  if (summary.assumedInputs.length === 0) return [];
-  const refs = summary.assumptionRefs.length > 0 ? ` (${summary.assumptionRefs.join(", ")})` : "";
-  if (summary.dominated) {
-    const basis = dominatedBasis(derivation, new Set(summary.assumedInputs), lookup);
-    return [{
-      code: "assumption_dominated",
-      message: `Every input that sizes this result is assumed${refs}: ${summary.assumedInputs.join(", ")}. ${DOMINATED_BASIS_TEXT[basis]}`,
-      inputs: summary.assumedInputs,
-      basis,
-    }];
-  }
-  return [{
-    code: "assumed_inputs",
-    message: `Some inputs are assumed${refs}: ${summary.assumedInputs.join(", ")}.`,
-    inputs: summary.assumedInputs,
-  }];
-}
-
-export type HourBasisCategory = "sourced" | "partly_assumed" | "assumed_physical_count" | "assumed_scope_only" | "assumed_unclassified" | "assumed_only" | "no_derivation";
-
-/** Which basis a row's hours rest on, from its derivation's sources, never from the evidence-basis label. */
-export function classifyHourBasis(derivation: LineDerivation | null | undefined, lookup: DerivationSourceLookup = {}): HourBasisCategory {
-  if (!derivation || derivation.inputs.length === 0) return "no_derivation";
-  const [flag] = flagDerivationAssumptions(derivation, lookup);
-  if (!flag) return "sourced";
-  if (flag.code === "assumed_inputs") return "partly_assumed";
-  switch (flag.basis) {
-    case "physical_count": return "assumed_physical_count";
-    case "scope_only": return "assumed_scope_only";
-    case "assumption_only": return "assumed_only";
-    default: return "assumed_unclassified";
-  }
-}
-
-export interface HourBasisSummary {
-  /** What the numbers measure; always direct labour hours before estimate factors. */
-  unit: "direct_labour_hours_before_estimate_factors";
-  /** Sum of byBasis; equals the direct labour hours of the rows passed in. */
-  total: number;
-  byBasis: Record<HourBasisCategory, number>;
-}
-
-/**
- * Hours per basis across rows. `hoursOf` must return a row's DIRECT labour
- * hours (0 for equipment duration, materials, etc.); estimate factors are not
- * classified and are reported separately by the caller. Every row lands in
- * exactly one category, so byBasis always sums to total.
- */
-export function summarizeHourBasis<T extends { derivation?: unknown }>(rows: T[], hoursOf: (row: T) => number, lookup: DerivationSourceLookup = {}): HourBasisSummary {
-  const byBasis: Record<HourBasisCategory, number> = { sourced: 0, partly_assumed: 0, assumed_physical_count: 0, assumed_scope_only: 0, assumed_unclassified: 0, assumed_only: 0, no_derivation: 0 };
-  let total = 0;
-  for (const row of rows) {
-    const hours = Number(hoursOf(row));
-    if (!Number.isFinite(hours) || hours <= 0) continue;
-    byBasis[classifyHourBasis(normalizeLineDerivation(row.derivation), lookup)] += hours;
-    total += hours;
-  }
-  for (const key of Object.keys(byBasis) as HourBasisCategory[]) byBasis[key] = Math.round(byBasis[key] * 100) / 100;
-  return { unit: "direct_labour_hours_before_estimate_factors", total: Math.round(total * 100) / 100, byBasis };
-}
-
-/** Lookup built from a strategy's Drawing Evidence Engine claims and a set of rows' derivations. */
-export function derivationSourceLookup(claims: unknown, items: Array<{ id?: unknown; derivation?: unknown }>): DerivationSourceLookup {
-  const info = new Map<string, { method: string; unit: string; quantityName: string }>();
-  for (const claim of Array.isArray(claims) ? claims : []) {
-    const record = (claim ?? {}) as Record<string, unknown>;
-    const id = String(record.claimId ?? record.id ?? "").trim();
-    if (id) info.set(id, { method: String(record.method ?? ""), unit: String(record.unit ?? ""), quantityName: String(record.quantityName ?? record.claim ?? "") });
-  }
-  const derivations = new Map<string, LineDerivation>();
-  for (const item of items) {
-    const id = String(item.id ?? "").trim();
-    const derivation = normalizeLineDerivation(item.derivation);
-    if (id && derivation) derivations.set(id, derivation);
-  }
-  return { claimMethod: (id) => info.get(id)?.method ?? null, claimInfo: (id) => info.get(id) ?? null, itemDerivation: (id) => derivations.get(id) ?? null };
 }
 
 function normalizeProcurement(value: unknown): LineDerivationProcurement | null {
