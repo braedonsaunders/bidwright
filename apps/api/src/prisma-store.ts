@@ -17264,6 +17264,9 @@ export class PrismaApiStore {
     if (!terms.length) return [];
     const foreignKey = table === "KnowledgeChunk" ? "bookId" : "documentId";
     const parent = table === "KnowledgeChunk" ? "KnowledgeBook" : "KnowledgeDocument";
+    const resultColumns = table === "KnowledgeChunk"
+      ? 'id, "bookId", "sectionTitle", text, "pageNumber", "tokenCount", "order", metadata'
+      : 'id, "documentId", "pageId", "sectionTitle", text, "tokenCount", "order", metadata';
     const vector = CHUNK_SEARCH_VECTOR.replace(/"(\w+)"/g, 'c."$1"');
     const rows = await this.db.$queryRawUnsafe<Array<Record<string, any>>>(`
       WITH matches AS MATERIALIZED (
@@ -17272,12 +17275,12 @@ export class PrismaApiStore {
           AND ($6::text IS NULL OR $6 = 'all' OR b.scope = $6)
           AND ($7::text IS NULL OR b."projectId" = $7 OR (b.scope = 'global' AND $6::text IS DISTINCT FROM 'project'))
           AND ${vector} @@ websearch_to_tsquery('english', $1)
-      ) SELECT *, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "searchScore",
+      ) SELECT ${resultColumns}, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "searchScore",
         (SELECT avg((tokens @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS "searchCoverage",
         ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "matchedTerms"
       FROM matches ORDER BY "searchCoverage" DESC, "searchScore" DESC, id LIMIT $4`,
       webQuery, terms, this.organizationId, Math.max(1, Math.min(limit, 200)), referenceId ?? null, options.scope ?? null, options.projectId ?? null);
-    return rows.map(({ searchScore, searchCoverage, matchedTerms, tokens: _tokens, ...row }) => ({
+    return rows.map(({ searchScore, searchCoverage, matchedTerms, ...row }) => ({
       ...row, metadata: { ...(row.metadata ?? {}), searchMatch: {
         score: Number(searchCoverage) * 100 + Number(searchScore), coverage: Number(searchCoverage), matchedTerms,
         scoring: "indexed_stemmed_coverage", matchedPhrases: [],
@@ -17954,7 +17957,8 @@ export class PrismaApiStore {
     const rows = await resolved.client.$queryRawUnsafe(`
       WITH matches AS MATERIALIZED (
         SELECT r.*, ${vector} AS tokens FROM "DatasetRow" r WHERE r."datasetId" = $3 AND ${vector} @@ websearch_to_tsquery('english', $1)
-      ) SELECT *, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
+      ) SELECT id, "datasetId", data, "order", "createdAt", "updatedAt",
+        ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
         ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "_indexedMatchedTerms"
       FROM matches ORDER BY cardinality(ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term))) DESC,
         "_indexedScore" DESC, "order", id LIMIT 2000`, webQuery, terms, resolved.dataset.id) as any[];
