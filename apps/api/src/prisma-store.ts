@@ -1851,18 +1851,6 @@ function buildSearchDiagnostics<T>(
   };
 }
 
-function laborUnitSearchOrFilters(terms: string[]) {
-  return uniqueStrings(terms).flatMap((term) => [
-    { code: { contains: term, mode: "insensitive" } },
-    { name: { contains: term, mode: "insensitive" } },
-    { description: { contains: term, mode: "insensitive" } },
-    { discipline: { contains: term, mode: "insensitive" } },
-    { category: { contains: term, mode: "insensitive" } },
-    { className: { contains: term, mode: "insensitive" } },
-    { subClassName: { contains: term, mode: "insensitive" } },
-  ]);
-}
-
 function laborUnitSearchText(unit: any) {
   return searchTextFromParts([
     unit.name,

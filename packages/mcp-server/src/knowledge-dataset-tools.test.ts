@@ -117,6 +117,8 @@ test("combined search returns drillable sources and expands the matched book pas
       source: "Workshop manual", excerpt: "Hole | hours\n1/4 | 0.004", text: "Full passage", pageNumber: 12 }]));
     else if (url.pathname === "/api/labor-units/units") response.end(JSON.stringify({ total: 1, units: [{ id: "lu-1", name: "Tap a hole", hoursNormal: 0.004, outputUom: "EA" }] }));
     else if (url.pathname === "/datasets/search/global") response.end(JSON.stringify({ results: [{ datasetId: "ds-1", datasetName: "Workshop tables", columns: [{ key: "size", name: "Size in inches" }], sampleRows: [{ size: "1/4", hours: 0.004 }], samplesAreMatches: true }] }));
+    else if (url.pathname === "/knowledge/books/kb-1/read-page") response.end(JSON.stringify({ success: true, bookId: "kb-1", pageNumber: 12, image: "data:image/png;base64,aGVsbG8=" }));
+    else if (url.pathname === "/knowledge/books/kb-1/info") response.end(JSON.stringify({ book: { storagePath: "knowledge/kb-1/manual.pdf" } }));
     else if (url.pathname === "/knowledge/books/kb-1/passage") {
       assert.equal(url.searchParams.get("chunkId"), "kc-1");
       response.end(JSON.stringify({ book: { id: "kb-1", name: "Workshop manual" }, chunkId: "kc-1", chunks: [
@@ -140,7 +142,8 @@ test("combined search returns drillable sources and expands the matched book pas
     try {
       const search=await client.callTool({name:'searchEstimatingKnowledge',arguments:{query:'tap hole'}});
       const passage=await client.callTool({name:'readKnowledgePassage',arguments:{bookId:'kb-1',chunkId:'kc-1',maxChars:1000}});
-      console.log(JSON.stringify({search,passage}));
+      const page=await client.callTool({name:'getBookPage',arguments:{bookId:'kb-1',pageNumber:12}});
+      console.log(JSON.stringify({search,passage,page}));
     } finally { await client.close(); await server.close(); }
   `;
   const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", script], { env: { ...process.env, BIDWRIGHT_API_URL: `http://127.0.0.1:${address.port}` }, stdio: ["ignore", "pipe", "pipe"] });
@@ -148,7 +151,9 @@ test("combined search returns drillable sources and expands the matched book pas
   child.stdout.on("data", (chunk) => output += chunk); child.stderr.on("data", (chunk) => errors += chunk);
   try {
     const [code] = await once(child, "exit"); assert.equal(code, 0, errors);
-    const { search, passage } = JSON.parse(output);
+    const { search, passage, page } = JSON.parse(output);
+    assert.equal(page.content[0].type, "image");
+    assert.equal(page.content[0].mimeType, "image/png");
     const groups = JSON.parse(search.content[0].text).results;
     const book = groups.find((group: any) => group.source === "books").hits[0];
     assert.equal(book.bookId, "kb-1"); assert.equal(book.id, "kc-1"); assert.match(book.text, /0\.004/);

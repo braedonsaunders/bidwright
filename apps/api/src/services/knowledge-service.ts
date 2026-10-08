@@ -395,7 +395,7 @@ async function extractText(
   mimeType: string,
   filename: string,
   azureConfig?: { endpoint?: string; key?: string; features?: AzureDocumentIntelligenceFeature[]; queryFields?: string[]; outputContentFormat?: "text" | "markdown" },
-): Promise<{ text: string; pageCount: number }> {
+): Promise<{ text: string; pageCount: number; pages?: Array<{ pageNumber: number | null; text: string }> }> {
   // PDF: use Azure DI layout model for table extraction when available,
   // otherwise fall back to local parser
   if (mimeType === "application/pdf") {
@@ -451,6 +451,10 @@ async function extractText(
 
     return {
       text: text || doc.content,
+      pages: doc.pages.map((page): { pageNumber: number | null; text: string } => ({ pageNumber: page.pageNumber, text: [page.content,
+        ...(doc.tables ?? []).filter((table: any) => (table.pageNumber ?? table.boundingRegions?.[0]?.pageNumber) === page.pageNumber).map((table) => table.rawMarkdown ?? "")].filter(Boolean).join("\n\n") })).concat((doc.tables ?? [])
+        .filter((table: any) => !(table.pageNumber ?? table.boundingRegions?.[0]?.pageNumber) && table.rawMarkdown)
+        .map((table) => ({ pageNumber: null, text: table.rawMarkdown! }))),
       pageCount: doc.metadata.pageCount || 1,
       tables: extractedTables.length > 0 ? extractedTables : undefined,
     } as any;
@@ -625,6 +629,7 @@ export class KnowledgeService {
         const extracted = await extractText(request.file.buffer, request.file.mimeType, request.file.filename, azureConfig);
         text = extracted.text;
         pageCount = extracted.pageCount;
+        if (extracted.pages?.length) request.pages = extracted.pages;
         if ((extracted as any).tables?.length > 0) {
           extractedTableData = (extracted as any).tables;
         }

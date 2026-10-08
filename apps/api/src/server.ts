@@ -7,7 +7,7 @@ import MsgReader, { type FieldsData } from "@kenjiuno/msgreader";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { access, chown, mkdir, readFile, rename, rm, stat, writeFile, symlink } from "node:fs/promises";
+import { access, chown, mkdir, readFile, rename, rm, stat, writeFile, symlink, realpath } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,7 @@ import {
 import { prisma } from "@bidwright/db";
 import { getExtendedWorksheetUnitBreakdown, normalizeAgentMemory, setAgentMemorySection } from "@bidwright/domain";
 import {
+  apiDataRoot,
   relativePackageArchivePath,
   relativeProjectFilePath,
   resolveApiPath,
@@ -6580,6 +6581,27 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     }, Math.max(0, Math.min(Number.isFinite(Number(neighbors)) ? Number(neighbors) : 1, 2)));
     if (!passage) return reply.code(404).send({ message: "Book passage not found" });
     return passage;
+  });
+
+  app.post("/knowledge/books/:bookId/read-page", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const parsed = z.object({ pageNumber: z.coerce.number().int().positive(), tile: z.string().optional(),
+      bbox: z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional(),
+      maxEdge: z.number().int().min(256).max(3000).default(1568) }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ message: "Pass a page number and optional tile or normalized bbox", issues: parsed.error.issues });
+    const book = await request.store!.getKnowledgeBook(bookId);
+    if (!book?.storagePath) return reply.code(404).send({ message: "Book or stored PDF not found" });
+    const root = await realpath(apiDataRoot);
+    let pdfPath: string;
+    try { pdfPath = await realpath(resolveApiPath(book.storagePath)); }
+    catch { return reply.code(404).send({ message: "Stored PDF not found" }); }
+    if (!pdfPath.startsWith(root + path.sep)) return reply.code(403).send({ message: "Book file is outside storage" });
+    const { readPdfPage } = await import("@bidwright/vision");
+    const result = await readPdfPage({ pdfPath, pageNumber: parsed.data.pageNumber,
+      mode: parsed.data.tile || parsed.data.bbox ? "tile" : "overview", tile: parsed.data.tile, bbox: parsed.data.bbox, maxEdge: parsed.data.maxEdge });
+    if (!result.success) return reply.code(result.code === "page_out_of_range" ? 400 : 422).send({ message: result.error, code: result.code });
+    return { ...result, bookId: book.id, bookName: book.name, sourceFileName: book.sourceFileName,
+      textLines: result.textLines?.slice(0, 40).map((line) => ({ text: line.text, bbox: line.bbox })), textLinesOmitted: Math.max(0, (result.textLines?.length ?? 0) - 40) };
   });
 
   // ── GET /knowledge/project-corpus/search ─────────────────────────────────

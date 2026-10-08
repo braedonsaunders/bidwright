@@ -742,29 +742,24 @@ export function registerKnowledgeTools(server: McpServer) {
   // ── getBookPage ──────────────────────────────────────────
   server.tool(
     "getBookPage",
-    "Get the file path and page details for a knowledge book page so you can read it directly. When search results reference a book and page number, use this to get the actual file path, then use the Read tool to view the real PDF page (with vision). This lets you see the original tables, diagrams, and formatting that OCR may have garbled.",
+    "View the actual PDF page of a reference book as an image with positioned text. Read source tables, column headings, units and footnotes directly; zoom with a tile from the overview grid or a normalized bbox. Uses bookId and pageNumber from search results. Returns the original file path too for native PDF reading.",
     {
-      bookId: z.string().describe("Knowledge book ID (from search results)"),
-      pageNumber: z.coerce.number().describe("Page number to view"),
+      bookId: z.string().min(1), pageNumber: z.coerce.number().int().positive(),
+      tile: z.string().optional().describe("Tile id from the overview grid, e.g. r1c2"),
+      bbox: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional().describe("Normalized 0..1 crop of the page"),
     },
-    async ({ bookId, pageNumber }) => {
-      const data = await apiGet(`/knowledge/books/${bookId}/info`);
-      const book = data.book || data;
-      if (!book || !book.storagePath) {
-        return { content: [{ type: "text" as const, text: JSON.stringify({ error: "Book not found or no file stored" }) }] };
-      }
-      // Return the file path relative to the project working directory
-      // The CLI agent can use Read tool with pages parameter to view it
-      return {
-        content: [{ type: "text" as const, text: JSON.stringify({
-          bookName: book.name,
-          fileName: book.sourceFileName,
-          filePath: `../../${book.storagePath}`, // Relative to project workdir
-          pageNumber,
-          totalPages: book.pageCount,
-          hint: `Use the Read tool on the filePath with pages="${pageNumber}" to view this page visually. The PDF page will be rendered as an image so you can read tables and diagrams directly.`,
-        }, null, 2) }],
-      };
+    async ({ bookId, pageNumber, tile, bbox }) => {
+      const maxEdge = Math.max(256, Math.min(Number(process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE) || 1568, 3000));
+      const [page, info] = await Promise.all([
+        apiPost(`/knowledge/books/${encodeURIComponent(bookId)}/read-page`, { pageNumber, tile, bbox, maxEdge }),
+        apiGet(`/knowledge/books/${encodeURIComponent(bookId)}/info`),
+      ]);
+      const { image, ...metadata } = page;
+      const book = info.book || info;
+      const match = typeof image === "string" ? image.match(/^data:([^;]+);base64,(.+)$/s) : null;
+      const content: any[] = [{ type: "text", text: JSON.stringify({ ...metadata, filePath: book.storagePath ? `../../${book.storagePath}` : undefined }) }];
+      if (match) content.unshift({ type: "image", mimeType: match[1], data: match[2] });
+      return { content };
     }
   );
 
