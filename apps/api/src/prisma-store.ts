@@ -13365,11 +13365,13 @@ export class PrismaApiStore {
       }
     }
     const matches = await this.db.$queryRawUnsafe<Array<{ id: string; score: number; coverage: number; matchedTerms: string[] }>>(
-      `SELECT u.id, ts_rank_cd(${vector}, websearch_to_tsquery('english', $1), 2) AS score,
-        (SELECT avg((${vector} @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS coverage,
-        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term)) AS "matchedTerms"
-       FROM "LaborUnit" u JOIN "LaborUnitLibrary" l ON l.id = u."libraryId"
-       WHERE ${conditions.join(" AND ")} ORDER BY coverage DESC, score DESC, u.id LIMIT $4`, ...params);
+      `WITH matches AS MATERIALIZED (
+         SELECT u.id, ${vector} AS tokens FROM "LaborUnit" u JOIN "LaborUnitLibrary" l ON l.id = u."libraryId"
+         WHERE ${conditions.join(" AND ")}
+       ) SELECT id, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS score,
+        (SELECT avg((tokens @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS coverage,
+        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "matchedTerms"
+       FROM matches ORDER BY coverage DESC, score DESC, id LIMIT $4`, ...params);
     if (!matches.length) return [];
     const rank = new Map(matches.map((match) => [match.id, match]));
     const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } }, include: { library: true } });
@@ -17264,17 +17266,18 @@ export class PrismaApiStore {
     const parent = table === "KnowledgeChunk" ? "KnowledgeBook" : "KnowledgeDocument";
     const vector = CHUNK_SEARCH_VECTOR.replace(/"(\w+)"/g, 'c."$1"');
     const rows = await this.db.$queryRawUnsafe<Array<Record<string, any>>>(`
-      SELECT c.*, ts_rank_cd(${vector}, websearch_to_tsquery('english', $1), 2) AS "searchScore",
-        (SELECT avg((${vector} @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS "searchCoverage",
-        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term)) AS "matchedTerms"
-      FROM "${table}" c JOIN "${parent}" b ON b.id = c."${foreignKey}"
-      WHERE b."organizationId" = $3 AND ($5::text IS NULL OR b.id = $5)
-        AND ($6::text IS NULL OR $6 = 'all' OR b.scope = $6)
-        AND ($7::text IS NULL OR b."projectId" = $7 OR (b.scope = 'global' AND $6::text IS DISTINCT FROM 'project'))
-        AND ${vector} @@ websearch_to_tsquery('english', $1)
-      ORDER BY "searchCoverage" DESC, "searchScore" DESC, c.id LIMIT $4`,
+      WITH matches AS MATERIALIZED (
+        SELECT c.*, ${vector} AS tokens FROM "${table}" c JOIN "${parent}" b ON b.id = c."${foreignKey}"
+        WHERE b."organizationId" = $3 AND ($5::text IS NULL OR b.id = $5)
+          AND ($6::text IS NULL OR $6 = 'all' OR b.scope = $6)
+          AND ($7::text IS NULL OR b."projectId" = $7 OR (b.scope = 'global' AND $6::text IS DISTINCT FROM 'project'))
+          AND ${vector} @@ websearch_to_tsquery('english', $1)
+      ) SELECT *, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "searchScore",
+        (SELECT avg((tokens @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS "searchCoverage",
+        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "matchedTerms"
+      FROM matches ORDER BY "searchCoverage" DESC, "searchScore" DESC, id LIMIT $4`,
       webQuery, terms, this.organizationId, Math.max(1, Math.min(limit, 200)), referenceId ?? null, options.scope ?? null, options.projectId ?? null);
-    return rows.map(({ searchScore, searchCoverage, matchedTerms, ...row }) => ({
+    return rows.map(({ searchScore, searchCoverage, matchedTerms, tokens: _tokens, ...row }) => ({
       ...row, metadata: { ...(row.metadata ?? {}), searchMatch: {
         score: Number(searchCoverage) * 100 + Number(searchScore), coverage: Number(searchCoverage), matchedTerms,
         scoring: "indexed_stemmed_coverage", matchedPhrases: [],
@@ -17949,11 +17952,12 @@ export class PrismaApiStore {
     if (!terms.length) return (await this.listDatasetRows(datasetId, undefined, undefined, 100, 0)).rows;
     const vector = ROW_SEARCH_VECTOR.replace('"data"', 'r."data"');
     const rows = await resolved.client.$queryRawUnsafe(`
-      SELECT r.*, ts_rank_cd(${vector}, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
-        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term)) AS "_indexedMatchedTerms"
-      FROM "DatasetRow" r WHERE r."datasetId" = $3 AND ${vector} @@ websearch_to_tsquery('english', $1)
-      ORDER BY cardinality(ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE ${vector} @@ plainto_tsquery('english', term))) DESC,
-        "_indexedScore" DESC, r."order", r.id LIMIT 2000`, webQuery, terms, resolved.dataset.id) as any[];
+      WITH matches AS MATERIALIZED (
+        SELECT r.*, ${vector} AS tokens FROM "DatasetRow" r WHERE r."datasetId" = $3 AND ${vector} @@ websearch_to_tsquery('english', $1)
+      ) SELECT *, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
+        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "_indexedMatchedTerms"
+      FROM matches ORDER BY cardinality(ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term))) DESC,
+        "_indexedScore" DESC, "order", id LIMIT 2000`, webQuery, terms, resolved.dataset.id) as any[];
     return rankIndexedCandidates(rows, buildEstimatorSearchProfile(query), (row) => JSON.stringify(row.data ?? {}), (row) => datasetRowIdentityText(row.data))
       .map((entry) => mapDatasetRow({ ...entry.item, data: { ...entry.item.data,
         _searchMatch: { score: entry.score, coverage: entry.coverage, matchedTerms: entry.matchedTerms } } }));
