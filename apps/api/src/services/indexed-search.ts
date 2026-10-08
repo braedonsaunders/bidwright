@@ -53,7 +53,7 @@ export function rankIndexedCandidates<T>(items: T[], profile: SearchProfile, tex
     const normalized = normalizeEstimatorSearchText(numericIdentity(item));
     const stemmed = new Set<string>(item._indexedMatchedTerms ?? []);
     const matchedTerms = profile.terms.filter((term) => /^\d/.test(term.token)
-      ? estimatorTermMatches(normalized, term) : stemmed.has(term.token) || match?.matchedTerms.includes(term.token)).map((term) => term.token);
+      ? estimatorTermMatches(/[a-z]/.test(term.token) ? normalizeEstimatorSearchText(text(item)) : normalized, term) : stemmed.has(term.token) || match?.matchedTerms.includes(term.token)).map((term) => term.token);
     const coverage = profile.totalWeight ? profile.terms.reduce((sum, term) => sum + (matchedTerms.includes(term.token) ? term.weight : 0), 0) / profile.totalWeight : 0;
     return { item: item as T, score: matchedTerms.length / Math.max(1, profile.terms.length) * 100 + coverage * 10 + (match?.score ?? 0) * 0.1 + Number(item._indexedScore ?? 0), coverage,
       matchedTerms, matchedPhrases: match?.matchedPhrases ?? [], anchorMatches: profile.terms.filter((term) => term.isAnchor && matchedTerms.includes(term.token)).length };

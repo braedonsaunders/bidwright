@@ -38,3 +38,9 @@ test("numeric identifiers stay whole and unrelated word prefixes do not count", 
   assert.equal(rankEstimatorSearchItems(["304L alloy", "304 cost"], buildEstimatorSearchProfile("304L"), (row) => row)[0].item, "304L alloy");
   assert.equal(rankEstimatorSearchItems(["butterfly valve"], buildEstimatorSearchProfile("butt weld"), (row) => row).length, 0);
 });
+
+
+test("standard stemming finds the source table over a contents entry", () => {
+  const pages = ["Contents: Drilling Holes 50", "Drilling holes in plate. If holes are tapped, add a factor. Hole size and hours."];
+  assert.equal(rankEstimatorSearchItems(pages, buildEstimatorSearchProfile("drill tap holes"), (row) => row)[0].item, pages[1]);
+});

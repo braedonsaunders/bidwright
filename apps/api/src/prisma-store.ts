@@ -13374,8 +13374,19 @@ export class PrismaApiStore {
        FROM matches ORDER BY coverage DESC, score DESC, id LIMIT $4`, ...params);
     if (!matches.length) return [];
     const rank = new Map(matches.map((match) => [match.id, match]));
-    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } }, include: { library: true } });
+    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } },
+      select: { id: true, libraryId: true, name: true, code: true, description: true, discipline: true, category: true,
+        className: true, subClassName: true, tags: true, outputUom: true, hoursNormal: true, entityCategoryType: true,
+        library: { select: { id: true, name: true, provider: true } } } });
     return rows.map((row) => ({ ...row, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
+  }
+
+  private async hydrateLaborSearchEntries(entries: RankedSearchEntry<any>[]) {
+    if (!entries.length) return [];
+    const rows = await this.db.laborUnit.findMany({ where: { id: { in: entries.map((entry) => entry.item.id) },
+      library: { OR: [{ organizationId: this.organizationId }, { organizationId: null }] } }, include: { library: true } });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return entries.flatMap((entry) => { const item = byId.get(entry.item.id); return item ? [{ ...entry, item }] : []; });
   }
 
   async listLaborUnits(input: {
@@ -13438,7 +13449,7 @@ export class PrismaApiStore {
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(1000, Math.max(1, input.limit ?? 250));
       return {
-        units: ranked.slice(offset, offset + limit).map((entry) => mapLaborUnit({
+        units: (await this.hydrateLaborSearchEntries(ranked.slice(offset, offset + limit))).map((entry) => mapLaborUnit({
           ...entry.item,
           metadata: {
             ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
@@ -13527,7 +13538,7 @@ export class PrismaApiStore {
       if (parentType === "subclass") {
         return {
           nodes: [],
-          units: ranked.slice(offset, offset + limit).map(unitWithSearch),
+          units: (await this.hydrateLaborSearchEntries(ranked.slice(offset, offset + limit))).map(unitWithSearch),
           total: ranked.length,
           diagnostics,
         };
