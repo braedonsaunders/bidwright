@@ -1,3 +1,5 @@
+import { stemmer } from "@orama/stemmers/english";
+
 export type SearchProfileTerm = {
   token: string;
   variants: string[];
@@ -30,10 +32,10 @@ const ESTIMATE_SEARCH_STOPWORDS = new Set([
 
 export function normalizeEstimatorSearchText(value: unknown) {
   return String(value ?? "")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([a-z])([A-Z])/g, "$1 $2")
     .toLowerCase()
     .replace(/(\d)\s*\/\s*(\d)/g, "$1/$2")
-    .match(/[a-z][a-z0-9]*|\d+(?:-\d+\/\d+|\/\d+|\.\d+)?/g)?.join(" ") ?? "";
+    .match(/[a-z][a-z0-9]*|\d+[a-z][a-z0-9]*|\d+(?:-\d+\/\d+|\/\d+|\.\d+)?/g)?.join(" ") ?? "";
 }
 
 export function estimatorSearchTokens(value: unknown) {
@@ -48,16 +50,6 @@ export function uniqueStrings(values: string[]) {
   return [...new Set(values.map((value) => value.trim()).filter(Boolean))];
 }
 
-function singularPluralVariants(token: string) {
-  if (/^\d/.test(token)) return [token];
-  if (token.endsWith("ies") && token.length > 4) return [token, `${token.slice(0, -3)}y`];
-  if (token.endsWith("s") && token.length > 3) return [token, token.slice(0, -1)];
-  return [token, `${token}s`];
-}
-
-function estimatorSearchVariants(token: string) {
-  return uniqueStrings(singularPluralVariants(token));
-}
 
 function estimatorSearchTermWeight(token: string) {
   if (/\d/.test(token)) return 2;
@@ -72,7 +64,7 @@ export function buildEstimatorSearchProfile(query: string): SearchProfile {
     const weight = estimatorSearchTermWeight(token);
     return {
       token,
-      variants: estimatorSearchVariants(token),
+      variants: [token],
       weight,
       isAnchor: weight >= 2 || /\d/.test(token),
     };
@@ -101,11 +93,21 @@ export function lineItemAutocompleteTsQuery(value: unknown) {
   return tokens.map((token) => `${token}:*`).join(" & ");
 }
 
+// Bounded text cache: the same candidate is compared across query terms,
+// corpus weights and diagnostics. Source text and reported terms stay original.
+const stemmedSearchTexts = new Map<string, string>();
+function stemmedSearchText(text: string) {
+  const cached = stemmedSearchTexts.get(text);
+  if (cached !== undefined) return cached;
+  const stemmed = text.split(" ").map((token) => /^\d/.test(token) ? token : stemmer(token)).join(" ");
+  if (stemmedSearchTexts.size >= 4096) stemmedSearchTexts.delete(stemmedSearchTexts.keys().next().value!);
+  stemmedSearchTexts.set(text, stemmed);
+  return stemmed;
+}
+
 export function estimatorTermMatches(haystack: string, term: SearchProfileTerm) {
-  const tokens = new Set(haystack.split(" "));
-  return term.variants.some((variant) =>
-    /^\d/.test(variant) ? tokens.has(variant) : [...tokens].some((token) => token === variant || (variant.length >= 4 && token.startsWith(variant))),
-  );
+  const padded = ` ${stemmedSearchText(haystack)} `;
+  return term.variants.some((variant) => padded.includes(` ${stemmedSearchText(variant)} `));
 }
 
 export function scoreEstimatorSearchText(profile: SearchProfile, textValue: unknown, headingValue: unknown = "") {
@@ -131,7 +133,7 @@ export function scoreEstimatorSearchText(profile: SearchProfile, textValue: unkn
   }
 
   for (const phrase of profile.phrases) {
-    if (combined.includes(phrase)) {
+    if (stemmedSearchText(combined).includes(stemmedSearchText(phrase))) {
       matchedPhrases.push(phrase);
       score += phrase.split(" ").length * 1.5;
     }
@@ -172,7 +174,7 @@ const DATASET_IDENTITY_COLUMN = /(?:^|_)(?:size|diameter|nominal|nps|dn|gauge|sc
 export function datasetRowIdentityText(data: unknown): string {
   if (!data || typeof data !== "object" || Array.isArray(data)) return "";
   return Object.entries(data as Record<string, unknown>)
-    .filter(([key, value]) => DATASET_IDENTITY_COLUMN.test(key.replace(/([a-z0-9])([A-Z])/g, "$1_$2")) && (typeof value === "string" || typeof value === "number"))
+    .filter(([key, value]) => DATASET_IDENTITY_COLUMN.test(key.replace(/([a-z])([A-Z])/g, "$1_$2")) && (typeof value === "string" || typeof value === "number"))
     .map(([key, value]) => `${key} ${String(value)}`)
     .join(" ");
 }

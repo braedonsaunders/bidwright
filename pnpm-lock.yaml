@@ -86,6 +86,9 @@ importers:
       '@kenjiuno/msgreader':
         specifier: ^1.28.0
         version: 1.28.0
+      '@orama/stemmers':
+        specifier: 3.1.18
+        version: 3.1.18
       argon2:
         specifier: ^0.41.1
         version: 0.41.1
@@ -1870,6 +1873,10 @@ packages:
       react: '>=19.0.0'
       react-dom: '>=19.0.0'
       zustand: ^4.5.5
+
+  '@orama/stemmers@3.1.18':
+    resolution: {integrity: sha512-xXs5fpiUvBs4jJZtnayJmUSomdxxiwwwvTbAzPHSyI6geLM7bxXHgpVlYz4JeMBycHX8bHF7j9m7F35BxhuZ8g==}
+    engines: {node: '>= 20.0.0'}
 
   '@parcel/watcher-android-arm64@2.5.6':
     resolution: {integrity: sha512-YQxSS34tPF/6ZG7r/Ih9xy+kP/WwediEUsqmtf0cuCV5TPPKw/PQHRhueUo6JdeFJaqV3pyjm0GdYjZotbRt/A==}
@@ -8795,6 +8802,8 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
       - supports-color
+
+  '@orama/stemmers@3.1.18': {}
 
   '@parcel/watcher-android-arm64@2.5.6':
     optional: true

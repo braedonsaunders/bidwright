@@ -6908,30 +6908,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     const { q, limit: limitStr } = (request.query ?? {}) as { q?: string; limit?: string };
     if (!q) return { results: [] };
     const limit = Math.max(1, Math.min(Number(limitStr) || 10, 25));
-    const allDatasets = await request.store!.listDatasets();
-    const profile = buildEstimatorSearchProfile(q);
-    const metadata = rankEstimatorSearchItems(allDatasets, profile,
-      (d: any) => `${d.name} ${d.description} ${(d.tags ?? []).join(" ")} ${JSON.stringify(d.columns)}`, (d) => d.name);
-    const metadataById = new Map(metadata.map((entry) => [entry.item.id, entry]));
-    // Search actual rows too: dataset titles often do not name their operations.
-    // Four workers bound database pressure without serializing every source.
-    const candidates: any[] = [];
-    let cursor = 0;
-    await Promise.all(Array.from({ length: Math.min(4, allDatasets.length) }, async () => {
-      while (cursor < allDatasets.length) {
-        const d: any = allDatasets[cursor++];
-        const rows = await request.store!.searchDatasetRows(d.id, q);
-        const meta = metadataById.get(d.id);
-        const best = rows[0]?.data?._searchMatch as any;
-        if (!meta && !best) continue;
-        candidates.push({ datasetId: d.id, datasetName: d.name, description: d.description, tags: d.tags,
-          columns: d.columns, rowCount: d.rowCount, sourceBookId: d.sourceBookId, sourcePages: d.sourcePages,
-          score: (best?.score ?? 0) + (meta?.score ?? 0), matchedRows: rows.length,
-          sampleRows: rows.slice(0, 5).map((row) => row.data), samplesAreMatches: true });
-      }
-    }));
-    candidates.sort((a, b) => b.score - a.score || a.datasetId.localeCompare(b.datasetId));
-    return { results: candidates.slice(0, limit), total: candidates.length };
+    return request.store!.searchDatasets(q, limit);
   });
 
   app.get("/datasets/:datasetId/search", async (request, reply) => {

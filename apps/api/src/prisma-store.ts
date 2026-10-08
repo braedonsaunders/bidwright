@@ -13365,17 +13365,28 @@ export class PrismaApiStore {
       }
     }
     const matches = await this.db.$queryRawUnsafe<Array<{ id: string; score: number; coverage: number; matchedTerms: string[] }>>(
-      `WITH matches AS MATERIALIZED (
+      `WITH term_queries AS MATERIALIZED (SELECT term, plainto_tsquery('english', term) AS query FROM unnest($2::text[]) AS term), matches AS MATERIALIZED (
          SELECT u.id, ${vector} AS tokens FROM "LaborUnit" u JOIN "LaborUnitLibrary" l ON l.id = u."libraryId"
          WHERE ${conditions.join(" AND ")}
        ) SELECT id, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS score,
-        (SELECT avg((tokens @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS coverage,
-        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "matchedTerms"
+        (SELECT avg((tokens @@ query)::int) FROM term_queries) AS coverage,
+        ARRAY(SELECT term FROM term_queries WHERE tokens @@ query) AS "matchedTerms"
        FROM matches ORDER BY coverage DESC, score DESC, id LIMIT $4`, ...params);
     if (!matches.length) return [];
     const rank = new Map(matches.map((match) => [match.id, match]));
-    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } }, include: { library: true } });
+    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } },
+      select: { id: true, libraryId: true, name: true, code: true, description: true, discipline: true, category: true,
+        className: true, subClassName: true, tags: true, outputUom: true, hoursNormal: true, entityCategoryType: true,
+        library: { select: { id: true, name: true, provider: true } } } });
     return rows.map((row) => ({ ...row, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
+  }
+
+  private async hydrateLaborSearchEntries(entries: RankedSearchEntry<any>[]) {
+    if (!entries.length) return [];
+    const rows = await this.db.laborUnit.findMany({ where: { id: { in: entries.map((entry) => entry.item.id) },
+      library: { OR: [{ organizationId: this.organizationId }, { organizationId: null }] } }, include: { library: true } });
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return entries.flatMap((entry) => { const item = byId.get(entry.item.id); return item ? [{ ...entry, item }] : []; });
   }
 
   async listLaborUnits(input: {
@@ -13434,11 +13445,11 @@ export class PrismaApiStore {
       const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
       const searchText = laborUnitSearchText;
       const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
-      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText);
+      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText, (unit) => `${unit.name} ${unit.subClassName ?? ""}`);
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(1000, Math.max(1, input.limit ?? 250));
       return {
-        units: ranked.slice(offset, offset + limit).map((entry) => mapLaborUnit({
+        units: (await this.hydrateLaborSearchEntries(ranked.slice(offset, offset + limit))).map((entry) => mapLaborUnit({
           ...entry.item,
           metadata: {
             ...((entry.item.metadata as Record<string, unknown> | null) ?? {}),
@@ -13506,7 +13517,7 @@ export class PrismaApiStore {
       const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
       const searchText = laborUnitSearchText;
       const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
-      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText);
+      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText, (unit) => `${unit.name} ${unit.subClassName ?? ""}`);
       const diagnostics = buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText);
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(parentType === "subclass" ? 1000 : 200, Math.max(1, input.limit ?? (parentType === "subclass" ? 250 : 50)));
@@ -13527,7 +13538,7 @@ export class PrismaApiStore {
       if (parentType === "subclass") {
         return {
           nodes: [],
-          units: ranked.slice(offset, offset + limit).map(unitWithSearch),
+          units: (await this.hydrateLaborSearchEntries(ranked.slice(offset, offset + limit))).map(unitWithSearch),
           total: ranked.length,
           diagnostics,
         };
@@ -17269,15 +17280,15 @@ export class PrismaApiStore {
       : 'id, "documentId", "pageId", "sectionTitle", text, "tokenCount", "order", metadata';
     const vector = CHUNK_SEARCH_VECTOR.replace(/"(\w+)"/g, 'c."$1"');
     const rows = await this.db.$queryRawUnsafe<Array<Record<string, any>>>(`
-      WITH matches AS MATERIALIZED (
+      WITH term_queries AS MATERIALIZED (SELECT term, plainto_tsquery('english', term) AS query FROM unnest($2::text[]) AS term), matches AS MATERIALIZED (
         SELECT c.*, ${vector} AS tokens FROM "${table}" c JOIN "${parent}" b ON b.id = c."${foreignKey}"
         WHERE b."organizationId" = $3 AND ($5::text IS NULL OR b.id = $5)
           AND ($6::text IS NULL OR $6 = 'all' OR b.scope = $6)
           AND ($7::text IS NULL OR b."projectId" = $7 OR (b.scope = 'global' AND $6::text IS DISTINCT FROM 'project'))
           AND ${vector} @@ websearch_to_tsquery('english', $1)
       ) SELECT ${resultColumns}, ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "searchScore",
-        (SELECT avg((tokens @@ plainto_tsquery('english', term))::int) FROM unnest($2::text[]) AS term) AS "searchCoverage",
-        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "matchedTerms"
+        (SELECT avg((tokens @@ query)::int) FROM term_queries) AS "searchCoverage",
+        ARRAY(SELECT term FROM term_queries WHERE tokens @@ query) AS "matchedTerms"
       FROM matches ORDER BY "searchCoverage" DESC, "searchScore" DESC, id LIMIT $4`,
       webQuery, terms, this.organizationId, Math.max(1, Math.min(limit, 200)), referenceId ?? null, options.scope ?? null, options.projectId ?? null);
     return rows.map(({ searchScore, searchCoverage, matchedTerms, ...row }) => ({
@@ -17731,7 +17742,7 @@ export class PrismaApiStore {
     return null;
   }
 
-  async listDatasets(projectId?: string): Promise<Dataset[]> {
+  async listDatasets(projectId?: string): Promise<ReturnType<typeof mapDataset>[]> {
     const where: any = { organizationId: this.organizationId, isTemplate: false };
     if (projectId) {
       await this.requireProject(projectId);
@@ -17946,6 +17957,48 @@ export class PrismaApiStore {
     return mapDatasetRow(row);
   }
 
+  /** One indexed row query for discovery, rather than one round trip per dataset. */
+  async searchDatasets(query: string, limit = 10) {
+    const datasets = await this.listDatasets();
+    const profile = buildEstimatorSearchProfile(query);
+    const { webQuery, terms } = indexedSearchQuery(query);
+    if (!terms.length || !datasets.length) return { results: [], total: 0 };
+    const vector = ROW_SEARCH_VECTOR.replace('"data"', 'r."data"');
+    const rows = await this.db.$queryRawUnsafe<any[]>(`
+      WITH term_queries AS MATERIALIZED (SELECT term, plainto_tsquery('english', term) AS query FROM unnest($2::text[]) AS term),
+      matches AS MATERIALIZED (
+        SELECT r.id, r."datasetId", r.data, r."order", ${vector} AS tokens FROM "DatasetRow" r
+        WHERE r."datasetId" = ANY($3::text[]) AND ${vector} @@ websearch_to_tsquery('english', $1)
+      ), scored AS (
+        SELECT id, "datasetId", data, "order", ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
+          ARRAY(SELECT term FROM term_queries WHERE tokens @@ query) AS "_indexedMatchedTerms" FROM matches
+      ), ranked AS (
+        SELECT *, row_number() OVER (PARTITION BY "datasetId" ORDER BY cardinality("_indexedMatchedTerms") DESC, "_indexedScore" DESC, "order", id) AS position FROM scored
+      ) SELECT id, "datasetId", data, "order", "_indexedScore", "_indexedMatchedTerms" FROM ranked WHERE position <= 8`,
+      webQuery, terms, datasets.map((dataset) => dataset.id));
+    const byDataset = new Map<string, any[]>();
+    for (const row of rows) {
+      const entries = byDataset.get(row.datasetId) ?? [];
+      entries.push(row); byDataset.set(row.datasetId, entries);
+    }
+    const results = datasets.flatMap((dataset) => {
+      const context = `${dataset.name} ${dataset.description ?? ''} ${(dataset.tags ?? []).join(' ')} ${JSON.stringify(dataset.columns)}`;
+      const entries = byDataset.get(dataset.id) ?? [];
+      const ranked = rankIndexedCandidates(entries, profile, (row) => `${context} ${JSON.stringify(row.data)}`, () => dataset.name,
+        (row) => `${dataset.name} ${datasetRowIdentityText(row.data)}`);
+      const metadata = rankEstimatorSearchItems([dataset], profile, () => context, (d) => d.name)[0];
+      if (!ranked.length && !metadata) return [];
+      // Count coverage first; rarity and term location break ties, not override intent.
+      const metadataCoverage = metadata ? metadata.matchedTerms.length / profile.terms.length : 0;
+      const score = ranked[0]?.score ?? metadataCoverage * 100 + (metadata?.score ?? 0) * 0.1;
+      return [{ datasetId: dataset.id, datasetName: dataset.name, description: dataset.description, tags: dataset.tags,
+        columns: dataset.columns, rowCount: dataset.rowCount, sourceBookId: dataset.sourceBookId, sourcePages: dataset.sourcePages,
+        score, sampleRows: ranked.slice(0, 5).map((entry) => ({ ...entry.item.data,
+          _searchMatch: { score: entry.score, coverage: entry.coverage, matchedTerms: entry.matchedTerms } })), samplesAreMatches: true }];
+    }).sort((a, b) => b.score - a.score || a.datasetId.localeCompare(b.datasetId));
+    return { results: results.slice(0, Math.max(1, Math.min(limit, 25))), total: results.length };
+  }
+
   async searchDatasetRows(datasetId: string, query: string): Promise<DatasetRow[]> {
     const resolved = await this._resolveDatasetRecordForRead(datasetId);
     if (!resolved) {
@@ -17955,12 +18008,12 @@ export class PrismaApiStore {
     if (!terms.length) return (await this.listDatasetRows(datasetId, undefined, undefined, 100, 0)).rows;
     const vector = ROW_SEARCH_VECTOR.replace('"data"', 'r."data"');
     const rows = await resolved.client.$queryRawUnsafe(`
-      WITH matches AS MATERIALIZED (
+      WITH term_queries AS MATERIALIZED (SELECT term, plainto_tsquery('english', term) AS query FROM unnest($2::text[]) AS term), matches AS MATERIALIZED (
         SELECT r.*, ${vector} AS tokens FROM "DatasetRow" r WHERE r."datasetId" = $3 AND ${vector} @@ websearch_to_tsquery('english', $1)
       ) SELECT id, "datasetId", data, "order", "createdAt", "updatedAt",
         ts_rank_cd(tokens, websearch_to_tsquery('english', $1), 2) AS "_indexedScore",
-        ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term)) AS "_indexedMatchedTerms"
-      FROM matches ORDER BY cardinality(ARRAY(SELECT term FROM unnest($2::text[]) AS term WHERE tokens @@ plainto_tsquery('english', term))) DESC,
+        ARRAY(SELECT term FROM term_queries WHERE tokens @@ query) AS "_indexedMatchedTerms"
+      FROM matches ORDER BY cardinality(ARRAY(SELECT term FROM term_queries WHERE tokens @@ query)) DESC,
         "_indexedScore" DESC, "order", id LIMIT 2000`, webQuery, terms, resolved.dataset.id) as any[];
     return rankIndexedCandidates(rows, buildEstimatorSearchProfile(query), (row) => JSON.stringify(row.data ?? {}), (row) => datasetRowIdentityText(row.data))
       .map((entry) => mapDatasetRow({ ...entry.item, data: { ...entry.item.data,
