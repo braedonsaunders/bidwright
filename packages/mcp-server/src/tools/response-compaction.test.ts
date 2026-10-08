@@ -11,11 +11,11 @@ import {
 } from "./response-compaction.js";
 
 const schedule = {
-  id: "rs-teva",
-  name: "Teva 2026 D2D (MECH)",
+  id: "rs-client",
+  name: "Client 2026 (MECH)",
   category: "Labour",
   scope: "global",
-  description: "Mechanical day-to-day labour rates for the Stouffville site, including foreman and trade tiers and the standard overtime multipliers agreed for 2026.",
+  description: "Mechanical day-to-day labour rates for the client site, including foreman and trade tiers and the standard overtime multipliers agreed for 2026.",
   tiers: [
     { id: "rst-reg", name: "Regular", multiplier: 1, uom: "HR" },
     { id: "rst-ot", name: "Overtime", multiplier: 1.5, uom: "HR" },
@@ -26,8 +26,8 @@ const schedule = {
     code: `MECH-${i}`,
     unit: "HR",
     description: "Journeyman millwright, including small tools and consumables, site-wide, as agreed in the 2026 schedule negotiation.",
-    rates: { "rst-reg": 98.9, "rst-ot": 148.35 },
-    costRates: { "rst-reg": 61.1234, "rst-ot": 91.69 },
+    rates: { "rst-reg": 100.5, "rst-ot": 150.75 },
+    costRates: { "rst-reg": 62.4321, "rst-ot": 93.65 },
     burden: {},
     perDiem: null,
   })),
@@ -54,7 +54,7 @@ test("paginate exposes continuation and omitted counts and clamps limits", () =>
 test("a compact rate item keeps the selection essentials and stays small without rates", () => {
   const row = compactRateItem(schedule.items[0], schedule, { includeRates: false });
   assert.equal(row.rateScheduleItemId, "rsi-0");
-  assert.equal(row.scheduleId, "rs-teva");
+  assert.equal(row.scheduleId, "rs-client");
   assert.equal(row.unit, "HR");
   assert.equal(row.code, "MECH-0");
   assert.equal(row.rates, undefined);
@@ -64,8 +64,8 @@ test("a compact rate item keeps the selection essentials and stays small without
 
 test("rates are re-keyed by tier name at stored precision, and cost rates kept when they differ", () => {
   const row = compactRateItem(schedule.items[0], schedule, { includeRates: true });
-  assert.deepEqual(row.rates, { Regular: 98.9, Overtime: 148.35 });
-  assert.deepEqual(row.costRates, { Regular: 61.1234, Overtime: 91.69 }, "no rounding: 61.1234 is retained exactly");
+  assert.deepEqual(row.rates, { Regular: 100.5, Overtime: 150.75 });
+  assert.deepEqual(row.costRates, { Regular: 62.4321, Overtime: 93.65 }, "no rounding: 62.4321 is retained exactly");
   assert.equal(row.burden, undefined, "empty burden is dropped");
   assert.equal(row.perDiem, undefined);
   // an unknown tier id is never dropped

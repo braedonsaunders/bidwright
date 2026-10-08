@@ -31,3 +31,6 @@ docs
 apps/desktop
 apps/model-editor
 packages/vision/test-sandbox
+
+# Private catalog/rate exports are never part of an image.
+packages/db/seed-items/

@@ -25,11 +25,11 @@ test("writeMemory replaces a memory file it cannot open for writing", async () =
     const client = new Client({ name: "test-client", version: "0.0.0" });
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
 
-    const result = await client.callTool({ name: "writeMemory", arguments: { section: "progress", content: "Alexanderwerk sheet read" } });
+    const result = await client.callTool({ name: "writeMemory", arguments: { section: "progress", content: "Layout sheet read" } });
     assert.notEqual(result.isError, true, JSON.stringify(result.content));
     const saved = JSON.parse(await readFile(memoryPath, "utf8"));
     // One canonical shape for agent, API and UI; nothing the API wrote is lost.
-    assert.equal(saved.sections.progress, "Alexanderwerk sheet read");
+    assert.equal(saved.sections.progress, "Layout sheet read");
     assert.equal(saved.sections.ingestion_results, "3 documents");
     // Parallel tool calls must not drop each other's sections.
     await Promise.all(["a", "b", "c", "d", "e"].map((section) =>

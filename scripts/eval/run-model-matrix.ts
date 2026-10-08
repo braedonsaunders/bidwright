@@ -6,7 +6,8 @@ import { createRequire } from "node:module";
 
 const args = process.argv.slice(2);
 const value = (flag: string, fallback?: string) => args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback;
-const sourceProject = value("--project-id", "project-92c0a6f3-b9c6-42d0-9ff0-1f078ba8a823")!;
+const sourceProject = value("--project-id");
+if (!sourceProject) throw new Error("--project-id <source project> is required");
 const api = value("--api-url", process.env.BIDWRIGHT_API_URL || "https://bidwright.rassaun.com/proxy")!;
 const output = resolve(value("--out", `.bidwright/evals/matrix-${Date.now()}`)!);
 const models = (value("--models", "openrouter:moonshotai/kimi-k3,claude-code:claude-opus-5-5,codex:gpt-6.1-sol,claude-code:claude-sonnet-5-5")!).split(",").map((entry) => {
@@ -14,7 +15,9 @@ const models = (value("--models", "openrouter:moonshotai/kimi-k3,claude-code:cla
   if (split < 1) throw new Error("Each model must be runtime:model-id");
   return { runtime: entry.slice(0, split), model: entry.slice(split + 1) };
 });
-const scope = value("--scope", "Mechanical installation of Alexanderwerk and Servo-Lift equipment, including platform installation. Exclude platform fabrication and electrical work. Do not price customer-supplied equipment as new supply.")!;
+const scope = value("--scope", "")!;
+// Evaluation references describe customer jobs and stay outside the repository.
+const referenceFile = value("--reference-file");
 async function deploymentTag() {
   const response = await fetch(`${api.replace(/\/$/, "")}/health`, { signal: AbortSignal.timeout(30_000) });
   if (!response.ok) throw new Error(`Deployment health check failed: HTTP ${response.status}`);
@@ -23,7 +26,7 @@ async function deploymentTag() {
   return health.deploymentTag;
 }
 const plan = { sourceProject, api, models, repeat: Number(value("--repeat", "1")), scope, output,
-  copyProjectPerRun: true, reingestArchives: true, autoAnswer: false, stopOnQuestion: true, referenceFile: resolve("scripts/eval/alexanderwerk-ground-truth.json") };
+  copyProjectPerRun: true, reingestArchives: true, autoAnswer: false, stopOnQuestion: true, referenceFile: referenceFile ? resolve(referenceFile) : null };
 if (!args.includes("--execute")) {
   console.log(JSON.stringify({ ...plan, instruction: "Pass --execute and authenticated environment or --token-file to run. Each attempt copies and resets the source estimate." }, null, 2));
 } else {

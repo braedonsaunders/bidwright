@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 
 /**
  * Guards the worksheet-item payload contract (truncated payloads, batch
- * shapes). Originally added for the Birla
+ * shapes). Originally added for an
  * electrical quote, where 60 of 65 createWorksheetItem calls were rejected.
  *
  * The rules live inside a closure in quote-tools.ts, so these reimplement the
@@ -34,7 +34,7 @@ function looksTruncated(input: Record<string, unknown>) {
 }
 
 test("a call carrying only the required fields is reported as truncated", () => {
-  // The exact payload recorded 39 times on the Birla run, which the server
+  // The exact payload recorded 39 times on that run, which the server
   // answered with "Line evidence basis is required" -- true, but it sent the
   // agent rewriting evidenceBasis instead of resending a smaller call.
   assert.equal(
