@@ -141,10 +141,10 @@ import { userRoutes } from "./routes/user-routes.js";
 import { integrationsRoutes } from "./routes/integrations-routes.js";
 import { webhooksRoutes } from "./routes/webhooks-routes.js";
 import { costIntelligenceRoutes } from "./routes/cost-intelligence-routes.js";
-import { buildPdfDataPackage, generatePdfHtml, generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
-import { loadQuotePdfAttachmentBytes, mergePdfBuffers, quotePdfSegmentsFromLayout } from "./services/pdf-attachments.js";
+import { generatePdfBuffer, buildSchedulePdfData, generateSchedulePdfHtml, type PdfLayoutOptions } from "./services/pdf-service.js";
+import { renderQuotePdf } from "./services/quote-pdf.js";
 import { validateIntegrationsEncryptionKey } from "./services/settings-key-validation.js";
-import { sendQuoteEmail } from "./services/email-service.js";
+import { sendProjectQuote } from "./services/send-project-quote.js";
 import { DEMO_DISABLED_MESSAGE, isApiDemoMode } from "./demo-mode.js";
 import { parseImportFile } from "./services/catalog-import-service.js";
 import { cleanExpiredSessions } from "./services/auth-service.js";
@@ -5617,85 +5617,14 @@ export function buildServer() {
       return reply.type(contentType).send(buffer);
     }
 
-    const reportSections = await request.store!.listReportSections(projectId);
-
-    // Resolve image file paths for report sections so the PDF renderer can embed them
-    for (const section of reportSections) {
-      if (section.sectionType === "image" && section.content) {
-        try {
-          const parsed = JSON.parse(section.content);
-          if (parsed.fileNodeId) {
-            const node = await request.store!.getFileNode(parsed.fileNodeId);
-            if (node?.storagePath) {
-              parsed.resolvedImagePath = resolveApiPath(node.storagePath);
-              section.content = JSON.stringify(parsed);
-            }
-          }
-        } catch { /* not JSON, skip */ }
-      }
-    }
-
-    const orgSettings = await request.store!.getSettings();
-    const pdfData = buildPdfDataPackage(workspace, reportSections, {
-      termsAndConditions: orgSettings.termsAndConditions || "",
-      companyName: orgSettings.general?.orgName || orgSettings.brand?.companyName || "",
-      logoUrl: orgSettings.general?.logoUrl || orgSettings.brand?.logoUrl || "",
-      website: orgSettings.general?.website || orgSettings.brand?.websiteUrl || "",
-    });
-
-    // Parse layout options from query param if present
     let layoutOptions: Partial<PdfLayoutOptions> | undefined;
     const layoutParam = (request.query as Record<string, string>)?.layout;
     if (layoutParam) {
       try { layoutOptions = JSON.parse(decodeURIComponent(layoutParam)); } catch { /* ignore */ }
     }
-
-    const { segments } = quotePdfSegmentsFromLayout(layoutOptions);
-    const warnings: string[] = [];
-    const parts: Buffer[] = [];
-    const needsMerge = segments.some((segment) => segment.kind !== "html");
-
-    if (!needsMerge) {
-      const html = generatePdfHtml(pdfData, templateType, layoutOptions);
-      const { buffer, contentType } = await generatePdfBuffer(html, layoutOptions);
-      return reply.type(contentType).send(buffer);
-    }
-
-    for (const segment of segments) {
-      if (segment.kind === "html") {
-        const html = generatePdfHtml(pdfData, templateType, {
-          ...layoutOptions,
-          sectionOrder: segment.sectionKeys,
-          freezeSectionOrder: true,
-        });
-        const { buffer } = await generatePdfBuffer(html, layoutOptions);
-        parts.push(buffer);
-        continue;
-      }
-      if (segment.kind === "schedule") {
-        const scheduleHtml = generateSchedulePdfHtml(buildSchedulePdfData(workspace));
-        const { buffer } = await generatePdfBuffer(scheduleHtml, {
-          pageSetup: {
-            orientation: "landscape",
-            pageSize: layoutOptions?.pageSetup?.pageSize ?? "letter",
-          },
-        });
-        parts.push(buffer);
-        continue;
-      }
-      const loaded = await loadQuotePdfAttachmentBytes(request.store!, projectId, segment.attachment);
-      if (loaded.bytes) parts.push(loaded.bytes);
-      else if (loaded.warning) warnings.push(loaded.warning);
-    }
-
-    if (parts.length === 0) {
-      return reply.code(500).send({ message: warnings[0] ?? "PDF generation produced no pages." });
-    }
-    const buffer = await mergePdfBuffers(parts);
-    if (warnings.length) {
-      reply.header("X-Bidwright-Pdf-Warnings", warnings.join(" | "));
-    }
-    return reply.type("application/pdf").send(buffer);
+    const { buffer, contentType, warnings } = await renderQuotePdf(request.store!, projectId, workspace, templateType, layoutOptions);
+    if (warnings.length) reply.header("X-Bidwright-Pdf-Warnings", warnings.join(" | "));
+    return reply.type(contentType).send(buffer);
   });
 
   // -------------------------------------------------------------------------
@@ -5747,22 +5676,10 @@ export function buildServer() {
       return reply.code(404).send({ message: "Project not found" });
     }
 
-    const quoteNumber = workspace.quote?.quoteNumber ?? projectId;
-    const subject = `Quote ${quoteNumber} – ${workspace.currentRevision?.title ?? workspace.project?.name ?? ""}`;
-
-    const result = await sendQuoteEmail({
-      to: contacts,
-      subject,
-      message,
-      quoteNumber,
-    });
-
-    await request.store!.logActivity(projectId, workspace.currentRevision?.id ?? null, "quote_sent", {
-      recipients: contacts,
-      quoteNumber,
-    });
-
-    return result;
+    if (!workspace.currentRevision) {
+      return reply.code(400).send({ message: "No current quote revision" });
+    }
+    return sendProjectQuote(request.store!, projectId, workspace, { contacts, message });
   });
 
   // -------------------------------------------------------------------------
