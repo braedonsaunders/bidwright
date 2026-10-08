@@ -7,6 +7,12 @@ import { AcTrMaterialManager } from './AcTrMaterialManager'
 
 export interface AcTrLineMaterialOptions {
   basicMaterialOnly?: boolean
+  /**
+   * Antialiased screen-space strokes (Line2) even when lineweight is ByLayer
+   * or lineweight display is off. Used by complex TEXT/SHAPE linetypes:
+   * WebGL's 1px `GL_LINES` stay device pixels when zoomed and look stair-stepped.
+   */
+  fatLines?: boolean
 }
 
 /**
@@ -26,27 +32,23 @@ export interface AcTrLineMaterialOptions {
 export class AcTrLineMaterialManager extends AcTrMaterialManager<AcTrLineMaterialOptions> {
   /**
    * Builds a stable material key from traits.
-   * Key differs for shader vs basic, ByLayer vs ByEntity.
+   * Every key includes the effective layer so layer-scoped updates stay precise.
    */
   protected buildKey(
     traits: AcGiSubEntityTraits,
     options: AcTrLineMaterialOptions
   ): string {
-    const hasByLayerKeyTraits = this.hasByLayerKeyTraits(traits)
     const lineWidth = this.resolveLineWidth(traits.lineWeight)
     const mode = this.getMaterialMode(traits, options)
     const drawOrderSuffix = this.buildDrawOrderSuffix(traits)
-    const rgb = this.resolveTraitsRgb(traits)
+    const colorKey = this.buildKeyColorSegment(traits)
+    const fatSuffix = options.fatLines ? '_aaline' : ''
 
     if (mode === 'shader') {
-      return hasByLayerKeyTraits
-        ? `layer_${mode}_${traits.layer}_${traits.lineType.name}_${rgb}_${traits.lineTypeScale}_${lineWidth}${drawOrderSuffix}`
-        : `entity_${mode}_${traits.lineType.name}_${rgb}_${traits.lineTypeScale}_${lineWidth}${drawOrderSuffix}`
+      return `${traits.layer}_${mode}_${traits.lineType.name}_${colorKey}_${traits.lineTypeScale}_${lineWidth}${drawOrderSuffix}`
     }
 
-    return hasByLayerKeyTraits
-      ? `layer_${mode}_${traits.layer}_${rgb}_${lineWidth}${drawOrderSuffix}`
-      : `entity_${mode}_${rgb}_${lineWidth}${drawOrderSuffix}`
+    return `${traits.layer}_${mode}_${colorKey}_${lineWidth}${fatSuffix}${drawOrderSuffix}`
   }
 
   /** Returns true if a shader material is required. */
@@ -54,6 +56,12 @@ export class AcTrLineMaterialManager extends AcTrMaterialManager<AcTrLineMateria
     traits: AcGiSubEntityTraits,
     options: AcTrLineMaterialOptions
   ): boolean {
+    if (options.fatLines) {
+      return false
+    }
+    // Complex TEXT/SHAPE patterns still use the dash shader for their simple
+    // dash/gap elements when {@link buildComplexLineTypeGeometry} declines
+    // (density fallback). The shader skips complex elements itself.
     return !!(
       !options.basicMaterialOnly &&
       traits.lineType.pattern &&
@@ -65,16 +73,18 @@ export class AcTrLineMaterialManager extends AcTrMaterialManager<AcTrLineMateria
     traits: AcGiSubEntityTraits,
     options: AcTrLineMaterialOptions
   ): 'shader' | 'basic' | 'fat' {
+    if (options.fatLines) return 'fat'
     if (this.isShaderMaterial(traits, options)) return 'shader'
     return options.basicMaterialOnly ? 'basic' : 'fat'
   }
 
   protected createMaterialImpl(
     traits: AcGiSubEntityTraits,
-    options: AcTrLineMaterialOptions = {}
+    options: AcTrLineMaterialOptions = {},
+    layerColorRgb?: number
   ): THREE.Material {
     let material: THREE.Material
-    const rgb = this.resolveTraitsRgb(traits)
+    const rgb = this.resolveMaterialRgb(traits, layerColorRgb)
 
     const scales = this.getLineTypeScales()
     const scale = scales.ltscale * scales.celtscale * traits.lineTypeScale
@@ -87,7 +97,10 @@ export class AcTrLineMaterialManager extends AcTrMaterialManager<AcTrLineMateria
         this.options.viewportScaleUniform,
         AcTrMaterialManager.CameraZoomUniform
       )
-    } else if (options.basicMaterialOnly || traits.lineWeight < 0) {
+    } else if (
+      !options.fatLines &&
+      (options.basicMaterialOnly || traits.lineWeight < 0)
+    ) {
       material = new THREE.LineBasicMaterial({
         color: rgb
       })

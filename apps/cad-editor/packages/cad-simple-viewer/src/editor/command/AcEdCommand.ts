@@ -1,8 +1,33 @@
-import { AcApContext, AcApDocManager } from '../../app'
+// Type-only / direct-file imports keep the command layer free of the app and
+// view barrels (which transitively pull DOM-heavy input UI). That lets command
+// stack unit tests run in the Node Jest environment.
+//
+// App runtime services (busy indicator, command-line messages) are reached via
+// {@link acapCommandServices} instead of importing AcApDocManager, which would
+// create a circular init cycle with concrete command classes.
+import { acapCommandServices } from '../../app/AcApCommandServices'
+import type { AcApContext } from '../../app/AcApContext'
 import { acapNotifyUndoStackChanged } from '../../util/AcApDatabaseEdit'
 import { eventBus } from '../global/eventBus'
 import { AcEdMessageType } from '../input/ui/AcEdMessageType'
-import { AcEdOpenMode } from '../view'
+import { AcEdOpenMode } from '../view/AcEdOpenMode'
+import {
+  type AcEdSessionAccessory
+} from './AcEdSessionAccessory'
+
+/**
+ * Thrown from {@link AcEdSessionAccessory.mount} when the accessory declines to
+ * mount (for example when a host ribbon already covers the same UI).
+ * {@link AcEdCommand.trigger} treats this as a successful no-op.
+ */
+export class AcEdSessionAccessoryMountSkippedError extends Error {
+  /** Creates an error with a stable message and `name` for instanceof checks. */
+  constructor() {
+    super('session-accessory-mount-skipped')
+    this.name = 'AcEdSessionAccessoryMountSkippedError'
+  }
+}
+
 
 /**
  * Abstract base class for all CAD commands.
@@ -228,6 +253,8 @@ export abstract class AcEdCommand<TUserData extends object = {}> {
     const tm = db.transactionManager
     const recordUndo = this.shouldRecordUndoStack(context)
     let undoTransactionActive = false
+    let sessionAccessoryMounted = false
+    const accessory = this.sessionAccessory
 
     if (recordUndo) {
       tm.startUndoMark(this.globalName || this.localName)
@@ -238,6 +265,34 @@ export abstract class AcEdCommand<TUserData extends object = {}> {
     try {
       this.onCommandWillStart(context)
       context.view.editor.events.commandWillStart.dispatch({ command: this })
+      if (accessory) {
+        try {
+          const hostInfo = context.view.sessionAccessoryHost
+          const options = {
+            host: hostInfo.host,
+            type: hostInfo.type,
+            view: context.view
+          }
+          const mountArgs = {
+            command: this,
+            accessory,
+            options,
+            source: 'command' as const
+          }
+          context.view.editor.events.beforeMountSessionAccessory.dispatch(
+            mountArgs
+          )
+          accessory.mount(options)
+          context.view.editor.events.afterMountSessionAccessory.dispatch(
+            mountArgs
+          )
+          sessionAccessoryMounted = true
+        } catch (error) {
+          if (!(error instanceof AcEdSessionAccessoryMountSkippedError)) {
+            // Mount failures must not block command execution.
+          }
+        }
+      }
       await this.execute(context)
     } catch (error) {
       if (undoTransactionActive && tm.hasTransaction()) {
@@ -249,10 +304,29 @@ export abstract class AcEdCommand<TUserData extends object = {}> {
       }
       throw error
     } finally {
+      if (sessionAccessoryMounted && accessory) {
+        try {
+          const unmountArgs = {
+            command: this,
+            accessory,
+            source: 'command' as const
+          }
+          context.view.editor.events.beforeUnmountSessionAccessory.dispatch(
+            unmountArgs
+          )
+          accessory.unmount()
+          context.view.editor.events.afterUnmountSessionAccessory.dispatch(
+            unmountArgs
+          )
+        } catch {
+          // Unmount failures must not mask command completion.
+        }
+      }
       if (undoTransactionActive && tm.hasTransaction()) {
         tm.commitTransaction()
         tm.endUndoMark()
         undoTransactionActive = false
+        eventBus.emit('session-db-edit-committed', {})
         acapNotifyUndoStackChanged()
       }
       context.view.editor.events.commandEnded.dispatch({ command: this })
@@ -302,6 +376,14 @@ export abstract class AcEdCommand<TUserData extends object = {}> {
   }
 
   /**
+   * Optional widgets for the command session UI. On desktop they mount at the
+   * top center of the canvas; on phone/pad they mount at the top of the bottom
+   * session panel. When non-null, {@link trigger} mounts before {@link execute}
+   * and unmounts in `finally`.
+   */
+  sessionAccessory: AcEdSessionAccessory | null = null
+
+  /**
    * Displays a message in the command-line output.
    *
    * @param message - Message text to render
@@ -313,7 +395,7 @@ export abstract class AcEdCommand<TUserData extends object = {}> {
     type: AcEdMessageType = 'info',
     msgKey?: string
   ): void {
-    AcApDocManager.instance.editor.showMessage(message, type, msgKey)
+    acapCommandServices().showMessage(message, type, msgKey)
   }
 
   /**
@@ -324,5 +406,34 @@ export abstract class AcEdCommand<TUserData extends object = {}> {
    */
   protected notify(message: string, type: AcEdMessageType = 'info'): void {
     eventBus.emit('message', { message, type })
+  }
+
+  /**
+   * Shows the application busy overlay while a long-running operation executes.
+   *
+   * @param message - Optional message displayed under the spinner
+   */
+  protected showBusyIndicator(message?: string): void {
+    acapCommandServices().showBusyIndicator(message)
+  }
+
+  /**
+   * Hides the application busy overlay started by {@link showBusyIndicator}.
+   */
+  protected hideBusyIndicator(): void {
+    acapCommandServices().hideBusyIndicator()
+  }
+
+  /**
+   * Runs {@link work} while the application busy overlay is visible.
+   *
+   * @param work - Synchronous or asynchronous operation to execute
+   * @param message - Optional message displayed under the spinner
+   */
+  protected async withBusyIndicator<T>(
+    work: () => T | Promise<T>,
+    message?: string
+  ): Promise<T> {
+    return acapCommandServices().withBusyIndicator(work, message)
   }
 }

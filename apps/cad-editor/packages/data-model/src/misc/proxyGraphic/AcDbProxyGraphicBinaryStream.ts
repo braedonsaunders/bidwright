@@ -557,7 +557,7 @@ export class AcDbProxyGraphicBitStream {
  * @param data - Bytes to encode.
  * @returns A contiguous hex string with two digits per byte.
  */
-export function bytesToHexString(data: Uint8Array): string {
+export function acdbBytesToHexString(data: Uint8Array): string {
   return Array.from(data, byte => byte.toString(16).padStart(2, '0'))
     .join('')
     .toUpperCase()
@@ -572,7 +572,7 @@ export function bytesToHexString(data: Uint8Array): string {
  * @param chunks - Hex strings, typically from DXF group code **310**.
  * @returns Concatenated decoded bytes.
  */
-export function hexStringsToBytes(chunks: string[]): Uint8Array {
+export function acdbHexStringsToBytes(chunks: string[]): Uint8Array {
   const totalLength = chunks.reduce(
     (sum, chunk) => sum + Math.floor(chunk.length / 2),
     0
@@ -583,6 +583,43 @@ export function hexStringsToBytes(chunks: string[]): Uint8Array {
     for (let i = 0; i < chunk.length; i += 2) {
       result[offset++] = parseInt(chunk.slice(i, i + 2), 16)
     }
+  }
+  return result
+}
+
+/**
+ * Combines DXF group-code **310** payload chunks that may arrive either as
+ * hexadecimal strings (ASCII DXF readers that leave hex raw) or as already
+ * decoded binary (`Uint8Array` from typed/binary pair readers).
+ *
+ * Calling `String(Uint8Array)` corrupts the payload (comma-separated decimals),
+ * so callers must use this helper instead of treating every chunk as hex text.
+ *
+ * @param chunks - Ordered group **310** values from DXF.
+ * @returns Concatenated bytes in chunk order.
+ */
+export function acdbCombineDxfBinaryChunks(
+  chunks: Array<string | Uint8Array>
+): Uint8Array {
+  if (chunks.length === 0) {
+    return new Uint8Array()
+  }
+
+  const parts: Uint8Array[] = []
+  for (const chunk of chunks) {
+    if (chunk instanceof Uint8Array) {
+      parts.push(chunk)
+    } else {
+      parts.push(acdbHexStringsToBytes([String(chunk)]))
+    }
+  }
+
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0)
+  const result = new Uint8Array(totalLength)
+  let offset = 0
+  for (const part of parts) {
+    result.set(part, offset)
+    offset += part.length
   }
   return result
 }

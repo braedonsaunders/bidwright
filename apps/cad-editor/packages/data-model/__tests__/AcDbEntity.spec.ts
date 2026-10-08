@@ -175,7 +175,7 @@ describe('AcDbEntity.color resolution', () => {
     acdbHostApplicationServices().workingDatabase = db
   })
 
-  it('uses CECOLOR when entity color is explicitly ByBlock', () => {
+  it('resolves ByBlock without INSERT owner to ACI 7 foreground, not CECOLOR', () => {
     addLayerWithColor('0', 0x101010)
     db.clayer = '0'
     db.cecolor = new AcCmColor().setRGBValue(0x336699)
@@ -188,10 +188,12 @@ describe('AcDbEntity.color resolution', () => {
     line.color.setByBlock()
 
     expect(line.color.isByBlock).toBe(true)
-    expect(line.resolvedColor.RGB).toBe(0x336699)
+    expect(line.resolvedColor.isForeground).toBe(true)
+    expect(line.resolvedColor.colorIndex).toBe(7)
+    expect(line.resolvedColor.RGB).not.toBe(0x336699)
   })
 
-  it('resolves ByBlock through current layer when CECOLOR is ByLayer', () => {
+  it('keeps ByBlock as foreground even when CECOLOR is ByLayer', () => {
     addLayerWithColor('ENTITY_LAYER', 0x00ff00)
     addLayerWithColor('CURRENT_LAYER', 0x112233)
     db.clayer = 'CURRENT_LAYER'
@@ -204,7 +206,9 @@ describe('AcDbEntity.color resolution', () => {
     line.layer = 'ENTITY_LAYER'
     line.color.setByBlock()
 
-    expect(line.resolvedColor.RGB).toBe(0x112233)
+    expect(line.resolvedColor.isForeground).toBe(true)
+    expect(line.resolvedColor.colorIndex).toBe(7)
+    expect(line.resolvedColor.RGB).not.toBe(0x112233)
   })
 
   it('resolves ByLayer against the entity layer color', () => {

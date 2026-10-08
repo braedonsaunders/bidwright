@@ -9,8 +9,12 @@
  * @packageDocumentation
  */
 
-import type { AcGePoint2dLike } from '@mlightcad/data-model'
+import { AcGeCircArc2d, type AcGePoint2dLike } from '@mlightcad/data-model'
 
+import {
+  expandOsnapPath,
+  pathEdgeNearAperture
+} from './AcExOsnapPath'
 import {
   type AcExOsnapAcGeCurve,
   ellipsePointAtNormalized,
@@ -35,6 +39,53 @@ export function distSq(ax: number, ay: number, bx: number, by: number): number {
   return dx * dx + dy * dy
 }
 
+/**
+ * How much `mouse - nearest` points into this circular arc.
+ *
+ * When two polyline bulge segments share a vertex, nearest-point distances
+ * are equal and a later-wins compare would always lock the second arc.
+ */
+export function inwardArcAlignment(
+  curve: AcGeCircArc2d,
+  nearest: AcGePoint2dLike,
+  mouse: AcGePoint2dLike
+): number {
+  const mx = mouse.x - nearest.x
+  const my = mouse.y - nearest.y
+  if (mx * mx + my * my < 1e-24) return 0
+
+  const r = curve.radius > 0 ? curve.radius : 1
+  const endTolSq = Math.max(1e-16, 1e-12 * r * r)
+  const atStart =
+    distSq(nearest.x, nearest.y, curve.startPoint.x, curve.startPoint.y) <=
+    endTolSq
+  const atEnd =
+    distSq(nearest.x, nearest.y, curve.endPoint.x, curve.endPoint.y) <= endTolSq
+  if (!atStart && !atEnd) return 0
+
+  const pts = curve.getPoints(8)
+  if (pts.length < 3) return 0
+  const inward = atStart && !atEnd ? pts[1]! : pts[pts.length - 2]!
+  const ix = inward.x - nearest.x
+  const iy = inward.y - nearest.y
+  const ilen = Math.hypot(ix, iy)
+  if (!(ilen > 1e-18)) return 0
+  return (mx * ix + my * iy) / ilen
+}
+
+/** True when `distSqValue`/`align` should replace the current lock winner. */
+export function isBetterArcLock(
+  distSqValue: number,
+  align: number,
+  bestDistSq: number,
+  bestAlign: number
+): boolean {
+  const tie = Math.max(1e-18, Math.abs(bestDistSq) * 1e-9)
+  if (distSqValue < bestDistSq - tie) return true
+  if (distSqValue > bestDistSq + tie) return false
+  return align > bestAlign
+}
+
 function pushPoint(
   out: AcExOsnapCandidate[],
   p: AcGePoint2dLike,
@@ -51,7 +102,7 @@ export interface AcExOsnapCandidate {
 }
 
 /**
- * Collects discrete (non-nearest) snap points for one primitive at index build time.
+ * Collects discrete (non-nearest) snap points for one primitive during a snap query.
  *
  * @param prim - Exported primitive in WCS.
  * @param modes - Enabled OSNAP modes.
@@ -62,6 +113,14 @@ export function collectPrimitiveDiscreteSnapCandidates(
   modes: Set<AcExOsnapMode>,
   geo?: AcExOsnapAcGeCurve
 ): AcExOsnapCandidate[] {
+  if (prim.kind === 'path') {
+    const out: AcExOsnapCandidate[] = []
+    for (const edge of expandOsnapPath(prim)) {
+      out.push(...collectPrimitiveDiscreteSnapCandidates(edge, modes))
+    }
+    return out
+  }
+
   const out: AcExOsnapCandidate[] = []
   const resolved = geo ?? primitiveToAcGeCurve(prim)
 
@@ -163,6 +222,23 @@ export function collectPrimitiveNearestSnapCandidate(
   py: number,
   geo?: AcExOsnapAcGeCurve
 ): AcExOsnapCandidate | undefined {
+  if (prim.kind === 'path') {
+    let best: AcExOsnapCandidate | undefined
+    let bestDist = Infinity
+    const threshold = Number.POSITIVE_INFINITY
+    for (const edge of expandOsnapPath(prim)) {
+      if (!pathEdgeNearAperture(edge, px, py, threshold)) continue
+      const candidate = collectPrimitiveNearestSnapCandidate(edge, px, py)
+      if (!candidate) continue
+      const d = distSq(px, py, candidate.x, candidate.y)
+      if (d < bestDist) {
+        bestDist = d
+        best = candidate
+      }
+    }
+    return best
+  }
+
   const pick = { x: px, y: py, z: 0 }
   const resolved = geo ?? primitiveToAcGeCurve(prim)
 

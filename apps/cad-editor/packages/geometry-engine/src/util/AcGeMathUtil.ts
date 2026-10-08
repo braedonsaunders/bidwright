@@ -267,7 +267,7 @@ const RAD2DEG = 180 / Math.PI
  * http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript/21963136#21963136
  * @returns Return a UUID
  */
-function generateUUID(): string {
+function acgeGenerateUUID(): string {
   const d0 = (Math.random() * 0xffffffff) | 0
   const d1 = (Math.random() * 0xffffffff) | 0
   const d2 = (Math.random() * 0xffffffff) | 0
@@ -305,7 +305,7 @@ function generateUUID(): string {
  * @param max Input maximum value
  * @returns Return clamped value between min and max
  */
-function clamp(value: number, min: number, max: number) {
+function acgeClamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value))
 }
 
@@ -316,7 +316,7 @@ function clamp(value: number, min: number, max: number) {
  * @param m Input one integer
  * @returns Return the Euclidean modulo of m % n
  */
-function euclideanModulo(n: number, m: number) {
+function acgeEuclideanModulo(n: number, m: number) {
   return ((n % m) + m) % m
 }
 
@@ -329,7 +329,7 @@ function euclideanModulo(n: number, m: number) {
  * @param b2 Input maximum value for range B.
  * @returns Return linear mapping of x from range [a1, a2] to range [b1, b2]
  */
-function mapLinear(x: number, a1: number, a2: number, b1: number, b2: number) {
+function acgeMapLinear(x: number, a1: number, a2: number, b1: number, b2: number) {
   return b1 + ((x - a1) * (b2 - b1)) / (a2 - a1)
 }
 
@@ -341,7 +341,7 @@ function mapLinear(x: number, a1: number, a2: number, b1: number, b2: number) {
  * @param value Input a value between start and end
  * @returns Return the percentage in the closed interval [0, 1] of the given value between the start and end point.
  */
-function inverseLerp(x: number, y: number, value: number) {
+function acgeInverseLerp(x: number, y: number, value: number) {
   if (x !== y) {
     return (value - x) / (y - x)
   } else {
@@ -357,7 +357,7 @@ function inverseLerp(x: number, y: number, value: number) {
  * @param t Input interpolation factor in the closed interval [0, 1]
  * @returns Return a value linearly interpolated from two known points
  */
-function lerp(x: number, y: number, t: number) {
+function acgeLerp(x: number, y: number, t: number) {
   return (1 - t) * x + t * y
 }
 
@@ -372,8 +372,8 @@ function lerp(x: number, y: number, t: number) {
  * @param dt Input delta time in seconds.
  * @returns Return a number from x toward y
  */
-function damp(x: number, y: number, lambda: number, dt: number) {
-  return lerp(x, y, 1 - Math.exp(-lambda * dt))
+function acgeDamp(x: number, y: number, lambda: number, dt: number) {
+  return acgeLerp(x, y, 1 - Math.exp(-lambda * dt))
 }
 
 /**
@@ -383,8 +383,8 @@ function damp(x: number, y: number, lambda: number, dt: number) {
  * @param length The positive value the function will pingpong to. Default is 1.
  * @returns Return a value that alternates between 0 and length : Float.
  */
-function pingpong(x: number, length: number = 1) {
-  return length - Math.abs(euclideanModulo(x, length * 2) - length)
+function acgePingpong(x: number, length: number = 1) {
+  return length - Math.abs(acgeEuclideanModulo(x, length * 2) - length)
 }
 
 /**
@@ -396,7 +396,7 @@ function pingpong(x: number, length: number = 1) {
  * @param max  Any x value above max will be 1.
  * @returns Return a value between 0-1
  */
-function smoothstep(x: number, min: number, max: number) {
+function acgeSmoothstep(x: number, min: number, max: number) {
   if (x <= min) return 0
   if (x >= max) return 1
 
@@ -413,7 +413,7 @@ function smoothstep(x: number, min: number, max: number) {
  * @param max Any x value above max will be 1.
  * @returns Return a value between 0-1
  */
-function smootherstep(x: number, min: number, max: number) {
+function acgeSmootherstep(x: number, min: number, max: number) {
   if (x <= min) return 0
   if (x >= max) return 1
 
@@ -428,7 +428,7 @@ function smootherstep(x: number, min: number, max: number) {
  * @param high Input interval upper boundary value
  * @returns Return random integer in the interval [low, high].
  */
-function randInt(low: number, high: number) {
+function acgeRandInt(low: number, high: number) {
   return low + Math.floor(Math.random() * (high - low + 1))
 }
 
@@ -439,7 +439,7 @@ function randInt(low: number, high: number) {
  * @returns Return random float in the interval [low, high]
  */
 // Random float from <low, high> interval
-function randFloat(low: number, high: number) {
+function acgeRandFloat(low: number, high: number) {
   return low + Math.random() * (high - low)
 }
 
@@ -448,7 +448,7 @@ function randFloat(low: number, high: number) {
  * @param range Input interval range value
  * @returns Return random float in the interval [- range / 2, range / 2].
  */
-function randFloatSpread(range: number) {
+function acgeRandFloatSpread(range: number) {
   return range * (0.5 - Math.random())
 }
 
@@ -457,7 +457,7 @@ function randFloatSpread(range: number) {
  * @param s Input one integer seed number
  * @returns Return pseudo-random float in the interval [0, 1]
  */
-function seededRandom(s: number) {
+function acgeSeededRandom(s: number) {
   if (s !== undefined) _seed = s
 
   // Mulberry32 generator
@@ -476,7 +476,7 @@ function seededRandom(s: number) {
  * @param degrees Input degrees value to be converted
  * @returns Return converted angle value in radians
  */
-function degToRad(degrees: number) {
+function acgeDegToRad(degrees: number) {
   return degrees * DEG2RAD
 }
 
@@ -485,7 +485,7 @@ function degToRad(degrees: number) {
  * @param radians Input radians value to be converted
  * @returns Return converted angle value in degrees
  */
-function radToDeg(radians: number) {
+function acgeRadToDeg(radians: number) {
   return radians * RAD2DEG
 }
 
@@ -494,7 +494,7 @@ function radToDeg(radians: number) {
  * @param value Input the number to check
  * @returns Return true if n is a power of 2.
  */
-function isPowerOfTwo(value: number) {
+function acgeIsPowerOfTwo(value: number) {
   return (value & (value - 1)) === 0 && value !== 0
 }
 
@@ -503,7 +503,7 @@ function isPowerOfTwo(value: number) {
  * @param value Input one number
  * @returns Return the smallest power of 2 that is greater than or equal to n.
  */
-function ceilPowerOfTwo(value: number) {
+function acgeCeilPowerOfTwo(value: number) {
   return Math.pow(2, Math.ceil(Math.log(value) / Math.LN2))
 }
 
@@ -512,7 +512,7 @@ function ceilPowerOfTwo(value: number) {
  * @param value Input one number
  * @returns Return the largest power of 2 that is less than or equal to n.
  */
-function floorPowerOfTwo(value: number) {
+function acgeFloorPowerOfTwo(value: number) {
   return Math.pow(2, Math.floor(Math.log(value) / Math.LN2))
 }
 
@@ -521,7 +521,7 @@ function floorPowerOfTwo(value: number) {
  * @param angle Input one angle value in radians
  * @returns Return normalized angle value in radians
  */
-function normalizeAngle(angle: number): number {
+function acgeNormalizeAngle(angle: number): number {
   const TAU = Math.PI * 2
   return ((angle % TAU) + TAU) % TAU
 }
@@ -533,7 +533,7 @@ function normalizeAngle(angle: number): number {
  * @param value2 Input the second value
  * @returns Return true if if the valueToTest is between (value1, value2) or (value2, value1).
  */
-function isBetween(valueToTest: number, value1: number, value2: number) {
+function acgeIsBetween(valueToTest: number, value1: number, value2: number) {
   return (
     (valueToTest > value1 && valueToTest < value2) ||
     (valueToTest > value2 && valueToTest < value1)
@@ -548,15 +548,15 @@ function isBetween(valueToTest: number, value1: number, value2: number) {
  * @param clockwise Input rotation direction from start angle to end angle
  * @returns Return true if the algleToTest is between startAngle and endAngle
  */
-function isBetweenAngle(
+function acgeIsBetweenAngle(
   angleToTest: number,
   startAngle: number,
   endAngle: number,
   clockwise: boolean = false
 ) {
-  angleToTest = normalizeAngle(angleToTest)
-  startAngle = normalizeAngle(startAngle)
-  endAngle = normalizeAngle(endAngle)
+  angleToTest = acgeNormalizeAngle(angleToTest)
+  startAngle = acgeNormalizeAngle(startAngle)
+  endAngle = acgeNormalizeAngle(endAngle)
   if (clockwise) {
     if (startAngle > endAngle) {
       return angleToTest <= startAngle && angleToTest >= endAngle
@@ -572,7 +572,17 @@ function isBetweenAngle(
   }
 }
 
-function intPartLength(num: number) {
+/**
+ * Return true if `mid` lies on the counterclockwise sweep from `start` to `end`.
+ * Angles are treated as radians and normalized to `[0, 2π)`.
+ */
+function acgeIsAngleOnCcwSweep(start: number, mid: number, end: number) {
+  const total = acgeNormalizeAngle(end - start)
+  const offset = acgeNormalizeAngle(mid - start)
+  return offset <= total + 1e-7
+}
+
+function acgeIntPartLength(num: number) {
   num = Math.abs(num)
   if (num < 1.0) {
     return 0
@@ -580,66 +590,68 @@ function intPartLength(num: number) {
   return Math.ceil(Math.log10(Math.abs(num) + 1))
 }
 
-function relativeEps(num: number, epsilon = 1.0e-7) {
-  const count = intPartLength(num)
+function acgeRelativeEps(num: number, epsilon = 1.0e-7) {
+  const count = acgeIntPartLength(num)
   return Math.max(Math.pow(10, count) * epsilon, epsilon)
 }
 
 const AcGeMathUtil = {
   DEG2RAD: DEG2RAD,
   RAD2DEG: RAD2DEG,
-  generateUUID: generateUUID,
-  clamp: clamp,
-  euclideanModulo: euclideanModulo,
-  mapLinear: mapLinear,
-  inverseLerp: inverseLerp,
-  lerp: lerp,
-  damp: damp,
-  pingpong: pingpong,
-  smoothstep: smoothstep,
-  smootherstep: smootherstep,
-  randInt: randInt,
-  randFloat: randFloat,
-  randFloatSpread: randFloatSpread,
-  seededRandom: seededRandom,
-  degToRad: degToRad,
-  radToDeg: radToDeg,
-  isPowerOfTwo: isPowerOfTwo,
-  ceilPowerOfTwo: ceilPowerOfTwo,
-  floorPowerOfTwo: floorPowerOfTwo,
-  normalizeAngle: normalizeAngle,
-  isBetween: isBetween,
-  isBetweenAngle: isBetweenAngle,
-  intPartLength: intPartLength,
-  relativeEps: relativeEps
+  generateUUID: acgeGenerateUUID,
+  clamp: acgeClamp,
+  euclideanModulo: acgeEuclideanModulo,
+  mapLinear: acgeMapLinear,
+  inverseLerp: acgeInverseLerp,
+  lerp: acgeLerp,
+  damp: acgeDamp,
+  pingpong: acgePingpong,
+  smoothstep: acgeSmoothstep,
+  smootherstep: acgeSmootherstep,
+  randInt: acgeRandInt,
+  randFloat: acgeRandFloat,
+  randFloatSpread: acgeRandFloatSpread,
+  seededRandom: acgeSeededRandom,
+  degToRad: acgeDegToRad,
+  radToDeg: acgeRadToDeg,
+  isPowerOfTwo: acgeIsPowerOfTwo,
+  ceilPowerOfTwo: acgeCeilPowerOfTwo,
+  floorPowerOfTwo: acgeFloorPowerOfTwo,
+  normalizeAngle: acgeNormalizeAngle,
+  isBetween: acgeIsBetween,
+  isBetweenAngle: acgeIsBetweenAngle,
+  isAngleOnCcwSweep: acgeIsAngleOnCcwSweep,
+  intPartLength: acgeIntPartLength,
+  relativeEps: acgeRelativeEps
 }
 
 export {
   DEG2RAD,
   RAD2DEG,
-  generateUUID,
-  clamp,
-  euclideanModulo,
-  mapLinear,
-  inverseLerp,
-  lerp,
-  damp,
-  pingpong,
-  smoothstep,
-  smootherstep,
-  randInt,
-  randFloat,
-  randFloatSpread,
-  seededRandom,
-  degToRad,
-  radToDeg,
-  isPowerOfTwo,
-  ceilPowerOfTwo,
-  floorPowerOfTwo,
-  normalizeAngle,
-  isBetween,
-  isBetweenAngle,
-  intPartLength,
-  relativeEps,
+  acgeGenerateUUID,
+  acgeClamp,
+  acgeEuclideanModulo,
+  acgeMapLinear,
+  acgeInverseLerp,
+  acgeLerp,
+  acgeDamp,
+  acgePingpong,
+  acgeSmoothstep,
+  acgeSmootherstep,
+  acgeRandInt,
+  acgeRandFloat,
+  acgeRandFloatSpread,
+  acgeSeededRandom,
+  acgeDegToRad,
+  acgeRadToDeg,
+  acgeIsPowerOfTwo,
+  acgeCeilPowerOfTwo,
+  acgeFloorPowerOfTwo,
+  acgeNormalizeAngle,
+  acgeIsBetween,
+  acgeIsBetweenAngle,
+  acgeIsAngleOnCcwSweep,
+  acgeIntPartLength,
+  acgeRelativeEps,
   AcGeMathUtil
 }

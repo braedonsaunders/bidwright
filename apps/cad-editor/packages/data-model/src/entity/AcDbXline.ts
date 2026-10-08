@@ -1,13 +1,13 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeLine3d,
   AcGeMatrix3d,
+  acgeOffsetPointByDirectionInXY,
   AcGePoint3d,
   AcGePoint3dLike,
   AcGeVector3d,
-  AcGeVector3dLike,
-  offsetPointByDirectionInXY
-} from '@mlightcad/geometry-engine'
+  AcGeVector3dLike} from '@mlightcad/geometry-engine'
 import { AcGiRenderer } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
@@ -172,6 +172,18 @@ export class AcDbXline extends AcDbCurve {
     return extents
   }
 
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const end = this._basePoint.clone().add(this._unitDir)
+    return [
+      {
+        kind: 'line',
+        line: new AcGeLine3d(this._basePoint, end),
+        extent: 'unbounded'
+      }
+    ]
+  }
+
   /**
    * Returns the full property definition for this xline entity, including
    * general group and geometry group.
@@ -332,6 +344,15 @@ export class AcDbXline extends AcDbCurve {
   }
 
   /**
+   * This xline always draws as a single `lineStrip` primitive.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    return 'lineStrip' as const
+  }
+
+  /**
    * Draws this xline using the specified renderer.
    *
    * This method renders the xline as a line segment extending from the base point
@@ -363,6 +384,51 @@ export class AcDbXline extends AcDbCurve {
     filer.writeSubclassMarker('AcDbXline')
     filer.writePoint3d(10, this.basePoint)
     filer.writeVector3d(11, this.unitDir)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbXline')
+
+    let bx = this.basePoint.x
+    let by = this.basePoint.y
+    let bz = this.basePoint.z
+    let dx = this.unitDir.x
+    let dy = this.unitDir.y
+    let dz = this.unitDir.z
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+          bx = n
+          break
+        case 20:
+          by = n
+          break
+        case 30:
+          bz = n
+          break
+        case 11:
+          dx = n
+          break
+        case 21:
+          dy = n
+          break
+        case 31:
+          dz = n
+          break
+        default:
+          break
+      }
+    }
+
+    this.basePoint = new AcGePoint3d(bx, by, bz)
+    this.unitDir = new AcGeVector3d(dx, dy, dz)
     return this
   }
 
@@ -398,7 +464,7 @@ export class AcDbXline extends AcDbCurve {
    * @returns Parallel xline, or `null` when {@link unitDir} has negligible XY component
    */
   private createOffsetCurve(offsetDist: number): AcDbXline | null {
-    const offsetPoint = offsetPointByDirectionInXY(
+    const offsetPoint = acgeOffsetPointByDirectionInXY(
       this.basePoint,
       this.unitDir,
       offsetDist

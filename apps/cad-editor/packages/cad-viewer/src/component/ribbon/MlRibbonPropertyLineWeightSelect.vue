@@ -2,12 +2,15 @@
   <ml-ribbon-property-field
     :icon="lineWeightIcon"
     :disabled="disabled"
+    :control-width="resolvedControlWidth"
     variant="line-weight"
   >
     <ml-line-weight-select
       :model-value="modelValue"
       :disabled="disabled"
       :placeholder="placeholder"
+      :numeric-only="numericOnly"
+      :compact="numericOnly"
       @update:modelValue="emit('update:modelValue', $event)"
     />
   </ml-ribbon-property-field>
@@ -15,6 +18,7 @@
 
 <script setup lang="ts">
 import { AcGiLineWeight } from '@mlightcad/data-model'
+import { computed } from 'vue'
 
 import { lineWeight as lineWeightIcon } from '../../svg'
 import MlLineWeightSelect from '../common/MlLineWeightSelect.vue'
@@ -30,11 +34,19 @@ interface RibbonPropertyLineWeightSelectProps {
   disabled?: boolean
   /** Placeholder shown when no line weight can be resolved. */
   placeholder?: string
+  /** When true, hide ByLayer / ByBlock / Default. */
+  numericOnly?: boolean
+  /** Optional fixed width for the embedded control; defaults narrower when `numericOnly`. */
+  controlWidth?: string
 }
 
-defineProps<RibbonPropertyLineWeightSelectProps>()
+const props = defineProps<RibbonPropertyLineWeightSelectProps>()
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: AcGiLineWeight): void
 }>()
+
+const resolvedControlWidth = computed(() =>
+  props.controlWidth ?? (props.numericOnly ? '120px' : undefined)
+)
 </script>

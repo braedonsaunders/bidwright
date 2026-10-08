@@ -1,11 +1,15 @@
 <template>
-  <div class="ml-lineweight-select">
+  <div
+    class="ml-lineweight-select"
+    :class="{ 'ml-lineweight-select--compact': compact }"
+  >
     <el-dropdown
       class="ml-lineweight-select__dropdown"
       trigger="click"
-      popper-class="ml-lineweight-popper"
+      :popper-class="popperClass"
       :disabled="props.disabled || !lineWeightItems.length"
       @command="onSelect"
+      @visible-change="onVisibleChange"
     >
       <button
         type="button"
@@ -57,6 +61,7 @@ import {
   ElIcon
 } from 'element-plus'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 /**
  * Render-ready line weight entry shown by the select control.
@@ -80,13 +85,30 @@ interface LineWeightSelectProps {
   disabled?: boolean
   /** Placeholder shown when no line weight can be resolved. */
   placeholder?: string
+  /** When true, hide ByLayer / ByBlock / Default. */
+  numericOnly?: boolean
+  /**
+   * Narrower trigger sized for numeric weights plus a stroke preview.
+   */
+  compact?: boolean
 }
 
-const props = defineProps<LineWeightSelectProps>()
+const props = withDefaults(defineProps<LineWeightSelectProps>(), {
+  compact: false
+})
+
+const { locale } = useI18n()
+
+const popperClass = computed(() =>
+  props.compact
+    ? 'ml-lineweight-popper ml-lineweight-popper--compact'
+    : 'ml-lineweight-popper'
+)
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: AcGiLineWeight): void
   (e: 'change', value: AcGiLineWeight): void
+  (e: 'visible-change', visible: boolean): void
 }>()
 
 /**
@@ -98,11 +120,11 @@ const emit = defineEmits<{
 function formatLabel(value: AcGiLineWeight): string {
   switch (value) {
     case AcGiLineWeight.ByLayer:
-      return 'ByLayer'
+      return locale.value === 'ar' ? 'حسب الطبقة' : 'ByLayer'
     case AcGiLineWeight.ByBlock:
-      return 'ByBlock'
+      return locale.value === 'ar' ? 'حسب الكتلة' : 'ByBlock'
     case AcGiLineWeight.ByLineWeightDefault:
-      return 'Default'
+      return locale.value === 'ar' ? 'افتراضي' : 'Default'
     default:
       return `${(value / 100).toFixed(2)} mm`
   }
@@ -116,6 +138,7 @@ function formatLabel(value: AcGiLineWeight): string {
  */
 function previewPx(value: AcGiLineWeight): number | null {
   if (value < 0) return null
+  if (value === 0) return 1
   return Math.max(1, Math.min(6, value / 40))
 }
 
@@ -128,7 +151,7 @@ function previewPx(value: AcGiLineWeight): number | null {
  * @returns A sort order compatible with `Array.prototype.sort`.
  */
 function sortLineWeightValues(a: AcGiLineWeight, b: AcGiLineWeight) {
-  const specialOrder = [
+  const specialOrder: AcGiLineWeight[] = [
     AcGiLineWeight.ByLayer,
     AcGiLineWeight.ByBlock,
     AcGiLineWeight.ByLineWeightDefault
@@ -146,22 +169,24 @@ function sortLineWeightValues(a: AcGiLineWeight, b: AcGiLineWeight) {
   return a - b
 }
 
-const lineWeightItems = computed<LineWeightItem[]>(() =>
-  Array.from(
+const lineWeightItems = computed<LineWeightItem[]>(() => {
+  const values = Array.from(
     new Set(
-      Object.values(AcGiLineWeight).filter(
-        (v): v is AcGiLineWeight =>
-          typeof v === 'number' && v !== AcGiLineWeight.ByDIPs
-      )
+      Object.values(AcGiLineWeight).filter((v): v is AcGiLineWeight => {
+        if (typeof v !== 'number') return false
+        if (v === AcGiLineWeight.ByDIPs) return false
+        if (v === 0) return false
+        if (props.numericOnly) return v > 0
+        return true
+      })
     )
   )
-    .sort(sortLineWeightValues)
-    .map(v => ({
-      value: v,
-      label: formatLabel(v),
-      previewWidth: previewPx(v)
-    }))
-)
+  return values.sort(sortLineWeightValues).map(v => ({
+    value: v,
+    label: formatLabel(v),
+    previewWidth: previewPx(v)
+  }))
+})
 
 const selectedItem = computed<LineWeightItem | undefined>(() =>
   lineWeightItems.value.find(item => item.value === props.modelValue)
@@ -181,6 +206,10 @@ const currentPreviewWidth = computed(
 function onSelect(value: AcGiLineWeight) {
   emit('update:modelValue', value)
   emit('change', value)
+}
+
+function onVisibleChange(visible: boolean) {
+  emit('visible-change', visible)
 }
 </script>
 
@@ -287,12 +316,30 @@ function onSelect(value: AcGiLineWeight) {
   flex: 1 1 auto;
 }
 
+.ml-lineweight-select--compact .ml-lineweight-select__trigger {
+  font-size: 12px;
+  padding: 0 6px;
+}
+
+.ml-lineweight-select--compact .ml-lineweight-select__value {
+  gap: 6px;
+}
+
+.ml-lineweight-select--compact .ml-lineweight-label {
+  font-size: 12px;
+}
+
 .ml-lineweight-preview {
   position: relative;
   display: inline-flex;
   width: 52px;
   height: 14px;
   flex: 0 0 52px;
+}
+
+.ml-lineweight-select--compact .ml-lineweight-preview {
+  width: 36px;
+  flex-basis: 36px;
 }
 
 .ml-lineweight-preview::before {
@@ -319,6 +366,16 @@ function onSelect(value: AcGiLineWeight) {
   justify-content: flex-start;
   gap: 8px;
   min-width: 160px;
+}
+
+:global(.ml-lineweight-popper--compact .ml-lineweight-item) {
+  gap: 6px;
+  min-width: 148px;
+}
+
+:global(.ml-lineweight-popper--compact .ml-lineweight-preview) {
+  width: 36px;
+  flex: 0 0 36px;
 }
 
 :global(.ml-lineweight-popper .ml-lineweight-text) {

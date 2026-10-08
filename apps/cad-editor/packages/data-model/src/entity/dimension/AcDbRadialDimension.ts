@@ -356,4 +356,73 @@ export class AcDbRadialDimension extends AcDbDimension {
     filer.writeAngle(53, this.extArcEndAngle)
     return this
   }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbRadialDimension')
+
+    // Match AutoCAD DXF / dxf-json-converter:
+    // group 10 (definition point) = center, group 15 = chord point.
+    const cx = this._dxfDefinitionPoint.x
+    const cy = this._dxfDefinitionPoint.y
+    const cz = this._dxfDefinitionPoint.z
+    let hx = this.chordPoint.x
+    let hy = this.chordPoint.y
+    let hz = this.chordPoint.z
+    let hasChord = false
+    let startDeg = (this.extArcStartAngle * 180) / Math.PI
+    let endDeg = (this.extArcEndAngle * 180) / Math.PI
+
+    const commit = () => {
+      this.center = new AcGePoint3d(cx, cy, cz)
+      this.chordPoint = new AcGePoint3d(hx, hy, hz)
+      this.extArcStartAngle = (startDeg * Math.PI) / 180
+      this.extArcEndAngle = (endDeg * Math.PI) / 180
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 15:
+          hx = n
+          hasChord = true
+          break
+        case 25:
+          hy = n
+          hasChord = true
+          break
+        case 35:
+          hz = n
+          hasChord = true
+          break
+        case 13:
+          // ObjectARX write uses 13 for chord; prefer 15 when both exist.
+          if (!hasChord) hx = n
+          break
+        case 23:
+          if (!hasChord) hy = n
+          break
+        case 33:
+          if (!hasChord) hz = n
+          break
+        case 40:
+          this.leaderLength = n
+          break
+        case 52:
+          startDeg = n
+          break
+        case 53:
+          endDeg = n
+          break
+        default:
+          break
+      }
+    }
+
+    commit()
+    return this
+  }
 }

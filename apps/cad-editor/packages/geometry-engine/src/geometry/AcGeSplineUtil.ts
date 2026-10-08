@@ -1,6 +1,6 @@
 import { AcGePoint3dLike } from '../math'
 
-export function isNonZeroDirection(vector?: AcGePoint3dLike | null): boolean {
+export function acgeIsNonZeroDirection(vector?: AcGePoint3dLike | null): boolean {
   if (!vector) return false
   const x = vector.x ?? 0
   const y = vector.y ?? 0
@@ -8,7 +8,7 @@ export function isNonZeroDirection(vector?: AcGePoint3dLike | null): boolean {
   return x * x + y * y + z * z > 1e-20
 }
 
-export function resolveControlPointSplineDegree(
+export function acgeResolveControlPointSplineDegree(
   declaredDegree: number | undefined,
   controlPointCount: number,
   knotCount: number
@@ -24,7 +24,7 @@ export function resolveControlPointSplineDegree(
   return Math.max(1, degree)
 }
 
-export function resolveFitPointSplineDegree(
+export function acgeResolveFitPointSplineDegree(
   declaredDegree: number | undefined,
   fitPointCount: number,
   tangentCount: number
@@ -38,7 +38,7 @@ export function resolveFitPointSplineDegree(
   return Math.max(1, degree)
 }
 
-export function normalizeSplineWeights(
+export function acgeNormalizeSplineWeights(
   weights: number[] | undefined,
   controlPointCount: number
 ): number[] | undefined {

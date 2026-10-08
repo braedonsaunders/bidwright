@@ -66,6 +66,22 @@ export class AcApPluginManager {
   }
 
   /**
+   * Context plugins should treat as current (the active MDI document).
+   */
+  get context() {
+    return this._context
+  }
+
+  /**
+   * Points plugins at the newly activated document context.
+   *
+   * @param context - Context of the active MDI document.
+   */
+  setContext(context: AcApContext) {
+    this._context = context
+  }
+
+  /**
    * Loads a plugin and calls its `onLoad` hook.
    *
    * If the plugin is already loaded, this method will throw an error.
@@ -460,8 +476,14 @@ export class AcApPluginManager {
         // Construct the import path
         const importPath = `${basePath}/${pluginFile.replace(/^\//, '')}`
 
-        // Dynamically import the plugin module
-        const module = await import(/* @vite-ignore */ importPath)
+        // Dynamically import the plugin module.
+        // webpackIgnore: folderPath is a runtime URL outside the package bundle.
+        // Without it, webpack builds a context over the whole package dist/ and
+        // can pull multi-MB workers (and inlined wasm) into unrelated apps
+        // (see mlightcad/cad-viewer#494).
+        const module = await import(
+          /* @vite-ignore */ /* webpackIgnore: true */ importPath
+        )
 
         // Get the plugin from the module
         // Support: default export, named export 'Plugin', or named export matching filename

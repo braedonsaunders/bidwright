@@ -28,6 +28,10 @@ export enum AcDbOsnapMode {
    */
   Quadrant = 5,
   /**
+   * Intersection - snaps to the intersection of two entities
+   */
+  Intersection = 6,
+  /**
    * Insertion - snaps to the insertion point of text, blocks, or other objects
    */
   Insertion = 7,

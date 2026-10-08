@@ -1,5 +1,6 @@
 import {
   AcGeBox3d,
+  AcGeMathUtil,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGePoint3dLike,
@@ -103,6 +104,17 @@ export class AcDbText extends AcDbEntity {
    * not BASELINE. Mirrors `AcDbText::alignmentPoint` in ObjectARX.
    */
   private _alignmentPoint: AcGePoint3d
+  /**
+   * Whether the alignment point was explicitly provided by the source file
+   * (DXF group 11 / DWG) or set through the API.
+   *
+   * Parse paths mirror {@link _position} into {@link _alignmentPoint} when
+   * group 11 is absent, so coordinate equality cannot tell "unset" apart
+   * from a spec-compliant file whose group 11 happens to equal group 10
+   * (e.g. everything written by ezdxf's `Text.set_placement`). This flag is
+   * the source of truth used by {@link resolveTextAnchor}.
+   */
+  private _hasAlignmentPoint = false
   /** The rotation angle of the text */
   private _rotation: number
   /** The oblique angle of the text */
@@ -115,6 +127,13 @@ export class AcDbText extends AcDbEntity {
   private _styleName: string
   /** The width factor (scale) of the text */
   private _widthFactor: number
+  /**
+   * Text generation flags (DXF group 71).
+   * Bit 2 = backward (mirrored in X); bit 4 = upside down (mirrored in Y).
+   */
+  private _generationFlag = 0
+  /** Extrusion / plane normal (DXF group 210). */
+  private _normal = new AcGeVector3d(0, 0, 1)
 
   /**
    * Creates a new text entity.
@@ -289,10 +308,31 @@ export class AcDbText extends AcDbEntity {
   /**
    * Sets the alignment point of the text in WCS coordinates.
    *
+   * Setting an alignment point through the API marks it as explicitly
+   * provided (see {@link hasAlignmentPoint}).
+   *
    * @param value - The new alignment point
    */
   set alignmentPoint(value: AcGePoint3d) {
     this._alignmentPoint.copy(value)
+    this._hasAlignmentPoint = true
+  }
+
+  /**
+   * Whether the alignment point was explicitly provided by the source file
+   * or through the API, as opposed to mirrored from {@link position} by a
+   * parse-time fallback when group 11 is absent.
+   */
+  get hasAlignmentPoint() {
+    return this._hasAlignmentPoint
+  }
+
+  /**
+   * Marks whether the alignment point is explicitly provided. Parse paths
+   * (DXF/DWG converters) set this after assigning {@link alignmentPoint}.
+   */
+  set hasAlignmentPoint(value: boolean) {
+    this._hasAlignmentPoint = value
   }
 
   /**
@@ -479,6 +519,45 @@ export class AcDbText extends AcDbEntity {
    */
   set widthFactor(value: number) {
     this._widthFactor = value
+  }
+
+  /**
+   * Text generation flags (DXF group 71).
+   * Bit 2 = backward; bit 4 = upside down.
+   */
+  get generationFlag() {
+    return this._generationFlag
+  }
+  set generationFlag(value: number) {
+    this._generationFlag = value
+  }
+
+  /** True when the text is mirrored in X (generation flag bit 2). */
+  get isBackward() {
+    return (this._generationFlag & 2) !== 0
+  }
+  set isBackward(value: boolean) {
+    this._generationFlag = value
+      ? this._generationFlag | 2
+      : this._generationFlag & ~2
+  }
+
+  /** True when the text is mirrored in Y (generation flag bit 4). */
+  get isUpsideDown() {
+    return (this._generationFlag & 4) !== 0
+  }
+  set isUpsideDown(value: boolean) {
+    this._generationFlag = value
+      ? this._generationFlag | 4
+      : this._generationFlag & ~4
+  }
+
+  /** Extrusion / plane normal (DXF group 210). */
+  get normal(): AcGeVector3d {
+    return this._normal
+  }
+  set normal(value: AcGeVector3dLike) {
+    this._normal.copy(value)
   }
 
   /**
@@ -806,11 +885,14 @@ export class AcDbText extends AcDbEntity {
     }
 
     const ap = this._alignmentPoint
+    // "Unset" is decided by the explicit-presence flag, not by coordinate
+    // equality: spec-compliant writers (ezdxf `set_placement`, AutoCAD) emit
+    // group 11 equal to group 10 when the insertion point coincides with the
+    // alignment point. The all-zero check stays as a guard for files that
+    // carry a degenerate zero group 11.
     const apIsUnset =
-      (ap.x === 0 && ap.y === 0 && ap.z === 0) ||
-      (ap.x === this._position.x &&
-        ap.y === this._position.y &&
-        ap.z === this._position.z)
+      !this._hasAlignmentPoint ||
+      (ap.x === 0 && ap.y === 0 && ap.z === 0)
     if (apIsUnset) {
       return {
         anchor: this._position,
@@ -908,6 +990,9 @@ export class AcDbText extends AcDbEntity {
     filer.writeDouble(41, this.widthFactor)
     filer.writeAngle(51, this.oblique)
     filer.writeString(7, this.styleName)
+    if (this.generationFlag !== 0) {
+      filer.writeInt16(71, this.generationFlag)
+    }
     filer.writeInt16(72, this.horizontalMode)
     filer.writeInt16(73, this.verticalMode)
     // Group 11 holds the alignment point used when horizontal/vertical modes
@@ -915,6 +1000,139 @@ export class AcDbText extends AcDbEntity {
     // (or zero), so we mirror by emitting `alignmentPoint`, which defaults to
     // a copy of `position` for entities created in code.
     filer.writePoint3d(11, this.alignmentPoint)
+    filer.writeVector3d(210, this.normal)
     return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbText')
+
+    let px = this.position.x
+    let py = this.position.y
+    let pz = this.position.z
+    let ax = this.alignmentPoint.x
+    let ay = this.alignmentPoint.y
+    let az = this.alignmentPoint.z
+    let hasAlignment = false
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+          px = n
+          break
+        case 20:
+          py = n
+          break
+        case 30:
+          pz = n
+          break
+        case 11:
+          ax = n
+          hasAlignment = true
+          break
+        case 21:
+          ay = n
+          hasAlignment = true
+          break
+        case 31:
+          az = n
+          hasAlignment = true
+          break
+        case 1:
+          this.textString = String(item.value)
+          break
+        case 7:
+          this.styleName = String(item.value)
+          break
+        case 39:
+          this.thickness = n
+          break
+        case 40:
+          this.height = n
+          break
+        case 41:
+          this.widthFactor = n
+          break
+        case 50:
+          this.rotation = AcGeMathUtil.degToRad(n)
+          break
+        case 51:
+          this.oblique = AcGeMathUtil.degToRad(n)
+          break
+        case 71:
+          this.generationFlag = n
+          break
+        case 72:
+          this.horizontalMode = n
+          break
+        case 73:
+          this.verticalMode = n
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        case 100: {
+          // TEXT uses a duplicated AcDbText marker before group 73. ATTRIB /
+          // ATTDEF follow with a different subclass — hand those off.
+          const marker = String(item.value)
+          if (marker === 'AcDbText') {
+            break
+          }
+          filer.pushBackItem(item)
+          this.finishTextDxfIn(px, py, pz, ax, ay, az, hasAlignment, nx, ny, nz)
+          return this
+        }
+        default:
+          // Unknown optional TEXT codes — keep scanning within this object.
+          break
+      }
+    }
+
+    this.finishTextDxfIn(px, py, pz, ax, ay, az, hasAlignment, nx, ny, nz)
+    return this
+  }
+
+  private finishTextDxfIn(
+    px: number,
+    py: number,
+    pz: number,
+    ax: number,
+    ay: number,
+    az: number,
+    hasAlignment: boolean,
+    nx: number,
+    ny: number,
+    nz: number
+  ) {
+    this.position = new AcGePoint3d(px, py, pz)
+    // The assignment goes through the setter (which marks the alignment
+    // point as provided), so set the flag explicitly afterwards: only a
+    // present and non-zero group 11 counts as provided; the fallback branch
+    // merely mirrors `position` into `alignmentPoint`.
+    if (hasAlignment && !(ax === 0 && ay === 0 && az === 0)) {
+      this.alignmentPoint = new AcGePoint3d(ax, ay, az)
+      this._hasAlignmentPoint = true
+    } else {
+      this.alignmentPoint = new AcGePoint3d(px, py, pz)
+      this._hasAlignmentPoint = false
+    }
+    const normal = new AcGeVector3d(nx, ny, nz)
+    if (normal.lengthSq() > 0) {
+      this.normal.copy(normal.normalize())
+    }
   }
 }

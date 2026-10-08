@@ -80,7 +80,10 @@ export class AcDbSymbolTableRecord<
    * Symbol table records follow ObjectARX semantics: existing database records
    * must be opened with {@link AcDbDatabase.openObjectForWrite} before mutation.
    */
-  override setAttr<A extends AcCmStringKey<ATTRS>>(attrName: A, val?: ATTRS[A]) {
+  override setAttr<A extends AcCmStringKey<ATTRS>>(
+    attrName: A,
+    val?: ATTRS[A]
+  ) {
     this.assertOpenForWrite()
     super.setAttr(attrName, val)
   }
@@ -107,10 +110,7 @@ export class AcDbSymbolTableRecord<
       return
     }
 
-    if (
-      manager.strictMode &&
-      !manager.isRecording()
-    ) {
+    if (manager.strictMode && !manager.isRecording()) {
       throw new Error(
         'Cannot modify symbol table records outside an active transaction.'
       )

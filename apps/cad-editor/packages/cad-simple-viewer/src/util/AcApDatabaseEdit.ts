@@ -18,9 +18,10 @@ export function acapRunDatabaseEdit(
   label: string,
   fn: () => void
 ): void {
-  const wasRecording = db.isUndoRecording()
+  const wasRecording = db.isUndoRecording?.() ?? false
   db.runDatabaseEdit(label, fn)
   if (!wasRecording) {
+    eventBus.emit('session-db-edit-committed', {})
     acapNotifyUndoStackChanged()
   }
 }

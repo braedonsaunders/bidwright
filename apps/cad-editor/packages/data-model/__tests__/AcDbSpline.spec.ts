@@ -280,9 +280,11 @@ describe('AcDbSpline', () => {
     expect(
       (renderer as unknown as { lines: jest.Mock }).lines
     ).toHaveBeenCalledTimes(1)
-    expect(
-      (renderer as unknown as { lines: jest.Mock }).lines.mock.calls[0][0]
-    ).toHaveLength(100)
+    const sampled = (
+      renderer as unknown as { lines: jest.Mock }
+    ).lines.mock.calls[0][0] as unknown[]
+    expect(sampled.length).toBeGreaterThan(1)
+    expect(sampled.length).toBeLessThanOrEqual(100)
   })
 
   it('writes spline-specific DXF fields for control points', () => {

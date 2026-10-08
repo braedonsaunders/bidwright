@@ -168,4 +168,53 @@ export class AcDbOrdinateDimension extends AcDbDimension {
     filer.writePoint3d(14, this.leaderEndPoint)
     return this
   }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbOrdinateDimension')
+
+    let dx = this.definingPoint.x
+    let dy = this.definingPoint.y
+    let dz = this.definingPoint.z
+    let lx = this.leaderEndPoint.x
+    let ly = this.leaderEndPoint.y
+    let lz = this.leaderEndPoint.z
+
+    const commit = () => {
+      this.definingPoint = new AcGePoint3d(dx, dy, dz)
+      this.leaderEndPoint = new AcGePoint3d(lx, ly, lz)
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 13:
+          dx = n
+          break
+        case 23:
+          dy = n
+          break
+        case 33:
+          dz = n
+          break
+        case 14:
+          lx = n
+          break
+        case 24:
+          ly = n
+          break
+        case 34:
+          lz = n
+          break
+        default:
+          break
+      }
+    }
+
+    commit()
+    return this
+  }
 }

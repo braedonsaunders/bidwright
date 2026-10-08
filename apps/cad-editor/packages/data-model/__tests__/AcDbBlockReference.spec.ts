@@ -117,6 +117,47 @@ describe('AcDbBlockReference', () => {
     expect(plusXFromBase.y).toBeCloseTo(22)
   })
 
+  it('flattens insertion Z in blockTransform for plan-view depth clipping', () => {
+    const db = createDb()
+    createNamedBlock(db, 'ELEVATED_STAMP')
+
+    const blockRef = new AcDbBlockReference('ELEVATED_STAMP')
+    blockRef.position = new AcGePoint3d(100, 200, 9010.8928)
+    blockRef.scaleFactors = new AcGePoint3d(12.8, 12.8, 12.8)
+    db.tables.blockTable.modelSpace.appendEntity(blockRef)
+
+    // Entity still stores the DWG elevation.
+    expect(blockRef.position.z).toBeCloseTo(9010.8928)
+
+    // Draw/extent transform must not push geometry outside the 2D camera band.
+    const p = new AcGePoint3d(1, 1, 0).applyMatrix4(blockRef.blockTransform)
+    expect(p.x).toBeCloseTo(100 + 12.8)
+    expect(p.y).toBeCloseTo(200 + 12.8)
+    expect(p.z).toBeCloseTo(0)
+  })
+
+  it('keeps nested elevated INSERT extents in the plan-view Z band', () => {
+    const db = createDb()
+    const stamp = createNamedBlock(db, 'STAMP')
+    stamp.appendEntity(
+      new AcDbLine({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })
+    )
+
+    const titleBlock = createNamedBlock(db, 'TITLE_BLOCK')
+    const stampRef = new AcDbBlockReference('STAMP')
+    stampRef.position = new AcGePoint3d(5, 5, 9010.8928)
+    titleBlock.appendEntity(stampRef)
+
+    const titleRef = new AcDbBlockReference('TITLE_BLOCK')
+    titleRef.position = new AcGePoint3d(10, 20, 0)
+    db.tables.blockTable.modelSpace.appendEntity(titleRef)
+
+    const extents = titleRef.geometricExtents
+    expect(stampRef.position.z).toBeCloseTo(9010.8928)
+    expect(extents.min).toMatchObject({ x: 15, y: 25, z: 0 })
+    expect(extents.max).toMatchObject({ x: 16, y: 25, z: 0 })
+  })
+
   it('returns insertion osnap and delegates to sub-entity osnap by gsMark', () => {
     const db = createDb()
     const block = createNamedBlock(db, 'TEST_BLOCK')

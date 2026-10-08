@@ -8,12 +8,15 @@ export default {
     exportHtml: '导出为 HTML',
     exportPdf: '导出为PDF',
     exportSvg: '导出为 SVG',
-    exportImage: '导出图片'
+    exportImage: '导出图片',
+    about: '关于'
   },
   ribbon: {
     tab: {
       home: '常用',
-      tools: '工具',
+      insert: '插入',
+      review: '审阅',
+      measurement: '测量',
       hatchContext: '填充',
       mtextEditorContext: '文字编辑器'
     },
@@ -208,7 +211,18 @@ export default {
       properties: '属性',
       utilities: '实用工具',
       annotation: '批注',
-      measurement: '测量'
+      review: '审阅',
+      measurement: '测量',
+      style: '样式',
+      lengthUnits: '长度单位',
+      angleUnits: '角度单位',
+      reference: '参照',
+      block: '块'
+    },
+    insertBlock: {
+      empty: '没有可用的块',
+      currentDrawing: '当前图形',
+      previewMenu: '块预览画廊'
     },
     property: {
       color: '颜色',
@@ -256,6 +270,8 @@ export default {
       line: '绘制单段直线。',
       polyline: '以一个对象绘制由直线或圆弧组成的连续线段。',
       spline: '通过拟合点或控制点绘制平滑样条曲线。',
+      sketch: '创建一系列徒手线段。',
+      revcloud: '创建修订云线以突出显示图纸区域。',
       circle: '使用多种构造方式绘制圆。',
       arc: '使用多种构造方式绘制圆弧。',
       mline: '将多条平行线作为一个多线对象进行绘制。',
@@ -275,7 +291,15 @@ export default {
       redo: '重做上一次撤销的操作。',
       properties: '打开当前所选对象的属性面板。',
       quickSelect: '打开快速选择对话框，按条件筛选并选择图元。',
+      countList: '打开计数面板以查看并管理块计数。',
+      missingResources: '打开缺失/外部资源面板以处理字体、图片和外部参照。',
       drawingUnits: '打开图形单位对话框，设置坐标格式、精度与插入缩放单位。',
+      attachDwg: '将 DWG 或 DXF 图纸作为外部参照附着（XATTACH）。',
+      attachImage: '将光栅图像作为外部参照附着（IMAGEATTACH）。',
+      insert: '打开块工具选项板以浏览并插入块定义（INSERT）。',
+      editAttributes: '打开增强属性编辑器，编辑块属性值与显示特性（ATTEDIT）。',
+      defineAttribute: '创建用于块的属性定义（ATTDEF）。',
+      agent: '打开 CAD Agent 工具面板，使用自然语言描述并绘制图形。',
       propertyColor: '设置新建对象或当前选中对象使用的颜色。',
       propertyLineType: '设置新建对象或当前选中对象使用的线型。',
       propertyLineWeight: '设置新建对象或当前选中对象使用的线宽。',
@@ -332,6 +356,8 @@ export default {
       xline: '构造线',
       ellipse: '椭圆',
       spline: '样条曲线',
+      sketch: '草图',
+      revcloud: '修订云线',
       rect: '矩形',
       rectangle: '矩形',
       polygon: '多边形',
@@ -349,7 +375,14 @@ export default {
       redo: '重做',
       properties: '属性',
       quickSelect: '快速选择',
-      drawingUnits: '图形单位'
+      countList: '计数',
+      drawingUnits: '图形单位',
+      attachDwg: '附着\nDWG',
+      attachImage: '附着\n图像',
+      insert: '插入',
+      editAttributes: '编辑属性',
+      defineAttribute: '定义属性',
+      agent: 'CAD Agent'
     }
   },
   verticalToolbar: {
@@ -360,6 +393,10 @@ export default {
     measureDistance: {
       text: '距离',
       description: '测量两点之间的距离'
+    },
+    measureContinuous: {
+      text: '连续测',
+      description: '连续拾取多个点测量各段距离，直到按 Enter 或取消'
     },
     measureAngle: {
       text: '角度',
@@ -373,17 +410,29 @@ export default {
       text: '弧长',
       description: '测量由三点定义的弧长'
     },
+    measurePoint: {
+      text: '坐标',
+      description: '测量拾取点的 X/Y 坐标'
+    },
+    measurementPanel: {
+      text: '测量面板',
+      description: '打开测量面板'
+    },
     clearMeasurements: {
       text: '清除',
-      description: '清除视图中的所有测量标注'
+      description: '清除当前布局上的所有测量标注'
+    },
+    measurementImport: {
+      text: '导入',
+      description: '从 sidecar JSON 文件导入测量标注'
+    },
+    measurementExport: {
+      text: '导出',
+      description: '将测量标注导出为 sidecar JSON 文件'
     },
     annotation: {
       text: '批注',
-      description: '创建用于说明和标注图纸内容的文字或图形批注'
-    },
-    hideAnnotation: {
-      text: '隐藏批注',
-      description: '隐藏批注'
+      description: '审阅工具'
     },
     layer: {
       text: '图层',
@@ -393,44 +442,121 @@ export default {
       text: '移动',
       description: '平移视图'
     },
-    revCircle: {
-      text: '圆',
-      description: '使用圆高亮并标注图纸中的区域'
+    markupPanel: {
+      text: '批注面板',
+      description: '打开批注面板'
     },
-    revLine: {
-      text: '直线',
-      description: '使用直线对图纸中的对象或区域进行标注和说明'
+    markupText: {
+      text: '文字',
+      description: '放置文字批注'
     },
-    revFreehand: {
-      text: '手绘线',
-      description: '使用手绘线自由标注和强调图纸中的内容'
-    },
-    revRect: {
-      text: '矩形',
-      description: '使用矩形高亮并标注图纸中的对象或区域'
-    },
-    revCloud: {
+    markupCloud: {
       text: '云线',
-      description: '在图纸中以云状线条标出修改或需要重点关注的区域'
+      description: '创建云线批注'
+    },
+    markupRect: {
+      text: '矩形',
+      description: '创建矩形批注'
+    },
+    markupCircle: {
+      text: '圆',
+      description: '创建圆形批注'
+    },
+    markupArrow: {
+      text: '箭头',
+      description: '创建箭头批注'
+    },
+    markupLine: {
+      text: '直线',
+      description: '创建直线批注'
+    },
+    markupCallout: {
+      text: '标注',
+      description: '创建引线标注'
+    },
+    markupStamp: {
+      text: '图章',
+      description: '放置图章'
+    },
+    markupImport: {
+      text: '导入',
+      description: '从 sidecar JSON 文件导入批注'
+    },
+    markupExport: {
+      text: '导出',
+      description: '将批注导出为 sidecar JSON 文件'
+    },
+    markupColor: {
+      text: '颜色',
+      description: '设置新建批注的颜色'
+    },
+    markupFontSize: {
+      text: '字高',
+      description: '打开字高设置（适应屏幕或世界坐标高度）',
+      fit: '适应',
+      wcs: 'WCS'
+    },
+    measurementColor: {
+      text: '颜色',
+      description: '有选中测量标注时修改其颜色；未选中时用于后续添加的测量标注'
+    },
+    measurementFontSize: {
+      text: '字高',
+      description: '有选中测量标注时修改其字高；未选中时用于后续添加的测量标注',
+      fit: '适应',
+      wcs: 'WCS'
+    },
+    showMarkup: {
+      text: '显示批注',
+      description: '显示批注'
+    },
+    hideMarkup: {
+      text: '隐藏批注',
+      description: '隐藏批注'
+    },
+    showMeasurements: {
+      text: '显示测量',
+      description: '显示测量标注'
+    },
+    hideMeasurements: {
+      text: '隐藏测量',
+      description: '隐藏测量标注'
+    },
+    clearMarkups: {
+      text: '清除',
+      description: '清除当前布局上的所有批注'
     },
     select: {
       text: '选择',
       description: '选择图元'
     },
-    showAnnotation: {
-      text: '显示批注',
-      description: '显示批注'
-    },
     switchBg: {
       text: '切换背景色',
-      description: '在白色与黑色之间切换绘图背景色'
+      description: '在白色与黑色之间切换绘图背景色',
+      disabledInReadingMode: '阅读模式下不可用（白底固定）'
+    },
+    readingMode: {
+      text: '阅读模式',
+      description: '切换阅读模式（白底黑线，便于审阅）'
+    },
+    zoom: {
+      text: '缩放',
+      description: '缩放工具：保存的视图、范围、智能范围、窗口'
+    },
+    zoomSaved: {
+      text: '保存的视图',
+      description: '恢复 AutoCAD 保存的视图（VPORT / 布局界限），或打开时的初始视口'
     },
     zoomToExtent: {
-      text: '范围缩放',
+      text: '范围',
       description: '缩放以显示所有对象'
     },
+    zoomSmartExtents: {
+      text: '智能',
+      description: '缩放到主要几何簇，忽略远处异常图元'
+    },
     zoomToBox: {
-      text: '矩形缩放',
+      text: '窗口',
       description: '缩放以显示矩形窗口内的对象'
     }
   },
@@ -440,9 +566,8 @@ export default {
       commandLine: '命令行',
       coordinate: '坐标',
       entityInfo: '图元信息',
-      fileName: '文件名',
       languageSelector: '语言菜单',
-      mainMenu: '主菜单',
+      ribbon: '功能区',
       toolbar: '工具栏',
       stats: '性能面板'
     },
@@ -453,6 +578,7 @@ export default {
       center: '圆心',
       node: '节点',
       quadrant: '象限点',
+      intersection: '交点',
       insertion: '插入',
       nearest: '最近点'
     },
@@ -491,7 +617,8 @@ export default {
     },
     export: {
       tooltip: '导出图片为 PNG'
-    }
+    },
+    moreLayouts: '更多布局'
   },
   toolPalette: {
     entityProperties: {
@@ -507,12 +634,288 @@ export default {
     layerManager: {
       tab: '图层',
       title: '图层管理器',
+      currentLayerLabel: '当前图层: {name}',
+      searchPlaceholder: '搜索图层',
+      filters: '过滤器',
+      collapseFilters: '收起过滤器',
+      expandFilters: '展开过滤器',
+      filterAll: '全部',
+      filterAllUsed: '所有使用的图层',
+      toolbar: {
+        showFilters: '图层过滤器',
+        newFilter: '新建过滤器',
+        newFilterGroup: '新建过滤器组',
+        newLayer: '新建图层',
+        deleteLayer: '删除图层',
+        setCurrent: '置为当前'
+      },
+      prompts: {
+        newFilterTitle: '新建过滤器',
+        newFilterName: '请输入过滤器名称',
+        newFilterGroupTitle: '新建过滤器组',
+        newFilterGroupName: '请输入过滤器组名称',
+        newLayerTitle: '新建图层',
+        newLayerName: '请输入图层名称',
+        confirm: '确定',
+        cancel: '取消'
+      },
+      messages: {
+        filterCreated: '已创建过滤器 "{name}"',
+        filterExists: '过滤器 "{name}" 已存在',
+        filterCreateFailed: '创建过滤器失败',
+        layerCreated: '已创建图层 "{name}"',
+        layerExists: '图层 "{name}" 已存在',
+        layerCreateFailed: '创建图层失败',
+        layerDeleted: '已删除图层 "{name}"',
+        layerDeleteFailed: '删除图层 "{name}" 失败',
+        cannotDeleteLayer0: '无法删除图层 "0"',
+        cannotDeleteCurrent: '无法删除当前图层',
+        selectLayerFirst: '请先选择一个图层',
+        setCurrentSuccess: '当前图层已设为 "{name}"',
+        setCurrentFailed: '设置当前图层失败'
+      },
       layerList: {
         name: '名称',
-        on: '可见',
+        on: '开',
+        freeze: '冻结',
+        lock: '锁定',
+        plot: '打印',
         color: '颜色',
-        zoomToLayer: '已缩放到所点击的图层"{layer}"'
+        linetype: '线型',
+        lineweight: '线宽',
+        transparency: '透明度',
+        description: '说明',
+        currentLayer: '当前图层',
+        newLayerPlaceholder: '图层名称',
+        zoomToLayer: '已缩放到所点击的图层"{layer}"',
+        lineWeightDefault: '默认'
       }
+    },
+    countList: {
+      tab: '计数',
+      title: '计数',
+      searchPlaceholder: '搜索块名称',
+      countInArea: '指定区域计数',
+      areaSet: '计数区域已更新',
+      areaCleared: '正在对整个模型空间计数',
+      blockName: '块',
+      count: '数量',
+      empty: '未找到可见块',
+      prompt: {
+        firstCorner: '指定计数区域的第一个角点或 [Entire(整个)]: ',
+        secondCorner: '指定对角点: '
+      }
+    },
+    designReview: {
+      tab: '批注',
+      title: '批注',
+      searchPlaceholder: '搜索批注',
+      empty: '暂无批注',
+      type: '类型',
+      status: '状态',
+      author: '作者',
+      summary: '摘要',
+      details: '详情',
+      closeDetails: '关闭详情',
+      label: '标签',
+      comment: '评论',
+      zoomTo: '缩放到',
+      delete: '删除',
+      clear: '全部清除',
+      statusValues: {
+        open: '打开',
+        question: '疑问',
+        answered: '已答复',
+        closed: '已关闭'
+      }
+    },
+    measurements: {
+      tab: '测量',
+      title: '测量',
+      empty: '暂无测量',
+      type: '类型',
+      value: '数值',
+      filterAll: '全部',
+      delete: '删除',
+      clear: '全部清除',
+      typeValues: {
+        distance: '距离',
+        angle: '角度',
+        area: '面积',
+        arc: '弧长',
+        point: '坐标'
+      }
+    },
+    missingResources: {
+      tab: '资源',
+      title: '缺失 / 外部资源',
+      fontTab: '字体',
+      imageTab: '图片',
+      xrefTab: '外部参照',
+      attach: '附着',
+      attachDwg: '附着 DWG/DXF ...',
+      attachImage: '附着图像 ...',
+      attachImageFailed: '附着图像 "{name}" 失败',
+      fileReferences: '文件参照',
+      details: '详细信息',
+      foundAt: '找到位置',
+      selectReference: '选择参照以查看详细信息',
+      expandDetails: '展开详细信息',
+      collapseDetails: '收起详细信息',
+      apply: '应用',
+      applyDone: '已应用替换',
+      emptyFonts: '没有缺失字体',
+      emptyImages: '没有缺失图片',
+      matchFontType: '匹配字体类型（SHX / 网格）',
+      missedFont: '缺失字体',
+      replacedFont: '替换字体',
+      selectFont: '选择替换字体',
+      selectLocalFont: '选择本地字体文件',
+      file: '文件',
+      replace: '替换',
+      name: '名称',
+      path: '保存路径',
+      type: '类型',
+      typeAttach: '附着',
+      typeOverlay: '覆盖',
+      typeImage: '图像',
+      status: '状态',
+      statusMissing: '缺失',
+      statusLoaded: '已加载',
+      actions: '操作',
+      visible: '可见',
+      browse: '浏览…',
+      fromUrl: 'URL…',
+      unload: '卸载',
+      load: '加载',
+      empty: '当前图纸没有外部参照或图像',
+      urlPrompt: '输入 DWG 或 DXF 文件的 URL',
+      urlRequired: '请输入 URL',
+      loadFailed: '加载参照 "{name}" 失败'
+    },
+    memoryProfile: {
+      tab: '内存',
+      title: '内存分析',
+      refresh: '刷新',
+      collecting: '正在分析内存 ...',
+      showPie: '显示汇总图表',
+      hidePie: '隐藏汇总图表',
+      collectedAt: '采集时间 {time}',
+      heapUsed: 'JS 堆 {used} / {total}',
+      estimateNote: '几何体大小来自缓冲区 byteLength，其余类别为估算值。',
+      estimated: '估',
+      pieTotal: '已统计',
+      pieAriaLabel: '按类别划分的内存占用',
+      empty: '暂无数据',
+      missedFonts: '缺失字体',
+      fontMemory: '字体 / 文字渲染内存',
+      fontMemorySummary: '内存 {live}（主线程 {main} · Worker {workers}）',
+      fontStorage: 'IndexedDB 存储（不计入内存）',
+      fontStorageSummary: '{count} 个缓存字体 · {size}',
+      materialPoint: '点',
+      materialLine: '线',
+      materialFill: '填充',
+      materialTotal: '合计',
+      dataModelCounts: '{entities} 个图元 · {objects} 个对象 · {total}',
+      dataModelCategories: '按类别',
+      dataModelEntityTypes: '按图元类型',
+      categories: {
+        heap: 'JS 堆',
+        geometry: '几何体',
+        mapping: '映射元数据',
+        spatial: '空间索引',
+        dataModel: '数据模型',
+        materials: '材质缓存',
+        fonts: '字体'
+      },
+      tabs: {
+        geometry: '几何体',
+        spatial: '空间索引',
+        dataModel: '数据模型',
+        materials: '材质',
+        fonts: '字体'
+      },
+      columns: {
+        layout: '布局',
+        layer: '图层',
+        geometry: '几何体',
+        mapping: '映射',
+        entities: '图元',
+        rootItems: '根项',
+        childItems: '子项',
+        estimated: '估计大小',
+        type: '类型',
+        count: '数量',
+        category: '类别',
+        font: '字体'
+      }
+    },
+    openFileProfile: {
+      tab: '打开性能',
+      title: '打开性能',
+      refresh: '刷新',
+      copy: '复制',
+      copied: '性能数据已复制',
+      copyFailed: '复制性能数据失败',
+      collectedAt: '采集时间 {time}',
+      hint: '每次打开图纸后自动采集。设置 OPENPROF=1 可同时输出到控制台。',
+      noData: '暂无打开性能数据。请先打开图纸，再运行 OPENPERF。',
+      empty: '暂无数据',
+      timing: '墙钟耗时',
+      progressive: '渐进打开',
+      progressiveMode: '模式',
+      progressiveOn: '开启',
+      progressiveOff: '关闭',
+      midOpenPaints: '打开中绘制次数',
+      yields: '让出次数',
+      cache: 'INSERT 渲染缓存（顶层）',
+      slowBlocks: '最慢块模板 miss',
+      total: '打开总计',
+      read: 'db.read',
+      parse: 'PARSE',
+      entity: 'ENTITY 刷入',
+      convert: '场景转换',
+      cacheHits: '缓存命中',
+      cacheMisses: '缓存未命中',
+      cacheBuild: 'Miss 构建',
+      cacheCompact: 'Miss 压缩',
+      cacheHitPath: '命中路径',
+      columns: {
+        stage: '阶段',
+        duration: '耗时',
+        share: '占比',
+        metric: '指标',
+        value: '值',
+        block: '块',
+        build: '构建',
+        compact: '压缩'
+      }
+    },
+    blocks: {
+      tab: '块',
+      title: '块',
+      tabCurrentDrawing: '当前图形',
+      tabRecent: '最近使用',
+      tabFavorites: '收藏夹',
+      tabLibraries: '库',
+      sectionCurrentDrawing: '当前图形中的块',
+      sectionRecent: '最近使用的块',
+      sectionFavorites: '收藏的块',
+      sectionLibraries: '块库',
+      filterPlaceholder: '过滤器...',
+      empty: '没有可用的块',
+      emptyRecent: '没有最近插入的块',
+      emptyFavorites: '没有收藏的块',
+      emptyLibraries: '尚未配置块库',
+      toggleFavorite: '切换收藏',
+      options: '选项',
+      insertionPoint: '插入点',
+      scale: '比例',
+      rotation: '旋转',
+      angle: '角度',
+      autoPlacement: '自动放置',
+      repeatPlacement: '重复放置',
+      explode: '分解'
     }
   },
   colorDropdown: {
@@ -569,15 +972,37 @@ export default {
     fontCacheFailed: '缓存字体 "{fileName}" 失败。',
     failedToGetAvaiableFonts: '无法从"{url}"获取可用的字体信息！',
     failedToOpenFile: '无法打开文件"{fileName}"！',
+    failedToOpenFileToast: '无法打开"{fileName}"。详情请查看通知中心。',
+    failedToOpenFileWorkerOom:
+      '无法打开"{fileName}"。使用 LibreDWG 解析器时内存不足，导致打开失败。可点击{dwgParserLink}购买商用 DWG Parser，以支持更大图纸并避免此问题。',
+    failedToOpenFileWorkerOomLink: '此页面',
+    failedToOpenFileWorkerTimeout: '无法打开"{fileName}"。解析图纸时操作超时。',
+    failedToOpenFileFontLoadFailed:
+      '无法打开"{fileName}"。无法加载图纸所需的字体。',
+    failedToOpenFileLicenseExpired:
+      '无法打开"{fileName}"。DWG 转换器许可证已过期。',
+    failedToOpenFileLicenseInvalid:
+      '无法打开"{fileName}"。DWG 转换器许可证缺失或无效。',
     fetchingDrawingFile: '正在加载图纸文件...',
     unknownEntities:
-      '这张图纸中包含了{count}个未知或不支持的实体，这些实体将无法显示！'
+      '这张图纸中包含了{count}个未知或不支持的实体，这些实体将无法显示！',
+    tianzhengEntities:
+      '检测到天正（或同类第三方）自定义图元（约 {count} 个）。当前环境无法完整解析这些图元，部分内容可能无法显示。',
+    emptyProxyEntities:
+      '这张图纸中包含了{count}个缺少代理图形的自定义实体，这些实体将无法显示！'
   },
   notification: {
     center: {
       title: '通知',
       clearAll: '清除全部',
       noNotifications: '暂无通知'
+    },
+    group: {
+      fontMissed: '字体缺失',
+      fontMissedSummary: '共 {count} 条字体相关消息，点击展开查看详情',
+      unsupportedEntities: '不支持的图元',
+      unsupportedEntitiesSummary: '共 {count} 条解析相关消息，点击展开查看详情',
+      genericSummary: '共 {count} 条消息，点击展开查看详情'
     },
     time: {
       justNow: '刚刚',
@@ -587,9 +1012,18 @@ export default {
     },
     title: {
       failedToOpenFile: '无法打开文件',
+      failedToOpenFileWorkerOom: '内存不足',
+      failedToOpenFileWorkerTimeout: '打开超时',
+      failedToOpenFileFontLoadFailed: '字体加载失败',
+      failedToOpenFileLicenseExpired: '许可证已过期',
+      failedToOpenFileLicenseInvalid: '许可证无效',
       fontNotFound: '找不到字体',
       fontNotLoaded: '无法加载字体',
-      parsingWarning: '解析图纸问题'
+      parsingWarning: '解析图纸问题',
+      systemMessage: '系统消息',
+      systemWarning: '系统警告',
+      systemError: '系统错误',
+      systemInfo: '系统信息'
     }
   }
 }

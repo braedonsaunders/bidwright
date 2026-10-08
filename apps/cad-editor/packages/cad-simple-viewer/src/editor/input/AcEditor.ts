@@ -2,6 +2,7 @@ import { AcCmEventManager, AcDbObjectId } from '@mlightcad/data-model'
 
 import { AcApDocManager } from '../../app'
 import { AcEdCommand } from '../command'
+import type { AcEdSessionAccessoryEventArgs } from '../command/AcEdSessionAccessory'
 import { AcEdBaseView } from '../view/AcEdBaseView'
 import { AcEdCorsorType, AcEdCursorManager } from './AcEdCursorManager'
 import { AcEdInputModifiers } from './AcEdInputModifiers'
@@ -47,6 +48,9 @@ export interface AcEdCommandEventArgs {
   /** The command instance involved in the event */
   command: AcEdCommand
 }
+
+/** Re-export of session-accessory event payload for editor consumers. */
+export type { AcEdSessionAccessoryEventArgs }
 
 /**
  * Advanced input handler for CAD operations providing high-level user interaction methods.
@@ -99,7 +103,19 @@ export class AcEditor {
     /** Fired just before the command starts executing */
     commandWillStart: new AcCmEventManager<AcEdCommandEventArgs>(),
     /** Fired after the command finishes executing */
-    commandEnded: new AcCmEventManager<AcEdCommandEventArgs>()
+    commandEnded: new AcCmEventManager<AcEdCommandEventArgs>(),
+    /** Fired just before a session accessory is mounted */
+    beforeMountSessionAccessory:
+      new AcCmEventManager<AcEdSessionAccessoryEventArgs>(),
+    /** Fired after a session accessory has been mounted */
+    afterMountSessionAccessory:
+      new AcCmEventManager<AcEdSessionAccessoryEventArgs>(),
+    /** Fired just before a session accessory is unmounted */
+    beforeUnmountSessionAccessory:
+      new AcCmEventManager<AcEdSessionAccessoryEventArgs>(),
+    /** Fired after a session accessory has been unmounted */
+    afterUnmountSessionAccessory:
+      new AcCmEventManager<AcEdSessionAccessoryEventArgs>()
   }
 
   /**
@@ -110,7 +126,12 @@ export class AcEditor {
   constructor(view: AcEdBaseView) {
     this._view = view
     this._cursorManager = new AcEdCursorManager(view)
-    this._inputManager = new AcEdInputManager(view)
+    this._inputManager = new AcEdInputManager(view, this.events)
+  }
+
+  /** Input manager for prompts, mobile chrome, and session accessories. */
+  get inputManager() {
+    return this._inputManager
   }
 
   /**
@@ -147,6 +168,19 @@ export class AcEditor {
   }
 
   /**
+   * Programmatically cancels the currently active input prompt, if any.
+   *
+   * Delegates to {@link AcEdInputManager.cancelActiveInput}. Used by the
+   * command dispatcher to enforce command exclusivity: when a new command is
+   * started while another is still waiting for user input, the previous
+   * prompt is aborted with the canonical `'cancelled'` status before the new
+   * command runs.
+   */
+  cancelActiveInput() {
+    this._inputManager.cancelActiveInput()
+  }
+
+  /**
    * Queues scripted command-line inputs for subsequent getXXX prompts.
    * One entry equals one Enter-confirmed input.
    */
@@ -157,6 +191,18 @@ export class AcEditor {
   /** Clears any queued scripted inputs. */
   clearScriptInputs() {
     this._inputManager.clearScriptInputs()
+  }
+
+  /** Returns whether any scripted inputs remain queued. */
+  hasScriptInputs() {
+    return this._inputManager.hasScriptInputs()
+  }
+
+  /**
+   * Removes and returns all remaining scripted inputs.
+   */
+  drainScriptInputs() {
+    return this._inputManager.drainScriptInputs()
   }
 
   /**

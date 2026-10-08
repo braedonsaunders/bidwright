@@ -361,7 +361,7 @@ export class AcEdCommandLine {
         min-width: 0;
         overflow: hidden;
         color: var(--ml-ui-text-muted, #333);
-        height: 100%; 
+        height: 100%;
       }
 
       .ml-cli-prompt {
@@ -850,10 +850,12 @@ export class AcEdCommandLine {
       })
 
       this.promptEl.append(']')
+    }
 
-      if (promptFormat.defaultKeyword) {
-        this.promptEl.append(` <${promptFormat.defaultKeyword}>`)
-      }
+    const defaultText =
+      promptFormat.defaultKeyword ?? options.valueDefaultDisplayText
+    if (defaultText) {
+      this.promptEl.append(` <${defaultText}>`)
     }
 
     this.promptEl.append(': ')

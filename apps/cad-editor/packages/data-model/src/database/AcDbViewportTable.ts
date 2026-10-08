@@ -45,10 +45,14 @@ export class AcDbViewportTable extends AcDbSymbolTable<AcDbViewportTableRecord> 
    * @returns The normalized viewport table record name.
    */
   protected normalizeName(name: string) {
-    if (AcDbViewportTableRecord.isActiveVportName(name)) {
+    const trimmed = (name ?? '').trim()
+    if (!trimmed) {
+      return ''
+    }
+    if (AcDbViewportTableRecord.isActiveVportName(trimmed)) {
       return ACTIVE_VPORT_NAME
     }
-    return name.toUpperCase()
+    return super.normalizeName(trimmed)
   }
 
   /**

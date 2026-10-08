@@ -1,19 +1,25 @@
 export { AcDbDatabase } from './AcDbDatabase'
+export type { AcDbClass } from './AcDbClass'
 export type {
   AcDbCreateDefaultDataOptions,
   AcDbDictObjectEventArgs,
   AcDbEntityEventArgs,
-  AcDbFontInfo,
-  AcDbFontLoader,
   AcDbLayerEventArgs,
   AcDbLayerModifiedEventArgs,
   AcDbOpenDatabaseOptions,
+  AcDbOpenFailedEventArgs,
   AcDbOpenFileStage,
   AcDbProgressdEventArgs,
   AcDbTables
 } from './AcDbDatabase'
+export { AcDbOpenDatabaseError } from './AcDbOpenDatabaseError'
+export type { AcDbOpenDatabaseErrorCode } from './AcDbOpenDatabaseError'
 export { AcDbBlockTable } from './AcDbBlockTable'
-export { AcDbBlockScaling, AcDbBlockTableRecord } from './AcDbBlockTableRecord'
+export {
+  AcDbBlockScaling,
+  AcDbBlockTableRecord,
+  AcDbBlockTableRecordFlag
+} from './AcDbBlockTableRecord'
 export type { AcDbBlockTableRecordAttrs } from './AcDbBlockTableRecord'
 export { AcDbDatabaseConverter } from './AcDbDatabaseConverter'
 export type {
@@ -21,6 +27,7 @@ export type {
   AcDbConversionStage,
   AcDbConvertDatabasePerformanceData,
   AcDbDatabaseConverterConfig,
+  AcDbDatabaseConverterReadOptions,
   AcDbParsingTaskResult,
   AcDbParsingTaskStats,
   AcDbStageStatus
@@ -44,7 +51,10 @@ export {
 } from './AcDbDimStyleTableRecord'
 export type { AcDbDimStyleTableRecordAttrs } from './AcDbDimStyleTableRecord'
 export { AcDbDwgVersion } from './AcDbDwgVersion'
-export type { AcDbDwgVersionEntry } from './AcDbDwgVersion'
+export type {
+  AcDbDwgVersionEntry,
+  AcDbDxfVersionCapabilities
+} from './AcDbDwgVersion'
 export { AcDbAbstractViewTableRecord } from './AcDbAbstractViewTableRecord'
 export type { AcDbAbstractViewTableRecordAttrs } from './AcDbAbstractViewTableRecord'
 export { AcDbLayerTable } from './AcDbLayerTable'
@@ -85,9 +95,9 @@ export {
   AcDbTransaction,
   AcDbTransactionManager,
   AcDbUndoStack,
-  areChangeContainersEqual,
-  collectChangeEntities,
-  collectDictionaryChanges
+  acdbAreChangeContainersEqual,
+  acdbCollectChangeEntities,
+  acdbCollectDictionaryChanges
 } from './transaction'
 export type {
   AcDbChangeContainer,
@@ -98,6 +108,9 @@ export type {
 export { AcDbTextStyleTable } from './AcDbTextStyleTable'
 export { AcDbTextStyleTableRecord } from './AcDbTextStyleTableRecord'
 export type { AcDbTextStyleTableRecordAttrs } from './AcDbTextStyleTableRecord'
+export { AcDbUcsTable } from './AcDbUcsTable'
+export { AcDbUcsTableRecord } from './AcDbUcsTableRecord'
+export type { AcDbUcsTableRecordAttrs } from './AcDbUcsTableRecord'
 export { AcDbViewTable } from './AcDbViewTable'
 export { AcDbViewTableRecord } from './AcDbViewTableRecord'
 export type { AcDbViewTableRecordAttrs } from './AcDbViewTableRecord'

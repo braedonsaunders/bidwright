@@ -3,11 +3,17 @@ import {
   AcCmColor,
   AcCmColorMethod,
   AcCmEventManager,
+  AcCmTaskError,
   AcCmTransparency
 } from '@mlightcad/common'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
-import { AcDbObject, AcDbObjectId } from '../base/AcDbObject'
+import {
+  AcDbObject,
+  AcDbObjectId,
+  TEMP_OBJECT_ID_PREFIX,
+  acdbAssignWorkingDatabase
+} from '../base/AcDbObject'
 import { AcDbOpenMode } from '../base/AcDbOpenMode'
 import { AcDbRegenerator } from '../converter/AcDbRegenerator'
 import {
@@ -16,8 +22,22 @@ import {
   AcDbFileType
 } from './AcDbDatabaseConverterManager'
 import { AcDbEntity } from '../entity/AcDbEntity'
+import { AcDbPolyline } from '../entity/AcDbPolyline'
 import {
   ACAD_APPID,
+  ACDB_COMPAREHATCH_DEFAULT,
+  ACDB_COMPAREHATCH_MAX,
+  ACDB_COMPAREHATCH_MIN,
+  ACDB_COMPARERCMARGIN_DEFAULT,
+  ACDB_COMPARERCMARGIN_MAX,
+  ACDB_COMPARERCMARGIN_MIN,
+  ACDB_COMPARETEXT_DEFAULT,
+  ACDB_COMPARETEXT_MAX,
+  ACDB_COMPARETEXT_MIN,
+  ACDB_COMPARETOLERANCE_DEFAULT,
+  ACDB_COMPARETOLERANCE_MAX,
+  ACDB_COMPARETOLERANCE_MIN,
+  acdbCoerceIntegerSysVar,
   ACTIVE_VPORT_NAME,
   ByBlock,
   ByLayer,
@@ -29,17 +49,33 @@ import {
 } from '../misc/AcDbConstants'
 import { AcDbAngleUnits } from '../misc/AcDbAngleUnits'
 import { AcDbDataGenerator } from '../misc/AcDbDataGenerator'
+import { ACDB_DRAW_CIRCLE_SIDES_DRAFT } from '../misc/AcDbDrawTessellate'
 import { AcDbFormatter } from '../misc/AcDbFormatter'
 import { AcDbLinearUnits } from '../misc/AcDbLinearUnits'
 import { AcDbUnitsValue } from '../misc/AcDbUnitsValue'
 import { AcDbDictionary } from '../object/AcDbDictionary'
+import { AcDbGroup } from '../object/AcDbGroup'
+import { AcDbLayerFilter } from '../object/AcDbLayerFilter'
+import { AcDbLayerIndex } from '../object/AcDbLayerIndex'
 import { AcDbMLeaderStyle } from '../object/AcDbMLeaderStyle'
 import { AcDbMlineStyle } from '../object/AcDbMlineStyle'
 import { AcDbRasterImageDef } from '../object/AcDbRasterImageDef'
+import { AcDbSortentsTable } from '../object/AcDbSortentsTable'
 import { AcDbXrecord } from '../object/AcDbXrecord'
+import { AcLyLayerFilterTree } from '../ly/AcLyLayerFilterTree'
+import {
+  ACAD_LAYERFILTERS_NAME,
+  ACLY_DICTIONARY_NAME,
+  acdbLayerGroupsToResultBuffer,
+  acdbSerializeLayerFilterTree,
+  type AcDbSerializedFilterNode
+} from '../ly/AcLyLayerFilterIO'
+import { acdbBytesToHexString } from '../misc/proxyGraphic'
 import { AcDbBlockTable } from './AcDbBlockTable'
 import { AcDbBlockTableRecord } from './AcDbBlockTableRecord'
 import { AcDbConversionStage, AcDbStageStatus } from './AcDbDatabaseConverter'
+import type { AcDbConversionProgressCallback } from './AcDbDatabaseConverter'
+import { AcDbOpenDatabaseError } from './AcDbOpenDatabaseError'
 import { AcDbDimStyleTable } from './AcDbDimStyleTable'
 import { AcDbDimStyleTableRecord } from './AcDbDimStyleTableRecord'
 import { AcDbLayerTable } from './AcDbLayerTable'
@@ -51,15 +87,18 @@ import { AcDbLinetypeTable } from './AcDbLinetypeTable'
 import { AcDbLinetypeTableRecord } from './AcDbLinetypeTableRecord'
 import { AcDbTextStyleTable } from './AcDbTextStyleTable'
 import { AcDbTextStyleTableRecord } from './AcDbTextStyleTableRecord'
+import { AcDbUcsTable } from './AcDbUcsTable'
 import { AcDbViewTable } from './AcDbViewTable'
 import { AcDbViewportTable } from './AcDbViewportTable'
 import { AcDbViewportTableRecord } from './AcDbViewportTableRecord'
 import {
   AcGeBox3d,
+  AcGeCircArc2d,
   AcGePoint3d,
   AcGePoint3dLike
 } from '@mlightcad/geometry-engine'
 import { AcDbDwgVersion } from './AcDbDwgVersion'
+import type { AcDbClass } from './AcDbClass'
 import { AcGiLineWeight } from '@mlightcad/graphic-interface'
 import { AcDbRegAppTable } from './AcDbRegAppTable'
 import { AcDbRegAppTableRecord } from './AcDbRegAppTableRecord'
@@ -133,69 +172,21 @@ export interface AcDbProgressdEventArgs {
    * Store data associated with the current sub stage. Its meaning of different sub stages
    * are as follows.
    * - 'PARSE' stage: statistics of parsing task
-   * - 'FONT' stage: fonts needed by this drawing
+   * - Any stage with {@link subStageStatus} `'ERROR'`: `{ code, message, stage? }`
    *
-   * Note: For now, 'PARSE' and 'FONT' sub stages use this field only.
+   * Note: For now, 'PARSE' sub stages use this field only, except on errors.
    */
   data?: unknown
 }
 
 /**
- * Font information structure.
- *
- * Contains information about a font including its name, file path,
- * type, and URL for loading.
+ * Event arguments when opening a drawing database fails.
  */
-export interface AcDbFontInfo {
-  /** Array of font names/aliases */
-  name: string[]
-  /** Font file name */
-  file: string
-  /** Font type (mesh or shx) */
-  type: 'mesh' | 'shx'
-  /** URL for loading the font */
-  url: string
-}
-
-/**
- * Interface for loading fonts when opening a document.
- *
- * Applications should implement this interface to provide font loading
- * functionality when opening drawing databases that contain text entities.
- */
-export interface AcDbFontLoader {
-  /**
-   * Loads the specified fonts.
-   *
-   * @param fontNames - Array of font names to load
-   * @returns Promise that resolves when fonts are loaded
-   *
-   * @example
-   * ```typescript
-   * const fontLoader: AcDbFontLoader = {
-   *   async load(fontNames: string[]) {
-   *     // Load fonts implementation
-   *   },
-   *   async getAvaiableFonts() {
-   *     return [];
-   *   }
-   * };
-   * ```
-   */
-  load(fontNames: string[]): Promise<void>
-
-  /**
-   * Gets all available fonts.
-   *
-   * @returns Promise that resolves to an array of available font information
-   *
-   * @example
-   * ```typescript
-   * const fonts = await fontLoader.getAvaiableFonts();
-   * console.log('Available fonts:', fonts);
-   * ```
-   */
-  getAvaiableFonts(): Promise<AcDbFontInfo[]>
+export interface AcDbOpenFailedEventArgs {
+  /** The database that failed to open */
+  database: AcDbDatabase
+  /** Structured failure information */
+  error: AcDbOpenDatabaseError
 }
 
 /**
@@ -211,14 +202,6 @@ export interface AcDbOpenDatabaseOptions {
    * any modifications to the database content.
    */
   readOnly?: boolean
-
-  /**
-   * Loader used to load fonts used in the drawing database.
-   *
-   * This loader will be used to load any fonts referenced by text entities
-   * in the drawing database.
-   */
-  fontLoader?: AcDbFontLoader
 
   /**
    * The minimum number of items in one chunk.
@@ -238,6 +221,17 @@ export interface AcDbOpenDatabaseOptions {
   timeout?: number
 
   /**
+   * Override the text encoding used to decode text content (layer names,
+   * annotations, text entities, block attributes, ...).
+   *
+   * When omitted, the encoding is auto-detected from the file (DXF reads
+   * `$DWGCODEPAGE`; DWG reads the header code page). When provided, it wins
+   * over auto-detection — for example `'cp949'` or `'euc-kr'` for Korean
+   * drawings whose declared code page is missing or wrong.
+   */
+  encoding?: string
+
+  /**
    * System variables to override in the database.
    *
    * This allows overriding system variable values when opening a database.
@@ -252,12 +246,25 @@ export interface AcDbOpenDatabaseOptions {
   /**
    * Whether entities on non-plottable ("no-plot") layers are drawn.
    *
-   * - `true` (default): desktop AutoCAD editor semantics ??no-plot layers remain
+   * - `true` (default): desktop AutoCAD editor semantics — no-plot layers remain
    *   visible on screen (Defpoints, viewport frames on `*-NPLT`, etc.).
-   * - `false`: web/publish viewer semantics (e.g. BIM 360 / ACC) ??entities on
+   * - `false`: web/publish viewer semantics (e.g. BIM 360 / ACC) — entities on
    *   no-plot layers are omitted from display.
    */
   drawNoPlotLayers?: boolean
+
+  /**
+   * Maximum number of segments used to tessellate a full circle when drawing.
+   *
+   * Lower values use less GPU memory and produce smaller HTML exports; higher
+   * values look smoother on large arcs. Clamped to the DXF VPORT range
+   * `[{@link AcGeCircArc2d.MIN_CIRCLE_SIDES}, {@link AcGeCircArc2d.MAX_CIRCLE_SIDES}]`.
+   * When omitted, {@link ACDB_DRAW_CIRCLE_SIDES_DRAFT} (50) is used so
+   * AutoCAD's common VIEWRES 1000 is not applied accidentally.
+   *
+   * Short arcs still use fewer segments than a full circle.
+   */
+  circleSides?: number
 
   /**
    * File name of the drawing being opened, including extension (for example `Plan.dwg`).
@@ -285,6 +292,8 @@ export interface AcDbTables {
   readonly linetypeTable: AcDbLinetypeTable
   /** Text style table containing text style definitions */
   readonly textStyleTable: AcDbTextStyleTable
+  /** UCS table containing named user coordinate systems */
+  readonly ucsTable: AcDbUcsTable
   /** View table containing named view definitions */
   readonly viewTable: AcDbViewTable
   /** Layer table containing layer definitions */
@@ -366,6 +375,8 @@ export class AcDbDatabase extends AcDbObject {
   private _hptransparency: AcCmTransparency
   /** Current text style name for the database */
   private _textstyle: string
+  /** Current dimension style name for the database ($DIMSTYLE) */
+  private _dimstyle: string
   /** The extents of current Model Space */
   private _extents: AcGeBox3d
   /** Insertion units for the database */
@@ -378,6 +389,10 @@ export class AcDbDatabase extends AcDbObject {
   private _ltscale: number
   /** The flag whether to display line weight */
   private _lwdisplay: boolean
+  /** TILEMODE: true = model space active (1), false = paper space (0) */
+  private _tilemode: boolean
+  /** PSLTSCALE: paper space linetype scaling */
+  private _psltscale: boolean
   /** Point display mode */
   private _pdmode: number
   /** Point display size */
@@ -386,21 +401,43 @@ export class AcDbDatabase extends AcDbObject {
   private _osmode: number
   /** Orthogonal mode flag (ORTHOMODE): 0 = off, 1 = on */
   private _orthomode: number
+  /** COMPAREHATCH: whether hatch objects are included in drawing comparison */
+  private _comparehatch: number
+  /** COMPARERCMARGIN: revision-cloud offset around comparison change sets */
+  private _comparercmargin: number
+  /** COMPARETEXT: whether text objects are included in drawing comparison */
+  private _comparetext: number
+  /** COMPARETOLERANCE: decimal-place geometric tolerance for drawing comparison */
+  private _comparetolerance: number
   /** Tables in the database */
   private _tables: AcDbTables
+  /** Class definitions from DXF CLASSES / DWG class table (needed for proxy entities). */
+  private _classes: AcDbClass[] = []
   /** Nongraphical objects in the database */
   private _objects: {
     readonly dictionary: AcDbDictionary<AcDbDictionary>
+    readonly group: AcDbDictionary<AcDbGroup>
     readonly imageDefinition: AcDbDictionary<AcDbRasterImageDef>
+    readonly layerFilter: AcDbDictionary<AcDbLayerFilter>
+    readonly layerIndex: AcDbDictionary<AcDbLayerIndex>
     readonly layout: AcDbLayoutDictionary
     readonly mleaderStyle: AcDbDictionary<AcDbMLeaderStyle>
     readonly mlineStyle: AcDbDictionary<AcDbMlineStyle>
+    readonly sortentsTable: AcDbDictionary<AcDbSortentsTable>
     readonly xrecord: AcDbDictionary<AcDbXrecord>
   }
   /** Current space (model space or paper space) */
   private _currentSpace?: AcDbBlockTableRecord
   /** The maximum handle value in the database, used for generating unique object IDs */
   private _maxHandle: number
+  /**
+   * BigInt-tracked maximum handle. Engages once handles exceed
+   * {@link Number.MAX_SAFE_INTEGER}; beyond that point float increments no
+   * longer advance (`x + 1 === x`) and handle generation would spin forever.
+   */
+  private _maxHandleBig?: bigint
+  /** Global registry of committed object handles across all database-resident objects */
+  private _handleRegistry = new Map<AcDbObjectId, AcDbObject>()
   /** Lazily created formatter for lengths, angles, and coordinates */
   private _formatter?: AcDbFormatter
   /**
@@ -408,8 +445,23 @@ export class AcDbDatabase extends AcDbObject {
    * Set from {@link AcDbOpenDatabaseOptions.drawNoPlotLayers} when opening a database.
    */
   private _drawNoPlotLayers = true
+  /**
+   * Display tessellation side count for a full circle.
+   * Set from {@link AcDbOpenDatabaseOptions.circleSides} when opening a database.
+   */
+  private _drawCircleSides = ACDB_DRAW_CIRCLE_SIDES_DRAFT
   /** Current drawing file name (**DWGNAME**), including extension. */
   private _dwgname: string
+  /**
+   * Drawing thumbnail preview image (DXF `THUMBNAILIMAGE` / DWG preview).
+   * Raw image bytes (typically BMP/DIB or PNG), or `undefined` when absent.
+   */
+  private _thumbnailImage?: Uint8Array
+  /**
+   * Layer Properties Manager filter tree (`AcLy*` / .NET `LayerFilterTree`).
+   * Distinct from {@link objects.layerFilter} (`AcDbLayerFilter` index objects).
+   */
+  private _layerFilters: AcLyLayerFilterTree
 
   /** Manages transactions and undo/redo for this database. */
   readonly transactionManager: AcDbDatabaseTransactionManager
@@ -419,6 +471,7 @@ export class AcDbDatabase extends AcDbObject {
   private _pendingEntityErased: AcDbEntity[] = []
   private _pendingDictObjectSet: { object: AcDbObject; key: string }[] = []
   private _pendingDictObjectErased: { object: AcDbObject; key: string }[] = []
+  private _lastOpenError: AcDbOpenDatabaseError | null = null
 
   /**
    * Events that can be triggered by the database.
@@ -444,7 +497,9 @@ export class AcDbDatabase extends AcDbObject {
     /** Fired when a layer is erased from the database */
     layerErased: new AcCmEventManager<AcDbLayerEventArgs>(),
     /** Fired during database opening operations to report progress */
-    openProgress: new AcCmEventManager<AcDbProgressdEventArgs>()
+    openProgress: new AcCmEventManager<AcDbProgressdEventArgs>(),
+    /** Fired when {@link AcDbDatabase.read} or {@link AcDbDatabase.openUri} fails */
+    openFailed: new AcCmEventManager<AcDbOpenFailedEventArgs>()
   }
 
   /**
@@ -475,6 +530,7 @@ export class AcDbDatabase extends AcDbObject {
     this._hplayer = '.'
     this._hptransparency = new AcCmTransparency()
     this._textstyle = DEFAULT_TEXT_STYLE
+    this._dimstyle = DEFAULT_TEXT_STYLE
     this._extents = new AcGeBox3d()
     // TODO: Default value is 1 (imperial) or 4 (metric)
     this._insunits = AcDbUnitsValue.Millimeters
@@ -482,10 +538,16 @@ export class AcDbDatabase extends AcDbObject {
     this._measurement = 1
     this._ltscale = 1
     this._lwdisplay = false
+    this._tilemode = true
+    this._psltscale = true
     this._pdmode = 0
     this._pdsize = 0
     this._osmode = 0
     this._orthomode = 0
+    this._comparehatch = ACDB_COMPAREHATCH_DEFAULT
+    this._comparercmargin = ACDB_COMPARERCMARGIN_DEFAULT
+    this._comparetext = ACDB_COMPARETEXT_DEFAULT
+    this._comparetolerance = ACDB_COMPARETOLERANCE_DEFAULT
     this._maxHandle = 0
     this._tables = {
       appIdTable: new AcDbRegAppTable(this),
@@ -493,19 +555,26 @@ export class AcDbDatabase extends AcDbObject {
       dimStyleTable: new AcDbDimStyleTable(this),
       linetypeTable: new AcDbLinetypeTable(this),
       textStyleTable: new AcDbTextStyleTable(this),
+      ucsTable: new AcDbUcsTable(this),
       viewTable: new AcDbViewTable(this),
       layerTable: new AcDbLayerTable(this),
       viewportTable: new AcDbViewportTable(this)
     }
     this._objects = {
       dictionary: new AcDbDictionary(this),
+      group: new AcDbDictionary(this),
       imageDefinition: new AcDbDictionary(this),
+      layerFilter: new AcDbDictionary(this),
+      layerIndex: new AcDbDictionary(this),
       layout: new AcDbLayoutDictionary(this),
       mleaderStyle: new AcDbDictionary(this),
       mlineStyle: new AcDbDictionary(this),
+      sortentsTable: new AcDbDictionary(this),
       xrecord: new AcDbDictionary(this)
     }
+    this._layerFilters = new AcLyLayerFilterTree()
     this.transactionManager = new AcDbDatabaseTransactionManager(this)
+    this.registerBootstrapHandles()
   }
 
   /**
@@ -525,6 +594,19 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
+   * Gets or sets class definitions from the drawing (DXF CLASSES / DWG class table).
+   *
+   * Proxy entities resolve their application class ID (group code **91**)
+   * against this list (IDs start at 500 for the first entry).
+   */
+  get classes(): readonly AcDbClass[] {
+    return this._classes
+  }
+  set classes(classes: readonly AcDbClass[]) {
+    this._classes = classes.map(entry => ({ ...entry }))
+  }
+
+  /**
    * Gets all nongraphical objects in this drawing database.
    *
    * @returns Object containing all nongraphical objects in the database
@@ -540,10 +622,46 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
+   * Gets the Layer Properties Manager filter tree for this database.
+   *
+   * @remarks
+   * Mirrors AutoCAD .NET `Database.LayerFilters` / ObjectARX `AcLy*` filters.
+   * This is the property/group filter **tree**, not the flat
+   * {@link objects.layerFilter} dictionary used by `AcDbLayerFilter` /
+   * `AcDbLayerIndex`.
+   *
+   * Like AutoCAD, treat this value as retrieved by value: mutate the tree,
+   * then assign it back via the setter if your workflow expects that pattern.
+   *
+   * @returns The current {@link AcLyLayerFilterTree}.
+   *
+   * @example
+   * ```typescript
+   * const tree = db.layerFilters;
+   * const filter = new AcLyLayerFilter();
+   * filter.name = 'Unlocked Layers';
+   * filter.setFilterExpression('LOCKED=="False"');
+   * tree.root.addNested(filter);
+   * db.layerFilters = tree;
+   * ```
+   */
+  get layerFilters(): AcLyLayerFilterTree {
+    return this._layerFilters
+  }
+
+  /**
+   * Sets the Layer Properties Manager filter tree for this database.
+   *
+   * @param value - New filter tree.
+   */
+  set layerFilters(value: AcLyLayerFilterTree) {
+    this._layerFilters = value ?? new AcLyLayerFilterTree()
+  }
+
+  /**
    * Looks up a database-resident object by its object ID.
    *
-   * Search order: entities, symbol table records, dictionary objects
-   * (including nested dictionaries), then the database object itself.
+   * Uses the global handle registry maintained by {@link registerObjectHandle}.
    *
    * @param id - Object identifier to resolve
    * @param _openErased - Reserved for erased-object support
@@ -553,40 +671,27 @@ export class AcDbDatabase extends AcDbObject {
     if (id === this.objectId) {
       return this
     }
+    return this._handleRegistry.get(id)
+  }
 
-    const entity = this.tables.blockTable.getEntityById(id)
-    if (entity) {
-      return entity
+  /**
+   * Creates an extension dictionary for `owner` and registers it in this database.
+   *
+   * Used by {@link AcDbObject.createExtensionDictionary}. Returns the existing
+   * dictionary id when one is already attached.
+   */
+  createExtensionDictionaryFor(owner: AcDbObject): AcDbObjectId | undefined {
+    const existingId = owner.extensionDictionary
+    if (existingId) {
+      return existingId
     }
 
-    const symbolTables: AcDbSymbolTable[] = [
-      this.tables.appIdTable,
-      this.tables.blockTable,
-      this.tables.dimStyleTable,
-      this.tables.linetypeTable,
-      this.tables.textStyleTable,
-      this.tables.viewTable,
-      this.tables.layerTable,
-      this.tables.viewportTable
-    ]
-    for (const table of symbolTables) {
-      const record = table.getIdAt(id)
-      if (record) {
-        return record
-      }
-    }
-
-    for (const dictionary of this.getRootDictionaries()) {
-      if (dictionary.objectId === id) {
-        return dictionary
-      }
-      const object = this.findObjectInDictionary(dictionary, id)
-      if (object) {
-        return object
-      }
-    }
-
-    return undefined
+    const dict = new AcDbDictionary(this)
+    dict.database = this
+    dict.ownerId = owner.objectId
+    this.commitObjectHandle(dict)
+    owner.extensionDictionary = dict.objectId
+    return dict.objectId
   }
 
   /**
@@ -688,47 +793,16 @@ export class AcDbDatabase extends AcDbObject {
   getRootDictionaries(): AcDbDictionary[] {
     return [
       this.objects.dictionary,
+      this.objects.group,
       this.objects.imageDefinition,
+      this.objects.layerFilter,
+      this.objects.layerIndex,
       this.objects.layout,
       this.objects.mleaderStyle,
       this.objects.mlineStyle,
+      this.objects.sortentsTable,
       this.objects.xrecord
     ]
-  }
-
-  /**
-   * Recursively searches a dictionary tree for an object with the given ID.
-   *
-   * @param dictionary - Root dictionary to search (including nested dictionaries)
-   * @param id - Object identifier to resolve
-   * @returns Matching object, or undefined when not found under `dictionary`
-   */
-  private findObjectInDictionary(
-    dictionary: AcDbDictionary,
-    id: AcDbObjectId
-  ): AcDbObject | undefined {
-    if (dictionary.objectId === id) {
-      return dictionary
-    }
-
-    const direct = dictionary.getIdAt(id)
-    if (direct) {
-      return direct
-    }
-
-    for (const [, entry] of dictionary.entries()) {
-      if (entry.objectId === id) {
-        return entry
-      }
-      if (entry instanceof AcDbDictionary) {
-        const nested = this.findObjectInDictionary(entry, id)
-        if (nested) {
-          return nested
-        }
-      }
-    }
-
-    return undefined
   }
 
   /**
@@ -750,6 +824,68 @@ export class AcDbDatabase extends AcDbObject {
       this.transactionManager.flushPendingEntityModifiedEvents()
       this.transactionManager.flushPendingLayerModifiedEvents()
       this.flushEventBatch()
+    }
+  }
+
+  /**
+   * Ends the outermost event batch, flushing `entityAppended` notifications in
+   * chunks so converters can report ENTITY progress while the viewer adds/renders.
+   *
+   * Nested batches still require matching {@link endEventBatch} /
+   * {@link endEventBatchChunked} calls; only the outermost close flushes.
+   *
+   * @param chunkSize - Max entities per `entityAppended` dispatch
+   * @param onChunk - Called after each chunk with `(flushed, total)`
+   */
+  async endEventBatchChunked(
+    chunkSize: number,
+    onChunk?: (flushed: number, total: number) => void | Promise<void>
+  ): Promise<void> {
+    if (this._eventBatchDepth <= 0) {
+      return
+    }
+    this._eventBatchDepth--
+    if (this._eventBatchDepth !== 0) {
+      return
+    }
+
+    this.transactionManager.flushPendingEntityModifiedEvents()
+    this.transactionManager.flushPendingLayerModifiedEvents()
+
+    const appended = this._pendingEntityAppended
+    this._pendingEntityAppended = []
+    const total = appended.length
+    const size = Math.max(1, chunkSize)
+
+    if (total === 0) {
+      this.flushEventBatchRemainder()
+      return
+    }
+
+    // Dispatch in chunks; if onChunk throws, still flush remaining appends and
+    // erase/dict queues so catch paths calling endEventBatch() are not needed.
+    let flushed = 0
+    try {
+      for (let i = 0; i < total; i += size) {
+        const end = Math.min(i + size, total)
+        const chunk = appended.slice(i, end)
+        this.events.entityAppended.dispatch({
+          database: this,
+          entity: chunk
+        })
+        flushed = end
+        if (onChunk) {
+          await onChunk(end, total)
+        }
+      }
+    } finally {
+      if (flushed < total) {
+        this.events.entityAppended.dispatch({
+          database: this,
+          entity: appended.slice(flushed)
+        })
+      }
+      this.flushEventBatchRemainder()
     }
   }
 
@@ -845,6 +981,11 @@ export class AcDbDatabase extends AcDbObject {
       })
     }
 
+    this.flushEventBatchRemainder()
+  }
+
+  /** Flushes non-append batch queues (erase / dictionary) after entity appends. */
+  private flushEventBatchRemainder(): void {
     if (this._pendingEntityErased.length > 0) {
       const erased = this._pendingEntityErased
       this._pendingEntityErased = []
@@ -907,8 +1048,189 @@ export class AcDbDatabase extends AcDbObject {
    * ```
    */
   generateHandle(): AcDbObjectId {
+    if (this._maxHandleBig != null) {
+      this._maxHandleBig += BigInt(1)
+      return this._maxHandleBig.toString(16).toUpperCase()
+    }
+    if (this._maxHandle >= Number.MAX_SAFE_INTEGER) {
+      // Float precision can no longer advance the counter; switch to BigInt.
+      this._maxHandleBig = BigInt(this._maxHandle)
+      return this.generateHandle()
+    }
     this._maxHandle++
     return this._maxHandle.toString(16).toUpperCase()
+  }
+
+  /**
+   * Generates a handle that is not already registered in this database.
+   *
+   * @internal
+   */
+  generateUniqueHandle(): AcDbObjectId {
+    let handle = this.generateHandle()
+    while (this.isHandleTaken(handle)) {
+      handle = this.generateHandle()
+    }
+    return handle
+  }
+
+  /**
+   * Initializes {@link generateHandle} from a DXF/DWG `$HANDSEED` value.
+   *
+   * `$HANDSEED` is the next handle AutoCAD would assign; internal `_maxHandle`
+   * is kept one below that value.
+   *
+   * @param seed - Hexadecimal handle seed from the drawing header
+   */
+  initializeHandleSeed(seed: string) {
+    const nextBig = BigInt('0x' + seed)
+    if (nextBig <= BigInt(0)) {
+      return
+    }
+    const baseline = nextBig - BigInt(1)
+    if (baseline <= BigInt(Number.MAX_SAFE_INTEGER)) {
+      if (this._maxHandleBig == null) {
+        const value = Number(baseline)
+        if (value > this._maxHandle) {
+          this._maxHandle = value
+        }
+      }
+      return
+    }
+    // Handle seeds beyond float-safe range must be tracked with BigInt.
+    if (this._maxHandleBig == null || baseline > this._maxHandleBig) {
+      this._maxHandleBig = baseline
+    }
+  }
+
+  /**
+   * Adopts a handle from an external drawing when it is still available.
+   *
+   * When the preferred handle is already registered to another object, a new
+   * unique handle is generated instead.
+   *
+   * @internal
+   */
+  adoptExternalHandle(
+    object: AcDbObject,
+    preferredId: AcDbObjectId
+  ): AcDbObjectId {
+    this.releaseObjectHandle(object)
+    if (
+      preferredId &&
+      !preferredId.startsWith(TEMP_OBJECT_ID_PREFIX) &&
+      !this.isHandleTaken(preferredId)
+    ) {
+      object.objectId = preferredId
+      this.registerObjectHandle(object)
+      this.updateMaxHandle(preferredId)
+      return preferredId
+    }
+    return this.assignGeneratedHandle(object)
+  }
+
+  /**
+   * Registers an object's current {@link AcDbObject.objectId} in the global handle map.
+   *
+   * @internal
+   */
+  registerObjectHandle(object: AcDbObject) {
+    const objectId = object.objectId
+    if (!objectId || objectId.startsWith(TEMP_OBJECT_ID_PREFIX)) {
+      return
+    }
+    this._handleRegistry.set(objectId, object)
+  }
+
+  /**
+   * Removes an object's handle from the global handle map.
+   *
+   * @internal
+   */
+  releaseObjectHandle(object: AcDbObject) {
+    const objectId = object.objectId
+    if (!objectId || objectId.startsWith(TEMP_OBJECT_ID_PREFIX)) {
+      return
+    }
+    if (this._handleRegistry.get(objectId) === object) {
+      this._handleRegistry.delete(objectId)
+    }
+  }
+
+  /**
+   * Returns true when a handle is already registered to another object.
+   *
+   * @internal
+   */
+  isHandleTaken(objectId: AcDbObjectId, except?: AcDbObject): boolean {
+    if (!objectId || objectId.startsWith(TEMP_OBJECT_ID_PREFIX)) {
+      return false
+    }
+    const owner = this._handleRegistry.get(objectId)
+    return owner !== undefined && owner !== except
+  }
+
+  /**
+   * Registers bootstrap tables, dictionaries, and the database object itself.
+   */
+  private registerBootstrapHandles() {
+    this._handleRegistry.clear()
+    this.registerObjectHandle(this)
+    for (const table of [
+      this._tables.blockTable,
+      this._tables.dimStyleTable,
+      this._tables.layerTable,
+      this._tables.linetypeTable,
+      this._tables.appIdTable,
+      this._tables.textStyleTable,
+      this._tables.ucsTable,
+      this._tables.viewTable,
+      this._tables.viewportTable
+    ]) {
+      this.registerObjectHandle(table)
+    }
+    for (const dictionary of [
+      this._objects.dictionary,
+      this._objects.group,
+      this._objects.imageDefinition,
+      this._objects.layerFilter,
+      this._objects.layerIndex,
+      this._objects.layout,
+      this._objects.mleaderStyle,
+      this._objects.mlineStyle,
+      this._objects.sortentsTable,
+      this._objects.xrecord
+    ]) {
+      this.registerObjectHandle(dictionary)
+    }
+  }
+
+  /**
+   * Assigns a freshly generated unique handle to an object.
+   *
+   * @internal
+   */
+  private assignGeneratedHandle(object: AcDbObject): AcDbObjectId {
+    const oldId = object.objectId
+    this.releaseObjectHandle(object)
+    const handle = this.generateUniqueHandle()
+    object.objectId = handle
+    this.registerObjectHandle(object)
+    if (oldId && oldId !== handle) {
+      this.updateMaxHandle(handle)
+      // When a BTR is displaced by a later import claiming its handle, keep
+      // child entity ownerIds in sync. Otherwise ATTDEF.isLooseInDrawingSpace
+      // cannot resolve the owner BTR and may draw attribute tags into the
+      // block render cache (overlapping INSERT ATTRIB values).
+      if (object instanceof AcDbBlockTableRecord) {
+        for (const entity of object.newIterator()) {
+          if (entity.getAttrWithoutException('ownerId') === oldId) {
+            entity.ownerId = handle
+          }
+        }
+      }
+    }
+    return handle
   }
 
   /**
@@ -923,9 +1245,37 @@ export class AcDbDatabase extends AcDbObject {
    * ```
    */
   updateMaxHandle(handle: string): void {
-    const handleValue = parseInt(handle, 16)
-    if (!isNaN(handleValue) && handleValue > this._maxHandle) {
-      this._maxHandle = handleValue
+    this.trackMaxHandle(handle)
+  }
+
+  /**
+   * Records the maximum seen handle, staying float-precise below
+   * {@link Number.MAX_SAFE_INTEGER} and switching to BigInt tracking above it.
+   */
+  private trackMaxHandle(handle: string): void {
+    if (this._maxHandleBig != null) {
+      // BigInt mode only engages for handles above float-safe range, so any
+      // handle with fewer than 14 hex digits is guaranteed smaller — skip the
+      // per-entity BigInt parse on the hot commit path.
+      if (handle.length >= 14) {
+        const big = BigInt('0x' + handle)
+        if (big > this._maxHandleBig) {
+          this._maxHandleBig = big
+        }
+      }
+      return
+    }
+
+    const value = parseInt(handle, 16)
+    if (isNaN(value)) {
+      return
+    }
+    if (value > Number.MAX_SAFE_INTEGER) {
+      this._maxHandleBig = BigInt('0x' + handle)
+      return
+    }
+    if (value > this._maxHandle) {
+      this._maxHandle = value
     }
   }
 
@@ -942,11 +1292,34 @@ export class AcDbDatabase extends AcDbObject {
     hasId?: (id: AcDbObjectId) => boolean
   ) {
     const objectId = object.getAttrWithoutException('objectId')
-    if (!objectId || object.isTemp || (hasId && hasId(objectId))) {
-      object.objectId = this.generateHandle()
-    } else {
-      this.updateMaxHandle(objectId)
+    const tableDuplicate = hasId != null && objectId != null && hasId(objectId)
+    const needsGenerated = !objectId || object.isTemp || tableDuplicate
+
+    if (needsGenerated) {
+      this.assignGeneratedHandle(object)
+      return
     }
+
+    const incumbent = this._handleRegistry.get(objectId)
+    if (incumbent && incumbent !== object) {
+      if (this.shouldPreserveIncomingHandle(object)) {
+        this.assignGeneratedHandle(incumbent)
+      } else {
+        this.assignGeneratedHandle(object)
+        return
+      }
+    }
+
+    this.registerObjectHandle(object)
+    this.updateMaxHandle(objectId)
+  }
+
+  /**
+   * Returns true when an object already carries an explicit handle that should
+   * be preserved over auto-generated registry occupants (typically DXF/DWG imports).
+   */
+  private shouldPreserveIncomingHandle(object: AcDbObject): boolean {
+    return !object.isTemp
   }
 
   /**
@@ -1317,6 +1690,19 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
+   * Display tessellation side count for a full circle.
+   *
+   * Configured via {@link AcDbOpenDatabaseOptions.circleSides} when the
+   * database is opened. Defaults to {@link ACDB_DRAW_CIRCLE_SIDES_DRAFT}.
+   */
+  get drawCircleSides() {
+    return this._drawCircleSides
+  }
+  set drawCircleSides(value: number) {
+    this._drawCircleSides = AcGeCircArc2d.resolveCircleSides(value)
+  }
+
+  /**
    * Name of the current drawing file (**DWGNAME**), including extension.
    *
    * Read-only through the system-variable API; updated when a drawing is opened
@@ -1350,6 +1736,26 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
+   * Gets or sets the drawing thumbnail preview image.
+   *
+   * Corresponds to AutoCAD .NET `Database.ThumbnailBitmap`, DXF
+   * `THUMBNAILIMAGE` section (group codes 90/310), and the DWG file preview.
+   * Stored as raw image bytes (typically BMP/DIB or PNG).
+   *
+   * @returns Thumbnail image bytes, or `undefined` when none exist.
+   */
+  get thumbnailImage(): Uint8Array | undefined {
+    return this._thumbnailImage
+  }
+  set thumbnailImage(value: Uint8Array | undefined) {
+    if (!value || value.length === 0) {
+      this._thumbnailImage = undefined
+      return
+    }
+    this._thumbnailImage = value
+  }
+
+  /**
    * Returns whether entities on the given layer should be drawn under the
    * current {@link drawNoPlotLayers} setting.
    *
@@ -1373,6 +1779,22 @@ export class AcDbDatabase extends AcDbObject {
         this._lwdisplay = nextValue
       }
     )
+  }
+
+  /** TILEMODE: true = model space (1), false = paper space (0). */
+  get tilemode(): boolean {
+    return this._tilemode
+  }
+  set tilemode(value: boolean) {
+    this._tilemode = value
+  }
+
+  /** PSLTSCALE: paper space linetype scaling. */
+  get psltscale(): boolean {
+    return this._psltscale
+  }
+  set psltscale(value: boolean) {
+    this._psltscale = value
   }
 
   /**
@@ -1637,6 +2059,23 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
+   * The dimension style name for new dimension objects (`$DIMSTYLE`).
+   */
+  get dimstyle(): string {
+    return this._dimstyle
+  }
+  set dimstyle(value: string) {
+    this.updateSysVar(
+      AcDbSystemVariables.DIMSTYLE,
+      this._dimstyle,
+      value ?? DEFAULT_TEXT_STYLE,
+      nextValue => {
+        this._dimstyle = nextValue
+      }
+    )
+  }
+
+  /**
    * The zero (0) base angle with respect to the current UCS in radians.
    */
   get angbase(): number {
@@ -1792,6 +2231,124 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
+   * Whether hatch objects are included in drawing comparison (**COMPAREHATCH**).
+   *
+   * - `0`: Hatch objects are excluded (AutoCAD default)
+   * - `1`: Hatch objects are included
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-BBB5E4A0-B607-4898-9A6B-A65C51551EE5
+   */
+  get comparehatch(): number {
+    return this._comparehatch
+  }
+  set comparehatch(value: number) {
+    const nextValue = acdbCoerceIntegerSysVar(
+      'COMPAREHATCH',
+      value ?? ACDB_COMPAREHATCH_DEFAULT,
+      ACDB_COMPAREHATCH_MIN,
+      ACDB_COMPAREHATCH_MAX
+    )
+    this.updateSysVar(
+      AcDbSystemVariables.COMPAREHATCH,
+      this._comparehatch,
+      nextValue,
+      coerced => {
+        this._comparehatch = coerced
+      }
+    )
+  }
+
+  /**
+   * Offset between a change-set boundary and the revision cloud
+   * (**COMPARERCMARGIN**). AutoCAD range is **1–25**; default is **5**.
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-7A230058-048B-4EE6-949D-105AF6AC8E73
+   */
+  get comparercmargin(): number {
+    return this._comparercmargin
+  }
+  set comparercmargin(value: number) {
+    const nextValue = acdbCoerceIntegerSysVar(
+      'COMPARERCMARGIN',
+      value ?? ACDB_COMPARERCMARGIN_DEFAULT,
+      ACDB_COMPARERCMARGIN_MIN,
+      ACDB_COMPARERCMARGIN_MAX
+    )
+    this.updateSysVar(
+      AcDbSystemVariables.COMPARERCMARGIN,
+      this._comparercmargin,
+      nextValue,
+      coerced => {
+        this._comparercmargin = coerced
+      }
+    )
+  }
+
+  /**
+   * Whether text objects are included in drawing comparison (**COMPARETEXT**).
+   *
+   * - `0`: Text objects are excluded
+   * - `1`: Text objects are included (AutoCAD default)
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-1BE58261-FA5F-4914-BAC6-C1DF7E3D1E9C
+   */
+  get comparetext(): number {
+    return this._comparetext
+  }
+  set comparetext(value: number) {
+    const nextValue = acdbCoerceIntegerSysVar(
+      'COMPARETEXT',
+      value ?? ACDB_COMPARETEXT_DEFAULT,
+      ACDB_COMPARETEXT_MIN,
+      ACDB_COMPARETEXT_MAX
+    )
+    this.updateSysVar(
+      AcDbSystemVariables.COMPARETEXT,
+      this._comparetext,
+      nextValue,
+      coerced => {
+        this._comparetext = coerced
+      }
+    )
+  }
+
+  /**
+   * Decimal-place geometric tolerance used when comparing two drawings
+   * (**COMPARETOLERANCE**). AutoCAD range is **0–14**; default is **6**.
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-3131F7C8-7199-4EC5-9892-88C2D2A86F78
+   */
+  get comparetolerance(): number {
+    return this._comparetolerance
+  }
+  set comparetolerance(value: number) {
+    const nextValue = acdbCoerceIntegerSysVar(
+      'COMPARETOLERANCE',
+      value ?? ACDB_COMPARETOLERANCE_DEFAULT,
+      ACDB_COMPARETOLERANCE_MIN,
+      ACDB_COMPARETOLERANCE_MAX
+    )
+    this.updateSysVar(
+      AcDbSystemVariables.COMPARETOLERANCE,
+      this._comparetolerance,
+      nextValue,
+      coerced => {
+        this._comparetolerance = coerced
+      }
+    )
+  }
+
+  /**
+   * The most recent failure from {@link read} or {@link openUri}, or `null` after a successful open.
+   *
+   * Useful when a caller catches no exception (for example a viewer that returns `false`)
+   * but still needs to distinguish worker out-of-memory from other parse failures.
+   */
+  get lastOpenError(): AcDbOpenDatabaseError | null {
+    return this._lastOpenError
+  }
+
+  /**
    * Reads drawing data from a string or ArrayBuffer.
    *
    * This method parses the provided data and populates the database with
@@ -1827,46 +2384,66 @@ export class AcDbDatabase extends AcDbObject {
       )
 
     this.clear()
+    this._lastOpenError = null
     this._drawNoPlotLayers = options?.drawNoPlotLayers ?? true
+    this.drawCircleSides = options?.circleSides ?? ACDB_DRAW_CIRCLE_SIDES_DRAFT
     if (options?.fileName) {
       this.setDwgName(options.fileName)
     }
 
-    await converter.read(
-      data,
-      this,
-      (options && options.minimumChunkSize) || 10,
-      async (
-        percentage: number,
-        stage: AcDbConversionStage,
-        stageStatus: AcDbStageStatus,
-        data?: unknown
-      ) => {
-        this.events.openProgress.dispatch({
-          database: this,
-          percentage: percentage,
-          stage: 'CONVERSION',
-          subStage: stage,
-          subStageStatus: stageStatus,
-          data: data
-        })
-        if (
-          options &&
-          options.fontLoader &&
-          stage == 'FONT' &&
-          stageStatus == 'END'
-        ) {
-          const fonts = data
-            ? (data as string[])
-            : this.tables.textStyleTable.fonts
-          await options.fontLoader.load(fonts)
-        }
-      },
-      options?.timeout,
-      options?.sysVars
-    )
+    // Ensure this database is the host working database for the duration of
+    // conversion. Converters (including peer packages such as dxf-json-converter)
+    // assign real handles on unbound objects; some entity getters still fall
+    // back to the working database before append/add binds them.
+    acdbAssignWorkingDatabase(this)
 
+    try {
+      await converter.read(data, this, {
+        minimumChunkSize: (options && options.minimumChunkSize) || 10,
+        progress: this.createConversionProgressHandler(),
+        timeout: options?.timeout,
+        encoding: options?.encoding,
+        sysVars: options?.sysVars
+      })
+    } catch (error) {
+      const openError = AcDbOpenDatabaseError.from(error)
+      this._lastOpenError = openError
+      this.events.openFailed.dispatch({ database: this, error: openError })
+      throw openError
+    }
+
+    this._lastOpenError = null
     this.ensureDatabaseDefaults()
+  }
+
+  private createConversionProgressHandler(): AcDbConversionProgressCallback {
+    return async (
+      percentage: number,
+      stage: AcDbConversionStage,
+      stageStatus: AcDbStageStatus,
+      data?: unknown,
+      taskError?: AcCmTaskError
+    ) => {
+      let progressData: unknown = data
+      if (stageStatus === 'ERROR' && taskError) {
+        const openError = AcDbOpenDatabaseError.fromTask(taskError)
+        this._lastOpenError = openError
+        progressData = {
+          code: openError.code,
+          message: openError.message,
+          stage: openError.stage ?? stage
+        }
+      }
+
+      this.events.openProgress.dispatch({
+        database: this,
+        percentage: percentage,
+        stage: 'CONVERSION',
+        subStage: stage,
+        subStageStatus: stageStatus,
+        data: progressData
+      })
+    }
   }
 
   /**
@@ -1963,45 +2540,65 @@ export class AcDbDatabase extends AcDbObject {
   }
 
   /**
-   * Exports the current database into an ASCII DXF string.
+   * Exports the current database into DXF (ASCII string or binary bytes).
    *
    * The `fileName` parameter is kept for ObjectARX API parity. In this web
    * implementation the method returns the DXF payload instead of writing the
    * filesystem directly.
    *
-   * This is the top-level DXF export entry point. It emits the sectioned
-   * structure in the canonical order: HEADER, TABLES, BLOCKS, ENTITIES,
-   * OBJECTS, and EOF.
-   *
    * @param _fileName - Kept for ObjectARX parity. Ignored in this implementation.
    * @param precision - Numeric precision used by the DXF filer.
    * @param version - Target DXF/DWG version name or value.
-   * @param _saveThumbnailImage - Kept for ObjectARX parity. Ignored here.
-   * @returns The serialized DXF contents.
+   * @param optionsOrThumbnail - Legacy boolean thumbnail flag, or options with
+   *   `saveThumbnailImage` and `format: 'ascii' | 'binary'`.
+   * @returns ASCII DXF string, or `Uint8Array` when format is `'binary'`.
    */
   dxfOut(
     _fileName?: string,
     precision: number = 16,
     version: AcDbDwgVersion | string | number = this.version.name,
-    _saveThumbnailImage: boolean = false
-  ) {
+    optionsOrThumbnail:
+      | boolean
+      | { saveThumbnailImage?: boolean; format?: 'ascii' | 'binary' } = false
+  ): string | Uint8Array {
     this.ensureDatabaseDefaults()
+    if (
+      this._layerFilters.root.getNestedFilters().length > 0 &&
+      !this.tables.layerTable.extensionDictionary
+    ) {
+      this.tables.layerTable.extensionDictionary = this.generateHandle()
+    }
+
+    const options =
+      typeof optionsOrThumbnail === 'boolean'
+        ? {
+            saveThumbnailImage: optionsOrThumbnail,
+            format: 'ascii' as const
+          }
+        : {
+            saveThumbnailImage: optionsOrThumbnail.saveThumbnailImage ?? false,
+            format: optionsOrThumbnail.format ?? 'ascii'
+          }
 
     const outVersion =
       version instanceof AcDbDwgVersion ? version : new AcDbDwgVersion(version)
     const filer = new AcDbDxfFiler({
       database: this,
       precision,
-      version: outVersion
+      version: outVersion,
+      outputFormat: options.format
     })
 
     this.writeDxfHeaderSection(filer)
+    this.writeDxfClassesSection(filer)
     this.writeDxfTablesSection(filer, outVersion)
     this.writeDxfBlocksSection(filer)
     this.writeDxfEntitiesSection(filer)
     this.writeDxfObjectsSection(filer)
+    this.writeDxfThumbnailImageSection(filer, options.saveThumbnailImage)
     filer.writeStart('EOF')
-    return filer.toString()
+    filer.finalizeHeaderHandleSeed()
+    return options.format === 'binary' ? filer.toBinary() : filer.toString()
   }
 
   /**
@@ -2009,26 +2606,10 @@ export class AcDbDatabase extends AcDbObject {
    */
   async regen() {
     const converter = new AcDbRegenerator(this)
-    await converter.read(
-      null as unknown as ArrayBuffer,
-      this,
-      500,
-      async (
-        percentage: number,
-        stage: AcDbConversionStage,
-        stageStatus: AcDbStageStatus,
-        data?: unknown
-      ) => {
-        this.events.openProgress.dispatch({
-          database: this,
-          percentage: percentage,
-          stage: 'CONVERSION',
-          subStage: stage,
-          subStageStatus: stageStatus,
-          data: data
-        })
-      }
-    )
+    await converter.read(null as unknown as ArrayBuffer, this, {
+      minimumChunkSize: 500,
+      progress: this.createConversionProgressHandler()
+    })
   }
 
   /**
@@ -2253,9 +2834,11 @@ export class AcDbDatabase extends AcDbObject {
     }
 
     for (const [name, style] of dictionary.entries()) {
+      // LibreDWG / incomplete dictionaries can yield entries whose key or
+      // `styleName` is missing — skip those instead of throwing mid-open.
       if (
-        name.toUpperCase() === normalizedName.toUpperCase() ||
-        style.styleName.toUpperCase() === normalizedName.toUpperCase()
+        name?.toUpperCase() === normalizedName.toUpperCase() ||
+        style.styleName?.toUpperCase() === normalizedName.toUpperCase()
       ) {
         return
       }
@@ -2291,7 +2874,7 @@ export class AcDbDatabase extends AcDbObject {
     }
 
     for (const [name] of dictionary.entries()) {
-      if (name.toUpperCase() === normalizedName.toUpperCase()) {
+      if (name?.toUpperCase() === normalizedName.toUpperCase()) {
         return
       }
     }
@@ -2324,9 +2907,8 @@ export class AcDbDatabase extends AcDbObject {
     filer.startSection('HEADER')
     filer.writeString(9, '$ACADVER')
     filer.writeString(1, filer.version?.name ?? this.version.name)
-    filer.writeString(9, '$HANDSEED')
-    filer.writeString(5, filer.nextHandle.toString(16).toUpperCase())
-    if (filer.version != null && filer.version.value >= 27) {
+    filer.writeHeaderHandleSeed()
+    if (filer.capabilities.supportsUtf8CodePage) {
       filer.writeString(9, '$DWGCODEPAGE')
       filer.writeString(3, 'UTF-8')
     }
@@ -2342,13 +2924,30 @@ export class AcDbDatabase extends AcDbObject {
     filer.writeInt16(70, this.measurement)
     filer.writeString(9, '$LTSCALE')
     filer.writeDouble(40, this.ltscale)
-    filer.writeString(9, '$LWDISPLAY')
-    filer.writeInt16(70, this.lwdisplay ? 1 : 0)
+    if (filer.capabilities.supportsLineWeight) {
+      filer.writeString(9, '$LWDISPLAY')
+      filer.writeInt16(70, this.lwdisplay ? 1 : 0)
+    }
+    filer.writeString(9, '$CELTSCALE')
+    filer.writeDouble(40, this.celtscale)
+    if (filer.capabilities.supportsLineWeight) {
+      filer.writeString(9, '$CELWEIGHT')
+      filer.writeLineWeight(370, this.celweight)
+    }
+    filer.writeString(9, '$CECOLOR')
+    filer.writeCmColor(this.cecolor)
+    filer.writeString(9, '$TILEMODE')
+    filer.writeInt16(70, this.tilemode ? 1 : 0)
+    filer.writeString(9, '$PSLTSCALE')
+    filer.writeInt16(70, this.psltscale ? 1 : 0)
     filer.writeString(9, '$CLAYER')
     filer.writeString(8, this.clayer)
     filer.writeString(9, '$CELTYPE')
     filer.writeString(6, this.celtype)
-    if (!this.cetransparency.isInvalid) {
+    if (
+      filer.capabilities.supportsTransparency &&
+      !this.cetransparency.isInvalid
+    ) {
       filer.writeString(9, '$CETRANSPARENCY')
       filer.writeTransparency(this.cetransparency)
     }
@@ -2356,24 +2955,39 @@ export class AcDbDatabase extends AcDbObject {
     filer.writeString(2, this.cmlstyle)
     filer.writeString(9, '$CMLSCALE')
     filer.writeDouble(40, this.cmlscale)
-    filer.writeString(9, '$CMLEADERSTYLE')
-    filer.writeString(2, this.cmleaderstyle)
-    if (this.hpcolor.colorMethod !== AcCmColorMethod.None) {
+    if ((filer.version?.value ?? 33) >= 27) {
+      filer.writeString(9, '$CMLEADERSTYLE')
+      filer.writeString(2, this.cmleaderstyle)
+    }
+    if (
+      (filer.version?.value ?? 33) >= 25 &&
+      this.hpcolor.colorMethod !== AcCmColorMethod.None
+    ) {
       filer.writeString(9, '$HPCOLOR')
       filer.writeCmColor(this.hpcolor, 2)
     }
-    if (this.hpbackgroundcolor.colorMethod !== AcCmColorMethod.None) {
+    if (
+      (filer.version?.value ?? 33) >= 25 &&
+      this.hpbackgroundcolor.colorMethod !== AcCmColorMethod.None
+    ) {
       filer.writeString(9, '$HPBACKGROUNDCOLOR')
       filer.writeCmColor(this.hpbackgroundcolor, 2)
     }
-    filer.writeString(9, '$HPLAYER')
-    filer.writeString(8, this.hplayer)
-    if (!this.hptransparency.isInvalid) {
+    if ((filer.version?.value ?? 33) >= 25) {
+      filer.writeString(9, '$HPLAYER')
+      filer.writeString(8, this.hplayer)
+    }
+    if (
+      filer.capabilities.supportsTransparency &&
+      !this.hptransparency.isInvalid
+    ) {
       filer.writeString(9, '$HPTRANSPARENCY')
       filer.writeTransparency(this.hptransparency)
     }
     filer.writeString(9, '$TEXTSTYLE')
     filer.writeString(7, this.textstyle)
+    filer.writeString(9, '$DIMSTYLE')
+    filer.writeString(2, this.dimstyle)
     filer.writeString(9, '$ANGBASE')
     filer.writeAngle(50, this.angbase)
     filer.writeString(9, '$ANGDIR')
@@ -2382,10 +2996,14 @@ export class AcDbDatabase extends AcDbObject {
     filer.writeInt16(70, this.aunits)
     filer.writeString(9, '$AUPREC')
     filer.writeInt16(70, this.auprec)
-    filer.writeString(9, '$EXTMIN')
-    filer.writePoint3d(10, this.extmin)
-    filer.writeString(9, '$EXTMAX')
-    filer.writePoint3d(10, this.extmax)
+    if ([this.extmin.x, this.extmin.y, this.extmin.z].every(Number.isFinite)) {
+      filer.writeString(9, '$EXTMIN')
+      filer.writePoint3d(10, this.extmin)
+    }
+    if ([this.extmax.x, this.extmax.y, this.extmax.z].every(Number.isFinite)) {
+      filer.writeString(9, '$EXTMAX')
+      filer.writePoint3d(10, this.extmax)
+    }
     filer.writeString(9, '$PDMODE')
     filer.writeInt32(70, this.pdmode)
     filer.writeString(9, '$PDSIZE')
@@ -2394,6 +3012,36 @@ export class AcDbDatabase extends AcDbObject {
     filer.writeInt32(70, this.osmode)
     filer.writeString(9, '$ORTHOMODE')
     filer.writeInt16(70, this.orthomode)
+    filer.endSection()
+  }
+
+  /**
+   * Writes the CLASSES section for the DXF export.
+   *
+   * Required for proxy entities whose group code **91** indexes into this
+   * section. Skipped when no classes were loaded from the source drawing.
+   *
+   * @param filer - DXF output writer.
+   */
+  private writeDxfClassesSection(filer: AcDbDxfFiler) {
+    if (
+      !filer.capabilities.supportsClassesSection ||
+      this._classes.length === 0
+    ) {
+      return
+    }
+
+    filer.startSection('CLASSES')
+    for (const dxfClass of this._classes) {
+      filer.writeStart('CLASS')
+      filer.writeString(1, dxfClass.name)
+      filer.writeString(2, dxfClass.cppClassName)
+      filer.writeString(3, dxfClass.appName)
+      filer.writeInt32(90, dxfClass.proxyFlag)
+      filer.writeInt32(91, dxfClass.instanceCount)
+      filer.writeInt8(280, dxfClass.wasProxy ? 1 : 0)
+      filer.writeInt8(281, dxfClass.isEntity ? 1 : 0)
+    }
     filer.endSection()
   }
 
@@ -2418,6 +3066,13 @@ export class AcDbDatabase extends AcDbObject {
       this.tables.viewTable,
       this.tables.viewTable.newIterator(),
       'VIEW'
+    )
+    this.writeDxfTable(
+      filer,
+      'UCS',
+      this.tables.ucsTable,
+      this.tables.ucsTable.newIterator(),
+      'UCS'
     )
     this.writeDxfTable(
       filer,
@@ -2454,7 +3109,7 @@ export class AcDbDatabase extends AcDbObject {
       this.tables.dimStyleTable.newIterator(),
       'DIMSTYLE'
     )
-    if (version.value >= 19) {
+    if (version.capabilities.supportsBlockRecordTable) {
       this.writeDxfTable(
         filer,
         'BLOCK_RECORD',
@@ -2509,6 +3164,9 @@ export class AcDbDatabase extends AcDbObject {
    * @param filer - DXF output writer.
    */
   private writeDxfObjectsSection(filer: AcDbDxfFiler) {
+    if (!filer.capabilities.supportsObjectsSection) {
+      return
+    }
     filer.startSection('OBJECTS')
     const rootDict = this.objects.dictionary
     rootDict.ownerId = '0'
@@ -2516,7 +3174,7 @@ export class AcDbDatabase extends AcDbObject {
     const writeDictionary = (dict: AcDbDictionary) => {
       // Dictionary entries (3/350 pairs) are embedded in the DICTIONARY object.
       filer.writeStart('DICTIONARY')
-      dict.dxfOut(filer)
+      dict.dxfOut(filer, true)
     }
 
     const ensureRootEntry = (key: string, dict: AcDbDictionary) => {
@@ -2532,7 +3190,20 @@ export class AcDbDatabase extends AcDbObject {
     }
 
     ensureRootEntry('ACAD_LAYOUT', this.objects.layout)
-    if (this.objects.mleaderStyle.numEntries > 0) {
+    if (this.objects.group.numEntries > 0) {
+      ensureRootEntry('ACAD_GROUP', this.objects.group)
+    } else {
+      dropRootEntry('ACAD_GROUP')
+    }
+    if (this.objects.sortentsTable.numEntries > 0) {
+      ensureRootEntry('ACAD_SORTENTS', this.objects.sortentsTable)
+    } else {
+      dropRootEntry('ACAD_SORTENTS')
+    }
+    if (
+      (filer.version?.value ?? 33) >= 27 &&
+      this.objects.mleaderStyle.numEntries > 0
+    ) {
       ensureRootEntry('ACAD_MLEADERSTYLE', this.objects.mleaderStyle)
     } else {
       dropRootEntry('ACAD_MLEADERSTYLE')
@@ -2556,7 +3227,16 @@ export class AcDbDatabase extends AcDbObject {
     writeDictionary(rootDict)
     writeDictionary(this.objects.layout)
 
-    if (this.objects.mleaderStyle.numEntries > 0) {
+    if (this.objects.group.numEntries > 0) {
+      writeDictionary(this.objects.group)
+    }
+    if (this.objects.sortentsTable.numEntries > 0) {
+      writeDictionary(this.objects.sortentsTable)
+    }
+    if (
+      (filer.version?.value ?? 33) >= 27 &&
+      this.objects.mleaderStyle.numEntries > 0
+    ) {
       writeDictionary(this.objects.mleaderStyle)
     }
     if (this.objects.mlineStyle.numEntries > 0) {
@@ -2573,28 +3253,193 @@ export class AcDbDatabase extends AcDbObject {
 
     for (const [_, layout] of this.objects.layout.entries()) {
       filer.writeStart('LAYOUT')
-      layout.dxfOut(filer)
+      layout.dxfOut(filer, true)
+    }
+
+    for (const [key, group] of this.objects.group.entries()) {
+      if (!group.name) group.name = key
+      filer.writeStart('GROUP')
+      group.dxfOut(filer, true)
+    }
+
+    for (const [_, sortents] of this.objects.sortentsTable.entries()) {
+      filer.writeStart('SORTENTSTABLE')
+      sortents.dxfOut(filer, true)
     }
 
     for (const [_, imageDef] of this.objects.imageDefinition.entries()) {
       filer.writeStart('IMAGEDEF')
-      imageDef.dxfOut(filer)
+      imageDef.dxfOut(filer, true)
     }
 
-    for (const [_, mleaderStyle] of this.objects.mleaderStyle.entries()) {
-      filer.writeStart('MLEADERSTYLE')
-      mleaderStyle.dxfOut(filer)
+    for (const [_, layerFilter] of this.objects.layerFilter.entries()) {
+      filer.writeStart('LAYER_FILTER')
+      layerFilter.dxfOut(filer, true)
+    }
+
+    for (const [_, layerIndex] of this.objects.layerIndex.entries()) {
+      filer.writeStart('LAYER_INDEX')
+      layerIndex.dxfOut(filer, true)
+    }
+
+    if ((filer.version?.value ?? 33) >= 27) {
+      for (const [_, mleaderStyle] of this.objects.mleaderStyle.entries()) {
+        filer.writeStart('MLEADERSTYLE')
+        mleaderStyle.dxfOut(filer, true)
+      }
     }
     for (const [_, mlineStyle] of this.objects.mlineStyle.entries()) {
       filer.writeStart('MLINESTYLE')
-      mlineStyle.dxfOut(filer)
+      mlineStyle.dxfOut(filer, true)
     }
 
     for (const [_, xrecord] of this.objects.xrecord.entries()) {
       filer.writeStart('XRECORD')
+      xrecord.dxfOut(filer, true)
+    }
+
+    this.writeAcLyLayerFilterObjects(filer)
+    filer.endSection()
+  }
+
+  /**
+   * Writes Layer Manager filter tree objects (`ACAD_LAYERFILTERS` /
+   * `ACLYDICTIONARY` + XRecords) into the OBJECTS section and attaches an
+   * extension dictionary to the Layer Table.
+   *
+   * @param filer - DXF output writer.
+   */
+  private writeAcLyLayerFilterObjects(filer: AcDbDxfFiler) {
+    const serialized = acdbSerializeLayerFilterTree(this._layerFilters)
+    if (serialized.nodes.length === 0) {
+      return
+    }
+
+    type BuiltDict = {
+      handle: string
+      ownerId: string
+      entries: { name: string; id: string }[]
+    }
+    type BuiltXRec = {
+      handle: string
+      ownerId: string
+      extensionDictionaryId?: string
+      data: AcDbSerializedFilterNode['data']
+    }
+
+    const dicts: BuiltDict[] = []
+    const xrecs: BuiltXRec[] = []
+    const layerTable = this.tables.layerTable
+    const layerExtHandle =
+      layerTable.extensionDictionary ?? this.generateHandle()
+    layerTable.extensionDictionary = layerExtHandle
+
+    const aclyHandle = this.generateHandle()
+    const acadHandle = this.generateHandle()
+    const rootAclyEntries: { name: string; id: string }[] = []
+    const rootAcadEntries: { name: string; id: string }[] = []
+
+    const emit = (
+      node: AcDbSerializedFilterNode,
+      parentAclyHandle: string,
+      addToLegacy: boolean
+    ): string => {
+      const xHandle = this.generateHandle()
+      let extensionDictionaryId: string | undefined
+      if (node.children.length > 0) {
+        const extHandle = this.generateHandle()
+        const childAclyHandle = this.generateHandle()
+        const childEntries: { name: string; id: string }[] = []
+        for (const child of node.children) {
+          childEntries.push({
+            name: child.key,
+            id: emit(child, childAclyHandle, false)
+          })
+        }
+        dicts.push({
+          handle: extHandle,
+          ownerId: xHandle,
+          entries: [{ name: ACLY_DICTIONARY_NAME, id: childAclyHandle }]
+        })
+        dicts.push({
+          handle: childAclyHandle,
+          ownerId: extHandle,
+          entries: childEntries
+        })
+        extensionDictionaryId = extHandle
+      }
+
+      xrecs.push({
+        handle: xHandle,
+        ownerId: parentAclyHandle,
+        extensionDictionaryId,
+        data: node.data
+      })
+      if (addToLegacy) {
+        rootAcadEntries.push({ name: node.key, id: xHandle })
+      }
+      return xHandle
+    }
+
+    for (const node of serialized.nodes) {
+      rootAclyEntries.push({
+        name: node.key,
+        id: emit(node, aclyHandle, true)
+      })
+    }
+
+    const layerExtEntries = new Map<string, string>()
+    const existingLayerExt = this.getObjectById(layerExtHandle)
+    if (existingLayerExt instanceof AcDbDictionary) {
+      for (const [key, value] of existingLayerExt.entries()) {
+        layerExtEntries.set(key, value.objectId)
+      }
+    }
+    layerExtEntries.set(ACLY_DICTIONARY_NAME, aclyHandle)
+    layerExtEntries.set(ACAD_LAYERFILTERS_NAME, acadHandle)
+
+    dicts.unshift(
+      {
+        handle: layerExtHandle,
+        ownerId: layerTable.objectId,
+        entries: Array.from(layerExtEntries, ([name, id]) => ({ name, id }))
+      },
+      {
+        handle: aclyHandle,
+        ownerId: layerExtHandle,
+        entries: rootAclyEntries
+      },
+      {
+        handle: acadHandle,
+        ownerId: layerExtHandle,
+        entries: rootAcadEntries
+      }
+    )
+
+    for (const dict of dicts) {
+      filer.writeStart('DICTIONARY')
+      filer.writeHandle(5, dict.handle)
+      filer.writeObjectId(330, dict.ownerId)
+      filer.writeSubclassMarker('AcDbDictionary')
+      filer.writeInt16(280, 1)
+      filer.writeInt16(281, 1)
+      for (const entry of dict.entries) {
+        filer.writeString(3, entry.name)
+        filer.writeObjectId(350, entry.id)
+      }
+    }
+
+    for (const item of xrecs) {
+      const xrecord = new AcDbXrecord()
+      xrecord.objectId = item.handle
+      xrecord.ownerId = item.ownerId
+      if (item.extensionDictionaryId) {
+        xrecord.extensionDictionary = item.extensionDictionaryId
+      }
+      xrecord.data = acdbLayerGroupsToResultBuffer(item.data)
+      filer.writeStart('XRECORD')
       xrecord.dxfOut(filer)
     }
-    filer.endSection()
   }
 
   /**
@@ -2629,7 +3474,7 @@ export class AcDbDatabase extends AcDbObject {
       }
 
       filer.writeStart(recordType)
-      record.dxfOut(filer)
+      record.dxfOut(filer, true)
     }
     filer.endTable()
   }
@@ -2645,8 +3490,41 @@ export class AcDbDatabase extends AcDbObject {
    * @param entity - Entity to serialize.
    */
   private writeDxfEntity(filer: AcDbDxfFiler, entity: AcDbEntity) {
+    if (
+      entity instanceof AcDbPolyline &&
+      !filer.capabilities.supportsLwPolyline
+    ) {
+      filer.writeStart('POLYLINE')
+      entity.dxfOutAs2dPolyline(filer, true)
+      return
+    }
     filer.writeStart(entity.dxfTypeName)
-    entity.dxfOut(filer)
+    entity.dxfOut(filer, true)
+  }
+
+  /**
+   * Writes THUMBNAILIMAGE when preview bytes are present and export requested.
+   */
+  private writeDxfThumbnailImageSection(
+    filer: AcDbDxfFiler,
+    saveThumbnailImage = false
+  ) {
+    const bytes = this._thumbnailImage
+    if (!saveThumbnailImage || !bytes || bytes.length === 0) {
+      return
+    }
+    if (!filer.capabilities.supportsObjectsSection) {
+      // Thumbnail section is post-R12; skip for AC1009.
+      return
+    }
+    const chunkSize = 127
+    filer.startSection('THUMBNAILIMAGE')
+    filer.writeInt32(90, bytes.length)
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize)
+      filer.writeString(310, acdbBytesToHexString(chunk))
+    }
+    filer.endSection()
   }
 
   /**
@@ -2663,20 +3541,29 @@ export class AcDbDatabase extends AcDbObject {
   private clear() {
     this.transactionManager.clearUndoStack()
     // Clear all tables and dictionaries
+    this._classes = []
     this._tables.blockTable.removeAll()
     this._tables.dimStyleTable.removeAll()
     this._tables.linetypeTable.removeAll()
     this._tables.textStyleTable.removeAll()
+    this._tables.ucsTable.removeAll()
     this._tables.viewTable.removeAll()
     this._tables.layerTable.removeAll()
     this._tables.viewportTable.removeAll()
+    this._tables.appIdTable.removeAll()
     this._objects.layout.removeAll()
+    this._objects.group.removeAll()
     this._objects.imageDefinition.removeAll()
+    this._objects.layerFilter.removeAll()
+    this._objects.layerIndex.removeAll()
     this._objects.mleaderStyle.removeAll()
     this._objects.mlineStyle.removeAll()
+    this._objects.sortentsTable.removeAll()
     this._objects.xrecord.removeAll()
+    this._layerFilters = new AcLyLayerFilterTree()
     this._currentSpace = undefined
     this._extents.makeEmpty()
+    this.registerBootstrapHandles()
   }
 
   /**

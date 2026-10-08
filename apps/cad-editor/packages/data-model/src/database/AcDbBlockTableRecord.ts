@@ -6,6 +6,7 @@ import { AcDbObjectId } from '../base/AcDbObject'
 import { AcDbEntity } from '../entity/AcDbEntity'
 import { AcDbObjectIterator } from '../misc/AcDbObjectIterator'
 import { AcDbUnitsValue } from '../misc/AcDbUnitsValue'
+import { acdbHexStringsToBytes } from '../misc/proxyGraphic/AcDbProxyGraphicBinaryStream'
 import {
   AcDbSymbolTableRecord,
   AcDbSymbolTableRecordAttrs
@@ -35,6 +36,30 @@ export enum AcDbBlockScaling {
 }
 
 /**
+ * Block-type flags for {@link AcDbBlockTableRecord} (DXF group code 70 on BLOCK).
+ *
+ * Bit values may be combined.
+ */
+export enum AcDbBlockTableRecordFlag {
+  /** No special block type flags apply */
+  None = 0,
+  /** Anonymous block (hatch, associative dimension, etc.) */
+  Anonymous = 1,
+  /** Block has non-constant attribute definitions */
+  HasNonConstantAttributes = 2,
+  /** External reference (xref) */
+  Xref = 4,
+  /** Xref overlay */
+  XrefOverlay = 8,
+  /** Externally dependent */
+  ExternallyDependent = 16,
+  /** Resolved external reference (or dependent of one) */
+  Resolved = 32,
+  /** Referenced external reference */
+  Referenced = 64
+}
+
+/**
  * Interface defining the attributes for block table records.
  */
 export interface AcDbBlockTableRecordAttrs extends AcDbSymbolTableRecordAttrs {
@@ -42,14 +67,27 @@ export interface AcDbBlockTableRecordAttrs extends AcDbSymbolTableRecordAttrs {
   origin: AcGePoint3d
   /** The object id of the associated AcDbLayout object in the Layouts dictionary */
   layoutId: AcDbObjectId
-  /** Block insertion units (DXF group code 70) */
+  /** Block insertion units (DXF group code 70 on BLOCK_RECORD) */
   blockInsertUnits: AcDbUnitsValue
   /** Block explodability flag (DXF group code 280) */
   explodability: number
   /** Block scalability flag (DXF group code 281) */
   blockScaling: AcDbBlockScaling
-  /** Binary data for bitmap preview (DXF group code 310, optional) */
-  bmpPreview?: string
+  /**
+   * Block-type flags (DXF group code 70 on BLOCK / BLOCK_HEADER).
+   * See {@link AcDbBlockTableRecordFlag}.
+   */
+  flags: number
+  /**
+   * Path name of the externally referenced drawing when this block is an xref
+   * (DXF group code 1 on BLOCK). Empty when not an xref or the path is unknown.
+   */
+  pathName: string
+  /**
+   * PreviewIcon binary payload (DXF BLOCK_RECORD group 310), typically a DIB
+   * (BITMAPINFO + bits). Stored as raw bytes rather than hex to save memory.
+   */
+  previewIcon?: Uint8Array
 }
 
 export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRecordAttrs> {
@@ -58,8 +96,8 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
   /** Name prefix for paper space block table records */
   static PAPER_SPACE_NAME_PREFIX = '*Paper_Space'
 
-  /** Map of entities indexed by their object IDs */
-  private _entities: Map<AcDbObjectId, AcDbEntity>
+  /** Entities owned by this block table record, in insertion order */
+  private _entities: AcDbEntity[]
 
   /**
    * Returns true if the specified name is the name of the model space block table record.
@@ -104,6 +142,28 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
   }
 
   /**
+   * Clears AutoCAD-internal xref status bits from BLOCK flags read from a file.
+   *
+   * DXF group 70 bits 32 ({@link AcDbBlockTableRecordFlag.Resolved}) and 64
+   * ({@link AcDbBlockTableRecordFlag.Referenced}) are documented as AutoCAD
+   * internal and ignored on input. Web converters do not bind xref geometry, so
+   * those bits must not suppress {@link isUnresolvedXref}. Runtime code (for
+   * example XATTACH overlay load) may set Resolved after content is available.
+   *
+   * @param flags - Raw block-type flags from DXF/DWG.
+   * @returns Flags with Resolved and Referenced cleared.
+   */
+  static sanitizeImportedFlags(flags: number) {
+    return (
+      flags &
+      ~(
+        AcDbBlockTableRecordFlag.Resolved |
+        AcDbBlockTableRecordFlag.Referenced
+      )
+    )
+  }
+
+  /**
    * Creates a new AcDbBlockTableRecord instance.
    *
    * @param attrs - Input attribute values for this block table record
@@ -122,13 +182,15 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
     defaults(attrs, {
       origin: new AcGePoint3d(),
       layoutId: '',
+      flags: AcDbBlockTableRecordFlag.None,
+      pathName: '',
       blockInsertUnits: 0,
       explodability: 1,
       blockScaling: AcDbBlockScaling.Uniform,
-      bmpPreview: undefined
+      previewIcon: undefined
     })
     super(attrs, defaultAttrs)
-    this._entities = new Map<string, AcDbEntity>()
+    this._entities = []
   }
 
   /**
@@ -212,6 +274,65 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
   }
 
   /**
+   * Gets or sets block-type flags (DXF BLOCK group code 70).
+   *
+   * @see {@link AcDbBlockTableRecordFlag}
+   */
+  get flags() {
+    return this.getAttr('flags')
+  }
+  set flags(value: number) {
+    this.setAttr('flags', value)
+  }
+
+  /**
+   * Gets or sets the path of the externally referenced drawing.
+   *
+   * Corresponds to DXF BLOCK group code 1. Empty when this is not an xref.
+   */
+  get pathName() {
+    return this.getAttr('pathName')
+  }
+  set pathName(value: string) {
+    this.setAttr('pathName', value)
+  }
+
+  /**
+   * True when this block is an external reference or an xref overlay.
+   */
+  get isXref() {
+    return (
+      (this.flags &
+        (AcDbBlockTableRecordFlag.Xref |
+          AcDbBlockTableRecordFlag.XrefOverlay)) !==
+      0
+    )
+  }
+
+  /**
+   * True when this block is an xref overlay (flag bit 8).
+   */
+  get isOverlayReference() {
+    return (this.flags & AcDbBlockTableRecordFlag.XrefOverlay) !== 0
+  }
+
+  /**
+   * True when this is an xref whose content has not been loaded into the block.
+   *
+   * File importers clear the Resolved bit via {@link sanitizeImportedFlags}
+   * because AutoCAD often writes Resolved even though web converters do not bind
+   * xref geometry. Runtime loaders (for example XATTACH) may set Resolved once
+   * an overlay session is available, even when the BTR stays empty.
+   */
+  get isUnresolvedXref() {
+    if (!this.isXref) return false
+    if ((this.flags & AcDbBlockTableRecordFlag.Resolved) !== 0) {
+      return false
+    }
+    return this._entities.length === 0
+  }
+
+  /**
    * Gets or sets the block insertion units.
    *
    * This corresponds to DXF group code 70 in BLOCK_RECORD entries.
@@ -254,17 +375,23 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
   }
 
   /**
-   * Gets or sets the bitmap preview data.
+   * Gets or sets the PreviewIcon binary payload for this block definition.
    *
-   * This corresponds to DXF group code 310 in BLOCK_RECORD entries.
+   * Corresponds to AutoCAD .NET `BlockTableRecord.PreviewIcon` and DXF
+   * BLOCK_RECORD group code 310. The payload is typically a DIB (BITMAPINFO +
+   * bits), not a full BMP file. Stored as raw bytes to avoid hex doubling.
    *
-   * @returns The bitmap preview data
+   * @returns Preview icon bytes, or `undefined` when none exist
    */
-  get bmpPreview() {
-    return this.getAttrWithoutException('bmpPreview')
+  get previewIcon(): Uint8Array | undefined {
+    return this.getAttrWithoutException('previewIcon')
   }
-  set bmpPreview(value: string | undefined) {
-    this.setAttr('bmpPreview', value)
+  set previewIcon(value: Uint8Array | undefined) {
+    if (!value || value.length === 0) {
+      this.setAttr('previewIcon', undefined)
+      return
+    }
+    this.setAttr('previewIcon', value)
   }
 
   /**
@@ -295,9 +422,9 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
       item.database = this.database
       item.ownerId = this.objectId
       this.database.ensureEntityStyleDefaults(item)
-      this.database.commitObjectHandle(item, id => this._entities.has(id))
+      this.database.commitObjectHandle(item, id => this.hasEntityId(id))
       item.resolveEffectiveProperties()
-      this._entities.set(item.objectId, item)
+      this._entities.push(item)
       if (
         item.dxfTypeName === 'INSERT' &&
         'syncAttributeDatabases' in item &&
@@ -359,10 +486,16 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
     }
 
     const ids = Array.isArray(objectId) ? objectId : [objectId]
+    if (ids.length === 0) {
+      return false
+    }
+
+    const idSet = new Set(ids)
     const entities: AcDbEntity[] = []
-    ids.forEach(id => {
-      const entity = this._entities.get(id)
-      if (entity) {
+    let write = 0
+
+    for (const entity of this._entities) {
+      if (idSet.has(entity.objectId)) {
         if (manager.isRecording()) {
           manager.recordRemove(
             { type: 'blockTableRecord', ownerId: this.objectId },
@@ -370,9 +503,12 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
           )
         }
         entities.push(entity)
+        this.database.releaseObjectHandle(entity)
+      } else {
+        this._entities[write++] = entity
       }
-      this._entities.delete(id)
-    })
+    }
+    this._entities.length = write
     if (
       entities.length > 0 &&
       !manager.isRecording() &&
@@ -407,7 +543,24 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
    * @returns The entity with the specified ID, or undefined if not found
    */
   getIdAt(id: AcDbObjectId) {
-    return this._entities.get(id)
+    const object = this.database.getObjectById(id)
+    if (!(object instanceof AcDbEntity)) {
+      return undefined
+    }
+    const ownerId = object.getAttrWithoutException('ownerId')
+    if (ownerId !== this.objectId) {
+      return undefined
+    }
+    return object
+  }
+
+  /**
+   * Returns true when this block table record already owns an entity with the given id.
+   *
+   * @internal
+   */
+  hasEntityId(id: AcDbObjectId) {
+    return this.getIdAt(id) !== undefined
   }
 
   /**
@@ -440,9 +593,12 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
     filer.writeString(8, '0')
     filer.writeSubclassMarker('AcDbBlockBegin')
     filer.writeString(2, this.name)
-    filer.writeInt16(70, 0)
+    filer.writeInt16(70, this.flags)
     filer.writePoint3d(10, this.origin)
     filer.writeString(3, this.name)
+    if (this.pathName) {
+      filer.writeString(1, this.pathName)
+    }
     return this
   }
 
@@ -483,10 +639,57 @@ export class AcDbBlockTableRecord extends AcDbSymbolTableRecord<AcDbBlockTableRe
     filer.writeInt16(70, this.blockInsertUnits)
     filer.writeInt16(280, this.explodability)
     filer.writeInt16(281, this.blockScaling)
-    // TODO: Oupput preview bitmap with the correct format
-    // filer.writeString(310, this.bmpPreview)
+    // TODO: Output PreviewIcon (group 310) with the correct DIB/hex format
+    // if (this.previewIcon?.length) { ... }
     if (this.isModelSapce || this.isPaperSapce) {
       filer.writeObjectId(340, this.layoutId)
+    }
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbSymbolTableRecord')
+    filer.atSubclassData('AcDbBlockTableRecord')
+
+    const previewChunks: string[] = []
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 100) {
+        filer.pushBackItem(item)
+        break
+      }
+      switch (code) {
+        case 2:
+          this.name = String(item.value)
+          break
+        case 70:
+          this.blockInsertUnits = Number(item.value)
+          break
+        case 280:
+          this.explodability = Number(item.value)
+          break
+        case 281:
+          this.blockScaling = Number(item.value) as AcDbBlockScaling
+          break
+        case 340:
+          this.layoutId = String(item.value)
+          break
+        case 310: {
+          const hex = String(item.value).replace(/\s+/g, '')
+          if (hex) previewChunks.push(hex)
+          break
+        }
+        default:
+          break
+      }
+    }
+
+    if (previewChunks.length > 0) {
+      this.previewIcon = acdbHexStringsToBytes(previewChunks)
     }
     return this
   }

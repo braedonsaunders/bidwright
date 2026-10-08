@@ -4,6 +4,7 @@ import {
   AcGePoint3d,
   AcGeVector3d
 } from '@mlightcad/geometry-engine'
+import { AcGiMTextAttachmentPoint } from '@mlightcad/graphic-interface'
 
 import { acdbHostApplicationServices, AcDbDxfFiler } from '../src/base'
 import { AcDbDatabase } from '../src/database'
@@ -99,6 +100,74 @@ describe('AcDbText', () => {
     expect(text.geometricExtents.min).toMatchObject({ x: 10, y: 20, z: 0 })
     expect(text.geometricExtents.max.x).toBeCloseTo(14)
     expect(text.geometricExtents.max.y).toBeCloseTo(22)
+  })
+
+  it('anchors centered text at group 11 even when it equals the insertion point', () => {
+    // Spec-compliant writers (ezdxf `Text.set_placement`, AutoCAD) emit
+    // group 11 equal to group 10 when the insertion point coincides with
+    // the alignment point. Equality must not be read as "group 11 unset":
+    // the rendered attachment has to stay MiddleCenter, not degrade to
+    // BaselineLeft.
+    const text = new AcDbText()
+    text.dxfInFields(
+      AcDbDxfFiler.fromString(
+        '100\nAcDbEntity\n100\nAcDbText\n10\n20\n20\n80\n30\n0\n40\n10\n1\nA1\n' +
+          '72\n1\n11\n20\n21\n80\n31\n0\n100\nAcDbText\n73\n2\n'
+      )
+    )
+    expect(text.hasAlignmentPoint).toBe(true)
+
+    const db = new AcDbDatabase()
+    db.createDefaultData()
+    acdbHostApplicationServices().workingDatabase = db
+    text.database = db
+    const renderer = { mtext: jest.fn(() => ({})) } as unknown as {
+      mtext: jest.Mock
+    }
+    text.subWorldDraw(renderer as never, true)
+
+    const [mtextData] = renderer.mtext.mock.calls[0]
+    expect(mtextData.position).toMatchObject({ x: 20, y: 80, z: 0 })
+    expect(mtextData.attachmentPoint).toBe(
+      AcGiMTextAttachmentPoint.MiddleCenter
+    )
+  })
+
+  it('falls back to baseline-left anchor when group 11 is absent', () => {
+    const text = new AcDbText()
+    text.dxfInFields(
+      AcDbDxfFiler.fromString(
+        '100\nAcDbEntity\n100\nAcDbText\n10\n20\n20\n80\n30\n0\n40\n10\n1\nA1\n' +
+          '72\n1\n100\nAcDbText\n73\n2\n'
+      )
+    )
+    expect(text.hasAlignmentPoint).toBe(false)
+    // alignmentPoint mirrors position so transformBy moves them together
+    expect(text.alignmentPoint).toMatchObject({ x: 20, y: 80, z: 0 })
+
+    const db = new AcDbDatabase()
+    db.createDefaultData()
+    acdbHostApplicationServices().workingDatabase = db
+    text.database = db
+    const renderer = { mtext: jest.fn(() => ({})) } as unknown as {
+      mtext: jest.Mock
+    }
+    text.subWorldDraw(renderer as never, true)
+
+    const [mtextData] = renderer.mtext.mock.calls[0]
+    expect(mtextData.position).toMatchObject({ x: 20, y: 80, z: 0 })
+    expect(mtextData.attachmentPoint).toBe(
+      AcGiMTextAttachmentPoint.BaselineLeft
+    )
+  })
+
+  it('treats an API-set alignment point as provided even when equal to position', () => {
+    const text = new AcDbText()
+    text.position = new AcGePoint3d(10, 20, 0)
+    expect(text.hasAlignmentPoint).toBe(false)
+
+    text.alignmentPoint = new AcGePoint3d(10, 20, 0)
+    expect(text.hasAlignmentPoint).toBe(true)
   })
 
   it('returns insertion osnap point only for insertion mode', () => {

@@ -1,16 +1,25 @@
 import { AcDbObjectId, AcGeBox2d, AcGeBox3d, log } from '@mlightcad/data-model'
 import {
+  AcTrDirectEntityMeta,
   AcTrEntity,
+  AcTrEntityPreview,
   AcTrHtmlTransientManager,
   AcTrPreviewOverlayManager,
   AcTrTransientManager
 } from '@mlightcad/three-renderer'
-import { AcEdLayerInfo } from 'editor'
 import * as THREE from 'three'
 
+import { AcEdLayerInfo } from '../editor'
 import type { AcTrSpatialSearchOptions } from '../spatialIndex/AcTrSpatialIndex'
 import { AcTrLayer } from './AcTrLayer'
-import { AcTrLayout, AcTrLayoutStats } from './AcTrLayout'
+import {
+  type AcTrEntityPreviewRootOptions,
+  AcTrLayout,
+  AcTrLayoutStats
+} from './AcTrLayout'
+
+/** Layout search order when building entity preview geometry. */
+export type AcTrEntityPreviewScope = 'active-first' | 'all'
 
 export interface AcTrSceneStats {
   layouts: AcTrLayoutStats[]
@@ -359,6 +368,20 @@ export class AcTrScene {
   }
 
   /**
+   * Applies compare-display coloring to every non-reference layout in the scene.
+   * Overlay/reference layouts must be updated via their own {@link AcTrLayout.setCompareDisplay}.
+   *
+   * @param options - Compare colors and per-entity role overrides.
+   */
+  setCompareDisplay(options: Parameters<AcTrLayout['setCompareDisplay']>[0]) {
+    this._layouts.forEach(layout => {
+      if (!layout.isReference) {
+        layout.setCompareDisplay(options)
+      }
+    })
+  }
+
+  /**
    * Search entities intersected or contained in the specified bounding box.
    * @param box Input the query bounding box
    * @returns Return query results
@@ -379,13 +402,57 @@ export class AcTrScene {
   }
 
   updateLayer(layer: AcEdLayerInfo) {
+    const previous = this._layers.get(layer.name)
+    const wasFrozen = previous?.isFrozen ?? false
     const updatedLayers: AcTrLayer[] = []
     this._layers.set(layer.name, layer)
+    const touchedObjectIds = new Set<string>()
     this._layouts.forEach(layout => {
       const updatedLayer = layout.updateLayer(layer)
       if (updatedLayer) updatedLayers.push(updatedLayer)
+      if (layer.isFrozen && !wasFrozen) {
+        for (const id of layout.applyInsertLayerFreeze(layer.name, true)) {
+          touchedObjectIds.add(id)
+        }
+      } else if (!layer.isFrozen && wasFrozen) {
+        for (const id of layout.applyInsertLayerFreeze(layer.name, false)) {
+          touchedObjectIds.add(id)
+        }
+      }
     })
-    return updatedLayers
+    return { updatedLayers, touchedObjectIds }
+  }
+
+  /**
+   * Invokes a callback for every scene layer group with the given name across layouts.
+   *
+   * @param layerName - Layer name shared by each layout's {@link AcTrLayer} bucket.
+   * @param fn - Callback invoked with the scene layer and owning layout.
+   */
+  forEachSceneLayer(
+    layerName: string,
+    fn: (sceneLayer: AcTrLayer, layout: AcTrLayout) => void
+  ): void {
+    this._layouts.forEach(layout => {
+      const sceneLayer = layout.getLayer(layerName)
+      if (sceneLayer) {
+        fn(sceneLayer, layout)
+      }
+    })
+  }
+
+  /**
+   * Applies ACI-7 / foreground colour to owned batch material clones across layouts.
+   */
+  repaintForegroundMaterials(color: number) {
+    this._layouts.forEach(layout => layout.repaintForegroundMaterials(color))
+  }
+
+  /**
+   * Updates wipeout / background-fill materials after a canvas theme flip.
+   */
+  repaintBackgroundMaterials(color: number) {
+    this._layouts.forEach(layout => layout.repaintBackgroundMaterials(color))
   }
 
   /**
@@ -405,22 +472,44 @@ export class AcTrScene {
   }
 
   /**
-   * Applies world transforms to existing transient entities without reconverting
-   * database entities on every cursor move.
+   * Show or hide one transient entity already published in this scene.
+   * @returns `true` when the entity exists and visibility was updated.
    */
-  updateTransientPreviewTransforms(
-    transforms: ReadonlyArray<{ objectId: AcDbObjectId; matrix: THREE.Matrix4 }>
-  ): boolean {
-    return this._transientManager.applyTransforms(
-      transforms.map(entry => ({
-        id: entry.objectId,
-        matrix: entry.matrix
-      }))
-    )
+  setTransientEntityVisible(objectId: AcDbObjectId, visible: boolean): boolean {
+    const entity = this._transientManager.get(objectId)
+    if (!entity) return false
+    if (entity.visible === visible) return false
+    entity.visible = visible
+    return true
   }
 
   /**
-   * Returns true when every requested entity exists in the active layout.
+   * Applies world transforms to existing transient entities without reconverting
+   * database entities on every cursor move.
+   *
+   * Also forwards matching ids to {@link AcTrHtmlTransientManager} so HTML
+   * overlays receive the same delta as WebGL transients.
+   *
+   * @returns Which renderer layers actually changed, so the view can dirty
+   *   WebGL and CSS2D independently.
+   */
+  updateTransientPreviewTransforms(
+    transforms: ReadonlyArray<{ objectId: AcDbObjectId; matrix: THREE.Matrix4 }>
+  ): { webgl: boolean; html: boolean } {
+    const mapped = transforms.map(entry => ({
+      id: entry.objectId,
+      matrix: entry.matrix
+    }))
+    return {
+      webgl: this._transientManager.applyTransforms(mapped),
+      html: this._htmlTransientManager.applyTransforms(mapped)
+    }
+  }
+
+  /**
+   * Returns true when every requested entity can be previewed in the active layout.
+   *
+   * Uses batch bounds only and does not clone preview geometry.
    *
    * @param entityIds - Database object ids required for preview creation
    */
@@ -429,11 +518,234 @@ export class AcTrScene {
     if (!layout) {
       return false
     }
-    return layout.canCreateEntityPreview(entityIds)
+    return layout.canCreateEntityPreview(entityIds, {
+      requireAllEntities: true
+    })
+  }
+
+  /**
+   * Computes a 2D framing box for preview export without cloning drawables.
+   *
+   * @param entityIds - Database object ids to measure
+   * @param margin - Margin multiplier applied around the raw bounds
+   * @param scope - Layout search order; defaults to {@link AcTrEntityPreviewScope active-first}
+   */
+  computeEntityPreviewBounds2d(
+    entityIds: AcDbObjectId[],
+    margin = 1.1,
+    scope: AcTrEntityPreviewScope = 'active-first'
+  ): AcGeBox2d | null {
+    const box = this.computeEntityPreviewBoundsBox(entityIds, scope)
+    return AcTrEntityPreview.box3ToBounds2d(box, margin)
+  }
+
+  /**
+   * Returns entity ids that can be previewed using the same layout policy as
+   * {@link createEntityPreviewRoot}.
+   *
+   * @param entityIds - Database object ids to check
+   * @param scope - Layout search order; defaults to {@link AcTrEntityPreviewScope active-first}
+   */
+  findPreviewableEntityIds(
+    entityIds: AcDbObjectId[],
+    scope: AcTrEntityPreviewScope = 'active-first'
+  ): AcDbObjectId[] {
+    if (entityIds.length === 0) {
+      return []
+    }
+
+    if (scope === 'all') {
+      const previewable: AcDbObjectId[] = []
+      const pending = new Set(entityIds)
+      for (const layout of this.getOrderedLayouts('all')) {
+        if (pending.size === 0) {
+          break
+        }
+
+        const claimable = layout.findPreviewableEntityIds([...pending])
+        if (claimable.length === 0) {
+          continue
+        }
+
+        previewable.push(...claimable)
+        for (const id of claimable) {
+          pending.delete(id)
+        }
+      }
+      return previewable
+    }
+
+    for (const layout of this.getOrderedLayouts('active-first')) {
+      const claimable = layout.findPreviewableEntityIds(entityIds)
+      if (claimable.length > 0) {
+        return claimable
+      }
+    }
+    return []
+  }
+
+  /**
+   * Builds one merged preview root, searching layouts in priority order.
+   *
+   * Entities that are missing from a layout or cannot be extracted are skipped.
+   * With {@link AcTrEntityPreviewScope.all}, each entity is taken from the first
+   * layout that can preview it so geometry is not duplicated.
+   *
+   * @param entityIds - Database object ids to include in the preview overlay
+   * @param options - Optional layout search order and per-layout extraction policy
+   * @returns Preview root group, or `null` when no preview geometry was extracted
+   */
+  createEntityPreviewRoot(
+    entityIds: AcDbObjectId[],
+    options?: {
+      scope?: AcTrEntityPreviewScope
+      layoutOptions?: AcTrEntityPreviewRootOptions
+    }
+  ): THREE.Group | null {
+    if (entityIds.length === 0) {
+      return null
+    }
+
+    const scope = options?.scope ?? 'active-first'
+    const layoutOptions: AcTrEntityPreviewRootOptions = {
+      missingEntity: 'skip',
+      ...options?.layoutOptions
+    }
+
+    if (scope === 'all') {
+      return this.mergeEntityPreviewRoots(
+        entityIds,
+        this.getOrderedLayouts('all'),
+        layoutOptions
+      )
+    }
+
+    for (const layout of this.getOrderedLayouts('active-first')) {
+      const root = layout.createEntityPreviewRoot(entityIds, layoutOptions)
+      if (root) {
+        return root
+      }
+    }
+    return null
+  }
+
+  /**
+   * Merges preview roots from the given layouts into one group.
+   *
+   * Each entity id is assigned to the first layout that can preview it.
+   */
+  private mergeEntityPreviewRoots(
+    entityIds: AcDbObjectId[],
+    layouts: Iterable<AcTrLayout>,
+    layoutOptions: AcTrEntityPreviewRootOptions
+  ): THREE.Group | null {
+    const pending = new Set(entityIds)
+    const previewRoot = new THREE.Group()
+    previewRoot.name = 'EntityPreviewRoot'
+
+    for (const layout of layouts) {
+      if (pending.size === 0) {
+        break
+      }
+
+      const claimable = layout.findPreviewableEntityIds([...pending])
+      if (claimable.length === 0) {
+        continue
+      }
+
+      const layoutRoot = layout.createEntityPreviewRoot(
+        claimable,
+        layoutOptions
+      )
+      if (!layoutRoot) {
+        continue
+      }
+
+      previewRoot.add(layoutRoot)
+      for (const id of claimable) {
+        pending.delete(id)
+      }
+    }
+
+    return previewRoot.children.length > 0 ? previewRoot : null
+  }
+
+  /**
+   * Returns layouts in priority order for preview lookup.
+   */
+  private getOrderedLayouts(scope: AcTrEntityPreviewScope): AcTrLayout[] {
+    if (scope === 'all') {
+      return [...this._layouts.values()]
+    }
+
+    const ordered: AcTrLayout[] = []
+    const active = this.activeLayout
+    const model = this.modelSpaceLayout
+
+    if (active) {
+      ordered.push(active)
+    }
+    if (model && model !== active) {
+      ordered.push(model)
+    }
+    for (const layout of this._layouts.values()) {
+      if (layout !== active && layout !== model) {
+        ordered.push(layout)
+      }
+    }
+    return ordered
+  }
+
+  /**
+   * Computes batch bounds for requested entities using the same layout policy as
+   * {@link createEntityPreviewRoot}.
+   */
+  private computeEntityPreviewBoundsBox(
+    entityIds: AcDbObjectId[],
+    scope: AcTrEntityPreviewScope = 'active-first'
+  ) {
+    const target = new THREE.Box3()
+    const scratch = new THREE.Box3()
+
+    if (scope === 'all') {
+      const pending = new Set(entityIds)
+      for (const layout of this.getOrderedLayouts('all')) {
+        if (pending.size === 0) {
+          break
+        }
+
+        const claimable = layout.findPreviewableEntityIds([...pending])
+        if (claimable.length === 0) {
+          continue
+        }
+
+        layout.computeEntityPreviewBoundsBox(claimable, scratch)
+        if (!scratch.isEmpty()) {
+          target.union(scratch)
+        }
+        for (const id of claimable) {
+          pending.delete(id)
+        }
+      }
+      return target
+    }
+
+    for (const layout of this.getOrderedLayouts('active-first')) {
+      layout.computeEntityPreviewBoundsBox(entityIds, scratch)
+      if (!scratch.isEmpty()) {
+        target.copy(scratch)
+        return target
+      }
+    }
+
+    target.makeEmpty()
+    return target
   }
 
   /**
    * Creates one batched preview overlay for command jigs.
+   *
+   * Only the active layout is searched and every requested entity must be present.
    *
    * @param entityIds - Database object ids to include in the preview overlay
    * @returns Preview handle id, or `null` when preview creation failed
@@ -443,7 +755,11 @@ export class AcTrScene {
     if (!layout) {
       return null
     }
-    const root = layout.createEntityPreviewRoot(entityIds)
+
+    const root = layout.createEntityPreviewRoot(entityIds, {
+      missingEntity: 'fail',
+      requireAllEntities: true
+    })
     if (!root) {
       return null
     }
@@ -493,6 +809,27 @@ export class AcTrScene {
     }
 
     return this
+  }
+
+  /**
+   * Adds an entity via direct batch append (no temporary drawable tree).
+   *
+   * @returns `true` when geometry was registered in the target layout.
+   */
+  addDirectEntity(
+    meta: AcTrDirectEntityMeta,
+    extendBbox: boolean = true
+  ): boolean {
+    const ownerId = meta.ownerId
+    if (!ownerId) {
+      log.warn('[AcTrSecene] The owner id of one entity cannot be empty!')
+      return false
+    }
+    let layout = this._layouts.get(ownerId)
+    if (!layout) {
+      layout = this.addEmptyLayout(ownerId)
+    }
+    return layout.addDirectEntity(meta, extendBbox)
   }
 
   /**

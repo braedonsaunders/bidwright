@@ -1,6 +1,6 @@
 import {
-  AcExHtmlI18n,
   ACEX_HTML_LOCALE_STORAGE_KEY,
+  AcExHtmlI18n,
   detectAcExHtmlLocale,
   detectBrowserAcExHtmlLocale,
   formatAcExHtmlMessage,
@@ -52,6 +52,9 @@ describe('AcExHtmlI18n', () => {
   it('resolves locale codes', () => {
     expect(resolveAcExHtmlLocale('zh-CN')).toBe('zh')
     expect(resolveAcExHtmlLocale('en-US')).toBe('en')
+    expect(resolveAcExHtmlLocale('cs-CZ')).toBe('cs')
+    expect(resolveAcExHtmlLocale('tr-TR')).toBe('tr')
+    expect(resolveAcExHtmlLocale('ar-SA')).toBe('ar')
     expect(resolveAcExHtmlLocale('fr')).toBeNull()
   })
 
@@ -61,6 +64,9 @@ describe('AcExHtmlI18n', () => {
 
     mockNavigator(['en-US', 'zh-CN'])
     expect(detectBrowserAcExHtmlLocale()).toBe('en')
+
+    mockNavigator(['ar-SA', 'en-US'])
+    expect(detectBrowserAcExHtmlLocale()).toBe('ar')
 
     mockNavigator(['fr-FR'])
     expect(detectBrowserAcExHtmlLocale()).toBe('en')
@@ -80,14 +86,60 @@ describe('AcExHtmlI18n', () => {
   it('translates messages with parameters', () => {
     const i18n = new AcExHtmlI18n('zh')
     expect(i18n.t('status.distance', { value: '12.5' })).toBe('距离：12.5')
+    expect(
+      i18n.t('status.arcLength', {
+        length: '10',
+        radius: '5',
+        angle: '180°',
+        chord: '10'
+      })
+    ).toBe('弧长：10 | 半径：5 | 总角度：180° | 弦长：10')
+    expect(i18n.t('status.continuousTotal', { value: '30' })).toBe('总长度：30')
+    expect(i18n.t('toolbar.measurementPanel')).toBe('看结果')
+    expect(i18n.t('measurePanel.empty')).toBe('暂无测量')
+    expect(i18n.t('measurePanel.filterArc')).toBe('弧长')
+    expect(i18n.t('toolbar.measureRadius')).toBe('测半径')
+    expect(i18n.t('measurePanel.filterRadius')).toBe('半径')
+    expect(i18n.t('status.radius', { value: '5' })).toBe('半径：5')
+    expect(i18n.t('session.confirm')).toBe('确定')
+    expect(i18n.t('session.undo')).toBe('撤销')
     expect(formatAcExHtmlMessage('Zoom: {name}', { name: '0' })).toBe('Zoom: 0')
   })
 
-  it('toggles between en and zh', () => {
+  it('cycles the locale through en -> zh -> cs -> tr -> ar -> en', () => {
     const i18n = new AcExHtmlI18n('en')
     expect(i18n.t('layers.title')).toBe('Layers')
-    i18n.toggleLocale()
-    expect(i18n.locale).toBe('zh')
+    expect(i18n.localeBadge).toBe('EN')
+
+    expect(i18n.toggleLocale()).toBe('zh')
     expect(i18n.t('layers.title')).toBe('图层')
+    expect(i18n.localeBadge).toBe('中')
+
+    expect(i18n.toggleLocale()).toBe('cs')
+    expect(i18n.t('layers.title')).toBe('Hladiny')
+    expect(i18n.localeBadge).toBe('CS')
+
+    expect(i18n.toggleLocale()).toBe('tr')
+    expect(i18n.t('layers.title')).toBe('Katmanlar')
+    expect(i18n.localeBadge).toBe('TR')
+
+    expect(i18n.toggleLocale()).toBe('ar')
+    expect(i18n.t('layers.title')).toBe('\u0627\u0644\u0637\u0628\u0642\u0627\u062a')
+    expect(i18n.localeBadge).toBe('AR')
+
+    expect(i18n.toggleLocale()).toBe('en')
+    expect(i18n.locale).toBe('en')
+  })
+
+  it('translates Turkish messages with parameters', () => {
+    const i18n = new AcExHtmlI18n('tr')
+    expect(i18n.t('status.distance', { value: '12.5' })).toBe('Mesafe: 12.5')
+    expect(i18n.t('layers.zoomTo', { name: 'Duvarlar' })).toBe(
+      'Duvarlar katmanına yakınlaştır'
+    )
+    expect(i18n.t('review.zoomTo')).toBe('Yakınlaştır')
+    expect(i18n.t('review.closeDetails')).toBe('Ayrıntıları kapat')
+    expect(i18n.t('toolbar.measurementPanel')).toBe('Sonuç')
+    expect(i18n.t('measurePanel.title')).toBe('Ölçümler')
   })
 })

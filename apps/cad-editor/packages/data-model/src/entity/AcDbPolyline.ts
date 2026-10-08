@@ -2,20 +2,24 @@ import {
   AcGeArea2d,
   AcGeBox3d,
   AcGeCircArc2d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
+  acgeOffsetVertexPath,
   AcGePoint2d,
   AcGePoint3d,
   AcGePoint3dLike,
   AcGePolyline2d,
   AcGePolyline2dVertex,
-  AcGeVector3dLike,
-  offsetVertexPath
+  type AcGeTessellateOptions,
+  AcGeVector3d,
+  AcGeVector3dLike
 } from '@mlightcad/geometry-engine'
 import { AcGiRenderer } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbSystemVariables } from '../database/AcDbSystemVariables'
 import { AcDbSysVarManager } from '../database/AcDbSysVarManager'
+import { acdbDrawTessellateOptions } from '../misc/AcDbDrawTessellate'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbCurve } from './AcDbCurve'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
@@ -23,10 +27,14 @@ import {
   acdbForEachGripIndex,
   acdbMovePolyline2dVertexAt
 } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPolyline2d } from './AcDbIntersectHelpers'
 import {
   acdbCollectPolyline2dSegmentOsnapPoints,
   acdbPickNearestOsnapPoint
 } from './AcDbOsnapHelpers'
+
+/** Reused across dxfIn to avoid per-vertex temporaries (parse is sequential). */
+const _dxfInVertex = /*@__PURE__*/ new AcGePoint2d()
 
 /**
  * Represents one vertex of a polyline entity in AutoCAD.
@@ -39,6 +47,8 @@ interface AcDbPolylineVertex extends AcGePolyline2dVertex {
   startWidth?: number
   /** The ending width at this vertex */
   endWidth?: number
+  /** Vertex identifier (DXF group 91) */
+  identifier?: number
 }
 
 /**
@@ -82,6 +92,10 @@ export class AcDbPolyline extends AcDbCurve {
 
   /** The elevation (Z-coordinate) of the polyline plane */
   private _elevation: number
+  /** Thickness along the normal (DXF group 39) */
+  private _thickness = 0
+  /** Extrusion / plane normal (DXF group 210) */
+  private _normal = new AcGeVector3d(0, 0, 1)
   /** The underlying geometric polyline object */
   private _geo: AcGePolyline2d<AcDbPolylineVertex>
 
@@ -149,6 +163,26 @@ export class AcDbPolyline extends AcDbCurve {
    */
   set elevation(value: number) {
     this._elevation = value
+  }
+
+  /**
+   * Thickness along the entity normal (DXF group 39).
+   */
+  get thickness() {
+    return this._thickness
+  }
+  set thickness(value: number) {
+    this._thickness = value
+  }
+
+  /**
+   * Extrusion direction / plane normal (DXF group 210).
+   */
+  get normal(): AcGeVector3d {
+    return this._normal
+  }
+  set normal(value: AcGeVector3dLike) {
+    this._normal.copy(value)
   }
 
   /**
@@ -307,9 +341,22 @@ export class AcDbPolyline extends AcDbCurve {
    */
   get geometricExtents(): AcGeBox3d {
     const box = this._geo.box
+    if (box.isEmpty()) {
+      return new AcGeBox3d()
+    }
     return new AcGeBox3d(
       { x: box.min.x, y: box.min.y, z: this._elevation },
       { x: box.max.x, y: box.max.y, z: this._elevation }
+    )
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return acdbIntersectPrimitivesFromPolyline2d(
+      this._geo.vertices,
+      this.closed,
+      this._elevation,
+      this._normal
     )
   }
 
@@ -599,6 +646,19 @@ export class AcDbPolyline extends AcDbCurve {
   }
 
   /**
+   * Thin centerline → `lineStrip`; any renderable width → solid `area`.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    if (!this.hasRenderableWidth()) return 'lineStrip' as const
+    // Closed wide polylines prefer offsetRing when both loops align; leave them
+    // unbatched so capture does not assume a single area() call.
+    if (this.closed) return null
+    return 'area' as const
+  }
+
+  /**
    * Draws this polyline using the specified renderer.
    *
    * This method renders the polyline as a series of connected line segments
@@ -608,9 +668,30 @@ export class AcDbPolyline extends AcDbCurve {
    * @returns The rendered polyline entity, or undefined if drawing failed
    */
   subWorldDraw(renderer: AcGiRenderer) {
-    const centerline = this._geo.getPoints(100)
-    const widthProfile = this.createWidthProfile()
+    const tessellateOptions = acdbDrawTessellateOptions(renderer)
+    const centerline = this._geo.tessellate(tessellateOptions)
+    const widthProfile = this.createWidthProfile(tessellateOptions)
     if (widthProfile != null) {
+      if (this.closed) {
+        const ring = createClosedWidePolylineOffsetRing(widthProfile)
+        if (ring != null) {
+          const traits = renderer.subEntityTraits
+          traits.fillType = {
+            solidFill: true,
+            patternAngle: 0,
+            definitionLines: []
+          }
+          const elevation = this.elevation
+          return renderer.offsetRing(
+            ring.outer.map(point =>
+              new AcGePoint3d().set(point.x, point.y, elevation)
+            ),
+            ring.inner.map(point =>
+              new AcGePoint3d().set(point.x, point.y, elevation)
+            )
+          )
+        }
+      }
       const area = createWidePolylineArea(widthProfile, this.closed)
       if (area != null) {
         const traits = renderer.subEntityTraits
@@ -641,11 +722,245 @@ export class AcDbPolyline extends AcDbCurve {
     filer.writeSubclassMarker('AcDbPolyline')
     filer.writeInt32(90, this.numberOfVertices)
     filer.writeInt16(70, this.closed ? 1 : 0)
+
+    const constantWidth = this.resolveConstantWidth()
+    if (constantWidth != null) {
+      // Group 43 replaces per-vertex 40/41 when every segment has the same width.
+      filer.writeDouble(43, constantWidth)
+    }
     filer.writeDouble(38, this.elevation)
-    for (let i = 0; i < this.numberOfVertices; ++i) {
+    if (this.thickness !== 0) {
+      filer.writeDouble(39, this.thickness)
+    }
+
+    const vertices = this._geo.vertices
+    for (let i = 0; i < vertices.length; ++i) {
+      const vertex = vertices[i]
       filer.writePoint2d(10, this.getPoint2dAt(i))
+      if (constantWidth == null) {
+        if (vertex.startWidth != null) {
+          filer.writeDouble(40, vertex.startWidth)
+        }
+        if (vertex.endWidth != null) {
+          filer.writeDouble(41, vertex.endWidth)
+        }
+      }
+      const bulge = vertex.bulge ?? 0
+      if (bulge !== 0) {
+        filer.writeDouble(42, bulge)
+      }
+      if (vertex.identifier != null) {
+        filer.writeInt32(91, vertex.identifier)
+      }
+    }
+    filer.writeVector3d(210, this.normal)
+    return this
+  }
+
+  /**
+   * Writes this LWPOLYLINE as a legacy R12 POLYLINE + VERTEX + SEQEND sequence.
+   *
+   * Used when the target DXF version does not support LWPOLYLINE.
+   */
+  dxfOutAs2dPolyline(filer: AcDbDxfFiler, _allXdata = false) {
+    filer.writeHandle(5, this.objectId)
+    filer.writeObjectId(330, this.ownerId)
+    filer.writeObjectId(360, this.extensionDictionary)
+    filer.writeSubclassMarker('AcDbEntity')
+    filer.writeString(8, this.layer)
+    filer.writeString(6, this.lineType)
+    filer.writeDouble(48, this.linetypeScale)
+    filer.writeInt16(60, this.visibility ? 0 : 1)
+    filer.writeCmColor(this.color)
+    filer.writeLineWeight(370, this.lineWeight)
+    filer.writeTransparency(this.transparency)
+    const owner = this.database?.tables.blockTable.getIdAt(this.ownerId)
+    if (owner?.isPaperSapce) {
+      filer.writeInt16(67, 1)
+    }
+    filer.writeSubclassMarker('AcDb2dPolyline')
+    filer.writeInt16(66, this.numberOfVertices > 0 ? 1 : 0)
+    filer.writeInt16(70, this.closed ? 1 : 0)
+    filer.writeDouble(10, 0)
+    filer.writeDouble(20, 0)
+    filer.writeDouble(30, this.elevation)
+
+    for (let i = 0; i < this.numberOfVertices; ++i) {
+      const vertex = this._geo.vertices[i]
+      filer.writeStart('VERTEX')
+      filer.writeHandle(5, this.database?.generateHandle())
+      filer.writeObjectId(330, this.objectId)
+      filer.writeSubclassMarker('AcDbEntity')
+      filer.writeSubclassMarker('AcDbVertex')
+      filer.writeSubclassMarker('AcDb2dVertex')
+      filer.writePoint3d(10, {
+        x: this.getPoint2dAt(i).x,
+        y: this.getPoint2dAt(i).y,
+        z: this.elevation
+      })
+      const bulge = vertex?.bulge ?? 0
+      if (bulge !== 0) {
+        filer.writeDouble(42, bulge)
+      }
+      filer.writeInt16(70, 0)
+    }
+    filer.writeStart('SEQEND')
+    filer.writeHandle(5, this.database?.generateHandle())
+    filer.writeObjectId(330, this.objectId)
+    filer.writeSubclassMarker('AcDbEntity')
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbPolyline')
+
+    this.reset(false)
+    let closed = false
+    let elevation = this.elevation
+    let thickness = this.thickness
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+    let constantWidth = -1
+    let pendingX = 0
+    let pendingY = 0
+    let hasPending = false
+    let bulge = 0
+    let startWidth = -1
+    let endWidth = -1
+    let vertexId: number | undefined
+    let vertexIndex = 0
+
+    const flushVertex = () => {
+      if (!hasPending) return
+      const sw = startWidth < 0 ? constantWidth : startWidth
+      const ew = endWidth < 0 ? constantWidth : endWidth
+      _dxfInVertex.x = pendingX
+      _dxfInVertex.y = pendingY
+      this.addVertexAt(vertexIndex++, _dxfInVertex, bulge, sw, ew)
+      if (vertexId != null) {
+        const vertex = this._geo.vertices[vertexIndex - 1]
+        if (vertex) vertex.identifier = vertexId
+      }
+      hasPending = false
+      bulge = 0
+      startWidth = -1
+      endWidth = -1
+      vertexId = undefined
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 90:
+          // Vertex count — informational; ignore.
+          break
+        case 70:
+          closed = (n & 1) !== 0
+          break
+        case 43:
+          constantWidth = n
+          break
+        case 38:
+          elevation = n
+          break
+        case 39:
+          thickness = n
+          break
+        case 10:
+          flushVertex()
+          pendingX = n
+          pendingY = 0
+          hasPending = true
+          break
+        case 20:
+          pendingY = n
+          break
+        case 40:
+          startWidth = n
+          break
+        case 41:
+          endWidth = n
+          break
+        case 42:
+          bulge = n
+          break
+        case 91:
+          vertexId = n
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        default:
+          break
+      }
+    }
+
+    flushVertex()
+    this.closed = closed
+    this.elevation = elevation
+    this.thickness = thickness
+    if (nx * nx + ny * ny + nz * nz > 0) {
+      this.normal.set(nx, ny, nz).normalize()
     }
     return this
+  }
+
+  /**
+   * Returns a single constant width when every vertex uses that same start and
+   * end width; otherwise `undefined` so per-vertex 40/41 codes are written.
+   */
+  private resolveConstantWidth(): number | undefined {
+    const vertices = this._geo.vertices
+    if (vertices.length === 0) return undefined
+
+    let common: number | undefined
+    for (const vertex of vertices) {
+      const startWidth = vertex.startWidth
+      const endWidth = vertex.endWidth
+      if (startWidth == null && endWidth == null) {
+        if (common != null && common !== 0) return undefined
+        common = common ?? 0
+        continue
+      }
+      const start = startWidth ?? 0
+      const end = endWidth ?? 0
+      if (start !== end) return undefined
+      if (common == null) {
+        common = start
+      } else if (common !== start) {
+        return undefined
+      }
+    }
+
+    // Default LWPOLYLINE width is 0; omit group 43 unless there is actual width.
+    return common != null && common !== 0 ? common : undefined
+  }
+
+  /**
+   * True when any vertex carries a start/end width above the render epsilon.
+   * Matches the width gate used by {@link createWidthProfile}.
+   */
+  private hasRenderableWidth(): boolean {
+    const vertices = this._geo.vertices
+    for (let i = 0; i < vertices.length; i++) {
+      const startWidth = Math.max(0, vertices[i].startWidth ?? 0)
+      const endWidth = Math.max(0, vertices[i].endWidth ?? 0)
+      if (startWidth > WIDTH_EPSILON || endWidth > WIDTH_EPSILON) {
+        return true
+      }
+    }
+    return false
   }
 
   /**
@@ -667,7 +982,9 @@ export class AcDbPolyline extends AcDbCurve {
    * @returns A width profile suitable for wide-line loop construction, or `null`
    * if the polyline has insufficient geometry or no renderable width.
    */
-  private createWidthProfile(): WidePolylinePoint[] | null {
+  private createWidthProfile(
+    tessellateOptions?: AcGeTessellateOptions
+  ): WidePolylinePoint[] | null {
     const vertices = this._geo.vertices
     const count = vertices.length
     if (count < 2) return null
@@ -685,7 +1002,11 @@ export class AcDbPolyline extends AcDbCurve {
         hasRenderableWidth = true
       }
 
-      const sampled = this.sampleSegment(startVertex, endVertex)
+      const sampled = this.sampleSegment(
+        startVertex,
+        endVertex,
+        tessellateOptions
+      )
       const lastIndex = sampled.length - 1
       for (let j = 0; j <= lastIndex; j++) {
         if (j === 0 && points.length > 0) {
@@ -721,11 +1042,12 @@ export class AcDbPolyline extends AcDbCurve {
    */
   private sampleSegment(
     startVertex: AcDbPolylineVertex,
-    endVertex: AcDbPolylineVertex
+    endVertex: AcDbPolylineVertex,
+    tessellateOptions?: AcGeTessellateOptions
   ): AcGePoint2d[] {
     if (startVertex.bulge && Math.abs(startVertex.bulge) > WIDTH_EPSILON) {
       const arc = new AcGeCircArc2d(startVertex, endVertex, startVertex.bulge)
-      const sampled = arc.getPoints(32)
+      const sampled = arc.tessellate(tessellateOptions)
       if (sampled.length > 1) {
         return sampled.map(point => new AcGePoint2d(point.x, point.y))
       }
@@ -811,7 +1133,7 @@ export class AcDbPolyline extends AcDbCurve {
 }
 
 /**
- * Offsets a planar vertex path using {@link offsetVertexPath} and wraps the
+ * Offsets a planar vertex path using {@link acgeOffsetVertexPath} and wraps the
  * result as an {@link AcDbPolyline}.
  *
  * @param points - Sampled or vertex-derived 2D path in WCS (XY)
@@ -820,17 +1142,18 @@ export class AcDbPolyline extends AcDbCurve {
  * @returns The first offset polyline, or `null` when the path has fewer than two points
  * or offsetting fails
  */
-export function offsetVertexPathAsPolyline(
+export function acdbOffsetVertexPathAsPolyline(
   points: AcGePoint2d[],
   closed: boolean,
   offsetDist: number
 ): AcDbPolyline | null {
-  const geo = offsetVertexPath(points, closed, offsetDist)
+  const geo = acgeOffsetVertexPath(points, closed, offsetDist)
   return geo ? AcDbPolyline.fromGePolyline(geo) : null
 }
 
 const WIDTH_EPSILON = 1e-6
 const MITER_LIMIT = 4
+const INNER_TO_OUTER_MAX_RATIO = 0.75
 
 /**
  * A sampled centerline point with local width used for wide polyline rendering.
@@ -842,11 +1165,38 @@ interface WidePolylinePoint {
 }
 
 /**
+ * Closed wide polyline whose inner offset did not collapse.
+ *
+ * Both loops keep centerline order, so index `i` is one sample's two sides.
+ * Returns `null` when a side is missing or the counts differ; the caller then
+ * uses {@link createWidePolylineArea}.
+ */
+function createClosedWidePolylineOffsetRing(points: WidePolylinePoint[]): {
+  outer: Array<{ x: number; y: number }>
+  inner: Array<{ x: number; y: number }>
+} | null {
+  const centerline = normalizeCenterline(points, true)
+  if (centerline.length < 2) return null
+  const { left, right } = createWidePolylineBoundaries(centerline, true)
+  const leftLoop = compactBoundaryLoop(left)
+  const rightLoop = compactBoundaryLoop(right)
+  if (!isRenderableLoop(leftLoop) || !isRenderableLoop(rightLoop)) return null
+  if (leftLoop.length !== rightLoop.length) return null
+  const leftArea = Math.abs(calculateSignedArea(leftLoop))
+  const rightArea = Math.abs(calculateSignedArea(rightLoop))
+  const [outer, inner] =
+    leftArea >= rightArea ? [leftLoop, rightLoop] : [rightLoop, leftLoop]
+  return { outer, inner }
+}
+
+/**
  * Builds a renderable filled area for a wide polyline.
  *
- * Open wide polylines are represented as a single stitched shell loop. Closed
- * wide polylines are represented as two loops (outer + inner hole) so the
- * stroke ring does not degenerate into a self-intersecting polygon.
+ * Open wide polylines are tessellated into per-segment quads so the stroke band
+ * follows the centerline without enclosing interior regions when the path bends
+ * back on itself. Closed wide polylines are represented as two loops (outer +
+ * inner hole) so the stroke ring does not degenerate into a self-intersecting
+ * polygon.
  *
  * @param points - Centerline samples with per-point widths.
  * @param closed - Whether the source polyline is topologically closed.
@@ -855,29 +1205,185 @@ interface WidePolylinePoint {
  */
 function createWidePolylineArea(points: WidePolylinePoint[], closed: boolean) {
   if (points.length < 2) return null
+  if (closed) {
+    return createWidePolylineAreaForSingleProfile(points, true)
+  }
+
+  const subpaths = splitWidePolylineProfileAtRevisits(points)
+  if (subpaths.length === 1) {
+    return createWidePolylineAreaForSingleProfile(subpaths[0], false)
+  }
+
+  const area = new AcGeArea2d()
+  let added = false
+  for (const subpath of subpaths) {
+    const part = createWidePolylineAreaForSingleProfile(subpath, false)
+    if (part == null) {
+      continue
+    }
+    for (const loop of part.loops) {
+      area.add(loop)
+    }
+    added = true
+  }
+  return added ? area : null
+}
+
+function createWidePolylineAreaForSingleProfile(
+  points: WidePolylinePoint[],
+  closed: boolean
+) {
   const centerline = normalizeCenterline(points, closed)
   if (centerline.length < 2) return null
 
   const { left, right } = createWidePolylineBoundaries(centerline, closed)
-  if (left.length < 2 || right.length < 2) return null
+  if (countBoundaryPoints(left) < 2 || countBoundaryPoints(right) < 2) {
+    return null
+  }
 
   const area = new AcGeArea2d()
   if (closed) {
-    if (!isRenderableLoop(left) || !isRenderableLoop(right)) {
+    const leftLoop = compactBoundaryLoop(left)
+    const rightLoop = compactBoundaryLoop(right)
+    const leftOk = isRenderableLoop(leftLoop)
+    const rightOk = isRenderableLoop(rightLoop)
+    if (!leftOk && !rightOk) {
       return null
     }
-    const leftArea = Math.abs(calculateSignedArea(left))
-    const rightArea = Math.abs(calculateSignedArea(right))
-    const [outer, inner] = leftArea >= rightArea ? [left, right] : [right, left]
+    // When half-width >= centerline radius (e.g. Blowoff circle with
+    // width == diameter), the inner offset collapses to a point. Keep the
+    // outer loop alone as a solid filled disk instead of aborting to stroke.
+    if (!leftOk || !rightOk) {
+      area.add(new AcGePolyline2d(leftOk ? leftLoop : rightLoop, true))
+      return area
+    }
+    const leftArea = Math.abs(calculateSignedArea(leftLoop))
+    const rightArea = Math.abs(calculateSignedArea(rightLoop))
+    const [outer, inner] =
+      leftArea >= rightArea ? [leftLoop, rightLoop] : [rightLoop, leftLoop]
     area.add(new AcGePolyline2d(outer, true))
     area.add(new AcGePolyline2d(inner, true))
     return area
   }
 
-  const loop = [...left, ...right.reverse()]
-  if (!isRenderableLoop(loop)) return null
-  area.add(new AcGePolyline2d(loop, true))
-  return area
+  if (
+    (isNearlyClosedWidePolyline(centerline) &&
+      tryAddClosedOffsetWidePolylineRing(area, centerline)) ||
+    addOpenWidePolylineBand(area, left, right)
+  ) {
+    return area
+  }
+  return null
+}
+
+/**
+ * Splits a sampled centerline when it revisits the same point so each subpath
+ * can be stroked independently without forming one enclosing fill region.
+ */
+function splitWidePolylineProfileAtRevisits(points: WidePolylinePoint[]) {
+  if (points.length < 2) {
+    return [points]
+  }
+
+  const subpaths: WidePolylinePoint[][] = []
+  let segmentStart = 0
+  const firstIndexByKey = new Map<string, number>()
+
+  for (let i = 0; i < points.length; i++) {
+    const key = widePolylinePointKey(points[i])
+    const firstIndex = firstIndexByKey.get(key)
+    if (firstIndex != null && i - firstIndex > 1) {
+      const subpath = points.slice(segmentStart, i + 1)
+      if (subpath.length >= 2) {
+        subpaths.push(subpath)
+      }
+      segmentStart = firstIndex
+      firstIndexByKey.clear()
+      for (let j = segmentStart; j <= i; j++) {
+        firstIndexByKey.set(widePolylinePointKey(points[j]), j)
+      }
+      continue
+    }
+    firstIndexByKey.set(key, i)
+  }
+
+  const tail = points.slice(segmentStart)
+  if (tail.length >= 2) {
+    subpaths.push(tail)
+  }
+
+  return subpaths.length > 0 ? subpaths : [points]
+}
+
+function widePolylinePointKey(point: WidePolylinePoint) {
+  return `${point.x.toFixed(4)}:${point.y.toFixed(4)}`
+}
+
+/**
+ * Validates that two offset loops form a thin ring rather than a near-solid slab.
+ */
+function isValidWidePolylineRing(outerArea: number, innerArea: number) {
+  const outer = Math.max(outerArea, innerArea)
+  const inner = Math.min(outerArea, innerArea)
+  if (outer <= WIDTH_EPSILON) {
+    return false
+  }
+  const ringArea = outer - inner
+  if (ringArea <= WIDTH_EPSILON) {
+    return false
+  }
+  return inner / outer <= INNER_TO_OUTER_MAX_RATIO
+}
+
+/**
+ * Returns true when an open polyline's endpoints are close enough to be treated
+ * as a nearly-closed stirrup outline.
+ */
+function isNearlyClosedWidePolyline(centerline: WidePolylinePoint[]) {
+  // A single segment (2 samples) is a stroke, never a stirrup ring — even when
+  // length is comparable to width (valve triangles, arrowheads, etc.).
+  if (centerline.length < 3) {
+    return false
+  }
+  const first = centerline[0]
+  const last = centerline[centerline.length - 1]
+  const gap = Math.hypot(last.x - first.x, last.y - first.y)
+  if (gap <= WIDTH_EPSILON) {
+    return true
+  }
+  const maxWidth = Math.max(...centerline.map(point => point.width))
+  if (maxWidth <= WIDTH_EPSILON) {
+    return false
+  }
+  return gap <= maxWidth * 4
+}
+
+/**
+ * Attempts to render an open wide polyline as a closed-offset ring. This matches
+ * stirrup-like paths whose endpoints are separated by a small gap.
+ */
+function tryAddClosedOffsetWidePolylineRing(
+  area: AcGeArea2d,
+  centerline: WidePolylinePoint[]
+) {
+  const { left, right } = createWidePolylineBoundaries(centerline, true)
+  const leftLoop = compactBoundaryLoop(left)
+  const rightLoop = compactBoundaryLoop(right)
+  if (!isRenderableLoop(leftLoop) || !isRenderableLoop(rightLoop)) {
+    return false
+  }
+
+  const leftArea = Math.abs(calculateSignedArea(leftLoop))
+  const rightArea = Math.abs(calculateSignedArea(rightLoop))
+  if (!isValidWidePolylineRing(leftArea, rightArea)) {
+    return false
+  }
+
+  const [outer, inner] =
+    leftArea >= rightArea ? [leftLoop, rightLoop] : [rightLoop, leftLoop]
+  area.add(new AcGePolyline2d(outer, true))
+  area.add(new AcGePolyline2d(inner, true))
+  return true
 }
 
 /**
@@ -892,29 +1398,97 @@ function createWidePolylineBoundaries(
   centerline: WidePolylinePoint[],
   closed: boolean
 ) {
-  const left: AcGePolyline2dVertex[] = []
-  const right: AcGePolyline2dVertex[] = []
+  const left: (AcGePolyline2dVertex | null)[] = new Array(centerline.length)
+  const right: (AcGePolyline2dVertex | null)[] = new Array(centerline.length)
   for (let i = 0; i < centerline.length; i++) {
     const point = centerline[i]
     const halfWidth = Math.max(0, point.width) / 2
+    // Zero width: left/right meet on the centerline (triangle tip / taper end).
+    // Returning null here drops the whole open-band segment in
+    // addOpenWidePolylineBand (valve symbols, arrowheads, etc.).
     if (halfWidth <= WIDTH_EPSILON) {
+      left[i] = { x: point.x, y: point.y }
+      right[i] = { x: point.x, y: point.y }
       continue
     }
     const offset = computeOffsetDirection(centerline, i, closed)
     if (offset == null) {
+      left[i] = null
+      right[i] = null
       continue
     }
-    left.push({
+    left[i] = {
       x: point.x + offset.x * halfWidth,
       y: point.y + offset.y * halfWidth
-    })
-    right.push({
+    }
+    right[i] = {
       x: point.x - offset.x * halfWidth,
       y: point.y - offset.y * halfWidth
-    })
+    }
   }
 
   return { left, right }
+}
+
+/**
+ * Adds one segment quad to an open wide-polyline band area.
+ */
+function addOpenWidePolylineSegmentQuad(
+  area: AcGeArea2d,
+  leftStart: AcGePolyline2dVertex,
+  leftEnd: AcGePolyline2dVertex,
+  rightEnd: AcGePolyline2dVertex,
+  rightStart: AcGePolyline2dVertex
+) {
+  const quad = [leftStart, leftEnd, rightEnd, rightStart]
+  if (!isRenderableLoop(quad)) {
+    return false
+  }
+  area.add(new AcGePolyline2d(quad, true))
+  return true
+}
+
+/**
+ * Tessellates an open wide polyline into segment quads with flat end caps.
+ */
+function addOpenWidePolylineBand(
+  area: AcGeArea2d,
+  left: (AcGePolyline2dVertex | null)[],
+  right: (AcGePolyline2dVertex | null)[]
+) {
+  let added = false
+  for (let i = 0; i < left.length - 1; i++) {
+    const leftStart = left[i]
+    const leftEnd = left[i + 1]
+    const rightStart = right[i]
+    const rightEnd = right[i + 1]
+    if (leftStart == null || leftEnd == null || rightStart == null || rightEnd == null) {
+      continue
+    }
+    if (
+      addOpenWidePolylineSegmentQuad(
+        area,
+        leftStart,
+        leftEnd,
+        rightEnd,
+        rightStart
+      )
+    ) {
+      added = true
+    }
+  }
+  return added
+}
+
+function countBoundaryPoints(boundary: (AcGePolyline2dVertex | null)[]) {
+  return boundary.reduce(
+    (count, point) => (point == null ? count : count + 1),
+    0
+  )
+}
+
+function compactBoundaryLoop(boundary: (AcGePolyline2dVertex | null)[]) {
+  return boundary.filter((point): point is AcGePolyline2dVertex => point != null)
 }
 
 /**

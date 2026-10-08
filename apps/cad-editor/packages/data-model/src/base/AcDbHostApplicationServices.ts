@@ -1,10 +1,10 @@
 import { AcDbDatabase } from '../database/AcDbDatabase'
 import { AcDbLayoutManager } from '../object/layout/AcDbLayoutManager'
-import { setAcDbHostApplicationServicesProvider } from './AcDbObject'
+import { acdbSetHostApplicationServicesProvider } from './AcDbObject'
 
 let layoutManagerFactory: (() => AcDbLayoutManager) | undefined
 
-export function setAcDbLayoutManagerFactory(factory: () => AcDbLayoutManager) {
+export function acdbSetLayoutManagerFactory(factory: () => AcDbLayoutManager) {
   layoutManagerFactory = factory
 }
 
@@ -131,4 +131,4 @@ export class AcDbHostApplicationServices {
   }
 }
 
-setAcDbHostApplicationServicesProvider(acdbHostApplicationServices)
+acdbSetHostApplicationServicesProvider(acdbHostApplicationServices)

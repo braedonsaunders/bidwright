@@ -9,6 +9,7 @@ jest.mock('../src/renderer', () => ({
 
 import type { AcTrBatchDrawPolicy } from '../src/draw/AcTrBatchDrawPolicy'
 import { RTE_REBASE_THRESHOLD } from '../src/draw/AcTrBatchDrawPolicy'
+import { AcTrGlyphEntity } from '../src/object/AcTrGlyphEntity'
 import { AcTrMText } from '../src/object/AcTrMText'
 import { AcTrRenderContext } from '../src/renderer/AcTrRenderContext'
 import { AcTrStyleManager } from '../src/style/AcTrStyleManager'
@@ -24,14 +25,14 @@ type GeometryHost = THREE.Object3D & {
 }
 
 type RaycastHost = THREE.Object3D & {
-  _mtext?: Pick<MTextObject, 'raycast'>
+  _rendered?: Pick<MTextObject, 'raycast'>
   wcsBbox: THREE.Box3
 }
 
-const privateMethods = AcTrMText.prototype as unknown as {
-  attachMText(this: AcTrMText, mtext: MTextObject): void
+const privateMethods = AcTrGlyphEntity.prototype as unknown as {
+  attachRendered(this: AcTrMText, rendered: MTextObject): void
   computeGeometryBox(this: GeometryHost): THREE.Box3
-  updateSelectionBox(this: GeometryHost, mtext: MTextObject): void
+  updateSelectionBox(this: GeometryHost, rendered: MTextObject): void
   hasGeometry(object: THREE.Object3D): boolean
   raycast(
     this: RaycastHost,
@@ -57,6 +58,26 @@ describe('AcTrMText wcsBbox', () => {
 
     expect(box.min.toArray()).toEqual([10, 20, 0])
     expect(box.max.toArray()).toEqual([14, 22, 0])
+  })
+
+  it('keeps selection boxes in parent-local space when the glyph is parented', () => {
+    const parent = new THREE.Object3D()
+    parent.position.set(1000, 2000, 0)
+    parent.updateMatrixWorld(true)
+
+    const host = createGeometryHost()
+    parent.add(host)
+    host.add(createBoxMesh({ x: 10, y: 20, z: 0 }))
+    host.updateMatrixWorld(true)
+
+    const box = host.computeGeometryBox()
+
+    // Geometry is at local (10,20); parent translation must not be baked into
+    // wcsBbox or INSERT spatial refresh would apply that transform twice.
+    expect(box.min.x).toBeCloseTo(10)
+    expect(box.min.y).toBeCloseTo(20)
+    expect(box.max.x).toBeCloseTo(14)
+    expect(box.max.y).toBeCloseTo(22)
   })
 
   it('keeps renderer logical space when it overlaps rendered geometry', () => {
@@ -188,11 +209,54 @@ describe('AcTrMText', () => {
     )
     const mtext = createSyncMTextObject(placementRoot)
 
-    privateMethods.attachMText.call(entity, mtext)
+    privateMethods.attachRendered.call(entity, mtext)
 
     expect(getSceneDrawableUserData(placementRoot).noBatch).toBe(true)
     expect(entity.children).toHaveLength(1)
     expect(placementRoot.children).toHaveLength(2)
+  })
+
+  it('folds inverse INSERT matrix into WCS placement so mirrored scales stay local', () => {
+    const context = new AcTrRenderContext(new AcTrStyleManager(), unbatchPolicy)
+    const insert = new THREE.Object3D()
+    // Thin mirrored Y — THREE.Matrix4.decompose cannot represent this inverse.
+    insert.position.set(592909.8248335773, 3124651.1516687754, 0)
+    insert.rotation.z = 1.8245795716825401
+    insert.scale.set(5.353306447087925, -0.2001236053492903, 0.2001236055046306)
+    insert.updateMatrixWorld(true)
+
+    const entity = new AcTrMText(
+      {
+        text: 'FJM5428',
+        position: { x: 592909.8651438681, y: 3124651.724989663, z: 0 }
+      } as never,
+      { layer: 'DOOR_FIRE_TEXT', color: 7 } as never,
+      {} as never,
+      context,
+      true
+    )
+    insert.add(entity)
+    // Apply inverse without TRS decompose (matches AcTrEntity.applyMatrix).
+    const inverse = insert.matrixWorld.clone().invert()
+    entity.matrixAutoUpdate = false
+    entity.matrix.copy(inverse)
+    entity.matrixWorldNeedsUpdate = true
+    entity.updateMatrixWorld(true)
+
+    const wcs = { x: 592909.8651438681, y: 3124651.724989663, z: 0 }
+    const placementRoot = createPlacementRoot(wcs, [0, 8])
+    const mtext = createSyncMTextObject(placementRoot)
+    privateMethods.attachRendered.call(entity, mtext)
+
+    expect(entity.matrix.equals(new THREE.Matrix4())).toBe(true)
+    expect(Math.abs(placementRoot.matrix.elements[12])).toBeLessThan(10)
+    expect(Math.abs(placementRoot.matrix.elements[13])).toBeLessThan(10)
+
+    insert.updateMatrixWorld(true)
+    const world = new THREE.Vector3()
+    placementRoot.getWorldPosition(world)
+    expect(world.x).toBeCloseTo(wcs.x, 1)
+    expect(world.y).toBeCloseTo(wcs.y, 1)
   })
 
   it('flattens render leaves when resolveDrawMode returns batch', () => {
@@ -207,13 +271,80 @@ describe('AcTrMText', () => {
     const placementRoot = createPlacementRoot({ x: 10, y: 20, z: 0 }, [0, 8])
     const mtext = createSyncMTextObject(placementRoot)
 
-    privateMethods.attachMText.call(entity, mtext)
+    privateMethods.attachRendered.call(entity, mtext)
 
     expect(getSceneDrawableUserData(placementRoot).noBatch).toBeUndefined()
     expect(entity.children).toHaveLength(2)
     expect(entity.children.every(child => child instanceof THREE.Mesh)).toBe(
       true
     )
+  })
+
+  it('keeps mirrored INSERT glyph world positions after batch flatten', () => {
+    const context = new AcTrRenderContext(new AcTrStyleManager(), batchPolicy)
+    const insert = new THREE.Object3D()
+    insert.position.set(592909.8248335773, 3124651.1516687754, 0)
+    insert.rotation.z = 1.8245795716825401
+    insert.scale.set(5.353306447087925, -0.2001236053492903, 0.2001236055046306)
+    insert.updateMatrixWorld(true)
+
+    const entity = new AcTrMText(
+      {
+        text: 'FJM5428',
+        position: { x: 592909.8651438681, y: 3124651.724989663, z: 0 }
+      } as never,
+      { layer: 'DOOR_FIRE_TEXT', color: 7 } as never,
+      {} as never,
+      context,
+      true
+    )
+    insert.add(entity)
+    const inverse = insert.matrixWorld.clone().invert()
+    entity.matrixAutoUpdate = false
+    entity.matrix.copy(inverse)
+    entity.matrixWorldNeedsUpdate = true
+    entity.updateMatrixWorld(true)
+
+    const wcs = { x: 592909.8651438681, y: 3124651.724989663, z: 0 }
+    const placementRoot = createPlacementRoot(wcs, [0, 8])
+    const expectedGlyphWorld: THREE.Vector3[] = []
+    placementRoot.updateMatrixWorld(true)
+    for (const child of placementRoot.children) {
+      const world = new THREE.Vector3()
+      child.getWorldPosition(world)
+      expectedGlyphWorld.push(world)
+    }
+
+    privateMethods.attachRendered.call(
+      entity,
+      createSyncMTextObject(placementRoot)
+    )
+
+    expect(entity.children).toHaveLength(2)
+    insert.updateMatrixWorld(true)
+    for (let i = 0; i < entity.children.length; i++) {
+      const world = new THREE.Vector3()
+      entity.children[i].getWorldPosition(world)
+      expect(world.x).toBeCloseTo(expectedGlyphWorld[i].x, 1)
+      expect(world.y).toBeCloseTo(expectedGlyphWorld[i].y, 1)
+    }
+  })
+
+  it('fastDeepClone keeps AcTrMText so INSERT clones can still asyncDraw', () => {
+    const context = new AcTrRenderContext(new AcTrStyleManager(), batchPolicy)
+    const entity = new AcTrMText(
+      { text: 'Hello', position: { x: 1, y: 2, z: 3 } } as never,
+      { layer: '0', color: 7 } as never,
+      { font: 'simsun' } as never,
+      context
+    )
+    entity.objectId = 'mtext-1'
+
+    const cloned = entity.fastDeepClone()
+
+    expect(cloned).toBeInstanceOf(AcTrMText)
+    expect(cloned.objectId).toBe('mtext-1')
+    expect(cloned.hasDrawableGeometry()).toBe(false)
   })
 })
 
@@ -231,7 +362,7 @@ function createRaycastHost(options: {
 }): RaycastHost {
   const host = new THREE.Object3D() as RaycastHost
   host.wcsBbox = options.wcsBbox
-  host._mtext = {
+  host._rendered = {
     raycast: options.mtextRaycast
   }
   host.updateMatrixWorld(true)

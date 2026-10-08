@@ -774,4 +774,18 @@ describe('AcDbMLine', () => {
     expect(mline.segments[0].position).toMatchObject({ x: 10, y: 5, z: 0 })
     expect(mline.segments[1].position).toMatchObject({ x: 20, y: 0, z: 0 })
   })
+
+  it('ensureDatabaseDefaults tolerates mline dictionary entries without styleName', () => {
+    const db = new AcDbDatabase()
+    db.createDefaultData()
+    const incomplete = new AcDbMlineStyle()
+    // LibreDWG incomplete dictionary entries can omit styleName (undefined).
+    // Constructor defaults to 'STANDARD', so clear it to reproduce the crash.
+    incomplete.styleName = undefined as unknown as string
+    db.objects.mlineStyle.setAt('ORPHAN_NO_STYLE_NAME', incomplete)
+
+    // dxfOut runs ensureDatabaseDefaults (same path as post-parse open).
+    expect(() => db.dxfOut()).not.toThrow()
+    expect(db.objects.mlineStyle.getAt('Standard')).toBeDefined()
+  })
 })

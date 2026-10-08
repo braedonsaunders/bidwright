@@ -51,6 +51,10 @@ export interface AcGiRenderer<T extends AcGiEntity = AcGiEntity> {
 
   /**
    * Draw a circular arc or full circle.
+   *
+   * Tessellate using `drawCircleSides` on {@link AcGiContext.database} so the
+   * database open-time setting is honoured.
+   *
    * @param arc Input circular arc to draw
    * @returns Return an object which can be added to scene
    */
@@ -58,6 +62,10 @@ export interface AcGiRenderer<T extends AcGiEntity = AcGiEntity> {
 
   /**
    * Draw an elliptical arc or full ellipse.
+   *
+   * Tessellate using `drawCircleSides` on {@link AcGiContext.database} so the
+   * database open-time setting is honoured.
+   *
    * @param ellipseArc Input elliptical arc to draw
    * @returns Return an object which can be added to scene
    */
@@ -84,10 +92,28 @@ export interface AcGiRenderer<T extends AcGiEntity = AcGiEntity> {
 
   /**
    * Draw one area
+   *
+   * Tessellate loop boundaries using `drawCircleSides` on
+   * {@link AcGiContext.database} so the database open-time setting is honoured.
+   *
    * @param area Input area to draw
    * @returns Return an object which can be added to scene
    */
   area(area: AcGeArea2d): T
+
+  /**
+   * Draw a closed wide polyline as an index-aligned offset ring.
+   *
+   * `outer[i]` and `inner[i]` are the two offsets of the same centerline
+   * sample. The renderer triangulates that band directly. Callers use this
+   * only when both loops are valid and have the same vertex count; a collapsed
+   * inner offset still goes through {@link area}.
+   *
+   * @param outer - Outer boundary in draw order, without a repeated closing vertex
+   * @param inner - Inner boundary in the same order and count as `outer`
+   * @returns Return an object which can be added to scene
+   */
+  offsetRing(outer: AcGePoint3dLike[], inner: AcGePoint3dLike[]): T
 
   /**
    * Draw multiple line texts

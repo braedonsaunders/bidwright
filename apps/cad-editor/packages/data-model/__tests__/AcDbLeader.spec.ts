@@ -1,10 +1,12 @@
-import { AcGeMatrix3d, AcGePoint3d } from '@mlightcad/geometry-engine'
+import { AcGeMatrix3d, AcGePoint3d, AcGeVector3d } from '@mlightcad/geometry-engine'
+import { AcGiMTextAttachmentPoint } from '@mlightcad/graphic-interface'
 
 import { acdbHostApplicationServices, AcDbDxfFiler } from '../src/base'
 import { AcDbDatabase } from '../src/database'
 import {
   AcDbLeader,
   AcDbLeaderAnnotationType,
+  AcDbMText,
   AcDbPolyline
 } from '../src/entity'
 import { expectDetachedClone } from '../test-utils/cloneTestUtils'
@@ -145,7 +147,190 @@ describe('AcDbLeader', () => {
     leaderC.appendVertex(new AcGePoint3d(6, 1, 0))
     leaderC.isSplined = true
     leaderC.subWorldDraw(rendererC as never)
-    expect((rendererC.lines.mock.calls[0] as unknown[][])[0]).toHaveLength(100)
+    const splinedPoints = (rendererC.lines.mock.calls[0] as unknown[][])[0]
+    expect(splinedPoints.length).toBeGreaterThan(1)
+    expect(splinedPoints.length).toBeLessThanOrEqual(100)
+  })
+
+  it('extends straight leaders with a horizontal hook line segment', () => {
+    const leader = new AcDbLeader()
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 5, 0))
+    leader.hasHookLine = true
+    leader.isHookLineSameDirection = true
+    leader.textWidth = 4
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points).toHaveLength(3)
+    expect(points[2]).toMatchObject({ x: 15, y: 5, z: 0 })
+  })
+
+  it('prefers associated MTEXT extents width for hook line length', () => {
+    const db = createWorkingDb()
+    const mtext = new AcDbMText()
+    mtext.location = new AcGePoint3d(10, 8, 0)
+    mtext.height = 5
+    mtext.extentsWidth = 18
+    db.tables.blockTable.modelSpace.appendEntity(mtext)
+
+    const leader = new AcDbLeader()
+    db.tables.blockTable.modelSpace.appendEntity(leader)
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 5, 0))
+    leader.hasHookLine = true
+    leader.isHookLineSameDirection = true
+    leader.textWidth = 9.51
+    leader.annoType = AcDbLeaderAnnotationType.MText
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points[2]).toMatchObject({ x: 28, y: 5, z: 0 })
+  })
+
+  it('draws hook line when textWidth is zero but MTEXT bounds define the span', () => {
+    const db = createWorkingDb()
+    const mtext = new AcDbMText()
+    mtext.location = new AcGePoint3d(10, 8, 0)
+    mtext.height = 5
+    mtext.extentsWidth = 20
+    db.tables.blockTable.modelSpace.appendEntity(mtext)
+
+    const leader = new AcDbLeader()
+    db.tables.blockTable.modelSpace.appendEntity(leader)
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 6, 0))
+    leader.hasHookLine = true
+    leader.textWidth = 0
+    leader.isHookLineSameDirection = true
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points).toHaveLength(3)
+    expect(points[2]).toMatchObject({ x: 30, y: 6, z: 0 })
+  })
+
+  it('draws hook line from associated MTEXT bounds when hasHookLine is false', () => {
+    const db = createWorkingDb()
+    const mtext = new AcDbMText()
+    mtext.location = new AcGePoint3d(10, 8, 0)
+    mtext.height = 5
+    mtext.extentsWidth = 16
+    db.tables.blockTable.modelSpace.appendEntity(mtext)
+
+    const leader = new AcDbLeader()
+    db.tables.blockTable.modelSpace.appendEntity(leader)
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 6, 0))
+    leader.hasHookLine = false
+    leader.textWidth = 0
+    leader.isHookLineSameDirection = true
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points).toHaveLength(3)
+    expect(points[2]).toMatchObject({ x: 26, y: 6, z: 0 })
+  })
+
+  it('extends hook line in the negative horizontal direction', () => {
+    const leader = new AcDbLeader()
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 5, 0))
+    leader.hasHookLine = true
+    leader.isHookLineSameDirection = false
+    leader.textWidth = 4
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points[2]).toMatchObject({ x: 5, y: 5, z: 0 })
+  })
+
+  it('resolves MTEXT by associatedAnnotation handle before spatial search', () => {
+    const db = createWorkingDb()
+    const farMtext = new AcDbMText()
+    farMtext.location = new AcGePoint3d(100, 100, 0)
+    farMtext.height = 5
+    farMtext.extentsWidth = 50
+    db.tables.blockTable.modelSpace.appendEntity(farMtext)
+
+    const nearMtext = new AcDbMText()
+    nearMtext.location = new AcGePoint3d(10, 8, 0)
+    nearMtext.height = 5
+    nearMtext.extentsWidth = 10
+    db.tables.blockTable.modelSpace.appendEntity(nearMtext)
+
+    const leader = new AcDbLeader()
+    db.tables.blockTable.modelSpace.appendEntity(leader)
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 5, 0))
+    leader.associatedAnnotation = farMtext.objectId
+    leader.hasHookLine = true
+    leader.isHookLineSameDirection = true
+    leader.textWidth = 0
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points[2].x).toBeGreaterThan(100)
+    expect(points[2].x).not.toBeCloseTo(20)
+  })
+
+  it('includes hook line endpoint in geometricExtents', () => {
+    const leader = new AcDbLeader()
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(10, 5, 0))
+    leader.hasHookLine = true
+    leader.isHookLineSameDirection = true
+    leader.textWidth = 4
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    expect(leader.geometricExtents.max.x).toBeCloseTo(15)
+    expect(leader.geometricExtents.max.y).toBeCloseTo(5)
+  })
+
+  it('associates rotated MTEXT using oriented local coordinates', () => {
+    const db = createWorkingDb()
+    const decoy = new AcDbMText()
+    decoy.location = new AcGePoint3d(20, 5, 0)
+    decoy.height = 4
+    decoy.extentsWidth = 30
+    db.tables.blockTable.modelSpace.appendEntity(decoy)
+
+    const rotated = new AcDbMText()
+    rotated.location = new AcGePoint3d(10, 10, 0)
+    rotated.rotation = Math.PI / 2
+    rotated.direction = new AcGeVector3d(0, 1, 0)
+    rotated.height = 4
+    rotated.extentsWidth = 20
+    rotated.attachmentPoint = AcGiMTextAttachmentPoint.TopLeft
+    db.tables.blockTable.modelSpace.appendEntity(rotated)
+
+    const leader = new AcDbLeader()
+    db.tables.blockTable.modelSpace.appendEntity(leader)
+    leader.appendVertex(new AcGePoint3d(0, 0, 0))
+    leader.appendVertex(new AcGePoint3d(12, 20, 0))
+    leader.hasHookLine = true
+    leader.isHookLineSameDirection = true
+    leader.textWidth = 0
+    leader.horizontalDirection = new AcGeVector3d(1, 0, 0)
+
+    const renderer = createRenderer()
+    leader.subWorldDraw(renderer as never)
+    const points = (renderer.lines.mock.calls[0] as unknown[][])[0] as AcGePoint3d[]
+    expect(points).toHaveLength(3)
+    expect(points[2].x).toBeCloseTo(14)
+    expect(points[2].y).toBeCloseTo(20)
   })
 
   it('transforms vertices and keeps working for splined geometry', () => {
@@ -168,7 +353,9 @@ describe('AcDbLeader', () => {
 
     const renderer = createRenderer()
     leader.subWorldDraw(renderer as never)
-    expect((renderer.lines.mock.calls[0] as unknown[][])[0]).toHaveLength(100)
+    const sampled = (renderer.lines.mock.calls[0] as unknown[][])[0]
+    expect(sampled.length).toBeGreaterThan(1)
+    expect(sampled.length).toBeLessThanOrEqual(100)
   })
 
   it('writes leader-specific DXF fields', () => {

@@ -1,22 +1,26 @@
 import {
   AcGeArea2d,
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint2d,
   AcGePoint3d,
   AcGePoint3dLike,
   AcGePointLike,
   AcGePolyline2d,
-  AcGeVector3dLike
-} from '@mlightcad/geometry-engine'
+  acgeTransformOcsPointToWcs,
+  acgeTransformWcsPointToOcs,
+  AcGeVector3d,
+  AcGeVector3dLike} from '@mlightcad/geometry-engine'
 import { AcGiRenderer } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbCurve } from './AcDbCurve'
 import { acdbMovePointArrayGripAt } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
 import { acdbCollectVertexPathOsnapPoints } from './AcDbOsnapHelpers'
-import { AcDbPolyline, offsetVertexPathAsPolyline } from './AcDbPolyline'
+import { acdbOffsetVertexPathAsPolyline,AcDbPolyline } from './AcDbPolyline'
 
 /**
  * Represents a trace entity in AutoCAD.
@@ -57,12 +61,14 @@ export class AcDbTrace extends AcDbCurve {
   private _vertices: [AcGePoint3d, AcGePoint3d, AcGePoint3d, AcGePoint3d]
   /** The thickness (extrusion) of the trace */
   private _thickness: number
+  /** Extrusion / plane normal (DXF group 210) */
+  private _normal = new AcGeVector3d(0, 0, 1)
 
   /**
    * Creates a new trace entity.
    *
    * This constructor initializes a trace with default values.
-   * All vertices are set to the origin, elevation is 0, and thickness is 1.
+   * All vertices are set to the origin, elevation is 0, and thickness is 0.
    *
    * @example
    * ```typescript
@@ -77,7 +83,7 @@ export class AcDbTrace extends AcDbCurve {
   constructor() {
     super()
     this._elevation = 0
-    this._thickness = 1
+    this._thickness = 0
     this._vertices = [
       new AcGePoint3d(),
       new AcGePoint3d(),
@@ -171,6 +177,16 @@ export class AcDbTrace extends AcDbCurve {
   }
 
   /**
+   * Extrusion direction / plane normal (DXF group 210).
+   */
+  get normal(): AcGeVector3d {
+    return this._normal
+  }
+  set normal(value: AcGeVector3dLike) {
+    this._normal.copy(value)
+  }
+
+  /**
    * Gets the point at the specified index in this trace.
    *
    * The index can be 0, 1, 2, or 3, representing the four vertices of the trace.
@@ -228,6 +244,15 @@ export class AcDbTrace extends AcDbCurve {
    */
   get geometricExtents(): AcGeBox3d {
     return new AcGeBox3d().setFromPoints(this._vertices)
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const v0 = this._vertices[0]
+    const v1 = this._vertices[1]
+    const v2 = this._vertices[2]
+    const v3 = this._vertices[3]
+    return acdbIntersectPrimitivesFromPointPath([v0, v1, v3, v2], true)
   }
 
   /**
@@ -299,6 +324,15 @@ export class AcDbTrace extends AcDbCurve {
   }
 
   /**
+   * This trace always draws as a single `area` primitive.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    return 'area' as const
+  }
+
+  /**
    * Draws this trace using the specified renderer.
    *
    * This method renders the trace as a filled area using the trace's
@@ -333,12 +367,82 @@ export class AcDbTrace extends AcDbCurve {
   override dxfOutFields(filer: AcDbDxfFiler) {
     super.dxfOutFields(filer)
     filer.writeSubclassMarker('AcDbTrace')
-    filer.writeDouble(38, this.elevation)
-    filer.writeDouble(39, this.thickness)
-    filer.writePoint3d(10, this.getPointAt(0))
-    filer.writePoint3d(11, this.getPointAt(1))
-    filer.writePoint3d(12, this.getPointAt(2))
-    filer.writePoint3d(13, this.getPointAt(3))
+    // SOLID/TRACE have no group 38 in the DXF reference; Z lives on corner
+    // points (10–13). Writing 38 aborts parsers that stop on unknown codes
+    // (e.g. @mlightcad/dxf-json), leaving `points` unset.
+    if (this.thickness !== 0) {
+      filer.writeDouble(39, this.thickness)
+    }
+    filer.writePoint3d(10, acgeTransformWcsPointToOcs(this.getPointAt(0), this.normal))
+    filer.writePoint3d(11, acgeTransformWcsPointToOcs(this.getPointAt(1), this.normal))
+    filer.writePoint3d(12, acgeTransformWcsPointToOcs(this.getPointAt(2), this.normal))
+    filer.writePoint3d(13, acgeTransformWcsPointToOcs(this.getPointAt(3), this.normal))
+    filer.writeVector3d(210, this.normal)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbTrace')
+
+    const pts = [
+      { x: this.getPointAt(0).x, y: this.getPointAt(0).y, z: this.getPointAt(0).z },
+      { x: this.getPointAt(1).x, y: this.getPointAt(1).y, z: this.getPointAt(1).z },
+      { x: this.getPointAt(2).x, y: this.getPointAt(2).y, z: this.getPointAt(2).z },
+      { x: this.getPointAt(3).x, y: this.getPointAt(3).y, z: this.getPointAt(3).z }
+    ]
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+        case 11:
+        case 12:
+        case 13:
+          pts[code - 10].x = n
+          break
+        case 20:
+        case 21:
+        case 22:
+        case 23:
+          pts[code - 20].y = n
+          break
+        case 30:
+        case 31:
+        case 32:
+        case 33:
+          pts[code - 30].z = n
+          break
+        case 39:
+          this.thickness = n
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        default:
+          break
+      }
+    }
+
+    const normal = new AcGeVector3d(nx, ny, nz)
+    if (normal.lengthSq() > 0) {
+      this.normal.copy(normal.normalize())
+    }
+    pts.forEach((p, i) =>
+      this.setPointAt(i, acgeTransformOcsPointToWcs(p, this.normal))
+    )
     return this
   }
 
@@ -369,7 +473,7 @@ export class AcDbTrace extends AcDbCurve {
    * @returns Offset polyline around the trace boundary, or `null` on failure
    */
   private createOffsetCurve(offsetDist: number): AcDbCurve | null {
-    return offsetVertexPathAsPolyline(
+    return acdbOffsetVertexPathAsPolyline(
       this.collectBoundary2d(),
       true,
       offsetDist

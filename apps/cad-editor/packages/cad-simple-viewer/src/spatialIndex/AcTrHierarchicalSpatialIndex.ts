@@ -4,12 +4,19 @@ import { AcTrGroup } from '@mlightcad/three-renderer'
 import {
   AcEdSpatialQueryResultItem,
   AcEdSpatialQueryResultItemEx,
-  unionSpatialQueryItems
+  unionSpatialQueryItems,
+  uniquifySpatialItemIds
 } from '../editor/view/AcEdSpatialQueryResult'
 import { isFiniteSpatialBBox } from '../view/AcTrGroupWcsBboxAssert'
 import { AcTrLinearSpatialIndex } from './AcTrLinearSpatialIndex'
 import { AcTrRBushSpatialIndex } from './AcTrRBushSpatialIndex'
-import { AcTrSpatialIndex, AcTrSpatialIndexBBox, AcTrSpatialSearchOptions, isSpatialBoxFullyInside } from './AcTrSpatialIndex'
+import {
+  AcTrSpatialIndex,
+  AcTrSpatialIndexBBox,
+  AcTrSpatialIndexStats,
+  AcTrSpatialSearchOptions,
+  isSpatialBoxFullyInside
+} from './AcTrSpatialIndex'
 
 /**
  * A two-level (hierarchical) spatial index designed for complex CAD
@@ -268,6 +275,45 @@ export class AcTrHierarchicalSpatialIndex implements AcTrSpatialIndex {
   }
 
   /**
+   * Async variant of {@link all} that yields while flattening large child
+   * indexes so smart-extents collection does not freeze the UI thread.
+   *
+   * Produces the same ordered list as {@link all} for the same index contents.
+   *
+   * @param work - Cooperative yield helper (optional).
+   */
+  async allAsync(work?: {
+    maybeYield(): Promise<void>
+  }): Promise<AcEdSpatialQueryResultItem[]> {
+    const result: AcEdSpatialQueryResultItem[] = []
+    let sinceYield = 0
+    const roots = this.rootIndex.all()
+
+    for (let r = 0; r < roots.length; r++) {
+      const hit = roots[r]!
+      const child = this.childIndexes.get(hit.id)
+      if (child) {
+        const children = child.all()
+        for (let i = 0; i < children.length; i++) {
+          result.push(children[i] as AcEdSpatialQueryResultItem)
+          sinceYield++
+          if (work && (sinceYield & 0x7ff) === 0x7ff) {
+            await work.maybeYield()
+          }
+        }
+      } else {
+        result.push(hit as AcEdSpatialQueryResultItem)
+        sinceYield++
+        if (work && (sinceYield & 0x7ff) === 0x7ff) {
+          await work.maybeYield()
+        }
+      }
+    }
+
+    return result
+  }
+
+  /**
    * Checks whether a second-level index exists for the specified id.
    *
    * @param id Root item id.
@@ -275,6 +321,51 @@ export class AcTrHierarchicalSpatialIndex implements AcTrSpatialIndex {
    */
   hasChildIndex(id: AcDbObjectId) {
     return this.childIndexes.has(id)
+  }
+
+  /**
+   * Returns the first-level (root) item for {@link id}, when present.
+   *
+   * Does not clear or inspect child indexes.
+   */
+  getRootById(id: AcDbObjectId): AcEdSpatialQueryResultItem | undefined {
+    const root = this.rootIndex as AcTrSpatialIndex & {
+      getById?: (id: AcDbObjectId) => AcEdSpatialQueryResultItem | undefined
+    }
+    return root.getById?.(id)
+  }
+
+  /**
+   * Aggregates memory / cardinality stats from the root index and all children.
+   */
+  getStats(): AcTrSpatialIndexStats {
+    const rootStats = this.rootIndex.getStats()
+    let childItemCount = 0
+    let childBytes = 0
+    let rbushChildCount = 0
+    let linearChildCount = 0
+
+    for (const child of this.childIndexes.values()) {
+      const childStats = child.getStats()
+      childItemCount += childStats.itemCount
+      childBytes += childStats.estimatedBytes
+      if (childStats.kind === 'rbush') rbushChildCount++
+      else if (childStats.kind === 'linear') linearChildCount++
+    }
+
+    // Child-index Map overhead (string id keys + pointers).
+    const childMapBytes = this.childIndexes.size * 64
+
+    return {
+      kind: 'hierarchical',
+      itemCount: rootStats.itemCount,
+      estimatedBytes: rootStats.estimatedBytes + childBytes + childMapBytes,
+      rootItemCount: rootStats.itemCount,
+      childIndexCount: this.childIndexes.size,
+      childItemCount,
+      rbushChildCount,
+      linearChildCount
+    }
   }
 
   /**
@@ -297,7 +388,12 @@ export class AcTrHierarchicalSpatialIndex implements AcTrSpatialIndex {
     id: AcDbObjectId,
     items: readonly AcEdSpatialQueryResultItem[]
   ) {
-    const finiteItems = items.filter(isFiniteSpatialBBox)
+    // Copy each item: callers may pass live `wcsChildBoxes` that later mutate
+    // via Object.assign. RBush parent bounds would go stale if we stored those
+    // references; the previous insert({ ...item }) path copied for the same reason.
+    const finiteItems = uniquifySpatialItemIds(
+      items.filter(isFiniteSpatialBBox)
+    ).map(item => ({ ...item }))
     if (finiteItems.length === 0) {
       return undefined
     }
@@ -310,14 +406,14 @@ export class AcTrHierarchicalSpatialIndex implements AcTrSpatialIndex {
     const existing = this.childIndexes.get(id)
     if (existing) {
       existing.clear()
-      finiteItems.forEach(item => existing.insert({ ...item }))
+      existing.load(finiteItems)
       return existing
     }
 
     const spatialIndex = this.createIndexBySize(finiteItems.length)
     if (!spatialIndex) return undefined
 
-    finiteItems.forEach(item => spatialIndex.insert({ ...item }))
+    spatialIndex.load(finiteItems)
     this.setChildIndex(id, spatialIndex)
     return spatialIndex
   }
@@ -355,5 +451,4 @@ export class AcTrHierarchicalSpatialIndex implements AcTrSpatialIndex {
     }
     return undefined
   }
-
 }

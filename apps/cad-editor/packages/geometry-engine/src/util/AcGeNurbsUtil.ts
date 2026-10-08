@@ -7,7 +7,7 @@ type KnotParameterizationType = 'Uniform' | 'Chord' | 'SqrtChord'
 /**
  * Generate uniform knot vector
  */
-export function generateUniformKnots(
+export function acgeGenerateUniformKnots(
   degree: number,
   numControlPoints: number
 ): number[] {
@@ -36,7 +36,7 @@ export function generateUniformKnots(
 /**
  * Generate chord-length parameterized knots
  */
-export function generateChordKnots(
+export function acgeGenerateChordKnots(
   degree: number,
   points: number[][]
 ): number[] {
@@ -81,7 +81,7 @@ export function generateChordKnots(
 /**
  * Compute parameter values for fit points
  */
-export function computeParameterValues(
+export function acgeComputeParameterValues(
   points: number[][],
   parameterization: KnotParameterizationType = 'Uniform'
 ): number[] {
@@ -121,7 +121,7 @@ export function computeParameterValues(
 /**
  * Generate a clamped knot vector using averaging method
  */
-export function generateAveragedKnots(
+export function acgeGenerateAveragedKnots(
   degree: number,
   parameters: number[]
 ): number[] {
@@ -150,7 +150,7 @@ export function generateAveragedKnots(
 /**
  * Generate sqrt-chord parameterized knots
  */
-export function generateSqrtChordKnots(
+export function acgeGenerateSqrtChordKnots(
   degree: number,
   points: number[][]
 ): number[] {
@@ -193,23 +193,79 @@ export function generateSqrtChordKnots(
   return knots
 }
 
-function solveLinearSystem(matrix: number[][], rhs: number[]): number[] {
-  const n = matrix.length
-  const a = matrix.map(row => row.slice())
-  const b = rhs.slice()
+interface SparseRowEntry {
+  col: number
+  value: number
+}
+
+/**
+ * Returns the value of the entry in `row` for `col`, or `0` when absent.
+ *
+ * Rows are short (bounded by the system bandwidth), so a linear scan is
+ * cheaper than binary search.
+ */
+function findRowEntry(row: SparseRowEntry[], col: number): number {
+  for (const entry of row) {
+    if (entry.col === col) {
+      return entry.value
+    }
+  }
+  return 0
+}
+
+/**
+ * Returns the index of the entry in `row` for `col`, or `-1` when absent.
+ */
+function findRowEntryIndex(row: SparseRowEntry[], col: number): number {
+  for (let i = 0; i < row.length; i++) {
+    if (row[i].col === col) {
+      return i
+    }
+  }
+  return -1
+}
+
+/**
+ * Solves one banded linear system with multiple right-hand sides.
+ *
+ * Gaussian elimination with partial pivoting over the sparse rows. Only rows
+ * whose band window contains column `k` carry a `k` entry, so both the pivot
+ * search and the elimination step touch at most `band + 1` non-empty rows per
+ * column — the full-row loops below degrade to O(n² · band) instead of the
+ * dense solver's O(n³). A single factorization serves every RHS, so the X/Y/Z
+ * coordinate systems share one elimination pass.
+ *
+ * Note the pivot search scans every remaining row rather than a window of
+ * `band`: row swaps displace band rows downward, so a column's live entries
+ * can end up arbitrarily far below the diagonal.
+ *
+ * @param rows - Sparse matrix rows; every non-zero entry must satisfy
+ *   `|col - rowIndex| <= band` before pivoting.
+ * @param rhsList - One right-hand-side vector per output solution.
+ * @returns One solution vector per RHS.
+ * @throws {Error} When a pivot falls below `1e-12` (singular).
+ */
+function solveBandedLinearSystem(
+  rows: SparseRowEntry[][],
+  rhsList: number[][]
+): number[][] {
+  const n = rows.length
+  const a = rows.map(row => row.map(entry => ({ col: entry.col, value: entry.value })))
+  const bList = rhsList.map(rhs => rhs.slice())
 
   for (let k = 0; k < n; k++) {
-    let pivotRow = k
-    let pivotValue = Math.abs(a[k][k])
-    for (let i = k + 1; i < n; i++) {
-      const value = Math.abs(a[i][k])
-      if (value > pivotValue) {
-        pivotValue = value
+    // Partial pivot over all remaining rows that carry a `k` entry.
+    let pivotRow = -1
+    let pivotAbs = 1e-12
+    for (let i = k; i < n; i++) {
+      const abs = Math.abs(findRowEntry(a[i], k))
+      if (abs > pivotAbs) {
+        pivotAbs = abs
         pivotRow = i
       }
     }
 
-    if (pivotValue < 1e-12) {
+    if (pivotRow < 0) {
       throw new Error('Interpolation matrix is singular.')
     }
 
@@ -217,40 +273,100 @@ function solveLinearSystem(matrix: number[][], rhs: number[]): number[] {
       const tmpRow = a[k]
       a[k] = a[pivotRow]
       a[pivotRow] = tmpRow
-
-      const tmpValue = b[k]
-      b[k] = b[pivotRow]
-      b[pivotRow] = tmpValue
+      for (const b of bList) {
+        const tmpValue = b[k]
+        b[k] = b[pivotRow]
+        b[pivotRow] = tmpValue
+      }
     }
 
+    const pivotValue = findRowEntry(a[k], k)
     for (let i = k + 1; i < n; i++) {
-      const factor = a[i][k] / a[k][k]
+      const entryIndex = findRowEntryIndex(a[i], k)
+      if (entryIndex < 0) {
+        continue
+      }
+      const factor = a[i][entryIndex].value / pivotValue
       if (Math.abs(factor) < 1e-14) {
         continue
       }
-      for (let j = k; j < n; j++) {
-        a[i][j] -= factor * a[k][j]
+      for (const entry of a[i]) {
+        if (entry.col > k) {
+          entry.value -= factor * findRowEntry(a[k], entry.col)
+        }
       }
-      b[i] -= factor * b[k]
+      // Fill-in: the dense elimination subtracts the scaled pivot row from
+      // every column, so row `i` gains entries wherever the pivot row has a
+      // non-zero beyond the diagonal and row `i` has none. Missing these
+      // entries drops columns from later pivots and can make a well-posed
+      // system look singular.
+      for (const pivotEntry of a[k]) {
+        if (pivotEntry.col <= k || pivotEntry.value === 0) {
+          continue
+        }
+        if (findRowEntryIndex(a[i], pivotEntry.col) < 0) {
+          a[i].push({
+            col: pivotEntry.col,
+            value: -factor * pivotEntry.value
+          })
+        }
+      }
+      a[i][entryIndex].value = 0
+      for (const b of bList) {
+        b[i] -= factor * b[k]
+      }
     }
   }
 
-  const x = new Array(n).fill(0)
+  const solutions = bList.map(() => new Array<number>(n).fill(0))
   for (let i = n - 1; i >= 0; i--) {
-    let sum = b[i]
-    for (let j = i + 1; j < n; j++) {
-      sum -= a[i][j] * x[j]
+    const diagonal = findRowEntry(a[i], i)
+    for (let s = 0; s < bList.length; s++) {
+      let sum = bList[s][i]
+      for (const entry of a[i]) {
+        if (entry.col > i) {
+          sum -= entry.value * solutions[s][entry.col]
+        }
+      }
+      solutions[s][i] = sum / diagonal
     }
-    x[i] = sum / a[i][i]
   }
 
-  return x
+  return solutions
+}
+
+/**
+ * Finds the knot span index such that `knots[span] <= u < knots[span + 1]`.
+ *
+ * @param u - Parameter value inside the valid knot domain.
+ * @param degree - Curve degree.
+ * @param knots - Clamped knot vector.
+ * @returns The span index in `[degree, knots.length - degree - 2]`.
+ */
+function findKnotSpan(u: number, degree: number, knots: number[]): number {
+  const lastIndex = knots.length - degree - 2
+  if (u >= knots[lastIndex + 1]) {
+    return lastIndex
+  }
+  let lo = degree
+  let hi = knots.length - degree - 2
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (u < knots[mid]) {
+      hi = mid - 1
+    } else if (u >= knots[mid + 1]) {
+      lo = mid + 1
+    } else {
+      return mid
+    }
+  }
+  return degree
 }
 
 /**
  * Interpolate a NURBS curve from fit points with optional end tangents
  */
-export function interpolateNurbsCurve(
+export function acgeInterpolateNurbsCurve(
   fitPoints: number[][],
   degree: number,
   parameterization: KnotParameterizationType = 'Uniform',
@@ -275,7 +391,7 @@ export function interpolateNurbsCurve(
     throw new Error('Not enough points to interpolate a curve of this degree.')
   }
 
-  const params = computeParameterValues(safePoints, parameterization)
+  const params = acgeComputeParameterValues(safePoints, parameterization)
   const extendedParams = params.slice()
   if (hasStartTangent) {
     extendedParams.unshift(params[0])
@@ -284,68 +400,75 @@ export function interpolateNurbsCurve(
     extendedParams.push(params[params.length - 1])
   }
 
-  const knots = generateAveragedKnots(degree, extendedParams)
+  const knots = acgeGenerateAveragedKnots(degree, extendedParams)
   const size = n + 1
 
-  const matrix = new Array(size)
-  const rhsX = new Array(size)
-  const rhsY = new Array(size)
-  const rhsZ = new Array(size)
-
-  let row = 0
-  matrix[row] = new Array(size).fill(0)
-  matrix[row][0] = 1
-  rhsX[row] = safePoints[0][0]
-  rhsY[row] = safePoints[0][1]
-  rhsZ[row] = safePoints[0][2]
-  row++
-
-  for (let i = 1; i <= m - 1; i++) {
-    const u = params[i]
-    matrix[row] = new Array(size).fill(0)
-    for (let j = 0; j <= n; j++) {
-      matrix[row][j] = basisFunction(j, degree, u, knots)
-    }
-    rhsX[row] = safePoints[i][0]
-    rhsY[row] = safePoints[i][1]
-    rhsZ[row] = safePoints[i][2]
-    row++
-  }
-
-  matrix[row] = new Array(size).fill(0)
-  matrix[row][n] = 1
-  rhsX[row] = safePoints[m][0]
-  rhsY[row] = safePoints[m][1]
-  rhsZ[row] = safePoints[m][2]
-  row++
+  // The collocation matrix is banded (B-spline support is local). Rows are
+  // ordered so every non-zero entry stays within `degree + 1` of the diagonal:
+  // start tangent first (columns 0/1), then the interpolation rows in
+  // parameter order, then the end tangent (columns n-1/n).
+  const rows: SparseRowEntry[][] = []
+  const rhsX: number[] = []
+  const rhsY: number[] = []
+  const rhsZ: number[] = []
 
   if (hasStartTangent) {
     const denom = knots[degree + 1] - knots[0]
     const coeff = denom !== 0 ? degree / denom : 0
-    matrix[row] = new Array(size).fill(0)
-    matrix[row][0] = -coeff
-    matrix[row][1] = coeff
-    rhsX[row] = startTangent?.[0] ?? 0
-    rhsY[row] = startTangent?.[1] ?? 0
-    rhsZ[row] = startTangent?.[2] ?? 0
-    row++
+    rows.push([
+      { col: 0, value: -coeff },
+      { col: 1, value: coeff }
+    ])
+    rhsX.push(startTangent?.[0] ?? 0)
+    rhsY.push(startTangent?.[1] ?? 0)
+    rhsZ.push(startTangent?.[2] ?? 0)
   }
+
+  rows.push([{ col: 0, value: 1 }])
+  rhsX.push(safePoints[0][0])
+  rhsY.push(safePoints[0][1])
+  rhsZ.push(safePoints[0][2])
+
+  for (let i = 1; i <= m - 1; i++) {
+    const u = params[i]
+    const row: SparseRowEntry[] = []
+    const span = findKnotSpan(u, degree, knots)
+    const first = Math.max(0, span - degree)
+    const last = Math.min(n, span)
+    for (let j = first; j <= last; j++) {
+      const value = acgeBasisFunction(j, degree, u, knots)
+      if (value !== 0) {
+        row.push({ col: j, value })
+      }
+    }
+    rows.push(row)
+    rhsX.push(safePoints[i][0])
+    rhsY.push(safePoints[i][1])
+    rhsZ.push(safePoints[i][2])
+  }
+
+  rows.push([{ col: n, value: 1 }])
+  rhsX.push(safePoints[m][0])
+  rhsY.push(safePoints[m][1])
+  rhsZ.push(safePoints[m][2])
 
   if (hasEndTangent) {
     const denom = knots[n + degree + 1] - knots[n]
     const coeff = denom !== 0 ? degree / denom : 0
-    matrix[row] = new Array(size).fill(0)
-    matrix[row][n - 1] = -coeff
-    matrix[row][n] = coeff
-    rhsX[row] = endTangent?.[0] ?? 0
-    rhsY[row] = endTangent?.[1] ?? 0
-    rhsZ[row] = endTangent?.[2] ?? 0
-    row++
+    rows.push([
+      { col: n - 1, value: -coeff },
+      { col: n, value: coeff }
+    ])
+    rhsX.push(endTangent?.[0] ?? 0)
+    rhsY.push(endTangent?.[1] ?? 0)
+    rhsZ.push(endTangent?.[2] ?? 0)
   }
 
-  const solutionX = solveLinearSystem(matrix, rhsX)
-  const solutionY = solveLinearSystem(matrix, rhsY)
-  const solutionZ = solveLinearSystem(matrix, rhsZ)
+  const [solutionX, solutionY, solutionZ] = solveBandedLinearSystem(rows, [
+    rhsX,
+    rhsY,
+    rhsZ
+  ])
 
   const controlPoints = new Array(size)
   for (let i = 0; i < size; i++) {
@@ -360,7 +483,7 @@ export function interpolateNurbsCurve(
 /**
  * Calculate basis function value for NURBS
  */
-export function basisFunction(
+export function acgeBasisFunction(
   i: number,
   k: number,
   u: number,
@@ -377,15 +500,15 @@ export function basisFunction(
   const c2 = d2 > 1e-10 ? (knots[i + k + 1] - u) / d2 : 0.0
 
   return (
-    c1 * basisFunction(i, k - 1, u, knots) +
-    c2 * basisFunction(i + 1, k - 1, u, knots)
+    c1 * acgeBasisFunction(i, k - 1, u, knots) +
+    c2 * acgeBasisFunction(i + 1, k - 1, u, knots)
   )
 }
 
 /**
  * Calculate point on NURBS curve
  */
-export function evaluateNurbsPoint(
+export function acgeEvaluateNurbsPoint(
   u: number,
   degree: number,
   knots: number[],
@@ -412,7 +535,7 @@ export function evaluateNurbsPoint(
   let weight = 0
 
   for (let i = 0; i <= n; i++) {
-    const basis = basisFunction(i, p, u, knots)
+    const basis = acgeBasisFunction(i, p, u, knots)
     const w = weights[i] * basis
 
     point[0] += controlPoints[i][0] * w
@@ -466,10 +589,10 @@ function basisFunctionDeriv1(
   let value = 0
 
   if (denomA > 1e-10) {
-    value += (k / denomA) * basisFunction(i, k - 1, u, knots)
+    value += (k / denomA) * acgeBasisFunction(i, k - 1, u, knots)
   }
   if (denomB > 1e-10) {
-    value -= (k / denomB) * basisFunction(i + 1, k - 1, u, knots)
+    value -= (k / denomB) * acgeBasisFunction(i + 1, k - 1, u, knots)
   }
 
   return value
@@ -503,7 +626,7 @@ function basisFunctionDeriv2(
 /**
  * Evaluates a rational NURBS curve and its first two parametric derivatives.
  */
-export function evaluateNurbsDerivatives(
+export function acgeEvaluateNurbsDerivatives(
   u: number,
   degree: number,
   knots: number[],
@@ -524,7 +647,7 @@ export function evaluateNurbsDerivatives(
   let d2w = 0
 
   for (let i = 0; i <= n; i++) {
-    const basis = basisFunction(i, p, u, knots)
+    const basis = acgeBasisFunction(i, p, u, knots)
     const dbasis = basisFunctionDeriv1(i, p, u, knots)
     const d2basis = basisFunctionDeriv2(i, p, u, knots)
     const weight = weights[i]
@@ -548,7 +671,7 @@ export function evaluateNurbsDerivatives(
   }
 
   if (Math.abs(w) < 1e-10) {
-    const point = evaluateNurbsPoint(u, degree, knots, controlPoints, weights)
+    const point = acgeEvaluateNurbsPoint(u, degree, knots, controlPoints, weights)
     return { point, deriv1: [0, 0, 0], deriv2: [0, 0, 0] }
   }
 
@@ -574,7 +697,7 @@ export function evaluateNurbsDerivatives(
 /**
  * Signed planar curvature from parametric derivatives in XY.
  */
-export function signedPlanarCurvature(
+export function acgeSignedPlanarCurvature(
   deriv1: number[],
   deriv2: number[]
 ): number {
@@ -590,7 +713,7 @@ export function signedPlanarCurvature(
 /**
  * Calculate curve length using numerical integration
  */
-export function calculateCurveLength(
+export function acgeCalculateCurveLength(
   degree: number,
   knots: number[],
   controlPoints: number[][],
@@ -604,7 +727,7 @@ export function calculateCurveLength(
   const steps = 1000
   const step = (endParam - startParam) / steps
 
-  let prevPoint = evaluateNurbsPoint(
+  let prevPoint = acgeEvaluateNurbsPoint(
     startParam,
     degree,
     knots,
@@ -614,7 +737,7 @@ export function calculateCurveLength(
 
   for (let i = 1; i <= steps; i++) {
     const u = startParam + i * step
-    const point = evaluateNurbsPoint(u, degree, knots, controlPoints, weights)
+    const point = acgeEvaluateNurbsPoint(u, degree, knots, controlPoints, weights)
 
     const dx = point[0] - prevPoint[0]
     const dy = point[1] - prevPoint[1]
@@ -625,7 +748,7 @@ export function calculateCurveLength(
   }
 
   // Add the final segment to the end point
-  const finalPoint = evaluateNurbsPoint(
+  const finalPoint = acgeEvaluateNurbsPoint(
     endParam,
     degree,
     knots,
@@ -643,7 +766,7 @@ export function calculateCurveLength(
 /**
  * Generate control points from fit points using interpolation
  */
-export function interpolateControlPoints(
+export function acgeInterpolateControlPoints(
   fitPoints: number[][],
   degree: number = 3,
   parameterization: KnotParameterizationType = 'Uniform',
@@ -654,7 +777,7 @@ export function interpolateControlPoints(
     return []
   }
 
-  return interpolateNurbsCurve(
+  return acgeInterpolateNurbsCurve(
     fitPoints,
     degree,
     parameterization,

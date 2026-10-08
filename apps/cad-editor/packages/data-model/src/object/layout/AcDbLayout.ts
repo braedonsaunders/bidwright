@@ -1,4 +1,10 @@
-import { AcGeBox2d, AcGeBox3d } from '@mlightcad/geometry-engine'
+import {
+  AcGeBox2d,
+  AcGeBox3d,
+  AcGePoint3d,
+  AcGeVector3d,
+  AcGeVector3dLike
+} from '@mlightcad/geometry-engine'
 
 import { AcDbDxfFiler } from '../../base/AcDbDxfFiler'
 import { AcDbPlotSettings } from './AcDbPlotSettings'
@@ -33,6 +39,28 @@ export class AcDbLayout extends AcDbPlotSettings {
   private _extents: AcGeBox3d
   /** Object IDs for viewports in this layout (paperspace). */
   private _viewportArray: string[]
+  /**
+   * ID/handle of the named `AcDbUCSTableRecord` for this layout, used when
+   * `UCSORTHO` is 0 (DXF group 345).
+   */
+  private _namedUcsId?: string
+  /**
+   * ID/handle of the base `AcDbUCSTableRecord` when the layout's UCS is
+   * orthographic (DXF group 346).
+   */
+  private _orthographicUcsId?: string
+  /** Layout insertion base point (DXF group 12). */
+  private _insertionPoint = new AcGePoint3d()
+  /** UCS origin for this layout (DXF group 13). */
+  private _ucsOrigin = new AcGePoint3d()
+  /** UCS X axis (DXF group 16). */
+  private _ucsXAxis = new AcGeVector3d(1, 0, 0)
+  /** UCS Y axis (DXF group 17). */
+  private _ucsYAxis = new AcGeVector3d(0, 1, 0)
+  /** Elevation (DXF group 146). */
+  private _elevation = 0
+  /** Orthographic type of UCS (DXF group 76). */
+  private _orthographicType = 0
 
   /**
    * Creates a new AcDbLayout instance.
@@ -253,6 +281,84 @@ export class AcDbLayout extends AcDbPlotSettings {
   }
 
   /**
+   * Gets the named UCS object ID used when `UCSORTHO` is 0 (DXF group 345).
+   */
+  get namedUcsId() {
+    return this._namedUcsId
+  }
+
+  /**
+   * Sets the named UCS object ID used when `UCSORTHO` is 0 (DXF group 345).
+   */
+  set namedUcsId(value: string | undefined) {
+    this._namedUcsId = value
+  }
+
+  /**
+   * Gets the base UCS object ID used when the layout's UCS is orthographic
+   * (DXF group 346).
+   */
+  get orthographicUcsId() {
+    return this._orthographicUcsId
+  }
+
+  /**
+   * Sets the base UCS object ID used when the layout's UCS is orthographic
+   * (DXF group 346).
+   */
+  set orthographicUcsId(value: string | undefined) {
+    this._orthographicUcsId = value
+  }
+
+  /** Layout insertion base point (DXF group 12). */
+  get insertionPoint() {
+    return this._insertionPoint
+  }
+  set insertionPoint(value: AcGePoint3d) {
+    this._insertionPoint.copy(value)
+  }
+
+  /** UCS origin for this layout (DXF group 13). */
+  get ucsOrigin() {
+    return this._ucsOrigin
+  }
+  set ucsOrigin(value: AcGePoint3d) {
+    this._ucsOrigin.copy(value)
+  }
+
+  /** UCS X axis (DXF group 16). */
+  get ucsXAxis() {
+    return this._ucsXAxis
+  }
+  set ucsXAxis(value: AcGeVector3dLike) {
+    this._ucsXAxis.copy(value)
+  }
+
+  /** UCS Y axis (DXF group 17). */
+  get ucsYAxis() {
+    return this._ucsYAxis
+  }
+  set ucsYAxis(value: AcGeVector3dLike) {
+    this._ucsYAxis.copy(value)
+  }
+
+  /** Elevation (DXF group 146). */
+  get elevation() {
+    return this._elevation
+  }
+  set elevation(value: number) {
+    this._elevation = value
+  }
+
+  /** Orthographic type of UCS (DXF group 76). */
+  get orthographicType() {
+    return this._orthographicType
+  }
+  set orthographicType(value: number) {
+    this._orthographicType = value
+  }
+
+  /**
    * Writes DXF fields for this object.
    *
    * @param filer - DXF output writer.
@@ -276,6 +382,131 @@ export class AcDbLayout extends AcDbPlotSettings {
     filer.writePoint2d(11, this.limits.max)
     filer.writePoint3d(14, this.extents.min)
     filer.writePoint3d(15, this.extents.max)
+    filer.writePoint3d(12, this.insertionPoint)
+    filer.writePoint3d(13, this.ucsOrigin)
+    filer.writeVector3d(16, this.ucsXAxis)
+    filer.writeVector3d(17, this.ucsYAxis)
+    filer.writeDouble(146, this.elevation)
+    filer.writeInt16(76, this.orthographicType)
+    filer.writeObjectId(345, this._namedUcsId)
+    filer.writeObjectId(346, this._orthographicUcsId)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbLayout')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 1:
+          this.layoutName = String(item.value)
+          break
+        case 70:
+          this.tabSelected = n !== 0
+          break
+        case 71:
+          this.tabOrder = n
+          break
+        case 330:
+          this.blockTableRecordId = String(item.value)
+          break
+        case 331: {
+          const vpId = String(item.value)
+          if (vpId && vpId !== '0') {
+            this.viewportArray = [vpId]
+          }
+          break
+        }
+        case 10:
+          this.limits.min.x = n
+          break
+        case 20:
+          this.limits.min.y = n
+          break
+        case 11:
+          this.limits.max.x = n
+          break
+        case 21:
+          this.limits.max.y = n
+          break
+        case 14:
+          this.extents.min.x = n
+          break
+        case 24:
+          this.extents.min.y = n
+          break
+        case 34:
+          this.extents.min.z = n
+          break
+        case 15:
+          this.extents.max.x = n
+          break
+        case 25:
+          this.extents.max.y = n
+          break
+        case 35:
+          this.extents.max.z = n
+          break
+        case 345:
+          this.namedUcsId = String(item.value)
+          break
+        case 346:
+          this.orthographicUcsId = String(item.value)
+          break
+        case 12:
+          this.insertionPoint.x = n
+          break
+        case 22:
+          this.insertionPoint.y = n
+          break
+        case 32:
+          this.insertionPoint.z = n
+          break
+        case 13:
+          this.ucsOrigin.x = n
+          break
+        case 23:
+          this.ucsOrigin.y = n
+          break
+        case 33:
+          this.ucsOrigin.z = n
+          break
+        case 16:
+          this.ucsXAxis.x = n
+          break
+        case 26:
+          this.ucsXAxis.y = n
+          break
+        case 36:
+          this.ucsXAxis.z = n
+          break
+        case 17:
+          this.ucsYAxis.x = n
+          break
+        case 27:
+          this.ucsYAxis.y = n
+          break
+        case 37:
+          this.ucsYAxis.z = n
+          break
+        case 76:
+          this.orthographicType = n
+          break
+        case 146:
+          this.elevation = n
+          break
+        case 100:
+          filer.pushBackItem(item)
+          return this
+        default:
+          break
+      }
+    }
     return this
   }
 }

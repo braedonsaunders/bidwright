@@ -26,10 +26,6 @@ export type AcDbConversionStage =
    */
   | 'PARSE'
   /**
-   * Downloading font files
-   */
-  | 'FONT'
-  /**
    * Converting line types
    */
   | 'LTYPE'
@@ -89,7 +85,7 @@ export type AcDbStageStatus = 'START' | 'END' | 'IN-PROGRESS' | 'ERROR'
  * @param stage - Name of the current stage
  * @param stageStatus - Status of the current stage
  * @param data - Store data associated with the current stage. Its meaning varies by stage:
- *   - 'FONT' stage: fonts needed by this drawing
+ *   - 'PARSE' stage: statistics of parsing task
  *
  * @example
  * ```typescript
@@ -100,8 +96,8 @@ export type AcDbStageStatus = 'START' | 'END' | 'IN-PROGRESS' | 'ERROR'
  *   data
  * ) => {
  *   console.log(`Progress: ${percentage}% - Stage: ${stage} - Status: ${stageStatus}`);
- *   if (stage === 'FONT' && data) {
- *     console.log('Fonts needed:', data);
+ *   if (stage === 'PARSE' && data) {
+ *     console.log('Parse stats:', data);
  *   }
  * };
  * ```
@@ -122,9 +118,8 @@ export type AcDbConversionProgressCallback = (
   /**
    * Store data associated with the current stage. Its meaning of different stages are as follows.
    * - 'PARSE' stage: statistics of parsing task
-   * - 'FONT' stage: fonts needed by this drawing
    *
-   * Note: For now, 'PARSE' and 'FONT' stages use this field only.
+   * Note: For now, 'PARSE' stages use this field only.
    */
   data?: unknown,
   /**
@@ -132,6 +127,47 @@ export type AcDbConversionProgressCallback = (
    */
   error?: AcCmTaskError
 ) => Promise<void>
+
+/**
+ * Options for {@link AcDbDatabaseConverter.read}.
+ *
+ * Keeps the converter read API extensible without growing positional arguments.
+ */
+export interface AcDbDatabaseConverterReadOptions {
+  /**
+   * Minimum number of items in one processing chunk.
+   *
+   * Defaults to converter-specific behavior when omitted.
+   */
+  minimumChunkSize?: number
+
+  /**
+   * Optional progress callback invoked as conversion stages advance.
+   */
+  progress?: AcDbConversionProgressCallback
+
+  /**
+   * Timeout for parser web worker operations in milliseconds.
+   */
+  timeout?: number
+
+  /**
+   * Override the text encoding used to decode strings in the source file.
+   *
+   * When omitted, converters auto-detect the encoding (DXF reads
+   * `$DWGCODEPAGE`; DWG reads the header code page). When provided, it wins
+   * over auto-detection — for example `'cp949'` (normalized to the supported
+   * `'euc-kr'` `TextDecoder` label) for Korean drawings. Applies to
+   * converters that read text in the main thread, such as the native DXF
+   * converter; worker-based converters may ignore it.
+   */
+  encoding?: string
+
+  /**
+   * System variables to override in the database after HEADER is processed.
+   */
+  sysVars?: Record<string, number | boolean | string>
+}
 
 /**
  * Interface defining the data for a conversion task.
@@ -383,26 +419,27 @@ export abstract class AcDbDatabaseConverter<TModel = unknown> {
    * Reads and converts data into an AcDbDatabase.
    *
    * This method orchestrates the entire conversion process, including
-   * parsing, processing various components (fonts, linetypes, styles, etc.),
+   * parsing, processing various components (linetypes, styles, etc.),
    * and building the final database.
    *
    * @param data - The input data to convert
    * @param db - The database to populate with converted data
-   * @param minimumChunkSize - Minimum chunk size for batch processing
-   * @param progress - Optional progress callback
-   * @param timeout - Optional timeout for parser web worker operations in milliseconds
-   * @param sysVars - Optional system variables to override in the database
+   * @param options - Optional read options (chunk size, progress, etc.)
    * @returns Promise that resolves when conversion is complete
    *
    */
   async read(
     data: ArrayBuffer,
     db: AcDbDatabase,
-    minimumChunkSize: number,
-    progress?: AcDbConversionProgressCallback,
-    timeout?: number,
-    sysVars?: Record<string, number | boolean | string>
+    options: AcDbDatabaseConverterReadOptions = {}
   ) {
+    const {
+      minimumChunkSize = 10,
+      progress,
+      timeout,
+      sysVars
+    } = options
+
     const loadDbTimeEntry: AcCmPerformanceEntry<AcDbConvertDatabasePerformanceData> =
       {
         name: PERFORMANCE_ENTRY_NAME,
@@ -447,20 +484,6 @@ export abstract class AcDbDatabaseConverter<TModel = unknown> {
           progress: percentage,
           task: async (data: ArrayBuffer) => {
             return await this.parse(data, timeout)
-          }
-        },
-        progress
-      )
-    )
-    scheduler.addTask(
-      new AcDbConversionTask(
-        {
-          stage: 'FONT',
-          step: 5,
-          progress: percentage,
-          task: async (data: { model: TModel }) => {
-            const fonts = this.getFonts(data.model)
-            return { model: data.model, data: fonts }
           }
         },
         progress
@@ -548,6 +571,7 @@ export abstract class AcDbDatabaseConverter<TModel = unknown> {
           step: 1,
           progress: percentage,
           task: async (data: { model: TModel }) => {
+            this.processClasses(data.model, db)
             this.processHeader(data.model, db)
             // Override system variable values
             if (sysVars) {
@@ -709,10 +733,6 @@ export abstract class AcDbDatabaseConverter<TModel = unknown> {
     throw new Error('Not impelemented yet!')
   }
 
-  protected getFonts(_model: TModel): string[] {
-    throw new Error('Not impelemented yet!')
-  }
-
   protected processLineTypes(_model: TModel, _db: AcDbDatabase) {
     throw new Error('Not impelemented yet!')
   }
@@ -735,6 +755,18 @@ export abstract class AcDbDatabaseConverter<TModel = unknown> {
 
   protected processHeader(_model: TModel, _db: AcDbDatabase) {
     throw new Error('Not impelemented yet!')
+  }
+
+  /**
+   * Optional stage: CLASSES metadata only augments the database and older
+   * converters predate it. A throwing default (like the mandatory stages
+   * above) would break any converter compiled before this stage existed —
+   * the HEADER task calls it unconditionally, so a data-model upgrade
+   * without a matching converter upgrade aborted every file open with
+   * "Error occurred in conversion stage HEADER" (mlightcad/cad-viewer#437).
+   */
+  protected processClasses(_model: TModel, _db: AcDbDatabase) {
+    // No-op by default; converters that extract CLASSES override this.
   }
 
   protected processBlockTables(_model: TModel, _db: AcDbDatabase) {

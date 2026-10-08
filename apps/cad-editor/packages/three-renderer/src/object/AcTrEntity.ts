@@ -7,6 +7,7 @@ import { AcTrRenderContext } from '../renderer/AcTrRenderContext'
 import {
   AcTrMaterialUtil,
   AcTrMatrixUtil,
+  effectiveLayer,
   isObjectHierarchyVisible
 } from '../util'
 import {
@@ -144,21 +145,18 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
       object: THREE.Object3D
       relativeMatrix: THREE.Matrix4
     }> = []
-    const position = new THREE.Vector3()
-    const quaternion = new THREE.Quaternion()
-    const scale = new THREE.Vector3()
 
-    // Reconstruct the object's local TRS from the relative matrix. We intentionally restore
-    // the transform onto the object itself instead of applying the matrix to its geometry.
+    // Restore the relative transform onto the leaf itself (not baked into geometry).
+    // Copy the exact 4×4 — Matrix4.decompose cannot round-trip mirrored INSERT
+    // scales (negative determinants), which previously corrupted batched glyph
+    // placement after collapseInverseParentTransformIntoPlacement.
     function applyRelativeMatrix(
       object: THREE.Object3D,
       relativeMatrix: THREE.Matrix4
     ) {
-      relativeMatrix.decompose(position, quaternion, scale)
-      object.position.copy(position)
-      object.quaternion.copy(quaternion)
-      object.scale.copy(scale)
-      object.updateMatrix()
+      object.matrixAutoUpdate = false
+      object.matrix.copy(relativeMatrix)
+      object.matrixWorldNeedsUpdate = true
     }
 
     // Walk the subtree and collect only leaf render objects. Any intermediate groups are
@@ -167,29 +165,40 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
       object: THREE.Object3D,
       rootMatrixWorldInverse: THREE.Matrix4
     ) {
-      // Copy first because we will mutate the hierarchy during traversal.
-      const children = [...object.children]
+      // Detach the whole child list at once. Object3D.remove() is O(n) per
+      // call, so removing 20k block lines one by one is quadratic and froze
+      // large INSERT opens.
+      const children = object.children
+      object.children = []
       for (const child of children) {
-        // Propagate layer information downward when the leaf itself does not define one.
+        // Propagate INSERT layer-0 inheritance downward. Nested AcTrGroup nodes
+        // already carry the nested INSERT layer (set by AcDbRenderingCache
+        // attachEntityInfo) before the outer group flattens them.
         const objectData = getObjectUserData(object)
         const childData = getObjectUserData(child)
-        if (!childData.layerName && objectData.layerName) {
-          childData.layerName = objectData.layerName
+        if (objectData.layerName) {
+          if (!childData.layerName) {
+            childData.layerName = objectData.layerName
+          } else {
+            const resolved = effectiveLayer(
+              childData.layerName,
+              objectData.layerName
+            )
+            if (resolved !== childData.layerName) {
+              if (childData.layerName === '0') {
+                childData.authoredLayerName = '0'
+              }
+              childData.layerName = resolved
+            }
+          }
         }
 
         if (child.children.length > 0) {
           // Keep descending until we reach actual render leaves.
           traverseAndCollectChildren(child, rootMatrixWorldInverse)
         } else {
-          // Refresh world matrices before computing the leaf transform relative to `root`.
-          child.updateMatrixWorld(true)
-
-          // Convert from world space into `root` local space:
-          //   relative = inverse(rootWorld) * childWorld
-          // This preserves the final rendered placement after the child is re-parented
-          // directly under `root`.
-          // flatten() removes intermediate AcTrEntity nodes; bake entity visibility onto
-          // render leaves so batched drawing still honors DXF group code 60.
+          // root.updateMatrixWorld(true) already refreshed this subtree.
+          // Visibility must be read before parent is cleared.
           child.visible = isObjectHierarchyVisible(child)
           objectsToReparent.push({
             object: child,
@@ -198,10 +207,7 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
               .multiply(child.matrixWorld)
           })
         }
-
-        // Detach the current child from its old parent so that the old nested hierarchy is
-        // removed completely before we attach the collected leaves back under `root`.
-        object.remove(child)
+        child.parent = null
       }
     }
 
@@ -235,22 +241,28 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
     // Step 1: Remove the object from the parent if it exists
     if (isRemoveFromParent) object.removeFromParent()
 
-    // Step 2: Dispose of geometry if it exists
+    // Step 2: Dispose of geometry if it exists. Skip buffers borrowed from an
+    // immutable block-template cache entry — batching already cloned what it
+    // needed, and disposing here would corrupt later INSERT hits.
+    const sharesTemplateGeometry =
+      getSceneDrawableUserData(object).sharesTemplateGeometry === true
     if (
       object instanceof THREE.Mesh ||
       object instanceof THREE.Line ||
       object instanceof THREE.Points
     ) {
-      if (object.geometry) {
+      if (object.geometry && !sharesTemplateGeometry) {
         object.geometry.dispose()
       }
     }
 
-    // Step 3: Dispose of material(s)
+    // Step 3: Dispose of material(s). Template-instance leaves also reuse style
+    // cache materials with the template; disposing them would break later hits.
     if (
-      object instanceof THREE.Mesh ||
-      object instanceof THREE.Line ||
-      object instanceof THREE.Points
+      !sharesTemplateGeometry &&
+      (object instanceof THREE.Mesh ||
+        object instanceof THREE.Line ||
+        object instanceof THREE.Points)
     ) {
       const materials = Array.isArray(object.material)
         ? object.material
@@ -351,6 +363,17 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
   }
 
   /**
+   * Direct child count for {@link AcGiEntity.childCount}.
+   *
+   * Used by {@link AcDbRenderingCache} to skip {@link compactForInstancing} on
+   * tiny block templates. For {@link AcTrGroup}, this is the post-flatten leaf
+   * count under this object.
+   */
+  get childCount() {
+    return this.children.length
+  }
+
+  /**
    * @inheritdoc
    */
   addChild(entity: AcTrEntity) {
@@ -358,15 +381,39 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
   }
 
   /**
-   * @inheritdoc
+   * Applies a world/block transform to this entity's local matrix.
+   *
+   * Intentionally avoids {@link THREE.Object3D.applyMatrix4}, which decomposes
+   * into position/quaternion/scale and cannot represent mirrored INSERT scales
+   * (`scale.y < 0`, etc.). Those decompositions corrupt attribute inverses and
+   * push DOOR_FIRE_TEXT / similar labels tens of millions of units away.
+   *
+   * After this call {@link matrixAutoUpdate} is `false` so the exact 4×4 matrix
+   * (including reflection) is what {@link updateMatrixWorld} propagates.
    */
   applyMatrix(matrix: AcGeMatrix3d) {
     const threeMatrix = AcTrMatrixUtil.createMatrix4(matrix)
-    this.applyMatrix4(threeMatrix)
-    this.updateMatrixWorld(true)
+    this.applyFullMatrix4(threeMatrix)
     if (!this._wcsBbox.isEmpty()) {
       this._wcsBbox.applyMatrix4(threeMatrix)
     }
+  }
+
+  /**
+   * Left-multiplies {@link matrix} by `threeMatrix` without TRS decomposition.
+   *
+   * @param threeMatrix - Transform to apply in parent-local space.
+   */
+  protected applyFullMatrix4(threeMatrix: THREE.Matrix4) {
+    // When matrixAutoUpdate is already false, `matrix` is authoritative —
+    // updateMatrix() would wipe reflections by recomposing from TRS.
+    if (this.matrixAutoUpdate) {
+      this.updateMatrix()
+    }
+    this.matrix.multiplyMatrices(threeMatrix, this.matrix)
+    this.matrixAutoUpdate = false
+    this.matrixWorldNeedsUpdate = true
+    this.updateMatrixWorld(true)
   }
 
   /**
@@ -406,11 +453,14 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
 
   /**
    * @inheritdoc
+   *
+   * @param shareGeometry - When true, leaf drawables alias source buffers
+   *   (see {@link copyGeometry}). Block-template clones pass true.
    */
-  fastDeepClone() {
+  fastDeepClone(shareGeometry: boolean = false) {
     const cloned = new AcTrEntity(this.renderContext)
     cloned.copy(this, false)
-    this.copyGeometry(this, cloned)
+    this.copyGeometry(this, cloned, shareGeometry)
     return cloned
   }
 
@@ -429,21 +479,35 @@ export class AcTrEntity extends AcTrObject implements AcGiEntity {
    * Clone geometries in the source's direct children and copy them to the target
    * @param source Input the source entity
    * @param target Input the target entity
+   * @param shareGeometry When true, leaf drawables alias the source
+   *   {@link THREE.BufferGeometry} instead of deep-cloning buffers. Used for
+   *   immutable block-template instances; callers must not mutate shared
+   *   buffers in place (batching already clones before rebase).
    */
-  protected copyGeometry(source: AcTrEntity, target: AcTrEntity) {
+  protected copyGeometry(
+    source: AcTrEntity,
+    target: AcTrEntity,
+    shareGeometry: boolean = false
+  ) {
     for (let i = 0; i < source.children.length; i++) {
       const child = source.children[i]
 
       if (child instanceof AcTrEntity) {
-        target.add(child.fastDeepClone())
+        // Propagate shareGeometry so nested MTEXT/SHAPE/group leaves also
+        // alias template buffers instead of deep-cloning mid-tree.
+        target.add(child.fastDeepClone(shareGeometry))
         continue
       }
 
       const clonedChild = child.clone(false)
       if ('geometry' in clonedChild) {
-        clonedChild.geometry = (
-          clonedChild.geometry as THREE.BufferGeometry
-        ).clone()
+        if (shareGeometry) {
+          getSceneDrawableUserData(clonedChild).sharesTemplateGeometry = true
+        } else {
+          clonedChild.geometry = (
+            clonedChild.geometry as THREE.BufferGeometry
+          ).clone()
+        }
       }
       target.add(clonedChild)
     }

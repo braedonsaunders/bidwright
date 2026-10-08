@@ -7,7 +7,7 @@ import {
 } from '../src/database/AcDbDatabase'
 import {
   AcDbLayerTableRecord,
-  createLayerTableRecordDefaultAttrs,
+  acdbCreateLayerTableRecordDefaultAttrs,
   LAYER_TABLE_RECORD_DIFF_ATTR_KEYS
 } from '../src/database/AcDbLayerTableRecord'
 import { AcDbTextStyleTableRecord } from '../src/database/AcDbTextStyleTableRecord'
@@ -16,7 +16,7 @@ describe('AcDbSymbolTableRecord write access', () => {
   it('derives layer diff keys from default attrs plus name', () => {
     const expected = [
       'name',
-      ...Object.keys(createLayerTableRecordDefaultAttrs())
+      ...Object.keys(acdbCreateLayerTableRecordDefaultAttrs())
     ].sort()
 
     expect([...LAYER_TABLE_RECORD_DIFF_ATTR_KEYS].sort()).toEqual(expected)
@@ -62,9 +62,7 @@ describe('AcDbSymbolTableRecord write access', () => {
     })
 
     db.transactionManager.runUndoable('Layer Off', () => {
-      const opened = db.openObjectForWrite<AcDbLayerTableRecord>(
-        layer.objectId
-      )
+      const opened = db.openObjectForWrite<AcDbLayerTableRecord>(layer.objectId)
       opened!.isOff = true
       expect(modifiedCount).toBe(0)
     })
@@ -79,16 +77,16 @@ describe('AcDbSymbolTableRecord write access', () => {
     const layer = db.tables.layerTable.getAt('0')!
     const nextColor = new AcCmColor()
     nextColor.colorIndex = 1
-    let payload: { changes: Partial<{ isOff: boolean; color: AcCmColor }> } | undefined
+    let payload:
+      | { changes: Partial<{ isOff: boolean; color: AcCmColor }> }
+      | undefined
 
     db.events.layerModified.addEventListener(args => {
       payload = args
     })
 
     db.transactionManager.runUndoable('Layer Color', () => {
-      const opened = db.openObjectForWrite<AcDbLayerTableRecord>(
-        layer.objectId
-      )
+      const opened = db.openObjectForWrite<AcDbLayerTableRecord>(layer.objectId)
       opened!.color = nextColor
     })
 
@@ -199,9 +197,7 @@ describe('AcDbSymbolTableRecord write access', () => {
     })
 
     db.transactionManager.runUndoable('Layer Off', () => {
-      const opened = db.openObjectForWrite<AcDbLayerTableRecord>(
-        layer.objectId
-      )
+      const opened = db.openObjectForWrite<AcDbLayerTableRecord>(layer.objectId)
       opened!.isOff = !wasOff
     })
 

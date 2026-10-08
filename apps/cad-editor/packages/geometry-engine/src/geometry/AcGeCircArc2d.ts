@@ -7,8 +7,34 @@ import {
   AcGePoint2dLike,
   AcGeVector2d
 } from '../math'
-import { AcGeMathUtil, TAU } from '../util'
+import { acgeClamp, AcGeMathUtil, FLOAT_TOL, TAU } from '../util'
+import {
+  acgeTryCreateArcByCenterStartChord,
+  acgeTryCreateArcByCenterStartEnd,
+  acgeTryCreateArcByCenterStartProjectedEnd,
+  acgeTryCreateArcByCenterStartSweep,
+  acgeTryCreateArcByStartEndAngle,
+  acgeTryCreateArcByStartEndDirection,
+  acgeTryCreateArcByStartEndRadius,
+  acgeTryCreateArcByThreePoints,
+  acgeTryCreateCircle,
+  acgeTryCreateCircleByDiameter,
+  acgeTryCreateCircleByThreePoints,
+  acgeTryCreateShorterArc
+} from './AcGeCircArc2dFactory'
+import {
+  type AcGeCircumcircle2d,
+  acgeComputeCircumcircle2d,
+  acgeIsBetterDistanceAlign,
+  acgePointLiesOnCircle2d,
+  acgeProjectPointOntoCircle2d,
+  acgeSameCircle2d
+} from './AcGeCircArcUtil'
 import { AcGeCurve2d } from './AcGeCurve2d'
+import type {
+  AcGeResolvedTessellateOptions,
+  AcGeTessellateOptions
+} from './AcGeCurveTessellate'
 
 /**
  * Represent a circular arc.
@@ -22,6 +48,16 @@ import { AcGeCurve2d } from './AcGeCurve2d'
  * This means a "90° above X axis" in counterclockwise mode becomes "270°" in clockwise mode.
  */
 export class AcGeCircArc2d extends AcGeCurve2d {
+  /**
+   * Default tessellation side count for a full circle.
+   * Matches the historical `getPoints(100)` sampling path.
+   */
+  static readonly DEFAULT_CIRCLE_SIDES = 100
+  /** Lower bound for {@link AcGeTessellateOptions.circleSides}. */
+  static readonly MIN_CIRCLE_SIDES = 8
+  /** Upper bound for {@link AcGeTessellateOptions.circleSides} (DXF VPORT range). */
+  static readonly MAX_CIRCLE_SIDES = 20000
+
   private _center!: AcGePoint2d
   private _radius!: number
   private _startAngle!: number
@@ -81,6 +117,240 @@ export class AcGeCircArc2d extends AcGeCurve2d {
   }
 
   /**
+   * Create an arc from mathematical (unmirrored) polar angles.
+   *
+   * `startAngle` / `endAngle` are `atan2` angles in the XY plane (0 = +X,
+   * 90° = +Y). This differs from the five-argument constructor, whose angles
+   * are mirrored when `clockwise` is true.
+   *
+   * @param center Input arc center
+   * @param radius Input arc radius
+   * @param startAngle Input start angle in radians (`atan2`)
+   * @param endAngle Input end angle in radians (`atan2`)
+   * @param clockwise Input true to sweep clockwise from start to end
+   */
+  static fromMathAngles(
+    center: AcGePoint2dLike,
+    radius: number,
+    startAngle: number,
+    endAngle: number,
+    clockwise: boolean
+  ): AcGeCircArc2d {
+    const arc = new AcGeCircArc2d(
+      center,
+      radius,
+      AcGeMathUtil.normalizeAngle(startAngle),
+      AcGeMathUtil.normalizeAngle(endAngle),
+      false
+    )
+    arc._clockwise = clockwise
+    arc._boundingBoxNeedsUpdate = true
+    return arc
+  }
+
+  /**
+   * Return the circumcircle of three XY points, or `null` when they are collinear.
+   */
+  static computeCircumcircle(
+    p1: AcGePoint2dLike,
+    p2: AcGePoint2dLike,
+    p3: AcGePoint2dLike
+  ): AcGeCircumcircle2d | null {
+    return acgeComputeCircumcircle2d(p1, p2, p3)
+  }
+
+  /**
+   * Project `point` radially onto the circle `(center, radius)`.
+   */
+  static projectPoint(
+    center: AcGePoint2dLike,
+    radius: number,
+    point: AcGePoint2dLike
+  ) {
+    return acgeProjectPointOntoCircle2d(center, radius, point)
+  }
+
+  /**
+   * True when `point` lies on the circle `(center, radius)` within a radial
+   * tolerance (default `max(1e-6, radius * 1e-5)`).
+   */
+  static pointLiesOnCircle(
+    point: AcGePoint2dLike,
+    center: AcGePoint2dLike,
+    radius: number,
+    eps?: number
+  ): boolean {
+    return acgePointLiesOnCircle2d(point, center, radius, eps)
+  }
+
+  /**
+   * True when two circles share the same center and radius within `eps`
+   * (default `1e-8`).
+   */
+  static sameCircle(
+    center1: AcGePoint2dLike,
+    radius1: number,
+    center2: AcGePoint2dLike,
+    radius2: number,
+    eps?: number
+  ): boolean {
+    return acgeSameCircle2d(center1, radius1, center2, radius2, eps)
+  }
+
+  /**
+   * Lexicographic pick among nearest-point candidates: smaller `distSq` wins;
+   * on a near-tie, larger `align` wins.
+   */
+  static isBetterDistanceAlign(
+    distSq: number,
+    align: number,
+    bestDistSq: number,
+    bestAlign: number
+  ): boolean {
+    return acgeIsBetterDistanceAlign(distSq, align, bestDistSq, bestAlign)
+  }
+
+  /**
+   * Create the unique arc from `start` through `through` to `end`.
+   *
+   * The through point selects the major or minor sweep, including arcs greater
+   * than 180°. Return `null` when the points are collinear.
+   *
+   * @param reverseDirection Input true to take the complementary sweep
+   */
+  static tryCreateByThreePoints(
+    start: AcGePoint2dLike,
+    through: AcGePoint2dLike,
+    end: AcGePoint2dLike,
+    reverseDirection: boolean = false
+  ): AcGeCircArc2d | null {
+    return acgeTryCreateArcByThreePoints(start, through, end, reverseDirection)
+  }
+
+  /**
+   * Create a full circle from center and radius.
+   */
+  static tryCreateCircle(center: AcGePoint2dLike, radius: number) {
+    return acgeTryCreateCircle(center, radius)
+  }
+
+  /**
+   * Create a full circle whose diameter is the segment `p1`–`p2`.
+   */
+  static tryCreateCircleByDiameter(p1: AcGePoint2dLike, p2: AcGePoint2dLike) {
+    return acgeTryCreateCircleByDiameter(p1, p2)
+  }
+
+  /**
+   * Create a full circle through three non-collinear points.
+   */
+  static tryCreateCircleByThreePoints(
+    p1: AcGePoint2dLike,
+    p2: AcGePoint2dLike,
+    p3: AcGePoint2dLike
+  ) {
+    return acgeTryCreateCircleByThreePoints(p1, p2, p3)
+  }
+
+  /**
+   * Create the shorter arc from `start` to `end` on the circle at `center`.
+   */
+  static tryCreateShorterArc(
+    start: AcGePoint2dLike,
+    end: AcGePoint2dLike,
+    center: AcGePoint2dLike
+  ) {
+    return acgeTryCreateShorterArc(start, end, center)
+  }
+
+  /**
+   * Create an arc from center, start, and end with an explicit orientation.
+   */
+  static tryCreateByCenterStartEnd(
+    center: AcGePoint2dLike,
+    start: AcGePoint2dLike,
+    end: AcGePoint2dLike,
+    clockwise: boolean
+  ) {
+    return acgeTryCreateArcByCenterStartEnd(center, start, end, clockwise)
+  }
+
+  /**
+   * Create a center-start arc whose end is the radial projection of `rawEnd`.
+   */
+  static tryCreateByCenterStartProjectedEnd(
+    center: AcGePoint2dLike,
+    start: AcGePoint2dLike,
+    rawEnd: AcGePoint2dLike,
+    clockwise: boolean
+  ) {
+    return acgeTryCreateArcByCenterStartProjectedEnd(
+      center,
+      start,
+      rawEnd,
+      clockwise
+    )
+  }
+
+  /**
+   * Create a center-start arc from a signed included angle.
+   * Positive sweep is counterclockwise.
+   */
+  static tryCreateByCenterStartSweep(
+    center: AcGePoint2dLike,
+    start: AcGePoint2dLike,
+    sweepRad: number
+  ) {
+    return acgeTryCreateArcByCenterStartSweep(center, start, sweepRad)
+  }
+
+  /**
+   * Create a center-start arc from a signed chord length.
+   */
+  static tryCreateByCenterStartChord(
+    center: AcGePoint2dLike,
+    start: AcGePoint2dLike,
+    chordLength: number
+  ) {
+    return acgeTryCreateArcByCenterStartChord(center, start, chordLength)
+  }
+
+  /**
+   * Create a start-end arc from a signed included angle.
+   * Positive sweep is counterclockwise.
+   */
+  static tryCreateByStartEndAngle(
+    start: AcGePoint2dLike,
+    end: AcGePoint2dLike,
+    sweepRad: number
+  ) {
+    return acgeTryCreateArcByStartEndAngle(start, end, sweepRad)
+  }
+
+  /**
+   * Create a start-end arc from a tangent direction at the start point.
+   */
+  static tryCreateByStartEndDirection(
+    start: AcGePoint2dLike,
+    end: AcGePoint2dLike,
+    directionRad: number
+  ) {
+    return acgeTryCreateArcByStartEndDirection(start, end, directionRad)
+  }
+
+  /**
+   * Create a start-end arc from a signed radius.
+   * Positive radius is counterclockwise.
+   */
+  static tryCreateByStartEndRadius(
+    start: AcGePoint2dLike,
+    end: AcGePoint2dLike,
+    radius: number
+  ) {
+    return acgeTryCreateArcByStartEndRadius(start, end, radius)
+  }
+
+  /**
    * Create arc by three points
    * @param p1 Input the start point
    * @param p2 Input one point between the start point and the end point
@@ -91,66 +361,14 @@ export class AcGeCircArc2d extends AcGeCurve2d {
     p2: AcGePoint2dLike,
     p3: AcGePoint2dLike
   ) {
-    const midpoint = (
-      p1: AcGePoint2dLike,
-      p2: AcGePoint2dLike
-    ): AcGePoint2dLike => ({
-      x: (p1.x + p2.x) / 2,
-      y: (p1.y + p2.y) / 2
-    })
-
-    const slope = (p1: AcGePoint2dLike, p2: AcGePoint2dLike): number =>
-      (p2.y - p1.y) / (p2.x - p1.x)
-
-    const perpSlope = (m: number): number => -1 / m
-
-    const midpoint1 = midpoint(p1, p2)
-    const midpoint2 = midpoint(p2, p3)
-
-    const slope1 = slope(p1, p2)
-    const slope2 = slope(p2, p3)
-
-    const perpSlope1 = perpSlope(slope1)
-    const perpSlope2 = perpSlope(slope2)
-
-    const intersect = (
-      m1: number,
-      b1: number,
-      m2: number,
-      b2: number
-    ): AcGePoint2dLike => {
-      const x = (b2 - b1) / (m1 - m2)
-      const y = m1 * x + b1
-      return { x, y }
-    }
-
-    const b1 = midpoint1.y - perpSlope1 * midpoint1.x
-    const b2 = midpoint2.y - perpSlope2 * midpoint2.x
-
-    const center = intersect(perpSlope1, b1, perpSlope2, b2)
-
-    const radius = Math.sqrt(
-      Math.pow(p1.x - center.x, 2) + Math.pow(p1.y - center.y, 2)
-    )
-
-    const angle = (p: AcGePoint2dLike, center: AcGePoint2dLike): number =>
-      Math.atan2(p.y - center.y, p.x - center.x)
-
-    const startAngle = angle(p1, center)
-    const midAngle = angle(p2, center)
-    const endAngle = angle(p3, center)
-
-    const isCounterclockwise =
-      (endAngle > startAngle && endAngle < midAngle) ||
-      (startAngle > endAngle && startAngle < midAngle) ||
-      (midAngle > endAngle && midAngle < startAngle)
-
-    this.center = center
-    this.radius = radius
-    this._clockwise = !isCounterclockwise
-    // Store internal angles (unmirrored)
-    this._startAngle = startAngle
-    this._endAngle = endAngle
+    const arc = acgeTryCreateArcByThreePoints(p1, p2, p3)
+    if (!arc) throw AcCmErrors.ILLEGAL_PARAMETERS
+    this.center = arc.center
+    this.radius = arc.radius
+    this._clockwise = arc._clockwise
+    this._startAngle = arc._startAngle
+    this._endAngle = arc._endAngle
+    this._boundingBoxNeedsUpdate = true
   }
 
   /**
@@ -550,6 +768,35 @@ export class AcGeCircArc2d extends AcGeCurve2d {
   }
 
   /**
+   * How much `query - onCurve` points into this circular arc.
+   *
+   * Zero when `onCurve` is not an endpoint (within a relative tolerance), or
+   * when `query` coincides with `onCurve`. A positive value means `query` lies
+   * on this arc's interior side of `onCurve` — useful when two arcs share a
+   * vertex and nearest-point distances are equal.
+   */
+  inwardAlignment(onCurve: AcGePoint2dLike, query: AcGePoint2dLike): number {
+    const mx = query.x - onCurve.x
+    const my = query.y - onCurve.y
+    if (mx * mx + my * my < 1e-24) return 0
+
+    const r = this.radius > 0 ? this.radius : 1
+    const endTolSq = Math.max(1e-16, 1e-12 * r * r)
+    const atStart = this.startPoint.distanceToSquared(onCurve) <= endTolSq
+    const atEnd = this.endPoint.distanceToSquared(onCurve) <= endTolSq
+    if (!atStart && !atEnd) return 0
+
+    const pts = this.getPoints(8)
+    if (pts.length < 3) return 0
+    const inward = atStart && !atEnd ? pts[1]! : pts[pts.length - 2]!
+    const ix = inward.x - onCurve.x
+    const iy = inward.y - onCurve.y
+    const ilen = Math.hypot(ix, iy)
+    if (!(ilen > 1e-18)) return 0
+    return (mx * ix + my * iy) / ilen
+  }
+
+  /**
    * Returns perpendicular snap point(s) on this arc from the given point.
    */
   perpendicularPoints(point: AcGePoint2dLike): AcGePoint2d[] {
@@ -672,5 +919,126 @@ export class AcGeCircArc2d extends AcGeCurve2d {
       }
     }
     return points
+  }
+
+  /**
+   * Sample this arc to a polyline whose chord height is bounded by `options`.
+   *
+   * Uses a closed-form segment count, then {@link getPoints}. A full circle
+   * with default options still uses 100 segments; a short arc uses fewer.
+   *
+   * @param options - Chord-height tessellation options
+   */
+  tessellate(options?: AcGeTessellateOptions): AcGePoint2d[] {
+    const sweep = this.closed ? TAU : this.deltaAngle
+    const numPoints = AcGeCircArc2d.segmentCount(this.radius, sweep, {
+      ...options,
+      minSegments: options?.minSegments ?? (this.closed ? 8 : 3)
+    })
+    return this.getPoints(numPoints)
+  }
+
+  /**
+   * Clamp a VIEWRES-like side count into the legal VPORT range.
+   *
+   * @param circleSides - Raw side count; non-finite values fall back to the default
+   */
+  static resolveCircleSides(circleSides?: number): number {
+    if (circleSides == null || !Number.isFinite(circleSides)) {
+      return AcGeCircArc2d.DEFAULT_CIRCLE_SIDES
+    }
+    return acgeClamp(
+      Math.round(circleSides),
+      AcGeCircArc2d.MIN_CIRCLE_SIDES,
+      AcGeCircArc2d.MAX_CIRCLE_SIDES
+    )
+  }
+
+  /**
+   * Fill in `circleSides` and `maxSegments`, leaving per-curve deviation and
+   * `minSegments` for the caller to resolve.
+   */
+  static resolveTessellateOptions(
+    options?: AcGeTessellateOptions
+  ): AcGeResolvedTessellateOptions {
+    const circleSides = AcGeCircArc2d.resolveCircleSides(options?.circleSides)
+    const maxSegments = Math.max(
+      1,
+      Math.round(options?.maxSegments ?? circleSides)
+    )
+    return {
+      deviation: options?.deviation,
+      circleSides,
+      minSegments: options?.minSegments,
+      maxSegments
+    }
+  }
+
+  /**
+   * Chord height of a full circle tessellated into `circleSides` equal segments.
+   *
+   * `s = r * (1 - cos(π / n))`. Used as the default world-space deviation so a
+   * full circle still uses about `circleSides` segments.
+   */
+  static chordDeviationFromRadius(
+    radius: number,
+    circleSides: number = AcGeCircArc2d.DEFAULT_CIRCLE_SIDES
+  ): number {
+    const r = Math.abs(radius)
+    const n = AcGeCircArc2d.resolveCircleSides(circleSides)
+    if (r <= FLOAT_TOL) {
+      return FLOAT_TOL
+    }
+    return Math.max(FLOAT_TOL, r * (1 - Math.cos(Math.PI / n)))
+  }
+
+  /**
+   * Number of equal circular-arc segments whose chord height is at most the
+   * requested deviation.
+   *
+   * For the default deviation this equals `ceil(|sweep| / τ * circleSides)`,
+   * so a full circle keeps the historical 100-segment look while a short arc
+   * uses proportionally fewer evaluations.
+   *
+   * @param radius - Arc radius in world units
+   * @param sweep - Signed or unsigned included angle in radians
+   * @param options - Tessellation options
+   * @returns Segment count in `[minSegments, maxSegments]`
+   */
+  static segmentCount(
+    radius: number,
+    sweep: number,
+    options?: AcGeTessellateOptions
+  ): number {
+    const resolved = AcGeCircArc2d.resolveTessellateOptions(options)
+    const sweepAbs = Math.abs(sweep)
+    const isFullCircle = sweepAbs >= TAU - 1e-8
+    const minSegments = Math.max(
+      1,
+      Math.round(resolved.minSegments ?? (isFullCircle ? 8 : 3))
+    )
+    const maxSegments = Math.max(minSegments, resolved.maxSegments)
+    const r = Math.abs(radius)
+
+    if (r <= FLOAT_TOL || sweepAbs <= FLOAT_TOL) {
+      return minSegments
+    }
+
+    const deviation =
+      resolved.deviation ??
+      AcGeCircArc2d.chordDeviationFromRadius(r, resolved.circleSides)
+    const ratio = 1 - deviation / r
+    if (!Number.isFinite(ratio) || ratio >= 1) {
+      return maxSegments
+    }
+    if (ratio <= -1) {
+      return minSegments
+    }
+
+    const theta = 2 * Math.acos(ratio)
+    if (theta <= FLOAT_TOL) {
+      return maxSegments
+    }
+    return acgeClamp(Math.ceil(sweepAbs / theta), minSegments, maxSegments)
   }
 }

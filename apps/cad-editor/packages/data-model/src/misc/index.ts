@@ -3,9 +3,38 @@ export { AcDbFormatter } from './AcDbFormatter'
 export type { AcDbFormatterOptions } from './AcDbFormatter'
 export { AcDbLinearUnits } from './AcDbLinearUnits'
 export { AcDbRenderingCache } from './AcDbRenderingCache'
-export { AcDbCodePage, dwgCodePageToEncoding } from './AcDbCodePage'
+export type { AcDbRenderingCacheProfileStats } from './AcDbRenderingCache'
+export {
+  AcDbCodePage,
+  acdbDwgCodePageToEncoding,
+  acdbNormalizeTextEncoding
+} from './AcDbCodePage'
 export {
   ACAD_APPID,
+  acdbCoerceIntegerSysVar,
+  acdbIntegerSysVarIfInRange,
+  ACDB_COMPAREHATCH_DEFAULT,
+  ACDB_COMPAREHATCH_MAX,
+  ACDB_COMPAREHATCH_MIN,
+  ACDB_COMPAREPROPS_COLOR,
+  ACDB_COMPAREPROPS_DEFAULT,
+  ACDB_COMPAREPROPS_LAYER,
+  ACDB_COMPAREPROPS_LINETYPE,
+  ACDB_COMPAREPROPS_LINETYPESCALE,
+  ACDB_COMPAREPROPS_LINEWEIGHT,
+  ACDB_COMPAREPROPS_MAX,
+  ACDB_COMPAREPROPS_MIN,
+  ACDB_COMPAREPROPS_THICKNESS,
+  ACDB_COMPAREPROPS_TRANSPARENCY,
+  ACDB_COMPARERCMARGIN_DEFAULT,
+  ACDB_COMPARERCMARGIN_MAX,
+  ACDB_COMPARERCMARGIN_MIN,
+  ACDB_COMPARETEXT_DEFAULT,
+  ACDB_COMPARETEXT_MAX,
+  ACDB_COMPARETEXT_MIN,
+  ACDB_COMPARETOLERANCE_DEFAULT,
+  ACDB_COMPARETOLERANCE_MAX,
+  ACDB_COMPARETOLERANCE_MIN,
   ACDB_GRIPCOLOR_DEFAULT,
   ACDB_GRIPCOLOR_MAX,
   ACDB_GRIPCOLOR_MIN,
@@ -30,6 +59,7 @@ export {
   DEFAULT_MLINE_STYLE,
   DEFAULT_TEXT_STYLE,
   HATCH_PATTERN_SOLID,
+  acdbIsSolidHatchPatternName,
   HATCH_PATTERN_USER,
   MLIGHTCAD_APPID,
   VPORT_FALLBACK_CENTER_2D,
@@ -46,24 +76,54 @@ export {
   RAW_COLOR_TYPE_BY_LAYER,
   RAW_COLOR_TYPE_RGB,
   RAW_COLOR_TYPE_WINDOW_BG,
-  decodeMLeaderStyleRawColor,
-  encodeMLeaderStyleRawColor
+  acdbDecodeMLeaderStyleRawColor
 } from './AcDbMLeaderStyleColorCodec'
+export {
+  ACDB_DRAW_CIRCLE_SIDES_DRAFT,
+  ACDB_DRAW_CIRCLE_SIDES_HIGH,
+  ACDB_DRAW_CIRCLE_SIDES_STANDARD,
+  acdbDrawCircleSides,
+  acdbDrawTessellateOptions,
+  acdbResolveCircleSides
+} from './AcDbDrawTessellate'
+export {
+  acdbEstimateDatabaseMemory,
+  acdbFormatMemoryEstimate
+} from './AcDbMemoryEstimator'
+export type {
+  AcDbMemoryEstimate,
+  AcDbMemoryEstimateBucket,
+  AcDbMemoryEstimateOptions
+} from './AcDbMemoryEstimator'
 export { AcDbObjectIterator } from './AcDbObjectIterator'
+export { AcDbIntersect } from './AcDbIntersect'
+export {
+  ACDB_OLE2FRAME_GEOMETRY_HEADER_SIZE,
+  acdbParseOle2FrameGeometryHeader
+} from './AcDbOle2FrameGeometry'
+export type { AcDbOle2FrameGeometryHeader } from './AcDbOle2FrameGeometry'
+export { acdbExtractOleImageBlob } from './AcDbOleImageExtractor'
+export {
+  ACDB_OLE_METAFILE_EMF_MIME,
+  ACDB_OLE_METAFILE_WMF_MIME,
+  acdbIsOleMetafileMimeType,
+  acdbLooksLikeEmf,
+  acdbLooksLikeWmf,
+  acdbReassembleEmfFromWmfEscapes
+} from './AcDbOleMetafileDetect'
+export {
+  acdbOleBlobNeedsMetafileRasterization,
+  acdbRasterizeOleMetafile
+} from './AcDbOleMetafileRasterizer'
+export type { AcDbOleMetafileRasterizeOptions } from './AcDbOleMetafileRasterizer'
 export {
   AcDbOsnapMode,
-  acdbDisableOsnapMode,
-  acdbEnableOsnapMode,
   acdbHasOsnapMode,
   acdbMaskToOsnapModes,
   acdbOsnapModesToMask,
   acdbToggleOsnapMode
 } from './AcDbOsnapMode'
-export {
-  AcDbUnitsValue,
-  isImperialUnits,
-  isMetricUnits
-} from './AcDbUnitsValue'
+export { AcDbUnitsValue } from './AcDbUnitsValue'
 export {
   AcDbPatParser,
   AcDbPatSvgRenderer,
@@ -73,16 +133,17 @@ export {
 export {
   AcDbProxyGraphic,
   AcDbProxyGraphicType,
-  ACDB_PROXY_GRAPHIC_CHUNK_SIZE,
-  loadAcDbProxyGraphicFromDxf
+  ACDB_PROXY_GRAPHIC_CHUNK_SIZE
 } from './proxyGraphic'
 export {
   AcDbProxyGraphicBitStream,
   AcDbProxyGraphicByteStream,
   AcDbProxyGraphicEndOfBufferError,
-  bytesToHexString,
-  hexStringsToBytes
+  acdbBytesToHexString,
+  acdbCombineDxfBinaryChunks,
+  acdbHexStringsToBytes
 } from './proxyGraphic'
+export { acdbPreviewIconToDataUrl, acdbThumbnailImageToDataUrl } from './AcDbPreviewIcon'
 export type {
   AcDbPatDocument,
   AcDbPatGradientColor,
@@ -92,3 +153,22 @@ export type {
   AcDbPatPattern,
   AcDbPatPreviewOptions
 } from './pat'
+export {
+  ACDB_DYN_BLOCK_ENHANCED_BLOCK,
+  ACDB_DYN_BLOCK_GUID_APP,
+  ACDB_DYN_BLOCK_REP_BTAG_APP,
+  ACDB_DYN_BLOCK_REP_DATA,
+  ACDB_DYN_BLOCK_REP_ETAG_APP,
+  ACDB_DYN_BLOCK_REPRESENTATION_DICT,
+  ACDB_DYN_BLOCK_TRUE_NAME_APP,
+  acdbIsAnonymousUserBlockName
+} from './AcDbDynBlockConstants'
+export {
+  acdbImportDynBlockMetadata,
+  acdbNormalizeExtensionDictionaryId
+} from './AcDbImportDynBlockMetadata'
+export type {
+  AcDbDynBlockDictionarySource,
+  AcDbDynBlockRepresentationSource,
+  AcDbImportDynBlockMetadataOptions
+} from './AcDbImportDynBlockMetadata'

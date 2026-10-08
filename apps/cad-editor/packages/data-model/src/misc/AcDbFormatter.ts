@@ -8,10 +8,9 @@ import { AcDbDatabase } from '../database/AcDbDatabase'
 import { AcDbAngleUnits } from './AcDbAngleUnits'
 import { AcDbLinearUnits } from './AcDbLinearUnits'
 import {
-  AcDbUnitsValue,
-  isImperialUnits,
-  isMetricUnits
-} from './AcDbUnitsValue'
+  acdbIsImperialUnits,
+  acdbIsMetricUnits,
+  AcDbUnitsValue} from './AcDbUnitsValue'
 
 /**
  * Per-call options for {@link AcDbFormatter} methods.
@@ -962,10 +961,10 @@ function linearUnitSuffix(
   if (insunits === AcDbUnitsValue.Undefined) {
     return measurement === 0 ? '"' : ' mm'
   }
-  if (isMetricUnits(insunits)) {
+  if (acdbIsMetricUnits(insunits)) {
     return metricUnitSuffix(insunits)
   }
-  if (isImperialUnits(insunits)) {
+  if (acdbIsImperialUnits(insunits)) {
     return imperialUnitSuffix(insunits)
   }
   return ''

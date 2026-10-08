@@ -1,11 +1,15 @@
 import { AcCmColor, AcCmTransparency } from '@mlightcad/common'
 import {
   AcGeBox3d,
+  acgeIntersectCurves,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
+  AcGePlane,
   AcGePoint3d,
   AcGeVector3dLike
 } from '@mlightcad/geometry-engine'
 import {
+  AcGiDirectBatchPrimitive,
   AcGiEntity,
   AcGiLineStyle,
   AcGiLineWeight,
@@ -16,6 +20,7 @@ import {
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbObject } from '../base/AcDbObject'
 import { ByBlock, ByLayer, DEFAULT_LINE_TYPE } from '../misc/AcDbConstants'
+import { AcDbIntersect } from '../misc/AcDbIntersect'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import {
   AcDbEntityProperties,
@@ -50,6 +55,13 @@ export abstract class AcDbEntity extends AcDbObject {
   private _layer?: string
   /** The color of this entity */
   private _color?: AcCmColor
+  /**
+   * True when this entity's unresolved color is the ByLayer default (DXF file
+   * omitted color group 62/420). Keeps the entity's color lazily unallocated
+   * — {@link getEntityColor} materializes it as ByLayer on first access instead
+   * of eagerly allocating one `AcCmColor` per entity (~89% of typical drawings).
+   */
+  private _colorIsByLayerDefault: boolean = false
   /** The linetype name for this entity */
   private _lineType?: string
   /** The line weight for this entity */
@@ -58,10 +70,12 @@ export abstract class AcDbEntity extends AcDbObject {
   private _linetypeScale?: number
   /** Whether this entity is visible */
   private _visibility: boolean = true
-  /** The transparency level of this entity (0-1) */
-  private _transparency: AcCmTransparency = new AcCmTransparency()
+  /** The transparency level of this entity (0-1), materialized on first access. */
+  private _transparency?: AcCmTransparency
   /** Whether transparency was explicitly assigned on this entity. */
   private _transparencySet: boolean = false
+  /** DXF group 67 paper-space flag captured during dxfIn. */
+  private _dxfPaperSpace: boolean = false
 
   /**
    * Gets the type name of this entity.
@@ -79,19 +93,6 @@ export abstract class AcDbEntity extends AcDbObject {
    */
   get type() {
     return (this.constructor as typeof AcDbEntity).typeName
-  }
-
-  /**
-   * Emits the database-level entity modified event for in-place geometry edits.
-   * Editing commands call this after mutating an already-owned entity so views
-   * can update their render buckets without forcing every command through a
-   * database transaction.
-   */
-  triggerModifiedEvent() {
-    this.database.events.entityModified.dispatch({
-      database: this.database,
-      entity: this
-    })
   }
 
   /**
@@ -185,22 +186,12 @@ export abstract class AcDbEntity extends AcDbObject {
         color = layerColor
       }
     } else if (color.isByBlock) {
-      // For common entities, ByBlock falls back to current entity color (CECOLOR).
-      // If CECOLOR is ByLayer, resolve it further by current layer color.
-      const currentColor = this.database.cecolor
-      if (currentColor) {
-        color = currentColor
-        if (color.isByLayer) {
-          const currentLayerName = this.database.clayer || this.layer
-          const currentLayer =
-            this.database.tables.layerTable.getAt(currentLayerName)
-          if (currentLayer?.color?.RGB != null) {
-            color = currentLayer.color
-          }
-        }
-      }
-      // Nested block ByBlock colours are applied during block rendering. Attributes
-      // override this method to resolve ByBlock against their owning INSERT.
+      // AutoCAD / ODA: ByBlock without an INSERT owner displays as ACI 7
+      // (foreground / black-white), not CECOLOR. CECOLOR only seeds newly
+      // created entities. Nested block ByBlock colours are applied during
+      // block rendering; attributes override this method to resolve against
+      // their owning INSERT.
+      color = new AcCmColor().setForeground()
     }
     return color
   }
@@ -340,7 +331,7 @@ export abstract class AcDbEntity extends AcDbObject {
    * ```
    */
   get transparency() {
-    return this._transparency
+    return (this._transparency ??= new AcCmTransparency())
   }
 
   /**
@@ -369,17 +360,25 @@ export abstract class AcDbEntity extends AcDbObject {
    * Returns whether a color value has been explicitly assigned on this entity.
    */
   protected hasExplicitColor() {
-    return this._color != null
+    return this._color != null || this._colorIsByLayerDefault
   }
 
   /**
    * Returns the stored entity color, initializing it from CECOLOR if needed.
+   *
+   * Entities marked by {@link applyDxfFileDefaults} are materialized as the
+   * ByLayer default instead of the CECOLOR seed, which is exactly what the
+   * eager allocation used to store for them.
    */
   protected getEntityColor() {
     if (this._color == null) {
-      this._color = new AcCmColor()
-      if (this.database.cecolor) {
-        this._color.copy(this.database.cecolor)
+      if (this._colorIsByLayerDefault) {
+        this._color = new AcCmColor().setByLayer()
+      } else {
+        this._color = new AcCmColor()
+        if (this.database.cecolor) {
+          this._color.copy(this.database.cecolor)
+        }
       }
     }
     return this._color
@@ -389,15 +388,35 @@ export abstract class AcDbEntity extends AcDbObject {
    * Assigns the stored entity color.
    */
   protected setEntityColor(value: AcCmColor) {
+    this._colorIsByLayerDefault = false
     if (this._color == null) this._color = new AcCmColor()
     this._color.copy(value)
   }
 
   /**
    * Returns whether unresolved entity color should be initialized from CECOLOR.
+   * ByLayer-default entities (from DXF without color group) must NOT be seeded
+   * with CECOLOR — they should stay as ByLayer.
    */
   protected shouldResolveColorFromCecolor() {
-    return true
+    return !this._colorIsByLayerDefault
+  }
+
+  /**
+   * Applies DXF file defaults right after reading this entity from a DXF file.
+   *
+   * Per DXF spec, an entity whose color group (62/420) is absent defaults to
+   * ByLayer (256) — not CECOLOR. CECOLOR only seeds entities created
+   * programmatically (see {@link resolveEffectiveProperties}, mirroring
+   * `AcDbEntity::setDatabaseDefaults`). Records the default lazily instead of
+   * allocating an `AcCmColor` per entity.
+   *
+   * @internal
+   */
+  applyDxfFileDefaults() {
+    if (this._color == null) {
+      this._colorIsByLayerDefault = true
+    }
   }
 
   /**
@@ -430,13 +449,108 @@ export abstract class AcDbEntity extends AcDbObject {
     filer.writeDouble(48, this.linetypeScale)
     filer.writeInt16(60, this.visibility ? 0 : 1)
     filer.writeCmColor(this.color)
-    filer.writeInt16(370, this.lineWeight)
+    filer.writeLineWeight(370, this.lineWeight)
     filer.writeTransparency(this.transparency)
     const owner = this.database.tables.blockTable.getIdAt(this.ownerId)
     if (owner?.isPaperSapce) {
       filer.writeInt16(67, 1)
     }
     return this
+  }
+
+  /**
+   * Reads AcDbEntity common fields until the next subclass marker or object end.
+   */
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+
+    // Tolerate missing AcDbEntity marker (some writers omit it).
+    if (!filer.atSubclassData('AcDbEntity')) {
+      const next = filer.peekItem()
+      if (next && Number(next.code) === 100) {
+        // Different subclass — leave for derived class.
+        return this
+      }
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+
+      if (code === 100) {
+        // Next subclass (e.g. AcDbLine) — push back for derived dxfInFields.
+        filer.pushBackItem(item)
+        break
+      }
+
+      switch (code) {
+        case 8:
+          this.layer = String(item.value)
+          break
+        case 6:
+          this.lineType = String(item.value)
+          break
+        case 48:
+          this.linetypeScale = Number(item.value)
+          break
+        case 60:
+          this.visibility = Number(item.value) === 0
+          break
+        case 62:
+          this.color.colorIndex = Number(item.value)
+          break
+        case 420:
+          this.color.setRGBValue(Number(item.value))
+          break
+        case 370:
+          this.lineWeight = Number(item.value)
+          break
+        case 440:
+          this.transparency = AcCmTransparency.deserialize(Number(item.value))
+          break
+        case 67:
+          // Paper-space flag — ownership is resolved by the document reader.
+          this._dxfPaperSpace = Number(item.value) !== 0
+          break
+        case 410:
+          // Layout tab name — ownership uses group 67 / owner handle.
+          break
+        case 92:
+        case 160:
+        case 310:
+          // Proxy graphics byte count / binary chunks — skip for now.
+          break
+        case 284:
+        case 347:
+        case 380:
+        case 390:
+        case 430:
+          // Shadow mode / material / plot style / color name — optional.
+          break
+        default:
+          // Stay resilient to unknown AcDbEntity codes (forward compatible).
+          // Do not push back — that would abort derived subclass readers
+          // (TEXT/MTEXT/DIMENSION/TABLE often carry layout/material extras).
+          break
+      }
+    }
+
+    // Omitted group 62 is ByLayer per the DXF spec. Record the default lazily
+    // instead of allocating `new AcCmColor().setByLayer()` per entity (~89%
+    // of typical drawings); see {@link applyDxfFileDefaults}.
+    this.applyDxfFileDefaults()
+
+    return this
+  }
+
+  /**
+   * DXF group 67 paper-space flag from the last {@link dxfInFields} pass.
+   * Used by the streaming document reader to choose model vs paper ownership.
+   * @internal
+   */
+  get dxfPaperSpace(): boolean {
+    return this._dxfPaperSpace
   }
 
   /**
@@ -600,6 +714,52 @@ export abstract class AcDbEntity extends AcDbObject {
   ) {}
 
   /**
+   * Finds intersection points between this entity and another entity.
+   *
+   * This method mirrors ObjectARX `AcDbEntity::intersectWith`. Intersection
+   * points are returned in WCS. The optional `projPlane` argument corresponds
+   * to the ObjectARX overload that intersects the projections of both
+   * entities onto a plane (apparent intersection). `gsMarker` subentity
+   * filtering is not implemented.
+   *
+   * Subclasses should override {@link subGetIntersectCurves} instead of this
+   * method.
+   *
+   * @param entity - The other entity
+   * @param intType - Whether to extend this entity, the other entity, both, or neither
+   * @param projPlane - Optional projection plane for apparent intersection
+   * @returns Intersection points in WCS; empty when the entities do not intersect
+   */
+  intersectWith(
+    entity: AcDbEntity,
+    intType: AcDbIntersect = AcDbIntersect.OnBothOperands,
+    projPlane?: AcGePlane
+  ): AcGePoint3d[] {
+    const a = this.subGetIntersectCurves()
+    const b = entity.subGetIntersectCurves()
+    if (a.length === 0 || b.length === 0) return []
+    const extendA =
+      intType === AcDbIntersect.ExtendThis ||
+      intType === AcDbIntersect.ExtendBoth
+    const extendB =
+      intType === AcDbIntersect.ExtendArg ||
+      intType === AcDbIntersect.ExtendBoth
+    return acgeIntersectCurves(a, b, extendA, extendB, projPlane)
+  }
+
+  /**
+   * Returns the WCS curve primitives used by {@link intersectWith}.
+   *
+   * Default implementation returns `[]` (no intersections). Subclasses with
+   * drawable curve geometry override this; callers should use `intersectWith`.
+   * Entities without curve primitives (text, points, attributes) keep this
+   * empty default, matching ObjectARX.
+   */
+  subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return []
+  }
+
+  /**
    * Transforms this entity by the specified matrix.
    *
    * This method applies a geometric transformation to the entity.
@@ -665,6 +825,21 @@ export abstract class AcDbEntity extends AcDbObject {
   ): AcGiEntity | undefined
 
   /**
+   * The batchable primitive kind emitted by {@link subWorldDraw}, when this entity
+   * is eligible for direct geometry batching without an intermediate drawable tree.
+   *
+   * Default `null`: not eligible. Simple entities override to return the expected
+   * primitive kind (`lineStrip`, `point`, `area`, …). Renderers should still treat
+   * capture misses (wide polyline → `area` instead of `lines`, multi-draw, etc.)
+   * as a fallback to the legacy path.
+   *
+   * @internal
+   */
+  get directBatchPrimitive(): AcGiDirectBatchPrimitive | null {
+    return null
+  }
+
+  /**
    * Called by cad application when it wants the entity to draw itself in WCS (World Coordinate
    * System) and acts as a wrapper / dispatcher around subWorldDraw(). The children class should
    * never overidde this method.
@@ -696,6 +871,8 @@ export abstract class AcDbEntity extends AcDbObject {
     traits.transparency = this.transparency
     traits.layer = this.layer
     traits.drawOrder = 0
+    // Reset per-entity; wipeouts set this in subWorldDraw.
+    traits.isBackgroundFill = false
     if ('thickness' in this) {
       traits.thickness = this.thickness as number
     }

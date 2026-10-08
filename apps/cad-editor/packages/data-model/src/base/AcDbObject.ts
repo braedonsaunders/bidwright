@@ -5,6 +5,7 @@ import type { AcDbDatabase } from '../database/AcDbDatabase'
 import { AcDbDxfCode } from './AcDbDxfCode'
 import { AcDbDxfFiler } from './AcDbDxfFiler'
 import { AcDbResultBuffer } from './AcDbResultBuffer'
+import type { AcDbTypedValue } from './AcDbTypedValue'
 
 /** Type alias for object ID as string */
 export type AcDbObjectId = string
@@ -16,10 +17,24 @@ let hostApplicationServicesProvider:
   | (() => { workingDatabase: AcDbDatabase })
   | undefined
 
-export function setAcDbHostApplicationServicesProvider(
+export function acdbSetHostApplicationServicesProvider(
   provider: () => { workingDatabase: AcDbDatabase }
 ) {
   hostApplicationServicesProvider = provider
+}
+
+/**
+ * Assigns the host working database when the services provider is registered.
+ *
+ * No-op when the provider has not been installed yet (e.g. HostApplicationServices
+ * module not loaded). Used by {@link AcDbDatabase.read} so import paths that
+ * touch unbound objects still see a current database.
+ */
+export function acdbAssignWorkingDatabase(database: AcDbDatabase) {
+  if (!hostApplicationServicesProvider) {
+    return
+  }
+  hostApplicationServicesProvider().workingDatabase = database
 }
 
 export function acdbGetWorkingDatabase(): AcDbDatabase {
@@ -71,7 +86,21 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
   /** The attributes object that stores all object properties */
   private _attrs: AcCmObject<ATTRS>
   /** XData attached to this object */
-  private _xDataMap: Map<string, AcDbResultBuffer>
+  private _xDataMap?: Map<string, AcDbResultBuffer>
+  /**
+   * Imported DWG XData kept as flat primitive code/value pairs:
+   * [1001, appId, code, value, ..., 1001, nextAppId, ...].
+   *
+   * The traditional Map/ResultBuffer graph is created only for an AppId that
+   * is actually accessed or mutated through the public XData API.
+   * After that, this array is no longer the DXF order — {@link _xDataOrder} is.
+   */
+  private _importedXData?: Array<number | string>
+  /**
+   * AppIds in DXF output order, across compact imported values and
+   * materialized ResultBuffers. Absent when this object has no XData.
+   */
+  private _xDataOrder?: string[]
 
   /**
    * Creates a new AcDbObject instance.
@@ -87,14 +116,16 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
   constructor(attrs?: Partial<ATTRS>, defaultAttrs?: Partial<ATTRS>) {
     attrs = attrs || {}
     this._attrs = new AcCmObject<ATTRS>(attrs, defaultAttrs)
-    this._xDataMap = new Map()
 
-    // Generate objectId from database if not provided
+    // Generate objectId if not provided. Only use a real database handle when this
+    // object is already bound to a database (`_database`). Falling back to the
+    // global working database here would mint a non-TEMP handle for a detached
+    // object, which then fails assertOpenForWrite during secondary-database
+    // imports (e.g. XATTACH) while the host document is recording undo.
     if (!this._attrs.get('objectId')) {
-      try {
-        this._attrs.set('objectId', this.database.generateHandle())
-      } catch {
-        // Fallback: generate a temporary handle, will be reassigned when added to database
+      if (this._database) {
+        this._attrs.set('objectId', this._database.generateHandle())
+      } else {
         this._attrs.set('objectId', this.generateTemporaryHandle())
       }
     }
@@ -220,9 +251,13 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
   set objectId(value: AcDbObjectId) {
     this._attrs.set('objectId', value)
 
-    // Update the database's maxHandle if the new objectId is a valid hex handle
-    if (value && !value.startsWith(TEMP_OBJECT_ID_PREFIX)) {
-      this.database.updateMaxHandle(value)
+    // Update maxHandle only when this object is already bound. Unbound objects
+    // (typical during DXF/DWG import before append/add) must not fall back to
+    // the global working database — that fails when the host DB was never set,
+    // or when a second data-model singleton is in play (e.g. Vite + peer deps).
+    // commitObjectHandle updates maxHandle once the object is added.
+    if (value && !value.startsWith(TEMP_OBJECT_ID_PREFIX) && this._database) {
+      this._database.updateMaxHandle(value)
     }
   }
 
@@ -354,6 +389,147 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
   }
 
   /**
+   * Finds one imported compact XData block.
+   *
+   * @returns [start, end) indices into _importedXData, or undefined.
+   */
+  private findImportedXDataRange(appId: string): [number, number] | undefined {
+    const data = this._importedXData
+    if (!data) return undefined
+
+    let start = 0
+    while (start < data.length) {
+      if (Number(data[start]) !== AcDbDxfCode.ExtendedDataRegAppName) {
+        start += 2
+        continue
+      }
+
+      const currentAppId = String(data[start + 1] ?? '')
+      let end = start + 2
+      while (
+        end < data.length &&
+        Number(data[end]) !== AcDbDxfCode.ExtendedDataRegAppName
+      ) {
+        end += 2
+      }
+
+      if (currentAppId === appId) {
+        return [start, end]
+      }
+      start = end
+    }
+
+    return undefined
+  }
+
+  private removeImportedXData(appId: string): void {
+    const data = this._importedXData
+    const range = this.findImportedXDataRange(appId)
+    if (!data || !range) return
+
+    data.splice(range[0], range[1] - range[0])
+    if (data.length === 0) {
+      this._importedXData = undefined
+    }
+  }
+
+  /** Keeps an existing AppId where it is; appends one that is new. */
+  private rememberXDataApp(appId: string): void {
+    if (!appId) return
+    const order = (this._xDataOrder ??= [])
+    if (order.indexOf(appId) === -1) {
+      order.push(appId)
+    }
+  }
+
+  private forgetXDataApp(appId: string): void {
+    const order = this._xDataOrder
+    if (!order) return
+
+    const index = order.indexOf(appId)
+    if (index >= 0) {
+      order.splice(index, 1)
+    }
+    if (order.length === 0) {
+      this._xDataOrder = undefined
+    }
+  }
+
+  private clearMaterializedXData(appId: string): void {
+    const map = this._xDataMap
+    if (!map) return
+
+    map.delete(appId)
+    if (map.size === 0) {
+      this._xDataMap = undefined
+    }
+  }
+
+  private *importedXDataValues(
+    start: number,
+    end: number
+  ): IterableIterator<AcDbTypedValue> {
+    const data = this._importedXData
+    if (!data) return
+
+    for (let i = start; i < end; i += 2) {
+      yield {
+        code: Number(data[i]) as AcDbDxfCode,
+        value: data[i + 1]
+      }
+    }
+  }
+
+  /**
+   * Lossless parser/import fast path.
+   *
+   * Each 1001 group starts an AppId. That AppId stays in the compact list
+   * until `getXData`, `setXData`, or `removeXData` touches it. Replacing an
+   * AppId keeps its DXF position; a new AppId is appended.
+   *
+   * `getXData` materializes that AppId into an `AcDbResultBuffer` and keeps
+   * the buffer afterwards, so later reads observe in-place edits. Calling it
+   * during import gives up the compact representation for that AppId.
+   */
+  setImportedXData(
+    values: Iterable<{ code: number; value: string | number }>
+  ): void {
+    const blocks: Array<{ appId: string; flat: Array<number | string> }> = []
+    let appId: string | undefined
+    let flat: Array<number | string> | undefined
+
+    for (const item of values) {
+      const code = Number(item.code)
+      if (code === AcDbDxfCode.ExtendedDataRegAppName) {
+        if (appId && flat) {
+          blocks.push({ appId, flat })
+        }
+        appId = String(item.value)
+        flat = [code, item.value]
+        continue
+      }
+      if (!appId || !flat) continue
+      flat.push(code, item.value)
+    }
+    if (appId && flat) {
+      blocks.push({ appId, flat })
+    }
+    if (blocks.length === 0) return
+
+    for (const block of blocks) {
+      if (!block.appId) continue
+      this.removeImportedXData(block.appId)
+      this.clearMaterializedXData(block.appId)
+
+      const target = (this._importedXData ??= [])
+      for (const value of block.flat) {
+        target.push(value)
+      }
+      this.rememberXDataApp(block.appId)
+    }
+  }
+
+  /**
    * Retrieves the XData associated with this object for a given application ID.
    *
    * Extended Entity Data (XData) allows applications to attach arbitrary,
@@ -367,6 +543,11 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
    * @returns The AcDbResultBuffer associated with the AppId, or `undefined`
    *          if no XData exists for that AppId
    *
+   * Imported XData stays compact until the first call for that AppId. The call
+   * materializes an AcDbResultBuffer and keeps it, so later reads and in-place
+   * edits use that buffer. DXF output order does not change. Avoid calling this
+   * while importing when the compact form should be retained.
+   *
    * @example
    * ```typescript
    * const xdata = obj.getXData('MY_APP')
@@ -376,7 +557,22 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
    * ```
    */
   getXData(appId: string): AcDbResultBuffer | undefined {
-    return this._xDataMap.get(appId)
+    const existing = this._xDataMap?.get(appId)
+    if (existing) return existing
+
+    const range = this.findImportedXDataRange(appId)
+    if (!range) return undefined
+
+    const buffer = new AcDbResultBuffer()
+    for (const item of this.importedXDataValues(range[0], range[1])) {
+      buffer.add(item as never)
+    }
+
+    // Once accessed, the ResultBuffer becomes authoritative so callers keep
+    // the same mutable-object semantics as before. App order is unchanged.
+    this.removeImportedXData(appId)
+    ;(this._xDataMap ??= new Map()).set(appId, buffer)
+    return buffer
   }
 
   /**
@@ -406,7 +602,10 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
   setXData(resbuf: AcDbResultBuffer): void {
     for (const item of resbuf) {
       if (item.code === AcDbDxfCode.ExtendedDataRegAppName) {
-        this._xDataMap.set(item.value as string, resbuf)
+        const appId = item.value as string
+        this.removeImportedXData(appId)
+        ;(this._xDataMap ??= new Map()).set(appId, resbuf)
+        this.rememberXDataApp(appId)
       }
     }
   }
@@ -428,7 +627,9 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
    * ```
    */
   removeXData(appId: string): void {
-    this._xDataMap.delete(appId)
+    this.removeImportedXData(appId)
+    this.clearMaterializedXData(appId)
+    this.forgetXDataApp(appId)
   }
 
   /**
@@ -450,28 +651,17 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
    * ```
    */
   createExtensionDictionary(): AcDbObjectId | undefined {
-    // If already exists, behave like ObjectARX: do nothing
-    // const existingId = this.extensionDictionary
-    // if (existingId) {
-    //   return existingId
-    // }
+    const existingId = this.extensionDictionary
+    if (existingId) {
+      return existingId
+    }
 
-    // const db = this.database
-    // if (db) {
-    //   // Create a new extension dictionary
-    //   const dict = new AcDbDictionary(db)
+    const db = this.database
+    if (!db) {
+      return undefined
+    }
 
-    //   // Ensure dictionary lives in the same database
-    //   dict.database = db
-
-    //   // Add dictionary to database
-    //   db.objects.dictionary.setAt(dict.objectId, dict)
-
-    //   // Establish ownership relationship
-    //   this.extensionDictionary = dict.objectId
-    //   return dict.objectId
-    // }
-    return undefined
+    return db.createExtensionDictionaryFor(this)
   }
 
   /**
@@ -553,11 +743,19 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
    *
    * @param source - Deep-cloned xdata map from a snapshot object
    */
-  private restoreXDataMapFrom(source: Map<string, AcDbResultBuffer>): void {
-    this._xDataMap.clear()
-    for (const [key, value] of source.entries()) {
-      this._xDataMap.set(key, this.cloneValue(value) as AcDbResultBuffer)
+  private restoreXDataMapFrom(
+    source: Map<string, AcDbResultBuffer> | undefined
+  ): void {
+    if (!source || source.size === 0) {
+      this._xDataMap = undefined
+      return
     }
+
+    const restored = new Map<string, AcDbResultBuffer>()
+    for (const [key, value] of source.entries()) {
+      restored.set(key, this.cloneValue(value) as AcDbResultBuffer)
+    }
+    this._xDataMap = restored
   }
 
   /**
@@ -570,10 +768,9 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
    */
   private copySnapshotStateTo(target: this): void {
     target._attrs = this.cloneAttrs(this._attrs)
-    target._xDataMap = this.cloneValue(this._xDataMap) as Map<
-      string,
-      AcDbResultBuffer
-    >
+    target._xDataMap = this._xDataMap
+      ? (this.cloneValue(this._xDataMap) as Map<string, AcDbResultBuffer>)
+      : undefined
 
     const source = this as unknown as Record<string, unknown>
     const dest = target as unknown as Record<string, unknown>
@@ -714,6 +911,14 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
       return value.slice(0)
     }
 
+    // Blob/File must be shared by reference. Deep-cloning via Object.create +
+    // Object.keys yields an empty shell with no bytes — undo/redo of image
+    // replace would then lose pixel data, and any restore from that snapshot
+    // would leave RasterImage undrawable.
+    if (typeof Blob !== 'undefined' && value instanceof Blob) {
+      return value
+    }
+
     if (
       value &&
       typeof value === 'object' &&
@@ -766,11 +971,53 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
     this.dxfOutFields(filer)
 
     if (allXdata) {
-      for (const data of this._xDataMap.values()) {
-        filer.writeResultBuffer(data)
-      }
+      this.dxfOutXData(filer)
     }
     return this
+  }
+
+  /** Emit all attached XData buffers (DXF groups 1000–1071). */
+  protected dxfOutXData(filer: AcDbDxfFiler): void {
+    const order = this._xDataOrder
+    if (order) {
+      for (const appId of order) {
+        const materialized = this._xDataMap?.get(appId)
+        if (materialized) {
+          filer.writeResultBuffer(materialized)
+          continue
+        }
+
+        const range = this.findImportedXDataRange(appId)
+        if (range) {
+          filer.writeTypedValues(this.importedXDataValues(range[0], range[1]))
+        }
+      }
+      return
+    }
+
+    const compact = this._importedXData
+    if (compact) {
+      let start = 0
+      while (start < compact.length) {
+        let end = start + 2
+        while (
+          end < compact.length &&
+          Number(compact[end]) !== AcDbDxfCode.ExtendedDataRegAppName
+        ) {
+          end += 2
+        }
+
+        filer.writeTypedValues(this.importedXDataValues(start, end))
+        start = end
+      }
+    }
+
+    const map = this._xDataMap
+    if (!map) return
+
+    for (const data of map.values()) {
+      filer.writeResultBuffer(data)
+    }
   }
 
   /**
@@ -792,5 +1039,131 @@ export class AcDbObject<ATTRS extends AcDbObjectAttrs = AcDbObjectAttrs> {
     // For better downstream compatibility, the object-level marker (AcDbObject) is omitted.
     // filer.writeSubclassMarker('AcDbObject')
     return this
+  }
+
+  /**
+   * Reads this object from a DXF filer (ObjectARX `dxfIn`).
+   *
+   * Reads common handle/owner fields, then delegates to {@link dxfInFields}.
+   * XData (group 1001+) is consumed when present after object fields.
+   *
+   * Group-102 control strings (`{ACAD_XDICTIONARY`, `{ACAD_REACTORS`, …) are
+   * consumed here so subclass readers still see handle/owner/subclass markers
+   * that follow them. Many real DXF writers emit these blocks on LAYER and
+   * entity records; skipping them would leave `name`/`layer` unset.
+   */
+  dxfIn(filer: AcDbDxfFiler): this {
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 5 || code === 105) {
+        this.objectId = String(item.value)
+      } else if (code === 330) {
+        this.ownerId = String(item.value)
+      } else if (code === 360) {
+        this.extensionDictionary = String(item.value)
+      } else if (code === 102) {
+        this.dxfInControlString(filer, String(item.value))
+      } else if (code === 100) {
+        // Subclass markers belong to dxfInFields — push back and stop common loop.
+        filer.pushBackItem(item)
+        break
+      } else {
+        // Unknown common code — let subclass handle it.
+        filer.pushBackItem(item)
+        break
+      }
+    }
+
+    this.dxfInFields(filer)
+
+    if (filer.atExtendedData) {
+      this.dxfInXData(filer)
+    }
+
+    return this
+  }
+
+  /**
+   * Consumes a DXF group-102 control-string block that was already opened
+   * (the opening `102` value is `startValue`, typically `{ACAD_XDICTIONARY`
+   * or `{ACAD_REACTORS`).
+   *
+   * For `{ACAD_XDICTIONARY`, the first soft-owner handle (360) is stored as
+   * {@link extensionDictionary}. Other control strings are skipped until the
+   * matching closing `102` / `}`.
+   */
+  protected dxfInControlString(filer: AcDbDxfFiler, startValue: string): void {
+    const isExtDict =
+      startValue === '{ACAD_XDICTIONARY' || startValue === 'ACAD_XDICTIONARY'
+
+    while (!filer.atEndOfObject && !filer.atEof) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 102) {
+        const value = String(item.value)
+        if (value === '}' || value === '') {
+          break
+        }
+        // Nested control string — consume it recursively.
+        this.dxfInControlString(filer, value)
+        continue
+      }
+      if (isExtDict && code === 360 && !this.extensionDictionary) {
+        this.extensionDictionary = String(item.value)
+      }
+      // Ignore other pairs inside the control string (e.g. reactor 330s).
+    }
+  }
+
+  /**
+   * Reads object-specific DXF fields (ObjectARX `dxfInFields`).
+   *
+   * Subclasses should override, call `super.dxfInFields(filer)` first when
+   * appropriate, then consume their subclass marker and fields in an
+   * order-independent loop.
+   *
+   * Per the AutoCAD DXF specification, readers must **ignore undefined group
+   * codes** and must not assume field order. Within a subclass loop the
+   * correct unknown-code behavior is `break` (skip and continue). Use
+   * `pushBackItem` only to hand a group-100 subclass marker (or XData) to
+   * another reader — never to abort on an unrecognized optional code.
+   */
+  dxfInFields(_filer: AcDbDxfFiler): this {
+    return this
+  }
+
+  /** Consume XData pairs starting at group 1001 until end of object. */
+  protected dxfInXData(filer: AcDbDxfFiler): void {
+    let buffer: AcDbResultBuffer | undefined
+
+    const flush = () => {
+      if (buffer && buffer.length > 0) {
+        this.setXData(buffer)
+      }
+      buffer = undefined
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 1001) {
+        flush()
+        buffer = new AcDbResultBuffer([{ code: item.code, value: item.value }])
+      } else if (code >= 1000 && code <= 1071) {
+        if (!buffer) {
+          buffer = new AcDbResultBuffer()
+        }
+        buffer.add({ code: item.code, value: item.value })
+      } else {
+        filer.pushBackItem(item)
+        break
+      }
+    }
+
+    flush()
   }
 }

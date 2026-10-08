@@ -1,14 +1,25 @@
-import { AcGiSubEntityTraits } from '@mlightcad/data-model'
 import {
+  AcCmColor,
   ACGI_MODEL_SPACE_BACKGROUND,
-  acgiForegroundColorForBackground
+  acgiForegroundColorForBackground,
+  AcGiSubEntityTraits
 } from '@mlightcad/data-model'
 import * as THREE from 'three'
 
 import { AcTrFillMaterialManager } from './AcTrFillMaterialManager'
 import { AcTrLineMaterialManager } from './AcTrLineMaterialManager'
+import { AcTrMaterialCacheStats } from './AcTrMaterialManager'
 import { AcTrPointMaterialManager } from './AcTrPointMaterialManager'
 import { AcTrStyleManagerOptions } from './AcTrStyleManagerOptions'
+
+/** Aggregated material-cache stats across point / line / fill managers. */
+export interface AcTrStyleManagerStats {
+  point: AcTrMaterialCacheStats
+  line: AcTrMaterialCacheStats
+  fill: AcTrMaterialCacheStats
+  totalCount: number
+  totalEstimatedBytes: number
+}
 
 /**
  * Central style/material access point for the CAD viewer.
@@ -38,6 +49,12 @@ export class AcTrStyleManager {
   private pointMgr: AcTrPointMaterialManager
   private lineMgr: AcTrLineMaterialManager
   private fillMgr: AcTrFillMaterialManager
+  /**
+   * When true, fat-line materials are used even if {@link showLineWeight}
+   * (LWDISPLAY) is off. Overlay transients (markup / measurement) set this
+   * for the duration of conversion so ribbon lineweight is visible.
+   */
+  private _forceShowLineWeight = false
 
   constructor() {
     this.pointMgr = new AcTrPointMaterialManager(this.options)
@@ -68,15 +85,33 @@ export class AcTrStyleManager {
    */
   getLineMaterial(
     traits: AcGiSubEntityTraits,
-    basicMaterialOnly?: boolean
+    basicMaterialOnly?: boolean,
+    fatLines?: boolean,
+    layerColor?: AcCmColor,
+    layerColorRgb?: number
   ): THREE.Material {
+    if (fatLines) {
+      return this.lineMgr.getMaterial(
+        traits,
+        { fatLines: true },
+        layerColorRgb,
+        layerColor
+      )!
+    }
     const hasLinePattern = !!(
       traits.lineType.pattern && traits.lineType.pattern.length > 0
     )
-    const forceBasicMaterial = !this.options.showLineWeight && !hasLinePattern
-    return this.lineMgr.getMaterial(traits, {
-      basicMaterialOnly: basicMaterialOnly || forceBasicMaterial
-    })!
+    const showLineWeight =
+      this.options.showLineWeight || this._forceShowLineWeight
+    const forceBasicMaterial = !showLineWeight && !hasLinePattern
+    return this.lineMgr.getMaterial(
+      traits,
+      {
+        basicMaterialOnly: basicMaterialOnly || forceBasicMaterial
+      },
+      layerColorRgb,
+      layerColor
+    )!
   }
 
   /**
@@ -91,6 +126,18 @@ export class AcTrStyleManager {
    */
   set showLineWeight(value: boolean) {
     this.options.showLineWeight = value
+  }
+
+  /**
+   * Whether overlay conversion should honor entity lineweights even when
+   * {@link showLineWeight} is false.
+   */
+  get forceShowLineWeight(): boolean {
+    return this._forceShowLineWeight
+  }
+
+  set forceShowLineWeight(value: boolean) {
+    this._forceShowLineWeight = value
   }
 
   /**
@@ -153,11 +200,18 @@ export class AcTrStyleManager {
    */
   getMTextFillMaterial(
     traits: AcGiSubEntityTraits,
-    rebaseOffset: THREE.Vector2 = _rebaseOffset
+    rebaseOffset: THREE.Vector2 = _rebaseOffset,
+    layerColor?: AcCmColor,
+    layerColorRgb?: number
   ): THREE.Material {
-    return this.fillMgr.getMaterial(traits, {
-      rebaseOffset
-    })
+    return this.fillMgr.getMaterial(
+      traits,
+      {
+        rebaseOffset
+      },
+      layerColorRgb,
+      layerColor
+    )
   }
 
   /**
@@ -251,6 +305,23 @@ export class AcTrStyleManager {
     this.lineMgr.dispose()
     this.pointMgr.dispose()
     this.fillMgr.dispose()
+  }
+
+  /**
+   * Returns aggregated material-cache stats for memory diagnostics.
+   */
+  getStats(): AcTrStyleManagerStats {
+    const point = this.pointMgr.getStats()
+    const line = this.lineMgr.getStats()
+    const fill = this.fillMgr.getStats()
+    return {
+      point,
+      line,
+      fill,
+      totalCount: point.count + line.count + fill.count,
+      totalEstimatedBytes:
+        point.estimatedBytes + line.estimatedBytes + fill.estimatedBytes
+    }
   }
 
   updateLineResolution(width: number, height: number): void {

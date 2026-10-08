@@ -9,6 +9,21 @@ import { AcGiLineWeight } from '@mlightcad/graphic-interface'
 
 import { AcDbAngleUnits } from '../misc/AcDbAngleUnits'
 import {
+  ACDB_COMPAREHATCH_DEFAULT,
+  ACDB_COMPAREHATCH_MAX,
+  ACDB_COMPAREHATCH_MIN,
+  ACDB_COMPAREPROPS_DEFAULT,
+  ACDB_COMPAREPROPS_MAX,
+  ACDB_COMPAREPROPS_MIN,
+  ACDB_COMPARERCMARGIN_DEFAULT,
+  ACDB_COMPARERCMARGIN_MAX,
+  ACDB_COMPARERCMARGIN_MIN,
+  ACDB_COMPARETEXT_DEFAULT,
+  ACDB_COMPARETEXT_MAX,
+  ACDB_COMPARETEXT_MIN,
+  ACDB_COMPARETOLERANCE_DEFAULT,
+  ACDB_COMPARETOLERANCE_MAX,
+  ACDB_COMPARETOLERANCE_MIN,
   ACDB_GRIPCOLOR_DEFAULT,
   ACDB_GRIPCOLOR_MAX,
   ACDB_GRIPCOLOR_MIN,
@@ -18,6 +33,7 @@ import {
   ACDB_GRIPSIZE_DEFAULT,
   ACDB_GRIPSIZE_MAX,
   ACDB_GRIPSIZE_MIN,
+  acdbCoerceIntegerSysVar,
   ByLayer,
   DEFAULT_HATCH_PATTERN_METRIC,
   DEFAULT_MLEADER_STYLE,
@@ -28,6 +44,22 @@ import { AcDbLinearUnits } from '../misc/AcDbLinearUnits'
 import { AcDbUnitsValue } from '../misc/AcDbUnitsValue'
 import type { AcDbDatabase } from './AcDbDatabase'
 import { AcDbSystemVariables } from './AcDbSystemVariables'
+
+/**
+ * Best-effort default for {@link AcDbSystemVariables.LOGINNAME}.
+ * Prefers common OS environment variables when running under Node.
+ */
+function detectDefaultLoginName(): string {
+  try {
+    const env =
+      typeof process !== 'undefined' && process.env ? process.env : undefined
+    if (!env) return ''
+    const name = env.USERNAME || env.USER || env.LOGNAME || ''
+    return typeof name === 'string' ? name.trim() : ''
+  } catch {
+    return ''
+  }
+}
 
 /**
  * Supported AutoCAD system variable data type name.
@@ -244,6 +276,84 @@ export class AcDbSysVarManager {
       type: 'number',
       isDbVar: false,
       defaultValue: 0
+    })
+    /**
+     * Controls whether hatch objects are included in drawing comparison.
+     * - 0: Hatch objects are excluded (AutoCAD default)
+     * - 1: Hatch objects are included
+     *
+     * Saved in the drawing.
+     *
+     * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-BBB5E4A0-B607-4898-9A6B-A65C51551EE5
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.COMPAREHATCH,
+      type: 'number',
+      isDbVar: true,
+      defaultValue: ACDB_COMPAREHATCH_DEFAULT
+    })
+    /**
+     * Controls whether a change in an object's non-geometric property is
+     * identified as a change between two drawing revisions (bitcode sum):
+     * - 0: Property changes are not included (AutoCAD default)
+     * - 1: Color
+     * - 2: Layer
+     * - 4: Linetype
+     * - 8: Linetype scale
+     * - 16: Lineweight
+     * - 32: Transparency
+     * - 64: Thickness
+     *
+     * Saved in the registry (not in the drawing).
+     *
+     * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-FC52193A-3801-42D1-B5C3-873B192B36B2
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.COMPAREPROPS,
+      type: 'number',
+      isDbVar: false,
+      defaultValue: ACDB_COMPAREPROPS_DEFAULT
+    })
+    /**
+     * Offset distance between a change-set boundary and the revision cloud.
+     * Valid range is **1–25**; higher values produce a larger cloud.
+     * Saved in the drawing. AutoCAD initial value is **5**.
+     *
+     * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-7A230058-048B-4EE6-949D-105AF6AC8E73
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.COMPARERCMARGIN,
+      type: 'number',
+      isDbVar: true,
+      defaultValue: ACDB_COMPARERCMARGIN_DEFAULT
+    })
+    /**
+     * Controls whether text objects are included in drawing comparison.
+     * - 0: Text objects are excluded
+     * - 1: Text objects are included (AutoCAD default)
+     *
+     * Saved in the drawing.
+     *
+     * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-1BE58261-FA5F-4914-BAC6-C1DF7E3D1E9C
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.COMPARETEXT,
+      type: 'number',
+      isDbVar: true,
+      defaultValue: ACDB_COMPARETEXT_DEFAULT
+    })
+    /**
+     * Decimal-place tolerance used when comparing two drawings. Objects are
+     * considered identical when they differ by at most this precision.
+     * Valid range is **0–14**. Saved in the drawing. AutoCAD initial value is **6**.
+     *
+     * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-3131F7C8-7199-4EC5-9892-88C2D2A86F78
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.COMPARETOLERANCE,
+      type: 'number',
+      isDbVar: true,
+      defaultValue: ACDB_COMPARETOLERANCE_DEFAULT
     })
     /**
      * - 0: All Dynamic Input features, including dynamic prompts, off
@@ -471,6 +581,19 @@ export class AcDbSysVarManager {
       defaultValue: AcDbUnitsValue.Millimeters
     })
     /**
+     * Displays the user's login name. Read-only through {@link setVar}; host
+     * apps initialize it with {@link setLoginName}.
+     *
+     * @see https://help.autodesk.com/view/ACD/2026/ENU/?caas=caas/documentation/CIV3D/2014/ENU/filesACD/GUID-81446F4E-F6DC-442A-9889-EE777D3D49B9-htm.html
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.LOGINNAME,
+      type: 'string',
+      isDbVar: false,
+      readOnly: true,
+      defaultValue: detectDefaultLoginName()
+    })
+    /**
      * Sets the linear unit display format for coordinates and distances (not insertion scaling).
      * Integer codes match AutoCAD and {@link AcDbLinearUnits}:
      * - `1`: Scientific
@@ -490,7 +613,7 @@ export class AcDbSysVarManager {
     })
     /**
      * Sets the display precision for linear distances (decimal places or equivalent), used together
-     * with {@link AcDbDatabase.lunits | LUNITS}. Typical range in AutoCAD is **0??**; common initial value **4**.
+     * with {@link AcDbDatabase.lunits | LUNITS}. Typical range in AutoCAD is **0–8**; common initial value **4**.
      *
      * @see https://help.autodesk.com/view/ACD/2027/ENU/?guid=GUID-5FFF39D6-EFC7-49F5-B56A-6023EB5C0DE7
      */
@@ -565,6 +688,17 @@ export class AcDbSysVarManager {
       type: 'number',
       isDbVar: true,
       defaultValue: 0
+    })
+    /**
+     * Enables open-file performance profiling. When on, stage timings and
+     * block-cache stats are printed to the console after the drawing finishes
+     * converting. Not stored in the DWG (session/registry style).
+     */
+    this.registerVar({
+      name: AcDbSystemVariables.OPENPROF,
+      type: 'boolean',
+      isDbVar: false,
+      defaultValue: false
     })
     /**
      * Background color of the paper-space (layout) drawing area.
@@ -680,6 +814,19 @@ export class AcDbSysVarManager {
    */
   public registerMany(vars: AcDbSysVarDescriptor[]) {
     vars.forEach(v => this.registerVar(v))
+  }
+
+  /**
+   * Initializes the session {@link AcDbSystemVariables.LOGINNAME} value.
+   *
+   * {@link setVar} rejects writes because LOGINNAME is read-only for users;
+   * host applications call this once at startup (for example after auth).
+   *
+   * @param value - Login / user display name.
+   */
+  public setLoginName(value: string): void {
+    const name = this.normalizeName(AcDbSystemVariables.LOGINNAME)
+    this.cache.set(name, value.trim())
   }
 
   /**
@@ -857,6 +1004,46 @@ export class AcDbSysVarManager {
           )
         }
         value = intVal
+      }
+      if (name === AcDbSystemVariables.COMPAREHATCH.toLowerCase()) {
+        value = acdbCoerceIntegerSysVar(
+          'COMPAREHATCH',
+          value,
+          ACDB_COMPAREHATCH_MIN,
+          ACDB_COMPAREHATCH_MAX
+        )
+      }
+      if (name === AcDbSystemVariables.COMPAREPROPS.toLowerCase()) {
+        value = acdbCoerceIntegerSysVar(
+          'COMPAREPROPS',
+          value,
+          ACDB_COMPAREPROPS_MIN,
+          ACDB_COMPAREPROPS_MAX
+        )
+      }
+      if (name === AcDbSystemVariables.COMPARERCMARGIN.toLowerCase()) {
+        value = acdbCoerceIntegerSysVar(
+          'COMPARERCMARGIN',
+          value,
+          ACDB_COMPARERCMARGIN_MIN,
+          ACDB_COMPARERCMARGIN_MAX
+        )
+      }
+      if (name === AcDbSystemVariables.COMPARETEXT.toLowerCase()) {
+        value = acdbCoerceIntegerSysVar(
+          'COMPARETEXT',
+          value,
+          ACDB_COMPARETEXT_MIN,
+          ACDB_COMPARETEXT_MAX
+        )
+      }
+      if (name === AcDbSystemVariables.COMPARETOLERANCE.toLowerCase()) {
+        value = acdbCoerceIntegerSysVar(
+          'COMPARETOLERANCE',
+          value,
+          ACDB_COMPARETOLERANCE_MIN,
+          ACDB_COMPARETOLERANCE_MAX
+        )
       }
       if (descriptor.isDbVar) {
         this.applyVarMutation(name, oldVal, value, db, () => {

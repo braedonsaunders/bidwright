@@ -9,15 +9,18 @@ import {
   AcGePointLike,
   AcGeVector3dLike
 } from '../math'
+import { FLOAT_TOL } from '../util'
 import { AcGeGeometryUtil } from '../util/AcGeGeometryUtil'
-import { acGeClosedPolygonArea3d } from '../util/AcGePolygonAreaUtil'
+import { acgeClosedPolygonArea3d } from '../util/AcGePolygonAreaUtil'
+import { AcGeCircArc2d } from './AcGeCircArc2d'
 import { AcGeCurve3d } from './AcGeCurve3d'
+import type { AcGeTessellateOptions } from './AcGeCurveTessellate'
 import { AcGeKnotParameterizationType, AcGeNurbsCurve } from './AcGeNurbsCurve'
 import {
-  isNonZeroDirection,
-  normalizeSplineWeights,
-  resolveControlPointSplineDegree,
-  resolveFitPointSplineDegree
+  acgeIsNonZeroDirection,
+  acgeNormalizeSplineWeights,
+  acgeResolveControlPointSplineDegree,
+  acgeResolveFitPointSplineDegree
 } from './AcGeSplineUtil'
 
 export class AcGeSpline3d extends AcGeCurve3d {
@@ -540,6 +543,41 @@ export class AcGeSpline3d extends AcGeCurve3d {
     return points
   }
 
+  /**
+   * Sample this spline to a polyline whose chord height is bounded by `options`.
+   *
+   * Starts from a coarse parameter grid and inserts midpoints only where the
+   * chord-height test fails. Total NURBS evaluations never exceed
+   * `maxSegments` (default 100).
+   *
+   * @param options - Chord-height tessellation options
+   */
+  tessellate(options?: AcGeTessellateOptions): AcGePoint3d[] {
+    const resolved = AcGeCircArc2d.resolveTessellateOptions(options)
+    const knots = this._nurbsCurve.knots()
+    const degree = this._nurbsCurve.degree()
+    if (knots.length < degree + 2) {
+      return [this.startPoint.clone(), this.endPoint.clone()]
+    }
+    const startParam = knots[degree]
+    const endParam = knots[knots.length - degree - 1]
+    const n = resolved.circleSides
+    const length = Math.abs(this.length)
+    const deviation =
+      resolved.deviation ??
+      Math.max(FLOAT_TOL, length <= FLOAT_TOL ? FLOAT_TOL : length / (2 * n * n))
+    return AcGeCurve3d.tessellateParametricCurve(
+      startParam,
+      endParam,
+      t => this.evaluateAt(t),
+      {
+        deviation,
+        minSegments: resolved.minSegments ?? (this.closed ? 8 : 2),
+        maxSegments: resolved.maxSegments
+      }
+    )
+  }
+
   getCurvePoints(curve: AcGeNurbsCurve, count: number) {
     const points = []
     const knots = curve.knots() // Get the knot vector from the curve
@@ -580,7 +618,7 @@ export class AcGeSpline3d extends AcGeCurve3d {
   get area(): number {
     if (!this._closed) return 0
     const points = this.getPoints(128)
-    return acGeClosedPolygonArea3d(points)
+    return acgeClosedPolygonArea3d(points)
   }
 
   /**
@@ -730,7 +768,7 @@ export class AcGeSpline3d extends AcGeCurve3d {
       return null
     }
 
-    const degree = resolveControlPointSplineDegree(
+    const degree = acgeResolveControlPointSplineDegree(
       declaredDegree,
       controlPoints.length,
       knots.length
@@ -743,7 +781,7 @@ export class AcGeSpline3d extends AcGeCurve3d {
       return new AcGeSpline3d(
         controlPoints,
         knots,
-        normalizeSplineWeights(weights, controlPoints.length),
+        acgeNormalizeSplineWeights(weights, controlPoints.length),
         degree,
         closed
       )
@@ -780,10 +818,10 @@ export class AcGeSpline3d extends AcGeCurve3d {
       return null
     }
 
-    const hasStartTangent = isNonZeroDirection(startTangent)
-    const hasEndTangent = isNonZeroDirection(endTangent)
+    const hasStartTangent = acgeIsNonZeroDirection(startTangent)
+    const hasEndTangent = acgeIsNonZeroDirection(endTangent)
     const tangentCount = (hasStartTangent ? 1 : 0) + (hasEndTangent ? 1 : 0)
-    const degree = resolveFitPointSplineDegree(
+    const degree = acgeResolveFitPointSplineDegree(
       declaredDegree,
       fitPoints.length,
       tangentCount

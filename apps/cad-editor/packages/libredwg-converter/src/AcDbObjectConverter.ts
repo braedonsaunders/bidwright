@@ -1,9 +1,15 @@
 import {
+  acdbDecodeMLeaderStyleRawColor,
+  AcDbLayerFilter,
+  AcDbLayerIndex,
   AcDbMLeaderStyle,
-  AcDbObject,
-  decodeMLeaderStyleRawColor
-} from '@mlightcad/data-model'
-import { DwgCommonObject, DwgMLeaderStyleObject } from '@mlightcad/libredwg-web'
+  AcDbObject} from '@mlightcad/data-model'
+import {
+  DwgCommonObject,
+  DwgLayerFilterObject,
+  DwgLayerIndexObject,
+  DwgMLeaderStyleObject
+} from '@mlightcad/libredwg-web'
 
 /**
  * Converts libredwg object records to AcDbObject instances.
@@ -35,7 +41,7 @@ export class AcDbObjectConverter {
       dbObject.leaderLineType = style.leaderLineType
     }
     if (style.leaderLineColor != null) {
-      dbObject.leaderLineColor = decodeMLeaderStyleRawColor(
+      dbObject.leaderLineColor = acdbDecodeMLeaderStyleRawColor(
         style.leaderLineColor
       )
     }
@@ -70,7 +76,7 @@ export class AcDbObjectConverter {
       dbObject.textRightAttachmentType = style.textRightAttachmentType
     }
     if (style.textColor != null) {
-      dbObject.textColor = decodeMLeaderStyleRawColor(style.textColor)
+      dbObject.textColor = acdbDecodeMLeaderStyleRawColor(style.textColor)
     }
     if (style.textHeight != null) dbObject.textHeight = style.textHeight
     if (style.textFrameEnabled != null) {
@@ -82,7 +88,7 @@ export class AcDbObjectConverter {
     if (style.alignSpace != null) dbObject.alignSpace = style.alignSpace
     dbObject.blockContentId = style.blockContentId
     if (style.blockContentColor != null) {
-      dbObject.blockContentColor = decodeMLeaderStyleRawColor(
+      dbObject.blockContentColor = acdbDecodeMLeaderStyleRawColor(
         style.blockContentColor
       )
     }
@@ -123,6 +129,47 @@ export class AcDbObjectConverter {
     }
     dbObject.unknown2 = style.unknown2
     this.processCommonAttrs(style, dbObject)
+    return dbObject
+  }
+
+  /**
+   * Converts a DWG LAYER_FILTER object to an AcDbLayerFilter.
+   *
+   * @param filter - The DWG layer filter object to convert
+   * @returns The converted AcDbLayerFilter instance
+   */
+  convertLayerFilter(filter: DwgLayerFilterObject) {
+    const dbObject = new AcDbLayerFilter()
+    if (filter.layerNames?.length) {
+      dbObject.layerNames = filter.layerNames
+    }
+    this.processCommonAttrs(filter, dbObject)
+    return dbObject
+  }
+
+  /**
+   * Converts a DWG LAYER_INDEX object to an AcDbLayerIndex.
+   *
+   * @param index - The DWG layer index object to convert
+   * @returns The converted AcDbLayerIndex instance
+   */
+  convertLayerIndex(index: DwgLayerIndexObject) {
+    const dbObject = new AcDbLayerIndex()
+    if (index.timeStamp != null) {
+      dbObject.lastUpdatedAt = index.timeStamp
+      dbObject.lastUpdatedAtU = index.timeStamp
+    }
+    if (index.layerNames?.length) {
+      dbObject.layerNames = index.layerNames
+    }
+    if (index.idBufferIds?.length) {
+      dbObject.idBufferIds = index.idBufferIds
+    }
+    if (index.idBufferEntryCounts?.length) {
+      dbObject.idBufferEntryCounts = index.idBufferEntryCounts
+    }
+    dbObject.isUptoDate = true
+    this.processCommonAttrs(index, dbObject)
     return dbObject
   }
 

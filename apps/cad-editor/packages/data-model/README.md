@@ -13,7 +13,7 @@ This package contains the core classes for defining and manipulating AutoCAD ent
 
 - **Database Management**: Complete AutoCAD database structure with tables and records
 - **Entity Support**: All major AutoCAD entity types (lines, circles, polylines, blocks, etc.)
-- **File Conversion**: Extensible converter registration system (`AcDbDatabaseConverterManager`); DXF/DWG readers live in separate packages
+- **File Conversion**: Built-in MIT DXF converter (`AcDbNativeDxfConverter`, registered by default); extensible converter registration for DWG and alternate DXF readers
 - **Symbol Tables**: Layer, linetype, text style, and dimension style management
 - **Block Management**: Block table and block reference handling
 - **Dimension Support**: Comprehensive dimension entity types
@@ -80,9 +80,9 @@ npm install @mlightcad/data-model
 - **AcDbDatabaseConverter**: Base class for file format converters
 - **AcDbDatabaseConverterManager**: Manages registered file converters
 - **AcDbBatchProcessing**: Batch processing utilities
-- **AcDbBaseWorker**, **createWorkerApi**: Web Worker infrastructure for parsers
+- **AcDbBaseWorker**, **acdbCreateWorkerApi**: Web Worker infrastructure for parsers
 
-DXF import is provided by [@mlightcad/dxf-json-converter](../dxf-json-converter/README.md). DWG import is provided by converter packages such as [@mlightcad/libredwg-converter](../libredwg-converter/README.md). Register them with `AcDbDatabaseConverterManager` before calling `AcDbDatabase.read()`.
+DXF import is built in via `AcDbNativeDxfConverter` (registered by default). An optional GPL alternative is [@mlightcad/dxf-json-converter](https://github.com/mlightcad/dwg-dxf-converter/tree/main/packages/dxf-json-converter). DWG import is provided by converter packages such as [@mlightcad/libredwg-converter](../libredwg-converter/README.md); register a DWG converter with `AcDbDatabaseConverterManager` before calling `AcDbDatabase.read()` on DWG files.
 
 ### Utilities
 - **AcDbConstants**: Database constants
@@ -160,6 +160,11 @@ modelSpace.appendEntity(blockRef);
 ```
 
 ### File Conversion
+
+DXF support is registered by default via `AcDbNativeDxfConverter` (MIT, main-thread
+streaming). You only need to register a converter when you want a different DXF
+implementation or when reading DWG files.
+
 ```typescript
 import {
   AcDbDatabase,
@@ -168,17 +173,19 @@ import {
   acdbHostApplicationServices,
   AcDbOpenDatabaseOptions
 } from '@mlightcad/data-model'
-import { AcDbDxfConverter } from '@mlightcad/dxf-json-converter'
 import { AcDbLibreDwgConverter } from '@mlightcad/libredwg-converter'
 
-// Register converters (required before reading files)
-AcDbDatabaseConverterManager.instance.register(
-  AcDbFileType.DXF,
-  new AcDbDxfConverter({
-    useWorker: true,
-    parserWorkerUrl: './assets/dxf-parser-worker.js'
-  })
-)
+// Optional: replace the default native DXF converter (e.g. GPL worker-based parser)
+// import { AcDbDxfConverter } from '@mlightcad/dxf-json-converter'
+// AcDbDatabaseConverterManager.instance.register(
+//   AcDbFileType.DXF,
+//   new AcDbDxfConverter({
+//     useWorker: true,
+//     parserWorkerUrl: './assets/dxf-parser-worker.js'
+//   })
+// )
+
+// DWG still requires an explicit converter registration
 AcDbDatabaseConverterManager.instance.register(
   AcDbFileType.DWG,
   new AcDbLibreDwgConverter({
@@ -193,6 +200,18 @@ acdbHostApplicationServices().workingDatabase = database
 const buffer = await file.arrayBuffer()
 await database.read(buffer, { readOnly: true }, AcDbFileType.DXF)
 ```
+
+### Font Loading
+
+Fonts referenced by text entities are loaded on demand by the mtext renderer when a
+font is first needed. Viewers such as `@mlightcad/cad-simple-viewer` typically resolve
+font metadata from [mlightcad/cad-data](https://github.com/mlightcad/cad-data)
+(default CDN: `https://cdn.jsdelivr.net/gh/mlightcad/cad-data@main/`).
+
+To self-host fonts and templates (directory layout, `fonts.json`, CORS, and `baseUrl`
+configuration), see the
+[Self Hosted Fonts and Templates](https://github.com/mlightcad/cad-viewer/wiki/Self-Hosted-Fonts-and-Templates)
+guide in the cad-viewer wiki.
 
 ### Dimension Creation
 ```typescript
@@ -235,7 +254,7 @@ newLayout.setPlotCentered(true);
 - **iconv-lite**: For text encoding conversion
 - **uid**: For unique ID generation
 
-To read DXF files, also install [@mlightcad/dxf-json-converter](../dxf-json-converter/README.md) and register `AcDbDxfConverter`.
+DXF reading works out of the box. For DWG, install a converter such as [@mlightcad/libredwg-converter](../libredwg-converter/README.md). An optional GPL DXF alternative is [@mlightcad/dxf-json-converter](https://github.com/mlightcad/dwg-dxf-converter/tree/main/packages/dxf-json-converter).
 
 ## API Documentation
 
@@ -243,4 +262,4 @@ For detailed API documentation, visit the [RealDWG-Web documentation](https://ml
 
 ## Contributing
 
-This package is part of the RealDWG-Web monorepo. Please refer to the main project README for contribution guidelines. 
+This package is part of the RealDWG-Web monorepo. Please refer to the main project README for contribution guidelines.

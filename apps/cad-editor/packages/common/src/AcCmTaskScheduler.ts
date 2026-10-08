@@ -1,3 +1,5 @@
+import { accmYieldToUi } from './AcCmYieldToUi'
+
 /**
  * @fileoverview Task scheduling and execution system for the AutoCAD Common library.
  *
@@ -172,30 +174,15 @@ export class AcCmTaskScheduler<TInitial, TFinal = TInitial> {
   /**
    * Schedules a task to be executed asynchronously.
    *
-   * This method uses requestAnimationFrame in browser environments or setTimeout
-   * in Node.js environments to schedule the task.
+   * Yields via {@link accmYieldToUi} so the browser can paint between tasks,
+   * then runs `callback` on the resumed turn.
    *
    * @param callback - The callback function to schedule
    * @returns Promise that resolves with the result of the callback
    */
-  private scheduleTask<T>(callback: () => T | Promise<T>): Promise<T> {
-    return new Promise<T>((resolve, reject) => {
-      const executeCallback = () => {
-        // Execute the callback and handle the result
-        Promise.resolve(callback()).then(resolve).catch(reject)
-      }
-
-      if (
-        typeof window !== 'undefined' &&
-        typeof window.requestAnimationFrame === 'function'
-      ) {
-        // Browser environment with requestAnimationFrame
-        window.requestAnimationFrame(executeCallback)
-      } else {
-        // Node.js or fallback to setTimeout
-        setTimeout(executeCallback, 0)
-      }
-    })
+  private async scheduleTask<T>(callback: () => T | Promise<T>): Promise<T> {
+    await accmYieldToUi()
+    return callback()
   }
 
   /**

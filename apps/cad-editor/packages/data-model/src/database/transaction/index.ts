@@ -1,10 +1,10 @@
 export {
   AcDbChangeApplier,
-  collectChangeEntities,
-  collectDictionaryChanges
+  acdbCollectChangeEntities,
+  acdbCollectDictionaryChanges
 } from './AcDbChangeApplier'
 export { AcDbChangeRecorder } from './AcDbChangeRecorder'
-export { areChangeContainersEqual } from './AcDbDatabaseChange'
+export { acdbAreChangeContainersEqual } from './AcDbDatabaseChange'
 export type {
   AcDbChangeContainer,
   AcDbDatabaseChange

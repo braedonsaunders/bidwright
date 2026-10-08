@@ -102,12 +102,44 @@ function assertWorkerBundle() {
     )
   }
 
+  for (const marker of profile.forbiddenInWorker ?? []) {
+    if (content.includes(marker)) {
+      fail(
+        `${workerLabel} contains forbidden marker "${marker}"; wasm must be a sibling asset, not inlined`
+      )
+    }
+  }
+
   console.log(
     `verify-build (${profileName}): ${workerLabel} ok (${size} bytes, parser present)`
+  )
+}
+
+function assertWasmAsset() {
+  if (!profile.wasm) {
+    return
+  }
+
+  const wasmPath = join(packageDir, profile.wasm)
+  const wasmLabel = basename(profile.wasm)
+  let size
+  try {
+    size = statSync(wasmPath).size
+  } catch {
+    fail(`missing wasm asset: ${wasmPath}`)
+  }
+
+  if (size < 1024 * 1024) {
+    fail(`${wasmLabel} looks too small (${size} bytes); expected LibreDWG wasm`)
+  }
+
+  console.log(
+    `verify-build (${profileName}): ${wasmLabel} ok (${size} bytes)`
   )
 }
 
 assertMainBundle()
 if (!mainOnly) {
   assertWorkerBundle()
+  assertWasmAsset()
 }

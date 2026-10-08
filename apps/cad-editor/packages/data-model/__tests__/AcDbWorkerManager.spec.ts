@@ -1,7 +1,7 @@
 import {
   AcDbWorkerApi,
   AcDbWorkerManager,
-  createWorkerApi
+  acdbCreateWorkerApi
 } from '../src/converter/worker/AcDbWorkerManager'
 
 class FakeWorker {
@@ -28,12 +28,36 @@ class FakeWorker {
     if (payload.input === 'no-response') {
       return
     }
+    if (payload.input === 'fail-result') {
+      const evt = {
+        data: {
+          id: payload.id,
+          success: false,
+          data: undefined,
+          error: payload.input === 'fail-result' ? 'failed' : undefined
+        }
+      }
+      this.listeners.message.forEach(cb => cb(evt))
+      return
+    }
+    if (payload.input === 'fail-oom') {
+      const evt = {
+        data: {
+          id: payload.id,
+          success: false,
+          error:
+            "Failed to execute 'postMessage' on 'DedicatedWorkerGlobalScope': Data cannot be cloned, out of memory.",
+          errorCode: 'worker_oom'
+        }
+      }
+      this.listeners.message.forEach(cb => cb(evt))
+      return
+    }
     const evt = {
       data: {
         id: payload.id,
-        success: payload.input !== 'fail-result',
-        data: payload.input,
-        error: payload.input === 'fail-result' ? 'failed' : undefined
+        success: true,
+        data: payload.input
       }
     }
     this.listeners.message.forEach(cb => cb(evt))
@@ -74,6 +98,10 @@ describe('AcDbWorkerManager / AcDbWorkerApi', () => {
     expect(failed.success).toBe(false)
     expect(failed.error).toBe('failed')
 
+    const oom = await manager.execute<string, string>('fail-oom')
+    expect(oom.success).toBe(false)
+    expect(oom.errorCode).toBe('worker_oom')
+
     const workerError = await manager.execute<string, string>('trigger-error')
     expect(workerError.success).toBe(false)
     expect(workerError.error).toContain('Worker error: boom')
@@ -95,7 +123,7 @@ describe('AcDbWorkerManager / AcDbWorkerApi', () => {
     expect(result.success).toBe(true)
     expect(result.data).toBe('wrapped')
 
-    const viaFactory = createWorkerApi({ workerUrl: 'mock-worker.js' })
+    const viaFactory = acdbCreateWorkerApi({ workerUrl: 'mock-worker.js' })
     expect(viaFactory.getStats().config.workerUrl).toBe('mock-worker.js')
 
     api.destroy()

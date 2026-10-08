@@ -10,9 +10,20 @@ import {
 
 import { AcApDocManager, AcApSettingManager } from '../../../app'
 import { AcApI18n } from '../../../i18n'
-import { AcEdBaseView } from '../../view'
+import { AcUiTouchPointTutorialDialog } from '../../../ui/AcUiTouchPointTutorialDialog'
+import type {
+  AcEdSessionAccessory,
+  AcEdSessionAccessoryHostInfo
+} from '../../command/AcEdSessionAccessory'
+import {
+  acedIsMobileUiLayout,
+  acedShouldHideDesktopCommandLine,
+  acedSubscribeUiLayout
+} from '../../global/AcEdUiLayout'
+import type { AcEdBaseView } from '../../view'
 import { AcEdInputModifiers } from '../AcEdInputModifiers'
 import { AcEdInputToggles } from '../AcEdInputToggles'
+import type { AcEditor } from '../AcEditor'
 import { AcEdSelectionSet } from '../AcEdSelectionSet'
 import {
   AcEdAngleHandler,
@@ -26,6 +37,7 @@ import {
 } from '../handler'
 import { AcEdPointInputContext } from '../handler/AcEdInputHandler'
 import { AcEdKeywordHandler } from '../handler/AcEdKeywordHandler'
+import { AcEdMarkerManager } from '../marker'
 import {
   AcEdPromptAngleOptions,
   AcEdPromptBoxOptions,
@@ -50,6 +62,7 @@ import {
 } from '../prompt'
 import { AcEdPromptInputMode } from '../session/AcEdPromptInputSession'
 import { AcEdCommandLine } from './AcEdCommandLine'
+import { AcEdEntityPickCancelChrome } from './AcEdEntityPickCancelChrome'
 import { AcEdFloatingInput } from './AcEdFloatingInput'
 import {
   AcEdFloatingInputBoxCount,
@@ -59,7 +72,23 @@ import {
   AcEdFloatingInputRawData
 } from './AcEdFloatingInputTypes'
 import { AcEdFloatingMessage } from './AcEdFloatingMessage'
+import { acedInteractionStrategy } from './AcEdInteractionStrategy'
 import { AcEdMessageType } from './AcEdMessageType'
+import { acedAttachMobileBoxGesture } from './AcEdMobileBoxGesture'
+import {
+  AcEdMobileCommandChrome,
+  type AcEdMobileKeywordChip
+} from './AcEdMobileCommandChrome'
+import {
+  acedComputeSessionMetrics,
+  type AcEdMobileSessionMetrics
+} from './AcEdMobileSessionMetrics'
+import { AcEdSessionAccessoryController } from './AcEdSessionAccessoryController'
+import {
+  acedIsTouchDerivedMouseEvent,
+  acedIsTouchLongPressContextMenu,
+  acedShouldIgnoreCompatMouse
+} from './AcEdTouchPointSession'
 
 /**
  * Internal control-flow error used to propagate keyword picks out of
@@ -111,8 +140,24 @@ export class AcEdInputManager {
   /** Stores last confirmed point from getPoint() or getBox() */
   private lastPoint: AcGePoint2dLike | null = null
 
+  /**
+   * Plus marks at confirmed pick points for the active command.
+   * Positions accumulate across sequential {@link getPoint} prompts (including
+   * scripted ones); DOM marks appear only when a later interactive prompt
+   * starts so single-point commands do not flash a mark. Cleared on command end.
+   */
+  private _confirmedPointMarks: AcEdMarkerManager | null = null
+  private _confirmedPointPositions: AcGePoint2dLike[] = []
+  private readonly _boundRepositionConfirmedPointMarks: () => void
+
   /** Command line UI component */
   private _commandLine: AcEdCommandLine
+  /** Phone/pad prompt bar + session panel (hidden on desktop). */
+  private _mobileChrome: AcEdMobileCommandChrome
+  /** Top-right X shown during mobile entity picks (below message bar). */
+  private _entityPickCancel: AcEdEntityPickCancelChrome | null = null
+  /** Desktop/mobile session accessory host resolution and selection mounts. */
+  private readonly _sessionAccessoryController: AcEdSessionAccessoryController
   /** Buffered command-line style inputs (each item is one Enter-confirmed value). */
   private _scriptInputs: string[] = []
   /** Current modifier key state during input sessions. */
@@ -135,15 +180,27 @@ export class AcEdInputManager {
    * (getEntity/getSelection). Used to gate view-level selection behavior.
    */
   private entitySelectionActive: boolean = false
+  /**
+   * Rejector of the currently active prompt session, used by
+   * {@link cancelActiveInput} to programmatically abort the prompt.
+   *
+   * Prompt sessions never nest (composite prompts such as {@link getBox} chain
+   * their sub-prompts sequentially), so a single slot is sufficient.
+   */
+  private _activeRejector: ((err?: Error) => void) | null = null
 
   /**
    * Construct the manager and attach mousemove listener used for floating input
    * positioning and live preview updates.
    *
    * @param view - The view associated with the input manager
+   * @param editorEvents - Editor event bus; passed in because `view.editor` is
+   *   not assigned until {@link AcEditor} finishes constructing.
    */
-  constructor(view: AcEdBaseView) {
+  constructor(view: AcEdBaseView, editorEvents: AcEditor['events']) {
     this.view = view
+    this._boundRepositionConfirmedPointMarks = () =>
+      this.repositionConfirmedPointMarks()
     this.injectCSS()
     // Newly added UI overlays (command line, previews) are container-local.
     // Ensure absolute-positioned children are anchored to this view only.
@@ -153,10 +210,74 @@ export class AcEdInputManager {
     }
     const commandLine = new AcEdCommandLine(this.view.container)
     this._commandLine = commandLine
-    commandLine.visible = AcApSettingManager.instance.isShowCommandLine
-    AcApSettingManager.instance.events.modified.addEventListener(() => {
-      commandLine.visible = AcApSettingManager.instance.isShowCommandLine
+    this._mobileChrome = new AcEdMobileCommandChrome(this.view.container)
+    this._sessionAccessoryController = new AcEdSessionAccessoryController({
+      view: this.view,
+      getMobileChrome: () => this._mobileChrome,
+      isMobilePromptOpen: () => this._mobileChrome.isOpen,
+      getEditorEvents: () => editorEvents
     })
+    this._sessionAccessoryController.bindEditorEvents()
+    this.syncDesktopCommandLineVisibility()
+    AcApSettingManager.instance.events.modified.addEventListener(() => {
+      this.syncDesktopCommandLineVisibility()
+    })
+    acedSubscribeUiLayout(() => {
+      this.syncDesktopCommandLineVisibility()
+      if (
+        !acedInteractionStrategy().point.usesSessionChrome &&
+        this._mobileChrome.isOpen
+      ) {
+        this._mobileChrome.hide()
+      }
+      this._sessionAccessoryController.remountActiveSessionAccessory()
+    })
+    this.view.events.viewChanged.addEventListener(
+      this._boundRepositionConfirmedPointMarks
+    )
+    this.view.events.viewResize.addEventListener(
+      this._boundRepositionConfirmedPointMarks
+    )
+    // Safety net: if a prompt failed to clean up, close the mobile session
+    // panel when the command finishes so the bottom chrome cannot linger.
+    // Also clear confirmed-point plus marks for the finished command.
+    editorEvents.commandEnded.addEventListener(() => {
+      this.clearConfirmedPointMarks()
+      if (this._mobileChrome.isOpen) {
+        this.endMobilePrompt()
+      }
+    })
+  }
+
+  /**
+   * Whether the phone/pad bottom session panel is open for the current prompt.
+   */
+  get isMobilePromptOpen(): boolean {
+    return this._mobileChrome.isOpen
+  }
+
+  /** Mobile session panel chrome. */
+  get mobileChrome(): AcEdMobileCommandChrome {
+    return this._mobileChrome
+  }
+
+  /** Active mount target for session accessories. */
+  get sessionAccessoryHost(): AcEdSessionAccessoryHostInfo {
+    return this._sessionAccessoryController.sessionAccessoryHost
+  }
+
+  /** Selection-driven accessory shown when no command accessory is mounted. */
+  get selectionSessionAccessory(): AcEdSessionAccessory | null {
+    return this._sessionAccessoryController.selectionSessionAccessory
+  }
+
+  /**
+   * Updates the selection-driven accessory on the session accessory controller.
+   *
+   * @param value - Accessory to show on selection, or `null` to clear.
+   */
+  set selectionSessionAccessory(value: AcEdSessionAccessory | null) {
+    this._sessionAccessoryController.selectionSessionAccessory = value
   }
 
   /**
@@ -193,6 +314,153 @@ export class AcEdInputManager {
   }
 
   /**
+   * Programmatically cancels the currently active prompt session, if any.
+   *
+   * This is the external counterpart of pressing Escape during a prompt: it
+   * rejects the active prompt promise with the canonical `'cancelled'` error,
+   * which prompt wrappers map to {@link AcEdPromptStatus.Cancel}. Commands
+   * waiting on `getPoint()` / `getDistance()` / etc. therefore observe the
+   * cancellation as a normal Cancel-status result and clean up naturally.
+   *
+   * Calling this method when no prompt is active is a no-op.
+   */
+  cancelActiveInput() {
+    const rejector = this._activeRejector
+    if (!rejector) return
+    this._activeRejector = null
+    rejector()
+  }
+
+  /**
+   * Shows or hides the desktop command line according to settings and layout.
+   */
+  private syncDesktopCommandLineVisibility(): void {
+    const hide = acedShouldHideDesktopCommandLine(this.active)
+    this._commandLine.visible =
+      !hide && AcApSettingManager.instance.isShowCommandLine
+  }
+
+  /**
+   * Visible keyword chips for the mobile session panel.
+   */
+  private mobileKeywordChips(
+    options: AcEdPromptOptions<unknown>
+  ): AcEdMobileKeywordChip[] {
+    return (options.keywords?.toArray() ?? [])
+      .filter(kw => kw.visible)
+      .map(kw => ({
+        displayName: kw.displayName,
+        globalName: kw.globalName,
+        enabled: kw.enabled
+      }))
+  }
+
+  /**
+   * Opens the mobile command chrome for the current prompt when on phone/pad.
+   */
+  private beginMobilePrompt(args: {
+    prompt: string
+    keywords?: AcEdMobileKeywordChip[]
+    allowNone: boolean
+    showMetrics: boolean
+    showStringInput?: boolean
+    stringValue?: string
+    stringPlaceholder?: string
+    touchPointTutorial?: boolean
+    onConfirm: () => void
+    onCancel: () => void
+    onKeyword: (globalName: string) => void
+  }): void {
+    this.syncDesktopCommandLineVisibility()
+    if (!acedInteractionStrategy().point.usesSessionChrome) return
+    this._mobileChrome.show(
+      {
+        prompt: args.prompt,
+        keywords: args.keywords ?? [],
+        allowNone: args.allowNone,
+        showMetrics: args.showMetrics,
+        showStringInput: args.showStringInput,
+        stringValue: args.stringValue,
+        stringPlaceholder: args.stringPlaceholder
+      },
+      {
+        onConfirm: args.onConfirm,
+        onCancel: args.onCancel,
+        onKeyword: args.onKeyword
+      }
+    )
+    this._sessionAccessoryController.remountActiveSessionAccessory()
+    if (args.touchPointTutorial) {
+      void AcUiTouchPointTutorialDialog.maybeShow(this.view.container)
+    }
+  }
+
+  /** Closes the mobile command chrome and restores desktop CLI visibility. */
+  private endMobilePrompt(): void {
+    this._mobileChrome.hide()
+    this.syncDesktopCommandLineVisibility()
+    this._sessionAccessoryController.remountActiveSessionAccessory()
+  }
+
+  /**
+   * Shows the top-right entity-pick cancel button on mobile layouts only.
+   *
+   * @param onCancel - Invoked when the user taps X.
+   */
+  private showEntityPickCancel(onCancel: () => void): void {
+    if (!acedIsMobileUiLayout()) {
+      this.hideEntityPickCancel()
+      return
+    }
+    if (!this._entityPickCancel) {
+      this._entityPickCancel = new AcEdEntityPickCancelChrome({
+        container: this.view.container,
+        onCancel: () => this._entityPickCancelOnCancel?.(),
+        label: AcApI18n.t('main.entityPick.cancel'),
+        topOffsetPx: 48
+      })
+    } else {
+      this._entityPickCancel.setLabel(AcApI18n.t('main.entityPick.cancel'))
+    }
+    this._entityPickCancelOnCancel = onCancel
+    this._entityPickCancel.show()
+  }
+
+  /** Hides the mobile entity-pick cancel button. */
+  private hideEntityPickCancel(): void {
+    this._entityPickCancelOnCancel = null
+    this._entityPickCancel?.hide()
+  }
+
+  /** Latest cancel callback for {@link _entityPickCancel}. */
+  private _entityPickCancelOnCancel: (() => void) | null = null
+
+  /**
+   * Pushes live length/angle/Δ values into the mobile session panel.
+   */
+  private pushMobileMetrics(
+    cursor: AcGePoint2dLike,
+    basePoint?: AcGePoint2dLike | null
+  ): void {
+    if (!this._mobileChrome.isOpen) return
+    const metrics: AcEdMobileSessionMetrics = acedComputeSessionMetrics(
+      cursor,
+      basePoint
+    )
+    // A zero-length rubber-band (cursor still on lastPoint after lift / before
+    // the next press) must not wipe the previous readout.
+    if (metrics.hasBasePoint && metrics.length === 0) return
+    this._mobileChrome.setMetrics(metrics, {
+      length: this.formatNumber(metrics.length, 'distance'),
+      angle: this.formatNumber(metrics.angleDeg, 'angle'),
+      dx: this.formatNumber(metrics.dx, 'point'),
+      dy: this.formatNumber(metrics.dy, 'point'),
+      x: this.formatNumber(metrics.x, 'point'),
+      y: this.formatNumber(metrics.y, 'point')
+    })
+  }
+
+  /**
    * Queue scripted inputs for subsequent getXXX calls.
    * One array item equals one Enter-confirmed value.
    */
@@ -204,6 +472,24 @@ export class AcEdInputManager {
   /** Clears any pending scripted inputs. */
   clearScriptInputs() {
     this._scriptInputs.length = 0
+  }
+
+  /** Returns whether any scripted inputs remain queued. */
+  hasScriptInputs() {
+    return this._scriptInputs.length > 0
+  }
+
+  /**
+   * Removes and returns all remaining scripted inputs.
+   *
+   * Used by multi-command script runners that need to inspect leftovers after
+   * a command finishes without clearing the queue mid-run.
+   */
+  drainScriptInputs() {
+    if (!this._scriptInputs.length) {
+      return [] as string[]
+    }
+    return this._scriptInputs.splice(0, this._scriptInputs.length)
   }
 
   /**
@@ -334,6 +620,8 @@ export class AcEdInputManager {
   ): AcEdPromptKeywordOptions {
     const keywordOptions = new AcEdPromptKeywordOptions(options.message)
     keywordOptions.appendKeywordsToMessage = options.appendKeywordsToMessage
+    keywordOptions.valueDefaultDisplayText =
+      options.getDefaultValueDisplayText()
 
     const keywords = options.keywords?.toArray() ?? []
     keywords.forEach(kw => {
@@ -741,7 +1029,8 @@ export class AcEdInputManager {
       inputCount: 1,
       promptOptions: options,
       handler,
-      getDynamicValue
+      getDynamicValue,
+      showMetrics: false
     })
   }
 
@@ -816,6 +1105,7 @@ export class AcEdInputManager {
           floatingInput?.setBasePoint(firstPoint, {
             showBaseLineOnly: !options.useDashedLine
           })
+          this._mobileChrome.update({ showMetrics: true })
           return false
         }
         return true
@@ -1010,7 +1300,11 @@ export class AcEdInputManager {
           inputCount: 1,
           promptOptions: options,
           handler,
-          getDynamicValue
+          getDynamicValue,
+          showMetrics: false,
+          showStringInput: true,
+          // String value comes from the session panel / typed boxes, not picks.
+          allowPickCommit: false
         })
       },
       value => new AcEdPromptResult(AcEdPromptStatus.OK, value),
@@ -1041,14 +1335,57 @@ export class AcEdInputManager {
           return scriptedValue
         }
 
-        const result = await this._commandLine.getKeywords(options, true)
-        if (!result) {
-          if (options.allowNone) {
-            throw new AcEdNoneInputError()
+        return new Promise<string>((resolve, reject) => {
+          let settled = false
+          const finish = (action: () => void) => {
+            if (settled) return
+            settled = true
+            this.active = false
+            if (this._activeRejector === rejector) {
+              this._activeRejector = null
+            }
+            this._commandLine.cancelActiveSession()
+            this.endMobilePrompt()
+            action()
           }
-          throw new Error('cancelled')
-        }
-        return result
+          const rejector = (err?: Error) => {
+            finish(() => reject(err ?? new Error('cancelled')))
+          }
+          this._activeRejector = rejector
+          // Pad hides the desktop CLI only while a prompt session is active.
+          this.active = true
+
+          this.beginMobilePrompt({
+            prompt: options.getDisplayMessage(),
+            keywords: this.mobileKeywordChips(options),
+            allowNone: options.allowNone,
+            showMetrics: false,
+            onConfirm: () => {
+              if (options.allowNone) {
+                rejector(new AcEdNoneInputError())
+              }
+            },
+            onCancel: () => rejector(),
+            onKeyword: globalName => {
+              finish(() => resolve(globalName))
+            }
+          })
+
+          this._commandLine.getKeywords(options, true).then(
+            result => {
+              if (!result) {
+                rejector(
+                  options.allowNone
+                    ? new AcEdNoneInputError()
+                    : new Error('cancelled')
+                )
+                return
+              }
+              finish(() => resolve(result))
+            },
+            err => rejector(err instanceof Error ? err : undefined)
+          )
+        })
       },
       value => new AcEdPromptResult(AcEdPromptStatus.OK, value),
       status => new AcEdPromptResult(status),
@@ -1107,17 +1444,20 @@ export class AcEdInputManager {
           let startCanvas: AcGePoint2dLike | null = null
           let previewEl: HTMLDivElement | null = null
           let lastDragEvent: MouseEvent | null = null
+          let disposeGesture: (() => void) | null = null
 
-          const updateSelectionPreview = (e: MouseEvent) => {
+          const updateSelectionPreview = (
+            clientX: number,
+            clientY: number,
+            action: 'add' | 'replace' | 'remove' = 'add'
+          ) => {
             if (!startWcs || !previewEl || !startCanvas) return
 
-            const curWcs = this.view.screenToWorld(
-              this.view.viewportToCanvas({ x: e.clientX, y: e.clientY })
-            )
             const curCanvas = this.view.viewportToCanvas({
-              x: e.clientX,
-              y: e.clientY
+              x: clientX,
+              y: clientY
             })
+            const curWcs = this.view.screenToWorld(curCanvas)
             const p1 = this.view.worldToScreen(startWcs)
             const p2 = this.view.worldToScreen(curWcs)
 
@@ -1126,7 +1466,6 @@ export class AcEdInputManager {
             const width = Math.abs(p1.x - p2.x)
             const height = Math.abs(p1.y - p2.y)
             const mode = this.view.getSelectionMode(startCanvas, curCanvas)
-            const action = this.view.getSelectionActionFromEvent(e, 'add')
             const style = this.view.getSelectionPreviewStyle(mode, action)
 
             Object.assign(previewEl.style, {
@@ -1142,20 +1481,35 @@ export class AcEdInputManager {
 
           const onViewChanged = () => {
             if (lastDragEvent) {
-              updateSelectionPreview(lastDragEvent)
+              updateSelectionPreview(
+                lastDragEvent.clientX,
+                lastDragEvent.clientY,
+                this.view.getSelectionActionFromEvent(lastDragEvent, 'add')
+              )
             }
           }
 
           let settled = false
+          const rejector = (err?: Error) => {
+            cleanup()
+            reject(err ?? new Error('cancelled'))
+          }
           const cleanup = () => {
             if (settled) return
             settled = true
             this.active = false
             this.entitySelectionActive = false
+            if (this._activeRejector === rejector) {
+              this._activeRejector = null
+            }
             floatingMessage?.dispose()
             previewEl?.remove()
             keywordSession?.cancel()
             this._commandLine.clear()
+            this.endMobilePrompt()
+            disposeGesture?.()
+            disposeGesture = null
+            this.view.setNavigationEnabled(true)
 
             document.removeEventListener('keydown', keyHandler)
             this.view.canvas.removeEventListener('mousedown', mouseDown)
@@ -1168,24 +1522,37 @@ export class AcEdInputManager {
             this.view.events.viewChanged.removeEventListener(onViewChanged)
             this.view.events.viewResize.removeEventListener(onViewChanged)
           }
+          this._activeRejector = rejector
+
+          this.beginMobilePrompt({
+            prompt: options.getDisplayMessage(),
+            keywords: this.mobileKeywordChips(options),
+            allowNone: true,
+            showMetrics: false,
+            onConfirm: () => {
+              cleanup()
+              resolve([...selected])
+            },
+            onCancel: () => rejector(),
+            onKeyword: globalName => {
+              rejector(new AcEdKeywordInputError(globalName))
+            }
+          })
 
           keywordSession?.promise.then(keyword => {
             if (settled) return
             if (!keyword) {
-              cleanup()
-              reject(new Error('cancelled'))
+              rejector()
               return
             }
-            cleanup()
-            reject(new AcEdKeywordInputError(keyword))
+            rejector(new AcEdKeywordInputError(keyword))
           })
 
           /** ---------- Keyboard ---------- */
 
           const keyHandler = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
-              cleanup()
-              reject(new Error('cancelled'))
+              rejector()
               return
             }
 
@@ -1202,63 +1569,23 @@ export class AcEdInputManager {
             }
           }
 
-          const mouseDown = (e: MouseEvent) => {
-            if (e.button === 2) {
-              if (this.shouldUseRightClickEnter()) {
-                e.preventDefault()
-                cleanup()
-                resolve([...selected])
-              }
-              return
-            }
-            if (e.button !== 0) return
+          const clientToCanvas = (clientX: number, clientY: number) =>
+            this.view.viewportToCanvas({ x: clientX, y: clientY })
 
-            startCanvas = this.view.viewportToCanvas({
-              x: e.clientX,
-              y: e.clientY
-            })
-            startWcs = this.view.screenToWorld(startCanvas)
-
-            previewEl = document.createElement('div')
-            previewEl.className = 'ml-jig-preview-rect'
-            this.view.container.appendChild(previewEl)
-          }
-
-          const mouseMove = (e: MouseEvent) => {
-            if (e.buttons !== 1) return
-            if (!startWcs || !previewEl || !startCanvas) return
-
-            lastDragEvent = e
-            updateSelectionPreview(e)
-          }
-
-          const mouseUp = (e: MouseEvent) => {
-            if (e.button !== 0) return
-            if (!startWcs || !startCanvas) return
-
-            const endWcs = this.view.screenToWorld(
-              this.view.viewportToCanvas({ x: e.clientX, y: e.clientY })
-            )
-            const endCanvas = this.view.viewportToCanvas({
-              x: e.clientX,
-              y: e.clientY
-            })
-            previewEl?.remove()
-            previewEl = null
-            lastDragEvent = null
-
-            // Click selection
-            const action = this.view.getSelectionActionFromEvent(e, 'add')
-
-            if (this.view.isSelectionClick(startCanvas, endCanvas)) {
+          const applySelectionAt = (
+            endCanvas: AcGePoint2dLike,
+            endWcs: AcGePoint2dLike,
+            action: 'add' | 'replace' | 'remove',
+            isClick: boolean
+          ) => {
+            if (isClick) {
               const picked = this.view.pick(endWcs)
               if (picked.length > 0) {
                 this.view.applySelection([picked[0].id], action)
               } else if (action === 'replace') {
                 this.view.selectionSet.clear()
               }
-            } else {
-              // Box selection
+            } else if (startWcs && startCanvas) {
               const box = new AcGeBox2d()
                 .expandByPoint(startWcs)
                 .expandByPoint(endWcs)
@@ -1271,16 +1598,129 @@ export class AcEdInputManager {
               selected.add(id)
             }
 
-            if (options.singleOnly && action !== 'remove') {
-              if (selected.size > 0) {
-                cleanup()
-                resolve([...selected])
-              }
+            if (
+              options.singleOnly &&
+              action !== 'remove' &&
+              selected.size > 0
+            ) {
+              cleanup()
+              resolve([...selected])
             }
+          }
 
+          const beginPreview = (clientX: number, clientY: number) => {
+            startCanvas = clientToCanvas(clientX, clientY)
+            startWcs = this.view.screenToWorld(startCanvas)
+            previewEl?.remove()
+            previewEl = document.createElement('div')
+            previewEl.className = 'ml-jig-preview-rect'
+            this.view.container.appendChild(previewEl)
+          }
+
+          const clearBoxPreview = () => {
+            previewEl?.remove()
+            previewEl = null
+            lastDragEvent = null
             startWcs = null
             startCanvas = null
           }
+
+          const mouseDown = (e: MouseEvent) => {
+            if (e.button === 2) {
+              if (this.shouldUseRightClickEnter()) {
+                e.preventDefault()
+                cleanup()
+                resolve([...selected])
+              }
+              return
+            }
+            if (e.button !== 0) return
+            if (
+              acedIsTouchDerivedMouseEvent(e) ||
+              acedShouldIgnoreCompatMouse()
+            ) {
+              return
+            }
+
+            beginPreview(e.clientX, e.clientY)
+          }
+
+          const mouseMove = (e: MouseEvent) => {
+            if (e.buttons !== 1) return
+            if (!startWcs || !previewEl || !startCanvas) return
+            if (
+              acedIsTouchDerivedMouseEvent(e) ||
+              acedShouldIgnoreCompatMouse()
+            ) {
+              return
+            }
+
+            lastDragEvent = e
+            updateSelectionPreview(
+              e.clientX,
+              e.clientY,
+              this.view.getSelectionActionFromEvent(e, 'add')
+            )
+          }
+
+          const mouseUp = (e: MouseEvent) => {
+            if (e.button !== 0) return
+            if (!startWcs || !startCanvas) return
+            if (
+              acedIsTouchDerivedMouseEvent(e) ||
+              acedShouldIgnoreCompatMouse()
+            ) {
+              return
+            }
+
+            const endCanvas = clientToCanvas(e.clientX, e.clientY)
+            const endWcs = this.view.screenToWorld(endCanvas)
+            const isClick = this.view.isSelectionClick(startCanvas, endCanvas)
+            const action = this.view.getSelectionActionFromEvent(e, 'add')
+            previewEl?.remove()
+            previewEl = null
+            lastDragEvent = null
+            applySelectionAt(endCanvas, endWcs, action, isClick)
+            startWcs = null
+            startCanvas = null
+          }
+
+          disposeGesture = acedAttachMobileBoxGesture({
+            element: this.view.canvas,
+            setNavigationEnabled: enabled => {
+              this.view.setNavigationEnabled(enabled)
+            },
+            onActivate: (clientX, clientY) => {
+              beginPreview(clientX, clientY)
+              lastDragEvent = null
+              updateSelectionPreview(clientX, clientY, 'add')
+            },
+            onMove: (clientX, clientY) => {
+              updateSelectionPreview(clientX, clientY, 'add')
+            },
+            onBoxEnd: (clientX, clientY, moved) => {
+              if (!startWcs || !startCanvas) {
+                clearBoxPreview()
+                return
+              }
+              const endCanvas = clientToCanvas(clientX, clientY)
+              const endWcs = this.view.screenToWorld(endCanvas)
+              previewEl?.remove()
+              previewEl = null
+              lastDragEvent = null
+              applySelectionAt(endCanvas, endWcs, 'add', !moved)
+              startWcs = null
+              startCanvas = null
+            },
+            onTap: (clientX, clientY) => {
+              const endCanvas = clientToCanvas(clientX, clientY)
+              const endWcs = this.view.screenToWorld(endCanvas)
+              applySelectionAt(endCanvas, endWcs, 'add', true)
+            },
+            onAbort: () => {
+              clearBoxPreview()
+            }
+          })
 
           document.addEventListener('keydown', keyHandler)
           this.view.canvas.addEventListener('mousedown', mouseDown)
@@ -1331,11 +1771,18 @@ export class AcEdInputManager {
             this._commandLine.setPrompt(options.message)
           }
           let settled = false
+          const rejector = (err?: Error) => {
+            cleanup()
+            reject(err ?? new Error('cancelled'))
+          }
           const cleanup = () => {
             if (settled) return
             settled = true
             this.active = false
             this.entitySelectionActive = false
+            if (this._activeRejector === rejector) {
+              this._activeRejector = null
+            }
             options.jig?.end()
             document.removeEventListener('keydown', keyHandler)
             this.view.canvas.removeEventListener('mousedown', mouseDownHandler)
@@ -1347,17 +1794,35 @@ export class AcEdInputManager {
             floatingMessage?.dispose()
             keywordSession?.cancel()
             this._commandLine.clear()
+            this.hideEntityPickCancel()
+            this.endMobilePrompt()
           }
+          this._activeRejector = rejector
+
+          this.beginMobilePrompt({
+            prompt: options.getDisplayMessage(),
+            keywords: this.mobileKeywordChips(options),
+            allowNone: options.allowNone,
+            showMetrics: false,
+            onConfirm: () => {
+              if (!options.allowNone) return
+              cleanup()
+              resolve(null)
+            },
+            onCancel: () => rejector(),
+            onKeyword: globalName => {
+              rejector(new AcEdKeywordInputError(globalName))
+            }
+          })
+          this.showEntityPickCancel(() => rejector())
 
           keywordSession?.promise.then(keyword => {
             if (settled) return
             if (!keyword) {
-              cleanup()
-              reject(new Error('cancelled'))
+              rejector()
               return
             }
-            cleanup()
-            reject(new AcEdKeywordInputError(keyword))
+            rejector(new AcEdKeywordInputError(keyword))
           })
 
           const mouseDownHandler = (e: MouseEvent) => {
@@ -1413,8 +1878,7 @@ export class AcEdInputManager {
           /** Keyboard handling */
           const keyHandler = (e: KeyboardEvent) => {
             if (e.key === 'Escape') {
-              cleanup()
-              reject(new Error('cancelled'))
+              rejector()
               return
             }
 
@@ -1448,80 +1912,331 @@ export class AcEdInputManager {
 
   /**
    * Prompt the user to specify a rectangular box by selecting two corners.
-   * Each corner may be specified by clicking on the canvas or typing "x,y".
-   * A live HTML overlay rectangle previews the box as the user moves the mouse.
    *
-   * The box prompt is implemented as two chained point prompts. Keywords from
-   * the original box prompt are copied into each corner prompt so the caller
-   * sees a consistent interaction model across both stages.
+   * Desktop: two chained point prompts with a live HTML overlay preview.
+   * Phone/pad: the mobile {@link acedInteractionStrategy} uses long-press
+   * (~1s) + drag on touch, and click-drag or two clicks on mouse.
    *
    * @param options - Box prompt options controlling corner messages, preview behavior, and keywords
    * @returns A prompt result containing the final 2D box, cancel status, or keyword
    */
   async getBox(options: AcEdPromptBoxOptions): Promise<AcEdPromptBoxResult> {
     return this.executePrompt(
-      async () => {
-        // Get first point
-        const message1 =
-          options.firstCornerMessage ||
-          AcApI18n.t('main.inputManager.firstCorner')
-        const options1 = new AcEdPromptPointOptions(message1)
-        this.copyKeywords(options, options1)
-        options1.useDashedLine = options.useDashedLine
-        options1.useBasePoint = options.useBasePoint
-        options1.disableOSnap = options.disableOSnap
-        const p1Result = await this.getPoint(options1)
-        if (p1Result.status !== AcEdPromptStatus.OK) {
-          return new AcEdPromptBoxResult(
-            p1Result.status,
-            undefined,
-            p1Result.stringResult
-          )
-        }
-        const p1 = p1Result.value!
-        const cwcsP1 = this.view.worldToScreen(p1)
-
-        // Create preview rectangle
-        const previewEl = document.createElement('div')
-        previewEl.className = 'ml-jig-preview-rect'
-        this.view.container.appendChild(previewEl)
-
-        const cleanup = () => {
-          previewEl.remove()
-        }
-
-        const drawPreview = (pos: AcGePoint2dLike) => {
-          const cwcsP2 = this.view.worldToScreen(pos)
-          const left = Math.min(cwcsP2.x, cwcsP1.x)
-          const top = Math.min(cwcsP2.y, cwcsP1.y)
-          const width = Math.abs(cwcsP2.x - cwcsP1.x)
-          const height = Math.abs(cwcsP2.y - cwcsP1.y)
-
-          Object.assign(previewEl.style, {
-            left: `${left}px`,
-            top: `${top}px`,
-            width: `${width}px`,
-            height: `${height}px`
-          })
-        }
-
-        // Second point
-        const message2 =
-          options.secondCornerMessage ||
-          AcApI18n.t('main.inputManager.secondCorner')
-        const options2 = new AcEdPromptPointOptions(message2)
-        this.copyKeywords(options, options2)
-        options2.useDashedLine = options.useDashedLine
-        options2.useBasePoint = options.useBasePoint
-        options2.disableOSnap = options.disableOSnap
-        const p2 = await this.getPointInternal(options2, cleanup, drawPreview)
-
-        const box = new AcGeBox2d().expandByPoint(p1).expandByPoint(p2)
-        return new AcEdPromptBoxResult(AcEdPromptStatus.OK, box)
-      },
+      () =>
+        acedInteractionStrategy().acquireBox(
+          {
+            acquireTwoPointBox: opts => this.getBoxViaTwoPoints(opts),
+            acquireHoldDragBox: opts => this.getBoxViaHoldDrag(opts)
+          },
+          options
+        ),
       value => value,
       status => new AcEdPromptBoxResult(status)
     )
+  }
+
+  /**
+   * Desktop / two-click box acquisition used by {@link getBox}.
+   */
+  private async getBoxViaTwoPoints(
+    options: AcEdPromptBoxOptions
+  ): Promise<AcEdPromptBoxResult> {
+    const message1 =
+      options.firstCornerMessage || AcApI18n.t('main.inputManager.firstCorner')
+    const options1 = new AcEdPromptPointOptions(message1)
+    this.copyKeywords(options, options1)
+    options1.useDashedLine = options.useDashedLine
+    options1.useBasePoint = options.useBasePoint
+    options1.disableOSnap = options.disableOSnap
+    options1.allowNone = options.allowNone
+    const p1Result = await this.getPoint(options1)
+    if (p1Result.status !== AcEdPromptStatus.OK) {
+      return new AcEdPromptBoxResult(
+        p1Result.status,
+        undefined,
+        p1Result.stringResult
+      )
+    }
+    const p1 = p1Result.value!
+    const cwcsP1 = this.view.worldToScreen(p1)
+
+    const previewEl = document.createElement('div')
+    previewEl.className = 'ml-jig-preview-rect'
+    this.view.container.appendChild(previewEl)
+
+    const cleanup = () => {
+      previewEl.remove()
+    }
+
+    const drawPreview = (pos: AcGePoint2dLike) => {
+      const cwcsP2 = this.view.worldToScreen(pos)
+      const left = Math.min(cwcsP2.x, cwcsP1.x)
+      const top = Math.min(cwcsP2.y, cwcsP1.y)
+      const width = Math.abs(cwcsP2.x - cwcsP1.x)
+      const height = Math.abs(cwcsP2.y - cwcsP1.y)
+
+      Object.assign(previewEl.style, {
+        left: `${left}px`,
+        top: `${top}px`,
+        width: `${width}px`,
+        height: `${height}px`
+      })
+    }
+
+    const message2 =
+      options.secondCornerMessage ||
+      AcApI18n.t('main.inputManager.secondCorner')
+    const options2 = new AcEdPromptPointOptions(message2)
+    this.copyKeywords(options, options2)
+    options2.useDashedLine = options.useDashedLine
+    options2.useBasePoint = options.useBasePoint
+    options2.disableOSnap = options.disableOSnap
+    const p2 = await this.getPointInternal(options2, cleanup, drawPreview)
+
+    const box = new AcGeBox2d().expandByPoint(p1).expandByPoint(p2)
+    return new AcEdPromptBoxResult(AcEdPromptStatus.OK, box)
+  }
+
+  /**
+   * Phone/pad box acquisition: long-press locks corner 1, drag, release for
+   * corner 2. Mouse still works via click-drag or two clicks.
+   * Preview uses window/crossing styles by drag direction.
+   */
+  private getBoxViaHoldDrag(
+    options: AcEdPromptBoxOptions
+  ): Promise<AcEdPromptBoxResult> {
+    return new Promise<AcEdPromptBoxResult>((resolve, reject) => {
+      this.active = true
+      const message =
+        options.firstCornerMessage ||
+        AcApI18n.t('main.inputManager.firstCorner')
+      const keywordSession = this.startKeywordSession(options, true)
+      if (!keywordSession) {
+        this._commandLine.setPrompt(message)
+      }
+
+      const floatingMessage = new AcEdFloatingMessage(this.view, {
+        parent: this.view.canvas,
+        message
+      })
+
+      let startWcs: AcGePoint2dLike | null = null
+      let startCanvas: AcGePoint2dLike | null = null
+      let previewEl: HTMLDivElement | null = null
+      let settled = false
+      let disposeGesture: (() => void) | null = null
+      let firstCornerLocked = false
+      let lastMouse: { clientX: number; clientY: number } | null = null
+
+      const clearPreview = () => {
+        previewEl?.remove()
+        previewEl = null
+      }
+
+      const resetBox = () => {
+        clearPreview()
+        startWcs = null
+        startCanvas = null
+        firstCornerLocked = false
+        lastMouse = null
+      }
+
+      const clientToCanvas = (clientX: number, clientY: number) =>
+        this.view.viewportToCanvas({ x: clientX, y: clientY })
+
+      const updatePreview = (clientX: number, clientY: number) => {
+        if (!startWcs || !previewEl || !startCanvas) return
+        const curCanvas = clientToCanvas(clientX, clientY)
+        const curWcs = this.view.screenToWorld(curCanvas)
+        const p1 = this.view.worldToScreen(startWcs)
+        const p2 = this.view.worldToScreen(curWcs)
+        const mode = this.view.getSelectionMode(startCanvas, curCanvas)
+        const style = this.view.getSelectionPreviewStyle(mode, 'add')
+        Object.assign(previewEl.style, {
+          left: `${Math.min(p1.x, p2.x)}px`,
+          top: `${Math.min(p1.y, p2.y)}px`,
+          width: `${Math.abs(p1.x - p2.x)}px`,
+          height: `${Math.abs(p1.y - p2.y)}px`,
+          borderStyle: style.borderStyle,
+          background: style.background
+        })
+        previewEl.style.setProperty('--line-color', style.lineColor)
+      }
+
+      const beginPreview = (clientX: number, clientY: number) => {
+        const canvas = clientToCanvas(clientX, clientY)
+        startCanvas = canvas
+        startWcs = this.view.screenToWorld(canvas)
+        firstCornerLocked = false
+        lastMouse = { clientX, clientY }
+        clearPreview()
+        previewEl = document.createElement('div')
+        previewEl.className = 'ml-jig-preview-rect'
+        this.view.container.appendChild(previewEl)
+        updatePreview(clientX, clientY)
+      }
+
+      const commitBoxIfMoved = (clientX: number, clientY: number) => {
+        if (!startWcs || !startCanvas) return false
+        const endCanvas = clientToCanvas(clientX, clientY)
+        if (this.view.isSelectionClick(startCanvas, endCanvas)) return false
+        const endWcs = this.view.screenToWorld(endCanvas)
+        const box = new AcGeBox2d()
+          .expandByPoint(startWcs)
+          .expandByPoint(endWcs)
+        cleanup()
+        resolve(new AcEdPromptBoxResult(AcEdPromptStatus.OK, box))
+        return true
+      }
+
+      const rejector = (err?: Error) => {
+        cleanup()
+        reject(err ?? new Error('cancelled'))
+      }
+
+      const cleanup = () => {
+        if (settled) return
+        settled = true
+        this.active = false
+        if (this._activeRejector === rejector) {
+          this._activeRejector = null
+        }
+        disposeGesture?.()
+        disposeGesture = null
+        resetBox()
+        floatingMessage.dispose()
+        keywordSession?.cancel()
+        this._commandLine.clear()
+        this.endMobilePrompt()
+        this.view.setNavigationEnabled(true)
+        document.removeEventListener('keydown', keyHandler)
+        this.view.canvas.removeEventListener('mousedown', mouseDown)
+        this.view.canvas.removeEventListener('mousemove', mouseMove)
+        this.view.canvas.removeEventListener('mouseup', mouseUp)
+        this.view.canvas.removeEventListener('contextmenu', contextMenuHandler)
+        this.view.events.viewChanged.removeEventListener(onViewChanged)
+        this.view.events.viewResize.removeEventListener(onViewChanged)
+      }
+      this._activeRejector = rejector
+
+      this.beginMobilePrompt({
+        prompt: options.getDisplayMessage(),
+        keywords: this.mobileKeywordChips(options),
+        allowNone: options.allowNone,
+        showMetrics: false,
+        onConfirm: () => {
+          if (options.allowNone) {
+            cleanup()
+            resolve(new AcEdPromptBoxResult(AcEdPromptStatus.None))
+          }
+        },
+        onCancel: () => rejector(),
+        onKeyword: globalName => {
+          rejector(new AcEdKeywordInputError(globalName))
+        }
+      })
+
+      keywordSession?.promise.then(keyword => {
+        if (settled) return
+        if (!keyword) {
+          rejector()
+          return
+        }
+        rejector(new AcEdKeywordInputError(keyword))
+      })
+
+      const keyHandler = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          rejector()
+          return
+        }
+        if (e.key === 'Enter' && options.allowNone) {
+          cleanup()
+          resolve(new AcEdPromptBoxResult(AcEdPromptStatus.None))
+        }
+      }
+      document.addEventListener('keydown', keyHandler)
+
+      const contextMenuHandler = (e: MouseEvent) => {
+        if (this.shouldUseRightClickEnter()) {
+          e.preventDefault()
+        }
+      }
+
+      const isCompatMouse = (e: MouseEvent) =>
+        acedIsTouchDerivedMouseEvent(e) || acedShouldIgnoreCompatMouse()
+
+      const mouseDown = (e: MouseEvent) => {
+        if (e.button === 2) {
+          if (this.shouldUseRightClickEnter() && options.allowNone) {
+            e.preventDefault()
+            cleanup()
+            resolve(new AcEdPromptBoxResult(AcEdPromptStatus.None))
+          }
+          return
+        }
+        if (e.button !== 0) return
+        if (isCompatMouse(e)) return
+        if (firstCornerLocked) return
+        this.view.setNavigationEnabled(false)
+        beginPreview(e.clientX, e.clientY)
+      }
+
+      const mouseMove = (e: MouseEvent) => {
+        if (!startWcs || !previewEl || !startCanvas) return
+        if (isCompatMouse(e)) return
+        if (e.buttons !== 1 && !firstCornerLocked) return
+        lastMouse = { clientX: e.clientX, clientY: e.clientY }
+        updatePreview(e.clientX, e.clientY)
+      }
+
+      const mouseUp = (e: MouseEvent) => {
+        if (e.button !== 0) return
+        if (!startWcs || !startCanvas) return
+        if (isCompatMouse(e)) return
+        if (commitBoxIfMoved(e.clientX, e.clientY)) return
+        firstCornerLocked = true
+      }
+
+      const onViewChanged = () => {
+        if (lastMouse && startWcs && previewEl) {
+          updatePreview(lastMouse.clientX, lastMouse.clientY)
+        }
+      }
+
+      disposeGesture = acedAttachMobileBoxGesture({
+        element: this.view.canvas,
+        setNavigationEnabled: enabled => {
+          this.view.setNavigationEnabled(enabled)
+        },
+        onActivate: (clientX, clientY) => {
+          beginPreview(clientX, clientY)
+          lastMouse = null
+          updatePreview(clientX, clientY)
+        },
+        onMove: (clientX, clientY) => {
+          updatePreview(clientX, clientY)
+        },
+        onBoxEnd: (clientX, clientY, moved) => {
+          if (!startWcs || !startCanvas) return
+          if (!moved) {
+            resetBox()
+            return
+          }
+          commitBoxIfMoved(clientX, clientY)
+        },
+        onAbort: () => {
+          resetBox()
+        }
+      })
+
+      this.view.canvas.addEventListener('mousedown', mouseDown)
+      this.view.canvas.addEventListener('mousemove', mouseMove)
+      this.view.canvas.addEventListener('mouseup', mouseUp)
+      this.view.canvas.addEventListener('contextmenu', contextMenuHandler)
+      this.view.events.viewChanged.addEventListener(onViewChanged)
+      this.view.events.viewResize.addEventListener(onViewChanged)
+    })
   }
 
   /**
@@ -1545,8 +2260,14 @@ export class AcEdInputManager {
     const scriptedValue = this.tryGetScriptedPoint(options)
     if (scriptedValue != null) {
       cleanup?.()
-      return Promise.resolve(scriptedValue)
+      // Record for later interactive prompts in the same command; no DOM yet.
+      this.recordConfirmedPointMarkIfNeeded(options, scriptedValue)
+      return scriptedValue
     }
+
+    // Show marks for points confirmed earlier in this command while picking
+    // the next one (avoids a flash when the command ends after a single pick).
+    this.showConfirmedPointMarksIfAny()
 
     const getDynamicValue = (pos: AcGePoint2dLike) => {
       return {
@@ -1559,7 +2280,7 @@ export class AcEdInputManager {
     }
 
     const handler = new AcEdPointHandler(options)
-    return this.makeFloatingInputPromise<AcGePoint3dLike>({
+    const value = await this.makeFloatingInputPromise<AcGePoint3dLike>({
       inputCount: 2,
       promptOptions: options,
       disableOSnap: options.disableOSnap,
@@ -1568,6 +2289,59 @@ export class AcEdInputManager {
       getDynamicValue,
       drawPreview
     })
+    this.recordConfirmedPointMarkIfNeeded(options, value)
+    return value
+  }
+
+  /**
+   * Whether a confirmed-point plus mark should be tracked for this prompt.
+   *
+   * Explicit {@link AcEdPromptPointOptions.showConfirmedPointMark} overrides
+   * the phone/pad default.
+   */
+  private shouldShowConfirmedPointMark(
+    options: AcEdPromptPointOptions
+  ): boolean {
+    const override = options.showConfirmedPointMark
+    if (override !== undefined) return override
+    return acedInteractionStrategy().point.showsConfirmedPointMarks
+  }
+
+  /**
+   * Records a confirmed pick for later display when enabled for the prompt.
+   * DOM marks are deferred until {@link showConfirmedPointMarksIfAny}.
+   */
+  private recordConfirmedPointMarkIfNeeded(
+    options: AcEdPromptPointOptions,
+    point: AcGePoint3dLike
+  ): void {
+    if (!this.shouldShowConfirmedPointMark(options)) return
+    this._confirmedPointPositions.push({ x: point.x, y: point.y })
+  }
+
+  /**
+   * Renders plus marks for points already confirmed in this command.
+   * Called at the start of an interactive {@link getPointInternal}.
+   */
+  private showConfirmedPointMarksIfAny(): void {
+    if (this._confirmedPointPositions.length === 0) return
+    this._confirmedPointMarks ??= new AcEdMarkerManager(this.view)
+    this._confirmedPointMarks.setHintMarkers(
+      this._confirmedPointPositions,
+      'plus'
+    )
+  }
+
+  /** Repositions confirmed-point marks after pan/zoom. */
+  private repositionConfirmedPointMarks(): void {
+    this._confirmedPointMarks?.repositionHints()
+  }
+
+  /** Clears all confirmed-point plus marks for the finished command. */
+  private clearConfirmedPointMarks(): void {
+    this._confirmedPointMarks?.clear()
+    this._confirmedPointMarks = null
+    this._confirmedPointPositions = []
   }
 
   /**
@@ -1836,7 +2610,7 @@ export class AcEdInputManager {
     const baseAngle = hasBaseAngle ? (options.baseAngle as number) : undefined
 
     return {
-      message: options.message,
+      message: options.getDisplayMessage(),
       jig: options.jig,
       basePoint,
       useBasePoint,
@@ -1870,6 +2644,11 @@ export class AcEdInputManager {
     drawPreview?: AcEdFloatingInputDrawPreviewCallback
     onCommit?: AcEdFloatingInputCommitCallback<T>
     onFloatingInputCreated?: (input: AcEdFloatingInput<T>) => void
+    showMetrics?: boolean
+    /** Session-panel text field instead of X/Y metrics (mobile string prompts). */
+    showStringInput?: boolean
+    /** When false, canvas pick does not commit (string prompts). */
+    allowPickCommit?: boolean
   }): Promise<T> {
     return new Promise<T>((resolve, reject) => {
       this.active = true
@@ -1907,6 +2686,25 @@ export class AcEdInputManager {
       const defaultBehavior = this.resolvePromptDefaultValue(
         options.promptOptions
       )
+      const showStringInput =
+        options.showStringInput === true &&
+        acedInteractionStrategy().point.usesSessionChrome
+      const showMetrics = showStringInput
+        ? false
+        : (options.showMetrics ??
+          (options.inputCount === 2 || basePoint != null))
+      const allowPickCommit = options.allowPickCommit !== false
+
+      const getDynamicValue: AcEdFloatingInputDynamicValueCallback<T> = pos => {
+        if (!showStringInput) {
+          this.pushMobileMetrics(
+            pos,
+            basePoint ?? floatingInput.sessionBasePoint
+          )
+        }
+        return options.getDynamicValue(pos)
+      }
+
       const floatingInput = new AcEdFloatingInput(this.view, {
         parent: this.view.canvas,
         inputCount: options.inputCount,
@@ -1920,8 +2718,9 @@ export class AcEdInputManager {
         allowNone,
         useDefaultValue: defaultBehavior.useDefaultValue,
         defaultValue: defaultBehavior.defaultValue,
+        allowPickCommit,
         validate: validate,
-        getDynamicValue: options.getDynamicValue,
+        getDynamicValue,
         drawPreview: (pos: AcGePoint2dLike) => {
           if (promptDefaults.jig) {
             const defaults = options.getDynamicValue(pos)
@@ -1953,6 +2752,9 @@ export class AcEdInputManager {
         settled = true
         this.active = false
         this.entitySelectionActive = false
+        if (this._activeRejector === rejector) {
+          this._activeRejector = null
+        }
         options.cleanup?.()
         promptDefaults.jig?.end()
         document.removeEventListener('keydown', escHandler)
@@ -1962,6 +2764,7 @@ export class AcEdInputManager {
         floatingInput.dispose()
         promptInputSession.cancel()
         this._commandLine.clear()
+        this.endMobilePrompt()
       }
 
       const resolver = (value: T) => {
@@ -1974,6 +2777,8 @@ export class AcEdInputManager {
         reject(err ?? new Error('cancelled'))
       }
 
+      this._activeRejector = rejector
+
       const noneRejector = () => {
         rejector(new AcEdNoneInputError())
       }
@@ -1981,6 +2786,45 @@ export class AcEdInputManager {
       const keywordRejector = (keyword: string) => {
         rejector(new AcEdKeywordInputError(keyword))
       }
+
+      const commitMobileString = () => {
+        const raw = this._mobileChrome.getStringValue()
+        if (!raw.trim() && defaultBehavior.useDefaultValue) {
+          resolver(defaultBehavior.defaultValue as T)
+          return
+        }
+        const parsed = options.handler.parse(raw)
+        if (parsed != null) {
+          resolver(parsed)
+          return
+        }
+        // Invalid: keep the session open and refocus the field.
+        this._mobileChrome.focusStringInput()
+      }
+
+      this.beginMobilePrompt({
+        prompt: options.promptOptions.getDisplayMessage(),
+        keywords: this.mobileKeywordChips(
+          options.promptOptions as AcEdPromptOptions<unknown>
+        ),
+        allowNone,
+        showMetrics,
+        showStringInput,
+        stringValue:
+          showStringInput && defaultBehavior.useDefaultValue
+            ? String(defaultBehavior.defaultValue ?? '')
+            : undefined,
+        touchPointTutorial: !showStringInput,
+        onConfirm: () => {
+          if (showStringInput) {
+            commitMobileString()
+          } else {
+            noneRejector()
+          }
+        },
+        onCancel: () => rejector(),
+        onKeyword: keywordRejector
+      })
 
       const escHandler = (e: KeyboardEvent) => {
         if (e.key === 'Escape') {
@@ -1995,6 +2839,16 @@ export class AcEdInputManager {
         }
       }
       const contextMenuHandler = (e: MouseEvent) => {
+        // Phone long-press synthesizes contextmenu while the snap loupe is
+        // opening. That is not right-click Enter — swallowing it would
+        // cancel the measure / point prompt as soon as the loupe appears.
+        if (
+          acedIsTouchLongPressContextMenu(e) ||
+          acedInteractionStrategy().point.swallowsPromptContextMenu
+        ) {
+          e.preventDefault()
+          return
+        }
         if (!this.shouldUseRightClickEnter()) return
         e.preventDefault()
         noneRejector()
@@ -2004,7 +2858,14 @@ export class AcEdInputManager {
       document.addEventListener('keyup', modifierHandler)
       this.view.canvas.addEventListener('contextmenu', contextMenuHandler)
       // showAt() expects viewport coordinates; curMousePos is canvas-local.
-      floatingInput.showAt(this.view.canvasToViewport(this.view.curMousePos))
+      // On touch, skip the dummy canvas-(0,0) seed until a real pointer sample.
+      // Also skip leftover finger coords after a touch pick — those seed a
+      // short jig segment on the next measure-distance prompt.
+      if (this.view.hasCursorPos && !acedShouldIgnoreCompatMouse()) {
+        floatingInput.showAt(this.view.canvasToViewport(this.view.curMousePos))
+      } else {
+        floatingInput.showAt({ x: 0, y: 0 })
+      }
 
       promptInputSession.promise.then(result => {
         if (settled) return

@@ -1,5 +1,12 @@
-import { strFromU8, strToU8 } from 'fflate'
+import { strFromU8 } from 'fflate'
 
+import { readLineBatch, readMeshBatch, writeLineBatch, writeMeshBatch } from './AcExBatchBinaryCodec'
+import { AcExBinaryReader, AcExBinaryWriter } from './AcExBinaryIO'
+import {
+  ACEO_OSNAP_MAGIC,
+  decodeOsnapCatalogBinary,
+  encodeOsnapCatalogBinary
+} from './AcExOsnapCatalogCodec'
 import {
   ACEX_SNAPSHOT_VERSION,
   type AcExLayoutSnapshot,
@@ -10,23 +17,12 @@ import {
 
 const MAGIC = 0x58454341 // 'ACEX' little-endian
 
-const F_LINE_INDICES = 1
-const F_LINE_PATTERN = 2
-const F_LINE_DISTANCES = 4
-const F_LINE_WIDTH = 8
-
-const F_MESH_INDICES = 1
-const F_MESH_HATCH = 2
-const F_MESH_GRADIENT_FILL = 4
-const F_MESH_GRADIENT_POS = 8
-const F_MESH_SIDE = 16
-const F_MESH_POINTS = 32
-
 /**
  * Serializes a snapshot to a compact binary byte array.
  *
  * Metadata and small JSON-friendly fields are length-prefixed UTF-8 JSON;
  * geometry buffers are stored as raw {@link Float32Array} / {@link Uint32Array} bytes.
+ * Layout OSNAP catalogs use uncompressed ACEO (same schema as package sidecars).
  *
  * @param snapshot - Snapshot to encode; {@link AcExSnapshot.version} must match
  *   {@link ACEX_SNAPSHOT_VERSION}.
@@ -36,14 +32,16 @@ export function encodeSnapshotBinary(snapshot: AcExSnapshot): Uint8Array {
     throw new Error(`Unsupported snapshot version: ${snapshot.version}`)
   }
 
-  const writer = new BinaryWriter()
+  const writer = new AcExBinaryWriter()
   writer.writeU32(MAGIC)
   writer.writeU8(ACEX_SNAPSHOT_VERSION)
   writer.writeU8(0)
   writer.writeU8(0)
   writer.writeU8(0)
 
-  writer.writeJson(snapshot.meta)
+  // Keep the viewport JSON slot as a bare array/null (v4 wire shape) so older
+  // runtimes keep paper-space scissors. Carry saved views in meta instead.
+  writer.writeJson(metaWithSavedViews(snapshot))
   writer.writeJson(snapshot.layers)
   writer.writeString(snapshot.activeLayoutBtrId)
   writer.writeU32(snapshot.layouts.length)
@@ -59,7 +57,7 @@ export function encodeSnapshotBinary(snapshot: AcExSnapshot): Uint8Array {
  * Parses a binary snapshot byte array produced by {@link encodeSnapshotBinary}.
  */
 export function decodeSnapshotBinary(bytes: Uint8Array): AcExSnapshot {
-  const reader = new BinaryReader(bytes)
+  const reader = new AcExBinaryReader(bytes)
   const magic = reader.readU32()
   if (magic !== MAGIC) {
     throw new Error('Invalid snapshot magic')
@@ -73,7 +71,7 @@ export function decodeSnapshotBinary(bytes: Uint8Array): AcExSnapshot {
     throw new Error(`Unsupported snapshot version: ${version}`)
   }
 
-  const meta = reader.readJson<AcExSnapshot['meta']>()
+  const meta = reader.readJson<AcExSnapshot['meta'] & { savedViews?: Record<string, AcExLayoutSnapshot['savedView']> }>()
   const layers = reader.readJson<AcExSnapshot['layers']>()
   const activeLayoutBtrId = reader.readString()
   const layoutCount = reader.readU32()
@@ -81,6 +79,7 @@ export function decodeSnapshotBinary(bytes: Uint8Array): AcExSnapshot {
   for (let i = 0; i < layoutCount; i++) {
     layouts.push(readLayout(reader))
   }
+  applySavedViewsFromMeta(layouts, meta.savedViews)
 
   return {
     version: ACEX_SNAPSHOT_VERSION,
@@ -91,11 +90,46 @@ export function decodeSnapshotBinary(bytes: Uint8Array): AcExSnapshot {
   }
 }
 
-function writeLayout(writer: BinaryWriter, layout: AcExLayoutSnapshot): void {
+function metaWithSavedViews(snapshot: AcExSnapshot): AcExSnapshot['meta'] {
+  const savedViews: NonNullable<AcExSnapshot['meta']['savedViews']> = {
+    ...(snapshot.meta.savedViews ?? {})
+  }
+  for (const layout of snapshot.layouts) {
+    if (layout.savedView) {
+      savedViews[layout.btrId] = layout.savedView
+    }
+  }
+  if (Object.keys(savedViews).length === 0) {
+    if (snapshot.meta.savedViews == null) {
+      return snapshot.meta
+    }
+    const { savedViews: _omit, ...rest } = snapshot.meta
+    return rest
+  }
+  return { ...snapshot.meta, savedViews }
+}
+
+function applySavedViewsFromMeta(
+  layouts: AcExLayoutSnapshot[],
+  savedViews: Record<string, AcExLayoutSnapshot['savedView']> | undefined
+): void {
+  if (!savedViews) return
+  for (const layout of layouts) {
+    if (layout.savedView) continue
+    const saved = savedViews[layout.btrId]
+    if (saved) {
+      layout.savedView = saved
+    }
+  }
+}
+
+function writeLayout(writer: AcExBinaryWriter, layout: AcExLayoutSnapshot): void {
   writer.writeString(layout.btrId)
   writer.writeString(layout.name)
   writer.writeU8(layout.isModelSpace ? 1 : 0)
-  writer.writeJson(layout.osnap ?? null)
+  writeLayoutOsnap(writer, layout.osnap)
+  // Bare array/null — must stay v4-compatible with older viewer runtimes.
+  writer.writeJson(layout.viewports ?? null)
 
   writer.writeU32(layout.lineBatches.length)
   for (const batch of layout.lineBatches) {
@@ -108,12 +142,27 @@ function writeLayout(writer: BinaryWriter, layout: AcExLayoutSnapshot): void {
   }
 }
 
-function readLayout(reader: BinaryReader): AcExLayoutSnapshot {
+function writeLayoutOsnap(
+  writer: AcExBinaryWriter,
+  osnap: AcExLayoutSnapshot['osnap']
+): void {
+  if (!osnap || osnap.primitives.length === 0) {
+    writer.writeU32(0)
+    return
+  }
+  const bytes = encodeOsnapCatalogBinary(osnap)
+  writer.writeU32(bytes.length)
+  writer.writeBytes(bytes)
+}
+
+function readLayout(reader: AcExBinaryReader): AcExLayoutSnapshot {
   const btrId = reader.readString()
   const name = reader.readString()
   const isModelSpace = reader.readU8() !== 0
-  const osnapValue = reader.readJson<AcExLayoutSnapshot['osnap'] | null>()
-  const osnap = osnapValue ?? undefined
+  const osnap = readLayoutOsnap(reader)
+  // Accept bare arrays/null (current) and a short-lived object form that also
+  // nested savedView beside viewports during development of this feature.
+  const viewports = readLayoutViewports(reader.readJson<unknown>())
 
   const lineBatchCount = reader.readU32()
   const lineBatches: AcExLineBatch[] = []
@@ -127,302 +176,65 @@ function readLayout(reader: BinaryReader): AcExLayoutSnapshot {
     meshBatches.push(readMeshBatch(reader))
   }
 
-  return { btrId, name, isModelSpace, lineBatches, meshBatches, osnap }
-}
-
-function writeLineBatch(writer: BinaryWriter, batch: AcExLineBatch): void {
-  writer.writeString(batch.layer)
-  writer.writeU32(batch.color >>> 0)
-  writer.writeF64(batch.offset[0]!)
-  writer.writeF64(batch.offset[1]!)
-  writer.writeF64(batch.offset[2]!)
-  writer.writeFloat32Array(batch.positions)
-
-  let flags = 0
-  if (batch.indices && batch.indices.length > 0) flags |= F_LINE_INDICES
-  if (batch.linePattern) flags |= F_LINE_PATTERN
-  if (batch.lineDistances && batch.lineDistances.length > 0) {
-    flags |= F_LINE_DISTANCES
-  }
-  if (batch.lineWidth != null && batch.lineWidth > 0) {
-    flags |= F_LINE_WIDTH
-  }
-  writer.writeU8(flags)
-
-  if (flags & F_LINE_INDICES) {
-    writer.writeUint32Array(batch.indices!)
-  }
-  if (flags & F_LINE_PATTERN) {
-    writer.writeJson(batch.linePattern!)
-  }
-  if (flags & F_LINE_DISTANCES) {
-    writer.writeFloat32Array(batch.lineDistances!)
-  }
-  if (flags & F_LINE_WIDTH) {
-    writer.writeF32(batch.lineWidth!)
+  return {
+    btrId,
+    name,
+    isModelSpace,
+    lineBatches,
+    meshBatches,
+    osnap,
+    viewports
   }
 }
 
-function readLineBatch(reader: BinaryReader): AcExLineBatch {
-  const layer = reader.readString()
-  const color = reader.readU32()
-  const offset: [number, number, number] = [
-    reader.readF64(),
-    reader.readF64(),
-    reader.readF64()
-  ]
-  const positions = reader.readFloat32Array()
-  const flags = reader.readU8()
-
-  const batch: AcExLineBatch = { layer, color, offset, positions }
-  if (flags & F_LINE_INDICES) {
-    batch.indices = reader.readUint32Array()
+/**
+ * Accepts legacy/current bare viewport arrays/null and an object `{ viewports }`
+ * form so mismatched mid-development snapshots still decode.
+ */
+function readLayoutViewports(raw: unknown): AcExLayoutSnapshot['viewports'] {
+  if (raw == null) {
+    return undefined
   }
-  if (flags & F_LINE_PATTERN) {
-    batch.linePattern =
-      reader.readJson<NonNullable<AcExLineBatch['linePattern']>>()
+  if (Array.isArray(raw)) {
+    return raw as AcExLayoutSnapshot['viewports']
   }
-  if (flags & F_LINE_DISTANCES) {
-    batch.lineDistances = reader.readFloat32Array()
-  }
-  if (flags & F_LINE_WIDTH) {
-    batch.lineWidth = reader.readF32()
-  }
-  return batch
-}
-
-function writeMeshBatch(writer: BinaryWriter, batch: AcExMeshBatch): void {
-  writer.writeString(batch.layer)
-  writer.writeU32(batch.color >>> 0)
-  writer.writeF64(batch.offset[0]!)
-  writer.writeF64(batch.offset[1]!)
-  writer.writeF64(batch.offset[2]!)
-  writer.writeFloat32Array(batch.positions)
-
-  let flags = 0
-  if (batch.indices && batch.indices.length > 0) flags |= F_MESH_INDICES
-  if (batch.hatchPattern) flags |= F_MESH_HATCH
-  if (batch.gradientFill) flags |= F_MESH_GRADIENT_FILL
-  if (batch.gradientPositions && batch.gradientPositions.length > 0) {
-    flags |= F_MESH_GRADIENT_POS
-  }
-  if (batch.side != null) flags |= F_MESH_SIDE
-  if (batch.points) flags |= F_MESH_POINTS
-  writer.writeU8(flags)
-
-  if (flags & F_MESH_INDICES) {
-    writer.writeUint32Array(batch.indices!)
-  }
-  if (flags & F_MESH_HATCH) {
-    writer.writeJson(batch.hatchPattern!)
-  }
-  if (flags & F_MESH_GRADIENT_FILL) {
-    writer.writeJson(batch.gradientFill!)
-  }
-  if (flags & F_MESH_GRADIENT_POS) {
-    writer.writeFloat32Array(batch.gradientPositions!)
-  }
-  if (flags & F_MESH_SIDE) {
-    writer.writeU8(batch.side!)
-  }
-}
-
-function readMeshBatch(reader: BinaryReader): AcExMeshBatch {
-  const layer = reader.readString()
-  const color = reader.readU32()
-  const offset: [number, number, number] = [
-    reader.readF64(),
-    reader.readF64(),
-    reader.readF64()
-  ]
-  const positions = reader.readFloat32Array()
-  const flags = reader.readU8()
-
-  const batch: AcExMeshBatch = { layer, color, offset, positions }
-  if (flags & F_MESH_INDICES) {
-    batch.indices = reader.readUint32Array()
-  }
-  if (flags & F_MESH_HATCH) {
-    batch.hatchPattern =
-      reader.readJson<NonNullable<AcExMeshBatch['hatchPattern']>>()
-  }
-  if (flags & F_MESH_GRADIENT_FILL) {
-    batch.gradientFill =
-      reader.readJson<NonNullable<AcExMeshBatch['gradientFill']>>()
-  }
-  if (flags & F_MESH_GRADIENT_POS) {
-    batch.gradientPositions = reader.readFloat32Array()
-  }
-  if (flags & F_MESH_SIDE) {
-    batch.side = reader.readU8()
-  }
-  if (flags & F_MESH_POINTS) {
-    batch.points = true
-  }
-  return batch
-}
-
-class BinaryWriter {
-  private readonly chunks: Uint8Array[] = []
-  private length = 0
-
-  writeU8(value: number): void {
-    const chunk = new Uint8Array(1)
-    chunk[0] = value & 0xff
-    this.chunks.push(chunk)
-    this.length += 1
-  }
-
-  writeU32(value: number): void {
-    const chunk = new Uint8Array(4)
-    new DataView(chunk.buffer).setUint32(0, value >>> 0, true)
-    this.chunks.push(chunk)
-    this.length += 4
-  }
-
-  writeF32(value: number): void {
-    const chunk = new Uint8Array(4)
-    new DataView(chunk.buffer).setFloat32(0, value, true)
-    this.chunks.push(chunk)
-    this.length += 4
-  }
-
-  writeF64(value: number): void {
-    const chunk = new Uint8Array(8)
-    new DataView(chunk.buffer).setFloat64(0, value, true)
-    this.chunks.push(chunk)
-    this.length += 8
-  }
-
-  writeBytes(bytes: Uint8Array): void {
-    this.chunks.push(bytes)
-    this.length += bytes.length
-  }
-
-  writeString(value: string): void {
-    const bytes = strToU8(value)
-    this.writeU32(bytes.length)
-    this.writeBytes(bytes)
-  }
-
-  writeJson(value: unknown): void {
-    this.writeString(JSON.stringify(value))
-  }
-
-  writeFloat32Array(array: Float32Array): void {
-    const bytes = new Uint8Array(
-      array.buffer,
-      array.byteOffset,
-      array.byteLength
-    )
-    this.writeU32(bytes.length)
-    this.writeBytes(bytes)
-  }
-
-  writeUint32Array(array: Uint32Array): void {
-    const bytes = new Uint8Array(
-      array.buffer,
-      array.byteOffset,
-      array.byteLength
-    )
-    this.writeU32(bytes.length)
-    this.writeBytes(bytes)
-  }
-
-  toUint8Array(): Uint8Array {
-    const result = new Uint8Array(this.length)
-    let offset = 0
-    for (const chunk of this.chunks) {
-      result.set(chunk, offset)
-      offset += chunk.length
+  if (typeof raw === 'object') {
+    const record = raw as {
+      viewports?: AcExLayoutSnapshot['viewports'] | null
     }
-    return result
+    return record.viewports ?? undefined
   }
+  return undefined
 }
 
-class BinaryReader {
-  private offset = 0
-
-  constructor(private readonly bytes: Uint8Array) {}
-
-  readU8(): number {
-    return this.bytes[this.offset++]!
+/**
+ * Reads a layout OSNAP payload: ACEO bytes, empty, or legacy UTF-8 JSON.
+ */
+function readLayoutOsnap(
+  reader: AcExBinaryReader
+): AcExLayoutSnapshot['osnap'] {
+  const length = reader.readU32()
+  if (length === 0) {
+    return undefined
   }
-
-  readU32(): number {
-    const view = new DataView(
-      this.bytes.buffer,
-      this.bytes.byteOffset + this.offset,
-      4
-    )
-    const value = view.getUint32(0, true)
-    this.offset += 4
-    return value
+  const bytes = reader.readBytes(length)
+  if (isAceoPayload(bytes)) {
+    return decodeOsnapCatalogBinary(bytes)
   }
-
-  readF32(): number {
-    const view = new DataView(
-      this.bytes.buffer,
-      this.bytes.byteOffset + this.offset,
-      4
-    )
-    const value = view.getFloat32(0, true)
-    this.offset += 4
-    return value
+  // Legacy monolithic ACEX stored osnap as length-prefixed JSON (`null` / object).
+  const text = strFromU8(bytes)
+  if (text.length === 0 || text === 'null') {
+    return undefined
   }
+  return JSON.parse(text) as AcExLayoutSnapshot['osnap']
+}
 
-  readF64(): number {
-    const view = new DataView(
-      this.bytes.buffer,
-      this.bytes.byteOffset + this.offset,
-      8
-    )
-    const value = view.getFloat64(0, true)
-    this.offset += 8
-    return value
-  }
-
-  readBytes(length: number): Uint8Array {
-    const slice = this.bytes.subarray(this.offset, this.offset + length)
-    this.offset += length
-    return slice
-  }
-
-  readString(): string {
-    const length = this.readU32()
-    if (length === 0) {
-      return ''
-    }
-    return strFromU8(this.readBytes(length))
-  }
-
-  readJson<T>(): T {
-    const text = this.readString()
-    if (text.length === 0) {
-      throw new Error('Expected JSON payload')
-    }
-    return JSON.parse(text) as T
-  }
-
-  readFloat32Array(): Float32Array {
-    const byteLength = this.readU32()
-    if (byteLength === 0) {
-      return new Float32Array(0)
-    }
-    const bytes = this.readBytes(byteLength)
-    const buffer = new ArrayBuffer(byteLength)
-    new Uint8Array(buffer).set(bytes)
-    return new Float32Array(buffer)
-  }
-
-  readUint32Array(): Uint32Array {
-    const byteLength = this.readU32()
-    if (byteLength === 0) {
-      return new Uint32Array(0)
-    }
-    const bytes = this.readBytes(byteLength)
-    const buffer = new ArrayBuffer(byteLength)
-    new Uint8Array(buffer).set(bytes)
-    return new Uint32Array(buffer)
-  }
+function isAceoPayload(bytes: Uint8Array): boolean {
+  if (bytes.length < 4) return false
+  const magic =
+    bytes[0]! |
+    (bytes[1]! << 8) |
+    (bytes[2]! << 16) |
+    (bytes[3]! << 24)
+  return (magic >>> 0) === ACEO_OSNAP_MAGIC
 }

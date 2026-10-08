@@ -9,6 +9,8 @@ export class AcGiViewport {
   private _height: number
   private _width: number
   private _viewCenter: AcGePoint3d
+  private _viewTarget: AcGePoint3d
+  private _viewTwistAngle: number
   private _viewHeight: number
   private _number: number
   private _id: string
@@ -22,6 +24,8 @@ export class AcGiViewport {
     this._height = 0
     this._width = 0
     this._viewCenter = new AcGePoint3d()
+    this._viewTarget = new AcGePoint3d()
+    this._viewTwistAngle = 0
     this._viewHeight = 0
   }
 
@@ -109,6 +113,29 @@ export class AcGiViewport {
   }
 
   /**
+   * The view target in WCS coordinates (DXF group 17).
+   *
+   * Paper-space viewports store the model view center in DCS (`viewCenter`);
+   * the WCS center is `viewTarget + rotate(viewCenter, viewTwistAngle)`.
+   */
+  get viewTarget() {
+    return this._viewTarget
+  }
+  set viewTarget(value: AcGePoint3d) {
+    this._viewTarget.copy(value)
+  }
+
+  /**
+   * The view twist angle in radians (DXF group 51).
+   */
+  get viewTwistAngle() {
+    return this._viewTwistAngle
+  }
+  set viewTwistAngle(value: number) {
+    this._viewTwistAngle = value
+  }
+
+  /**
    * The height (in display coordinate system coordinates) of the Model Space view within the viewport.
    * Zooming the view out within the viewport increases this value and zooming in decreases this value.
    */
@@ -128,15 +155,52 @@ export class AcGiViewport {
   }
 
   /**
-   * The bounding box (in display coordinate system coordinates) of the Model Space view within the viewport.
+   * The bounding box of the Model Space view shown through this viewport,
+   * expressed in WCS coordinates.
+   *
+   * `viewCenter` is stored in DCS; AutoCAD maps it to WCS by rotating by
+   * `viewTwistAngle` and translating by `viewTarget` (same rule as
+   * `AcDbViewportTableRecord.modelViewBox` for the *ACTIVE VPORT).
    */
   get viewBox() {
+    const wcsCenter = AcGiViewport.dcsCenterToWcs(
+      this.viewCenter,
+      this.viewTarget,
+      this.viewTwistAngle
+    )
     const box = new AcGeBox2d()
-    box.setFromCenterAndSize(this.viewCenter, {
+    box.setFromCenterAndSize(wcsCenter, {
       x: this.viewWidth,
       y: this.viewHeight
     })
     return box
+  }
+
+  /**
+   * Maps a DCS view center to WCS using the viewport target and twist.
+   */
+  static dcsCenterToWcs(
+    center: AcGePoint3d,
+    target: AcGePoint3d,
+    twistAngle: number
+  ): AcGePoint3d {
+    let wcsCenterX = center.x
+    let wcsCenterY = center.y
+    if (Number.isFinite(twistAngle) && twistAngle !== 0) {
+      const cos = Math.cos(twistAngle)
+      const sin = Math.sin(twistAngle)
+      wcsCenterX = center.x * cos - center.y * sin
+      wcsCenterY = center.x * sin + center.y * cos
+    }
+    if (
+      target &&
+      Number.isFinite(target.x) &&
+      Number.isFinite(target.y)
+    ) {
+      wcsCenterX += target.x
+      wcsCenterY += target.y
+    }
+    return new AcGePoint3d(wcsCenterX, wcsCenterY, 0)
   }
 
   /**
@@ -152,6 +216,8 @@ export class AcGiViewport {
     viewport.height = this.height
     viewport.width = this.width
     viewport.viewCenter.copy(this.viewCenter)
+    viewport.viewTarget.copy(this.viewTarget)
+    viewport.viewTwistAngle = this.viewTwistAngle
     viewport.viewHeight = this.viewHeight
     return viewport
   }
@@ -169,6 +235,8 @@ export class AcGiViewport {
     this.height = viewport.height
     this.width = viewport.width
     this.viewCenter.copy(viewport.viewCenter)
+    this.viewTarget.copy(viewport.viewTarget)
+    this.viewTwistAngle = viewport.viewTwistAngle
     this.viewHeight = viewport.viewHeight
     return this
   }

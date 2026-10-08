@@ -1,11 +1,15 @@
-import { AcDbObjectId } from '@mlightcad/data-model'
+import { AcDbObjectId, AcGiSubEntityTraits } from '@mlightcad/data-model'
 import {
   AcTrBatchedGroup,
   AcTrBatchedGroupStats,
+  AcTrDirectEntityMeta,
   AcTrEntity,
-  AcTrPreviewSubsetOptions
+  AcTrPreviewSubsetOptions,
+  AcTrRenderer,
+  AcTrStyleManager
 } from '@mlightcad/three-renderer'
 import * as THREE from 'three'
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 
 import { AcEdLayerInfo } from '../editor'
 
@@ -135,13 +139,17 @@ export class AcTrLayer {
    */
   computeBatchBoundingBox(
     target = new THREE.Box3(),
-    excludeObjectIds?: ReadonlySet<string>
+    excludeObjectIds?: ReadonlySet<string>,
+    includeObjectIds?: ReadonlySet<string>
   ) {
     if (!this.visible) {
       target.makeEmpty()
       return target
     }
-    return this._group.computeBoundingBox(target, { excludeObjectIds })
+    return this._group.computeBoundingBox(target, {
+      excludeObjectIds,
+      includeObjectIds
+    })
   }
 
   get visible() {
@@ -196,11 +204,116 @@ export class AcTrLayer {
   }
 
   /**
+   * Refreshes drawable materials after a layer-table style change.
+   *
+   * Updates batched material ids when the style cache remaps instances, patches
+   * unbatched drawables, and rematerializes text glyph hierarchies.
+   *
+   * @param layerName - Target layer whose drawables should be refreshed.
+   * @param layerTraits - Resolved layer traits from the live layer-table record.
+   * @param materials - Style-cache material map, keyed by previous material id.
+   * @param renderer - Renderer used to rebind layer-bound materials.
+   */
+  syncAppearanceFromRecord(
+    layerName: string,
+    layerTraits: Partial<AcGiSubEntityTraits>,
+    materials: Record<number, THREE.Material>,
+    renderer: AcTrRenderer
+  ): void {
+    const needsIdPatch = Object.entries(materials).some(
+      ([oldId, material]) => material.id !== Number(oldId)
+    )
+
+    // Always push cache materials into batch containers. Batches own private
+    // material clones (highlight isolation); an in-place colour refresh on the
+    // style-manager cache (same material id) would otherwise leave clones stale
+    // after switchbg / ACI-7 foreground inversion.
+    for (const id in materials) {
+      const oldId = Number(id)
+      const material = materials[id]
+      this.updateMaterial(oldId, material)
+    }
+
+    this._group.syncAppearanceFromRecord(
+      layerName,
+      layerTraits,
+      materials,
+      needsIdPatch,
+      (material, boundLayerName, boundLayerTraits) =>
+        renderer.getLayerBoundMaterial(
+          material,
+          boundLayerName,
+          boundLayerTraits
+        ),
+      renderer.styleManager
+    )
+  }
+
+  /** Rebinds batched drawables whose materials follow live layer-table style. */
+  rebindMaterialsForLayer(
+    layerName: string,
+    layerTraits: Partial<AcGiSubEntityTraits>,
+    getLayerBoundMaterial: (
+      material: THREE.Material,
+      layerName: string,
+      layerTraits?: Partial<AcGiSubEntityTraits>
+    ) => THREE.Material | undefined,
+    styleManager?: AcTrStyleManager
+  ) {
+    this._group.rebindMaterialsForLayer(
+      layerName,
+      layerTraits,
+      getLayerBoundMaterial,
+      styleManager
+    )
+  }
+
+  /** Rematerializes MTEXT/TEXT drawables stored as unbatched glyph subtrees. */
+  rematerializeLayerTextDrawables(
+    layerName: string,
+    styleManager: AcTrStyleManager,
+    layerTraits?: Partial<AcGiSubEntityTraits>
+  ) {
+    this._group.rematerializeLayerTextDrawables(
+      layerName,
+      styleManager,
+      layerTraits
+    )
+  }
+
+  /**
    * Re-render points with latest point style settings
    * @param displayMode Input display mode of points
+   * @param displaySize Input display size of points (`PDSIZE`)
    */
-  rerenderPoints(displayMode: number) {
-    this._group.rerenderPoints(displayMode)
+  rerenderPoints(displayMode: number, displaySize: number = 0) {
+    this._group.rerenderPoints(displayMode, displaySize)
+  }
+
+  /**
+   * Collects world-space AABBs for point / point-symbol batch slots in this layer.
+   *
+   * @param out - Map of object id to world AABB; values are unioned across layers.
+   * @returns The same map instance passed in {@link out}.
+   */
+  collectPointObjectWorldBoxes(
+    out: Map<string, THREE.Box3> = new Map()
+  ): Map<string, THREE.Box3> {
+    return this._group.collectPointObjectWorldBoxes(out)
+  }
+
+  /**
+   * Applies ACI-7 / foreground colour to owned batch material clones in this layer.
+   */
+  repaintForegroundMaterials(color: number) {
+    this._group.repaintForegroundMaterials(color)
+  }
+
+  /**
+   * Updates wipeout / background-fill materials after a canvas theme flip.
+   */
+  repaintBackgroundMaterials(color: number) {
+    this._group.repaintBackgroundMaterials(color)
   }
 
   /**
@@ -231,10 +344,13 @@ export class AcTrLayer {
    * Builds a preview subset for entities stored in this layer group.
    *
    * @param entityIds - Database object ids to extract from this layer
-   * @param options - Optional preview style and slot limits
+   * @param options - Optional preview style, slot limits, and missing-entity policy
    * @returns Preview subset group, or `null` when extraction failed
    */
-  createPreviewSubset(entityIds: AcDbObjectId[], options?: AcTrPreviewSubsetOptions) {
+  createPreviewSubset(
+    entityIds: AcDbObjectId[],
+    options?: AcTrPreviewSubsetOptions
+  ) {
     return this._group.createPreviewSubset(entityIds, options)
   }
 
@@ -247,6 +363,53 @@ export class AcTrLayer {
   addEntity(entity: AcTrEntity, _extendBbox: boolean = true) {
     this._group.addEntity(entity)
     this._boxDirty = true
+  }
+
+  /**
+   * Appends pre-built geometry directly into the layer batch (line / point / mesh).
+   *
+   * @returns `true` when the geometry was registered in the batched group.
+   */
+  addDirectEntity(meta: AcTrDirectEntityMeta): boolean {
+    const options = {
+      objectId: meta.objectId,
+      visible: meta.visible,
+      position: meta.position
+    }
+    let appended = false
+    if (meta.kind === 'lineFat') {
+      appended = this._group.appendLine2Geometry(
+        meta.geometry as LineSegmentsGeometry,
+        meta.material,
+        meta.worldOffset,
+        options
+      )
+    } else if (meta.kind === 'lineBasic') {
+      appended = this._group.appendLineGeometry(
+        meta.geometry as THREE.BufferGeometry,
+        meta.material,
+        meta.worldOffset,
+        options
+      )
+    } else if (meta.kind === 'point') {
+      appended = this._group.appendPointGeometry(
+        meta.geometry as THREE.BufferGeometry,
+        meta.material,
+        meta.worldOffset,
+        options
+      )
+    } else if (meta.kind === 'mesh') {
+      appended = this._group.appendMeshGeometry(
+        meta.geometry as THREE.BufferGeometry,
+        meta.material,
+        meta.worldOffset,
+        options
+      )
+    }
+    if (appended) {
+      this._boxDirty = true
+    }
+    return appended
   }
 
   /**
@@ -308,35 +471,66 @@ export class AcTrLayer {
    * Hover the specified entities
    */
   hover(ids: AcDbObjectId[]) {
-    ids.forEach(id => {
-      this._group.hover(id)
-    })
+    if (ids.length === 0) {
+      return
+    }
+    if (ids.length === 1) {
+      this._group.hover(ids[0]!)
+      return
+    }
+    this._group.hoverMany(ids)
   }
 
   /**
    * Unhover the specified entities
    */
   unhover(ids: AcDbObjectId[]) {
-    ids.forEach(id => {
-      this._group.unhover(id)
-    })
+    if (ids.length === 0) {
+      return
+    }
+    if (ids.length === 1) {
+      this._group.unhover(ids[0]!)
+      return
+    }
+    this._group.unhoverMany(ids)
   }
 
   /**
    * Select the specified entities
    */
   select(ids: AcDbObjectId[]) {
-    ids.forEach(id => {
-      this._group.select(id)
-    })
+    if (ids.length === 0) {
+      return
+    }
+    if (ids.length === 1) {
+      this._group.select(ids[0]!)
+      return
+    }
+    this._group.selectMany(ids)
   }
 
   /**
    * Unselect the specified entities
    */
   unselect(ids: AcDbObjectId[]) {
-    ids.forEach(id => {
-      this._group.unselect(id)
-    })
+    if (ids.length === 0) {
+      return
+    }
+    if (ids.length === 1) {
+      this._group.unselect(ids[0]!)
+      return
+    }
+    this._group.unselectMany(ids)
+  }
+
+  /**
+   * Applies compare-display coloring to entities in this layer.
+   *
+   * @param options - Compare colors and per-entity role overrides.
+   */
+  setCompareDisplay(
+    options: Parameters<AcTrBatchedGroup['setCompareDisplay']>[0]
+  ) {
+    this._group.setCompareDisplay(options)
   }
 }

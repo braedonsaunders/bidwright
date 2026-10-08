@@ -4,10 +4,13 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js'
 import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js'
 
 import {
-  canReleaseActiveLayoutBatches,
-  copyFloat32Buffer,
+  assignLayoutGeometryFrom,
+  layoutHasBatchGeometry,
+  releaseInactiveLayoutBatchBuffers,
   releaseLayerGroupsGeometryCpuArrays,
-  releaseSnapshotBatchBuffers
+  releaseLayoutBatchBuffers,
+  releaseSnapshotBatchBuffers,
+  releaseSnapshotOsnapCatalogs
 } from '../src/AcExViewerMemory'
 import { ACEX_SNAPSHOT_VERSION } from '../src/AcExSnapshotTypes'
 
@@ -83,65 +86,76 @@ function makeSnapshot(overrides: Record<string, unknown> = {}) {
 }
 
 describe('AcExViewerMemory', () => {
-  it('copyFloat32Buffer creates an independent array', () => {
-    const source = f32([1, 2, 3])
-    const copy = copyFloat32Buffer(source)
-    source[0] = 99
-    expect(copy[0]).toBe(1)
+  it('layoutHasBatchGeometry reflects cleared batches', () => {
+    const snapshot = makeSnapshot()
+    const layout = snapshot.layouts[0]!
+    expect(layoutHasBatchGeometry(layout)).toBe(true)
+    releaseLayoutBatchBuffers(layout)
+    expect(layoutHasBatchGeometry(layout)).toBe(false)
   })
 
-  it('canReleaseActiveLayoutBatches requires analytic osnap catalog', () => {
-    const withOsnap = makeSnapshot().layouts[0]!
-    expect(canReleaseActiveLayoutBatches(withOsnap)).toBe(true)
-
-    const withoutOsnap = makeSnapshot({
-      layouts: [
-        {
-          btrId: 'ms',
-          name: 'Model',
-          isModelSpace: true,
-          lineBatches: [],
-          meshBatches: []
-        }
-      ]
-    }).layouts[0]!
-    expect(canReleaseActiveLayoutBatches(withoutOsnap)).toBe(false)
+  it('releaseInactiveLayoutBatchBuffers keeps selected layouts', () => {
+    const snapshot = makeSnapshot()
+    releaseInactiveLayoutBatchBuffers(snapshot, new Set(['ms']))
+    expect(layoutHasBatchGeometry(snapshot.layouts[0]!)).toBe(true)
+    expect(layoutHasBatchGeometry(snapshot.layouts[1]!)).toBe(false)
+    expect(snapshot.layouts[1]!.osnap).toBeUndefined()
   })
 
-  it('releaseSnapshotBatchBuffers clears inactive layouts always', () => {
+  it('assignLayoutGeometryFrom moves batches onto a skeleton layout', () => {
+    const snapshot = makeSnapshot()
+    const source = snapshot.layouts[0]!
+    const target = {
+      btrId: 'ms',
+      name: 'Model',
+      isModelSpace: true,
+      lineBatches: [] as typeof source.lineBatches,
+      meshBatches: [] as typeof source.meshBatches,
+      osnap: undefined as typeof source.osnap
+    }
+    assignLayoutGeometryFrom(target, source)
+    expect(layoutHasBatchGeometry(target)).toBe(true)
+    expect(target.osnap?.primitives).toHaveLength(1)
+  })
+
+  it('releaseLayoutBatchBuffers clears one layout only', () => {
+    const snapshot = makeSnapshot()
+    const first = snapshot.layouts[0]!
+    const second = snapshot.layouts[1]!
+
+    releaseLayoutBatchBuffers(first)
+
+    expect(first.lineBatches).toHaveLength(0)
+    expect(second.lineBatches).toHaveLength(1)
+    expect(second.lineBatches[0]!.positions.length).toBeGreaterThan(0)
+  })
+
+  it('releaseSnapshotBatchBuffers clears every layout', () => {
     const snapshot = makeSnapshot()
 
-    releaseSnapshotBatchBuffers(snapshot, 'ms')
+    releaseSnapshotBatchBuffers(snapshot)
 
     expect(snapshot.layouts[0]!.lineBatches).toHaveLength(0)
     expect(snapshot.layouts[1]!.lineBatches).toHaveLength(0)
   })
 
-  it('releaseSnapshotBatchBuffers keeps active layout batches without osnap catalog', () => {
-    const snapshot = makeSnapshot({
-      layouts: [
-        {
-          btrId: 'ms',
-          name: 'Model',
-          isModelSpace: true,
-          lineBatches: [
-            {
-              layer: '0',
-              color: 0xffffff,
-              offset: [0, 0, 0] as [number, number, number],
-              positions: f32([0, 0, 0, 1, 0, 0])
-            }
-          ],
-          meshBatches: []
-        }
-      ],
-      activeLayoutBtrId: 'ms'
+  it('releaseSnapshotOsnapCatalogs clears layout catalogs without dropping retained primitives', () => {
+    const snapshot = makeSnapshot()
+    const activeLayout = snapshot.layouts[0]!
+    const retained = activeLayout.osnap!.primitives
+
+    releaseSnapshotOsnapCatalogs(snapshot)
+
+    expect(activeLayout.osnap).toBeUndefined()
+    expect(snapshot.layouts[1]!.osnap).toBeUndefined()
+    expect(retained).toHaveLength(1)
+    expect(retained[0]).toMatchObject({
+      kind: 'line',
+      x0: 0,
+      y0: 0,
+      x1: 1,
+      y1: 0
     })
-
-    releaseSnapshotBatchBuffers(snapshot, 'ms')
-
-    expect(snapshot.layouts[0]!.lineBatches).toHaveLength(1)
-    expect(snapshot.layouts[0]!.lineBatches[0]!.positions).toHaveLength(6)
   })
 
   it('releaseLayerGroupsGeometryCpuArrays empties geometry attribute arrays', () => {

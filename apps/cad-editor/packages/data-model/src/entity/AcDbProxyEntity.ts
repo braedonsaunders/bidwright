@@ -8,9 +8,9 @@ import { AcGiEntity, AcGiRenderer } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import {
-  AcDbProxyGraphic,
-  bytesToHexString,
-  loadAcDbProxyGraphicFromDxf
+  acdbBytesToHexString,
+  acdbLoadProxyGraphicFromDxf,
+  AcDbProxyGraphic
 } from '../misc/proxyGraphic'
 import { AcDbEntity } from './AcDbEntity'
 import {
@@ -84,17 +84,31 @@ export class AcDbProxyEntity extends AcDbEntity {
   /**
    * Proxy-entity class identifier assigned by the creating application.
    *
-   * Stored in DXF group code **90**.
+   * Stored in DXF group code **90**. Always `498` for `AcDbProxyEntity`.
    */
-  private _proxyEntityClassId = 0
+  private _proxyEntityClassId = 498
 
   /**
-   * Graphics metafile type flag describing how proxy graphics were captured.
+   * Application entity class ID from the CLASSES section order (500+).
    *
-   * Stored in DXF group code **91**. Also referred to as the object drawing
-   * format in some DXF parsers.
+   * Stored in DXF group code **91**.
    */
-  private _graphicsMetafileType = 0
+  private _applicationEntityClassId = 0
+
+  /**
+   * Object drawing format when the custom object became a proxy.
+   *
+   * Stored in DXF group code **95**. Low word is AcDbDwgVersion; high word is
+   * MaintenanceReleaseVersion.
+   */
+  private _objectDrawingFormat = 0
+
+  /**
+   * Original custom object data format.
+   *
+   * Stored in DXF group code **70**: `0` = DWG, `1` = DXF.
+   */
+  private _originalDataFormat = 0
 
   /**
    * Raw binary proxy-graphics payload.
@@ -107,10 +121,10 @@ export class AcDbProxyEntity extends AcDbEntity {
   /**
    * Optional entity-origin anchor points associated with the proxy entity.
    *
-   * Count is stored in DXF group code **92**; each point uses group code **10**.
+   * Used at draw time for grips; not written with group code **92** (that code
+   * is reserved for graphics-data size in classic DXF).
    */
   private _entityOrigins: AcGePoint3d[] = []
-
   /**
    * Cumulative world-space transform applied at draw time.
    *
@@ -201,25 +215,74 @@ export class AcDbProxyEntity extends AcDbEntity {
   }
 
   /**
-   * Gets the graphics metafile type flag.
+   * Gets the application entity class ID (CLASSES section order, 500+).
    *
    * Corresponds to DXF group code **91**.
-   *
-   * @returns The metafile / object-drawing-format flag.
    */
-  get graphicsMetafileType() {
-    return this._graphicsMetafileType
+  get applicationEntityClassId() {
+    return this._applicationEntityClassId
   }
 
   /**
-   * Sets the graphics metafile type flag.
+   * Sets the application entity class ID.
    *
-   * @param value - Metafile type (DXF group code **91**).
+   * @param value - Class ID from CLASSES section order (DXF group code **91**).
    */
-  set graphicsMetafileType(value: number) {
-    this._graphicsMetafileType = value
+  set applicationEntityClassId(value: number) {
+    this._applicationEntityClassId = value
   }
 
+  /**
+   * Gets the object drawing format (DXF group code **95**).
+   */
+  get objectDrawingFormat() {
+    return this._objectDrawingFormat
+  }
+
+  /**
+   * Sets the object drawing format (DXF group code **95**).
+   *
+   * @param value - Packed AcDbDwgVersion / MaintenanceReleaseVersion.
+   */
+  set objectDrawingFormat(value: number) {
+    this._objectDrawingFormat = value
+  }
+
+  /**
+   * Alias of {@link objectDrawingFormat} for older callers.
+   *
+   * @deprecated Use {@link objectDrawingFormat}.
+   */
+  get graphicsMetafileType() {
+    return this._objectDrawingFormat
+  }
+
+  /**
+   * Alias of {@link objectDrawingFormat} for older callers.
+   *
+   * @deprecated Use {@link objectDrawingFormat}.
+   */
+  set graphicsMetafileType(value: number) {
+    this._objectDrawingFormat = value
+  }
+
+  /**
+   * Gets the original custom object data format (DXF group code **70**).
+   *
+   * @returns `0` for DWG format, `1` for DXF format.
+   */
+  get originalDataFormat() {
+    return this._originalDataFormat
+  }
+
+  /**
+   * Sets the original custom object data format (DXF group code **70**).
+   *
+   * @param value - `0` = DWG, `1` = DXF.
+   */
+  set originalDataFormat(value: number) {
+    this._originalDataFormat = value
+  }
   /**
    * Gets the decoded proxy-graphics binary payload.
    *
@@ -388,39 +451,92 @@ export class AcDbProxyEntity extends AcDbEntity {
   /**
    * Writes DXF subclass fields for this proxy entity.
    *
-   * Emits the `AcDbProxyEntity` subclass marker followed by group codes **1**,
-   * **3**, **1001**, **90**, **91**, **92**, **10**, **160**, and **310** as
-   * appropriate.
+   * Emits the `AcDbProxyEntity` subclass marker followed by Autodesk group
+   * codes **90**, **91**, **95**, **70**, **160**, and **310**, plus optional
+   * **1** / **3** when original class metadata is available.
    *
    * @param filer - DXF output filer.
    * @returns This entity for chaining.
+   * @see https://help.autodesk.com/view/OARX/2024/ENU/?guid=GUID-89A690F9-E859-4D57-89EA-750F3FB76C6B
    */
   override dxfOutFields(filer: AcDbDxfFiler) {
     super.dxfOutFields(filer)
     filer.writeSubclassMarker('AcDbProxyEntity')
-    filer.writeString(1, this._originalDxfName)
+    if (this._originalDxfName) {
+      filer.writeString(1, this._originalDxfName)
+    }
     if (this._originalClassName) {
       filer.writeString(3, this._originalClassName)
     }
-    if (this._applicationName) {
-      filer.writeString(1001, this._applicationName)
+    filer.writeInt32(90, this._proxyEntityClassId || 498)
+    if (this._applicationEntityClassId) {
+      filer.writeInt32(91, this._applicationEntityClassId)
     }
-    filer.writeInt32(90, this._proxyEntityClassId)
-    filer.writeInt32(91, this._graphicsMetafileType)
-    if (this._entityOrigins.length > 0) {
-      filer.writeInt32(92, this._entityOrigins.length)
-      this._entityOrigins.forEach(origin => {
-        filer.writePoint3d(10, origin)
-      })
+    if (this._objectDrawingFormat) {
+      filer.writeInt32(95, this._objectDrawingFormat)
     }
+    filer.writeInt16(70, this._originalDataFormat)
     if (this._proxyGraphic?.length) {
       filer.writeInt32(160, this._proxyGraphic.length)
       let index = 0
       while (index < this._proxyGraphic.length) {
         const chunk = this._proxyGraphic.subarray(index, index + 127)
-        filer.writeString(310, bytesToHexString(chunk))
+        filer.writeString(310, acdbBytesToHexString(chunk))
         index += 127
       }
+    }
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbProxyEntity')
+
+    // ASCII readers may leave hex as string; typed binary pairs yield Uint8Array.
+    const dataChunks: Array<string | Uint8Array> = []
+    let graphicLength: number | undefined
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 1:
+          this.originalDxfName = String(item.value)
+          break
+        case 3:
+          this.originalClassName = String(item.value)
+          break
+        case 70:
+          this.originalDataFormat = n
+          break
+        case 90:
+          this.proxyEntityClassId = n
+          break
+        case 91:
+          this.applicationEntityClassId = n
+          break
+        case 95:
+          this.objectDrawingFormat = n
+          break
+        case 160:
+          graphicLength = n
+          break
+        case 310:
+          if (item.value instanceof Uint8Array) {
+            dataChunks.push(item.value)
+          } else {
+            dataChunks.push(String(item.value))
+          }
+          break
+        default:
+          break
+      }
+    }
+
+    if (dataChunks.length > 0) {
+      this.loadProxyGraphicFromDxf(graphicLength, dataChunks)
     }
     return this
   }
@@ -430,10 +546,11 @@ export class AcDbProxyEntity extends AcDbEntity {
    *
    * @param length - Expected byte length from group code **160**. When provided
    *   and positive, the result is truncated to this length.
-   * @param hexChunks - One or more hexadecimal strings from group code **310**.
+   * @param chunks - One or more hexadecimal strings or binary chunks from
+   *   group code **310**.
    */
-  loadProxyGraphicFromDxf(length?: number, hexChunks?: string[]) {
-    const data = loadAcDbProxyGraphicFromDxf(length, hexChunks)
+  loadProxyGraphicFromDxf(length?: number, chunks?: Array<string | Uint8Array>) {
+    const data = acdbLoadProxyGraphicFromDxf(length, chunks)
     if (data) {
       this.setProxyGraphic(data)
     }

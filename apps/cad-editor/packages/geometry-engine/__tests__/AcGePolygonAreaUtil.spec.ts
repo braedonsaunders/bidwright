@@ -1,8 +1,8 @@
 import {
-  acGeClosedPolygonArea2d,
-  acGeClosedPolygonArea3d,
-  acGePolygonArea2d,
-  acGePolygonArea3d
+  acgeClosedPolygonArea2d,
+  acgeClosedPolygonArea3d,
+  acgePolygonArea2d,
+  acgePolygonArea3d
 } from '../src/util/AcGePolygonAreaUtil'
 
 describe('AcGePolygonAreaUtil', () => {
@@ -13,14 +13,14 @@ describe('AcGePolygonAreaUtil', () => {
       { x: 2, y: 2 },
       { x: 0, y: 2 }
     ]
-    expect(acGePolygonArea2d(square)).toBeCloseTo(4, 8)
-    expect(acGeClosedPolygonArea2d(square)).toBeCloseTo(4, 8)
+    expect(acgePolygonArea2d(square)).toBeCloseTo(4, 8)
+    expect(acgeClosedPolygonArea2d(square)).toBeCloseTo(4, 8)
   })
 
   it('returns 0 for open or degenerate loops', () => {
-    expect(acGeClosedPolygonArea2d([])).toBe(0)
+    expect(acgeClosedPolygonArea2d([])).toBe(0)
     expect(
-      acGeClosedPolygonArea2d([
+      acgeClosedPolygonArea2d([
         { x: 0, y: 0 },
         { x: 1, y: 0 }
       ])
@@ -33,7 +33,7 @@ describe('AcGePolygonAreaUtil', () => {
       { x: 4, y: 0, z: 0 },
       { x: 0, y: 3, z: 0 }
     ]
-    expect(acGePolygonArea3d(triangle)).toBeCloseTo(6, 8)
-    expect(acGeClosedPolygonArea3d(triangle)).toBeCloseTo(6, 8)
+    expect(acgePolygonArea3d(triangle)).toBeCloseTo(6, 8)
+    expect(acgeClosedPolygonArea3d(triangle)).toBeCloseTo(6, 8)
   })
 })

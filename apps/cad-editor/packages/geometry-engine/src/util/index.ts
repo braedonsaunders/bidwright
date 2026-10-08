@@ -9,61 +9,64 @@ export {
   AcGeMathUtil,
   DEG2RAD,
   RAD2DEG,
-  ceilPowerOfTwo,
-  clamp,
-  damp,
-  degToRad,
-  euclideanModulo,
-  floorPowerOfTwo,
-  generateUUID,
-  intPartLength,
-  inverseLerp,
-  isBetween,
-  isBetweenAngle,
-  isPowerOfTwo,
-  lerp,
-  mapLinear,
-  normalizeAngle,
-  pingpong,
-  radToDeg,
-  randFloat,
-  randFloatSpread,
-  randInt,
-  relativeEps,
-  seededRandom,
-  smootherstep,
-  smoothstep
+  acgeCeilPowerOfTwo,
+  acgeClamp,
+  acgeDamp,
+  acgeDegToRad,
+  acgeEuclideanModulo,
+  acgeFloorPowerOfTwo,
+  acgeGenerateUUID,
+  acgeIntPartLength,
+  acgeInverseLerp,
+  acgeIsBetween,
+  acgeIsBetweenAngle,
+  acgeIsAngleOnCcwSweep,
+  acgeIsPowerOfTwo,
+  acgeLerp,
+  acgeMapLinear,
+  acgeNormalizeAngle,
+  acgePingpong,
+  acgeRadToDeg,
+  acgeRandFloat,
+  acgeRandFloatSpread,
+  acgeRandInt,
+  acgeRelativeEps,
+  acgeSeededRandom,
+  acgeSmootherstep,
+  acgeSmoothstep
 } from './AcGeMathUtil'
 export {
-  basisFunction,
-  calculateCurveLength,
-  computeParameterValues,
-  evaluateNurbsPoint,
-  evaluateNurbsDerivatives,
-  signedPlanarCurvature,
-  generateAveragedKnots,
-  generateChordKnots,
-  generateSqrtChordKnots,
-  generateUniformKnots,
-  interpolateControlPoints,
-  interpolateNurbsCurve
+  acgeBasisFunction,
+  acgeCalculateCurveLength,
+  acgeComputeParameterValues,
+  acgeEvaluateNurbsPoint,
+  acgeEvaluateNurbsDerivatives,
+  acgeSignedPlanarCurvature,
+  acgeGenerateAveragedKnots,
+  acgeGenerateChordKnots,
+  acgeGenerateSqrtChordKnots,
+  acgeGenerateUniformKnots,
+  acgeInterpolateControlPoints,
+  acgeInterpolateNurbsCurve
 } from './AcGeNurbsUtil'
 export {
-  getOcsAngle,
-  getOcsReferenceVector,
-  transformOcsPointToWcs,
-  transformWcsPointToOcs
+  acgeGetOcsAngle,
+  acgeGetOcsReferenceVector,
+  acgeGetOcsReferenceVectorInto,
+  acgeTransformOcsPointToWcs,
+  acgeTransformOcsPointToWcsInto,
+  acgeTransformWcsPointToOcs
 } from './AcGeOcsUtil'
 export { AcGeTol, DEFAULT_TOL } from './AcGeTol'
 export {
-  offsetPointByDirectionInXY,
-  offsetVertexPath
+  acgeOffsetPointByDirectionInXY,
+  acgeOffsetVertexPath
 } from './AcGeCurveOffsetUtil'
-export { offsetSmoothedSampledPath } from './AcGeSampledCurveOffsetUtil'
+export { acgeOffsetSmoothedSampledPath } from './AcGeSampledCurveOffsetUtil'
 export {
-  acGeClosedPolygonArea2d,
-  acGeClosedPolygonArea3d,
-  acGePolygonArea2d,
-  acGePolygonArea3d,
-  acGeSignedPolygonArea2d
+  acgeClosedPolygonArea2d,
+  acgeClosedPolygonArea3d,
+  acgePolygonArea2d,
+  acgePolygonArea3d,
+  acgeSignedPolygonArea2d
 } from './AcGePolygonAreaUtil'

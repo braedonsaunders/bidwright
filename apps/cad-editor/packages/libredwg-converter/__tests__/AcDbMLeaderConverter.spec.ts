@@ -45,6 +45,8 @@ describe('libredwg AcDbEntityConverter MLEADER', () => {
       textAnchor: { x: 10, y: 20, z: 0 },
       textHeight: 2.5,
       textWidth: 40,
+      textLineSpacingFactor: 0.8,
+      textLineSpacingStyle: 2,
       leaderSections: [
         {
           lastLeaderLinePoint: { x: 10, y: 20, z: 0 },
@@ -73,6 +75,8 @@ describe('libredwg AcDbEntityConverter MLEADER', () => {
     })
     expect(mleader.textHeight).toBe(2.5)
     expect(mleader.textWidth).toBe(40)
+    expect(mleader.textLineSpacingFactor).toBeCloseTo(0.8)
+    expect(mleader.textLineSpacingStyle).toBe(2)
     expect(mleader.numberOfLeaders).toBe(1)
     expect(mleader.leaders[0].leaderLines[0].vertices).toHaveLength(2)
   })

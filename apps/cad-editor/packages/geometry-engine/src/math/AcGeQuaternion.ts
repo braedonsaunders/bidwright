@@ -1,4 +1,4 @@
-import { clamp } from '../util/AcGeMathUtil'
+import { acgeClamp } from '../util/AcGeMathUtil'
 import { AcGeEuler } from './AcGeEuler'
 import { AcGeMatrix3d } from './AcGeMatrix3d'
 import { AcGeVector3d, AcGeVector3dLike } from './AcGeVector3d'
@@ -438,7 +438,7 @@ export class AcGeQuaternion {
    * @returns Return the angle between this quaternion and quaternion q in radians.
    */
   angleTo(q: AcGeQuaternion) {
-    return 2 * Math.acos(Math.abs(clamp(this.dot(q), -1, 1)))
+    return 2 * Math.acos(Math.abs(acgeClamp(this.dot(q), -1, 1)))
   }
 
   /**

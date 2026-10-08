@@ -279,24 +279,10 @@ export class AcGeMatrix3d {
         xAxis.crossVectors(AcGeVector3d.Z_AXIS, normal).normalize()
       }
       const yAxis = normal.clone().cross(xAxis).normalize()
-      this.set(
-        xAxis.x,
-        xAxis.y,
-        xAxis.z,
-        0,
-        yAxis.x,
-        yAxis.y,
-        yAxis.z,
-        0,
-        normal.x,
-        normal.y,
-        normal.z,
-        0,
-        0,
-        0,
-        0,
-        1
-      )
+      // Columns must be the OCS basis vectors (same layout as {@link makeBasis}).
+      // Passing axes as rows produced the transpose and broke OCS↔WCS for
+      // non-axis-aligned extrusions.
+      this.makeBasis(xAxis, yAxis, normal)
     } else {
       this.identity()
     }

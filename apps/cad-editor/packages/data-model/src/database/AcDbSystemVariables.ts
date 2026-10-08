@@ -46,6 +46,44 @@ export const AcDbSystemVariables = {
   /** UI color theme selector used by the application shell or viewer integration. */
   COLORTHEME: 'COLORTHEME',
   /**
+   * Controls whether hatch objects are included in drawing comparison.
+   * `0` excludes hatches (AutoCAD default); `1` includes them. Saved in the drawing.
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-BBB5E4A0-B607-4898-9A6B-A65C51551EE5
+   */
+  COMPAREHATCH: 'COMPAREHATCH',
+  /**
+   * Bitcode controlling which non-geometric property changes count as a
+   * difference between drawings. `0` ignores property-only changes (AutoCAD
+   * default). Saved in the registry (not in the drawing).
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-FC52193A-3801-42D1-B5C3-873B192B36B2
+   */
+  COMPAREPROPS: 'COMPAREPROPS',
+  /**
+   * Offset between a change-set boundary and the revision cloud in a
+   * comparison drawing. Valid range is **1–25**; AutoCAD default is **5**.
+   * Saved in the drawing.
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-7A230058-048B-4EE6-949D-105AF6AC8E73
+   */
+  COMPARERCMARGIN: 'COMPARERCMARGIN',
+  /**
+   * Controls whether text objects are included in drawing comparison.
+   * `0` excludes text; `1` includes text (AutoCAD default). Saved in the drawing.
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-1BE58261-FA5F-4914-BAC6-C1DF7E3D1E9C
+   */
+  COMPARETEXT: 'COMPARETEXT',
+  /**
+   * Decimal-place tolerance used when comparing two drawings. Objects are
+   * treated as identical when their geometric difference is at or below this
+   * precision. Valid range is **0–14**; AutoCAD default is **6**. Saved in the drawing.
+   *
+   * @see https://help.autodesk.com/view/ACD/2025/ENU/?guid=GUID-3131F7C8-7199-4EC5-9892-88C2D2A86F78
+   */
+  COMPARETOLERANCE: 'COMPARETOLERANCE',
+  /**
    * Controls the display and behavior of dynamic input at the cursor, enabling or
    * disabling on-screen pointer and dimension input
    */
@@ -122,6 +160,14 @@ export const AcDbSystemVariables = {
   HPTRANSPARENCY: 'HPTRANSPARENCY',
   /** Insertion units used for automatic scaling of inserted content. */
   INSUNITS: 'INSUNITS',
+  /**
+   * Displays the user's login name (read-only). Session-scoped; not stored in
+   * the drawing. Host applications may initialize it via
+   * {@link AcDbSysVarManager.setLoginName}.
+   *
+   * @see https://help.autodesk.com/view/ACD/2026/ENU/?caas=caas/documentation/CIV3D/2014/ENU/filesACD/GUID-81446F4E-F6DC-442A-9889-EE777D3D49B9-htm.html
+   */
+  LOGINNAME: 'LOGINNAME',
   /** Global linetype scale multiplier for the drawing database. */
   LTSCALE: 'LTSCALE',
   /** Linear unit display format for coordinates and distances (scientific, decimal, engineering, etc.). */
@@ -146,6 +192,12 @@ export const AcDbSystemVariables = {
    * constrained to horizontal or vertical relative to the current UCS.
    */
   ORTHOMODE: 'ORTHOMODE',
+  /**
+   * When `true`, records open-file stage timings (PARSE / ENTITY /
+   * scene convert / block-cache) and prints a summary to the console when
+   * opening finishes. Session-only (not stored in the drawing). Default `false`.
+   */
+  OPENPROF: 'OPENPROF',
   /** Background color of the paper-space (layout) drawing area. */
   PAPERBKCOLOR: 'PAPERBKCOLOR',
   /** Point display style bitmask that controls how POINT entities are drawn. */
@@ -169,6 +221,8 @@ export const AcDbSystemVariables = {
   SHORTCUTMENU: 'SHORTCUTMENU',
   /** Current text style name used when creating new text entities. */
   TEXTSTYLE: 'TEXTSTYLE',
+  /** Current dimension style name used when creating new dimension entities. */
+  DIMSTYLE: 'DIMSTYLE',
   /**
    * Controls feet-inch and fractional display delimiters together with **LUNITS**
    * (`0` = report format, `1` = input format).

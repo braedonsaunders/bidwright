@@ -44,7 +44,7 @@ export const RAW_COLOR_TYPE_WINDOW_BG = 0xc8
  * - ezdxf reference implementation (`encode_raw_color`):
  *   https://raw.githubusercontent.com/mozman/ezdxf/master/src/ezdxf/colors.py
  */
-export function encodeMLeaderStyleRawColor(color: AcCmColor) {
+export function acdbEncodeMLeaderStyleRawColor(color: AcCmColor) {
   if (color.isByBlock) {
     return (RAW_COLOR_TYPE_BY_BLOCK << 24) >> 0
   }
@@ -82,7 +82,7 @@ export function encodeMLeaderStyleRawColor(color: AcCmColor) {
  * - ezdxf reference implementation (`decode_raw_color_int`):
  *   https://raw.githubusercontent.com/mozman/ezdxf/master/src/ezdxf/colors.py
  */
-export function decodeMLeaderStyleRawColor(rawColor: number) {
+export function acdbDecodeMLeaderStyleRawColor(rawColor: number) {
   const color = new AcCmColor(AcCmColorMethod.ByBlock)
   const flags = (rawColor >>> 24) & 0xff
   switch (flags) {

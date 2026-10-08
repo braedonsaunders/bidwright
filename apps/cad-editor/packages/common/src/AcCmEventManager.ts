@@ -45,6 +45,17 @@ export class AcCmEventManager<T = unknown> {
   private listeners: ((payload: T) => void)[] = []
 
   /**
+   * Number of listeners currently registered.
+   *
+   * Used by `AcCmObject.set` to decide whether an untracked fast path is
+   * possible — a zero-listener check is cheaper than the lazy container
+   * allocation (`listenerCount === 0` means "nobody is listening").
+   */
+  public get listenerCount(): number {
+    return this.listeners.length
+  }
+
+  /**
    * Add the event listener
    * @param listener Input listener to be added
    */

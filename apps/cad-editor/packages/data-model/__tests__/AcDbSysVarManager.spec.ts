@@ -84,6 +84,12 @@ describe('AcDbSysVarManager', () => {
     manager.setVar(AcDbSystemVariables.DYNPROMPT, 'false', db)
     expect(manager.getVar(AcDbSystemVariables.DYNPROMPT, db)).toBe(false)
 
+    expect(manager.getVar(AcDbSystemVariables.OPENPROF, db)).toBe(false)
+    manager.setVar(AcDbSystemVariables.OPENPROF, true, db)
+    expect(manager.getVar(AcDbSystemVariables.OPENPROF, db)).toBe(true)
+    manager.setVar(AcDbSystemVariables.OPENPROF, 'false', db)
+    expect(manager.getVar(AcDbSystemVariables.OPENPROF, db)).toBe(false)
+
     manager.setVar(AcDbSystemVariables.MEASUREMENTCOLOR, 'red', db)
     expect(
       manager.getVar(AcDbSystemVariables.MEASUREMENTCOLOR, db)
@@ -237,6 +243,13 @@ describe('AcDbSysVarManager', () => {
     expect(manager.getDefaultValue(AcDbSystemVariables.GRIPOBJLIMIT)).toBe(100)
     expect(manager.getDefaultValue(AcDbSystemVariables.GRIPS)).toBe(2)
     expect(manager.getDefaultValue(AcDbSystemVariables.GRIPSIZE)).toBe(5)
+    expect(manager.getDefaultValue(AcDbSystemVariables.COMPAREHATCH)).toBe(0)
+    expect(manager.getDefaultValue(AcDbSystemVariables.COMPAREPROPS)).toBe(0)
+    expect(manager.getDefaultValue(AcDbSystemVariables.COMPARERCMARGIN)).toBe(5)
+    expect(manager.getDefaultValue(AcDbSystemVariables.COMPARETEXT)).toBe(1)
+    expect(manager.getDefaultValue(AcDbSystemVariables.COMPARETOLERANCE)).toBe(
+      6
+    )
     expect(manager.getAllDescriptors().length).toBeGreaterThan(0)
     expect(() => manager.getDefaultValue('__NOT_FOUND__')).toThrow(
       'System variable __not_found__ not found!'
@@ -265,5 +278,100 @@ describe('AcDbSysVarManager', () => {
     expect(() =>
       manager.setVar(AcDbSystemVariables.DWGNAME, 'Other.dwg', workingDb)
     ).toThrow('System variable dwgname is read-only!')
+  })
+
+  it('exposes read-only LOGINNAME for the session', () => {
+    const db = new AcDbDatabase()
+    const manager = AcDbSysVarManager.instance()
+
+    expect(typeof manager.getVar(AcDbSystemVariables.LOGINNAME, db)).toBe(
+      'string'
+    )
+    expect(() =>
+      manager.setVar(AcDbSystemVariables.LOGINNAME, 'alice', db)
+    ).toThrow(/read-only/i)
+
+    manager.setLoginName('alice')
+    expect(manager.getVar(AcDbSystemVariables.LOGINNAME, db)).toBe('alice')
+  })
+
+  it('registers DWG Compare system variables with AutoCAD defaults and ranges', () => {
+    const db = new AcDbDatabase()
+    const manager = AcDbSysVarManager.instance()
+    const oldCompareProps = manager.getVar(
+      AcDbSystemVariables.COMPAREPROPS,
+      db
+    ) as number
+
+    expect(db.comparehatch).toBe(0)
+    expect(db.comparercmargin).toBe(5)
+    expect(db.comparetext).toBe(1)
+    expect(db.comparetolerance).toBe(6)
+    expect(manager.getVar(AcDbSystemVariables.COMPAREHATCH, db)).toBe(0)
+    expect(manager.getVar(AcDbSystemVariables.COMPAREPROPS, db)).toBe(0)
+    expect(manager.getVar(AcDbSystemVariables.COMPARERCMARGIN, db)).toBe(5)
+    expect(manager.getVar(AcDbSystemVariables.COMPARETEXT, db)).toBe(1)
+    expect(manager.getVar(AcDbSystemVariables.COMPARETOLERANCE, db)).toBe(6)
+    expect(
+      manager.getDescriptor(AcDbSystemVariables.COMPAREHATCH)?.isDbVar
+    ).toBe(true)
+    expect(
+      manager.getDescriptor(AcDbSystemVariables.COMPAREPROPS)?.isDbVar
+    ).toBe(false)
+    expect(
+      manager.getDescriptor(AcDbSystemVariables.COMPARERCMARGIN)?.isDbVar
+    ).toBe(true)
+    expect(
+      manager.getDescriptor(AcDbSystemVariables.COMPARETEXT)?.isDbVar
+    ).toBe(true)
+    expect(
+      manager.getDescriptor(AcDbSystemVariables.COMPARETOLERANCE)?.isDbVar
+    ).toBe(true)
+
+    manager.setVar(AcDbSystemVariables.COMPAREHATCH, '1', db)
+    expect(db.comparehatch).toBe(1)
+    manager.setVar(AcDbSystemVariables.COMPAREPROPS, 1 + 2 + 16, db)
+    expect(manager.getVar(AcDbSystemVariables.COMPAREPROPS, db)).toBe(19)
+    manager.setVar(AcDbSystemVariables.COMPARERCMARGIN, 25, db)
+    expect(db.comparercmargin).toBe(25)
+    manager.setVar(AcDbSystemVariables.COMPARETEXT, 0, db)
+    expect(db.comparetext).toBe(0)
+    manager.setVar(AcDbSystemVariables.COMPARETOLERANCE, '0', db)
+    expect(db.comparetolerance).toBe(0)
+
+    expect(() =>
+      manager.setVar(AcDbSystemVariables.COMPAREHATCH, 2, db)
+    ).toThrow('Invalid COMPAREHATCH value! Valid range is 0 to 1.')
+    expect(() =>
+      manager.setVar(AcDbSystemVariables.COMPAREPROPS, 128, db)
+    ).toThrow('Invalid COMPAREPROPS value! Valid range is 0 to 127.')
+    expect(() =>
+      manager.setVar(AcDbSystemVariables.COMPARERCMARGIN, 0, db)
+    ).toThrow('Invalid COMPARERCMARGIN value! Valid range is 1 to 25.')
+    expect(() =>
+      manager.setVar(AcDbSystemVariables.COMPARETEXT, -1, db)
+    ).toThrow('Invalid COMPARETEXT value! Valid range is 0 to 1.')
+    expect(() =>
+      manager.setVar(AcDbSystemVariables.COMPARETOLERANCE, 15, db)
+    ).toThrow('Invalid COMPARETOLERANCE value! Valid range is 0 to 14.')
+
+    expect(() => {
+      db.comparehatch = 2
+    }).toThrow('Invalid COMPAREHATCH value! Valid range is 0 to 1.')
+    expect(() => {
+      db.comparercmargin = 0
+    }).toThrow('Invalid COMPARERCMARGIN value! Valid range is 1 to 25.')
+    expect(() => {
+      db.comparetext = -1
+    }).toThrow('Invalid COMPARETEXT value! Valid range is 0 to 1.')
+    expect(() => {
+      db.comparetolerance = 15
+    }).toThrow('Invalid COMPARETOLERANCE value! Valid range is 0 to 14.')
+
+    manager.setVar(AcDbSystemVariables.COMPAREHATCH, 0, db)
+    manager.setVar(AcDbSystemVariables.COMPAREPROPS, oldCompareProps, db)
+    manager.setVar(AcDbSystemVariables.COMPARERCMARGIN, 5, db)
+    manager.setVar(AcDbSystemVariables.COMPARETEXT, 1, db)
+    manager.setVar(AcDbSystemVariables.COMPARETOLERANCE, 6, db)
   })
 })

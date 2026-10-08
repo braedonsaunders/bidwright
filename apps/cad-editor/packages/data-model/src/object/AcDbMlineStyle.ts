@@ -143,4 +143,96 @@ export class AcDbMlineStyle extends AcDbObject {
     })
     return this
   }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbMlineStyle')
+
+    const elements: AcDbMlineStyleElement[] = []
+    let current: AcDbMlineStyleElement | undefined
+    let declaredCount = 0
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 2:
+          this.styleName = String(item.value)
+          break
+        case 70:
+          this.flags = n
+          break
+        case 3:
+          this.description = String(item.value)
+          break
+        case 51:
+          this.startAngle = n
+          break
+        case 52:
+          this.endAngle = n
+          break
+        case 71:
+          declaredCount = n
+          break
+        case 49: {
+          current = {
+            offset: n,
+            color: new AcCmColor(),
+            lineType: 'BYLAYER'
+          }
+          current.color.colorIndex = 256
+          elements.push(current)
+          break
+        }
+        case 62:
+          if (current) {
+            current.color.colorIndex = n
+          } else {
+            this.fillColor.colorIndex = n
+          }
+          break
+        case 420:
+          if (current) {
+            current.color.setRGBValue(n)
+          } else {
+            this.fillColor.setRGBValue(n)
+          }
+          break
+        case 6:
+          if (current) {
+            current.lineType = String(item.value)
+          }
+          break
+        case 100:
+          filer.pushBackItem(item)
+          this.finishMlineElements(elements, declaredCount)
+          return this
+        default:
+          break
+      }
+    }
+
+    this.finishMlineElements(elements, declaredCount)
+    return this
+  }
+
+  private finishMlineElements(
+    elements: AcDbMlineStyleElement[],
+    declaredCount: number
+  ) {
+    const count = Math.max(declaredCount, elements.length)
+    if (count <= 0) {
+      this.elements = []
+      return
+    }
+    this.elements = Array.from({ length: count }, (_, index) => {
+      const existing = elements[index]
+      if (existing) return existing
+      const color = new AcCmColor()
+      color.colorIndex = 256
+      return { offset: 0, color, lineType: 'BYLAYER' }
+    })
+  }
 }

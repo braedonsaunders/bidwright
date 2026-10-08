@@ -1,6 +1,7 @@
 import {
   AcGeBox2d,
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint2d,
   AcGePoint3d,
@@ -9,14 +10,28 @@ import {
   AcGeVector3d,
   AcGeVector3dLike
 } from '@mlightcad/geometry-engine'
-import { AcGiRenderer } from '@mlightcad/graphic-interface'
+import {
+  AcGiEntity,
+  AcGiMTextAttachmentPoint,
+  AcGiMTextData,
+  AcGiRenderer,
+  AcGiTextStyle
+} from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbObjectId } from '../base/AcDbObject'
+import { DEFAULT_TEXT_STYLE } from '../misc/AcDbConstants'
+import { acdbDrawImageFrame } from '../misc/acdbDrawImageFrame'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbEntity } from './AcDbEntity'
+import { AcDbEntityProperties } from './AcDbEntityProperties'
 import { acdbForEachGripIndex } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
 import { acdbCollectVertexPathOsnapPoints } from './AcDbOsnapHelpers'
+import {
+  acdbEscapePlainTextForMText,
+  acdbEstimatePlainTextWidth
+} from './AcDbTextExtentsHelpers'
 
 /**
  * Defines the clip boundary type for raster images.
@@ -114,6 +129,12 @@ export class AcDbRasterImage extends AcDbEntity {
   private _isImageShown: boolean
   /** Whether the image is transparent */
   private _isImageTransparent: boolean
+  /** Class version (DXF group 90) */
+  private _classVersion = 0
+  /**
+   * Clip mode (DXF group 290): 0 = outside mode, 1 = inside mode.
+   */
+  private _clipMode = 0
   /** The image data as a Blob */
   private _image?: Blob
 
@@ -311,6 +332,24 @@ export class AcDbRasterImage extends AcDbEntity {
     this._isImageTransparent = value
   }
 
+  /** Class version (DXF group 90). */
+  get classVersion() {
+    return this._classVersion
+  }
+  set classVersion(value: number) {
+    this._classVersion = value
+  }
+
+  /**
+   * Clip mode (DXF group 290): 0 = outside, 1 = inside.
+   */
+  get clipMode() {
+    return this._clipMode
+  }
+  set clipMode(value: number) {
+    this._clipMode = value
+  }
+
   /**
    * The image data of this entity.
    */
@@ -336,14 +375,202 @@ export class AcDbRasterImage extends AcDbEntity {
    */
   get imageFileName() {
     if (this._imageDefId) {
-      const imageDef = this.database.objects.imageDefinition.getIdAt(
-        this._imageDefId
-      )
+      const dict = this.database.objects.imageDefinition
+      // Converters key ISM_RASTER_IMAGE_DICT by the DWG handle, then
+      // commitObjectHandle may remint objectId on collision. Soft-pointer
+      // imageDefId still matches the dictionary key — fall back to getAt.
+      const imageDef =
+        dict.getIdAt(this._imageDefId) ?? dict.getAt(this._imageDefId)
       if (imageDef) {
         return imageDef.sourceFileName
       }
     }
     return ''
+  }
+
+  /**
+   * Basename of {@link imageFileName} (path separators stripped).
+   * Used for missing-image labels and the property palette.
+   */
+  get imageDisplayName() {
+    const path = this.imageFileName.trim()
+    if (!path) return ''
+    const parts = path.replace(/\\/g, '/').split('/')
+    return parts[parts.length - 1] || path
+  }
+
+  /**
+   * Returns the full property definition for this raster image entity.
+   */
+  get properties(): AcDbEntityProperties {
+    return {
+      type: this.type,
+      groups: [
+        this.getGeneralProperties(),
+        {
+          groupName: 'geometry',
+          properties: [
+            {
+              name: 'name',
+              type: 'string',
+              editable: false,
+              accessor: {
+                // Full path as stored on the image definition (AutoCAD NAME).
+                get: () => this.imageFileName || this.imageDisplayName
+              }
+            },
+            {
+              name: 'positionX',
+              type: 'float',
+              editable: true,
+              accessor: {
+                get: () => this.position.x,
+                set: (v: number) => {
+                  this.position.x = v
+                }
+              }
+            },
+            {
+              name: 'positionY',
+              type: 'float',
+              editable: true,
+              accessor: {
+                get: () => this.position.y,
+                set: (v: number) => {
+                  this.position.y = v
+                }
+              }
+            },
+            {
+              name: 'positionZ',
+              type: 'float',
+              editable: true,
+              accessor: {
+                get: () => this.position.z,
+                set: (v: number) => {
+                  this.position.z = v
+                }
+              }
+            },
+            {
+              name: 'rotation',
+              type: 'float',
+              editable: true,
+              accessor: {
+                get: () => this.rotation,
+                set: (v: number) => {
+                  this.rotation = v
+                }
+              }
+            },
+            {
+              name: 'width',
+              type: 'float',
+              editable: true,
+              accessor: {
+                get: () => this.width,
+                set: (v: number) => {
+                  this.width = v
+                }
+              }
+            },
+            {
+              name: 'height',
+              type: 'float',
+              editable: true,
+              accessor: {
+                get: () => this.height,
+                set: (v: number) => {
+                  this.height = v
+                }
+              }
+            }
+          ]
+        },
+        {
+          groupName: 'image',
+          properties: [
+            {
+              name: 'brightness',
+              type: 'int',
+              editable: true,
+              accessor: {
+                get: () => this.brightness,
+                set: (v: number) => {
+                  this.brightness = v
+                }
+              }
+            },
+            {
+              name: 'contrast',
+              type: 'int',
+              editable: true,
+              accessor: {
+                get: () => this.contrast,
+                set: (v: number) => {
+                  this.contrast = v
+                }
+              }
+            },
+            {
+              name: 'fade',
+              type: 'int',
+              editable: true,
+              accessor: {
+                get: () => this.fade,
+                set: (v: number) => {
+                  this.fade = v
+                }
+              }
+            },
+            {
+              name: 'isImageShown',
+              type: 'boolean',
+              editable: true,
+              accessor: {
+                get: () => this.isImageShown,
+                set: (v: boolean) => {
+                  this.isImageShown = v
+                }
+              }
+            },
+            {
+              name: 'isImageTransparent',
+              type: 'boolean',
+              editable: true,
+              accessor: {
+                get: () => this.isImageTransparent,
+                set: (v: boolean) => {
+                  this.isImageTransparent = v
+                }
+              }
+            },
+            {
+              name: 'isClipped',
+              type: 'boolean',
+              editable: true,
+              accessor: {
+                get: () => this.isClipped,
+                set: (v: boolean) => {
+                  this.isClipped = v
+                }
+              }
+            },
+            {
+              name: 'isShownClipped',
+              type: 'boolean',
+              editable: true,
+              accessor: {
+                get: () => this.isShownClipped,
+                set: (v: boolean) => {
+                  this.isShownClipped = v
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
   }
 
   /**
@@ -358,6 +585,11 @@ export class AcDbRasterImage extends AcDbEntity {
       0
     )
     return extents
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return acdbIntersectPrimitivesFromPointPath(this.boundaryPath(), true)
   }
 
   /**
@@ -428,13 +660,209 @@ export class AcDbRasterImage extends AcDbEntity {
    */
   subWorldDraw(renderer: AcGiRenderer) {
     const points = this.boundaryPath()
-    if (this._image) {
+    if (this._image && this.isImageShown) {
       return renderer.image(this._image, {
         boundary: points,
         roation: this._rotation
       })
-    } else {
-      return renderer.lines(points)
+    }
+    // Frame-only: transparent fill keeps the interior pickable (AutoCAD IMAGE behavior).
+    const frame = acdbDrawImageFrame(renderer, points)
+    const label = this.drawMissingImageLabel(renderer, points)
+    if (!label) {
+      return frame
+    }
+    if (!frame) {
+      return label
+    }
+    return renderer.group([frame, label])
+  }
+
+  /**
+   * Draws the external image file path centered in the frame when pixel data
+   * is missing, sizing the text so the full path fits inside the boundary.
+   */
+  private drawMissingImageLabel(
+    renderer: AcGiRenderer,
+    boundary: AcGePoint3d[]
+  ): AcGiEntity | undefined {
+    // A loaded blob with display turned off is an empty frame, not a missing file.
+    if (this._image || boundary.length < 3) {
+      return undefined
+    }
+
+    let label = ''
+    try {
+      label = this.imageFileName.trim()
+    } catch {
+      // Unbound entities have no image dictionary; still draw the frame.
+      return undefined
+    }
+    if (!label) {
+      return undefined
+    }
+
+    const center = this.boundaryCenter(boundary)
+    const {
+      width: boxWidth,
+      height: boxHeight,
+      rotation
+    } = this.boundaryLocalSize(boundary)
+    if (boxWidth <= 0 || boxHeight <= 0) {
+      return undefined
+    }
+
+    // Fit against a slash-normalized copy so path backslashes are not mistaken
+    // for MTEXT `\P` / `\S` when estimating width.
+    const fitLabel = label.replace(/\\/g, '/')
+    const textHeight = this.fitLabelTextHeight(fitLabel, boxWidth, boxHeight)
+    if (textHeight <= 0) {
+      return undefined
+    }
+
+    // Escape so `\Pictures` / `\Screenshots` draw as path text, not MTEXT codes.
+    const mtextLabel = acdbEscapePlainTextForMText(label)
+    const textWidth = acdbEstimatePlainTextWidth(fitLabel, textHeight)
+    const mtextData: AcGiMTextData = {
+      text: mtextLabel,
+      height: textHeight,
+      width: Math.max(textWidth, textHeight),
+      position: center,
+      rotation,
+      attachmentPoint: AcGiMTextAttachmentPoint.MiddleCenter
+    }
+
+    try {
+      return renderer.mtext(mtextData, this.resolveLabelTextStyle())
+    } catch {
+      return undefined
+    }
+  }
+
+  private resolveLabelTextStyle(): AcGiTextStyle {
+    const table = this.database.tables.textStyleTable
+    const style =
+      table.resolveAt(DEFAULT_TEXT_STYLE) ?? table.resolveAt('STANDARD')
+    if (style) {
+      return style.textStyle
+    }
+    return {
+      name: DEFAULT_TEXT_STYLE,
+      standardFlag: 0,
+      fixedTextHeight: 0,
+      widthFactor: 1,
+      obliqueAngle: 0,
+      textGenerationFlag: 0,
+      lastHeight: 0,
+      font: 'txt',
+      bigFont: ''
+    }
+  }
+
+  /**
+   * Chooses a text height that keeps the full label inside the image frame.
+   */
+  private fitLabelTextHeight(
+    label: string,
+    boxWidth: number,
+    boxHeight: number
+  ): number {
+    const usableWidth = boxWidth * 0.85
+    const usableHeight = boxHeight * 0.85
+    if (usableWidth <= 0 || usableHeight <= 0 || !label) {
+      return 0
+    }
+    // Binary search so acdbEstimatePlainTextWidth (CHAR_WIDTH_FACTOR=1) fits.
+    let low = 0
+    let high = usableHeight
+    for (let i = 0; i < 24; i++) {
+      const mid = (low + high) / 2
+      const width = acdbEstimatePlainTextWidth(label, mid)
+      if (width <= usableWidth && mid <= usableHeight) {
+        low = mid
+      } else {
+        high = mid
+      }
+    }
+    return low
+  }
+
+  private boundaryCenter(boundary: AcGePoint3d[]): AcGePoint3d {
+    let count = boundary.length
+    if (
+      count > 1 &&
+      boundary[0].x === boundary[count - 1].x &&
+      boundary[0].y === boundary[count - 1].y
+    ) {
+      count -= 1
+    }
+    let sx = 0
+    let sy = 0
+    let sz = 0
+    for (let i = 0; i < count; i++) {
+      sx += boundary[i].x
+      sy += boundary[i].y
+      sz += boundary[i].z
+    }
+    return new AcGePoint3d(sx / count, sy / count, sz / count)
+  }
+
+  /**
+   * Local width/height along the first edge and its perpendicular, plus
+   * rotation of that edge — works for both rectangular and clipped frames.
+   */
+  private boundaryLocalSize(boundary: AcGePoint3d[]): {
+    width: number
+    height: number
+    rotation: number
+  } {
+    let count = boundary.length
+    if (
+      count > 1 &&
+      boundary[0].x === boundary[count - 1].x &&
+      boundary[0].y === boundary[count - 1].y
+    ) {
+      count -= 1
+    }
+    if (count < 2) {
+      return {
+        width: this._width,
+        height: this._height,
+        rotation: this._rotation
+      }
+    }
+
+    const p0 = boundary[0]
+    const p1 = boundary[1]
+    const edgeX = p1.x - p0.x
+    const edgeY = p1.y - p0.y
+    const width = Math.hypot(edgeX, edgeY)
+    const rotation = Math.atan2(edgeY, edgeX)
+    if (width <= 0) {
+      return {
+        width: this._width,
+        height: this._height,
+        rotation: this._rotation
+      }
+    }
+
+    const ux = edgeX / width
+    const uy = edgeY / width
+    // Perpendicular (CCW): (-uy, ux)
+    let minV = 0
+    let maxV = 0
+    for (let i = 0; i < count; i++) {
+      const dx = boundary[i].x - p0.x
+      const dy = boundary[i].y - p0.y
+      const v = dx * -uy + dy * ux
+      minV = Math.min(minV, v)
+      maxV = Math.max(maxV, v)
+    }
+    const height = Math.max(maxV - minV, 0)
+    return {
+      width: width > 0 ? width : this._width,
+      height: height > 0 ? height : this._height,
+      rotation
     }
   }
 
@@ -597,6 +1025,7 @@ export class AcDbRasterImage extends AcDbEntity {
   override dxfOutFields(filer: AcDbDxfFiler) {
     super.dxfOutFields(filer)
     filer.writeSubclassMarker('AcDbRasterImage')
+    filer.writeInt32(90, this.classVersion)
     filer.writePoint3d(10, this.position)
     const wcsWidth = this.width * this.scale.x
     const wcsHeight = this.height * this.scale.y
@@ -632,7 +1061,162 @@ export class AcDbRasterImage extends AcDbEntity {
         filer.writePoint2d(14, point)
       }
     }
+    filer.writeInt16(290, this.clipMode)
     return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbRasterImage')
+
+    let px = this.position.x
+    let py = this.position.y
+    let pz = this.position.z
+    let ux = 1
+    let uy = 0
+    let uz = 0
+    let vx = 0
+    let vy = 1
+    let vz = 0
+    let sx = this.imageSize.x
+    let sy = this.imageSize.y
+    const clipPts: AcGePoint2d[] = []
+    let pendingClip: { x: number; y: number } | null = null
+
+    const flushClip = () => {
+      if (pendingClip) {
+        clipPts.push(new AcGePoint2d(pendingClip.x, pendingClip.y))
+        pendingClip = null
+      }
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+          px = n
+          break
+        case 20:
+          py = n
+          break
+        case 30:
+          pz = n
+          break
+        case 11:
+          ux = n
+          break
+        case 21:
+          uy = n
+          break
+        case 31:
+          uz = n
+          break
+        case 12:
+          vx = n
+          break
+        case 22:
+          vy = n
+          break
+        case 32:
+          vz = n
+          break
+        case 13:
+          sx = n
+          break
+        case 23:
+          sy = n
+          break
+        case 14:
+          flushClip()
+          pendingClip = { x: n, y: 0 }
+          break
+        case 24:
+          if (pendingClip) pendingClip.y = n
+          break
+        case 70: {
+          this.isImageShown = (n & 0x0003) !== 0
+          this.isShownClipped = (n & AcDbRasterImageImageDisplayOpt.Clip) !== 0
+          this.isImageTransparent =
+            (n & AcDbRasterImageImageDisplayOpt.Transparent) !== 0
+          break
+        }
+        case 71:
+          this.clipBoundaryType = n as AcDbRasterImageClipBoundaryType
+          break
+        case 90:
+          this.classVersion = n
+          break
+        case 91:
+          // Clip vertex count — informational.
+          break
+        case 280:
+          this.isClipped = n !== 0
+          break
+        case 281:
+          this.brightness = n
+          break
+        case 282:
+          this.contrast = n
+          break
+        case 283:
+          this.fade = n
+          break
+        case 290:
+          this.clipMode = n
+          break
+        case 340:
+          this.imageDefId = String(item.value)
+          break
+        default:
+          break
+      }
+    }
+
+    flushClip()
+    this.applyRasterImageDxfIn(
+      px,
+      py,
+      pz,
+      ux,
+      uy,
+      uz,
+      vx,
+      vy,
+      vz,
+      sx,
+      sy,
+      clipPts
+    )
+    return this
+  }
+
+  private applyRasterImageDxfIn(
+    px: number,
+    py: number,
+    pz: number,
+    ux: number,
+    uy: number,
+    uz: number,
+    vx: number,
+    vy: number,
+    vz: number,
+    sx: number,
+    sy: number,
+    clipPts: AcGePoint2d[]
+  ) {
+    this.position.copy({ x: px, y: py, z: pz })
+    this.imageSize.copy({ x: sx, y: sy })
+    const uLen = Math.hypot(ux, uy, uz)
+    const vLen = Math.hypot(vx, vy, vz)
+    this.width = uLen * (sx || 1)
+    this.height = vLen * (sy || 1)
+    this.rotation = Math.atan2(uy, ux)
+    if (clipPts.length > 0) {
+      this.clipBoundary = clipPts
+    }
   }
 }
 

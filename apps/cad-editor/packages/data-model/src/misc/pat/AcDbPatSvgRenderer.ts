@@ -1,7 +1,7 @@
 import { AcGeMathUtil } from '@mlightcad/geometry-engine'
 
 import type { AcDbGradientName } from '../../entity/AcDbHatch'
-import { HATCH_PATTERN_SOLID } from '../AcDbConstants'
+import { acdbIsSolidHatchPatternName } from '../AcDbConstants'
 import type {
   AcDbPatLine,
   AcDbPatPattern,
@@ -246,7 +246,7 @@ export class AcDbPatSvgRenderer {
    * @returns `true` when the pattern name resolves to `SOLID`.
    */
   private static isSolidPattern(pattern: AcDbPatPattern) {
-    return pattern.name.trim().toUpperCase() === HATCH_PATTERN_SOLID
+    return acdbIsSolidHatchPatternName(pattern.name)
   }
 
   /**

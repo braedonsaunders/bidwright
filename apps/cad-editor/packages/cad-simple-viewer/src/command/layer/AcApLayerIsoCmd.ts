@@ -1,21 +1,15 @@
-import { AcDbLayerTableRecord, AcDbObjectId } from '@mlightcad/data-model'
+import { AcDbObjectId } from '@mlightcad/data-model'
 
 import { AcApContext, AcApDocManager } from '../../app'
 import {
-  AcEdCommand,
   AcEdOpenMode,
   AcEdPromptKeywordOptions,
   AcEdPromptSelectionOptions,
   AcEdPromptStatus
 } from '../../editor'
 import { AcApI18n } from '../../i18n'
-import {
-  AcApLayerIsoLayerSnapshot,
-  AcApLayerIsoLayerState,
-  AcApLayerIsoState,
-  getLayerIsoState,
-  isSameLayerIsoState
-} from './AcApLayerIsoState'
+import { AcApLayerIsolationMode, AcApLayerService } from '../../service'
+import { AcApLayerMutationCmd } from './AcApLayerMutationCmd'
 
 /**
  * Top-level keywords accepted by the `LAYISO` selection prompt.
@@ -79,7 +73,7 @@ const DEFAULT_SETTINGS: LayisoSettings = {
  * - Locked-layer fading is not rendered, so `Lock and fade` falls back to
  *   locking non-isolated layers without changing their visibility.
  */
-export class AcApLayerIsoCmd extends AcEdCommand {
+export class AcApLayerIsoCmd extends AcApLayerMutationCmd {
   private static _settings: LayisoSettings = { ...DEFAULT_SETTINGS }
 
   private _vpfreezeHintShown = false
@@ -265,28 +259,6 @@ export class AcApLayerIsoCmd extends AcEdCommand {
   }
 
   /**
-   * Sets or clears the frozen bit while preserving other layer flags.
-   *
-   * @param layer - Target layer table record.
-   * @param frozen - Whether the layer should be marked frozen.
-   */
-  private setLayerFrozen(layer: AcDbLayerTableRecord, frozen: boolean) {
-    const flags = layer.standardFlags ?? 0
-    layer.standardFlags = frozen ? flags | 0x01 : flags & ~0x01
-  }
-
-  /**
-   * Sets or clears the locked bit while preserving other layer flags.
-   *
-   * @param layer - Target layer table record.
-   * @param locked - Whether the layer should be marked locked.
-   */
-  private setLayerLocked(layer: AcDbLayerTableRecord, locked: boolean) {
-    const flags = layer.standardFlags ?? 0
-    layer.standardFlags = locked ? flags | 0x04 : flags & ~0x04
-  }
-
-  /**
    * Resolves selected entities to layer names and applies isolation.
    *
    * @param context - Active application context containing database and view.
@@ -296,80 +268,31 @@ export class AcApLayerIsoCmd extends AcEdCommand {
     context: AcApContext,
     objectIds: AcDbObjectId[]
   ) {
-    const layerNames = this.collectSelectedLayerNames(context, objectIds)
+    const service = new AcApLayerService(context.doc.database)
+    const { layerNames, missingLayerNames } =
+      service.collectLayerNamesFromEntities(objectIds)
+
+    if (missingLayerNames.length > 0) {
+      this.showMessage(
+        `${AcApI18n.t('jig.layiso.layerNotFound')}: ${missingLayerNames.join(', ')}`,
+        'warning'
+      )
+    }
+
     if (layerNames.length === 0) {
       this.showMessage(AcApI18n.t('jig.layiso.noLayers'), 'warning')
       return
     }
 
-    const db = context.doc.database
-    const table = db.tables.layerTable
-    const targetNames = new Set(layerNames)
-    const targetLayer = table.getAt(layerNames[0])
-    const currentLayerBefore = db.clayer
-    const beforeStates = new Map<string, AcApLayerIsoLayerState>()
+    const result = context.doc.isolateLayers(
+      layerNames,
+      AcApLayerIsoCmd._settings.isolationMode as AcApLayerIsolationMode
+    )
 
-    for (const layer of table.newIterator()) {
-      beforeStates.set(layer.name, getLayerIsoState(layer))
+    if (!result) {
+      this.showMessage(AcApI18n.t('jig.layiso.noLayers'), 'warning')
+      return
     }
-
-    if (targetLayer) {
-      db.clayer = targetLayer.name
-    }
-
-    const affectedLayerNames = new Set<string>()
-
-    for (const layer of table.newIterator()) {
-      if (targetNames.has(layer.name)) {
-        if (layer.isOff) {
-          layer.isOff = false
-          affectedLayerNames.add(layer.name)
-        }
-        if (layer.isFrozen) {
-          this.setLayerFrozen(layer, false)
-          affectedLayerNames.add(layer.name)
-        }
-        if (layer.isLocked) {
-          this.setLayerLocked(layer, false)
-          affectedLayerNames.add(layer.name)
-        }
-        continue
-      }
-
-      if (AcApLayerIsoCmd._settings.isolationMode === 'Off') {
-        if (!layer.isOff) {
-          layer.isOff = true
-          affectedLayerNames.add(layer.name)
-        }
-        continue
-      }
-
-      if (!layer.isLocked) {
-        this.setLayerLocked(layer, true)
-        affectedLayerNames.add(layer.name)
-      }
-    }
-
-    const snapshots: AcApLayerIsoLayerSnapshot[] = []
-    for (const layer of table.newIterator()) {
-      const before = beforeStates.get(layer.name)
-      if (!before) continue
-
-      const isolated = getLayerIsoState(layer)
-      if (!isSameLayerIsoState(before, isolated)) {
-        snapshots.push({
-          name: layer.name,
-          before,
-          isolated
-        })
-      }
-    }
-
-    AcApLayerIsoState.set({
-      currentLayerBefore,
-      currentLayerAfter: db.clayer,
-      layers: snapshots
-    })
 
     if (
       AcApLayerIsoCmd._settings.isolationMode === 'Off' &&
@@ -390,46 +313,8 @@ export class AcApLayerIsoCmd extends AcEdCommand {
 
     context.view.selectionSet.clear()
     this.showMessage(
-      `${AcApI18n.t('jig.layiso.isolated')}: ${layerNames.join(', ')} (${AcApI18n.t('jig.layiso.affectedLayers')}: ${affectedLayerNames.size})`,
+      `${AcApI18n.t('jig.layiso.isolated')}: ${layerNames.join(', ')} (${AcApI18n.t('jig.layiso.affectedLayers')}: ${result.affectedLayerCount})`,
       'success'
     )
-  }
-
-  /**
-   * Collects distinct layer names from selected entity ids.
-   *
-   * @param context - Active application context containing the drawing database.
-   * @param objectIds - Selected entity identifiers.
-   * @returns Layer names resolved from valid selected entities.
-   */
-  private collectSelectedLayerNames(
-    context: AcApContext,
-    objectIds: AcDbObjectId[]
-  ) {
-    const db = context.doc.database
-    const names = new Set<string>()
-    const missing = new Set<string>()
-
-    objectIds.forEach(objectId => {
-      const entity = db.tables.blockTable.getEntityById(objectId)
-      const layerName = entity?.layer?.trim()
-      if (!layerName) return
-
-      const layer = db.tables.layerTable.getAt(layerName)
-      if (layer) {
-        names.add(layer.name)
-      } else {
-        missing.add(layerName)
-      }
-    })
-
-    if (missing.size > 0) {
-      this.showMessage(
-        `${AcApI18n.t('jig.layiso.layerNotFound')}: ${[...missing].join(', ')}`,
-        'warning'
-      )
-    }
-
-    return [...names]
   }
 }

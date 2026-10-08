@@ -28,7 +28,7 @@ describe('AcDbTrace', () => {
     expect(AcDbTrace.typeName).toBe('Trace')
     expect(trace.dxfTypeName).toBe('TRACE')
     expect(trace.elevation).toBe(0)
-    expect(trace.thickness).toBe(1)
+    expect(trace.thickness).toBe(0)
     expect(trace.closed).toBe(true)
   })
 
@@ -209,7 +209,7 @@ describe('AcDbTrace', () => {
 
     const out = filer.toString()
     expect(out).toContain('100\nAcDbTrace\n')
-    expect(out).toContain('38\n8\n')
+    expect(out).not.toContain('38\n8\n')
     expect(out).toContain('39\n0.75\n')
     expect(out).toContain('10\n1\n20\n2\n30\n3\n')
     expect(out).toContain('11\n4\n21\n5\n31\n6\n')

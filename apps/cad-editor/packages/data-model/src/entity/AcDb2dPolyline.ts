@@ -1,16 +1,20 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint2d,
   AcGePoint3d,
   AcGePoint3dLike,
   AcGePolyline2d,
   AcGePolyline2dVertex,
+  acgeTransformOcsPointToWcs,
+  AcGeVector3d,
   AcGeVector3dLike
 } from '@mlightcad/geometry-engine'
 import { AcGiRenderer } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
+import { acdbDrawTessellateOptions } from '../misc/AcDbDrawTessellate'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbCurve } from './AcDbCurve'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
@@ -18,6 +22,7 @@ import {
   acdbForEachGripIndex,
   acdbMovePolyline2dVertexAt
 } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPolyline2d } from './AcDbIntersectHelpers'
 import {
   acdbCollectPolyline2dSegmentOsnapPoints,
   acdbPickNearestOsnapPoint
@@ -73,6 +78,8 @@ export class AcDb2dPolyline extends AcDbCurve {
   private _polyType: AcDbPoly2dType
   /** The elevation (Z-coordinate) of the polyline plane */
   private _elevation: number
+  /** Extrusion direction / plane normal (DXF group 210). */
+  private _normal = new AcGeVector3d(0, 0, 1)
   /** The underlying geometric polyline object */
   private _geo: AcGePolyline2d<AcGePolyline2dVertex>
 
@@ -153,6 +160,19 @@ export class AcDb2dPolyline extends AcDbCurve {
   }
 
   /**
+   * Extrusion direction / plane normal (DXF group 210).
+   */
+  get normal(): AcGeVector3d {
+    return this._normal
+  }
+  set normal(value: AcGeVector3dLike) {
+    this._normal.copy(value)
+    if (this._normal.lengthSq() > 0) {
+      this._normal.normalize()
+    }
+  }
+
+  /**
    * Gets whether this polyline is closed.
    *
    * A closed polyline has a segment drawn from the last vertex to the first vertex,
@@ -221,9 +241,38 @@ export class AcDb2dPolyline extends AcDbCurve {
    */
   get geometricExtents(): AcGeBox3d {
     const box = this._geo.box
-    return new AcGeBox3d(
-      { x: box.min.x, y: box.min.y, z: this._elevation },
-      { x: box.max.x, y: box.max.y, z: this._elevation }
+    // Empty OCS box uses ±Infinity; transforming those through the OCS matrix
+    // yields NaN and can poison spatial indexes downstream.
+    if (box.isEmpty()) {
+      return new AcGeBox3d()
+    }
+    return new AcGeBox3d().setFromPoints([
+      acgeTransformOcsPointToWcs(
+        { x: box.min.x, y: box.min.y, z: this._elevation },
+        this._normal
+      ),
+      acgeTransformOcsPointToWcs(
+        { x: box.max.x, y: box.min.y, z: this._elevation },
+        this._normal
+      ),
+      acgeTransformOcsPointToWcs(
+        { x: box.max.x, y: box.max.y, z: this._elevation },
+        this._normal
+      ),
+      acgeTransformOcsPointToWcs(
+        { x: box.min.x, y: box.max.y, z: this._elevation },
+        this._normal
+      )
+    ])
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return acdbIntersectPrimitivesFromPolyline2d(
+      this._geo.vertices,
+      this.closed,
+      this._elevation,
+      this._normal
     )
   }
 
@@ -336,6 +385,10 @@ export class AcDb2dPolyline extends AcDbCurve {
     })
 
     this._elevation = elevation
+    this._normal.transformDirection(matrix)
+    if (this._normal.lengthSq() > 0) {
+      this._normal.normalize()
+    }
     ;(
       this._geo as AcGePolyline2d<AcGePolyline2dVertex> & {
         _boundingBoxNeedsUpdate: boolean
@@ -425,6 +478,15 @@ export class AcDb2dPolyline extends AcDbCurve {
   }
 
   /**
+   * This 2d polyline always draws as a single `lineStrip` primitive.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    return 'lineStrip' as const
+  }
+
+  /**
    * Draws this polyline using the specified renderer.
    *
    * @param renderer - The renderer to use for drawing
@@ -432,7 +494,7 @@ export class AcDb2dPolyline extends AcDbCurve {
    */
   subWorldDraw(renderer: AcGiRenderer) {
     const points: AcGePoint3d[] = []
-    const tmp = this._geo.getPoints(100)
+    const tmp = this._geo.tessellate(acdbDrawTessellateOptions(renderer))
     tmp.forEach(point =>
       points.push(new AcGePoint3d().set(point.x, point.y, this.elevation))
     )
@@ -504,6 +566,7 @@ export class AcDb2dPolyline extends AcDbCurve {
     filer.writeDouble(10, 0)
     filer.writeDouble(20, 0)
     filer.writeDouble(30, this.elevation)
+    filer.writeVector3d(210, this.normal)
     return this
   }
 

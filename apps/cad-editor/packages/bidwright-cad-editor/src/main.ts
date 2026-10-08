@@ -6,7 +6,14 @@ import {
 } from "@mlightcad/cad-simple-viewer";
 import { AcDbSystemVariables, AcDbSysVarManager } from "@mlightcad/data-model";
 
+import { AcDbDatabaseConverterManager, AcDbFileType } from "@mlightcad/data-model";
+import { AcDbLibreDwgConverter } from "@mlightcad/libredwg-converter";
 import "./styles.css";
+
+AcDbDatabaseConverterManager.instance.register(AcDbFileType.DWG, new AcDbLibreDwgConverter({
+  useWorker: true, convertByEntityType: false,
+  parserWorkerUrl: new URL("./workers/libredwg-parser-worker.js", window.location.href).href,
+}));
 
 type SourceKind = "source_document" | "file_node";
 type CadMode = "preview" | "takeoff";
@@ -265,12 +272,12 @@ class BidwrightCadBridge {
       documentId: this.documentId,
       sourceKind: this.options.sourceKind,
       fileName: ensureDxfName(this.options.fileName),
-      dxfContent: AcApDocManager.instance.curDocument.database.dxfOut(undefined, 6),
+      dxfContent: String(AcApDocManager.instance.curDocument.database.dxfOut(undefined, 6)),
     };
     return this.dxfSnapshot;
   }
 
-  private saveDxf(): void {
+  saveDxf(): void {
     try {
       const snapshot = this.captureDxf();
       if (!snapshot) return;
@@ -338,7 +345,7 @@ class BidwrightCadBridge {
         if (typeof resize === "function") {
           resize.call(view);
         }
-        if (fit && this.loaded) {
+        if (fit && this.loaded && view.activeLayoutView) {
           AcApDocManager.instance.sendStringToExecute("zoom\nall");
         }
       } catch {
@@ -511,11 +518,9 @@ class BidwrightTakeoffCadApp extends BidwrightCadBridge {
         UNDO: ["U"],
       },
       webworkerFileUrls: {
-        dxfParser: "./workers/dxf-parser-worker.js",
         dwgParser: "./workers/libredwg-parser-worker.js",
         mtextRender: "./workers/mtext-renderer-worker.js",
       },
-      htmlViewerRuntimeUrl: "./viewer-runtime.iife.js",
     });
   }
 
@@ -566,6 +571,7 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
     import("vue"),
   ]);
   const { MlCadViewer, i18n } = cadViewer;
+  const { PipingWorkbench } = await import("./piping/workbench");
   const { createApp, defineComponent, h, onMounted, ref, shallowRef } = vue;
   const NativeCadEditorApp = defineComponent({
     name: "BidwrightNativeCadEditorApp",
@@ -574,6 +580,16 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
       const loading = ref(Boolean(options.fileUrl));
       const error = ref<string | null>(null);
       const bridge = new BidwrightCadBridge(options);
+      const pipingRoot = ref<HTMLElement>();
+      const pipingVisible = ref(false);
+      let piping: InstanceType<typeof PipingWorkbench> | undefined;
+      const showMode = (value: boolean) => {
+        pipingVisible.value = value;
+        piping?.setVisible(value);
+        if (!value) window.setTimeout(() => {
+          window.dispatchEvent(new Event("resize"));
+        }, 0);
+      };
 
       onMounted(async () => {
         if (!options.fileUrl) return;
@@ -606,7 +622,12 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
       });
 
       return () => h("div", { class: "bidwright-native-cad-shell" }, [
-        h(MlCadViewer, {
+        h("nav", { class: "bw-cad-modes", "aria-label": "Drawing workspace" }, [
+          h("button", { class: !pipingVisible.value ? "active" : "", onClick: () => showMode(false) }, "2D CAD"),
+          h("button", { class: pipingVisible.value ? "active" : "", onClick: () => showMode(true) }, "Piping isometric"),
+          h("span", {}, "MLightCAD 1.7.4"),
+        ]),
+        h("div", { class: "bw-cad-native-view", style: { visibility: pipingVisible.value ? "hidden" : "visible" } }, [h(MlCadViewer, {
           locale: "en",
           localFile: localFile.value,
           theme: options.theme,
@@ -617,9 +638,13 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
           progressiveRendering: false,
           baseUrl: CAD_DATA_BASE_URL,
           htmlViewerRuntimeUrl: "./viewer-runtime.iife.js",
-          onCreate: () => bridge.attach(),
-          onDestroy: () => bridge.dispose(),
-        }),
+          onCreate: () => {
+            bridge.attach();
+            if (pipingRoot.value) piping = new PipingWorkbench(pipingRoot.value, () => bridge.saveDxf());
+          },
+          onDestroy: () => { piping?.dispose(); bridge.dispose(); },
+        })]),
+        h("div", { ref: pipingRoot }),
         loading.value
           ? h("div", { class: "bidwright-native-cad-overlay" }, "Opening drawing...")
           : null,

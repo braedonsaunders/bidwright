@@ -1,8 +1,8 @@
 import { AcGeSpline3d, AcGeKnotParameterizationType } from '../src'
 import { AcGePoint3d, AcGeBox3d, AcGeMatrix3d } from '../src'
 import {
-  computeParameterValues,
-  evaluateNurbsPoint
+  acgeComputeParameterValues,
+  acgeEvaluateNurbsPoint
 } from '../src/util/AcGeNurbsUtil'
 import { AcCmErrors } from '@mlightcad/common'
 
@@ -197,11 +197,11 @@ describe('AcGeSpline3d', () => {
       expect(endDerivative.y).toBeCloseTo(endTangent.y, 6)
       expect(endDerivative.z).toBeCloseTo(endTangent.z, 6)
 
-      const params = computeParameterValues(
+      const params = acgeComputeParameterValues(
         fitPoints.map(point => [point.x, point.y, point.z || 0]),
         'Uniform'
       )
-      const evaluatedMid = evaluateNurbsPoint(
+      const evaluatedMid = acgeEvaluateNurbsPoint(
         params[1],
         degree,
         knots,

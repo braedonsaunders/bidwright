@@ -46,7 +46,19 @@ export interface AcGiMTextData {
   directionVector?: AcGeVector3dLike
   attachmentPoint?: AcGiMTextAttachmentPoint
   drawingDirection?: AcGiMTextFlowDirection
+  /**
+   * AutoCAD DXF group-44 line spacing factor.
+   * Ratio of actual baseline spacing to single spacing (`5/3` of text height).
+   * Default is `1.0`.
+   */
   lineSpaceFactor?: number
+  /**
+   * AutoCAD DXF group-73 line spacing style.
+   * `1` = At Least (default when omitted/`0`): spacing is at least the text
+   * height when the factor would pack lines tighter than that.
+   * `2` = Exact: use `lineSpaceFactor` even when lines overlap.
+   */
+  lineSpaceStyle?: number
   widthFactor?: number
 }
 

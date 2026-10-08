@@ -1,5 +1,6 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint2d,
   AcGePoint3d,
@@ -13,7 +14,8 @@ import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbCurve } from './AcDbCurve'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
 import { acdbForEachGripIndex } from './AcDbGripHelpers'
-import { AcDbPolyline, offsetVertexPathAsPolyline } from './AcDbPolyline'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
+import { acdbOffsetVertexPathAsPolyline,AcDbPolyline } from './AcDbPolyline'
 
 /**
  * Represents a polyface mesh vertex in AutoCAD.
@@ -157,6 +159,26 @@ export class AcDbPolyFaceMesh extends AcDbCurve {
       new AcGePoint3d(minX, minY, minZ),
       new AcGePoint3d(maxX, maxY, maxZ)
     )
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const primitives: AcGeIntersectPrimitive[] = []
+    this._faces.forEach(face => {
+      const faceVertices: AcGePoint3d[] = []
+      face.vertexIndices.forEach(index => {
+        const absIndex = Math.abs(index) - 1
+        if (absIndex >= 0 && absIndex < this._vertices.length) {
+          faceVertices.push(this._vertices[absIndex].position)
+        }
+      })
+      if (faceVertices.length >= 2) {
+        primitives.push(
+          ...acdbIntersectPrimitivesFromPointPath(faceVertices, true)
+        )
+      }
+    })
+    return primitives
   }
 
   /**
@@ -405,7 +427,7 @@ export class AcDbPolyFaceMesh extends AcDbCurve {
    * @returns Offset polyline around the dominant face boundary, or `null` on failure
    */
   private createOffsetCurve(offsetDist: number): AcDbCurve | null {
-    return offsetVertexPathAsPolyline(
+    return acdbOffsetVertexPathAsPolyline(
       this.collectLargestFaceBoundary2d(),
       true,
       offsetDist

@@ -1,10 +1,13 @@
 import {
+  ACAP_UNTITLED_DOC_TITLE,
   AcApDocManager,
   AcApDocument,
   AcDbDocumentEventArgs,
+  type AcEdEvents,
   AcEdOpenMode,
   eventBus
 } from '@mlightcad/cad-simple-viewer'
+import type { AcDbOpenDatabaseErrorCode } from '@mlightcad/data-model'
 import {
   computed,
   type ComputedRef,
@@ -14,6 +17,8 @@ import {
   type Ref,
   ref
 } from 'vue'
+
+import { i18n } from '../locale'
 
 /**
  * Reactive view of the active CAD document and its open lifecycle.
@@ -53,7 +58,7 @@ export interface UseDocumentReturn {
    * Display title of the active document.
    *
    * Mirrors {@link AcApDocument.docTitle}. For a new document this is
-   * typically `"Untitled"` until a file is opened.
+   * {@link ACAP_UNTITLED_DOC_TITLE} until a file is opened.
    */
   docTitle: DeepReadonly<Ref<string>>
 
@@ -61,7 +66,8 @@ export interface UseDocumentReturn {
    * User-facing document label for UI display.
    *
    * Resolves to {@link docTitle} when present, otherwise falls back to
-   * {@link fileName}.
+   * {@link fileName}. When the document is unsaved, localizes
+   * {@link ACAP_UNTITLED_DOC_TITLE} via `main.document.untitled`.
    */
   displayName: ComputedRef<string>
 
@@ -82,6 +88,12 @@ export interface UseDocumentReturn {
    * {@link beginDocumentOpening} in custom open handlers.
    */
   endDocumentOpening: () => void
+
+  /**
+   * Structured failure category from the most recent `failed-to-open-file`
+   * event, when available.
+   */
+  lastOpenErrorCode: DeepReadonly<Ref<AcDbOpenDatabaseErrorCode | undefined>>
 }
 
 /** Shared flag indicating whether a document open operation is in progress. */
@@ -96,11 +108,33 @@ const fileName = ref('')
 /** Shared active document title sourced from {@link AcApDocument.docTitle}. */
 const docTitle = ref('')
 
+/**
+ * Resolves the user-facing document label from raw title and file name.
+ *
+ * @param title - {@link AcApDocument.docTitle}
+ * @param name - {@link AcApDocument.fileName}
+ */
+function resolveDisplayName(title: string, name: string): string {
+  if (title === ACAP_UNTITLED_DOC_TITLE && !name) {
+    return i18n.global.t('main.document.untitled')
+  }
+  return title || name
+}
+
 /** Shared computed label for UI surfaces that show the current document name. */
-const displayName = computed(() => docTitle.value || fileName.value)
+const displayName = computed(() => {
+  void i18n.global.locale.value
+  return resolveDisplayName(docTitle.value, fileName.value)
+})
+
+/** Structured error code from the latest failed open attempt. */
+const lastOpenErrorCode = ref<AcDbOpenDatabaseErrorCode>()
 
 /** Whether lifecycle listeners have already been attached to the doc manager. */
 let isBound = false
+
+/** Manager instance that {@link isBound} listeners are attached to. */
+let boundManager: AcApDocManager | null = null
 
 /** Polling timer used while waiting for {@link AcApDocManager.instance}. */
 let retryTimer: ReturnType<typeof setInterval> | undefined
@@ -172,6 +206,7 @@ function onDocumentToBeOpened(args: AcDbDocumentEventArgs) {
  */
 function onDocumentActivated(args: AcDbDocumentEventArgs) {
   endDocumentOpening()
+  lastOpenErrorCode.value = undefined
   syncFromDocument(args.doc)
 }
 
@@ -180,8 +215,10 @@ function onDocumentActivated(args: AcDbDocumentEventArgs) {
  *
  * Ensures {@link isDocumentOpening} is cleared when an open attempt fails.
  */
-function onFailedToOpenFile() {
+function onFailedToOpenFile(params: AcEdEvents['failed-to-open-file']) {
   endDocumentOpening()
+  lastOpenErrorCode.value = params.errorCode
+  syncFromDocument()
 }
 
 /**
@@ -194,6 +231,21 @@ function stopRetryTimer() {
 }
 
 /**
+ * Removes lifecycle listeners from the currently bound manager.
+ */
+function unbind() {
+  if (!boundManager) return
+
+  boundManager.events.documentToBeOpened.removeEventListener(
+    onDocumentToBeOpened
+  )
+  boundManager.events.documentActivated.removeEventListener(onDocumentActivated)
+  eventBus.off('failed-to-open-file', onFailedToOpenFile)
+  isBound = false
+  boundManager = null
+}
+
+/**
  * Attempts to connect lifecycle listeners to {@link AcApDocManager.instance}.
  *
  * On success, the current document state is synchronized immediately and
@@ -202,14 +254,24 @@ function stopRetryTimer() {
  * @returns `true` when binding succeeded; otherwise `false`
  */
 function tryBind() {
-  if (isBound) return true
+  const manager = getExistingDocManager()
+
+  if (isBound && (!manager || boundManager !== manager)) {
+    unbind()
+  }
+
+  if (!manager) return false
+  if (isBound) {
+    syncFromDocument(manager.curDocument)
+    return true
+  }
 
   try {
-    const manager = AcApDocManager.instance
     syncFromDocument(manager.curDocument)
     manager.events.documentToBeOpened.addEventListener(onDocumentToBeOpened)
     manager.events.documentActivated.addEventListener(onDocumentActivated)
     eventBus.on('failed-to-open-file', onFailedToOpenFile)
+    boundManager = manager
     isBound = true
     stopRetryTimer()
     return true
@@ -248,6 +310,7 @@ function ensureBound() {
  * - Synchronizes {@link fileName}, {@link docTitle}, and {@link openMode}
  *   when `documentActivated` fires
  * - Clears the opening state when `failed-to-open-file` is emitted
+ * - Records {@link lastOpenErrorCode} from structured open failures
  *
  * @returns Shared reactive document state and manual open-state helpers
  */
@@ -265,6 +328,7 @@ export function useDocument(): UseDocumentReturn {
     docTitle: readonly(docTitle),
     displayName,
     beginDocumentOpening,
-    endDocumentOpening
+    endDocumentOpening,
+    lastOpenErrorCode: readonly(lastOpenErrorCode)
   }
 }

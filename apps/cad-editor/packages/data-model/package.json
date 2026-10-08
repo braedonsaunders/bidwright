@@ -1,6 +1,6 @@
 {
   "name": "@mlightcad/data-model",
-  "version": "1.9.14",
+  "version": "1.15.1",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -45,9 +45,9 @@
   },
   "dependencies": {
     "@mlightcad/common": "workspace:*",
+    "@mlightcad/emf-converter": "workspace:*",
     "@mlightcad/geometry-engine": "workspace:*",
     "@mlightcad/graphic-interface": "workspace:*",
-    "iconv-lite": "^0.7.0",
     "uid": "^2.0.2"
   }
 }

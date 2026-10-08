@@ -1,36 +1,36 @@
 import {
-  computeParameterValues,
-  generateUniformKnots,
-  generateChordKnots,
-  generateSqrtChordKnots,
-  basisFunction,
-  evaluateNurbsPoint,
-  evaluateNurbsDerivatives,
-  signedPlanarCurvature,
-  calculateCurveLength,
-  interpolateControlPoints,
-  interpolateNurbsCurve
+  acgeComputeParameterValues,
+  acgeGenerateUniformKnots,
+  acgeGenerateChordKnots,
+  acgeGenerateSqrtChordKnots,
+  acgeBasisFunction,
+  acgeEvaluateNurbsPoint,
+  acgeEvaluateNurbsDerivatives,
+  acgeSignedPlanarCurvature,
+  acgeCalculateCurveLength,
+  acgeInterpolateControlPoints,
+  acgeInterpolateNurbsCurve
 } from '../src/util/AcGeNurbsUtil'
 
 describe('AcGeNurbsUtil', () => {
-  describe('generateUniformKnots', () => {
+  describe('acgeGenerateUniformKnots', () => {
     it('should generate uniform knots for degree 3 with 4 control points', () => {
-      const knots = generateUniformKnots(3, 4)
+      const knots = acgeGenerateUniformKnots(3, 4)
       expect(knots).toEqual([0, 0, 0, 0, 1, 1, 1, 1])
     })
 
     it('should generate uniform knots for degree 2 with 5 control points', () => {
-      const knots = generateUniformKnots(2, 5)
+      const knots = acgeGenerateUniformKnots(2, 5)
       expect(knots).toEqual([0, 0, 0, 1, 2, 3, 3, 3])
     })
 
     it('should generate uniform knots for degree 1 with 3 control points', () => {
-      const knots = generateUniformKnots(1, 3)
+      const knots = acgeGenerateUniformKnots(1, 3)
       expect(knots).toEqual([0, 0, 1, 2, 2])
     })
   })
 
-  describe('generateChordKnots', () => {
+  describe('acgeGenerateChordKnots', () => {
     it('should generate chord parameterized knots', () => {
       const points = [
         [0, 0, 0],
@@ -38,7 +38,7 @@ describe('AcGeNurbsUtil', () => {
         [2, 0, 0],
         [3, 1, 0]
       ]
-      const knots = generateChordKnots(3, points)
+      const knots = acgeGenerateChordKnots(3, points)
 
       expect(knots).toHaveLength(8)
       expect(knots[0]).toBe(0)
@@ -58,7 +58,7 @@ describe('AcGeNurbsUtil', () => {
         [3, 0, 0], // distance 2
         [6, 0, 0] // distance 3
       ]
-      const knots = generateChordKnots(3, points)
+      const knots = acgeGenerateChordKnots(3, points)
 
       // Total length is 6, so middle knots should be proportional
       expect(knots[4]).toBeGreaterThan(0)
@@ -73,13 +73,13 @@ describe('AcGeNurbsUtil', () => {
         [6, 0, 0],
         [10, 0, 0]
       ]
-      const knots = generateChordKnots(2, points)
+      const knots = acgeGenerateChordKnots(2, points)
       expect(knots[3]).toBeGreaterThan(0)
       expect(knots[4]).toBeGreaterThan(knots[3])
     })
   })
 
-  describe('generateSqrtChordKnots', () => {
+  describe('acgeGenerateSqrtChordKnots', () => {
     it('should generate sqrt chord parameterized knots', () => {
       const points = [
         [0, 0, 0],
@@ -87,7 +87,7 @@ describe('AcGeNurbsUtil', () => {
         [2, 0, 0],
         [3, 1, 0]
       ]
-      const knots = generateSqrtChordKnots(3, points)
+      const knots = acgeGenerateSqrtChordKnots(3, points)
 
       expect(knots).toHaveLength(8)
       expect(knots[0]).toBe(0)
@@ -108,18 +108,18 @@ describe('AcGeNurbsUtil', () => {
         [6, 0, 0],
         [10, 0, 0]
       ]
-      const knots = generateSqrtChordKnots(2, points)
+      const knots = acgeGenerateSqrtChordKnots(2, points)
       expect(knots[3]).toBeGreaterThan(0)
       expect(knots[4]).toBeGreaterThan(knots[3])
     })
   })
 
-  describe('computeParameterValues', () => {
+  describe('acgeComputeParameterValues', () => {
     it('handles empty/single/degenerate distance inputs', () => {
-      expect(computeParameterValues([], 'Chord')).toEqual([])
-      expect(computeParameterValues([[1, 2, 3]], 'Chord')).toEqual([0])
+      expect(acgeComputeParameterValues([], 'Chord')).toEqual([])
+      expect(acgeComputeParameterValues([[1, 2, 3]], 'Chord')).toEqual([0])
       expect(
-        computeParameterValues(
+        acgeComputeParameterValues(
           [
             [1, 1, 1],
             [1, 1, 1],
@@ -131,34 +131,34 @@ describe('AcGeNurbsUtil', () => {
     })
   })
 
-  describe('basisFunction', () => {
+  describe('acgeBasisFunction', () => {
     it('should return 1 for degree 0 when parameter is in range', () => {
       const knots = [0, 1, 2, 3]
-      expect(basisFunction(0, 0, 0.5, knots)).toBe(1)
-      expect(basisFunction(1, 0, 1.5, knots)).toBe(1)
+      expect(acgeBasisFunction(0, 0, 0.5, knots)).toBe(1)
+      expect(acgeBasisFunction(1, 0, 1.5, knots)).toBe(1)
     })
 
     it('should return 0 for degree 0 when parameter is out of range', () => {
       const knots = [0, 1, 2, 3]
-      expect(basisFunction(0, 0, 1.5, knots)).toBe(0)
-      expect(basisFunction(1, 0, 0.5, knots)).toBe(0)
+      expect(acgeBasisFunction(0, 0, 1.5, knots)).toBe(0)
+      expect(acgeBasisFunction(1, 0, 0.5, knots)).toBe(0)
     })
 
     it('should calculate degree 1 basis function correctly', () => {
       const knots = [0, 0, 1, 1]
-      const result = basisFunction(0, 1, 0.5, knots)
+      const result = acgeBasisFunction(0, 1, 0.5, knots)
       expect(result).toBeGreaterThan(0)
       expect(result).toBeLessThan(1)
     })
 
     it('should handle edge cases with zero knot differences', () => {
       const knots = [0, 0, 0, 0]
-      const result = basisFunction(0, 1, 0, knots)
+      const result = acgeBasisFunction(0, 1, 0, knots)
       expect(result).toBe(0)
     })
   })
 
-  describe('evaluateNurbsPoint', () => {
+  describe('acgeEvaluateNurbsPoint', () => {
     it('should evaluate point on NURBS curve', () => {
       const degree = 3
       const knots = [0, 0, 0, 0, 1, 1, 1, 1]
@@ -170,7 +170,7 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [1, 1, 1, 1]
 
-      const point = evaluateNurbsPoint(
+      const point = acgeEvaluateNurbsPoint(
         0.5,
         degree,
         knots,
@@ -197,14 +197,14 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [1, 1, 1, 1]
 
-      const point1 = evaluateNurbsPoint(
+      const point1 = acgeEvaluateNurbsPoint(
         -1,
         degree,
         knots,
         controlPoints,
         weights
       )
-      const point2 = evaluateNurbsPoint(
+      const point2 = acgeEvaluateNurbsPoint(
         2,
         degree,
         knots,
@@ -213,10 +213,10 @@ describe('AcGeNurbsUtil', () => {
       )
 
       expect(point1).toEqual(
-        evaluateNurbsPoint(0, degree, knots, controlPoints, weights)
+        acgeEvaluateNurbsPoint(0, degree, knots, controlPoints, weights)
       )
       expect(point2).toEqual(
-        evaluateNurbsPoint(1, degree, knots, controlPoints, weights)
+        acgeEvaluateNurbsPoint(1, degree, knots, controlPoints, weights)
       )
     })
 
@@ -231,7 +231,7 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [1, 2, 1, 1] // Second control point has weight 2
 
-      const point = evaluateNurbsPoint(
+      const point = acgeEvaluateNurbsPoint(
         0.5,
         degree,
         knots,
@@ -261,14 +261,14 @@ describe('AcGeNurbsUtil', () => {
       const positiveWeights = new Array(controlPoints.length).fill(1)
       const negativeWeights = new Array(controlPoints.length).fill(-1)
 
-      const positivePoint = evaluateNurbsPoint(
+      const positivePoint = acgeEvaluateNurbsPoint(
         6,
         degree,
         knots,
         controlPoints,
         positiveWeights
       )
-      const negativePoint = evaluateNurbsPoint(
+      const negativePoint = acgeEvaluateNurbsPoint(
         6,
         degree,
         knots,
@@ -282,7 +282,7 @@ describe('AcGeNurbsUtil', () => {
     })
   })
 
-  describe('evaluateNurbsDerivatives', () => {
+  describe('acgeEvaluateNurbsDerivatives', () => {
     it('returns a constant tangent for a straight degree-1 segment', () => {
       const degree = 1
       const knots = [0, 0, 1, 1]
@@ -292,7 +292,7 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [1, 1]
 
-      const evaluation = evaluateNurbsDerivatives(
+      const evaluation = acgeEvaluateNurbsDerivatives(
         0.5,
         degree,
         knots,
@@ -305,12 +305,12 @@ describe('AcGeNurbsUtil', () => {
       expect(evaluation.deriv1[0]).toBeCloseTo(4, 4)
       expect(evaluation.deriv1[1]).toBeCloseTo(0, 4)
       expect(
-        signedPlanarCurvature(evaluation.deriv1, evaluation.deriv2)
+        acgeSignedPlanarCurvature(evaluation.deriv1, evaluation.deriv2)
       ).toBeCloseTo(0, 4)
     })
   })
 
-  describe('calculateCurveLength', () => {
+  describe('acgeCalculateCurveLength', () => {
     it('should calculate length of a straight line', () => {
       const degree = 3
       const knots = [0, 0, 0, 0, 1, 1, 1, 1]
@@ -322,7 +322,7 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [1, 1, 1, 1]
 
-      const length = calculateCurveLength(degree, knots, controlPoints, weights)
+      const length = acgeCalculateCurveLength(degree, knots, controlPoints, weights)
 
       expect(length).toBeCloseTo(1, 2)
     })
@@ -338,14 +338,14 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [1, 1, 1, 1]
 
-      const length = calculateCurveLength(degree, knots, controlPoints, weights)
+      const length = acgeCalculateCurveLength(degree, knots, controlPoints, weights)
 
       expect(length).toBeGreaterThan(3) // Should be longer than straight line distance
       expect(length).toBeLessThan(7) // Should be reasonable
     })
   })
 
-  describe('interpolateControlPoints', () => {
+  describe('acgeInterpolateControlPoints', () => {
     it('should interpolate control points', () => {
       const fitPoints = [
         [0, 0, 0],
@@ -354,7 +354,7 @@ describe('AcGeNurbsUtil', () => {
         [3, 1, 0]
       ]
 
-      const controlPoints = interpolateControlPoints(fitPoints)
+      const controlPoints = acgeInterpolateControlPoints(fitPoints)
 
       expect(controlPoints).toHaveLength(4)
       expect(controlPoints[0]).toEqual([0, 0, 0])
@@ -367,14 +367,14 @@ describe('AcGeNurbsUtil', () => {
     })
 
     it('should handle empty array', () => {
-      const controlPoints = interpolateControlPoints([])
+      const controlPoints = acgeInterpolateControlPoints([])
       expect(controlPoints).toEqual([])
     })
   })
 
-  describe('interpolateNurbsCurve', () => {
+  describe('acgeInterpolateNurbsCurve', () => {
     it('should return empty result for empty fit points', () => {
-      expect(interpolateNurbsCurve([], 3)).toEqual({
+      expect(acgeInterpolateNurbsCurve([], 3)).toEqual({
         controlPoints: [],
         knots: [],
         weights: []
@@ -383,7 +383,7 @@ describe('AcGeNurbsUtil', () => {
 
     it('should throw when not enough points for degree', () => {
       expect(() =>
-        interpolateNurbsCurve(
+        acgeInterpolateNurbsCurve(
           [
             [0, 0, 0],
             [1, 0, 0]
@@ -402,11 +402,11 @@ describe('AcGeNurbsUtil', () => {
       ]
       const degree = 3
 
-      const result = interpolateNurbsCurve(fitPoints, degree, 'Uniform')
-      const params = computeParameterValues(fitPoints, 'Uniform')
+      const result = acgeInterpolateNurbsCurve(fitPoints, degree, 'Uniform')
+      const params = acgeComputeParameterValues(fitPoints, 'Uniform')
 
       params.forEach((u, index) => {
-        const point = evaluateNurbsPoint(
+        const point = acgeEvaluateNurbsPoint(
           u,
           degree,
           result.knots,
@@ -429,7 +429,7 @@ describe('AcGeNurbsUtil', () => {
       const startTangent = [1, 0, 0]
       const endTangent = [1, 0, 0]
 
-      const result = interpolateNurbsCurve(
+      const result = acgeInterpolateNurbsCurve(
         fitPoints,
         degree,
         'Uniform',
@@ -469,7 +469,7 @@ describe('AcGeNurbsUtil', () => {
   describe('Edge Cases', () => {
     it('should handle very small knot differences', () => {
       const knots = [0, 0, 0, 0, 1e-10, 1, 1, 1]
-      const result = basisFunction(0, 1, 0, knots)
+      const result = acgeBasisFunction(0, 1, 0, knots)
       expect(result).toBe(0)
     })
 
@@ -484,7 +484,7 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [0, 0, 0, 0]
 
-      const point = evaluateNurbsPoint(
+      const point = acgeEvaluateNurbsPoint(
         0.5,
         degree,
         knots,
@@ -505,7 +505,7 @@ describe('AcGeNurbsUtil', () => {
       ]
       const weights = [0, 0, 0]
 
-      const point = evaluateNurbsPoint(
+      const point = acgeEvaluateNurbsPoint(
         0.5,
         degree,
         knots,
@@ -522,7 +522,7 @@ describe('AcGeNurbsUtil', () => {
       const controlPoints = [[1, 2, 3]]
       const weights = [1]
 
-      const point = evaluateNurbsPoint(
+      const point = acgeEvaluateNurbsPoint(
         0.5,
         degree,
         knots,

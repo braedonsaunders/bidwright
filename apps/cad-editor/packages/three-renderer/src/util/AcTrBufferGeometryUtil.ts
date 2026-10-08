@@ -107,6 +107,205 @@ export class AcTrBufferGeometryUtil {
     return geometry
   }
 
+  /**
+   * Rebuilds `lineDistance` for non-indexed {@link THREE.LineSegments} geometry.
+   *
+   * Uses only complete vertex pairs so the attribute length always matches
+   * `position.count`. Call after sanitizing or rebasing segment positions.
+   *
+   * When an existing `lineDistance` attribute is present, each segment pair keeps
+   * its start phase and only the end value is updated from the new length. That
+   * preserves entity-local dash phases after GroupCompactor merges (each leaf
+   * starts at 0). A full chain restart (`0, d0, d0, d0+d1, ...`) is used only
+   * when building distances from scratch — chaining across merged independent
+   * segments would push later entities into linetype gaps (A4107 WSP connectors).
+   */
+  static recomputeLineDistanceForLineSegments(
+    geometry: THREE.BufferGeometry,
+    worldMatrix?: THREE.Matrix4
+  ) {
+    let positionAttribute = geometry.getAttribute(
+      'position'
+    ) as THREE.BufferAttribute
+    if (!positionAttribute || positionAttribute.count < 2) {
+      geometry.deleteAttribute('lineDistance')
+      return
+    }
+
+    const vertexCount = positionAttribute.count - (positionAttribute.count % 2)
+    if (vertexCount === 0) {
+      geometry.deleteAttribute('lineDistance')
+      return
+    }
+
+    if (vertexCount < positionAttribute.count) {
+      const trimmed = new Float32Array(vertexCount * positionAttribute.itemSize)
+      trimmed.set(
+        (positionAttribute.array as THREE.TypedArray).subarray(
+          0,
+          trimmed.length
+        )
+      )
+      geometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(trimmed, positionAttribute.itemSize)
+      )
+      positionAttribute = geometry.getAttribute(
+        'position'
+      ) as THREE.BufferAttribute
+    }
+
+    const existing = geometry.getAttribute('lineDistance') as
+      | THREE.BufferAttribute
+      | undefined
+    const preserveStarts =
+      !!existing && existing.count >= vertexCount
+
+    const lineDistances = new Float32Array(vertexCount)
+    for (let i = 0; i < vertexCount; i += 2) {
+      if (worldMatrix) {
+        _vector1
+          .fromBufferAttribute(positionAttribute, i)
+          .applyMatrix4(worldMatrix)
+        _vector2
+          .fromBufferAttribute(positionAttribute, i + 1)
+          .applyMatrix4(worldMatrix)
+      } else {
+        _vector1.fromBufferAttribute(positionAttribute, i)
+        _vector2.fromBufferAttribute(positionAttribute, i + 1)
+      }
+
+      const start = preserveStarts
+        ? existing!.getX(i)
+        : i === 0
+          ? 0
+          : lineDistances[i - 1]
+      lineDistances[i] = start
+      lineDistances[i + 1] = start + _vector1.distanceTo(_vector2)
+    }
+
+    geometry.setAttribute(
+      'lineDistance',
+      new THREE.Float32BufferAttribute(lineDistances, 1)
+    )
+  }
+
+  /**
+   * Whether one material's shader consumes the per-vertex `lineDistance`
+   * attribute (pattern/dashed linetype shader materials). Thin solid lines
+   * and wide lines never read it, so their geometries skip the attribute.
+   */
+  static hasPatternLineShader(material: THREE.Material): boolean {
+    return (
+      material instanceof THREE.ShaderMaterial &&
+      material.vertexShader.includes('lineDistance')
+    )
+  }
+
+  /**
+   * Adds a per-vertex cumulative `lineDistance` attribute to one standalone
+   * line geometry when `material` is a pattern shader that consumes it and the
+   * geometry does not carry the attribute yet.
+   *
+   * Used after material rebinds swap a dash-capable material onto a geometry
+   * authored for a solid material (solid lines skip lineDistance to save
+   * ~25% of line vertex memory).
+   *
+   * @param geometry - Line geometry mutated in place.
+   * @param material - One material or material array to inspect.
+   * @returns `true` when the attribute was added.
+   */
+  static ensureLineDistance(
+    geometry: THREE.BufferGeometry,
+    material: THREE.Material | THREE.Material[]
+  ): boolean {
+    if (geometry.hasAttribute('lineDistance')) {
+      return false
+    }
+    const primary = Array.isArray(material) ? material[0] : material
+    if (!primary || !AcTrBufferGeometryUtil.hasPatternLineShader(primary)) {
+      return false
+    }
+    AcTrBufferGeometryUtil.computeSegmentLineDistances(geometry)
+    return geometry.hasAttribute('lineDistance')
+  }
+
+  /**
+   * Computes per-vertex cumulative `lineDistance` for line-segment geometry.
+   *
+   * Distances accumulate along segment pairs starting from zero, so each
+   * geometry (one packed entity) gets an entity-local dash phase. Indexed
+   * geometry follows index pairs; non-indexed geometry follows consecutive
+   * vertex pairs. Unlike {@link recomputeLineDistanceForLineSegments} this
+   * never trims vertices or drops the attribute, which keeps batch slot
+   * reservations and the batch attribute contract intact.
+   *
+   * @param geometry - Line-segment geometry mutated in place.
+   */
+  static computeSegmentLineDistances(geometry: THREE.BufferGeometry) {
+    const positionAttribute = geometry.getAttribute('position') as
+      | THREE.BufferAttribute
+      | undefined
+    if (!positionAttribute) {
+      geometry.deleteAttribute('lineDistance')
+      return
+    }
+    if (positionAttribute.count < 2) {
+      geometry.setAttribute(
+        'lineDistance',
+        new THREE.Float32BufferAttribute(
+          new Float32Array(positionAttribute.count),
+          1
+        )
+      )
+      return
+    }
+
+    const lineDistances = new Float32Array(positionAttribute.count)
+    const index = geometry.getIndex()
+    let accumulated = 0
+
+    if (index) {
+      // Degenerate padding pairs may trail the real segments inside the index
+      // buffer (e.g. a two-vertex line backed by a four-slot index array).
+      // The first segment touching a vertex defines its distance so those
+      // padding pairs cannot overwrite real segment distances.
+      const written = new Uint8Array(positionAttribute.count)
+      for (let i = 0; i + 1 < index.count; i += 2) {
+        const a = index.getX(i)
+        const b = index.getX(i + 1)
+        if (a >= positionAttribute.count || b >= positionAttribute.count) {
+          continue
+        }
+        if (!written[a]) {
+          lineDistances[a] = accumulated
+          written[a] = 1
+        }
+        _vector1.fromBufferAttribute(positionAttribute, a)
+        _vector2.fromBufferAttribute(positionAttribute, b)
+        accumulated += _vector1.distanceTo(_vector2)
+        if (!written[b]) {
+          lineDistances[b] = accumulated
+          written[b] = 1
+        }
+      }
+    } else {
+      const vertexCount = positionAttribute.count - (positionAttribute.count % 2)
+      for (let i = 0; i < vertexCount; i += 2) {
+        lineDistances[i] = accumulated
+        _vector1.fromBufferAttribute(positionAttribute, i)
+        _vector2.fromBufferAttribute(positionAttribute, i + 1)
+        accumulated += _vector1.distanceTo(_vector2)
+        lineDistances[i + 1] = accumulated
+      }
+    }
+
+    geometry.setAttribute(
+      'lineDistance',
+      new THREE.Float32BufferAttribute(lineDistances, 1)
+    )
+  }
+
   // Calculates line distances in world space
   static computeLineDistance(line: THREE.Line) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -125,22 +324,14 @@ export class AcTrBufferGeometryUtil {
       if (!positionAttribute || positionAttribute.count === 0) {
         return
       }
-      const lineDistances: number[] = []
 
       if (isLineSegments) {
-        for (let i = 0, l = positionAttribute.count; i < l; i += 2) {
-          _vector1
-            .fromBufferAttribute(positionAttribute, i)
-            .applyMatrix4(worldMatrix)
-          _vector2
-            .fromBufferAttribute(positionAttribute, i + 1)
-            .applyMatrix4(worldMatrix)
-
-          lineDistances[i] = i === 0 ? 0 : lineDistances[i - 1]
-          lineDistances[i + 1] =
-            lineDistances[i] + _vector1.distanceTo(_vector2)
-        }
+        AcTrBufferGeometryUtil.recomputeLineDistanceForLineSegments(
+          geometry,
+          worldMatrix
+        )
       } else {
+        const lineDistances: number[] = []
         lineDistances[0] = 0
         for (let i = 1, l = positionAttribute.count; i < l; i++) {
           _vector1
@@ -153,12 +344,13 @@ export class AcTrBufferGeometryUtil {
           lineDistances[i] = lineDistances[i - 1]
           lineDistances[i] += _vector1.distanceTo(_vector2)
         }
+
+        geometry.setAttribute(
+          'lineDistance',
+          new THREE.Float32BufferAttribute(lineDistances, 1)
+        )
       }
 
-      geometry.setAttribute(
-        'lineDistance',
-        new THREE.Float32BufferAttribute(lineDistances, 1)
-      )
       line.geometry.dispose()
       line.geometry = geometry
     }
@@ -407,6 +599,32 @@ export class AcTrBufferGeometryUtil {
 
     const index = geometry.getIndex()
     if (!index) {
+      if (geometry.hasAttribute('lineDistance')) {
+        const segmentPositions: number[] = []
+        for (let vertex = 0; vertex + 1 < position.count; vertex += 2) {
+          if (!isFiniteVertex(vertex) || !isFiniteVertex(vertex + 1)) {
+            continue
+          }
+          const base1 = vertex * position.itemSize
+          const base2 = (vertex + 1) * position.itemSize
+          for (let component = 0; component < position.itemSize; component++) {
+            segmentPositions.push(position.array[base1 + component])
+          }
+          for (let component = 0; component < position.itemSize; component++) {
+            segmentPositions.push(position.array[base2 + component])
+          }
+        }
+        if (segmentPositions.length === 0) {
+          return false
+        }
+        geometry.setAttribute(
+          'position',
+          new THREE.Float32BufferAttribute(segmentPositions, position.itemSize)
+        )
+        AcTrBufferGeometryUtil.recomputeLineDistanceForLineSegments(geometry)
+        return true
+      }
+
       const validVertices: number[] = []
       for (let vertex = 0; vertex < position.count; vertex++) {
         if (isFiniteVertex(vertex)) {

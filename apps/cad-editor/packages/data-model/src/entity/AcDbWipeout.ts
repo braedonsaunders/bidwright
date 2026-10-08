@@ -10,7 +10,8 @@ import { AcDbRasterImage } from './AcDbRasterImage'
  * The AcDbWipeout entity creates a blank area that covers other entities
  * in the drawing. It's commonly used to hide parts of the drawing or
  * create clean areas for annotations. The wipeout area is defined by
- * a boundary path and is rendered as a solid black fill.
+ * a boundary path and is rendered as a solid fill in the current
+ * canvas / layout background colour (matching AutoCAD).
  *
  * @example
  * ```typescript
@@ -29,15 +30,19 @@ export class AcDbWipeout extends AcDbRasterImage {
   /**
    * Draws the wipeout entity.
    *
-   * This method creates a solid black area based on the boundary path
-   * of the wipeout entity. The area covers all entities behind it,
-   * effectively "wiping out" that portion of the drawing.
+   * This method creates a solid background-coloured area based on the
+   * boundary path of the wipeout entity. The area covers all entities
+   * behind it (by draw order), effectively "wiping out" that portion of
+   * the drawing.
    *
    * @param renderer - The renderer to use for drawing
-   * @returns The rendered entity or undefined if rendering failsenderedEntity = wipeout.draw(renderer);
-   * ```
+   * @returns The rendered entity or undefined if rendering fails
    */
   subWorldDraw(renderer: AcGiRenderer) {
+    // AutoCAD paints wipeouts with the layout background, not the entity
+    // colour. Flag the fill so renderers track MODELBKCOLOR / PAPERBKCOLOR
+    // (and theme flips) instead of resolving ACI / ByLayer to black/white.
+    renderer.subEntityTraits.isBackgroundFill = true
     const points = this.boundaryPath()
     const area = new AcGeArea2d()
     area.add(new AcGePolyline2d(points))

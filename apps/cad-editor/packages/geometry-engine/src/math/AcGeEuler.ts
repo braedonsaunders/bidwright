@@ -1,4 +1,4 @@
-import { clamp } from '../util/AcGeMathUtil'
+import { acgeClamp } from '../util/AcGeMathUtil'
 import { AcGeMatrix3d } from './AcGeMatrix3d'
 import { AcGeQuaternion } from './AcGeQuaternion'
 import { AcGeVector3d } from './AcGeVector3d'
@@ -146,7 +146,7 @@ export class AcGeEuler {
 
     switch (order) {
       case 'XYZ':
-        this._y = Math.asin(clamp(m13, -1, 1))
+        this._y = Math.asin(acgeClamp(m13, -1, 1))
 
         if (Math.abs(m13) < 0.9999999) {
           this._x = Math.atan2(-m23, m33)
@@ -159,7 +159,7 @@ export class AcGeEuler {
         break
 
       case 'YXZ':
-        this._x = Math.asin(-clamp(m23, -1, 1))
+        this._x = Math.asin(-acgeClamp(m23, -1, 1))
 
         if (Math.abs(m23) < 0.9999999) {
           this._y = Math.atan2(m13, m33)
@@ -172,7 +172,7 @@ export class AcGeEuler {
         break
 
       case 'ZXY':
-        this._x = Math.asin(clamp(m32, -1, 1))
+        this._x = Math.asin(acgeClamp(m32, -1, 1))
 
         if (Math.abs(m32) < 0.9999999) {
           this._y = Math.atan2(-m31, m33)
@@ -185,7 +185,7 @@ export class AcGeEuler {
         break
 
       case 'ZYX':
-        this._y = Math.asin(-clamp(m31, -1, 1))
+        this._y = Math.asin(-acgeClamp(m31, -1, 1))
 
         if (Math.abs(m31) < 0.9999999) {
           this._x = Math.atan2(m32, m33)
@@ -198,7 +198,7 @@ export class AcGeEuler {
         break
 
       case 'YZX':
-        this._z = Math.asin(clamp(m21, -1, 1))
+        this._z = Math.asin(acgeClamp(m21, -1, 1))
 
         if (Math.abs(m21) < 0.9999999) {
           this._x = Math.atan2(-m23, m22)
@@ -211,7 +211,7 @@ export class AcGeEuler {
         break
 
       case 'XZY':
-        this._z = Math.asin(-clamp(m12, -1, 1))
+        this._z = Math.asin(-acgeClamp(m12, -1, 1))
 
         if (Math.abs(m12) < 0.9999999) {
           this._x = Math.atan2(m32, m22)

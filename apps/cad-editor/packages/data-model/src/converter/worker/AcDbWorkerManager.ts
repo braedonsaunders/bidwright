@@ -2,6 +2,8 @@
  * Simple worker framework
  */
 
+import type { AcDbWorkerErrorCode } from './AcDbBaseWorker'
+
 export interface AcDbWorkerConfig {
   /** Worker script URL (required if useWorker is true) */
   workerUrl: string | URL
@@ -11,10 +13,13 @@ export interface AcDbWorkerConfig {
   maxConcurrentWorkers?: number
 }
 
+export type { AcDbWorkerErrorCode } from './AcDbBaseWorker'
+
 export interface AcDbWorkerResult<TOutput = unknown> {
   success: boolean
   data?: TOutput
   error?: string
+  errorCode?: AcDbWorkerErrorCode
   duration: number
 }
 
@@ -67,9 +72,13 @@ export class AcDbWorkerManager {
       )
     } catch (error) {
       const duration = Date.now() - startTime
+      const message = error instanceof Error ? error.message : String(error)
       return {
         success: false,
-        error: error instanceof Error ? error.message : String(error),
+        error: message,
+        errorCode: message.toLowerCase().includes('timed out')
+          ? 'worker_timeout'
+          : undefined,
         duration
       }
     }
@@ -115,7 +124,7 @@ export class AcDbWorkerManager {
 
       // Set up message handler
       const messageHandler = (event: MessageEvent) => {
-        const { id, success, data, error } = event.data
+        const { id, success, data, error, errorCode } = event.data
         if (id !== taskId) return
 
         this.cleanupTask(taskId)
@@ -131,6 +140,7 @@ export class AcDbWorkerManager {
           resolve({
             success: false,
             error,
+            errorCode,
             duration
           })
         }
@@ -144,11 +154,13 @@ export class AcDbWorkerManager {
       worker.addEventListener('message', messageHandler)
       worker.addEventListener('error', errorHandler)
 
-      // Send task to worker
-      worker.postMessage({
-        id: taskId,
-        input
-      })
+      // Zero-copy ArrayBuffer inputs into the worker (DWG file bytes).
+      const message = { id: taskId, input }
+      if (input instanceof ArrayBuffer) {
+        worker.postMessage(message, [input])
+      } else {
+        worker.postMessage(message)
+      }
     })
   }
 
@@ -301,6 +313,6 @@ export class AcDbWorkerApi {
 /**
  * Create a worker API instance
  */
-export function createWorkerApi(config: AcDbWorkerConfig): AcDbWorkerApi {
+export function acdbCreateWorkerApi(config: AcDbWorkerConfig): AcDbWorkerApi {
   return new AcDbWorkerApi(config)
 }

@@ -4,9 +4,9 @@ import { AcDbDatabase, AcDbLayerModifiedEventArgs } from '../AcDbDatabase'
 import { AcDbSysVarManager, AcDbSysVarType } from '../AcDbSysVarManager'
 import {
   AcDbChangeApplier,
-  collectChangeEntities,
-  collectDictionaryChanges,
-  collectLayerModifications
+  acdbCollectChangeEntities,
+  acdbCollectDictionaryChanges,
+  acdbCollectLayerModifications
 } from './AcDbChangeApplier'
 import { AcDbChangeContainer } from './AcDbDatabaseChange'
 import { AcDbDatabaseTransaction } from './AcDbDatabaseTransaction'
@@ -409,7 +409,7 @@ export class AcDbDatabaseTransactionManager {
   private dispatchCommitEvents(
     changes: import('./AcDbDatabaseChange').AcDbDatabaseChange[]
   ): void {
-    const { modified, appended, erased } = collectChangeEntities(
+    const { modified, appended, erased } = acdbCollectChangeEntities(
       this.database,
       changes
     )
@@ -424,7 +424,7 @@ export class AcDbDatabaseTransactionManager {
       this.database.notifyEntityErased(erased)
     }
 
-    const { set: dictSet, erased: dictErased } = collectDictionaryChanges(
+    const { set: dictSet, erased: dictErased } = acdbCollectDictionaryChanges(
       this.database,
       changes
     )
@@ -446,7 +446,7 @@ export class AcDbDatabaseTransactionManager {
       }
     }
 
-    for (const args of collectLayerModifications(this.database, changes)) {
+    for (const args of acdbCollectLayerModifications(this.database, changes)) {
       this.dispatchLayerModified(args)
     }
   }
@@ -464,12 +464,12 @@ export class AcDbDatabaseTransactionManager {
     changes: import('./AcDbDatabaseChange').AcDbDatabaseChange[],
     inverse: boolean
   ): void {
-    const { modified, appended, erased } = collectChangeEntities(
+    const { modified, appended, erased } = acdbCollectChangeEntities(
       this.database,
       changes
     )
 
-    const { set: dictSet, erased: dictErased } = collectDictionaryChanges(
+    const { set: dictSet, erased: dictErased } = acdbCollectDictionaryChanges(
       this.database,
       changes
     )
@@ -523,7 +523,7 @@ export class AcDbDatabaseTransactionManager {
       }
     }
 
-    for (const args of collectLayerModifications(
+    for (const args of acdbCollectLayerModifications(
       this.database,
       changes,
       inverse

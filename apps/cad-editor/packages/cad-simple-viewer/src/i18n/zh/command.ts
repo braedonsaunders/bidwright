@@ -6,6 +6,12 @@ export default {
     '-layer': {
       description: '通过命令行选项管理图层'
     },
+    about: {
+      description: '显示 mlightcad 产品信息'
+    },
+    acadver: {
+      description: '存储图形数据库版本标识符（只读）'
+    },
     angbase: {
       description: '设置当前 UCS 中 0 度的基准角方向'
     },
@@ -21,11 +27,17 @@ export default {
     auprec: {
       description: '设置角度显示精度（小数位数），与 AUNITS 配合使用'
     },
+    bmpout: {
+      description: '导出为 BMP 图片'
+    },
     cdxf: {
       description: '导出当前图纸为DXF格式'
     },
     cpdf: {
       description: '导出当前图纸为PDF格式'
+    },
+    '-cpdf': {
+      description: '使用命令行选项将当前图纸导出为PDF'
     },
     cecolor: {
       description: '设置新创建对象的当前默认颜色'
@@ -39,7 +51,7 @@ export default {
     celweight: {
       description: '设置新创建对象的默认线宽'
     },
-    cetranparency: {
+    cetransparency: {
       description: '设置新创建对象的透明度'
     },
     cachefont: {
@@ -73,8 +85,20 @@ export default {
     chtml: {
       description: '将当前图纸导出为可离线打开的 HTML 文件'
     },
+    '-chtml': {
+      description: '通过命令行选项将当前图纸导出为 HTML 文件'
+    },
     dimlinear: {
       description: '创建线性尺寸标注'
+    },
+    dimstyle: {
+      description: '设置当前标注样式的名称'
+    },
+    dwgname: {
+      description: '存储当前图形文件的名称（只读）'
+    },
+    loginname: {
+      description: '显示当前用户的登录名（只读）'
     },
     dynmode: {
       description: '控制光标处的动态输入设置'
@@ -89,9 +113,28 @@ export default {
       description: '从图纸中删除所选对象',
       prompt: '选择对象'
     },
+    extmax: {
+      description: '存储模型空间图形范围的右上角（只读）'
+    },
+    extmin: {
+      description: '存储模型空间图形范围的左下角（只读）'
+    },
+    entout: {
+      description: '导出所选对象的合并预览图',
+      prompt: '选择对象'
+    },
     hideobjects: {
       description: '临时隐藏所选对象的显示',
       prompt: '选择对象'
+    },
+    imageattach: {
+      description: '将光栅图像作为外部参照附着到当前图形'
+    },
+    '-insert': {
+      description: '将块定义插入到当前图形（命令行）'
+    },
+    xattach: {
+      description: '将 DWG 或 DXF 图形作为外部参照附着到当前图形'
     },
     gripcolor: {
       description: '设置所选对象上未选中夹点的颜色'
@@ -100,8 +143,7 @@ export default {
       description: '设置所选（热）夹点的颜色'
     },
     gripobjlimit: {
-      description:
-        '当选择集中的对象数超过指定值时不显示夹点（0 表示无限制）'
+      description: '当选择集中的对象数超过指定值时不显示夹点（0 表示无限制）'
     },
     grips: {
       description: '控制是否在所选对象上显示夹点'
@@ -151,6 +193,9 @@ export default {
     insunits: {
       description: '指定插入块、图像或外部参照时用于自动缩放的图形单位'
     },
+    jpgout: {
+      description: '导出为 JPEG 图片'
+    },
     laycur: {
       description: '将所选对象的图层属性更改为当前图层',
       prompt: '选择要更改到当前图层的对象'
@@ -199,6 +244,9 @@ export default {
     log: {
       description: '在控制台输出调试信息'
     },
+    ltscale: {
+      description: '设置图形的全局线型比例系数'
+    },
     lunits: {
       description: '设置坐标和距离的显示格式'
     },
@@ -209,7 +257,19 @@ export default {
       description: '用于控制是否在图纸中显示线宽效果'
     },
     clearmeasurements: {
-      description: '清除视图中的所有测量标注'
+      description: '清除当前布局上的所有测量标注'
+    },
+    measurementvis: {
+      description: '显示或隐藏当前布局上的测量标注'
+    },
+    measurementpanel: {
+      description: '打开测量面板'
+    },
+    measurementexport: {
+      description: '将测量标注导出为 sidecar JSON 文件'
+    },
+    measurementimport: {
+      description: '从 sidecar JSON 文件导入测量标注'
     },
     measurearea: {
       description: '计算所选对象或点定义区域的面积和周长'
@@ -223,11 +283,20 @@ export default {
     measuredistance: {
       description: '测量两点之间的距离及坐标增量'
     },
+    measurecontinuous: {
+      description: '连续拾取多个点测量各段距离，直到按 Enter 或取消'
+    },
+    measurepoint: {
+      description: '测量拾取点的 X/Y 坐标'
+    },
     measurement: {
       description: '设置图形使用英制或公制单位'
     },
     measurementcolor: {
       description: '设置测量标注覆盖图形使用的颜色'
+    },
+    modelbkcolor: {
+      description: '设置模型空间绘图区域的背景颜色'
     },
     mline: {
       description: '创建由多条平行线组成的多线对象'
@@ -245,11 +314,29 @@ export default {
     open: {
       description: '打开图纸'
     },
+    openprof: {
+      description: '控制是否在控制台记录文件打开阶段的耗时分析'
+    },
+    openperf: {
+      description: '打开“打开性能”面板，显示最近一次打开图纸的关键耗时'
+    },
+    orthomode: {
+      description: '将光标移动限制为水平或垂直方向'
+    },
     osmode: {
       description: '使用位码设置运行中的对象捕捉模式'
     },
     pan: {
       description: '平移视图'
+    },
+    paperbkcolor: {
+      description: '设置图纸空间（布局）绘图区域的背景颜色'
+    },
+    pdmode: {
+      description: '控制点对象的显示样式'
+    },
+    pdsize: {
+      description: '设置点对象的显示大小'
     },
     pickbox: {
       description: '控制用于选择对象的拾取框大小（像素）'
@@ -263,11 +350,23 @@ export default {
     point: {
       description: '连续创建点'
     },
+    polaraddang: {
+      description: '以分号分隔的列表存储附加极轴追踪角度'
+    },
+    polarang: {
+      description: '设置极轴追踪的极轴角增量'
+    },
+    polarmode: {
+      description: '控制极轴追踪和对象捕捉追踪设置'
+    },
     polygon: {
       description: '通过中心和半径或指定一条边创建正多边形'
     },
     qnew: {
       description: '创建新图纸'
+    },
+    close: {
+      description: '关闭当前图纸'
     },
     ray: {
       description: '创建从起点向单一方向无限延伸的射线'
@@ -279,7 +378,49 @@ export default {
       description: '重绘图纸'
     },
     revcloud: {
-      description: '创建矩形修订云线'
+      description: '创建或修改修订云线'
+    },
+    markuptext: {
+      description: '放置文字批注'
+    },
+    markupline: {
+      description: '创建直线批注'
+    },
+    markuparrow: {
+      description: '创建箭头批注'
+    },
+    markupcloud: {
+      description: '创建修订云线批注'
+    },
+    markuprect: {
+      description: '创建矩形批注'
+    },
+    markupcircle: {
+      description: '创建圆形批注'
+    },
+    markuphighlight: {
+      description: '创建高亮矩形批注'
+    },
+    markupcallout: {
+      description: '创建标注：先指定引线尖端，再放置文字框，最后输入文字'
+    },
+    markupstamp: {
+      description: '放置图章或自定义符号'
+    },
+    markupvis: {
+      description: '显示或隐藏批注'
+    },
+    clearmarkups: {
+      description: '清除当前布局上的所有批注'
+    },
+    markupexport: {
+      description: '将批注导出为 sidecar JSON 文件'
+    },
+    markupimport: {
+      description: '从 sidecar JSON 文件导入批注'
+    },
+    markuppanel: {
+      description: '打开批注面板'
     },
     rotate: {
       description: '绕基点旋转所选图元',
@@ -292,7 +433,7 @@ export default {
       description: '控制图形区域中快捷菜单的可用性'
     },
     sketch: {
-      description: '使用多段线创建手绘线，跟踪鼠标移动'
+      description: '创建一系列徒手线段'
     },
     spline: {
       description: '通过指定控制点创建平滑的样条曲线'
@@ -305,6 +446,9 @@ export default {
     },
     switchbg: {
       description: '切换绘图区域背景颜色，在白色和黑色背景之间切换'
+    },
+    readingmode: {
+      description: '切换阅读模式：白底黑线，便于阅读复杂图纸'
     },
     unisolateobjects: {
       description: '重新显示 HIDEOBJECTS 隐藏的所有对象'

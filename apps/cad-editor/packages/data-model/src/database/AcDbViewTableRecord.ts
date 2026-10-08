@@ -29,6 +29,8 @@ export interface AcDbViewTableRecordAttrs
   backgroundObjectId?: string
   /** Live section object ID for the view */
   liveSectionObjectId?: string
+  /** Hard-pointer ID to the sun object bound to this view (DXF group 361) */
+  sunObjectId?: string
 }
 
 /**
@@ -161,6 +163,17 @@ export class AcDbViewTableRecord extends AcDbAbstractViewTableRecord<AcDbViewTab
   }
 
   /**
+   * Gets or sets the hard-pointer object ID to the sun bound to this view
+   * (DXF group 361).
+   */
+  get sunObjectId() {
+    return this.getAttrWithoutException('sunObjectId')
+  }
+  set sunObjectId(value: string | undefined) {
+    this.setAttr('sunObjectId', value)
+  }
+
+  /**
    * Writes DXF fields for this object.
    *
    * @param filer - DXF output writer.
@@ -187,6 +200,7 @@ export class AcDbViewTableRecord extends AcDbAbstractViewTableRecord<AcDbViewTab
     filer.writeObjectId(332, this.backgroundObjectId)
     filer.writeObjectId(334, this.liveSectionObjectId)
     filer.writeObjectId(348, this.gsView.visualStyleObjectId)
+    filer.writeObjectId(361, this.sunObjectId)
 
     if (this.ucsAssociated) {
       filer.writePoint3d(110, this.gsView.ucsOrigin)
@@ -198,6 +212,140 @@ export class AcDbViewTableRecord extends AcDbAbstractViewTableRecord<AcDbViewTab
       filer.writeObjectId(346, this.ucsBaseObjectId)
     }
 
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbSymbolTableRecord')
+    filer.atSubclassData('AcDbAbstractViewTableRecord')
+    filer.atSubclassData('AcDbViewTableRecord')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 100) {
+        filer.pushBackItem(item)
+        break
+      }
+      const n = Number(item.value)
+      switch (code) {
+        case 2:
+          this.name = String(item.value)
+          break
+        case 70:
+          this.standardFlags = n
+          break
+        case 40:
+          this.gsView.viewHeight = n
+          break
+        case 10:
+          this.centerPoint.x = n
+          break
+        case 20:
+          this.centerPoint.y = n
+          break
+        case 41:
+          this.viewWidth = n
+          break
+        case 11:
+          this.gsView.viewDirectionFromTarget.x = n
+          break
+        case 21:
+          this.gsView.viewDirectionFromTarget.y = n
+          break
+        case 31:
+          this.gsView.viewDirectionFromTarget.z = n
+          break
+        case 12:
+          this.gsView.viewTarget.x = n
+          break
+        case 22:
+          this.gsView.viewTarget.y = n
+          break
+        case 32:
+          this.gsView.viewTarget.z = n
+          break
+        case 42:
+          this.gsView.lensLength = n
+          break
+        case 43:
+          this.gsView.frontClippingPlane = n
+          break
+        case 44:
+          this.gsView.backClippingPlane = n
+          break
+        case 50:
+          this.gsView.viewTwistAngle = (n * Math.PI) / 180
+          break
+        case 71:
+          this.gsView.viewMode = n
+          break
+        case 281:
+          this.gsView.renderMode = n
+          break
+        case 72:
+          this.ucsAssociated = n !== 0
+          break
+        case 73:
+          this.cameraPlottable = n !== 0
+          break
+        case 332:
+          this.backgroundObjectId = String(item.value)
+          break
+        case 334:
+          this.liveSectionObjectId = String(item.value)
+          break
+        case 348:
+          this.gsView.visualStyleObjectId = String(item.value)
+          break
+        case 361:
+          this.sunObjectId = String(item.value)
+          break
+        case 110:
+          this.gsView.ucsOrigin.x = n
+          break
+        case 120:
+          this.gsView.ucsOrigin.y = n
+          break
+        case 130:
+          this.gsView.ucsOrigin.z = n
+          break
+        case 111:
+          this.gsView.ucsXAxis.x = n
+          break
+        case 121:
+          this.gsView.ucsXAxis.y = n
+          break
+        case 131:
+          this.gsView.ucsXAxis.z = n
+          break
+        case 112:
+          this.gsView.ucsYAxis.x = n
+          break
+        case 122:
+          this.gsView.ucsYAxis.y = n
+          break
+        case 132:
+          this.gsView.ucsYAxis.z = n
+          break
+        case 79:
+          this.gsView.orthographicType = n
+          break
+        case 146:
+          this.ucsElevation = n
+          break
+        case 345:
+          this.ucsObjectId = String(item.value)
+          break
+        case 346:
+          this.ucsBaseObjectId = String(item.value)
+          break
+        default:
+          break
+      }
+    }
     return this
   }
 }

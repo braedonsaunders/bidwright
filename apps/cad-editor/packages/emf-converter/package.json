@@ -1,0 +1,58 @@
+{
+  "name": "@mlightcad/emf-converter",
+  "version": "1.15.1",
+  "description": "Fork of emf-converter@2.0.2 with Excel OLE EMF clip / LOGFONT fixes for RealDWG-Web",
+  "license": "Apache-2.0",
+  "type": "module",
+  "author": "MLight Lee <mlight.lee@outlook.com>",
+  "contributors": [
+    "ChristopherVR (upstream emf-converter)"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mlightcad/realdwg-web",
+    "directory": "packages/emf-converter"
+  },
+  "keywords": [
+    "autocad",
+    "cad",
+    "emf",
+    "wmf",
+    "metafile",
+    "ole",
+    "mlightcad",
+    "converter"
+  ],
+  "files": [
+    "dist",
+    "LICENSE",
+    "NOTICE.md",
+    "README.md",
+    "package.json"
+  ],
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "tsup",
+    "typecheck": "tsc --noEmit --pretty",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "lint": "node -e \"process.exit(0)\"",
+    "lint:fix": "node -e \"process.exit(0)\""
+  },
+  "devDependencies": {
+    "tsup": "^8.5.1",
+    "typescript": "^5.5.2",
+    "vitest": "^3.2.4"
+  }
+}

@@ -4,7 +4,7 @@ import { AcGePoint3dLike } from '../math/AcGePoint3d'
 /**
  * Computes the signed area of a 2D polygon using the shoelace formula.
  */
-export function acGeSignedPolygonArea2d(points: AcGePoint2dLike[]): number {
+export function acgeSignedPolygonArea2d(points: AcGePoint2dLike[]): number {
   const count = points.length
   if (count < 3) return 0
 
@@ -21,14 +21,14 @@ export function acGeSignedPolygonArea2d(points: AcGePoint2dLike[]): number {
 /**
  * Computes the absolute area of a 2D polygon using the shoelace formula.
  */
-export function acGePolygonArea2d(points: AcGePoint2dLike[]): number {
-  return Math.abs(acGeSignedPolygonArea2d(points))
+export function acgePolygonArea2d(points: AcGePoint2dLike[]): number {
+  return Math.abs(acgeSignedPolygonArea2d(points))
 }
 
 /**
  * Computes the area of a planar 3D polygon using Newell's method.
  */
-export function acGePolygonArea3d(points: AcGePoint3dLike[]): number {
+export function acgePolygonArea3d(points: AcGePoint3dLike[]): number {
   const count = points.length
   if (count < 3) return 0
 
@@ -56,16 +56,16 @@ export function acGePolygonArea3d(points: AcGePoint3dLike[]): number {
  * Returns the absolute polygon area for a closed loop, or `0` when the loop is
  * open or degenerate.
  */
-export function acGeClosedPolygonArea2d(points: AcGePoint2dLike[]): number {
+export function acgeClosedPolygonArea2d(points: AcGePoint2dLike[]): number {
   if (points.length < 3) return 0
-  return acGePolygonArea2d(points)
+  return acgePolygonArea2d(points)
 }
 
 /**
  * Returns the absolute polygon area for a closed loop, or `0` when the loop is
  * open or degenerate.
  */
-export function acGeClosedPolygonArea3d(points: AcGePoint3dLike[]): number {
+export function acgeClosedPolygonArea3d(points: AcGePoint3dLike[]): number {
   if (points.length < 3) return 0
-  return acGePolygonArea3d(points)
+  return acgePolygonArea3d(points)
 }

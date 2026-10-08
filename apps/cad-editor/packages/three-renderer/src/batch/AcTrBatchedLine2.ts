@@ -22,12 +22,17 @@ import {
   resolveReservedCount
 } from './AcTrBatchedMixin'
 import { syncBatchDrawVisibilityAfterOptimize } from './drawVisibility'
+import { ensureSlotIdAttribute, writeSlotIdRange } from './highlight'
 
 type AcTrBatchedLine2GeometryInfo = AcTrVertexBatchGeometryInfo
 
 const _box = /*@__PURE__*/ new THREE.Box3()
 const _vector = /*@__PURE__*/ new THREE.Vector3()
 const _vector2 = /*@__PURE__*/ new THREE.Vector3()
+const _segmentStart = /*@__PURE__*/ new THREE.Vector3()
+const _segmentEnd = /*@__PURE__*/ new THREE.Vector3()
+const _pointOnRay = /*@__PURE__*/ new THREE.Vector3()
+const _pointOnSegment = /*@__PURE__*/ new THREE.Vector3()
 const _batchIntersects: THREE.Intersection[] = []
 const _raycastObject = /*@__PURE__*/ new LineSegments2(
   new LineSegmentsGeometry()
@@ -88,6 +93,7 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     ;(this.geometry as LineSegmentsGeometry).setPositions(
       new Float32Array(this._maxSegmentCount * 6)
     )
+    ensureSlotIdAttribute(this.geometry, this._maxSegmentCount)
     this._copyStaticAttributes(reference)
     this._geometryInitialized = true
   }
@@ -103,7 +109,13 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     }
 
     for (const key in reference.attributes) {
-      if (key === 'instanceStart' || key === 'instanceEnd') continue
+      if (
+        key === 'instanceStart' ||
+        key === 'instanceEnd' ||
+        key === 'slotId'
+      ) {
+        continue
+      }
       dstGeometry.setAttribute(key, reference.getAttribute(key).clone())
     }
   }
@@ -310,6 +322,13 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     geometryInfo.vertexCount = segmentCount
     geometryInfo.boundingBox = null
 
+    writeSlotIdRange(
+      this.geometry,
+      segmentStart,
+      geometryInfo.reservedVertexCount,
+      geometryId
+    )
+
     return geometryId
   }
 
@@ -334,6 +353,18 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
           oldStart * 6,
           (oldStart + count) * 6
         )
+        const slotIdAttr = this.geometry.getAttribute('slotId') as
+          | THREE.BufferAttribute
+          | undefined
+        if (slotIdAttr) {
+          slotIdAttr.array.copyWithin(
+            nextSegmentStart,
+            oldStart,
+            oldStart + count
+          )
+          slotIdAttr.addUpdateRange(nextSegmentStart, count)
+          slotIdAttr.needsUpdate = true
+        }
       }
       info.vertexStart = nextSegmentStart
       nextSegmentStart += count
@@ -398,6 +429,181 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     return target
   }
 
+  /**
+   * Computes the object-space AABB of one packed slot by scanning the packed
+   * `instanceStart`/`instanceEnd` segment data.
+   *
+   * Overrides the mixin default so aggregate bounds queries (frustum culling,
+   * layout extents, picking) never go through the lazily cached slot `Box3`:
+   * one cached box per slot would stay resident for the whole session
+   * (~234B × slot count, i.e. ~100MB on a large drawing).
+   *
+   * Numerically identical to {@link getBoundingBoxAt}: both expand `start` and
+   * `end` in the same order with the same float values, so aggregate spheres
+   * and boxes are bit-for-bit unchanged. The contiguous fast path only skips
+   * the `fromBufferAttribute` indirection.
+   *
+   * @param geometryId - Slot index to query.
+   * @param target - Reusable {@link THREE.Box3} that receives the result.
+   * @returns `target` when the id is valid, otherwise `null`.
+   */
+  override computeBoundingBoxAt(
+    geometryId: number,
+    target: THREE.Box3
+  ) {
+    if (geometryId >= this._geometryCount) {
+      return null
+    }
+
+    const geometryInfo = this._geometryInfo[geometryId]
+    const start = this.geometry.getAttribute('instanceStart')
+    const end = this.geometry.getAttribute('instanceEnd')
+    const vertexStart = geometryInfo.vertexStart
+    const vertexEnd = vertexStart + geometryInfo.vertexCount
+    target.makeEmpty()
+
+    const interleavedStart =
+      start instanceof THREE.InterleavedBufferAttribute ? start : null
+    const interleavedEnd =
+      end instanceof THREE.InterleavedBufferAttribute ? end : null
+    if (
+      interleavedStart !== null &&
+      interleavedEnd !== null &&
+      interleavedEnd.data === interleavedStart.data &&
+      interleavedStart.itemSize === 3 &&
+      interleavedEnd.itemSize === 3 &&
+      interleavedStart.offset === 0 &&
+      interleavedEnd.offset === 3 &&
+      interleavedStart.data.stride === 6
+    ) {
+      // instanceStart/instanceEnd share one interleaved [sx,sy,sz,ex,ey,ez]
+      // buffer; read it as a flat Float32Array.
+      const packed = interleavedStart.data.array as Float32Array
+      for (let i = vertexStart; i < vertexEnd; i++) {
+        const offset = i * 6
+        target.expandByPoint(
+          _vector.set(packed[offset], packed[offset + 1], packed[offset + 2])
+        )
+        target.expandByPoint(
+          _vector2.set(
+            packed[offset + 3],
+            packed[offset + 4],
+            packed[offset + 5]
+          )
+        )
+      }
+      return target
+    }
+
+    for (let i = vertexStart; i < vertexEnd; i++) {
+      target.expandByPoint(_vector.fromBufferAttribute(start, i))
+      target.expandByPoint(_vector2.fromBufferAttribute(end, i))
+    }
+    return target
+  }
+
+  /**
+   * Aggregate object-space bounding sphere from one pass over the packed
+   * segment ranges of every active slot.
+   *
+   * Replaces the mixin's per-slot `Box3` + `Sphere.union` with plain min/max
+   * comparisons on the contiguous packed buffer: no per-slot object is
+   * allocated and the packed data is touched once. The resulting sphere is the
+   * circumsphere of the aggregate AABB of the same active slot set, so it
+   * still encloses every active vertex — frustum culling can only ever drop a
+   * batch whose geometry is entirely outside the frustum, exactly as before.
+   *
+   * @param target - Sphere that receives the aggregate result.
+   * @returns `target`, or `null` when no bounds could be derived.
+   */
+  override computeAggregateBoundingSphere(target: THREE.Sphere) {
+    const start = this.geometry.getAttribute('instanceStart')
+    const end = this.geometry.getAttribute('instanceEnd')
+    if (!start || !end) {
+      return null
+    }
+
+    let minX = Infinity
+    let minY = Infinity
+    let minZ = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let maxZ = -Infinity
+
+    const interleavedStart =
+      start instanceof THREE.InterleavedBufferAttribute ? start : null
+    const interleavedEnd =
+      end instanceof THREE.InterleavedBufferAttribute ? end : null
+    const packed =
+      interleavedStart !== null &&
+      interleavedEnd !== null &&
+      interleavedEnd.data === interleavedStart.data &&
+      interleavedStart.itemSize === 3 &&
+      interleavedEnd.itemSize === 3 &&
+      interleavedStart.offset === 0 &&
+      interleavedEnd.offset === 3 &&
+      interleavedStart.data.stride === 6
+        ? (interleavedStart.data.array as Float32Array)
+        : null
+
+    for (let slot = 0; slot < this._geometryCount; slot++) {
+      const info = this._geometryInfo[slot]
+      if (!isBatchGeometryActive(info.flags)) continue
+      const vertexStart = info.vertexStart
+      const vertexEnd = vertexStart + info.vertexCount
+
+      if (packed !== null) {
+        for (let i = vertexStart; i < vertexEnd; i++) {
+          const offset = i * 6
+          const sx = packed[offset]
+          const sy = packed[offset + 1]
+          const sz = packed[offset + 2]
+          const ex = packed[offset + 3]
+          const ey = packed[offset + 4]
+          const ez = packed[offset + 5]
+          if (sx < minX) minX = sx
+          if (sy < minY) minY = sy
+          if (sz < minZ) minZ = sz
+          if (sx > maxX) maxX = sx
+          if (sy > maxY) maxY = sy
+          if (sz > maxZ) maxZ = sz
+          if (ex < minX) minX = ex
+          if (ey < minY) minY = ey
+          if (ez < minZ) minZ = ez
+          if (ex > maxX) maxX = ex
+          if (ey > maxY) maxY = ey
+          if (ez > maxZ) maxZ = ez
+        }
+      } else {
+        for (let i = vertexStart; i < vertexEnd; i++) {
+          _vector.fromBufferAttribute(start, i)
+          _vector2.fromBufferAttribute(end, i)
+          if (_vector.x < minX) minX = _vector.x
+          if (_vector.y < minY) minY = _vector.y
+          if (_vector.z < minZ) minZ = _vector.z
+          if (_vector.x > maxX) maxX = _vector.x
+          if (_vector.y > maxY) maxY = _vector.y
+          if (_vector.z > maxZ) maxZ = _vector.z
+          if (_vector2.x < minX) minX = _vector2.x
+          if (_vector2.y < minY) minY = _vector2.y
+          if (_vector2.z < minZ) minZ = _vector2.z
+          if (_vector2.x > maxX) maxX = _vector2.x
+          if (_vector2.y > maxY) maxY = _vector2.y
+          if (_vector2.z > maxZ) maxZ = _vector2.z
+        }
+      }
+    }
+
+    if (minX > maxX) {
+      target.makeEmpty()
+      return target
+    }
+
+    _box.min.set(minX, minY, minZ)
+    _box.max.set(maxX, maxY, maxZ)
+    return _box.getBoundingSphere(target)
+  }
+
   getGeometryAt(geometryId: number) {
     this.validateGeometryId(geometryId)
     return this._geometryInfo[geometryId]
@@ -409,6 +615,16 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
   setGeometrySize(maxSegmentCount: number) {
     const oldGeometry = this.geometry as LineSegmentsGeometry
     const oldPacked = this._getPackedSegmentArray()
+    const oldSlotId = oldGeometry.getAttribute('slotId') as
+      | THREE.BufferAttribute
+      | THREE.InstancedBufferAttribute
+      | undefined
+    const oldSlotIdArray = oldSlotId
+      ? (oldSlotId.array as Float32Array).slice(
+          0,
+          Math.min(oldSlotId.count, this._maxSegmentCount)
+        )
+      : undefined
 
     this._maxSegmentCount = maxSegmentCount
     this.geometry = new LineSegmentsGeometry()
@@ -419,6 +635,16 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     const newPacked = this._getPackedSegmentArray()
     copyArrayContents(oldPacked, newPacked)
     this._copyStaticAttributes(oldGeometry)
+    const slotIdAttr = ensureSlotIdAttribute(this.geometry, maxSegmentCount)
+    if (oldSlotIdArray) {
+      ;(slotIdAttr.array as Float32Array).set(
+        oldSlotIdArray.subarray(
+          0,
+          Math.min(oldSlotIdArray.length, slotIdAttr.count)
+        )
+      )
+      slotIdAttr.needsUpdate = true
+    }
     this._geometryInitialized = true
     this._syncDrawRange()
     oldGeometry.dispose()
@@ -438,14 +664,12 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     object.position.copy(this.position)
     object.updateMatrix()
     object.updateMatrixWorld(true)
-    this.getBoundingBoxAt(
-      batchId,
-      object.geometry.boundingBox ?? new THREE.Box3()
-    )
-    this.getBoundingSphereAt(
-      batchId,
-      object.geometry.boundingSphere ?? new THREE.Sphere()
-    )
+    const localBox = object.geometry.boundingBox ?? new THREE.Box3()
+    this.computeBoundingBoxAt(batchId, localBox)
+    object.geometry.boundingBox = localBox
+    const localSphere = object.geometry.boundingSphere ?? new THREE.Sphere()
+    localBox.getBoundingSphere(localSphere)
+    object.geometry.boundingSphere = localSphere
     return object
   }
 
@@ -513,7 +737,7 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     }
 
     if (geometryInfo.bboxIntersectionCheck) {
-      this.getBoundingBoxAt(geometryId, _box)
+      this.computeBoundingBoxAt(geometryId, _box)
       _box.applyMatrix4(this.matrixWorld)
       if (raycaster.ray.intersectBox(_box, _vector)) {
         const distance = raycaster.ray.origin.distanceTo(_vector)
@@ -549,34 +773,23 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     _raycastObject.updateMatrixWorld(true)
     _raycastObject.raycast(raycaster, _batchIntersects)
 
-    // LineSegments2.raycast() ignores raycaster.params.Line.threshold and
-    // only uses the pixel-based LineMaterial.linewidth for hit detection.
-    // When linewidth is small the pick area can be too narrow, so fall back
-    // to a bounding-box intersection check when the precise raycast misses.
+    // LineSegments2.raycast() uses pixel LineMaterial.linewidth (plus optional
+    // params.Line2.threshold in px), not params.Line.threshold in WCS. When the
+    // screen-space pick misses, test distance to each segment against the WCS
+    // Line threshold. Do not fall back to the geometry AABB — that would make
+    // hollow rectangles / compacted INSERT linework selectable anywhere inside.
     if (_batchIntersects.length === 0) {
-      this.getBoundingBoxAt(geometryId, _box)
-      _box.applyMatrix4(this.matrixWorld)
-      const threshold = raycaster.params.Line.threshold
-      if (threshold > 0) {
-        _box.expandByScalar(threshold)
-      }
-      if (raycaster.ray.intersectBox(_box, _vector2)) {
-        const distance = raycaster.ray.origin.distanceTo(_vector2)
-        ;(
-          intersects as Array<
-            THREE.Intersection & { batchId?: number; objectId?: string }
-          >
-        ).push({
-          distance,
-          point: _vector2.clone(),
-          object: this,
-          face: null,
-          faceIndex: undefined,
-          uv: undefined,
-          batchId: geometryId,
-          objectId: geometryInfo.objectId
-        })
-      }
+      this._intersectSegmentsWithLineThreshold(
+        geometry,
+        // Use the batch world matrix (includes ancestors). `_raycastObject` is
+        // detached and only mirrors local TRS, so its matrixWorld is wrong when
+        // the batch sits under a transformed parent.
+        this.matrixWorld,
+        raycaster,
+        geometryId,
+        geometryInfo.objectId,
+        intersects
+      )
       geometry.dispose()
       return
     }
@@ -600,6 +813,73 @@ export class AcTrBatchedLine2 extends AcTrBatchedLine2Base {
     }
     _batchIntersects.length = 0
     geometry.dispose()
+  }
+
+  /**
+   * Picks against packed segments using `raycaster.params.Line.threshold` (WCS).
+   *
+   * Used when {@link LineSegments2.raycast} misses because it only considers
+   * pixel linewidth. Matches {@link THREE.Line} segment-distance semantics so
+   * clicks inside a hollow shape's bounding box do not count as hits.
+   */
+  private _intersectSegmentsWithLineThreshold(
+    geometry: LineSegmentsGeometry,
+    matrixWorld: THREE.Matrix4,
+    raycaster: THREE.Raycaster,
+    geometryId: number,
+    objectId: string | undefined,
+    intersects: THREE.Intersection[]
+  ) {
+    const threshold = raycaster.params.Line?.threshold ?? 0
+    if (!(threshold > 0)) {
+      return
+    }
+
+    const instanceStart = geometry.getAttribute('instanceStart')
+    const instanceEnd = geometry.getAttribute('instanceEnd')
+    if (!instanceStart || !instanceEnd) {
+      return
+    }
+
+    const thresholdSq = threshold * threshold
+    const typedIntersects = intersects as Array<
+      THREE.Intersection & { batchId?: number; objectId?: string }
+    >
+
+    for (let i = 0, l = instanceStart.count; i < l; i++) {
+      _segmentStart
+        .fromBufferAttribute(instanceStart, i)
+        .applyMatrix4(matrixWorld)
+      _segmentEnd
+        .fromBufferAttribute(instanceEnd, i)
+        .applyMatrix4(matrixWorld)
+
+      const distSq = raycaster.ray.distanceSqToSegment(
+        _segmentStart,
+        _segmentEnd,
+        _pointOnRay,
+        _pointOnSegment
+      )
+      if (distSq > thresholdSq) {
+        continue
+      }
+
+      const distance = raycaster.ray.origin.distanceTo(_pointOnRay)
+      if (distance < raycaster.near || distance > raycaster.far) {
+        continue
+      }
+
+      typedIntersects.push({
+        distance,
+        point: _pointOnSegment.clone(),
+        object: this,
+        face: null,
+        faceIndex: i,
+        uv: undefined,
+        batchId: geometryId,
+        objectId
+      })
+    }
   }
 
   /**

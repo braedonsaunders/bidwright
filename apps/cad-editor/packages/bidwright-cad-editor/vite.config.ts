@@ -41,6 +41,8 @@ export default defineConfig(() => {
       viteStaticCopy({
         targets: [
           { src: workerSource, dest: "workers" },
+          { src: "../libredwg-converter/dist/libredwg-parser-worker.js", dest: "workers" },
+          { src: "../libredwg-converter/dist/libredwg-web.wasm", dest: "workers" },
           { src: workerSource, dest: "assets" },
           { src: htmlRuntimeSource, dest: "" },
         ],

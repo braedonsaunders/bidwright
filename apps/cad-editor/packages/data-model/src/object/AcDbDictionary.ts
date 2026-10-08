@@ -31,8 +31,6 @@ export class AcDbDictionary<
 > extends AcDbObject {
   /** Map of records indexed by name */
   protected _recordsByName: Map<string, TObjectType>
-  /** Map of records indexed by object ID */
-  protected _recordsById: Map<string, TObjectType>
 
   /**
    * Creates a new AcDbDictionary instance.
@@ -49,7 +47,6 @@ export class AcDbDictionary<
     this.database = db
     this.objectId = db.generateHandle()
     this._recordsByName = new Map<string, TObjectType>()
-    this._recordsById = new Map<string, TObjectType>()
   }
 
   /**
@@ -95,15 +92,18 @@ export class AcDbDictionary<
     }
 
     const existing = this.getAt(key)
-    if (existing && manager.isRecording()) {
-      manager.recordRemove(
-        {
-          type: 'dictionary',
-          dictionaryId: this.objectId,
-          key
-        },
-        existing
-      )
+    if (existing) {
+      if (manager.isRecording()) {
+        manager.recordRemove(
+          {
+            type: 'dictionary',
+            dictionaryId: this.objectId,
+            key
+          },
+          existing
+        )
+      }
+      this.database.releaseObjectHandle(existing)
     }
 
     value.database = this.database
@@ -112,7 +112,6 @@ export class AcDbDictionary<
     this.database.commitObjectHandle(value, id => this.hasId(id))
 
     this._recordsByName.set(key, value)
-    this._recordsById.set(value.objectId, value)
 
     if (manager.isRecording()) {
       manager.recordAppend(
@@ -212,12 +211,12 @@ export class AcDbDictionary<
       )
     }
 
-    this._recordsById.delete(object.objectId)
     this._recordsByName.forEach((value, entryKey) => {
       if (value === object) {
         this._recordsByName.delete(entryKey)
       }
     })
+    this.database.releaseObjectHandle(object)
     if (key && !manager.isRecording() && !manager.isApplyingUndoRedo()) {
       this.database.notifyDictObjectErased(object, key)
     }
@@ -233,6 +232,7 @@ export class AcDbDictionary<
    */
   removeAll() {
     this._recordsByName.forEach((value, key) => {
+      this.database.releaseObjectHandle(value)
       this.database.events.dictObjectErased.dispatch({
         database: this.database,
         object: value,
@@ -240,7 +240,6 @@ export class AcDbDictionary<
       })
     })
     this._recordsByName.clear()
-    this._recordsById.clear()
   }
 
   /**
@@ -274,7 +273,7 @@ export class AcDbDictionary<
    * ```
    */
   hasId(id: string) {
-    return this._recordsById.has(id)
+    return this.getIdAt(id) !== undefined
   }
 
   /**
@@ -307,7 +306,15 @@ export class AcDbDictionary<
    * ```
    */
   getIdAt(id: AcDbObjectId) {
-    return this._recordsById.get(id)
+    const object = this.database.getObjectById(id)
+    if (!object) {
+      return undefined
+    }
+    const ownerId = object.getAttrWithoutException('ownerId')
+    if (ownerId !== this.objectId) {
+      return undefined
+    }
+    return object as TObjectType
   }
 
   /**
@@ -352,6 +359,42 @@ export class AcDbDictionary<
     for (const [key, value] of this._recordsByName) {
       filer.writeString(3, key)
       filer.writeObjectId(350, value.objectId)
+    }
+    return this
+  }
+
+  /**
+   * Reads dictionary entry name/handle pairs.
+   *
+   * Note: resolved object instances are wired later by
+   * {@link AcDbDxfObjectsReader} after child objects are loaded.
+   */
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbDictionary')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 100) {
+        filer.pushBackItem(item)
+        break
+      }
+      switch (code) {
+        case 3:
+        case 350:
+        case 340:
+        case 360:
+          // Entry name/pointer pairs are consumed here; object-graph linking
+          // is done by AcDbDxfObjectsReader once child objects exist.
+          break
+        case 280:
+        case 281:
+          break
+        default:
+          break
+      }
     }
     return this
   }

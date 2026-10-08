@@ -46,7 +46,8 @@ describe('AcDbSymbolTable', () => {
     expect(recA.ownerId).toBe(table.objectId)
     expect(table.numEntries).toBe(2)
     expect(table.has('A')).toBe(true)
-    expect(table.has('a')).toBe(false)
+    expect(table.has('a')).toBe(true)
+    expect(table.has(' A ')).toBe(true)
     expect(table.getAt('A')).toBe(recA)
     expect(table.getIdAt(recA.objectId)).toBe(recA)
     expect(table.getOwnerIdAt(recA.objectId)).toBe(recA)
@@ -92,6 +93,18 @@ describe('AcDbSymbolTable', () => {
 
     expect(table.removeId('unnamed-id')).toBe(true)
     expect(table.hasId('unnamed-id')).toBe(false)
+  })
+
+  it('treats undefined/null names as missing in getAt/has/remove', () => {
+    const db = setupWorkingDatabase()
+    const table = new AcDbSymbolTable<AcDbSymbolTableRecord>(db)
+    table.add(new AcDbSymbolTableRecord({ name: 'A' }))
+
+    expect(table.getAt(undefined as unknown as string)).toBeUndefined()
+    expect(table.getAt(null as unknown as string)).toBeUndefined()
+    expect(table.has(undefined as unknown as string)).toBe(false)
+    expect(table.remove(undefined as unknown as string)).toBe(false)
+    expect(table.getAt('A')?.name).toBe('A')
   })
 
   it('applies normalized names when subclass overrides normalizeName', () => {

@@ -27,7 +27,9 @@ describe('AcDbWipeout', () => {
     wipeout.height = 3
 
     const rendered = { id: 'wipeout-rendered' }
+    const traits = { isBackgroundFill: false }
     const renderer = {
+      subEntityTraits: traits,
       area: jest.fn(() => rendered)
     }
 
@@ -40,6 +42,7 @@ describe('AcDbWipeout', () => {
     const boundary = areaArg.loops[0].getPoints(4)
 
     expect(result).toBe(rendered)
+    expect(traits.isBackgroundFill).toBe(true)
     expect(renderer.area).toHaveBeenCalledTimes(1)
     expect(boundary).toHaveLength(5)
     expect(boundary[0]).toMatchObject({ x: 10, y: 20 })
@@ -62,7 +65,9 @@ describe('AcDbWipeout', () => {
       new AcGePoint2d(2, 5)
     ]
 
+    const traits = { isBackgroundFill: false }
     const renderer = {
+      subEntityTraits: traits,
       area: jest.fn(() => 'ok')
     }
 
@@ -74,6 +79,7 @@ describe('AcDbWipeout', () => {
     }
     const boundary = areaArg.loops[0].getPoints(4)
 
+    expect(traits.isBackgroundFill).toBe(true)
     expect(boundary).toHaveLength(4)
     expect(boundary[0]).toMatchObject({ x: 100, y: 200 })
     expect(boundary[1]).toMatchObject({ x: 120, y: 200 })

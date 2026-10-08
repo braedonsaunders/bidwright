@@ -2,10 +2,9 @@ import { AcDbObject } from '../../base'
 import { AcDbDatabase } from '../AcDbDatabase'
 import { AcDbSysVarManager } from '../AcDbSysVarManager'
 import {
+  acdbAreChangeContainersEqual,
   AcDbChangeContainer,
-  AcDbDatabaseChange,
-  areChangeContainersEqual
-} from './AcDbDatabaseChange'
+  AcDbDatabaseChange} from './AcDbDatabaseChange'
 
 /**
  * Accumulates structured database changes during an active transaction.
@@ -235,7 +234,7 @@ export class AcDbChangeRecorder {
       change =>
         change.kind === kind &&
         change.object.objectId === objectId &&
-        areChangeContainersEqual(change.container, container)
+        acdbAreChangeContainersEqual(change.container, container)
     )
   }
 

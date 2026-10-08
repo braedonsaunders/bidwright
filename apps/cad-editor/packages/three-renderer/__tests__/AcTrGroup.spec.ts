@@ -7,6 +7,7 @@ import { AcTrGroup } from '../src/object/AcTrGroup'
 import { AcTrLine } from '../src/object/AcTrLine'
 import { AcTrRenderContext } from '../src/renderer/AcTrRenderContext'
 import { AcTrSubEntityTraitsUtil } from '../src/util'
+import { getSceneDrawableUserData } from '../src/util/AcTrObjectUserData'
 
 const defaultTraits = AcTrSubEntityTraitsUtil.createDefaultTraits()
 
@@ -33,6 +34,17 @@ function createLine(
 }
 
 describe('AcTrGroup wcsBbox', () => {
+  it('reports childCount from post-flatten drawable children', () => {
+    const context = new AcTrRenderContext()
+    const lineA = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
+    const lineB = createLine('line-b', { x: 2, y: 5 }, { x: 8, y: 15 }, context)
+
+    const group = new AcTrGroup([lineA, lineB], context)
+
+    expect(group.childCount).toBe(group.children.length)
+    expect(group.childCount).toBeGreaterThanOrEqual(2)
+  })
+
   it('unions child wcsBbox values into the group wcsBbox', () => {
     const context = new AcTrRenderContext()
     const lineA = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
@@ -252,14 +264,14 @@ describe('AcTrGroup wcsBbox', () => {
     )
     group.addChild(attribute)
 
-    expect(group.wcsChildBoxes.find(box => box.id === 'line-title')).toMatchObject(
-      {
-        minX: 394,
-        minY: 28,
-        maxX: 574,
-        maxY: 28
-      }
-    )
+    expect(
+      group.wcsChildBoxes.find(box => box.id === 'line-title')
+    ).toMatchObject({
+      minX: 394,
+      minY: 28,
+      maxX: 574,
+      maxY: 28
+    })
     expect(group.wcsChildBoxes.find(box => box.id === 'attr-1')).toMatchObject({
       minX: 394,
       minY: 0,
@@ -271,12 +283,7 @@ describe('AcTrGroup wcsBbox', () => {
 
   it('preserves applyMatrix child boxes when refresh runs after deferred syncDraw', () => {
     const context = new AcTrRenderContext()
-    const line = createLine(
-      'line-a',
-      { x: 0, y: 0 },
-      { x: 10, y: 5 },
-      context
-    )
+    const line = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 5 }, context)
     const group = new AcTrGroup([line], context)
     group.applyMatrix(new AcGeMatrix3d().makeTranslation(100, 200, 0))
 
@@ -323,6 +330,33 @@ describe('AcTrGroup wcsBbox', () => {
       maxY: 200
     })
     expectWcsBboxCloseTo(outerGroup.wcsBbox, [674, 200, 0], [684, 200, 0])
+  })
+
+  it('resolves nested layer-0 to the nested INSERT layer, not the outer INSERT', () => {
+    const context = new AcTrRenderContext()
+    // Entity C authored on layer 0 inside nested block B.
+    const entityC = createLine(
+      'entity-c',
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      context,
+      '0'
+    )
+    const insertB = new AcTrGroup([entityC], context)
+    // Nested INSERT B lives on DIM (set after worldDraw by AcDbRenderingCache).
+    insertB.layerName = 'DIM'
+
+    const insertA = new AcTrGroup([insertB], context)
+    insertA.layerName = 'Wall'
+
+    expect(insertA.isOnTheSameLayer).toBe(false)
+    expect(
+      insertA.children.map(child => child.userData.layerName)
+    ).toEqual(['DIM'])
+    expect(
+      insertA.children.map(child => child.userData.authoredLayerName)
+    ).toEqual(['0'])
+    expect(insertA.getSourceEntities()[0]?.layerName).toBe('DIM')
   })
 
   it('skips invalid child boxes when applying insert transform', () => {
@@ -425,5 +459,153 @@ describe('AcTrGroup dispose', () => {
     const outerGroup = new AcTrGroup([emptyInnerGroup], context)
 
     expect(() => outerGroup.syncDraw()).not.toThrow()
+  })
+
+  it('skips deep-cloning source entities after compactForInstancing', () => {
+    const context = new AcTrRenderContext()
+    const lineA = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
+    const lineB = createLine('line-b', { x: 0, y: 5 }, { x: 10, y: 5 }, context)
+    const group = new AcTrGroup([lineA, lineB], context)
+    expect(group.getSourceEntities().length).toBe(2)
+
+    group.compactForInstancing()
+    expect(group.isCompacted).toBe(true)
+
+    const cloned = group.fastDeepClone() as AcTrGroup
+    expect(cloned.isCompacted).toBe(true)
+    expect(cloned.getSourceEntities()).toHaveLength(0)
+    expect(cloned.wcsChildBoxes).toEqual(group.wcsChildBoxes)
+  })
+
+  it('shares leaf geometry buffers across fastDeepClone instances', () => {
+    const context = new AcTrRenderContext()
+    const lineA = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
+    const lineB = createLine('line-b', { x: 0, y: 5 }, { x: 10, y: 5 }, context)
+    const group = new AcTrGroup([lineA, lineB], context)
+    group.compactForInstancing()
+
+    const cloned = group.fastDeepClone() as AcTrGroup
+    expect(cloned.children.length).toBe(group.children.length)
+    for (let i = 0; i < group.children.length; i++) {
+      const source = group.children[i] as THREE.Mesh
+      const instance = cloned.children[i] as THREE.Mesh
+      expect(instance).not.toBe(source)
+      expect(instance.geometry).toBe(source.geometry)
+      expect(getSceneDrawableUserData(instance).sharesTemplateGeometry).toBe(
+        true
+      )
+    }
+
+    AcTrEntity.disposeObject(cloned, false)
+    for (const child of group.children) {
+      const mesh = child as THREE.Mesh
+      const geometry = mesh.geometry
+      expect(geometry).toBeTruthy()
+      expect(() => geometry.getAttribute('position')).not.toThrow()
+      // Style-cache materials are shared with the template; dispose must not
+      // release them either.
+      expect(mesh.material).toBeTruthy()
+    }
+  })
+
+  it('prepareCacheTemplate does not drop source shells or merge leaves', () => {
+    const context = new AcTrRenderContext()
+    const lineA = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
+    const lineB = createLine('line-b', { x: 0, y: 5 }, { x: 10, y: 5 }, context)
+    const group = new AcTrGroup([lineA, lineB], context)
+    const beforeChildren = group.children.length
+    const beforeSources = group.getSourceEntities().length
+
+    group.prepareCacheTemplate()
+    expect(group.isCompacted).toBe(false)
+    // Releasing shells here regresses scene convert; compact still drops them.
+    expect(group.getSourceEntities()).toHaveLength(beforeSources)
+    expect(group.children.length).toBe(beforeChildren)
+  })
+
+  it('fastDeepClone auto-compacts templates with 2+ children so clones share geometry', () => {
+    const context = new AcTrRenderContext()
+    const lineA = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
+    const lineB = createLine('line-b', { x: 0, y: 5 }, { x: 10, y: 5 }, context)
+    const group = new AcTrGroup([lineA, lineB], context)
+    group.prepareCacheTemplate()
+
+    const first = group.fastDeepClone() as AcTrGroup
+    expect(group.isCompacted).toBe(true)
+    expect(first.children.length).toBe(group.children.length)
+    for (let i = 0; i < group.children.length; i++) {
+      const source = group.children[i] as THREE.Mesh
+      const instance = first.children[i] as THREE.Mesh
+      expect(instance.geometry).toBe(source.geometry)
+      expect(getSceneDrawableUserData(instance).sharesTemplateGeometry).toBe(
+        true
+      )
+    }
+
+    const second = group.fastDeepClone() as AcTrGroup
+    for (let i = 0; i < group.children.length; i++) {
+      const source = group.children[i] as THREE.Mesh
+      const instance = second.children[i] as THREE.Mesh
+      expect(instance.geometry).toBe(source.geometry)
+    }
+  })
+
+  it('lazily materializes wcsChildBoxes with INSERT transform on clone', () => {
+    const context = new AcTrRenderContext()
+    const line = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 5 }, context)
+    const group = new AcTrGroup([line], context)
+    group.compactForInstancing()
+
+    const cloned = group.fastDeepClone() as AcTrGroup
+    cloned.applyMatrix(new AcGeMatrix3d().makeTranslation(50, 25, 0))
+
+    expect(cloned.wcsChildBoxes[0]).toMatchObject({
+      minX: 50,
+      minY: 25,
+      maxX: 60,
+      maxY: 30,
+      id: 'line-a'
+    })
+    expectWcsBboxCloseTo(cloned.wcsBbox, [50, 25, 0], [60, 30, 0])
+    // Template source boxes remain block-local.
+    expect(group.wcsChildBoxes[0]).toMatchObject({
+      minX: 0,
+      minY: 0,
+      maxX: 10,
+      maxY: 5,
+      id: 'line-a'
+    })
+  })
+
+  it('preserves attribute boxes added before applyMatrix on a lazy clone', () => {
+    const context = new AcTrRenderContext()
+    const line = createLine('line-a', { x: 0, y: 0 }, { x: 10, y: 0 }, context)
+    const group = new AcTrGroup([line], context)
+    group.compactForInstancing()
+
+    const cloned = group.fastDeepClone() as AcTrGroup
+    const attribute = createLine(
+      'attr-1',
+      { x: 1, y: 1 },
+      { x: 5, y: 1 },
+      context,
+      'CARTOUCHE'
+    )
+    // addChild while still lazy (no applyMatrix yet).
+    cloned.addChild(attribute)
+    cloned.applyMatrix(new AcGeMatrix3d().makeTranslation(100, 0, 0))
+
+    expect(cloned.wcsChildBoxes.find(box => box.id === 'line-a')).toMatchObject({
+      minX: 100,
+      minY: 0,
+      maxX: 110,
+      maxY: 0
+    })
+    expect(cloned.wcsChildBoxes.find(box => box.id === 'attr-1')).toMatchObject({
+      minX: 101,
+      minY: 1,
+      maxX: 105,
+      maxY: 1
+    })
   })
 })

@@ -6,8 +6,14 @@ import {
 } from '@mlightcad/data-model'
 import * as THREE from 'three'
 
-import { AcTrRenderer } from '../renderer'
+import { AcTrRenderer } from '../renderer/AcTrRenderer'
 import { AcTrBaseView } from './AcTrBaseView'
+import {
+  type AcTrCssRect,
+  acTrCssRectToWcsBox,
+  acTrCssTopLeftRectToGl,
+  acTrIntersectCssRects
+} from './AcTrCssRect'
 
 /**
  * This class represents view to show viewport.
@@ -54,13 +60,22 @@ export class AcTrViewportView extends AcTrBaseView {
    *   viewport's model content (e.g. a large site-plan viewport whose paper
    *   box spans most of the sheet).
    *
-   * Because `number` misfires both ways, we rely **solely** on the
-   * structural fingerprint: the default viewport "looks at itself" in
-   * paper space, so its `centerPoint` (paper WCS) coincides with its
-   * `viewCenter` (model DCS). The genuine template default is the
-   * `(0,0)-(12,9)` viewport with `centerPoint == viewCenter == (6,4.5)`,
-   * while every real viewport pans the model view to a `viewCenter`
-   * tens-to-hundreds of units away from its paper `centerPoint`.
+   * Because `number` misfires both ways, we rely on structural fingerprints:
+   *
+   * 1. The default viewport "looks at itself" in paper space, so its
+   *    `centerPoint` (paper WCS) coincides with its `viewCenter` (model DCS).
+   *    The genuine template default is the `(0,0)-(12,9)` viewport with
+   *    `centerPoint == viewCenter == (6,4.5)`.
+   * 2. Some LibreDWG parses leave the default's paper `centerPoint` at the
+   *    origin `(0,0)` while still storing a sheet-local `viewCenter` and a
+   *    1:1 `viewHeight == height` with a zero `viewTarget`. That broken
+   *    default must also be filtered: otherwise it draws a large empty
+   *    rectangle near the origin and stretches first-visit zoom far away
+   *    from the real sheet content.
+   *
+   * Real user viewports pan/zoom the model (`viewCenter`/`viewTarget` away
+   * from the paper rectangle, `viewHeight` unrelated to paper `height`), so
+   * they do not match either fingerprint.
    *
    * @param viewport the viewport read from `AcDbViewport.toGiViewport()`
    *                 (or the database entity, which exposes the same
@@ -70,16 +85,45 @@ export class AcTrViewportView extends AcTrBaseView {
     number: number
     centerPoint: { x: number; y: number }
     viewCenter: { x: number; y: number }
+    height?: number
+    viewHeight?: number
+    viewTarget?: { x: number; y: number }
   }): boolean {
     // Tolerance ~1µ in drawing units — generous enough to absorb
     // floating-point round-tripping through the parser, tight enough
     // that no real user viewport (even one panned to (0,0) of model
     // space) collides with the paper rectangle's center by accident.
     const eps = 1e-6
-    return (
+    const looksAtItself =
       Math.abs(viewport.centerPoint.x - viewport.viewCenter.x) < eps &&
       Math.abs(viewport.centerPoint.y - viewport.viewCenter.y) < eps
-    )
+    if (looksAtItself) return true
+
+    // Broken LibreDWG default: paper center collapsed to origin, but the
+    // viewport still "looks at paper" (1:1 height, zero view target).
+    const centerAtOrigin =
+      Math.abs(viewport.centerPoint.x) < eps &&
+      Math.abs(viewport.centerPoint.y) < eps
+    if (!centerAtOrigin) return false
+
+    const height = viewport.height
+    const viewHeight = viewport.viewHeight
+    if (
+      height == null ||
+      viewHeight == null ||
+      !Number.isFinite(height) ||
+      !Number.isFinite(viewHeight) ||
+      Math.abs(viewHeight - height) >= eps
+    ) {
+      return false
+    }
+
+    // Missing viewTarget is treated as (0,0): older converters did not
+    // surface DXF group 17, but these broken defaults still have a zero
+    // target in the DWG.
+    const target = viewport.viewTarget
+    if (!target) return true
+    return Math.abs(target.x) < eps && Math.abs(target.y) < eps
   }
 
   /**
@@ -103,6 +147,7 @@ export class AcTrViewportView extends AcTrBaseView {
     this._viewport = viewport.clone()
     this._frustum *= viewport.height / parentView.height
     this.zoomTo(this._viewport.viewBox)
+    this.applyViewTwist()
     this.enabled = false
   }
 
@@ -118,6 +163,7 @@ export class AcTrViewportView extends AcTrBaseView {
    */
   update() {
     this.zoomTo(this._viewport.viewBox, 1.0)
+    this.applyViewTwist()
   }
 
   /**
@@ -156,38 +202,52 @@ export class AcTrViewportView extends AcTrBaseView {
   }
 
   /**
-   * Transforms a point from paper-space WCS into the model-space DCS that
-   * is visible through this viewport. The mapping is the affine transform
-   * defined by:
-   *   - `viewport.box`     — the rectangle the viewport occupies in paper
-   *   - `viewport.viewBox` — the rectangle of model the viewport shows
+   * Transforms a point from paper-space WCS into the model-space WCS that
+   * is visible through this viewport.
    *
-   * Note this intentionally ignores the viewport's twist angle (rotation
-   * within the viewport): AutoCAD viewports may be rotated, but the
-   * current renderer does not support that yet, and adding it here would
-   * silently disagree with what the user sees on screen. When twist
-   * support lands (`AcDbViewport.twistAngle`), update this transform and
-   * the corresponding renderer in lockstep.
+   * Maps the paper rectangle onto the DCS view (`viewBox` size around its
+   * center), then rotates by {@link AcGiViewport.viewTwistAngle} so a
+   * non-zero DVIEW twist matches `AcGiViewport.dcsCenterToWcs` and the
+   * camera applied after zoom-to-fit.
    */
   paperPointToModel(paperPt: AcGePoint2dLike): AcGePoint2d {
     const paperBox = this._viewport.box
     const modelBox = this._viewport.viewBox
     const paperW = paperBox.max.x - paperBox.min.x
     const paperH = paperBox.max.y - paperBox.min.y
-    // Degenerate viewport (collapsed to a line/point) — return the model
-    // view center as a safe fallback so callers don't divide by zero.
+    const centerX = (modelBox.min.x + modelBox.max.x) / 2
+    const centerY = (modelBox.min.y + modelBox.max.y) / 2
     if (paperW <= 0 || paperH <= 0) {
-      return new AcGePoint2d(
-        (modelBox.min.x + modelBox.max.x) / 2,
-        (modelBox.min.y + modelBox.max.y) / 2
-      )
+      return new AcGePoint2d(centerX, centerY)
     }
-    const u = (paperPt.x - paperBox.min.x) / paperW
-    const v = (paperPt.y - paperBox.min.y) / paperH
+    const localX =
+      ((paperPt.x - paperBox.min.x) / paperW - 0.5) *
+      (modelBox.max.x - modelBox.min.x)
+    const localY =
+      ((paperPt.y - paperBox.min.y) / paperH - 0.5) *
+      (modelBox.max.y - modelBox.min.y)
+    const twist = this._viewport.viewTwistAngle
+    if (!Number.isFinite(twist) || twist === 0) {
+      return new AcGePoint2d(centerX + localX, centerY + localY)
+    }
+    const cos = Math.cos(twist)
+    const sin = Math.sin(twist)
     return new AcGePoint2d(
-      modelBox.min.x + u * (modelBox.max.x - modelBox.min.x),
-      modelBox.min.y + v * (modelBox.max.y - modelBox.min.y)
+      centerX + localX * cos - localY * sin,
+      centerY + localX * sin + localY * cos
     )
+  }
+
+  /**
+   * Rotates this viewport's camera by {@link AcGiViewport.viewTwistAngle}
+   * after {@link zoomTo}, which otherwise resets rotation to identity.
+   */
+  private applyViewTwist() {
+    const twist = this._viewport.viewTwistAngle
+    const angle = Number.isFinite(twist) ? twist : 0
+    this._camera.internalCamera.up.set(-Math.sin(angle), Math.cos(angle), 0)
+    this._camera.setRotationFromEuler(new THREE.Euler(0, 0, angle))
+    this._camera.updateProjectionMatrix()
   }
 
   /**
@@ -206,36 +266,68 @@ export class AcTrViewportView extends AcTrBaseView {
   }
 
   /**
-   * Render the specified scene in this viewport view
-   * @param scene Input the scene to render
+   * Clips this paper viewport to the parent canvas and returns the CSS
+   * rectangle plus the model-space box that should fill it.
+   *
+   * A zoomed paper viewport can map to more CSS pixels than WebGL
+   * `MAX_VIEWPORT_DIMS`. Clamping that rect shifts NDC (right-side content
+   * appears in view) and further zoom draws nothing. The on-screen
+   * intersection stays within GPU limits.
+   *
+   * @returns On-canvas CSS rect and matching model box, or `null` when the
+   *   viewport is fully off-screen or has an empty mapping.
    */
-  render(scene: THREE.Object3D) {
+  computeOnscreenPass(): { hit: AcTrCssRect; modelBox: AcGeBox2d } | null {
     const viewportWindowBox = AcTrViewportView.calculateViewportWindowBox(
       this._parentView,
       this._viewport
     )
-    if (!viewportWindowBox.isEmpty()) {
-      const vpW = viewportWindowBox.size.width
-      const vpH = viewportWindowBox.size.height
-
-      if (vpW !== this._width || vpH !== this._height) {
-        this._width = vpW
-        this._height = vpH
-        this._frustum = vpH / 2
-        this.zoomTo(this._viewport.viewBox, 1.0)
-      }
-
-      const y = this._parentView.height - viewportWindowBox.min.y - vpH
-      this._renderer.setViewport(viewportWindowBox.min.x, y, vpW, vpH)
-      this._renderer.internalRenderer.setScissor(
-        viewportWindowBox.min.x,
-        y,
-        vpW,
-        vpH
-      )
-      this._renderer.internalRenderer.setScissorTest(true)
-      this._renderer.render(scene, this._camera)
-      this._renderer.internalRenderer.setScissorTest(false)
+    if (viewportWindowBox.isEmpty()) return null
+    const size = viewportWindowBox.size
+    const cssVp: AcTrCssRect = {
+      x: viewportWindowBox.min.x,
+      y: viewportWindowBox.min.y,
+      width: size.width,
+      height: size.height
     }
+    const hit = acTrIntersectCssRects(cssVp, {
+      x: 0,
+      y: 0,
+      width: this._parentView.width,
+      height: this._parentView.height
+    })
+    if (!hit) return null
+    // Map the CSS clip onto the DCS view box. Do not send corners through
+    // `paperPointToModel`: that applies `viewTwistAngle`, and `render()`
+    // already calls `applyViewTwist()` after `zoomTo`. Using the twisted
+    // AABB would zoom out fully on-screen twisted viewports.
+    const mapped = acTrCssRectToWcsBox(hit, this._viewport.viewBox, cssVp)
+    const modelBox = new AcGeBox2d()
+    modelBox.expandByPoint({ x: mapped.minX, y: mapped.minY })
+    modelBox.expandByPoint({ x: mapped.maxX, y: mapped.maxY })
+    if (modelBox.isEmpty()) return null
+    return { hit, modelBox }
+  }
+
+  /**
+   * Render the specified scene in this viewport view
+   * @param scene Input the scene to render
+   */
+  render(scene: THREE.Object3D) {
+    const pass = this.computeOnscreenPass()
+    if (!pass) return
+
+    this._width = pass.hit.width
+    this._height = pass.hit.height
+    this._frustum = pass.hit.height / 2
+    this.zoomTo(pass.modelBox, 1.0)
+    this.applyViewTwist()
+
+    const gl = acTrCssTopLeftRectToGl(pass.hit, this._parentView.height)
+    this._renderer.setViewport(gl.x, gl.y, gl.width, gl.height)
+    this._renderer.setScissor(gl.x, gl.y, gl.width, gl.height)
+    this._renderer.setScissorTest(true)
+    this._renderer.render(scene, this._camera)
+    this._renderer.setScissorTest(false)
   }
 }

@@ -8,7 +8,6 @@ import {
   AcGeVector3d,
   AcGeVector3dLike
 } from '@mlightcad/geometry-engine'
-import { AcGiMTextAttachmentPoint } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../../base'
 import { AcDbBlockTableRecord } from '../../database'
@@ -385,7 +384,7 @@ export class AcDbAlignedDimension extends AcDbDimension {
 
     if (this.dimensionText) {
       const mtext = new AcDbMText()
-      mtext.attachmentPoint = AcGiMTextAttachmentPoint.MiddleLeft
+      mtext.attachmentPoint = this.attachmentPoint
       mtext.layer = '0'
       mtext.color = new AcCmColor(AcCmColorMethod.ByBlock)
       mtext.location = pos
@@ -526,5 +525,167 @@ export class AcDbAlignedDimension extends AcDbDimension {
     filer.writeAngle(50, this.rotation)
     filer.writeAngle(52, this.oblique)
     return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData(this.dxfSubclassMarker)
+
+    let x1 = this.xLine1Point.x
+    let y1 = this.xLine1Point.y
+    let z1 = this.xLine1Point.z
+    let x2 = this.xLine2Point.x
+    let y2 = this.xLine2Point.y
+    let z2 = this.xLine2Point.z
+    let dx = this.dimLinePoint.x
+    let dy = this.dimLinePoint.y
+    let dz = this.dimLinePoint.z
+    let rotDeg = (this.rotation * 180) / Math.PI
+    let oblDeg = (this.oblique * 180) / Math.PI
+    let ix = this.dimBlockPosition.x
+    let iy = this.dimBlockPosition.y
+    let iz = this.dimBlockPosition.z
+    let hasInsertion = false
+    let hasDimLine = false
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 12:
+          ix = n
+          hasInsertion = true
+          break
+        case 22:
+          iy = n
+          hasInsertion = true
+          break
+        case 32:
+          iz = n
+          hasInsertion = true
+          break
+        case 13:
+          x1 = n
+          break
+        case 23:
+          y1 = n
+          break
+        case 33:
+          z1 = n
+          break
+        case 14:
+          x2 = n
+          break
+        case 24:
+          y2 = n
+          break
+        case 34:
+          z2 = n
+          break
+        case 15:
+          dx = n
+          hasDimLine = true
+          break
+        case 25:
+          dy = n
+          hasDimLine = true
+          break
+        case 35:
+          dz = n
+          hasDimLine = true
+          break
+        case 50:
+          rotDeg = n
+          break
+        case 52:
+          oblDeg = n
+          break
+        case 100:
+          filer.pushBackItem(item)
+          this.finishAlignedDxfIn(
+            x1,
+            y1,
+            z1,
+            x2,
+            y2,
+            z2,
+            dx,
+            dy,
+            dz,
+            rotDeg,
+            oblDeg,
+            ix,
+            iy,
+            iz,
+            hasInsertion,
+            hasDimLine
+          )
+          return this
+        default:
+          break
+      }
+    }
+
+    this.finishAlignedDxfIn(
+      x1,
+      y1,
+      z1,
+      x2,
+      y2,
+      z2,
+      dx,
+      dy,
+      dz,
+      rotDeg,
+      oblDeg,
+      ix,
+      iy,
+      iz,
+      hasInsertion,
+      hasDimLine
+    )
+    return this
+  }
+
+  private finishAlignedDxfIn(
+    x1: number,
+    y1: number,
+    z1: number,
+    x2: number,
+    y2: number,
+    z2: number,
+    dx: number,
+    dy: number,
+    dz: number,
+    rotDeg: number,
+    oblDeg: number,
+    ix: number,
+    iy: number,
+    iz: number,
+    hasInsertion: boolean,
+    hasDimLine: boolean
+  ) {
+    this.xLine1Point = { x: x1, y: y1, z: z1 }
+    this.xLine2Point = { x: x2, y: y2, z: z2 }
+    // AutoCAD aligned/rotated dims store the dim-line point as group 10
+    // (AcDbDimension definition point). Group 15 is rare.
+    if (hasDimLine) {
+      this.dimLinePoint = { x: dx, y: dy, z: dz }
+    } else {
+      this.dimLinePoint = {
+        x: this._dxfDefinitionPoint.x,
+        y: this._dxfDefinitionPoint.y,
+        z: this._dxfDefinitionPoint.z
+      }
+    }
+    this.rotation = (rotDeg * Math.PI) / 180
+    this.oblique = (oblDeg * Math.PI) / 180
+    // Match dxf-json-converter: group 12 (clone insertion) sets dim block
+    // position when present; otherwise leave at origin (do not use group 10).
+    if (hasInsertion) {
+      this.dimBlockPosition = { x: ix, y: iy, z: iz }
+    }
   }
 }

@@ -1,6 +1,7 @@
 import {
   AcGeBox3d,
-  acGeClosedPolygonArea3d,
+  acgeClosedPolygonArea3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGePoint3dLike,
@@ -13,6 +14,7 @@ import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbEntity } from './AcDbEntity'
 import { acdbMovePointArrayGripAt } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
 import { acdbCollectVertexPathOsnapPoints } from './AcDbOsnapHelpers'
 
 /**
@@ -64,7 +66,7 @@ export class AcDbFace extends AcDbEntity {
    */
   getVertexAt(index: number): AcGePoint3d {
     if (index < 0) return this._vertices[0]
-    if (index > this._vertices.length) {
+    if (index >= this._vertices.length) {
       return this._vertices[this._vertices.length - 1]
     }
     return this._vertices[index]
@@ -177,6 +179,11 @@ export class AcDbFace extends AcDbEntity {
     return new AcGeBox3d().setFromPoints(this._vertices)
   }
 
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return acdbIntersectPrimitivesFromPointPath(this._vertices, true)
+  }
+
   /**
    * The area of this planar face. Degenerate faces return `0`.
    */
@@ -194,7 +201,7 @@ export class AcDbFace extends AcDbEntity {
     ) {
       points.push(fourth)
     }
-    return acGeClosedPolygonArea3d(points)
+    return acgeClosedPolygonArea3d(points)
   }
 
   /**
@@ -253,6 +260,15 @@ export class AcDbFace extends AcDbEntity {
   }
 
   /**
+   * This face always draws as a single `lineSegments` primitive.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    return 'lineSegments' as const
+  }
+
+  /**
    * Draws this face using the specified renderer.
    *
    * This method renders the face as a filled area using the face's
@@ -302,6 +318,56 @@ export class AcDbFace extends AcDbEntity {
       }
     }
     filer.writeInt16(70, mask)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbFace')
+
+    // Constructor starts with 3 verts; seed local copies without requiring index 3.
+    const pts = [0, 1, 2, 3].map(i => {
+      const v = this._vertices[i]
+      return v
+        ? { x: v.x, y: v.y, z: v.z }
+        : { x: 0, y: 0, z: 0 }
+    })
+    let edgeMask = this._edgeInvisibilities
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+        case 11:
+        case 12:
+        case 13:
+          pts[code - 10].x = n
+          break
+        case 20:
+        case 21:
+        case 22:
+        case 23:
+          pts[code - 20].y = n
+          break
+        case 30:
+        case 31:
+        case 32:
+        case 33:
+          pts[code - 30].z = n
+          break
+        case 70:
+          edgeMask = n
+          break
+        default:
+          break
+      }
+    }
+
+    pts.forEach((p, i) => this.setVertexAt(i, p))
+    this._edgeInvisibilities = edgeMask
     return this
   }
 }

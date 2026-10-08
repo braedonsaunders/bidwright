@@ -73,7 +73,7 @@ const encodings = [
   'shift-jis', // DOS Japanese (shiftjis)
   'macintosh', // 23
   'big5',
-  'utf-8', // Korean (Wansung + Johab)
+  'euc-kr', // Korean (CP949/Wansung + UHC extensions; WHATWG 'euc-kr' decodes windows-949)
   'utf-8', // Johab?
   'ibm866', // Russian
   'windows-1250', // Central + Eastern European
@@ -95,6 +95,40 @@ const encodings = [
   'windows-1258' // Vietnamese
 ]
 
-export const dwgCodePageToEncoding = (codepage: AcDbCodePage) => {
+export const acdbDwgCodePageToEncoding = (codepage: AcDbCodePage) => {
   return encodings[codepage]
+}
+
+/**
+ * Common Korean/Chinese code page names that `TextDecoder` rejects but map
+ * onto supported WHATWG encodings.
+ *
+ * `TextDecoder` has no `'cp949'` label even though the encoding itself is
+ * supported: the WHATWG `'euc-kr'` label decodes windows-949, which covers
+ * CP949 (Wansung + the UHC extension). The same applies to `'cp936'` →
+ * `'gbk'`. Keys are lower-cased.
+ */
+const textEncodingAliases: Record<string, string> = {
+  cp949: 'euc-kr',
+  uhc: 'euc-kr',
+  // Canonicalize after stripping `_`/`-` so `euc_kr` / `EUC_KR` work too.
+  euckr: 'euc-kr',
+  windows949: 'euc-kr',
+  ksc56011987: 'euc-kr',
+  cp936: 'gbk'
+}
+
+/**
+ * Normalizes a user-supplied encoding label to one `TextDecoder` accepts.
+ *
+ * Unknown labels pass through unchanged so `TextDecoder` reports the error
+ * itself. Labels are matched case-insensitively with `'_'` and `'-'` ignored,
+ * mirroring how DXF code page names arrive in mixed forms.
+ *
+ * @param encoding - Encoding label such as `'cp949'` or `'EUC-KR'`.
+ * @returns A label `new TextDecoder(...)` accepts in every runtime.
+ */
+export const acdbNormalizeTextEncoding = (encoding: string): string => {
+  const key = encoding.toLowerCase().replace(/[_-]/g, '')
+  return textEncodingAliases[key] ?? encoding
 }

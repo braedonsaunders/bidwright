@@ -39,7 +39,7 @@ const dwgConverter = new AcDbLibreDwgConverter({
 AcDbDatabaseConverterManager.instance.register(AcDbFileType.DWG, dwgConverter);
 ```
 
-Deploy `libredwg-parser-worker.js` from this package's `dist/` folder to a public URL accessible by your application.
+Deploy both `libredwg-parser-worker.js` and its sibling `libredwg-web.wasm` from this package's `dist/` folder to the same public directory. The worker loads the wasm from next to itself at runtime.
 
 ## API
 

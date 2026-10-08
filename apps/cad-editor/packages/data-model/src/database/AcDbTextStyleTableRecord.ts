@@ -287,6 +287,23 @@ export class AcDbTextStyleTableRecord extends AcDbSymbolTableRecord<AcDbTextStyl
   }
 
   /**
+   * Font file name as written to DXF group 3.
+   *
+   * Shape-file STYLE entries used by SHAPE entities need a `.shx` extension in
+   * DXF (CadLib / AutoCAD); DWG often stores the bare base name.
+   */
+  private get dxfFontFileName(): string {
+    const fileName = this.fileName?.trim() ?? ''
+    if (!fileName || !this.isShapeFile) {
+      return fileName
+    }
+    if (/\.[^./\\]+$/i.test(fileName)) {
+      return fileName
+    }
+    return `${fileName}.shx`
+  }
+
+  /**
    * Writes DXF fields for this object.
    *
    * @param filer - DXF output writer.
@@ -302,8 +319,91 @@ export class AcDbTextStyleTableRecord extends AcDbSymbolTableRecord<AcDbTextStyl
     filer.writeAngle(50, this.obliquingAngle)
     filer.writeInt16(71, this.getAttr('textGenerationFlag'))
     filer.writeDouble(42, this.priorSize)
-    filer.writeString(3, this.fileName)
+    filer.writeString(3, this.dxfFontFileName)
     filer.writeString(4, this.bigFontFileName)
     return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbSymbolTableRecord')
+    filer.atSubclassData('AcDbTextStyleTableRecord')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 100) {
+        filer.pushBackItem(item)
+        break
+      }
+      switch (code) {
+        case 2:
+          this.name = String(item.value)
+          break
+        case 70:
+          this.setAttr('standardFlag', Number(item.value))
+          break
+        case 40:
+          this.textSize = Number(item.value)
+          break
+        case 41:
+          this.xScale = Number(item.value)
+          break
+        case 50:
+          this.obliquingAngle = Number(item.value)
+          break
+        case 71:
+          this.setAttr('textGenerationFlag', Number(item.value))
+          break
+        case 42:
+          this.priorSize = Number(item.value)
+          break
+        case 3:
+          this.fileName = this.getFileNameWithoutExtension(String(item.value))
+          break
+        case 4:
+          this.bigFontFileName = String(item.value)
+          break
+        default:
+          break
+      }
+    }
+    return this
+  }
+
+  /**
+   * TrueType styles often leave DXF group 3 empty and store the font name in
+   * ACAD XData (`1001 ACAD` / `1000 SimSun`). Apply that as {@link extendedFont}
+   * and fall back {@link fileName} when the primary font file is blank —
+   * matching dxf-json's `extendedFont` field.
+   */
+  protected override dxfInXData(filer: AcDbDxfFiler): void {
+    super.dxfInXData(filer)
+    this.applyExtendedFontFromXData()
+  }
+
+  private applyExtendedFontFromXData(): void {
+    const xdata = this.getXData('ACAD')
+    if (xdata) {
+      for (const item of xdata) {
+        if (Number(item.code) === 1000 && item.value != null) {
+          const name = String(item.value).trim()
+          if (name) {
+            this.setAttr('extendedFont', name)
+            break
+          }
+        }
+      }
+    }
+
+    const font = (this.getAttr('font') ?? '').trim()
+    if (!font) {
+      const fallback =
+        this.getAttrWithoutException('extendedFont') || this.name || ''
+      if (fallback) {
+        this.fileName = this.getFileNameWithoutExtension(fallback)
+      }
+    }
   }
 }

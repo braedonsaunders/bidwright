@@ -6,7 +6,7 @@ import {
   AcGeTol
 } from '@mlightcad/data-model'
 
-import { AcApAnnotation, AcApContext, AcApDocManager } from '../../app'
+import { AcApContext, AcApDocManager } from '../../app'
 import {
   AcEdBaseView,
   AcEdCommand,
@@ -25,6 +25,7 @@ import {
   AcEdPromptStatus
 } from '../../editor'
 import { AcApI18n } from '../../i18n'
+import { AcApEntityService } from '../../service'
 
 /**
  * Union of prompt option types used across the OFFSET state machine.
@@ -63,25 +64,6 @@ function isOffsettableCurve(
 }
 
 /**
- * Copies display and layer traits from a source entity onto an offset result.
- *
- * Offset geometry is created as new curve instances, so this helper ensures
- * the generated curves inherit the visual properties of the original.
- *
- * @param source - Original curve selected for offsetting.
- * @param target - Newly created offset curve that should match `source`.
- */
-function copyEntityTraits(source: AcDbEntity, target: AcDbEntity) {
-  target.layer = source.layer
-  target.color = source.color.clone()
-  target.lineType = source.lineType
-  target.lineWeight = source.lineWeight
-  target.linetypeScale = source.linetypeScale
-  target.transparency = source.transparency
-  target.visibility = source.visibility
-}
-
-/**
  * Builds one or more offset curves on the side indicated by a pick point.
  *
  * The side is resolved from the source curve geometry, the absolute distance is
@@ -101,7 +83,9 @@ function buildOffsetCurves(
   try {
     const side = curve.getOffsetSideAtPoint(sidePoint)
     const offsetCurves = curve.getOffsetCurves(offsetDistance * side)
-    offsetCurves.forEach(offsetCurve => copyEntityTraits(curve, offsetCurve))
+    offsetCurves.forEach(offsetCurve =>
+      AcApEntityService.copyDisplayTraits(curve, offsetCurve)
+    )
     return offsetCurves
   } catch {
     return []
@@ -191,11 +175,11 @@ export class AcApOffsetCmd extends AcEdCommand {
   private static _lastDistance?: number
 
   /**
-   * Creates the OFFSET command and marks it as a review-mode command.
+   * Creates the OFFSET command. Drawing geometry may only be offset in Write mode.
    */
   constructor() {
     super()
-    this.mode = AcEdOpenMode.Review
+    this.mode = AcEdOpenMode.Write
   }
 
   /**
@@ -215,7 +199,6 @@ export class AcApOffsetCmd extends AcEdCommand {
       this.showMessage(message, type)
     }
     const blockTable = context.doc.database.tables.blockTable
-    const annotation = new AcApAnnotation(context.doc.database)
     let offsetDistance: number | undefined
     let currentCurve: AcDbCurve | undefined
 
@@ -250,11 +233,9 @@ export class AcApOffsetCmd extends AcEdCommand {
        */
       buildPrompt() {
         const lastDistance = AcApOffsetCmd._lastDistance
-        const message =
-          lastDistance != null
-            ? `${AcApI18n.t('jig.offset.distance')} <${lastDistance}>`
-            : AcApI18n.t('jig.offset.distance')
-        const prompt = new AcEdPromptDistanceOptions(message)
+        const prompt = new AcEdPromptDistanceOptions(
+          AcApI18n.t('jig.offset.distance')
+        )
         prompt.useBasePoint = false
         prompt.useDashedLine = true
         prompt.allowZero = false
@@ -330,7 +311,6 @@ export class AcApOffsetCmd extends AcEdCommand {
       /**
        * Resolves the selected entity and advances to side-point picking when valid.
        *
-       * In review mode, annotation-owned entities are filtered out before lookup.
        * Non-curve selections show a warning and keep prompting for another object.
        *
        * @param result - Entity prompt result from the editor.
@@ -343,11 +323,7 @@ export class AcApOffsetCmd extends AcEdCommand {
           return 'finish'
         }
 
-        const validIds =
-          context.doc.openMode == AcEdOpenMode.Review
-            ? annotation.filterAnnotationEntities([result.objectId])
-            : [result.objectId]
-        const entity = context.doc.database.openEntityForRead(validIds[0])
+        const entity = context.doc.database.openEntityForRead(result.objectId)
         if (!isOffsettableCurve(entity)) {
           showCommandMessage(
             AcApI18n.t('jig.offset.invalidSelection'),

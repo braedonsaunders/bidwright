@@ -10,6 +10,13 @@ describe('AcDbTextStyleTable', () => {
     expectDetachedClone(() => new AcDbTextStyleTable(new AcDbDatabase()))
   })
 
+  it('normalizes font file names by stripping extension and lowercasing', () => {
+    expect(AcDbTextStyleTable.normalizeFontFileName('Arial.ttf')).toBe('arial')
+    expect(AcDbTextStyleTable.normalizeFontFileName('SIMHEI')).toBe('simhei')
+    expect(AcDbTextStyleTable.normalizeFontFileName('')).toBeUndefined()
+    expect(AcDbTextStyleTable.normalizeFontFileName(undefined)).toBeUndefined()
+  })
+
   it('collects normalized unique font names from file and big-font fields', () => {
     const db = new AcDbDatabase()
     const table = db.tables.textStyleTable

@@ -1,4 +1,4 @@
-import { AcGePoint2d, offsetSmoothedSampledPath } from '../src'
+import { AcGePoint2d, acgeOffsetSmoothedSampledPath } from '../src'
 
 function hasSelfIntersection(points: AcGePoint2d[], closed = false): boolean {
   const segmentCount = closed ? points.length : points.length - 1
@@ -28,7 +28,7 @@ function hasSelfIntersection(points: AcGePoint2d[], closed = false): boolean {
   return false
 }
 
-describe('offsetSmoothedSampledPath', () => {
+describe('acgeOffsetSmoothedSampledPath', () => {
   it('offsets a gentle open curve without self-intersections', () => {
     const points = [
       new AcGePoint2d(0, 0),
@@ -36,7 +36,7 @@ describe('offsetSmoothedSampledPath', () => {
       new AcGePoint2d(2, -1),
       new AcGePoint2d(3, 0)
     ]
-    const result = offsetSmoothedSampledPath(points, false, 0.5)
+    const result = acgeOffsetSmoothedSampledPath(points, false, 0.5)
     expect(result).not.toBeNull()
     const offsetPoints = Array.from(
       { length: result!.numberOfVertices },
@@ -57,7 +57,7 @@ describe('offsetSmoothedSampledPath', () => {
       )
     }
 
-    const result = offsetSmoothedSampledPath(points, false, 2)
+    const result = acgeOffsetSmoothedSampledPath(points, false, 2)
     expect(result).not.toBeNull()
     const offsetPoints = Array.from(
       { length: result!.numberOfVertices },
@@ -68,9 +68,9 @@ describe('offsetSmoothedSampledPath', () => {
   })
 
   it('returns null for degenerate input', () => {
-    expect(offsetSmoothedSampledPath([], false, 1)).toBeNull()
+    expect(acgeOffsetSmoothedSampledPath([], false, 1)).toBeNull()
     expect(
-      offsetSmoothedSampledPath([new AcGePoint2d(0, 0)], false, 1)
+      acgeOffsetSmoothedSampledPath([new AcGePoint2d(0, 0)], false, 1)
     ).toBeNull()
   })
 })

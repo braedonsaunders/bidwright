@@ -27,6 +27,7 @@ export {
   acgiResolveSubEntityTraitsRgbFromBackground
 } from './AcGiContext'
 export type { AcGiContextOptions } from './AcGiContext'
+export type { AcGiDirectBatchPrimitive } from './AcGiDirectBatchPrimitive'
 export type { AcGiFontMapping, AcGiRenderer } from './AcGiRenderer'
 export type { AcGiShapeData } from './AcGiShapeData'
 export type { AcGiStyleType } from './AcGiStyleType'

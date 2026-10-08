@@ -12,13 +12,14 @@ export class AcDbObjectIterator<ResultType>
 {
   /** Current index in the iteration */
   private i = 0
-  private _records: Map<string, ResultType>
-  private _keys: string[]
+  private readonly _records: Map<string, ResultType> | null
+  private readonly _array: readonly ResultType[] | null
+  private readonly _keys: string[]
 
   /**
    * Creates a new AcDbObjectIterator instance.
    *
-   * @param records - Array of objects to iterate over
+   * @param records - Map or array of objects to iterate over
    *
    * @example
    * ```typescript
@@ -26,16 +27,23 @@ export class AcDbObjectIterator<ResultType>
    * const iterator = new AcDbObjectIterator(entities);
    * ```
    */
-  constructor(records: Map<string, ResultType>) {
-    this._records = records
-    this._keys = Array.from(records.keys())
+  constructor(records: Map<string, ResultType> | readonly ResultType[]) {
+    if (records instanceof Map) {
+      this._records = records
+      this._array = null
+      this._keys = Array.from(records.keys())
+    } else {
+      this._records = null
+      this._array = records
+      this._keys = []
+    }
   }
 
   /**
    * The number of items
    */
   get count() {
-    return this._records.size
+    return this._records?.size ?? this._array!.length
   }
 
   /**
@@ -43,7 +51,10 @@ export class AcDbObjectIterator<ResultType>
    * @returns An array of values in the current iterator
    */
   toArray() {
-    return Array.from(this._records.values())
+    if (this._records) {
+      return Array.from(this._records.values())
+    }
+    return [...this._array!]
   }
 
   /**
@@ -76,8 +87,17 @@ export class AcDbObjectIterator<ResultType>
    * ```
    */
   next(): IteratorResult<ResultType, null> {
+    if (this._array) {
+      if (this.i < this._array.length) {
+        const value = this._array[this.i]
+        this.i += 1
+        return { value, done: false }
+      }
+      return { value: null, done: true }
+    }
+
     while (this.i < this._keys.length) {
-      const value = this._records.get(this._keys[this.i]) as ResultType
+      const value = this._records!.get(this._keys[this.i]) as ResultType
       this.i += 1
       return { value: value, done: false }
     }

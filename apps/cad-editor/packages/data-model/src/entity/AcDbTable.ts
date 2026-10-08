@@ -16,6 +16,7 @@ import {
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import type { AcDbBlockTableRecord } from '../database/AcDbBlockTableRecord'
+import { acdbDxfVersionCaps } from '../dxf/AcDbDxfVersionCaps'
 import { AcDbBlockReference } from './AcDbBlockReference'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
 
@@ -188,13 +189,35 @@ export class AcDbTable extends AcDbBlockReference {
    * @param numColumns - The number of columns in the table
    */
   constructor(name: string, numRows: number, numColumns: number) {
-    super(name)
+    super(name ?? '')
     this._attachmentPoint = AcGiMTextAttachmentPoint.TopLeft
     this._numColumns = numColumns
     this._numRows = numRows
     this._columnWidth = new Array<number>(numColumns)
     this._rowHeight = new Array<number>(numRows)
     this._cells = new Array<AcDbTableCell>(numRows * numColumns)
+  }
+
+  /**
+   * Resolves the anonymous table block used for rendering.
+   *
+   * LibreDWG sometimes omits the block name (`ldata.name`) while still providing
+   * the hard-pointer block record handle. Prefer name lookup, then fall back to
+   * {@link owningBlockRecordId}.
+   */
+  override get blockTableRecord(): AcDbBlockTableRecord | undefined {
+    const blockName = this.blockName
+    if (blockName) {
+      const byName = this.database.tables.blockTable.getAt(blockName)
+      if (byName) {
+        return byName
+      }
+    }
+    const owningId = this.owningBlockRecordId
+    if (!owningId) {
+      return undefined
+    }
+    return this.database.tables.blockTable.getIdAt(owningId)
   }
 
   /**
@@ -309,6 +332,19 @@ export class AcDbTable extends AcDbBlockReference {
    */
   setColumnWidth(index: number, width: number) {
     this._columnWidth[index] = width
+  }
+
+  /**
+   * Resizes row/column/cell storage for DXF import when counts are known.
+   */
+  resizeGrid(numRows: number, numColumns: number) {
+    const rows = Math.max(0, numRows)
+    const cols = Math.max(0, numColumns)
+    this._numRows = rows
+    this._numColumns = cols
+    this._rowHeight = new Array<number>(rows).fill(0)
+    this._columnWidth = new Array<number>(cols).fill(0)
+    this._cells = new Array<AcDbTableCell>(rows * cols)
   }
 
   /**
@@ -830,7 +866,7 @@ export class AcDbTable extends AcDbBlockReference {
 
     const version =
       filer.version ?? filer.database?.version ?? this.database?.version
-    const is2007OrLater = version?.value != null ? version.value >= 27 : false
+    const is2007OrLater = acdbDxfVersionCaps(version).supportsUtf8CodePage
 
     filer.writeInt16(280, this.tableDataVersion)
     filer.writeObjectId(342, this.tableStyleId)
@@ -997,6 +1033,242 @@ export class AcDbTable extends AcDbBlockReference {
         filer.writeString(4, format)
       }
     }
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbTable')
+
+    let rows = this._numRows
+    let cols = this._numColumns
+    let resized = false
+    const rowHeights: number[] = []
+    const columnWidths: number[] = []
+    let cellIndex = 0
+    let currentCell: AcDbTableCell | null = null
+    let textChunks: string[] = []
+    let hx = this.horizontalDirection?.x ?? 1
+    let hy = this.horizontalDirection?.y ?? 0
+    let hz = this.horizontalDirection?.z ?? 0
+
+    const ensureGrid = () => {
+      if (rows > 0 && cols > 0) {
+        if (
+          !resized ||
+          this._numRows !== rows ||
+          this._numColumns !== cols
+        ) {
+          this.resizeGrid(rows, cols)
+          resized = true
+        }
+      }
+    }
+
+    const flushCell = () => {
+      if (!currentCell) return
+      if (textChunks.length > 0) {
+        currentCell.text = textChunks.join('')
+        textChunks = []
+      }
+      ensureGrid()
+      if (cellIndex < this._cells.length) {
+        this.setCell(cellIndex, currentCell)
+      }
+      cellIndex += 1
+      currentCell = null
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 280:
+          if (!currentCell) {
+            this.tableDataVersion = n
+          }
+          break
+        case 342:
+          this.tableStyleId = String(item.value)
+          break
+        case 343:
+          this.owningBlockRecordId = String(item.value)
+          break
+        case 11:
+          hx = n
+          break
+        case 21:
+          hy = n
+          break
+        case 31:
+          hz = n
+          break
+        case 90:
+          if (!currentCell) {
+            this.tableValueFlag = n
+          }
+          // Inside CELL_VALUE / cell body these codes are value metadata.
+          break
+        case 93:
+          if (!currentCell) {
+            this.tableOverrideFlag = n
+          }
+          break
+        case 94:
+          if (!currentCell) {
+            this.borderColorOverrideFlag = n
+          }
+          break
+        case 95:
+          if (!currentCell) {
+            this.borderLineweightOverrideFlag = n
+          }
+          break
+        case 96:
+          if (!currentCell) {
+            this.borderVisibilityOverrideFlag = n
+          }
+          break
+        case 71:
+          this.attachmentPoint = n as AcGiMTextAttachmentPoint
+          break
+        case 170:
+          if (!currentCell) {
+            // Some writers put table-level attachment on 170 (cells use 170 too).
+            this.attachmentPoint = n as AcGiMTextAttachmentPoint
+          } else {
+            currentCell.attachmentPoint = n as AcGiMTextAttachmentPoint
+          }
+          break
+        case 91:
+          if (!currentCell) {
+            rows = n
+            ensureGrid()
+          } else if (currentCell) {
+            currentCell.overrideFlag = n
+          }
+          break
+        case 92:
+          if (!currentCell) {
+            cols = n
+            ensureGrid()
+          } else if (currentCell) {
+            currentCell.extendedCellFlags = n
+          }
+          break
+        case 141:
+          rowHeights.push(n)
+          break
+        case 142:
+          columnWidths.push(n)
+          break
+        case 171:
+          flushCell()
+          currentCell = {
+            text: '',
+            attachmentPoint: AcGiMTextAttachmentPoint.MiddleCenter,
+            cellType: n,
+            textHeight: 0
+          }
+          break
+        case 172:
+          if (currentCell) currentCell.flagValue = n
+          break
+        case 173:
+          if (currentCell) currentCell.mergedValue = n
+          break
+        case 174:
+          if (currentCell) currentCell.autoFit = Boolean(item.value) || n !== 0
+          break
+        case 175:
+          if (currentCell) currentCell.borderWidth = n
+          break
+        case 176:
+          if (currentCell) currentCell.borderHeight = n
+          break
+        case 177:
+          if (currentCell) currentCell.overrideFlag = n
+          break
+        case 178:
+          if (currentCell) currentCell.virtualEdgeFlag = n
+          break
+        case 145:
+          if (currentCell) currentCell.rotation = (n * Math.PI) / 180
+          break
+        case 1:
+        case 2:
+        case 302:
+        case 303:
+          textChunks.push(String(item.value))
+          break
+        case 300:
+          // Attribute text inside block-type cells.
+          if (currentCell) {
+            const existing = currentCell.attrText
+            if (Array.isArray(existing)) {
+              existing.push(String(item.value))
+            } else if (existing != null && existing !== '') {
+              currentCell.attrText = [String(existing), String(item.value)]
+            } else {
+              currentCell.attrText = String(item.value)
+            }
+          }
+          break
+        case 301:
+          if (currentCell) {
+            currentCell.cellValueBlockBegin = String(item.value)
+          }
+          break
+        case 304:
+          // ACVALUE_END
+          break
+        case 7:
+          if (currentCell) currentCell.textStyle = String(item.value)
+          break
+        case 140:
+          if (currentCell) currentCell.textHeight = n
+          break
+        case 340:
+          if (currentCell) currentCell.blockTableRecordId = String(item.value)
+          break
+        case 344:
+        case 345:
+          if (currentCell) currentCell.fieldObjetId = String(item.value)
+          break
+        case 144:
+        case 146:
+          if (currentCell) currentCell.blockScale = n
+          break
+        case 179:
+          if (currentCell) currentCell.blockAttrNum = n
+          break
+        case 70:
+          this.flowDirection = n
+          break
+        case 40:
+          this.horizontalCellMargin = n
+          break
+        case 41:
+          this.verticalCellMargin = n
+          break
+        case 281:
+          this.suppressHeader = n !== 0
+          break
+        case 310:
+          // BMP preview chunks — ignore.
+          break
+        default:
+          // Skip unknown / override decoration codes inside cells.
+          break
+      }
+    }
+
+    flushCell()
+    this.horizontalDirection = new AcGeVector3d(hx, hy, hz)
+    rowHeights.forEach((h, i) => this.setRowHeight(i, h))
+    columnWidths.forEach((w, i) => this.setColumnWidth(i, w))
     return this
   }
 

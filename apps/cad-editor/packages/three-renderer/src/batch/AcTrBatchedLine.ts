@@ -7,8 +7,7 @@ import {
   AcTrBatchedGeometryInfo,
   AcTrBatchGeometryUserData,
   copyArrayContents,
-  isBatchGeometryActive,
-  isBatchGeometryVisible
+  isBatchGeometryActive
 } from './AcTrBatchedGeometryInfo'
 import {
   applyGeometryAt,
@@ -27,8 +26,8 @@ import { syncBatchDrawVisibilityAfterOptimize } from './drawVisibility'
 const _box = /*@__PURE__*/ new THREE.Box3()
 /** Reusable scratch vector for bounds expansion. */
 const _vector = /*@__PURE__*/ new THREE.Vector3()
-/** Reusable scratch vector for bbox fallback raycast hits. */
-const _vector2 = /*@__PURE__*/ new THREE.Vector3()
+/** Reused pre-write slot bounds for the {@link setGeometryAt} fast path. */
+const _previousBounds = /*@__PURE__*/ new THREE.Box3()
 
 /**
  * Mixin base produced by {@link createAcTrBatchedMixin} for indexed line batches.
@@ -52,7 +51,9 @@ const AcTrBatchedLineBase = createAcTrBatchedMixin<AcTrBatchedGeometryInfo>(
  *
  * Multiple line geometries that share compatible attribute layouts and a material
  * are packed into one combined vertex/index buffer to reduce draw calls. Supports
- * point-symbol line regeneration and bbox-expanded raycast fallback for thin lines.
+ * point-symbol line regeneration. Picking uses {@link THREE.LineSegments.raycast}
+ * with `raycaster.params.Line.threshold` (distance to segments), not the geometry
+ * AABB — hollow shapes must not be selectable via their bounding box interior.
  *
  * @see {@link AcTrBatchedMesh} for mesh batching.
  * @see {@link AcTrBatchedLine2} for wide-line (`Line2`) batching.
@@ -255,8 +256,9 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
    * using {@link AcTrPointSymbolCreator}.
    *
    * @param displayMode - Point style mode passed to the symbol creator.
+   * @param displaySize - Point display size (`PDSIZE`) used to scale symbols.
    */
-  resetGeometry(displayMode: number) {
+  resetGeometry(displayMode: number, displaySize: number = 0) {
     // Backup user data
     const userData = this.getUserData()
 
@@ -266,7 +268,11 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
     const creator = AcTrPointSymbolCreator.instance
     userData.forEach(item => {
       if (item.position) {
-        const geometry = creator.create(displayMode)
+        const geometry = creator.create(
+          displayMode,
+          item.position,
+          displaySize
+        )
         if (geometry.line) {
           const worldOffset = new THREE.Vector3(
             item.position.x,
@@ -351,7 +357,7 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
     this._geometryCount = geometryCount
 
     // update the geometry
-    this.setGeometryAt(geometryId, geometry)
+    this.setGeometryAt(geometryId, geometry, null)
 
     // increment the next geometry position
     this._nextIndexStart =
@@ -438,11 +444,22 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
    *
    * @param geometryId - Target slot index.
    * @param geometry - New geometry payload to copy into the packed buffers.
+   * @param previousBounds - Pre-write local bounds of the slot. Defaults to a
+   *   scan of the current packed vertex range (no cached `Box3` is consulted
+   *   or materialized); `addGeometry` passes `null` for freshly reserved
+   *   slots so the fast path is skipped on first write.
    * @returns The same `geometryId` for chaining.
    * @throws {Error} When the id is out of range, layout is incompatible, or
    *   the source exceeds reserved capacity.
    */
-  setGeometryAt(geometryId: number, geometry: THREE.BufferGeometry) {
+  setGeometryAt(
+    geometryId: number,
+    geometry: THREE.BufferGeometry,
+    previousBounds: THREE.Box3 | null = this.computeBoundingBoxAt(
+      geometryId,
+      _previousBounds
+    )
+  ) {
     if (geometryId >= this._geometryCount) {
       throw new Error('AcTrBatchedLine: Maximum geometry count reached.')
     }
@@ -451,9 +468,109 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
 
     const batchGeometry = this.geometry
     const geometryInfo = this._geometryInfo[geometryId]
-    applyGeometryAt(geometryInfo, batchGeometry, geometry, 'AcTrBatchedLine')
+    applyGeometryAt(
+      geometryInfo,
+      batchGeometry,
+      geometry,
+      'AcTrBatchedLine',
+      geometryId,
+      previousBounds
+    )
 
     return geometryId
+  }
+
+  /**
+   * Materializes the `lineDistance` attribute when the current material is a
+   * pattern (dashed linetype) shader that consumes it. Called from
+   * {@link AcTrBatchedGroup.updateMaterial} after a layer rebind swaps a
+   * dash-capable material onto a batch whose packed geometry never carried
+   * the attribute (solid lines skip it to save ~25% of line vertex memory).
+   *
+   * Distances are rebuilt per packed slot so every entity restarts its dash
+   * phase at zero instead of chaining across slots.
+   */
+  ensureLineDistanceAttribute() {
+    const batchGeometry = this.geometry
+    if (batchGeometry.hasAttribute('lineDistance')) {
+      return
+    }
+    const material = Array.isArray(this.material)
+      ? this.material[0]
+      : this.material
+    if (
+      material == null ||
+      !AcTrBufferGeometryUtil.hasPatternLineShader(material)
+    ) {
+      // Only per-vertex dash pattern shaders consume lineDistance.
+      return
+    }
+
+    const packedPosition = batchGeometry.getAttribute('position') as
+      | THREE.BufferAttribute
+      | undefined
+    if (!packedPosition) return
+    const packedIndex = batchGeometry.getIndex() as THREE.BufferAttribute | null
+
+    // Sizing pass: scratch arrays cover the largest active slot.
+    let maxSlotVertices = 2
+    let maxSlotIndices = 2
+    for (let i = 0; i < this._geometryCount; i++) {
+      const info = this._geometryInfo[i]
+      if (!isBatchGeometryActive(info.flags)) continue
+      maxSlotVertices = Math.max(maxSlotVertices, info.vertexCount)
+      maxSlotIndices = Math.max(maxSlotIndices, info.indexCount)
+    }
+
+    const itemSize = packedPosition.itemSize
+    const distances = new Float32Array(packedPosition.count)
+    const slotGeometry = new THREE.BufferGeometry()
+    const positionScratch = new Float32Array(maxSlotVertices * itemSize)
+    const indexScratch = packedIndex
+      ? new Uint32Array(maxSlotIndices)
+      : undefined
+
+    for (let i = 0; i < this._geometryCount; i++) {
+      const info = this._geometryInfo[i]
+      if (!isBatchGeometryActive(info.flags)) continue
+      const vertexCount = info.vertexCount
+      if (vertexCount < 2) continue
+
+      // Rebuild the slot's local geometry in the scratch object and reuse the
+      // eager distance computation (segment-pair cumulative, entity-local).
+      positionScratch.set(
+        packedPosition.array.subarray(
+          info.vertexStart * itemSize,
+          (info.vertexStart + vertexCount) * itemSize
+        ),
+        0
+      )
+      slotGeometry.setAttribute(
+        'position',
+        new THREE.BufferAttribute(
+          positionScratch.subarray(0, vertexCount * itemSize),
+          itemSize
+        )
+      )
+      if (indexScratch && packedIndex) {
+        for (let k = 0; k < info.indexCount; k++) {
+          indexScratch[k] =
+            packedIndex.array[info.indexStart + k] - info.vertexStart
+        }
+        slotGeometry.setIndex(
+          new THREE.BufferAttribute(indexScratch.subarray(0, info.indexCount), 1)
+        )
+      }
+      AcTrBufferGeometryUtil.computeSegmentLineDistances(slotGeometry)
+      const slotDistances = slotGeometry.getAttribute(
+        'lineDistance'
+      ) as THREE.BufferAttribute
+      distances.set(slotDistances.array, info.vertexStart)
+    }
+
+    const attribute = new THREE.Float32BufferAttribute(distances, 1)
+    attribute.needsUpdate = true
+    batchGeometry.setAttribute('lineDistance', attribute)
   }
 
   /**
@@ -627,6 +744,158 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
   }
 
   /**
+   * Computes the object-space AABB of one packed slot by scanning the packed
+   * `position` buffer (through `index` when the batch is indexed).
+   *
+   * Overrides the mixin default so aggregate bounds queries (frustum culling,
+   * layout extents, picking) never go through the lazily cached slot `Box3`:
+   * one cached box per slot would stay resident for the whole session
+   * (~234B × slot count, i.e. ~100MB on a large drawing).
+   *
+   * Numerically identical to {@link getBoundingBoxAt}: the fast path only
+   * replaces `getX/getY/getZ` indirection with the same typed-array reads, and
+   * iterates the same index/vertex range in the same order.
+   *
+   * @param geometryId - Slot index to query.
+   * @param target - Reusable {@link THREE.Box3} that receives the result.
+   * @returns `target` when the id is valid, otherwise `null`.
+   */
+  override computeBoundingBoxAt(
+    geometryId: number,
+    target: THREE.Box3
+  ) {
+    if (geometryId >= this._geometryCount) {
+      return null
+    }
+
+    const geometry = this.geometry
+    const geometryInfo = this._geometryInfo[geometryId]
+    const index = geometry.index
+    const position = geometry.attributes.position
+    const { start, count } =
+      index != null
+        ? { start: geometryInfo.indexStart, count: geometryInfo.indexCount }
+        : { start: geometryInfo.vertexStart, count: geometryInfo.vertexCount }
+    target.makeEmpty()
+
+    if (
+      position.itemSize === 3 &&
+      !position.normalized &&
+      (index == null || (index.itemSize === 1 && !index.normalized))
+    ) {
+      const positionArray = position.array
+      const indexArray = index?.array
+      for (let i = start, l = start + count; i < l; i++) {
+        const vertexIndex = indexArray == null ? i : indexArray[i]
+        const offset = vertexIndex * 3
+        target.expandByPoint(
+          _vector.set(
+            positionArray[offset],
+            positionArray[offset + 1],
+            positionArray[offset + 2]
+          )
+        )
+      }
+      return target
+    }
+
+    for (let i = start, l = start + count; i < l; i++) {
+      let iv = i
+      if (index) {
+        iv = index.getX(iv)
+      }
+
+      target.expandByPoint(_vector.fromBufferAttribute(position, iv))
+    }
+
+    return target
+  }
+
+  /**
+   * Aggregate object-space bounding sphere from one pass over the packed
+   * vertex ranges of every active slot.
+   *
+   * Replaces the mixin's per-slot `Box3` + `Sphere.union` with plain min/max
+   * comparisons on the packed buffer: no per-slot object is allocated and the
+   * packed data is touched once. The resulting sphere is the circumsphere of
+   * the aggregate AABB of the same active slot set, so it still encloses
+   * every active vertex — frustum culling can only ever drop a batch whose
+   * geometry is entirely outside the frustum, exactly as before.
+   *
+   * @param target - Sphere that receives the aggregate result.
+   * @returns `target`, or `null` when no bounds could be derived.
+   */
+  override computeAggregateBoundingSphere(target: THREE.Sphere) {
+    const geometry = this.geometry
+    const index = geometry.index
+    const position = geometry.attributes.position
+    if (!position) {
+      return null
+    }
+
+    let minX = Infinity
+    let minY = Infinity
+    let minZ = Infinity
+    let maxX = -Infinity
+    let maxY = -Infinity
+    let maxZ = -Infinity
+
+    const fast =
+      position.itemSize === 3 &&
+      !position.normalized &&
+      (index == null || (index.itemSize === 1 && !index.normalized))
+    const positionArray = position.array
+    const indexArray = index?.array
+
+    for (let slot = 0; slot < this._geometryCount; slot++) {
+      const info = this._geometryInfo[slot]
+      if (!isBatchGeometryActive(info.flags)) continue
+      const { start, count } =
+        index != null
+          ? { start: info.indexStart, count: info.indexCount }
+          : { start: info.vertexStart, count: info.vertexCount }
+
+      if (fast) {
+        for (let i = start, l = start + count; i < l; i++) {
+          const offset = (indexArray == null ? i : indexArray[i]) * 3
+          const x = positionArray[offset]
+          const y = positionArray[offset + 1]
+          const z = positionArray[offset + 2]
+          if (x < minX) minX = x
+          if (y < minY) minY = y
+          if (z < minZ) minZ = z
+          if (x > maxX) maxX = x
+          if (y > maxY) maxY = y
+          if (z > maxZ) maxZ = z
+        }
+      } else {
+        for (let i = start, l = start + count; i < l; i++) {
+          let iv = i
+          if (index) {
+            iv = index.getX(iv)
+          }
+          _vector.fromBufferAttribute(position, iv)
+          if (_vector.x < minX) minX = _vector.x
+          if (_vector.y < minY) minY = _vector.y
+          if (_vector.z < minZ) minZ = _vector.z
+          if (_vector.x > maxX) maxX = _vector.x
+          if (_vector.y > maxY) maxY = _vector.y
+          if (_vector.z > maxZ) maxZ = _vector.z
+        }
+      }
+    }
+
+    if (minX > maxX) {
+      target.makeEmpty()
+      return target
+    }
+
+    _box.min.set(minX, minY, minZ)
+    _box.max.set(maxX, maxY, maxZ)
+    return _box.getBoundingSphere(target)
+  }
+
+  /**
    * Returns the geometry-info record for one slot after validation.
    *
    * @param geometryId - Slot index to query.
@@ -717,114 +986,6 @@ export class AcTrBatchedLine extends AcTrBatchedLineBase {
     } else {
       geometry.setDrawRange(0, this._nextVertexStart)
     }
-  }
-
-  /**
-   * Performs ray intersection for one line geometry slot with bbox fallback.
-   *
-   * Overrides the mixin default to improve pick reliability for thin lines:
-   *
-   * 1. When `bboxIntersectionCheck` is set, tests world-space bounding box only.
-   * 2. Otherwise delegates to {@link THREE.LineSegments.raycast} on the sub-range.
-   * 3. If the precise raycast misses, retests against the bounding box expanded by
-   *    `raycaster.params.Line.threshold`.
-   *
-   * @param geometryId - Slot index to test.
-   * @param raycaster - Configured THREE.js raycaster.
-   * @param intersects - Output array populated with intersection records extended
-   *   by `batchId` and `objectId`.
-   */
-  _intersectWith(
-    geometryId: number,
-    raycaster: THREE.Raycaster,
-    intersects: THREE.Intersection[]
-  ) {
-    const geometryInfo = this._geometryInfo[geometryId]
-    if (!isBatchGeometryVisible(geometryInfo.flags)) {
-      return
-    }
-
-    // Fast path: entities flagged for bbox-only intersection check
-    if (geometryInfo.bboxIntersectionCheck) {
-      this.getBoundingBoxAt(geometryId, this._box)
-      this._box.applyMatrix4(this.matrixWorld)
-      if (raycaster.ray.intersectBox(this._box, this._vector)) {
-        const distance = raycaster.ray.origin.distanceTo(this._vector)
-        ;(
-          intersects as Array<
-            THREE.Intersection & { batchId?: number; objectId?: string }
-          >
-        ).push({
-          distance,
-          point: this._vector.clone(),
-          object: this,
-          face: null,
-          faceIndex: undefined,
-          uv: undefined,
-          batchId: geometryId,
-          objectId: geometryInfo.objectId
-        })
-      }
-      return
-    }
-
-    // Standard raycast via THREE.LineSegments
-    const drawRange =
-      this.geometry.index != null
-        ? {
-            start: geometryInfo.indexStart,
-            count: geometryInfo.indexCount
-          }
-        : {
-            start: geometryInfo.vertexStart,
-            count: geometryInfo.vertexCount
-          }
-    this._setRaycastObjectInfo(
-      this._raycastObject,
-      geometryId,
-      drawRange.start,
-      drawRange.count
-    )
-    this._raycastObject.raycast(raycaster, this._batchIntersects)
-
-    // Fallback: when the precise raycast misses, test against the
-    // bounding box expanded by the Line threshold.
-    if (this._batchIntersects.length === 0) {
-      this.getBoundingBoxAt(geometryId, _box)
-      _box.applyMatrix4(this.matrixWorld)
-      const threshold = raycaster.params.Line.threshold
-      if (threshold > 0) {
-        _box.expandByScalar(threshold)
-      }
-      if (raycaster.ray.intersectBox(_box, _vector2)) {
-        const distance = raycaster.ray.origin.distanceTo(_vector2)
-        ;(
-          intersects as Array<
-            THREE.Intersection & { batchId?: number; objectId?: string }
-          >
-        ).push({
-          distance,
-          point: _vector2.clone(),
-          object: this,
-          face: null,
-          faceIndex: undefined,
-          uv: undefined,
-          batchId: geometryId,
-          objectId: geometryInfo.objectId
-        })
-      }
-      return
-    }
-
-    for (let j = 0, l = this._typedBatchIntersects.length; j < l; j++) {
-      const intersect = this._typedBatchIntersects[j]
-      intersect.object = this
-      intersect.batchId = geometryId
-      intersect.objectId = geometryInfo.objectId
-      intersects.push(intersect)
-    }
-
-    this._batchIntersects.length = 0
   }
 
   /**

@@ -37,7 +37,28 @@ const THEME_TOKENS: Record<AcEdUiTheme, Record<string, string>> = {
   }
 }
 
-export function applyUiTheme(
+type AcEdUiThemeListener = (theme: AcEdUiTheme) => void
+
+const themeListeners = new Set<AcEdUiThemeListener>()
+let notifyDepth = 0
+
+/**
+ * Subscribes to UI theme changes triggered by {@link acedApplyUiTheme}
+ * on the document root (or an explicit root target).
+ *
+ * @param listener - Called with the newly applied theme.
+ * @returns Unsubscribe function.
+ */
+export function acedSubscribeUiTheme(
+  listener: AcEdUiThemeListener
+): () => void {
+  themeListeners.add(listener)
+  return () => {
+    themeListeners.delete(listener)
+  }
+}
+
+export function acedApplyUiTheme(
   theme: AcEdUiTheme,
   target: HTMLElement = document.documentElement
 ) {
@@ -46,4 +67,77 @@ export function applyUiTheme(
     target.style.setProperty(key, tokens[key])
   })
   target.setAttribute('data-ml-ui-theme', theme)
+
+  // Only broadcast when the document (or marked) root theme changes so nested
+  // chrome can refresh without re-entrancy from their own apply calls.
+  const isRoot =
+    target === document.documentElement ||
+    target.hasAttribute('data-ml-ui-theme-root')
+  if (!isRoot || notifyDepth > 0) return
+  notifyDepth++
+  try {
+    for (const listener of [...themeListeners]) {
+      try {
+        listener(theme)
+      } catch {
+        // Theme listeners must not break chrome updates.
+      }
+    }
+  } finally {
+    notifyDepth--
+  }
+}
+
+/**
+ * Resolves class-based theme markers used by cad-viewer / Element Plus.
+ *
+ * @param el - Element to inspect.
+ * @returns Theme when a marker is present.
+ */
+function themeFromClassList(el: HTMLElement): AcEdUiTheme | undefined {
+  if (
+    el.classList.contains('ml-theme-dark') ||
+    el.classList.contains('dark')
+  ) {
+    return 'dark'
+  }
+  if (el.classList.contains('ml-theme-light')) {
+    return 'light'
+  }
+  return undefined
+}
+
+/**
+ * Resolves the active UI theme from a host element or the document.
+ *
+ * Lookup order:
+ * 1. Nearest ancestor with `data-ml-ui-theme`
+ * 2. Nearest ancestor with `ml-theme-dark` / `ml-theme-light` (cad-viewer)
+ * 3. `document.documentElement` `data-ml-ui-theme`
+ * 4. `document.documentElement` `data-mlcad-theme` (offline HTML viewer)
+ * 5. `html.dark` / `html.ml-theme-dark` class (Element Plus / cad-viewer)
+ * 6. Defaults to `'dark'` (matches cad-viewer default)
+ *
+ * @param from - Optional element to start ancestor walk from
+ */
+export function resolveUiTheme(from?: HTMLElement | null): AcEdUiTheme {
+  let el: HTMLElement | null | undefined = from
+  while (el) {
+    const attr = el.getAttribute('data-ml-ui-theme')
+    if (attr === 'light' || attr === 'dark') return attr
+    const fromClass = themeFromClassList(el)
+    if (fromClass) return fromClass
+    el = el.parentElement
+  }
+
+  const rootAttr = document.documentElement.getAttribute('data-ml-ui-theme')
+  if (rootAttr === 'light' || rootAttr === 'dark') return rootAttr
+
+  const htmlTheme = document.documentElement.getAttribute('data-mlcad-theme')
+  if (htmlTheme === 'light' || htmlTheme === 'dark') return htmlTheme
+
+  const rootClass = themeFromClassList(document.documentElement)
+  if (rootClass) return rootClass
+
+  return 'dark'
 }

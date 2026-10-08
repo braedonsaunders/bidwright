@@ -1,4 +1,5 @@
 import { AcDbObjectId } from '../base/AcDbObject'
+import { AcDbEntity } from '../entity/AcDbEntity'
 import { AcDbBlockTableRecord } from './AcDbBlockTableRecord'
 import { AcDbDatabase } from './AcDbDatabase'
 import { AcDbSymbolTable } from './AcDbSymbolTable'
@@ -64,9 +65,9 @@ export class AcDbBlockTable extends AcDbSymbolTable<AcDbBlockTableRecord> {
    * @returns The entity with the specified ID, or undefined if not found
    */
   getEntityById(id: AcDbObjectId) {
-    for (const btr of this.database.tables.blockTable.newIterator()) {
-      const entity = btr.getIdAt(id)
-      if (entity) return entity
+    const object = this.database.getObjectById(id)
+    if (object instanceof AcDbEntity) {
+      return object
     }
     return undefined
   }
@@ -99,6 +100,26 @@ export class AcDbBlockTable extends AcDbSymbolTable<AcDbBlockTableRecord> {
   }
 
   /**
+   * Returns all block table records that are external references (or overlays).
+   */
+  getXrefs(): AcDbBlockTableRecord[] {
+    const result: AcDbBlockTableRecord[] = []
+    for (const btr of this.newIterator()) {
+      if (btr.isXref) {
+        result.push(btr)
+      }
+    }
+    return result
+  }
+
+  /**
+   * Returns xref block table records whose external content has not been loaded.
+   */
+  getUnresolvedXrefs(): AcDbBlockTableRecord[] {
+    return this.getXrefs().filter(btr => btr.isUnresolvedXref)
+  }
+
+  /**
    * Normalizes the specified block table record name if it is one paper spacce or model space
    * block table record.
    *
@@ -107,14 +128,18 @@ export class AcDbBlockTable extends AcDbSymbolTable<AcDbBlockTableRecord> {
    * @returns The normalized block table record name.
    */
   protected normalizeName(name: string) {
-    let regularizedName = name
-    if (AcDbBlockTableRecord.isModelSapceName(name)) {
-      regularizedName = AcDbBlockTableRecord.MODEL_SPACE_NAME
-    } else if (AcDbBlockTableRecord.isPaperSapceName(name)) {
-      const prefix = AcDbBlockTableRecord.PAPER_SPACE_NAME_PREFIX
-      const suffix = name.substring(prefix.length)
-      regularizedName = prefix + suffix
+    const trimmed = (name ?? '').trim()
+    if (!trimmed) {
+      return ''
     }
-    return regularizedName
+    if (AcDbBlockTableRecord.isModelSapceName(trimmed)) {
+      return AcDbBlockTableRecord.MODEL_SPACE_NAME
+    }
+    if (AcDbBlockTableRecord.isPaperSapceName(trimmed)) {
+      const prefix = AcDbBlockTableRecord.PAPER_SPACE_NAME_PREFIX
+      const suffix = trimmed.substring(prefix.length)
+      return prefix + suffix
+    }
+    return super.normalizeName(trimmed)
   }
 }

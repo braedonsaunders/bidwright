@@ -1,4 +1,10 @@
-import { AcGeCircArc2d, AcGeTol, DEFAULT_TOL, ORIGIN_POINT_2D } from '../src'
+import {
+  AcGeCircArc2d,
+  AcGeTol,
+  DEFAULT_TOL,
+  ORIGIN_POINT_2D,
+  TAU
+} from '../src'
 import { AcGeMatrix2d } from '../src'
 
 describe('Test AcGeCircArc2d', () => {
@@ -48,14 +54,16 @@ describe('Test AcGeCircArc2d', () => {
       { x: 0, y: 1 },
       { x: 1, y: 0 }
     )
-    expect(arc1.clockwise).toBe(false)
+    expect(arc1.clockwise).toBe(true)
+    expect(arc1.midPoint.y).toBeCloseTo(1)
 
     const arc2 = new AcGeCircArc2d(
       { x: -1, y: 0 },
       { x: 0, y: -1 },
       { x: 1, y: 0 }
     )
-    expect(arc2.clockwise).toBe(true)
+    expect(arc2.clockwise).toBe(false)
+    expect(arc2.midPoint.y).toBeCloseTo(-1)
   })
 
   it('nearestPoint returns on-arc point and endpoints when outside span', () => {
@@ -236,5 +244,184 @@ describe('Test AcGeCircArc2d', () => {
     expect(transformed).toBe(closed)
     expect(closed.center.x).toBeCloseTo(3, 8)
     expect(closed.center.y).toBeCloseTo(4, 8)
+  })
+
+  it('creates a three-point arc through a vertical chord', () => {
+    const arc = new AcGeCircArc2d(
+      { x: 0, y: 0 },
+      { x: 0, y: 1 },
+      { x: 1, y: 0 }
+    )
+    expect(arc.center.x).toBeCloseTo(0.5)
+    expect(arc.center.y).toBeCloseTo(0.5)
+    expect(arc.radius).toBeCloseTo(Math.SQRT1_2)
+    expect(arc.length).toBeCloseTo(((3 * Math.PI) / 2) * Math.SQRT1_2)
+  })
+
+  it('throws for collinear three-point construction', () => {
+    expect(
+      () => new AcGeCircArc2d({ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 2, y: 0 })
+    ).toThrow()
+  })
+
+  it('selects the major arc when the through point is on the long sweep', () => {
+    const start = { x: 1, y: 0 }
+    const end = { x: 0, y: 1 }
+    const major = AcGeCircArc2d.tryCreateByThreePoints(
+      start,
+      { x: -1, y: 0 },
+      end
+    )
+    expect(major).not.toBeNull()
+    expect(major!.length).toBeCloseTo((3 * Math.PI) / 2)
+    expect(major!.clockwise).toBe(true)
+    expect(major!.midPoint.x).toBeCloseTo(-Math.SQRT1_2)
+    expect(major!.midPoint.y).toBeCloseTo(-Math.SQRT1_2)
+
+    const minor = AcGeCircArc2d.tryCreateByThreePoints(
+      start,
+      { x: Math.SQRT1_2, y: Math.SQRT1_2 },
+      end
+    )
+    expect(minor).not.toBeNull()
+    expect(minor!.length).toBeCloseTo(Math.PI / 2)
+    expect(minor!.clockwise).toBe(false)
+
+    const longSweep = AcGeCircArc2d.tryCreateByThreePoints(
+      { x: 1, y: 0 },
+      { x: -0.5, y: Math.sqrt(3) / 2 },
+      { x: 0.5, y: Math.sqrt(3) / 2 }
+    )
+    expect(longSweep).not.toBeNull()
+    expect(longSweep!.length).toBeCloseTo((5 * Math.PI) / 3)
+    expect(longSweep!.clockwise).toBe(true)
+    expect(longSweep!.midPoint.x).toBeCloseTo(-Math.sqrt(3) / 2)
+    expect(longSweep!.midPoint.y).toBeCloseTo(-0.5)
+  })
+
+  it('creates circles from center, diameter, and three points', () => {
+    const byCenter = AcGeCircArc2d.tryCreateCircle({ x: 1, y: 2 }, 3)
+    expect(byCenter).not.toBeNull()
+    expect(byCenter!.closed).toBe(true)
+    expect(byCenter!.radius).toBe(3)
+
+    const byDiameter = AcGeCircArc2d.tryCreateCircleByDiameter(
+      { x: 0, y: 0 },
+      { x: 4, y: 0 }
+    )
+    expect(byDiameter).not.toBeNull()
+    expect(byDiameter!.center.x).toBeCloseTo(2)
+    expect(byDiameter!.radius).toBeCloseTo(2)
+
+    const byThree = AcGeCircArc2d.tryCreateCircleByThreePoints(
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: -1, y: 0 }
+    )
+    expect(byThree).not.toBeNull()
+    expect(byThree!.center.x).toBeCloseTo(0)
+    expect(byThree!.center.y).toBeCloseTo(0)
+    expect(byThree!.radius).toBeCloseTo(1)
+    expect(
+      AcGeCircArc2d.tryCreateCircleByThreePoints(
+        { x: 0, y: 0 },
+        { x: 1, y: 0 },
+        { x: 2, y: 0 }
+      )
+    ).toBeNull()
+  })
+
+  it('creates the shorter arc between two circle points', () => {
+    const shorter = AcGeCircArc2d.tryCreateShorterArc(
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      { x: 0, y: 0 }
+    )
+    expect(shorter).not.toBeNull()
+    expect(shorter!.length).toBeCloseTo(Math.PI / 2)
+  })
+
+  it('creates center-start-sweep and start-end-radius arcs', () => {
+    const sweep = AcGeCircArc2d.tryCreateByCenterStartSweep(
+      { x: 0, y: 0 },
+      { x: 1, y: 0 },
+      Math.PI / 2
+    )
+    expect(sweep).not.toBeNull()
+    expect(sweep!.length).toBeCloseTo(Math.PI / 2)
+    expect(sweep!.clockwise).toBe(false)
+
+    const radius = AcGeCircArc2d.tryCreateByStartEndRadius(
+      { x: 1, y: 0 },
+      { x: 0, y: 1 },
+      1
+    )
+    expect(radius).not.toBeNull()
+    expect(radius!.radius).toBeCloseTo(1)
+  })
+
+  it('pointLiesOnCircle uses a relative radial tolerance', () => {
+    expect(
+      AcGeCircArc2d.pointLiesOnCircle({ x: 10, y: 0 }, { x: 0, y: 0 }, 10)
+    ).toBe(true)
+    expect(
+      AcGeCircArc2d.pointLiesOnCircle({ x: 10.2, y: 0 }, { x: 0, y: 0 }, 10)
+    ).toBe(false)
+    // Default eps is max(1e-6, r * 1e-5) = 1e-4 for r = 10.
+    expect(
+      AcGeCircArc2d.pointLiesOnCircle(
+        { x: 10.00005, y: 0 },
+        { x: 0, y: 0 },
+        10
+      )
+    ).toBe(true)
+    expect(
+      AcGeCircArc2d.pointLiesOnCircle(
+        { x: 10.001, y: 0 },
+        { x: 0, y: 0 },
+        10
+      )
+    ).toBe(false)
+  })
+
+  it('sameCircle compares center and radius', () => {
+    expect(
+      AcGeCircArc2d.sameCircle({ x: 1, y: 2 }, 3, { x: 1, y: 2 }, 3)
+    ).toBe(true)
+    expect(
+      AcGeCircArc2d.sameCircle({ x: 1, y: 2 }, 3, { x: 1.1, y: 2 }, 3)
+    ).toBe(false)
+  })
+
+  it('isBetterDistanceAlign prefers closer points, then larger align', () => {
+    expect(AcGeCircArc2d.isBetterDistanceAlign(1, 0, 4, 10)).toBe(true)
+    expect(AcGeCircArc2d.isBetterDistanceAlign(9, 10, 4, 0)).toBe(false)
+    expect(AcGeCircArc2d.isBetterDistanceAlign(4, 2, 4, 1)).toBe(true)
+    expect(AcGeCircArc2d.isBetterDistanceAlign(4, 1, 4, 2)).toBe(false)
+  })
+
+  it('inwardAlignment picks the arc interior at a shared vertex', () => {
+    const first = new AcGeCircArc2d(
+      ORIGIN_POINT_2D,
+      1,
+      0,
+      Math.PI / 2,
+      false
+    )
+    const second = new AcGeCircArc2d(
+      ORIGIN_POINT_2D,
+      1,
+      (3 * Math.PI) / 2,
+      TAU,
+      false
+    )
+    const vertex = { x: 1, y: 0 }
+    const towardFirst = { x: 0.95, y: 0.05 }
+    const towardSecond = { x: 0.95, y: -0.05 }
+    expect(first.inwardAlignment(vertex, towardFirst)).toBeGreaterThan(0)
+    expect(second.inwardAlignment(vertex, towardFirst)).toBeLessThan(0)
+    expect(second.inwardAlignment(vertex, towardSecond)).toBeGreaterThan(0)
+    expect(first.inwardAlignment(vertex, towardSecond)).toBeLessThan(0)
+    expect(first.inwardAlignment(vertex, vertex)).toBe(0)
   })
 })

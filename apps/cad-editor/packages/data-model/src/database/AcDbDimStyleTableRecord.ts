@@ -1228,6 +1228,25 @@ export class AcDbDimStyleTableRecord extends AcDbSymbolTableRecord<AcDbDimStyleT
   }
 
   /**
+   * Writes this object to the DXF output.
+   *
+   * DIMSTYLE table records use group code **105** for the handle (not 5).
+   *
+   * @returns The instance (for chaining).
+   */
+  override dxfOut(...args: unknown[]): unknown {
+    const [filer, allXdata = false] = args as [AcDbDxfFiler, boolean?]
+    filer.writeHandle(105, this.objectId)
+    filer.writeObjectId(330, this.ownerId)
+    filer.writeObjectId(360, this.extensionDictionary)
+    this.dxfOutFields(filer)
+    if (allXdata) {
+      this.dxfOutXData(filer)
+    }
+    return this
+  }
+
+  /**
    * Writes DXF fields for this object.
    *
    * @param filer - DXF output writer.
@@ -1264,6 +1283,247 @@ export class AcDbDimStyleTableRecord extends AcDbSymbolTableRecord<AcDbDimStyleT
     filer.writeObjectId(344, dimblk2?.objectId)
     filer.writeInt16(371, this.dimlwd)
     filer.writeInt16(372, this.dimlwe)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbSymbolTableRecord')
+    filer.atSubclassData('AcDbDimStyleTableRecord')
+
+    const flag01 = (v: number): 0 | 1 => (v === 0 ? 0 : 1)
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 100) {
+        filer.pushBackItem(item)
+        break
+      }
+      const n = Number(item.value)
+      switch (code) {
+        case 2:
+          this.name = String(item.value)
+          break
+        case 70:
+          // Standard flags — unused beyond presence.
+          break
+        case 3:
+          this.dimpost = String(item.value)
+          break
+        case 4:
+          this.dimapost = String(item.value)
+          break
+        case 5:
+          this.dimblk = String(item.value)
+          break
+        case 6:
+          this.dimblk1 = String(item.value)
+          break
+        case 7:
+          this.dimblk2 = String(item.value)
+          break
+        case 40:
+          this.dimscale = n
+          break
+        case 41:
+          this.dimasz = n
+          break
+        case 42:
+          this.dimexo = n
+          break
+        case 43:
+          this.dimdli = n
+          break
+        case 44:
+          this.dimexe = n
+          break
+        case 45:
+          this.dimrnd = n
+          break
+        case 46:
+          this.dimdle = n
+          break
+        case 47:
+          this.dimtp = n
+          break
+        case 48:
+          this.dimtm = n
+          break
+        case 140:
+          this.dimtxt = n
+          break
+        case 141:
+          this.dimcen = n
+          break
+        case 142:
+          this.dimtsz = n
+          break
+        case 143:
+          this.dimaltf = n
+          break
+        case 144:
+          this.dimlfac = n
+          break
+        case 145:
+          this.dimtvp = n
+          break
+        case 146:
+          this.dimtfac = n
+          break
+        case 147:
+          this.dimgap = n
+          break
+        case 148:
+          this.dimaltrnd = n
+          break
+        case 71:
+          this.dimtol = flag01(n)
+          break
+        case 72:
+          this.dimlim = flag01(n)
+          break
+        case 73:
+          this.dimtih = flag01(n)
+          break
+        case 74:
+          this.dimtoh = flag01(n)
+          break
+        case 75:
+          this.dimse1 = flag01(n)
+          break
+        case 76:
+          this.dimse2 = flag01(n)
+          break
+        case 77:
+          this.dimtad = n as AcDbDimTextVertical
+          break
+        case 78:
+          this.dimzin = n as AcDbDimZeroSuppression
+          break
+        case 79:
+          this.dimazin = n as AcDbDimZeroSuppressionAngular
+          break
+        case 170:
+          this.dimalt = flag01(n)
+          break
+        case 171:
+          // AutoCAD: DIMALTD. Project dxfOut writes DIMTOL here — prefer ALTD.
+          this.dimaltd = n
+          break
+        case 172:
+          this.dimtofl = flag01(n)
+          break
+        case 173:
+          this.dimsah = flag01(n)
+          break
+        case 174:
+          this.dimtix = flag01(n)
+          break
+        case 175:
+          this.dimsoxd = flag01(n)
+          break
+        case 176:
+          this.dimclrd = n
+          break
+        case 177:
+          this.dimclre = n
+          break
+        case 178:
+          this.dimclrt = n
+          break
+        case 179:
+          this.dimadec = n
+          break
+        case 270:
+          this.dimunit = n
+          break
+        case 271:
+          this.dimdec = n
+          break
+        case 272:
+          this.dimtdec = n
+          break
+        case 273:
+          this.dimaltu = n
+          break
+        case 274:
+          this.dimalttd = n
+          break
+        case 275:
+          this.dimaunit = n
+          break
+        case 276:
+          this.dimfrac = n
+          break
+        case 277:
+          this.dimlunit = n
+          break
+        case 278:
+          this.dimdsep =
+            typeof item.value === 'string'
+              ? item.value
+              : String.fromCharCode(n || 46)
+          break
+        case 279:
+          this.dimtmove = n
+          break
+        case 280:
+          this.dimjust = n as AcDbDimTextHorizontal
+          break
+        case 281:
+          this.dimsd1 = flag01(n)
+          break
+        case 282:
+          this.dimsd2 = flag01(n)
+          break
+        case 283:
+          this.dimtolj = n as AcDbDimVerticalJustification
+          break
+        case 284:
+          this.dimtzin = n as AcDbDimZeroSuppression
+          break
+        case 285:
+          this.dimaltz = n as AcDbDimZeroSuppression
+          break
+        case 286:
+          this.dimalttz = n as AcDbDimZeroSuppression
+          break
+        case 287:
+          this.dimfit = n
+          break
+        case 288:
+          this.dimupt = flag01(n)
+          break
+        case 289:
+          this.dimatfit = n
+          break
+        case 340:
+          this.dimtxsty = String(item.value)
+          break
+        case 341:
+          this.dimldrblk = String(item.value)
+          break
+        case 342:
+          this.dimblk = String(item.value)
+          break
+        case 343:
+          this.dimblk1 = String(item.value)
+          break
+        case 344:
+          this.dimblk2 = String(item.value)
+          break
+        case 371:
+          this.dimlwd = n
+          break
+        case 372:
+          this.dimlwe = n
+          break
+        default:
+          break
+      }
+    }
     return this
   }
 }

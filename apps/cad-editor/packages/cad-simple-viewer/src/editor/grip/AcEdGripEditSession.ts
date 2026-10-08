@@ -69,7 +69,6 @@ export class AcEdGripEditSession {
       const entity = db.openEntityForWrite(this._entity)
       if (!entity) return
       entity.subMoveGripPointsAt([this._target.gripIndex], offset)
-      entity.triggerModifiedEvent()
     })
     this.finish()
   }
@@ -87,6 +86,7 @@ export class AcEdGripEditSession {
   private finish() {
     this._jig.end()
     this._osnapMarkerManager.clear()
+    this._view.osnapResolver.clearAcquiredCenters()
     document.removeEventListener('mousemove', this._boundMouseMove)
     document.removeEventListener('mouseup', this._boundMouseUp)
     document.removeEventListener('keydown', this._boundKeyDown)
@@ -101,20 +101,26 @@ export class AcEdGripEditSession {
     const wcs = this._view.screenToWorld(canvasPos)
     const cursorWcs = { x: wcs.x, y: wcs.y, z: 0 }
 
-    this._osnapMarkerManager.hideMarker()
     const snapPoint = this._view.osnapResolver.resolve({
       cursorWcs,
       lastPoint: this._target.gripBaseWcs
     })
+    this._osnapMarkerManager.setHintMarkers(
+      AcEdOsnapResolver.displayCenterMarks(
+        this._view.osnapResolver.acquiredCenterMarks,
+        snapPoint
+      )
+    )
 
     if (snapPoint) {
-      this._osnapMarkerManager.showMarker(
+      this._osnapMarkerManager.showOrRepositionMarker(
         snapPoint,
         AcEdOsnapResolver.osnapModeToMarkerType(snapPoint.type)
       )
       return { x: snapPoint.x, y: snapPoint.y, z: snapPoint.z ?? 0 }
     }
 
+    this._osnapMarkerManager.hideMarker()
     return cursorWcs
   }
 }

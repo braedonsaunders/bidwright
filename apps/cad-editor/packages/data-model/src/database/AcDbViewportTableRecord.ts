@@ -1,5 +1,10 @@
 import { defaults } from '@mlightcad/common'
 import { AcGeBox2d, AcGePoint2d } from '@mlightcad/geometry-engine'
+import {
+  AcGiDefaultLightingType,
+  AcGiOrthographicType,
+  AcGiRenderMode
+} from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { ACTIVE_VPORT_NAME } from '../misc/AcDbConstants'
@@ -41,6 +46,8 @@ export interface AcDbViewportTableRecordAttrs
   gridMajor: number
   /** Background object ID for the viewport */
   backgroundObjectId?: string
+  /** UCS elevation for the viewport (DXF group 146) */
+  ucsElevation: number
 }
 
 type VportAspectRatioSource = {
@@ -151,7 +158,8 @@ export class AcDbViewportTableRecord extends AcDbAbstractViewTableRecord<AcDbVie
       snapSpacing: new AcGePoint2d(0, 0),
       standardFlag: 0,
       gridSpacing: new AcGePoint2d(),
-      gridMajor: 10
+      gridMajor: 10,
+      ucsElevation: 0
     })
     super(attrs, defaultAttrs)
   }
@@ -337,13 +345,33 @@ export class AcDbViewportTableRecord extends AcDbAbstractViewTableRecord<AcDbVie
   }
 
   /**
+   * The UCS elevation for this viewport (DXF group 146).
+   */
+  get ucsElevation() {
+    return this.getAttr('ucsElevation')
+  }
+  set ucsElevation(value: number) {
+    this.setAttr('ucsElevation', value)
+  }
+
+  /**
    * Builds the model-space WCS view rectangle from this VPORT record.
    *
    * AutoCAD stores:
-   * - view center in groups 10/20 (mapped to `centerPoint`)
+   * - view center in groups 12/22 (mapped to `centerPoint`) — in DCS
+   *   (display coordinate system), i.e. relative to the view target and
+   *   rotated by the view twist angle, NOT in WCS
+   * - view target in group 17 (`viewTarget`) — in WCS
+   * - view twist angle in group 51 (`viewTwistAngle`)
    * - view height in group 40/45 (`viewHeight`)
    * - aspect ratio in group 41 (`gsView.aspectRatio`) ??the AutoCAD graphics
    *   window width/height at save time, not the model-space view on its own
+   *
+   * The WCS view center is therefore `target + rotate(center, twist)`.
+   * Most drawings save a (0,0,0) target so the distinction is invisible,
+   * but AutoCAD does persist non-zero targets (e.g. after DVIEW/3D orbit
+   * round-trips); ignoring the target restores the view over empty space
+   * arbitrarily far from the drawing.
    *
    * View width = view height ? aspect ratio. The viewer uses the current canvas
    * aspect ratio so DWG/DXF exports of the same drawing frame identically even
@@ -362,6 +390,25 @@ export class AcDbViewportTableRecord extends AcDbAbstractViewTableRecord<AcDbVie
       return undefined
     }
 
+    // DCS -> WCS: rotate the stored center by the twist angle, then
+    // translate by the view target. The DCS axes are the WCS axes rotated
+    // counterclockwise by the twist angle about the view direction, so DCS
+    // coordinates map back to WCS by rotating +twist.
+    const twist = this.viewTwistAngle
+    let wcsCenterX = center.x
+    let wcsCenterY = center.y
+    if (Number.isFinite(twist) && twist !== 0) {
+      const cos = Math.cos(twist)
+      const sin = Math.sin(twist)
+      wcsCenterX = center.x * cos - center.y * sin
+      wcsCenterY = center.x * sin + center.y * cos
+    }
+    const target = this.viewTarget
+    if (target && Number.isFinite(target.x) && Number.isFinite(target.y)) {
+      wcsCenterX += target.x
+      wcsCenterY += target.y
+    }
+
     const aspectRatio = resolveViewAspectRatio(this, canvasAspectRatio)
 
     const viewWidth = viewHeight * aspectRatio
@@ -370,12 +417,12 @@ export class AcDbViewportTableRecord extends AcDbAbstractViewTableRecord<AcDbVie
 
     return new AcGeBox2d()
       .expandByPoint({
-        x: center.x - halfWidth,
-        y: center.y - halfHeight
+        x: wcsCenterX - halfWidth,
+        y: wcsCenterY - halfHeight
       })
       .expandByPoint({
-        x: center.x + halfWidth,
-        y: center.y + halfHeight
+        x: wcsCenterX + halfWidth,
+        y: wcsCenterY + halfHeight
       })
   }
 
@@ -499,7 +546,8 @@ export class AcDbViewportTableRecord extends AcDbAbstractViewTableRecord<AcDbVie
     ) {
       filer.writeDouble(41, this.gsView.aspectRatio)
     }
-    filer.writeDouble(45, this.gsView.viewHeight)
+    const targetVersion = filer.version?.value ?? 33
+    if (targetVersion >= 27) filer.writeDouble(45, this.gsView.viewHeight)
     filer.writePoint2d(10, this.lowerLeftCorner)
     filer.writePoint2d(11, this.upperRightCorner)
     filer.writePoint2d(12, this.center)
@@ -507,15 +555,235 @@ export class AcDbViewportTableRecord extends AcDbAbstractViewTableRecord<AcDbVie
     filer.writePoint2d(14, this.snapIncrements)
     filer.writePoint2d(15, this.gridIncrements)
     filer.writeInt16(70, this.standardFlag)
-    filer.writeInt16(71, this.circleSides)
+    filer.writeInt16(71, this.gsView.viewMode)
+    filer.writeInt16(72, this.circleSides)
     filer.writeDouble(42, this.gsView.lensLength)
     filer.writePoint3d(16, this.gsView.viewDirectionFromTarget)
     filer.writePoint3d(17, this.gsView.viewTarget)
     filer.writeAngle(50, this.snapAngle)
     filer.writeAngle(51, this.gsView.viewTwistAngle)
     filer.writeInt16(61, this.gridMajor)
-    filer.writeInt16(281, this.backgroundObjectId ? 1 : 0)
-    filer.writeObjectId(332, this.backgroundObjectId)
+    filer.writeDouble(146, this.ucsElevation)
+    filer.writeInt16(281, this.gsView.renderMode)
+    if (targetVersion >= 25) {
+      filer.writeInt16(170, this.shadePlotSetting)
+      filer.writeObjectId(333, this.shadePlotObjectId)
+    }
+    if (targetVersion >= 27) {
+      filer.writeInt16(282, this.defaultLightingType)
+      filer.writeInt16(292, this.isDefaultLightingOn ? 1 : 0)
+      filer.writeObjectId(332, this.backgroundObjectId)
+      filer.writeObjectId(348, this.gsView.visualStyleObjectId)
+    }
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbSymbolTableRecord')
+    filer.atSubclassData('AcDbAbstractViewTableRecord')
+    filer.atSubclassData('AcDbViewportTableRecord')
+
+    const frozenLayers: string[] = [...(this.gsView.frozenLayers ?? [])]
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      if (code === 100) {
+        filer.pushBackItem(item)
+        break
+      }
+      const n = Number(item.value)
+      switch (code) {
+        case 2:
+          this.name = String(item.value)
+          break
+        case 1:
+          this.gsView.styleSheet = String(item.value)
+          break
+        case 10:
+          this.lowerLeftCorner.x = n
+          break
+        case 20:
+          this.lowerLeftCorner.y = n
+          break
+        case 11:
+          this.upperRightCorner.x = n
+          break
+        case 21:
+          this.upperRightCorner.y = n
+          break
+        case 12:
+          this.center.x = n
+          this.gsView.center.x = n
+          break
+        case 22:
+          this.center.y = n
+          this.gsView.center.y = n
+          break
+        case 13:
+          this.snapBase.x = n
+          break
+        case 23:
+          this.snapBase.y = n
+          break
+        case 14:
+          this.snapIncrements.x = n
+          break
+        case 24:
+          this.snapIncrements.y = n
+          break
+        case 15:
+          this.gridIncrements.x = n
+          break
+        case 25:
+          this.gridIncrements.y = n
+          break
+        case 16:
+          this.gsView.viewDirectionFromTarget.x = n
+          break
+        case 26:
+          this.gsView.viewDirectionFromTarget.y = n
+          break
+        case 36:
+          this.gsView.viewDirectionFromTarget.z = n
+          break
+        case 17:
+          this.gsView.viewTarget.x = n
+          break
+        case 27:
+          this.gsView.viewTarget.y = n
+          break
+        case 37:
+          this.gsView.viewTarget.z = n
+          break
+        case 40:
+        case 45:
+          this.gsView.viewHeight = n
+          break
+        case 41:
+          if (Number.isFinite(n) && n > 0) {
+            this.gsView.aspectRatio = n
+          }
+          break
+        case 42:
+          this.gsView.lensLength = n
+          break
+        case 43:
+          this.gsView.frontClippingPlane = n
+          break
+        case 44:
+          this.gsView.backClippingPlane = n
+          break
+        case 50:
+          this.snapAngle = n
+          break
+        case 51:
+          this.gsView.viewTwistAngle = n
+          break
+        case 61:
+          this.gridMajor = n
+          break
+        case 70:
+          this.standardFlag = n
+          break
+        case 71:
+          // Project writer stores circleSides here; AutoCAD uses view mode.
+          // Prefer circleSides when value looks like a tessellation count.
+          if (n >= 1 && n <= 20000) {
+            this.circleSides = n
+          }
+          this.gsView.viewMode = n
+          break
+        case 72:
+          this.circleSides = n
+          break
+        case 74:
+          this.gsView.ucsIconSetting = n
+          break
+        case 110:
+          this.gsView.ucsOrigin.x = n
+          break
+        case 120:
+          this.gsView.ucsOrigin.y = n
+          break
+        case 130:
+          this.gsView.ucsOrigin.z = n
+          break
+        case 111:
+          this.gsView.ucsXAxis.x = n
+          break
+        case 121:
+          this.gsView.ucsXAxis.y = n
+          break
+        case 131:
+          this.gsView.ucsXAxis.z = n
+          break
+        case 112:
+          this.gsView.ucsYAxis.x = n
+          break
+        case 122:
+          this.gsView.ucsYAxis.y = n
+          break
+        case 132:
+          this.gsView.ucsYAxis.z = n
+          break
+        case 79:
+          this.gsView.orthographicType = n as AcGiOrthographicType
+          break
+        case 281:
+          // AutoCAD: render mode. Project writer: background on/off flag.
+          if (n === 0 || n === 1) {
+            // Keep as render mode when 0/1; background id comes from 332.
+          }
+          this.gsView.renderMode = n as AcGiRenderMode
+          break
+        case 331:
+        case 441:
+          frozenLayers.push(String(item.value))
+          break
+        case 332:
+          this.backgroundObjectId = String(item.value)
+          break
+        case 146:
+          this.ucsElevation = n
+          break
+        case 170:
+          this.shadePlotSetting = n
+          break
+        case 282:
+          this.defaultLightingType = n as AcGiDefaultLightingType
+          break
+        case 292:
+          this.isDefaultLightingOn = n !== 0
+          break
+        case 333:
+          this.shadePlotObjectId = String(item.value)
+          break
+        case 348:
+          this.gsView.visualStyleObjectId = String(item.value)
+          break
+        // Common VPORT flags we tolerate but do not map yet.
+        case 73:
+        case 75:
+        case 76:
+        case 77:
+        case 78:
+        case 60:
+        case 65:
+        case 141:
+        case 142:
+        case 63:
+        case 421:
+        case 431:
+          break
+        default:
+          break
+      }
+    }
+
+    this.gsView.frozenLayers = frozenLayers
     return this
   }
 }

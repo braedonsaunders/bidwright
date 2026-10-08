@@ -1,11 +1,13 @@
 import {
   AcGeEllipseArc3d,
+  acgeGetOcsAngle,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGePoint3dLike,
   AcGePointLike,
+  AcGeVector3d,
   AcGeVector3dLike,
-  getOcsAngle,
   TAU
 } from '@mlightcad/geometry-engine'
 import { AcGiRenderer } from '@mlightcad/graphic-interface'
@@ -60,8 +62,31 @@ export class AcDbEllipse extends AcDbCurve {
     return 'ELLIPSE'
   }
 
-  /** The underlying geometric ellipse arc object */
-  private _geo: AcGeEllipseArc3d
+  /** Backing for the lazily materialized geometric ellipse arc object. */
+  private _geoData: AcGeEllipseArc3d | null = null
+
+  /**
+   * The underlying geometric ellipse arc object. Materialized lazily so that
+   * factory-created entities (dxfIn path) never allocate default geometry.
+   */
+  private get _geo(): AcGeEllipseArc3d {
+    if (this._geoData == null) {
+      this._geoData = new AcGeEllipseArc3d(
+        new AcGePoint3d(),
+        AcGeVector3d.Z_AXIS,
+        AcGeVector3d.X_AXIS,
+        1,
+        1,
+        0,
+        Math.PI * 2
+      )
+    }
+    return this._geoData
+  }
+
+  private set _geo(value: AcGeEllipseArc3d) {
+    this._geoData = value
+  }
 
   /**
    * Creates a new ellipse entity.
@@ -102,6 +127,7 @@ export class AcDbEllipse extends AcDbCurve {
    * );
    * ```
    */
+  constructor()
   constructor(
     center: AcGePointLike,
     normal: AcGeVector3dLike,
@@ -110,17 +136,36 @@ export class AcDbEllipse extends AcDbCurve {
     minorAxisRadius: number,
     startAngle: number,
     endAngle: number
+  )
+  constructor(
+    center?: AcGePointLike,
+    normal?: AcGeVector3dLike,
+    majorAxis?: AcGeVector3dLike,
+    majorAxisRadius?: number,
+    minorAxisRadius?: number,
+    startAngle?: number,
+    endAngle?: number
   ) {
     super()
-    this._geo = new AcGeEllipseArc3d(
-      center,
-      normal,
-      majorAxis,
-      majorAxisRadius,
-      minorAxisRadius,
-      startAngle,
-      endAngle
-    )
+    if (
+      center !== undefined &&
+      normal !== undefined &&
+      majorAxis !== undefined &&
+      majorAxisRadius !== undefined &&
+      minorAxisRadius !== undefined &&
+      startAngle !== undefined &&
+      endAngle !== undefined
+    ) {
+      this._geo = new AcGeEllipseArc3d(
+        center,
+        normal,
+        majorAxis,
+        majorAxisRadius,
+        minorAxisRadius,
+        startAngle,
+        endAngle
+      )
+    }
   }
 
   /**
@@ -316,6 +361,17 @@ export class AcDbEllipse extends AcDbCurve {
    */
   get geometricExtents() {
     return this._geo.box
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return [
+      {
+        kind: 'ellipseArc',
+        arc: this._geo.clone(),
+        extendable: !this.closed
+      }
+    ]
   }
 
   /**
@@ -581,6 +637,15 @@ export class AcDbEllipse extends AcDbCurve {
   }
 
   /**
+   * This ellipse always draws as a single `lineStrip` primitive.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    return 'lineStrip' as const
+  }
+
+  /**
    * Draws this ellipse using the specified renderer.
    *
    * This method renders the ellipse as an elliptical arc using the ellipse's
@@ -617,6 +682,116 @@ export class AcDbEllipse extends AcDbCurve {
     return this
   }
 
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbEllipse')
+
+    let cx = this.center.x
+    let cy = this.center.y
+    let cz = this.center.z
+    let mx = this.majorAxis.x * this.majorAxisRadius
+    let my = this.majorAxis.y * this.majorAxisRadius
+    let mz = this.majorAxis.z * this.majorAxisRadius
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+    let axisRatio =
+      this.majorAxisRadius > 0
+        ? this.minorAxisRadius / this.majorAxisRadius
+        : 1
+    let startAngle = this.startAngle
+    let endAngle = this.endAngle
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+          cx = n
+          break
+        case 20:
+          cy = n
+          break
+        case 30:
+          cz = n
+          break
+        case 11:
+          mx = n
+          break
+        case 21:
+          my = n
+          break
+        case 31:
+          mz = n
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        case 40:
+          axisRatio = n
+          break
+        case 41:
+          startAngle = n
+          break
+        case 42:
+          endAngle = n
+          break
+        default:
+          break
+      }
+    }
+
+    this.applyDxfInGeometry(
+      cx,
+      cy,
+      cz,
+      mx,
+      my,
+      mz,
+      nx,
+      ny,
+      nz,
+      axisRatio,
+      startAngle,
+      endAngle
+    )
+    return this
+  }
+
+  private applyDxfInGeometry(
+    cx: number,
+    cy: number,
+    cz: number,
+    mx: number,
+    my: number,
+    mz: number,
+    nx: number,
+    ny: number,
+    nz: number,
+    axisRatio: number,
+    startAngle: number,
+    endAngle: number
+  ) {
+    const majorRadius = Math.hypot(mx, my, mz) || 1
+    this._geo = new AcGeEllipseArc3d(
+      { x: cx, y: cy, z: cz },
+      { x: nx, y: ny, z: nz },
+      { x: mx, y: my, z: mz },
+      majorRadius,
+      majorRadius * axisRatio,
+      startAngle,
+      endAngle
+    )
+  }
+
   override getOffsetCurves(offsetDist: number): AcDbCurve[] {
     const curve = this.createOffsetCurve(offsetDist)
     return curve ? [curve] : []
@@ -649,7 +824,7 @@ export class AcDbEllipse extends AcDbCurve {
           this.moveQuadrantGripAt(ELLIPSE_QUADRANT_GRIP_ANGLES[0], offset)
         } else {
           const point = this._geo.startPoint
-          this._geo.startAngle = getOcsAngle(
+          this._geo.startAngle = acgeGetOcsAngle(
             this._geo.center,
             {
               x: point.x + offset.x,
@@ -665,7 +840,7 @@ export class AcDbEllipse extends AcDbCurve {
           this.moveQuadrantGripAt(ELLIPSE_QUADRANT_GRIP_ANGLES[1], offset)
         } else {
           const point = this._geo.endPoint
-          this._geo.endAngle = getOcsAngle(
+          this._geo.endAngle = acgeGetOcsAngle(
             this._geo.center,
             {
               x: point.x + offset.x,

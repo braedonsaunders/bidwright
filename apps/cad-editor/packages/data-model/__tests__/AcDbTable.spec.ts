@@ -268,6 +268,66 @@ describe('AcDbTable', () => {
     expect(renderer.lineSegments).not.toHaveBeenCalled()
   })
 
+  it('resolves anonymous table block by owningBlockRecordId when name is missing', () => {
+    const db = setWorkingDb()
+    const renderer = createRenderer()
+    const block = new AcDbBlockTableRecord()
+    block.name = '*T_MISSING_NAME'
+    block.objectId = 'BTR_TABLE_ANON'
+    db.tables.blockTable.add(block)
+
+    const mtext = new AcDbMText()
+    mtext.contents = 'FROM_OWNING_BTR'
+    mtext.height = 3
+    block.appendEntity(mtext)
+
+    // LibreDWG can omit ldata.name while still providing block_header handle.
+    const table = new AcDbTable(undefined as unknown as string, 1, 1)
+    table.owningBlockRecordId = 'BTR_TABLE_ANON'
+    db.tables.blockTable.modelSpace.appendEntity(table)
+    table.setUniformRowHeight(9)
+    table.setUniformColumnWidth(20)
+    table.setCell(0, {
+      text: 'CELL_FALLBACK',
+      attachmentPoint: AcGiMTextAttachmentPoint.MiddleCenter,
+      cellType: 1,
+      textHeight: 2
+    })
+
+    expect(table.blockName).toBe('')
+    expect(table.blockTableRecord).toBe(block)
+    expect(() =>
+      table.subWorldDraw(renderer as unknown as AcGiRenderer<AcGiEntity>)
+    ).not.toThrow()
+
+    expect(renderer.mtext).toHaveBeenCalledTimes(1)
+    const mtextCall = renderer.mtext.mock.calls[0] as unknown[]
+    expect((mtextCall[0] as { text: string }).text).toBe('FROM_OWNING_BTR')
+    expect(renderer.lineSegments).not.toHaveBeenCalled()
+  })
+
+  it('draws cell geometry when both block name and owningBlockRecordId are missing', () => {
+    const db = setWorkingDb()
+    const renderer = createRenderer()
+    const table = new AcDbTable(undefined as unknown as string, 1, 1)
+    db.tables.blockTable.modelSpace.appendEntity(table)
+    table.setUniformRowHeight(10)
+    table.setUniformColumnWidth(20)
+    table.setCell(0, {
+      text: 'CELL_ONLY',
+      attachmentPoint: AcGiMTextAttachmentPoint.MiddleCenter,
+      textStyle: 'Standard',
+      cellType: 1,
+      textHeight: 2
+    })
+
+    expect(() =>
+      table.subWorldDraw(renderer as unknown as AcGiRenderer<AcGiEntity>)
+    ).not.toThrow()
+    expect(renderer.mtext).toHaveBeenCalledTimes(1)
+    expect(renderer.lineSegments).toHaveBeenCalledTimes(1)
+  })
+
   it('renders an anonymous table block when cell content is unavailable', () => {
     const db = setWorkingDb()
     const renderer = createRenderer()

@@ -182,6 +182,14 @@ export class AcGeBox3d {
    * @returns
    */
   expandByPoint(point: AcGeVector3dLike) {
+    // Non-finite coords poison min/max via Math.min/Math.max (NaN spreads to parents).
+    if (
+      !Number.isFinite(point.x) ||
+      !Number.isFinite(point.y) ||
+      !Number.isFinite(point.z)
+    ) {
+      return this
+    }
     this.min.min(point)
     this.max.max(point)
     return this

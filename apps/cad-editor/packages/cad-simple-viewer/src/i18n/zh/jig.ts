@@ -244,6 +244,17 @@ export default {
     restored: '个对象已恢复显示',
     nothingToRestore: '没有可恢复显示的对象'
   },
+  entout: {
+    longSidePrompt: '输入预览图长边像素尺寸',
+    exported: '个对象预览已导出',
+    skipped: '个对象已跳过',
+    failed: {
+      'no-preview-root': '无法为所选对象构建预览几何',
+      'no-bounds': '无法计算所选对象的预览范围',
+      'capture-failed': '无法渲染实体预览图',
+      'download-failed': '预览已渲染，但 PNG 下载失败'
+    }
+  },
   layer: {
     main: '输入选项',
     listSummary: '图层列表已输出到浏览器控制台',
@@ -636,7 +647,9 @@ export default {
   measureArc: {
     startPoint: '指定弧的起点',
     throughPoint: '指定弧上的一个点',
-    endPoint: '指定弧的终点'
+    endPoint: '指定弧的终点',
+    lockedEndPoint: '指定弧的终点（按 Ctrl 在大弧与小弧之间切换）',
+    invalidPoints: '三点共线，无法测量弧长。'
   },
   measureAngle: {
     vertex: '指定顶点',
@@ -650,6 +663,80 @@ export default {
   measureDistance: {
     firstPoint: '指定第一个点',
     secondPoint: '指定第二个点'
+  },
+  measureContinuous: {
+    firstPoint: '指定第一个点',
+    nextPoint: '指定下一个点（或按 Enter 完成）'
+  },
+  measurePoint: {
+    point: '指定点'
+  },
+  measurement: {
+    import: {
+      chooseFile: '选择测量 sidecar JSON 文件'
+    }
+  },
+  markup: {
+    author: '指定批注作者（将保存供以后使用）',
+    text: {
+      point: '指定文字批注点',
+      content: '输入批注文字'
+    },
+    line: {
+      firstPoint: '指定直线批注的第一点',
+      secondPoint: '指定直线批注的第二点'
+    },
+    arrow: {
+      firstPoint: '指定箭头起点',
+      secondPoint: '指定箭头尖端'
+    },
+    cloud: {
+      firstCorner: '指定云线的第一个角点',
+      secondCorner: '指定云线的对角点'
+    },
+    rect: {
+      firstCorner: '指定矩形的第一个角点',
+      secondCorner: '指定矩形的对角点'
+    },
+    circle: {
+      center: '指定圆心',
+      radius: '指定圆的半径'
+    },
+    shape: {
+      calloutOn: '[标注开启]',
+      calloutOff: '[标注关闭]',
+      calloutAnchor: '指定标注文字框位置',
+      keywords: {
+        callout: {
+          display: '标注(C)',
+          local: '标注',
+          global: 'Callout'
+        },
+        noCallout: {
+          display: '无标注(N)',
+          local: '无标注',
+          global: 'NoCallout'
+        }
+      }
+    },
+    highlight: {
+      firstCorner: '指定高亮的第一个角点',
+      secondCorner: '指定高亮的对角点'
+    },
+    callout: {
+      tip: '指定引线起点，或选择尚无标注的云线/矩形/圆外框',
+      anchor: '指定标注文字框位置',
+      content: '输入标注文字'
+    },
+    stamp: {
+      kind: '输入图章类型 [approved/rejected/revised/for-review/custom]',
+      imageUrl: '输入自定义图章图片 URL（可选）',
+      caption: '输入图章说明文字（可选）',
+      point: '指定图章插入点'
+    },
+    import: {
+      chooseFile: '选择批注 sidecar JSON 文件'
+    }
   },
   move: {
     basePointOrDisplacement: '指定基点或',
@@ -674,10 +761,46 @@ export default {
   mtext: {
     point: '指定多行文本插入点'
   },
+  bmpout: {
+    boundsFirstCorner: '指定边界的第一个角点',
+    boundsSecondCorner: '指定对角点',
+    longSidePrompt: '输入长边像素大小'
+  },
+  jpgout: {
+    boundsFirstCorner: '指定边界的第一个角点',
+    boundsSecondCorner: '指定对角点',
+    longSidePrompt: '输入长边像素大小'
+  },
   pngout: {
     boundsFirstCorner: '指定边界的第一个角点',
     boundsSecondCorner: '指定对角点',
     longSidePrompt: '输入长边像素大小'
+  },
+  imageattach: {
+    insertionPoint: '指定插入点：',
+    scale: '指定比例因子：',
+    rotation: '指定旋转角度：',
+    invalidScale: '比例因子必须大于 0。',
+    decodeFailed: '无法读取所选图像文件。'
+  },
+  insert: {
+    blockName: '输入块名：',
+    insertionPoint: '指定插入点：',
+    scale: '指定比例因子：',
+    rotation: '指定旋转角度：',
+    invalidScale: '比例因子必须大于 0。',
+    invalidBlockName: '无效的块名。',
+    blockNotFound: '未找到块',
+    xrefNotAllowed: '不能使用 -INSERT 插入外部参照。'
+  },
+  xattach: {
+    insertionPoint: '指定插入点：',
+    scale: '指定比例因子：',
+    rotation: '指定旋转角度：',
+    invalidScale: '比例因子必须大于 0。',
+    unsupportedFile: '请选择 DWG 或 DXF 文件。',
+    loading: '正在加载外部参照...',
+    loadFailed: '无法读取所选图形文件。'
   },
   point: {
     point: '指定点'
@@ -866,9 +989,119 @@ export default {
       }
     }
   },
-  sketch: {
+  revcloud: {
+    firstCornerOrOptions: '指定第一个角点或',
+    firstCorner: '指定第一个角点',
+    oppositeCorner: '指定对角点',
+    startPoint: '指定起点',
+    nextPoint: '指定下一点',
+    nextPointOrUndo: '指定下一点或',
     firstPoint: '指定第一个点',
-    nextPoint: '指定结束点'
+    guideCursor: '沿云线路径移动光标（按 Enter 结束）',
+    arcLength: '指定圆弧长度',
+    selectObject: '选择对象',
+    style: '输入修订云线圆弧样式',
+    reverseDirection: '反转方向',
+    invalidArcLength: '圆弧长度必须大于 0。',
+    invalidObject: '所选对象无法转换为修订云线。',
+    keywords: {
+      arcLength: {
+        display: '圆弧长度(A)',
+        local: '圆弧长度',
+        global: 'ArcLength'
+      },
+      object: {
+        display: '对象(O)',
+        local: '对象',
+        global: 'Object'
+      },
+      rectangular: {
+        display: '矩形(R)',
+        local: '矩形',
+        global: 'Rectangular'
+      },
+      polygonal: {
+        display: '多边形(P)',
+        local: '多边形',
+        global: 'Polygonal'
+      },
+      freehand: {
+        display: '手绘(F)',
+        local: '手绘',
+        global: 'Freehand'
+      },
+      style: {
+        display: '样式(S)',
+        local: '样式',
+        global: 'Style'
+      },
+      normal: {
+        display: '普通(N)',
+        local: '普通',
+        global: 'Normal'
+      },
+      calligraphy: {
+        display: '书法(C)',
+        local: '书法',
+        global: 'Calligraphy'
+      },
+      undo: {
+        display: '放弃(U)',
+        local: '放弃',
+        global: 'Undo'
+      },
+      yes: {
+        display: '是(Y)',
+        local: '是',
+        global: 'Yes'
+      },
+      no: {
+        display: '否(N)',
+        local: '否',
+        global: 'No'
+      }
+    }
+  },
+  sketch: {
+    specifySketch: '指定草图或',
+    sketching: '移动指针进行草图绘制（单击或按 Enter 停止）',
+    type: '输入草图类型',
+    increment: '指定草图增量',
+    tolerance: '指定样条曲线公差',
+    firstPoint: '指定第一个点',
+    nextPoint: '指定结束点',
+    keywords: {
+      type: {
+        display: '类型(T)',
+        local: '类型',
+        global: 'Type'
+      },
+      increment: {
+        display: '增量(I)',
+        local: '增量',
+        global: 'Increment'
+      },
+      tolerance: {
+        display: '公差(L)',
+        local: '公差',
+        global: 'Tolerance'
+      },
+      line: {
+        display: '直线(L)',
+        local: '直线',
+        global: 'Lines'
+      },
+      polyline: {
+        display: '多段线(P)',
+        local: '多段线',
+        global: 'Polyline'
+      },
+      spline: {
+        display: '样条曲线(S)',
+        local: '样条曲线',
+        global: 'Spline'
+      }
+    }
   },
   spline: {
     firstPoint: '指定第一个点',
@@ -963,6 +1196,21 @@ export default {
         local: '上一个',
         global: 'Previous'
       },
+      original: {
+        display: '原始视口(O)',
+        local: '原始视口',
+        global: 'Original'
+      },
+      saved: {
+        display: '保存的视图(V)',
+        local: '保存的视图',
+        global: 'Saved'
+      },
+      smart: {
+        display: '智能范围(I)',
+        local: '智能范围',
+        global: 'Smart'
+      },
       scale: {
         display: '比例(S)',
         local: '比例',
@@ -976,9 +1224,22 @@ export default {
     }
   },
   chtml: {
+    exportFormat: '导出格式',
     exportInvisibleLayers: '是否导出不可见图层',
+    exportLayouts: '是否导出布局',
     initialView: '打开 HTML 时的初始视图',
+    viewerMode: '离线查看器模式',
     keywords: {
+      single: {
+        display: '单文件(S)',
+        local: '单文件',
+        global: 'Single'
+      },
+      multi: {
+        display: '多文件包(M)',
+        local: '多文件包',
+        global: 'Multi'
+      },
       yes: {
         display: '是(Y)',
         local: '是',
@@ -998,6 +1259,53 @@ export default {
         display: '当前(C)',
         local: '当前',
         global: 'Current'
+      },
+      view: {
+        display: '查看(V)',
+        local: '查看',
+        global: 'View'
+      },
+      measure: {
+        display: '测量与批注(M)',
+        local: '测量与批注',
+        global: 'Measure'
+      }
+    }
+  },
+  cpdf: {
+    modelSpaceFit: '模型空间范围',
+    exportLayouts: '是否导出布局',
+    textMode: '文字渲染方式',
+    keywords: {
+      extents: {
+        display: '范围(E)',
+        local: '范围',
+        global: 'Extents'
+      },
+      display: {
+        display: '显示(D)',
+        local: '显示',
+        global: 'Display'
+      },
+      text: {
+        display: '文字(T)',
+        local: '文字',
+        global: 'Text'
+      },
+      vector: {
+        display: '矢量(V)',
+        local: '矢量',
+        global: 'Vector'
+      },
+      yes: {
+        display: '是(Y)',
+        local: '是',
+        global: 'Yes'
+      },
+      no: {
+        display: '否(N)',
+        local: '否',
+        global: 'No'
       }
     }
   }

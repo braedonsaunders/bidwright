@@ -1,8 +1,17 @@
 export { AcDb2dPolyline, AcDbPoly2dType } from './AcDb2dPolyline'
 export { AcDb2dVertex, AcDb2dVertexType } from './AcDb2dVertex'
 export { AcDb3dPolyline, AcDbPoly3dType } from './AcDb3dPolyline'
+export { AcDb3dSolid, type AcDb3dSolidOptions } from './AcDb3dSolid'
 export { AcDb3dVertex, AcDb3dVertexType } from './AcDb3dVertex'
 export { AcDbArc } from './AcDbArc'
+export {
+  AcDbArcAlignedText,
+  AcDbArcTextAlignment,
+  AcDbArcTextDirection,
+  AcDbArcTextPosition,
+  acdbParseArcAlignedNumber
+} from './AcDbArcAlignedText'
+export type { AcDbArcAlignedTextGlyph } from './AcDbArcAlignedText'
 export { AcDbAttribute } from './AcDbAttribute'
 export {
   AcDbAttributeDefinition,
@@ -25,6 +34,7 @@ export type {
   AcDbPropertyAccessor
 } from './AcDbEntityProperties'
 export { AcDbFace } from './AcDbFace'
+export { AcDbFcf } from './AcDbFcf'
 export {
   AcDbGradientPatternType,
   AcDbHatch,
@@ -64,6 +74,14 @@ export type {
   AcDbMLeaderMTextContentLike
 } from './AcDbMLeader'
 export { AcDbMText } from './AcDbMText'
+export { AcDbFrame } from './AcDbFrame'
+export { AcDbOleFrame } from './AcDbOleFrame'
+export {
+  AcDbOle2Frame,
+  AcDbOleObjectType,
+  AcDbOleTileMode
+} from './AcDbOle2Frame'
+export type { AcDbOleRectangle3d } from './AcDbOle2Frame'
 export { AcDbSpline } from './AcDbSpline'
 export { AcDbTable } from './AcDbTable'
 export type {
@@ -77,7 +95,8 @@ export {
   AcDbTextVerticalMode
 } from './AcDbText'
 export { AcDbTrace } from './AcDbTrace'
-export { AcDbPolyline, offsetVertexPathAsPolyline } from './AcDbPolyline'
+export { AcDbSolid } from './AcDbSolid'
+export { AcDbPolyline, acdbOffsetVertexPathAsPolyline } from './AcDbPolyline'
 export { AcDbProxyEntity } from './AcDbProxyEntity'
 export { AcDbPoint } from './AcDbPoint'
 export {

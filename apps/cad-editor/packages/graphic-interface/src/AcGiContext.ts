@@ -4,6 +4,8 @@ export interface AcGiContextOptions {
   /**
    * Database being drawn. Runtime type is `AcDbDatabase` (data-model); typed as
    * `unknown` here so graphic-interface does not depend on data-model.
+   *
+   * Display tessellation reads `drawCircleSides` from this object.
    */
   database?: unknown
   /** RGB used when the resolved color is foreground (ACI 7) on a dark background. */
@@ -26,6 +28,9 @@ export class AcGiContext {
   /**
    * Database being drawn. Runtime type is `AcDbDatabase` (data-model); typed as
    * `unknown` here so graphic-interface does not depend on data-model.
+   *
+   * Display tessellation of circles, arcs, ellipses, and areas should read
+   * `drawCircleSides` from this object.
    */
   database: unknown
   /** RGB used when the resolved color is foreground (ACI 7) on a dark background. */

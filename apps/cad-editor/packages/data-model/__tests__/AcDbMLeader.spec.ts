@@ -1,19 +1,27 @@
 import { AcCmColor, AcCmColorMethod } from '@mlightcad/common'
-import { AcGePoint3d } from '@mlightcad/geometry-engine'
+import { AcGePoint3d, AcGeVector3d } from '@mlightcad/geometry-engine'
 import {
   AcGiLineWeight,
   AcGiSubEntityTraits,
   DEFAULT_ACGI_CONTEXT
 } from '@mlightcad/graphic-interface'
 
-import { acdbHostApplicationServices } from '../src/base'
+import { acdbHostApplicationServices, AcDbDxfFiler } from '../src/base'
 import {
   AcDbBlockTableRecord,
   AcDbDatabase,
   AcDbLinetypeTableRecord
 } from '../src/database'
-import { AcDbLine, AcDbMLeader } from '../src/entity'
-import { AcDbOsnapMode, AcDbRenderingCache } from '../src/misc'
+import {
+  AcDbLine,
+  AcDbMLeader,
+  AcDbMLeaderContentType
+} from '../src/entity'
+import {
+  AcDbOsnapMode,
+  AcDbRenderingCache,
+  acdbDecodeMLeaderStyleRawColor
+} from '../src/misc'
 import { AcDbMLeaderStyle } from '../src/object'
 
 const createWorkingDb = () => {
@@ -183,6 +191,39 @@ describe('AcDbMLeader arrowhead rendering', () => {
 
     expect(renderer.lines).toHaveBeenCalledTimes(1)
     expect(renderer.area).not.toHaveBeenCalled()
+  })
+
+  it('prefers explicit entity text ACI color over style when override bit is clear', () => {
+    const db = createWorkingDb()
+    const mleader = createSimpleLeader(db)
+    mleader.contents = 'yellow non-standard line'
+    mleader.textLocation = new AcGePoint3d(5, 2, 0)
+    mleader.contentType = AcDbMLeaderContentType.MTextContent
+
+    // Real AutoCAD files (e.g. mleader-sytle.dxf) write ACI text color in
+    // CONTEXT_DATA / common section while leaving the text-color override bit
+    // unset in propertyOverrideFlag (0x44400).
+    mleader.textColor = acdbDecodeMLeaderStyleRawColor(-1023410174) // ACI 2
+    mleader.propertyOverrideFlag = 279552
+
+    const style = new AcDbMLeaderStyle()
+    style.textColor = new AcCmColor().setByBlock()
+    db.objects.mleaderStyle.setAt(style.objectId, style)
+    mleader.mleaderStyleId = style.objectId
+
+    const renderer = createRenderer()
+    let mtextRgb = -1
+    renderer.mtext.mockImplementation(() => {
+      mtextRgb = renderer.context.resolveSubEntityTraitsRgb(
+        renderer.subEntityTraits as unknown as AcGiSubEntityTraits
+      )
+      return { kind: 'mtext' }
+    })
+
+    mleader.worldDraw(renderer as never)
+
+    // ACI 2 = yellow
+    expect(mtextRgb).toBe(0xffff00)
   })
 
   it('applies style leader/text color when entity raw color is unresolved ByBlock', () => {
@@ -384,5 +425,330 @@ describe('AcDbMLeader geometricExtents', () => {
     const after = mleader.geometricExtents
     expect(after.max.y).toBeCloseTo(12)
     expect(after.max.y).toBeGreaterThan(before.max.y)
+  })
+})
+
+describe('AcDbMLeader dxfInFields CONTEXT_DATA', () => {
+  it('parses native CONTEXT_DATA leaders and MText like dxf-json', () => {
+    const db = createWorkingDb()
+    const mleader = new AcDbMLeader()
+    db.tables.blockTable.modelSpace.appendEntity(mleader)
+
+    const dxf = [
+      '0',
+      'MULTILEADER',
+      '5',
+      '168',
+      '330',
+      '1F',
+      '100',
+      'AcDbEntity',
+      '8',
+      '0',
+      '100',
+      'AcDbMLeader',
+      '270',
+      '2',
+      '300',
+      'CONTEXT_DATA{',
+      '40',
+      '1.0',
+      '10',
+      '314.11285266458',
+      '20',
+      '159.24939045629',
+      '30',
+      '0.0',
+      '41',
+      '4.0',
+      '290',
+      '1',
+      '304',
+      'yellow non-standard line',
+      '11',
+      '0.0',
+      '21',
+      '0.0',
+      '31',
+      '1.0',
+      '12',
+      '326.9709699906373',
+      '22',
+      '161.2821326118152',
+      '32',
+      '0.0',
+      '170',
+      '1',
+      '302',
+      'LEADER{',
+      '290',
+      '1',
+      '10',
+      '306.11285266458',
+      '20',
+      '159.24939045629',
+      '30',
+      '0.0',
+      '11',
+      '1.0',
+      '21',
+      '0.0',
+      '31',
+      '0.0',
+      '40',
+      '8.0',
+      '304',
+      'LEADER_LINE{',
+      '10',
+      '291.78857540927',
+      '20',
+      '137.91536050157',
+      '30',
+      '0.0',
+      '305',
+      '}',
+      '303',
+      '}',
+      '301',
+      '}',
+      '172',
+      '2',
+      '291',
+      '1',
+      '41',
+      '8.0',
+      '0',
+      'ENDSEC'
+    ].join('\n')
+
+    const filer = AcDbDxfFiler.fromString(dxf, { database: db })
+    expect(filer.readItem()?.value).toBe('MULTILEADER')
+    mleader.dxfIn(filer)
+
+    expect(mleader.version).toBe(2)
+    expect(mleader.contentType).toBe(AcDbMLeaderContentType.MTextContent)
+    expect(mleader.hasMText).toBe(true)
+    expect(mleader.textHeight).toBe(4)
+    expect(mleader.contentBasePosition).toMatchObject({
+      x: 314.11285266458,
+      y: 159.24939045629,
+      z: 0
+    })
+    expect(mleader.mtextContent?.text).toBe('yellow non-standard line')
+    expect(mleader.mtextContent?.anchorPoint).toMatchObject({
+      x: 326.9709699906373,
+      y: 161.2821326118152,
+      z: 0
+    })
+    expect(mleader.numberOfLeaders).toBe(1)
+    expect(mleader.leaders[0].lastLeaderLinePoint).toMatchObject({
+      x: 306.11285266458,
+      y: 159.24939045629,
+      z: 0
+    })
+    expect(mleader.leaders[0].doglegLength).toBe(8)
+    expect(mleader.leaders[0].leaderLines).toHaveLength(1)
+    expect(mleader.leaders[0].leaderLines[0].vertices[0]).toMatchObject({
+      x: 291.78857540927,
+      y: 137.91536050157,
+      z: 0
+    })
+    expect(mleader.doglegEnabled).toBe(true)
+    expect(mleader.doglegLength).toBe(8)
+  })
+
+  it('still reads legacy flat dxfOutFields leader format', () => {
+    const db = createWorkingDb()
+    const written = new AcDbMLeader()
+    written.contentType = AcDbMLeaderContentType.MTextContent
+    written.doglegEnabled = true
+    written.doglegLength = 5
+    written.mtextContent = {
+      text: 'legacy',
+      anchorPoint: new AcGePoint3d(10, 20, 0)
+    }
+    written.addLeader({
+      landingPoint: new AcGePoint3d(8, 20, 0),
+      doglegVector: new AcGeVector3d(1, 0, 0),
+      doglegLength: 5,
+      leaderLines: [
+        {
+          vertices: [new AcGePoint3d(0, 0, 0), new AcGePoint3d(5, 10, 0)]
+        }
+      ]
+    })
+    db.tables.blockTable.modelSpace.appendEntity(written)
+
+    const out = new AcDbDxfFiler()
+    written.dxfOut(out)
+    const dxf = ['0', 'MULTILEADER', out.toString()].join('\n')
+
+    const readBack = new AcDbMLeader()
+    db.tables.blockTable.modelSpace.appendEntity(readBack)
+    const filer = AcDbDxfFiler.fromString(dxf, { database: db })
+    expect(filer.readItem()?.value).toBe('MULTILEADER')
+    readBack.dxfIn(filer)
+
+    expect(readBack.mtextContent?.text).toBe('legacy')
+    expect(readBack.numberOfLeaders).toBe(1)
+    expect(readBack.leaders[0].leaderLines[0].vertices).toHaveLength(2)
+  })
+
+  it('parses real AutoCAD mleader-sytle CONTEXT_DATA with zeroed code 44 height', () => {
+    const db = createWorkingDb()
+    const mleader = new AcDbMLeader()
+    db.tables.blockTable.modelSpace.appendEntity(mleader)
+
+    // Minimal reproduction of C:\Users\MI\Downloads\mleader-sytle.dxf yellow entity:
+    // CONTEXT code 41=4, then code 44=0 (must not wipe height), common 172=2.
+    const dxf = [
+      '0',
+      'MULTILEADER',
+      '5',
+      '2A2',
+      '330',
+      '1F',
+      '100',
+      'AcDbEntity',
+      '8',
+      '0',
+      '100',
+      'AcDbMLeader',
+      '270',
+      '2',
+      '300',
+      'CONTEXT_DATA{',
+      '40',
+      '1.0',
+      '10',
+      '1846.178406316028',
+      '20',
+      '1888.681276467012',
+      '30',
+      '0.0',
+      '41',
+      '4.0',
+      '140',
+      '4.0',
+      '145',
+      '2.0',
+      '290',
+      '1',
+      '304',
+      'yellow non-standard line',
+      '11',
+      '0.0',
+      '21',
+      '0.0',
+      '31',
+      '1.0',
+      '340',
+      '11',
+      '12',
+      '1848.178406316028',
+      '22',
+      '1891.269271009986',
+      '32',
+      '0.0',
+      '13',
+      '1.0',
+      '23',
+      '0.0',
+      '33',
+      '0.0',
+      '42',
+      '0.0',
+      '43',
+      '0.0',
+      '44',
+      '0.0',
+      '45',
+      '1.0',
+      '170',
+      '1',
+      '90',
+      '-1023410174',
+      '172',
+      '5',
+      '296',
+      '0',
+      '302',
+      'LEADER{',
+      '290',
+      '1',
+      '291',
+      '1',
+      '10',
+      '1838.178406316028',
+      '20',
+      '1888.681276467012',
+      '30',
+      '0.0',
+      '11',
+      '1.0',
+      '21',
+      '0.0',
+      '31',
+      '0.0',
+      '40',
+      '8.0',
+      '304',
+      'LEADER_LINE{',
+      '10',
+      '1825.318691156017',
+      '20',
+      '1875.438882374751',
+      '30',
+      '0.0',
+      '91',
+      '0',
+      '305',
+      '}',
+      '303',
+      '}',
+      '301',
+      '}',
+      '340',
+      '28F',
+      '170',
+      '1',
+      '291',
+      '1',
+      '41',
+      '8.0',
+      '172',
+      '2',
+      '92',
+      '-1023410174',
+      '179',
+      '1',
+      '0',
+      'ENDSEC'
+    ].join('\n')
+
+    const filer = AcDbDxfFiler.fromString(dxf, { database: db })
+    expect(filer.readItem()?.value).toBe('MULTILEADER')
+    mleader.dxfIn(filer)
+
+    expect(mleader.contentType).toBe(AcDbMLeaderContentType.MTextContent)
+    expect(mleader.hasMText).toBe(true)
+    expect(mleader.mtextContent?.text).toBe('yellow non-standard line')
+    expect(mleader.mtextContent?.anchorPoint).toMatchObject({
+      x: 1848.178406316028,
+      y: 1891.269271009986,
+      z: 0
+    })
+    // Code 44=0 must not destroy the real height from code 41.
+    expect(mleader.textHeight).toBe(4)
+    expect(mleader.textColor?.colorIndex).toBe(2)
+    expect(mleader.numberOfLeaders).toBe(1)
+
+    const renderer = createRenderer()
+    const drawn = mleader.subWorldDraw(renderer as any, false)
+    expect(drawn).toBeDefined()
+    expect(renderer.mtext).toHaveBeenCalled()
+    const mtextArg = (renderer.mtext as jest.Mock).mock.calls[0][0]
+    expect(mtextArg.text).toBe('yellow non-standard line')
+    expect(mtextArg.height).toBe(4)
   })
 })

@@ -4,6 +4,16 @@ export { AcGeShape2d } from './AcGeShape2d'
 export { AcGeCurve2d } from './AcGeCurve2d'
 export { AcGeCircArc2d } from './AcGeCircArc2d'
 export { AcGeCircArc3d } from './AcGeCircArc3d'
+export type {
+  AcGeResolvedTessellateOptions,
+  AcGeTessellateOptions
+} from './AcGeCurveTessellate'
+export type { AcGeCircumcircle2d, AcGeCircumcircle3d } from './AcGeCircArcUtil'
+export {
+  acgeIsBetterDistanceAlign,
+  acgePointLiesOnCircle2d,
+  acgeSameCircle2d
+} from './AcGeCircArcUtil'
 export { AcGeEllipseArc2d } from './AcGeEllipseArc2d'
 export { AcGeEllipseArc3d } from './AcGeEllipseArc3d'
 export { AcGePolyline2d } from './AcGePolyline2d'
@@ -17,3 +27,12 @@ export { AcGeNurbsCurve } from './AcGeNurbsCurve'
 export type { AcGeKnotParameterizationType } from './AcGeNurbsCurve'
 export { AcGeCatmullRomCurve3d } from './AcGeCatmullRomCurve3d'
 export type { CatmullRomCurveType } from './AcGeCatmullRomCurve3d'
+export {
+  acgeCloneIntersectPrimitive,
+  acgeIntersectCurves,
+  acgeTransformIntersectPrimitive
+} from './AcGeCurveIntersect'
+export type {
+  AcGeCurveExtent,
+  AcGeIntersectPrimitive
+} from './AcGeCurveIntersect'

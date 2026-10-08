@@ -1,6 +1,5 @@
 import {
   AcGeCircArc3d,
-  AcGeLine3d,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGeVector3d,
@@ -22,9 +21,6 @@ describe('Test AcGeCircArc3d', () => {
   })
 
   it('covers edge branches in arc helpers', () => {
-    const errSpy = jest
-      .spyOn(console, 'error')
-      .mockImplementation(() => undefined)
     expect(
       AcGeCircArc3d.computeCenterPoint(
         { x: 0, y: 0, z: 0 },
@@ -32,8 +28,6 @@ describe('Test AcGeCircArc3d', () => {
         { x: 2, y: 2, z: 2 }
       )
     ).toBeNull()
-    expect(errSpy).toHaveBeenCalled()
-    errSpy.mockRestore()
 
     const fullArc = new AcGeCircArc3d(
       ORIGIN_POINT_3D,
@@ -96,24 +90,16 @@ describe('Test AcGeCircArc3d', () => {
     )
   })
 
-  it('covers computeCenterPoint failure branch when center cannot be solved', () => {
-    const errSpy = jest
-      .spyOn(console, 'error')
-      .mockImplementation(() => undefined)
-    const closestSpy = jest
-      .spyOn(AcGeLine3d.prototype, 'closestPointToPoint')
-      .mockReturnValue(null as unknown as AcGePoint3d)
-
-    expect(
-      AcGeCircArc3d.computeCenterPoint(
-        { x: 0, y: 0, z: 0 },
-        { x: 1, y: 0, z: 0 },
-        { x: 0, y: 1, z: 0 }
-      )
-    ).toBeNull()
-
-    closestSpy.mockRestore()
-    errSpy.mockRestore()
+  it('computes circumcenter of three non-collinear points', () => {
+    const center = AcGeCircArc3d.computeCenterPoint(
+      { x: 1, y: 0, z: 0 },
+      { x: -1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 }
+    )
+    expect(center).not.toBeNull()
+    expect(center!.x).toBeCloseTo(0)
+    expect(center!.y).toBeCloseTo(0)
+    expect(center!.z).toBeCloseTo(0)
   })
 
   it('computes circle area and returns 0 for open arc', () => {
@@ -130,5 +116,47 @@ describe('Test AcGeCircArc3d', () => {
       z: 1
     })
     expect(arc.area).toBe(0)
+  })
+
+  it('creates a three-point arc that follows the through point, including major arcs', () => {
+    const minor = AcGeCircArc3d.tryCreateByThreePoints(
+      { x: 1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 },
+      { x: Math.SQRT1_2, y: Math.SQRT1_2, z: 0 }
+    )
+    expect(minor).not.toBeNull()
+    expect(minor!.length).toBeCloseTo(Math.PI / 2)
+    expect(minor!.midPoint.x).toBeCloseTo(Math.SQRT1_2)
+    expect(minor!.midPoint.y).toBeCloseTo(Math.SQRT1_2)
+
+    const major = AcGeCircArc3d.tryCreateByThreePoints(
+      { x: 1, y: 0, z: 0 },
+      { x: 0, y: 1, z: 0 },
+      { x: -1, y: 0, z: 0 }
+    )
+    expect(major).not.toBeNull()
+    expect(major!.length).toBeCloseTo((3 * Math.PI) / 2)
+    expect(major!.midPoint.x).toBeCloseTo(-Math.SQRT1_2)
+    expect(major!.midPoint.y).toBeCloseTo(-Math.SQRT1_2)
+
+    // Through at 120° with end at 60° must take the long CCW sweep (300°),
+    // not the short start×through frame that would drop the through point.
+    const longSweep = AcGeCircArc3d.tryCreateByThreePoints(
+      { x: 1, y: 0, z: 0 },
+      { x: 0.5, y: Math.sqrt(3) / 2, z: 0 },
+      { x: -0.5, y: Math.sqrt(3) / 2, z: 0 }
+    )
+    expect(longSweep).not.toBeNull()
+    expect(longSweep!.length).toBeCloseTo((5 * Math.PI) / 3)
+    expect(longSweep!.midPoint.x).toBeCloseTo(-Math.sqrt(3) / 2)
+    expect(longSweep!.midPoint.y).toBeCloseTo(-0.5)
+
+    expect(
+      AcGeCircArc3d.tryCreateByThreePoints(
+        { x: 0, y: 0, z: 0 },
+        { x: 1, y: 0, z: 0 },
+        { x: 2, y: 0, z: 0 }
+      )
+    ).toBeNull()
   })
 })

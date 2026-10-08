@@ -3,7 +3,10 @@ import { AcGeVector3d, AcGeVector3dLike } from '@mlightcad/geometry-engine'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbObject } from '../base/AcDbObject'
-import { encodeMLeaderStyleRawColor } from '../misc/AcDbMLeaderStyleColorCodec'
+import {
+  acdbDecodeMLeaderStyleRawColor,
+  acdbEncodeMLeaderStyleRawColor
+} from '../misc/AcDbMLeaderStyleColorCodec'
 
 /**
  * Represents the nongraphical MLEADERSTYLE object.
@@ -859,7 +862,7 @@ export class AcDbMLeaderStyle extends AcDbObject {
     filer.writeDouble(40, this.firstSegmentAngleConstraint)
     filer.writeDouble(41, this.secondSegmentAngleConstraint)
     filer.writeInt16(173, this.leaderLineType)
-    filer.writeInt32(91, encodeMLeaderStyleRawColor(this.leaderLineColor))
+    filer.writeInt32(91, acdbEncodeMLeaderStyleRawColor(this.leaderLineColor))
     filer.writeHandle(340, this.leaderLineTypeId)
     filer.writeInt32(92, this.leaderLineWeight)
     filer.writeBoolean(290, this.enableLanding)
@@ -875,13 +878,13 @@ export class AcDbMLeaderStyle extends AcDbObject {
     filer.writeInt16(175, this.textAngleType)
     filer.writeInt16(176, this.textAlignmentType)
     filer.writeInt16(178, this.textRightAttachmentType)
-    filer.writeInt32(93, encodeMLeaderStyleRawColor(this.textColor))
+    filer.writeInt32(93, acdbEncodeMLeaderStyleRawColor(this.textColor))
     filer.writeDouble(45, this.textHeight)
     filer.writeBoolean(292, this.enableFrameText)
     filer.writeBoolean(297, this.textAlignAlwaysLeft)
     filer.writeDouble(46, this.alignSpace)
     filer.writeHandle(343, this.blockId)
-    filer.writeInt32(94, encodeMLeaderStyleRawColor(this.blockColor))
+    filer.writeInt32(94, acdbEncodeMLeaderStyleRawColor(this.blockColor))
     filer.writeDouble(47, this._blockScale.x)
     filer.writeDouble(49, this._blockScale.y)
     filer.writeDouble(140, this._blockScale.z)
@@ -897,6 +900,164 @@ export class AcDbMLeaderStyle extends AcDbObject {
     filer.writeInt16(272, this.bottomTextAttachmentType)
     filer.writeInt16(273, this.topTextAttachmentType)
     filer.writeBoolean(298, this.unknown2)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbMLeaderStyle')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 179:
+          this.unknown1 = n
+          break
+        case 170:
+          this.contentType = n
+          break
+        case 171:
+          this.drawMLeaderOrderType = n
+          break
+        case 172:
+          this.drawLeaderOrderType = n
+          break
+        case 90:
+          this.maxLeaderSegmentsPoints = n
+          break
+        case 40:
+          this.firstSegmentAngleConstraint = n
+          break
+        case 41:
+          this.secondSegmentAngleConstraint = n
+          break
+        case 173:
+          this.leaderLineType = n
+          break
+        case 91:
+          this.leaderLineColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 340:
+          this.leaderLineTypeId = String(item.value)
+          break
+        case 92:
+          this.leaderLineWeight = n
+          break
+        case 290:
+          this.enableLanding = n !== 0
+          break
+        case 42:
+          this.landingGap = n
+          break
+        case 291:
+          this.enableDogleg = n !== 0
+          break
+        case 43:
+          this.doglegLength = n
+          break
+        case 3:
+          this.description = String(item.value)
+          break
+        case 341:
+          this.arrowSymbolId = String(item.value)
+          break
+        case 44:
+          this.arrowSize = n
+          break
+        case 300:
+          this.defaultMTextContents = String(item.value)
+          break
+        case 342:
+          this.textStyleId = String(item.value)
+          break
+        case 174:
+          this.textLeftAttachmentType = n
+          break
+        case 175:
+          this.textAngleType = n
+          break
+        case 176:
+          this.textAlignmentType = n
+          break
+        case 178:
+          this.textRightAttachmentType = n
+          break
+        case 93:
+          this.textColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 45:
+          this.textHeight = n
+          break
+        case 292:
+          this.enableFrameText = n !== 0
+          break
+        case 297:
+          this.textAlignAlwaysLeft = n !== 0
+          break
+        case 46:
+          this.alignSpace = n
+          break
+        case 343:
+          this.blockId = String(item.value)
+          break
+        case 94:
+          this.blockColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 47:
+          this._blockScale.x = n
+          break
+        case 49:
+          this._blockScale.y = n
+          break
+        case 140:
+          this._blockScale.z = n
+          break
+        case 293:
+          this.enableBlockScale = n !== 0
+          break
+        case 141:
+          this.blockRotation = n
+          break
+        case 294:
+          this.enableBlockRotation = n !== 0
+          break
+        case 177:
+          this.blockConnectionType = n
+          break
+        case 142:
+          this.scale = n
+          break
+        case 295:
+          this.overwritePropChanged = n !== 0
+          break
+        case 296:
+          this.annotative = n !== 0
+          break
+        case 143:
+          this.breakSize = n
+          break
+        case 271:
+          this.textAttachmentDirection = n
+          break
+        case 272:
+          this.bottomTextAttachmentType = n
+          break
+        case 273:
+          this.topTextAttachmentType = n
+          break
+        case 298:
+          this.unknown2 = n !== 0
+          break
+        case 100:
+          filer.pushBackItem(item)
+          return this
+        default:
+          break
+      }
+    }
     return this
   }
 }

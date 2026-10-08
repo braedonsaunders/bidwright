@@ -2,6 +2,7 @@ import { AcCmColor } from '@mlightcad/common'
 import {
   AcGeArea2d,
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGePoint3dLike,
@@ -21,13 +22,16 @@ import {
 } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
+import type { AcDbTypedValue } from '../base/AcDbTypedValue'
 import { DEFAULT_MLEADER_STYLE } from '../misc/AcDbConstants'
+import { acdbDecodeMLeaderStyleRawColor } from '../misc/AcDbMLeaderStyleColorCodec'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbRenderingCache } from '../misc/AcDbRenderingCache'
 import { AcDbMLeaderStyle } from '../object/AcDbMLeaderStyle'
 import { AcDbEntity } from './AcDbEntity'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
 import { acdbForEachGripIndex } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
 import {
   acdbCollectLineSegmentOsnapPoints,
   acdbPickNearestOsnapPoint
@@ -1405,6 +1409,19 @@ export class AcDbMLeader extends AcDbEntity {
       : new AcGeBox3d()
   }
 
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const primitives: AcGeIntersectPrimitive[] = []
+    this._leaders.forEach(leader => {
+      leader.leaderLines.forEach(line => {
+        primitives.push(
+          ...acdbIntersectPrimitivesFromPointPath(line.vertices, false)
+        )
+      })
+    })
+    return primitives
+  }
+
   /**
    * Gets grip points used for interactive editing.
    *
@@ -1740,10 +1757,12 @@ export class AcDbMLeader extends AcDbEntity {
     }
 
     const mtextContent = this.getRenderableMTextContent()
-    if (
-      this.contentType === AcDbMLeaderContentType.MTextContent &&
-      mtextContent
-    ) {
+    const shouldDrawMText =
+      !!mtextContent &&
+      (this.contentType === AcDbMLeaderContentType.MTextContent ||
+        this.contentType === AcDbMLeaderContentType.NoneContent ||
+        this.hasMText === true)
+    if (shouldDrawMText && mtextContent) {
       this.applyColorTraits(traits, textColor, originalColor)
       const textHeight = this.getResolvedTextHeight()
       const mtextData: AcGiMTextData = {
@@ -1755,7 +1774,8 @@ export class AcDbMLeader extends AcDbEntity {
         directionVector: this.textDirection,
         attachmentPoint: this.textAttachmentPoint,
         drawingDirection: this.textDrawingDirection,
-        lineSpaceFactor: this.textLineSpacingFactor
+        lineSpaceFactor: this.textLineSpacingFactor,
+        lineSpaceStyle: this.textLineSpacingStyle
       }
       // Nested MText must follow the same delay flag as top-level MTEXT so the
       // viewer can finish geometry asynchronously in worker render mode.
@@ -1815,6 +1835,893 @@ export class AcDbMLeader extends AcDbEntity {
       })
     })
     return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbMLeader')
+
+    // Rebuild leaders from either native CONTEXT_DATA or legacy flat codes.
+    this._leaders.length = 0
+
+    let textContent = this._mtextContent?.text
+    let textAnchor = this._mtextContent?.anchorPoint?.clone()
+    let hasMTextContent = !!this._mtextContent
+    let blockId = this._blockContent?.blockContentId
+    let blockPos = this._blockContent?.position?.clone()
+    let blockScale = this._blockContent?.scale?.clone()
+    let blockRotation = this._blockContent?.rotation
+    let blockNormal = this._blockContent?.normal?.clone()
+    let blockColor = this._blockContent?.color?.clone()
+    let blockMatrix = this._blockContent?.transformationMatrix
+      ? [...this._blockContent.transformationMatrix]
+      : ([] as number[])
+    let hasBlockContent = !!this._blockContent
+    let contentTypeSet = false
+    // Native AutoCAD MULTILEADER uses CONTEXT_DATA / version (270). Older
+    // dxfOutFields used a flat layout without those markers.
+    let nativeFormat = false
+
+    // Legacy flat-format accumulators (written by older dxfOutFields).
+    let legacyLanding = this._landingPoint?.clone()
+    let legacyDogleg = this._doglegVector.clone()
+    let legacyLeader: AcDbMLeaderLeader | null = null
+    let legacyLine: AcDbMLeaderLine | null = null
+    let legacyInLeaders = false
+    let legacyTextRotDeg: number | undefined
+
+    const flushLegacyLine = () => {
+      if (legacyLine && legacyLeader) {
+        legacyLeader.leaderLines.push(legacyLine)
+      }
+      legacyLine = null
+    }
+    const flushLegacyLeader = () => {
+      flushLegacyLine()
+      if (legacyLeader) this.addLeader(legacyLeader)
+      legacyLeader = null
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      const s = String(item.value ?? '')
+
+      switch (code) {
+        case 100:
+          filer.pushBackItem(item)
+          flushLegacyLeader()
+          this.finishMLeaderDxfIn(
+            textContent,
+            textAnchor,
+            hasMTextContent,
+            blockId,
+            blockPos,
+            blockScale,
+            blockRotation,
+            blockNormal,
+            blockColor,
+            blockMatrix,
+            hasBlockContent,
+            contentTypeSet,
+            legacyLanding,
+            legacyDogleg,
+            legacyTextRotDeg
+          )
+          return this
+
+        case 300:
+          if (s === 'CONTEXT_DATA{') {
+            nativeFormat = true
+            const ctx = this.dxfInContextData(filer)
+            if (ctx.textContent != null) {
+              textContent = ctx.textContent
+              hasMTextContent = true
+            }
+            if (ctx.textAnchor) {
+              textAnchor = ctx.textAnchor
+              hasMTextContent = true
+            }
+            if (ctx.hasMText != null) this.hasMText = ctx.hasMText
+            if (ctx.hasBlock != null) this.hasBlock = ctx.hasBlock
+            if (ctx.blockContentId) {
+              blockId = ctx.blockContentId
+              hasBlockContent = this.isValidMLeaderHandle(ctx.blockContentId)
+            }
+            if (ctx.blockPosition) {
+              blockPos = ctx.blockPosition
+              hasBlockContent = true
+            }
+            if (ctx.blockScale) {
+              blockScale = ctx.blockScale
+              hasBlockContent = true
+            }
+            if (ctx.blockRotation != null) {
+              blockRotation = ctx.blockRotation
+              hasBlockContent = true
+            }
+            if (ctx.blockNormal) {
+              blockNormal = ctx.blockNormal
+              hasBlockContent = true
+            }
+            if (ctx.blockColor) {
+              blockColor = ctx.blockColor
+              hasBlockContent = true
+            }
+            if (ctx.blockMatrix.length > 0) {
+              blockMatrix = ctx.blockMatrix
+              hasBlockContent = true
+            }
+            if (hasMTextContent && !contentTypeSet) {
+              this.contentType = AcDbMLeaderContentType.MTextContent
+              contentTypeSet = true
+            }
+          }
+          break
+
+        case 270:
+          nativeFormat = true
+          this.version = n
+          break
+        case 340:
+          this.leaderStyleId = s
+          this.mleaderStyleId = s
+          break
+        case 90:
+          if (!legacyInLeaders) this.propertyOverrideFlag = n
+          else {
+            flushLegacyLine()
+            legacyLine = {
+              vertices: [],
+              breakPointIndexes: [],
+              breaks: []
+            }
+          }
+          break
+        case 170:
+          this.leaderLineType = n as AcDbMLeaderLineType
+          break
+        case 91:
+          this.leaderLineColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 341:
+          if (nativeFormat) {
+            this.leaderLineTypeId = s
+          } else if (this.isValidMLeaderHandle(s)) {
+            // Legacy dxfOutFields wrote block content id as group 341.
+            blockId = s
+            hasBlockContent = true
+          } else {
+            this.leaderLineTypeId = s
+          }
+          break
+        case 171:
+          if (!legacyInLeaders) this.leaderLineWeight = n
+          break
+        case 290:
+          if (nativeFormat) this.landingEnabled = this.readDxfBoolean(item)
+          else this.doglegEnabled = this.readDxfBoolean(item)
+          break
+        case 291:
+          this.doglegEnabled = this.readDxfBoolean(item)
+          break
+        case 40:
+          if (nativeFormat) this.doglegLength = n
+          else this.textHeight = n
+          break
+        case 41:
+          this.doglegLength = n
+          break
+        case 342:
+          this.arrowheadId = s
+          break
+        case 42:
+          if (nativeFormat) this.arrowheadSize = n
+          else this.textWidth = n
+          break
+        case 172:
+          this.contentType = n as AcDbMLeaderContentType
+          contentTypeSet = true
+          break
+        case 343:
+          this.textStyleId = s
+          break
+        case 173:
+          this.textLeftAttachmentType = n
+          break
+        case 95:
+          this.textRightAttachmentType = n
+          break
+        case 174:
+          this.textAngleType = n
+          break
+        case 175:
+          this.textAlignmentType = n
+          break
+        case 92:
+          this.textColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 292:
+          this.textFrameEnabled = this.readDxfBoolean(item)
+          break
+        case 344:
+          if (this.isValidMLeaderHandle(s)) {
+            blockId = s
+            this.blockContentId = s
+            hasBlockContent = true
+          }
+          break
+        case 93:
+          this.blockContentColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 10:
+          if (legacyInLeaders) {
+            filer.pushBackItem(item)
+            const vertex = filer.readPoint3d(10)
+            if (vertex && legacyLine) legacyLine.vertices.push(vertex)
+          } else {
+            filer.pushBackItem(item)
+            const pt = filer.readPoint3d(10)
+            if (!pt) break
+            if (nativeFormat) {
+              this.blockContentScale = new AcGeVector3d(pt)
+              blockScale = new AcGeVector3d(pt)
+              hasBlockContent = true
+            } else {
+              legacyLanding = pt
+            }
+          }
+          break
+        case 43:
+          this.blockContentRotation = n
+          blockRotation = n
+          hasBlockContent = true
+          break
+        case 176:
+          this.blockContentConnectionType = n
+          break
+        case 293:
+          this.annotativeScaleEnabled = this.readDxfBoolean(item)
+          break
+        case 94: {
+          this.arrowheadOverrides.push({ index: n })
+          break
+        }
+        case 345: {
+          const last =
+            this.arrowheadOverrides[this.arrowheadOverrides.length - 1]
+          if (last) last.handle = s
+          else this.arrowheadOverrides.push({ index: 0, handle: s })
+          break
+        }
+        case 330:
+          this.blockAttributes.push({ id: s })
+          break
+        case 177: {
+          const attr = this.blockAttributes[this.blockAttributes.length - 1]
+          if (attr) attr.index = n
+          break
+        }
+        case 44: {
+          const attr = this.blockAttributes[this.blockAttributes.length - 1]
+          if (attr) attr.width = n
+          break
+        }
+        case 302: {
+          const attr = this.blockAttributes[this.blockAttributes.length - 1]
+          if (attr) attr.text = s
+          break
+        }
+        case 294:
+          this.textDirectionNegative = this.readDxfBoolean(item)
+          break
+        case 178:
+          this.textAlignInIPE = n
+          break
+        case 179:
+          if (n !== 0) {
+            this.textAttachmentPoint = n as AcGiMTextAttachmentPoint
+          }
+          break
+        case 271:
+          this.textAttachmentDirection =
+            n as AcDbMLeaderTextAttachmentDirection
+          break
+        case 272:
+          this.bottomTextAttachmentDirection = n
+          break
+        case 273:
+          this.topTextAttachmentDirection = n
+          break
+
+        // ---- Legacy flat format (older dxfOutFields) ----
+        case 210:
+          filer.pushBackItem(item)
+          {
+            const normal = filer.readVector3d(210)
+            if (normal) this.normal = normal
+          }
+          break
+        case 110:
+          flushLegacyLeader()
+          legacyInLeaders = true
+          filer.pushBackItem(item)
+          {
+            const landing = filer.readPoint3d(110)
+            legacyLeader = {
+              landingPoint: landing,
+              doglegVector: new AcGeVector3d(1, 0, 0),
+              doglegLength: 0,
+              breaks: [],
+              leaderLines: []
+            }
+          }
+          break
+        case 111:
+          if (legacyLeader) {
+            filer.pushBackItem(item)
+            const dogleg = filer.readVector3d(111)
+            if (dogleg) legacyLeader.doglegVector = dogleg
+          }
+          break
+        case 140:
+          if (legacyLeader) legacyLeader.doglegLength = n
+          else this.arrowheadSize = n
+          break
+        case 1:
+          textContent = s
+          hasMTextContent = true
+          break
+        case 12:
+          filer.pushBackItem(item)
+          {
+            const anchor = filer.readPoint3d(12)
+            if (anchor) {
+              textAnchor = anchor
+              hasMTextContent = true
+            }
+          }
+          break
+        case 7:
+          this.textStyleName = s
+          break
+        case 50:
+          legacyTextRotDeg = n
+          break
+        case 15:
+          filer.pushBackItem(item)
+          {
+            const pos = filer.readPoint3d(15)
+            if (pos) {
+              blockPos = pos
+              hasBlockContent = true
+            }
+          }
+          break
+        case 16:
+          filer.pushBackItem(item)
+          {
+            const scale = filer.readVector3d(16)
+            if (scale) {
+              blockScale = scale
+              hasBlockContent = true
+            }
+          }
+          break
+        case 52:
+          blockRotation = (n * Math.PI) / 180
+          hasBlockContent = true
+          break
+        case 11:
+          if (!legacyInLeaders && !nativeFormat) {
+            filer.pushBackItem(item)
+            const dogleg = filer.readVector3d(11)
+            if (dogleg) legacyDogleg = dogleg
+          }
+          break
+        default:
+          break
+      }
+    }
+
+    flushLegacyLeader()
+    this.finishMLeaderDxfIn(
+      textContent,
+      textAnchor,
+      hasMTextContent,
+      blockId,
+      blockPos,
+      blockScale,
+      blockRotation,
+      blockNormal,
+      blockColor,
+      blockMatrix,
+      hasBlockContent,
+      contentTypeSet,
+      legacyLanding,
+      legacyDogleg,
+      legacyTextRotDeg
+    )
+    return this
+  }
+
+  /**
+   * Finalizes MLEADER fields after DXF group codes are consumed.
+   */
+  private finishMLeaderDxfIn(
+    textContent: string | undefined,
+    textAnchor: AcGePoint3d | undefined,
+    hasMTextContent: boolean,
+    blockId: string | undefined,
+    blockPos: AcGePoint3d | undefined,
+    blockScale: AcGeVector3d | undefined,
+    blockRotation: number | undefined,
+    blockNormal: AcGeVector3d | undefined,
+    blockColor: AcCmColor | undefined,
+    blockMatrix: number[],
+    hasBlockContent: boolean,
+    contentTypeSet: boolean,
+    legacyLanding: AcGePoint3d | undefined,
+    legacyDogleg: AcGeVector3d,
+    legacyTextRotDeg: number | undefined
+  ) {
+    if (legacyLanding) this.landingPoint = legacyLanding
+    this.doglegVector = legacyDogleg
+
+    if (legacyTextRotDeg != null) {
+      this.textRotation = (legacyTextRotDeg * Math.PI) / 180
+    }
+
+    // Resolve text style handle → name so font collection / renderer can find it.
+    if (!this.textStyleName && this.textStyleId) {
+      const record = this.database.tables.textStyleTable.getIdAt(this.textStyleId)
+      if (record?.name) this.textStyleName = record.name
+    }
+
+    const anchor =
+      textAnchor ?? this.textAnchor ?? this.contentBasePosition ?? legacyLanding
+    if ((hasMTextContent || this.hasMText) && textContent != null && anchor) {
+      this.mtextContent = {
+        text: textContent,
+        anchorPoint: anchor.clone()
+      }
+      if (!this.textAnchor) this.textAnchor = anchor.clone()
+      if (!contentTypeSet) {
+        this.contentType = AcDbMLeaderContentType.MTextContent
+      }
+    } else if ((hasMTextContent || this.hasMText) && textContent != null && !anchor) {
+      if (!contentTypeSet) {
+        this.contentType = AcDbMLeaderContentType.MTextContent
+      }
+    }
+
+    // Prefer MText when both content types appear (AutoCAD writes block-scale
+    // fields even for MText leaders; blockContentId "0" must be ignored).
+    if (
+      hasBlockContent &&
+      this.isValidMLeaderHandle(blockId) &&
+      this.contentType !== AcDbMLeaderContentType.MTextContent &&
+      !this.mtextContent
+    ) {
+      this.blockContent = {
+        blockContentId: blockId,
+        position: blockPos,
+        scale: blockScale ?? new AcGeVector3d(1, 1, 1),
+        rotation: blockRotation ?? 0,
+        normal: blockNormal,
+        color: blockColor,
+        transformationMatrix: blockMatrix
+      }
+      if (
+        !contentTypeSet &&
+        this.contentType === AcDbMLeaderContentType.NoneContent
+      ) {
+        this.contentType = AcDbMLeaderContentType.BlockContent
+      }
+    }
+  }
+
+  /**
+   * Parses the native AutoCAD `CONTEXT_DATA{ ... }` block (group 300/301).
+   *
+   * Mirrors dxf-json `parseContextData` so built-in DXF reading matches the
+   * converter path used by `@mlightcad/dxf-json`.
+   */
+  private dxfInContextData(filer: AcDbDxfFiler): {
+    textContent?: string
+    textAnchor?: AcGePoint3d
+    hasMText?: boolean
+    hasBlock?: boolean
+    blockContentId?: string
+    blockPosition?: AcGePoint3d
+    blockScale?: AcGeVector3d
+    blockRotation?: number
+    blockNormal?: AcGeVector3d
+    blockColor?: AcCmColor
+    blockMatrix: number[]
+  } {
+    const result: {
+      textContent?: string
+      textAnchor?: AcGePoint3d
+      hasMText?: boolean
+      hasBlock?: boolean
+      blockContentId?: string
+      blockPosition?: AcGePoint3d
+      blockScale?: AcGeVector3d
+      blockRotation?: number
+      blockNormal?: AcGeVector3d
+      blockColor?: AcCmColor
+      blockMatrix: number[]
+    } = { blockMatrix: [] }
+
+    while (!filer.atEof) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      const s = String(item.value ?? '')
+
+      if (code === 301) break
+      if (code === 0) {
+        filer.pushBackItem(item)
+        break
+      }
+
+      switch (code) {
+        case 10:
+          filer.pushBackItem(item)
+          this.contentBasePosition = filer.readPoint3d(10)
+          break
+        case 11:
+          filer.pushBackItem(item)
+          {
+            const normal = filer.readVector3d(11)
+            if (normal) this.normal = normal
+          }
+          break
+        case 12:
+          filer.pushBackItem(item)
+          {
+            const anchor = filer.readPoint3d(12)
+            if (anchor) {
+              result.textAnchor = anchor
+              this.textAnchor = anchor.clone()
+            }
+          }
+          break
+        case 13:
+          filer.pushBackItem(item)
+          {
+            const direction = filer.readVector3d(13)
+            if (direction) this.textDirection = direction
+          }
+          break
+        case 14:
+          filer.pushBackItem(item)
+          result.blockNormal = filer.readVector3d(14)
+          break
+        case 15:
+          filer.pushBackItem(item)
+          result.blockPosition = filer.readPoint3d(15)
+          break
+        case 16:
+          filer.pushBackItem(item)
+          result.blockScale = filer.readVector3d(16)
+          break
+        case 40:
+          this.contentScale = n
+          break
+        case 41:
+          // Primary text height. Keep the first positive value; later code 44
+          // is often written as 0.0 by AutoCAD and must not wipe this.
+          if (n > 0) this.textHeight = n
+          break
+        case 42:
+          // CONTEXT_DATA stores text rotation in radians.
+          this.textRotation = n
+          break
+        case 43:
+          // Width 0 means "auto" in AutoCAD — keep prior positive width.
+          if (n > 0) this.textWidth = n
+          break
+        case 44:
+          if (n > 0) this.textHeight = n
+          break
+        case 45:
+          this.textLineSpacingFactor = n
+          break
+        case 46:
+          result.blockRotation = n
+          break
+        case 47:
+          result.blockMatrix.push(n)
+          break
+        case 90:
+          this.textColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 91:
+          this.textBackgroundColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 92:
+          this.textBackgroundTransparency = n
+          break
+        case 93:
+          result.blockColor = acdbDecodeMLeaderStyleRawColor(n)
+          break
+        case 110:
+          filer.pushBackItem(item)
+          this.planeOrigin = filer.readPoint3d(110)
+          break
+        case 111:
+          filer.pushBackItem(item)
+          this.planeXAxisDirection = filer.readVector3d(111)
+          break
+        case 112:
+          filer.pushBackItem(item)
+          this.planeYAxisDirection = filer.readVector3d(112)
+          break
+        case 140:
+          this.arrowheadSize = n
+          break
+        case 141:
+          this.textBackgroundScaleFactor = n
+          break
+        case 142:
+          this.textColumnWidth = n
+          break
+        case 143:
+          this.textColumnGutterWidth = n
+          break
+        case 144:
+          this.textColumnHeight = n
+          break
+        case 145:
+          this.landingGap = n
+          break
+        case 170:
+          this.textLineSpacingStyle = n
+          break
+        case 171:
+          this.textAttachment = n
+          break
+        case 172:
+          this.textFlowDirection = n
+          break
+        case 173:
+          this.textColumnType = n
+          break
+        case 290:
+          result.hasMText = this.readDxfBoolean(item)
+          this.hasMText = result.hasMText
+          break
+        case 291:
+          this.textBackgroundColorOn = this.readDxfBoolean(item)
+          break
+        case 292:
+          this.textFillOn = this.readDxfBoolean(item)
+          break
+        case 293:
+          this.textUseAutoHeight = this.readDxfBoolean(item)
+          break
+        case 294:
+          this.textColumnFlowReversed = this.readDxfBoolean(item)
+          break
+        case 295:
+          this.textUseWordBreak = this.readDxfBoolean(item)
+          break
+        case 296:
+          result.hasBlock = this.readDxfBoolean(item)
+          this.hasBlock = result.hasBlock
+          break
+        case 297:
+          this.planeNormalReversed = this.readDxfBoolean(item)
+          break
+        case 302:
+          if (s === 'LEADER{') {
+            const leader = this.dxfInLeaderSection(filer)
+            this.addLeader(leader)
+          }
+          break
+        case 304:
+          if (s !== 'LEADER_LINE{') {
+            result.textContent = s
+            this.hasMText = true
+          }
+          break
+        case 340:
+          this.textStyleId = s
+          break
+        case 341:
+          result.blockContentId = s
+          if (this.isValidMLeaderHandle(s)) this.blockContentId = s
+          break
+        default:
+          break
+      }
+    }
+
+    return result
+  }
+
+  /**
+   * Parses one `LEADER{ ... }` section (group 302/303) inside CONTEXT_DATA.
+   */
+  private dxfInLeaderSection(filer: AcDbDxfFiler): AcDbMLeaderLeader {
+    const leader: AcDbMLeaderLeader = {
+      breaks: [],
+      leaderLines: []
+    }
+    let currentBreak: AcDbMLeaderBreak | undefined
+
+    const pushBreak = () => {
+      if (!currentBreak) return
+      leader.breaks.push(currentBreak)
+      currentBreak = undefined
+    }
+
+    while (!filer.atEof) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      const s = String(item.value ?? '')
+
+      if (code === 303) {
+        pushBreak()
+        break
+      }
+      if (code === 0 || code === 301) {
+        filer.pushBackItem(item)
+        pushBreak()
+        break
+      }
+
+      switch (code) {
+        case 290:
+          leader.lastLeaderLinePointSet = this.readDxfBoolean(item)
+          break
+        case 291:
+          leader.doglegVectorSet = this.readDxfBoolean(item)
+          break
+        case 10:
+          filer.pushBackItem(item)
+          leader.lastLeaderLinePoint = filer.readPoint3d(10)
+          break
+        case 11:
+          filer.pushBackItem(item)
+          leader.doglegVector = filer.readVector3d(11)
+          break
+        case 12:
+          filer.pushBackItem(item)
+          {
+            const start = filer.readPoint3d(12)
+            if (start) currentBreak = { start, end: start.clone() }
+          }
+          break
+        case 13:
+          filer.pushBackItem(item)
+          {
+            const end = filer.readPoint3d(13)
+            if (currentBreak && end) {
+              currentBreak.end = end
+              pushBreak()
+            }
+          }
+          break
+        case 90:
+          leader.leaderBranchIndex = n
+          break
+        case 40:
+          leader.doglegLength = n
+          break
+        case 304:
+          if (s === 'LEADER_LINE{') {
+            leader.leaderLines.push(this.dxfInLeaderLine(filer))
+          }
+          break
+        default:
+          break
+      }
+    }
+
+    return leader
+  }
+
+  /**
+   * Parses one `LEADER_LINE{ ... }` block (group 304/305) inside a LEADER section.
+   */
+  private dxfInLeaderLine(filer: AcDbDxfFiler): AcDbMLeaderLine {
+    const line: AcDbMLeaderLine = {
+      vertices: [],
+      breakPointIndexes: [],
+      breaks: []
+    }
+    let currentBreak: AcDbMLeaderBreak | undefined
+
+    const pushBreak = () => {
+      if (!currentBreak) return
+      line.breaks.push(currentBreak)
+      currentBreak = undefined
+    }
+
+    while (!filer.atEof) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+
+      if (code === 305) {
+        pushBreak()
+        break
+      }
+      if (code === 0 || code === 303 || code === 301) {
+        filer.pushBackItem(item)
+        pushBreak()
+        break
+      }
+
+      switch (code) {
+        case 10:
+          filer.pushBackItem(item)
+          {
+            const vertex = filer.readPoint3d(10)
+            if (vertex) line.vertices.push(vertex)
+          }
+          break
+        case 11:
+          filer.pushBackItem(item)
+          {
+            const start = filer.readPoint3d(11)
+            if (start) {
+              currentBreak = {
+                index: currentBreak?.index,
+                start,
+                end: start.clone()
+              }
+            }
+          }
+          break
+        case 12:
+          filer.pushBackItem(item)
+          {
+            const end = filer.readPoint3d(12)
+            if (currentBreak && end) {
+              currentBreak.end = end
+              pushBreak()
+            }
+          }
+          break
+        case 90:
+          line.breakPointIndexes.push(n)
+          currentBreak = {
+            index: n,
+            start: currentBreak?.start ?? new AcGePoint3d(),
+            end: currentBreak?.end ?? new AcGePoint3d()
+          }
+          break
+        case 91:
+          line.leaderLineIndex = n
+          break
+        default:
+          break
+      }
+    }
+
+    return line
+  }
+
+  private readDxfBoolean(item: AcDbTypedValue): boolean {
+    if (typeof item.value === 'boolean') return item.value
+    const n = Number(item.value)
+    if (Number.isFinite(n)) return n !== 0
+    const s = String(item.value ?? '')
+    return s !== '' && s !== '0'
+  }
+
+  private isValidMLeaderHandle(id: string | undefined): id is string {
+    return id != null && id !== '' && id !== '0'
   }
 
   /**
@@ -2412,10 +3319,22 @@ export class AcDbMLeader extends AcDbEntity {
    */
   private getMLeaderStyle(): AcDbMLeaderStyle | undefined {
     const dictionary = this.database.objects.mleaderStyle
-    const styleId = this.mleaderStyleId || this.leaderStyleId
+    const styleId = (this.mleaderStyleId || this.leaderStyleId)?.trim()
     if (styleId) {
       const style = dictionary.getIdAt(styleId)
       if (style) return style
+
+      // Fallback: native DXF may key styles by handle before the named
+      // dictionary rewires ownerId, so getIdAt can miss. Scan entries by id.
+      const normalized = styleId.toUpperCase()
+      for (const [, candidate] of dictionary.entries()) {
+        if (candidate.objectId?.toUpperCase() === normalized) {
+          return candidate
+        }
+      }
+
+      const byDb = this.database.getObjectById(styleId)
+      if (byDb instanceof AcDbMLeaderStyle) return byDb
     }
 
     return this.getDefaultMLeaderStyle()
@@ -2650,15 +3569,20 @@ export class AcDbMLeader extends AcDbEntity {
   ) {
     if (!entityColor) return styleColor
 
+    // Explicit ACI / true-color on the MULTILEADER entity is authoritative.
+    // AutoCAD writes context/common raw colors even when the matching
+    // property-override bit is clear, and those flags are unreliable
+    // (ezdxf ignores them for rendering). Prefer the entity color so yellow /
+    // green MText is not replaced by a ByBlock style fallback (white).
+    if (!entityColor.isByBlock && !entityColor.isByLayer) {
+      return entityColor
+    }
+
     const overrideEnabled = this.isPropertyOverrideEnabled(overrideFlagMask)
     if (overrideEnabled === true) return entityColor
     if (overrideEnabled === false) return styleColor ?? entityColor
 
-    // Some DXF producers always write entity color fields as ByBlock/ByLayer even
-    // when no override flag is enabled. Prefer style color in that ambiguous case.
-    if (!entityColor.isByBlock && !entityColor.isByLayer) {
-      return entityColor
-    }
+    // Entity is ByBlock/ByLayer and override flag is absent: prefer style.
     return styleColor ?? entityColor
   }
 

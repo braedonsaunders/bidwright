@@ -5,7 +5,12 @@ import {
   AcDbBlockReference,
   AcDbCircle,
   AcDbDatabase,
+  AcDbFcf,
   AcDbHatch,
+  AcDbLeader,
+  AcDbLeaderAnnotationType,
+  AcDbMText,
+  AcDbPolyline,
   AcDbProxyEntity,
   AcDbShape,
   acdbHostApplicationServices
@@ -99,8 +104,9 @@ describe('libredwg AcDbEntityConverter', () => {
     expect(proxy.type).toBe('ProxyEntity')
     expect(proxy.originalDxfName).toBe('AECC_TIN_SURFACE')
     expect(proxy.proxyEntityClassId).toBe(498)
-    expect(proxy.graphicsMetafileType).toBe(29)
-    expect(proxy.originalClassName).toBe('500')
+    expect(proxy.applicationEntityClassId).toBe(500)
+    expect(proxy.objectDrawingFormat).toBe(29)
+    expect(proxy.originalDataFormat).toBe(0)
     expect(proxy.proxyGraphic).toEqual(new Uint8Array([0x01, 0x02, 0x03, 0x04]))
   })
 
@@ -126,6 +132,33 @@ describe('libredwg AcDbEntityConverter', () => {
       expect(attr.textString).toBe('ROOM-101')
       expect(attr.styleName).toBe('STANDARD')
       expect(attr.height).toBe(2.5)
+    })
+
+    it('copies MINSERT column/row/spacing onto AcDbBlockReference', () => {
+      const converter = new AcDbEntityConverter()
+      const dbInsert = converter.convert({
+        type: 'INSERT',
+        handle: 'MINSERT1',
+        layer: '0',
+        name: 'CHAIR',
+        insertionPoint: { x: 10, y: 20, z: 0 },
+        xScale: 1,
+        yScale: 1,
+        zScale: 1,
+        rotation: 0,
+        columnCount: 4,
+        rowCount: 3,
+        columnSpacing: 1200,
+        rowSpacing: 800,
+        extrusionDirection: { x: 0, y: 0, z: 1 },
+        attribs: []
+      } as any) as AcDbBlockReference
+
+      expect(dbInsert).toBeInstanceOf(AcDbBlockReference)
+      expect(dbInsert.columnCount).toBe(4)
+      expect(dbInsert.rowCount).toBe(3)
+      expect(dbInsert.columnSpacing).toBe(1200)
+      expect(dbInsert.rowSpacing).toBe(800)
     })
 
     it('appends ATTRIBs of an INSERT through convert() preserving common attrs', () => {
@@ -318,5 +351,143 @@ describe('libredwg AcDbEntityConverter', () => {
 
     expect(result).toBeInstanceOf(AcDb3PointAngularDimension)
     expect((result as AcDb3PointAngularDimension).dimBlockId).toBe('*D64')
+  })
+
+  it('converts LEADER hook-line metadata from libredwg entities', () => {
+    acdbHostApplicationServices().workingDatabase = new AcDbDatabase()
+    const converter = new AcDbEntityConverter()
+    const result = converter.convert({
+      type: 'LEADER',
+      styleName: 'Standard',
+      isArrowheadEnabled: true,
+      isSpline: false,
+      leaderCreationFlag: 0,
+      isHooklineSameDirection: true,
+      isHooklineExists: true,
+      textHeight: 5,
+      textWidth: 9.51,
+      vertices: [
+        { x: 0, y: 0, z: 0 },
+        { x: 10, y: 5, z: 0 }
+      ],
+      horizontalDirection: { x: 1, y: 0, z: 0 }
+    } as any)
+
+    expect(result).toBeInstanceOf(AcDbLeader)
+    const leader = result as AcDbLeader
+    expect(leader.hasHookLine).toBe(true)
+    expect(leader.isHookLineSameDirection).toBe(true)
+    expect(leader.textWidth).toBeCloseTo(9.51)
+    expect(leader.annoType).toBe(AcDbLeaderAnnotationType.MText)
+    expect(leader.horizontalDirection).toMatchObject({ x: 1, y: 0, z: 0 })
+  })
+
+  it('converts MTEXT extentsWidth from libredwg entities', () => {
+    acdbHostApplicationServices().workingDatabase = new AcDbDatabase()
+    const converter = new AcDbEntityConverter()
+    const result = converter.convert({
+      type: 'MTEXT',
+      text: 'Note',
+      textHeight: 2.5,
+      rectWidth: 10,
+      extentsWidth: 16.25,
+      insertionPoint: { x: 0, y: 0, z: 0 }
+    } as any)
+
+    expect(result).toBeInstanceOf(AcDbMText)
+    expect((result as AcDbMText).extentsWidth).toBeCloseTo(16.25)
+  })
+
+  it('converts MTEXT line spacing factor and style', () => {
+    acdbHostApplicationServices().workingDatabase = new AcDbDatabase()
+    const converter = new AcDbEntityConverter()
+    const result = converter.convert({
+      type: 'MTEXT',
+      text: 'A\\PB',
+      textHeight: 2,
+      rectWidth: 10,
+      lineSpacing: 0.25,
+      lineSpacingStyle: 2,
+      insertionPoint: { x: 0, y: 0, z: 0 }
+    } as any)
+
+    expect(result).toBeInstanceOf(AcDbMText)
+    const mtext = result as AcDbMText
+    expect(mtext.lineSpacingFactor).toBeCloseTo(0.25)
+    expect(mtext.lineSpacingStyle).toBe(2)
+  })
+
+  it('keeps the default line spacing factor when libredwg reports 0', () => {
+    acdbHostApplicationServices().workingDatabase = new AcDbDatabase()
+    const converter = new AcDbEntityConverter()
+    const result = converter.convert({
+      type: 'MTEXT',
+      text: 'Note',
+      textHeight: 2.5,
+      rectWidth: 10,
+      lineSpacing: 0,
+      insertionPoint: { x: 0, y: 0, z: 0 }
+    } as any)
+
+    expect((result as AcDbMText).lineSpacingFactor).toBeCloseTo(1)
+  })
+
+  it('keeps tapered LWPOLYLINE vertex widths (valve triangles)', () => {
+    acdbHostApplicationServices().workingDatabase = new AcDbDatabase()
+    const converter = new AcDbEntityConverter()
+    const result = converter.convert({
+      type: 'LWPOLYLINE',
+      flag: 0x20,
+      constantWidth: 0,
+      vertices: [
+        { x: 0, y: 0, bulge: 0, startWidth: 0, endWidth: 0.75 },
+        {
+          x: 0.6617664691521554,
+          y: 0,
+          bulge: 0,
+          startWidth: 0.25,
+          endWidth: 0.25
+        }
+      ]
+    } as any)
+
+    expect(result).toBeInstanceOf(AcDbPolyline)
+    const polyline = result as AcDbPolyline
+    const vertices = polyline.properties.groups
+      .find(group => group.groupName === 'geometry')
+      ?.properties.find(property => property.name === 'vertices')
+      ?.accessor.get() as Array<{
+      startWidth?: number
+      endWidth?: number
+    }>
+    expect(vertices).toHaveLength(2)
+    expect(vertices[0].startWidth).toBe(0)
+    expect(vertices[0].endWidth).toBeCloseTo(0.75)
+    expect(vertices[1].startWidth).toBeCloseTo(0.25)
+    expect(vertices[1].endWidth).toBeCloseTo(0.25)
+    expect(polyline.directBatchPrimitive).toBe('area')
+  })
+
+  it('converts libredwg TOLERANCE entity to AcDbFcf', () => {
+    acdbHostApplicationServices().workingDatabase = new AcDbDatabase()
+    const converter = new AcDbEntityConverter()
+    const result = converter.convert({
+      type: 'TOLERANCE',
+      layer: '0',
+      handle: '1A2B',
+      styleName: 'Standard',
+      insertionPoint: { x: 100, y: 200, z: 0 },
+      text: '{\\Fgdt.shx|b0|i0|c134|p6;j}|0.05|A|',
+      extrusionDirection: { x: 0, y: 0, z: 1 },
+      xAxisDirection: { x: 1, y: 0, z: 0 }
+    } as any)
+
+    expect(result).toBeInstanceOf(AcDbFcf)
+    const fcf = result as AcDbFcf
+    expect(fcf.location).toMatchObject({ x: 100, y: 200, z: 0 })
+    expect(fcf.text).toContain('gdt')
+    expect(fcf.dimensionStyle).toBe('Standard')
+    expect(fcf.normal).toMatchObject({ x: 0, y: 0, z: 1 })
+    expect(fcf.direction).toMatchObject({ x: 1, y: 0, z: 0 })
   })
 })

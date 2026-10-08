@@ -242,7 +242,7 @@ export class AcDbChangeApplier {
  * @param changes - Changes produced by a transaction or undo record
  * @returns Entity buckets keyed by the kind of structural or property change
  */
-export function collectChangeEntities(
+export function acdbCollectChangeEntities(
   database: AcDbDatabase,
   changes: AcDbDatabaseChange[]
 ): {
@@ -301,7 +301,7 @@ export interface AcDbDictionaryChangeEntry {
  * @param changes - Changes produced by a transaction or undo record
  * @returns Dictionary entries grouped by set and erase operations
  */
-export function collectDictionaryChanges(
+export function acdbCollectDictionaryChanges(
   database: AcDbDatabase,
   changes: AcDbDatabaseChange[]
 ): {
@@ -341,7 +341,7 @@ export function collectDictionaryChanges(
  * @param after - State after modification
  * @returns Changed attributes mapped to their values in `after`
  */
-export function diffLayerTableRecordAttrs(
+export function acdbDiffLayerTableRecordAttrs(
   before: AcDbLayerTableRecord,
   after: AcDbLayerTableRecord
 ): Partial<AcDbLayerTableRecordAttrs> {
@@ -370,7 +370,7 @@ export function diffLayerTableRecordAttrs(
  * @param inverse - When true, compute diffs for undo replay
  * @returns Layer-modified event payloads for dispatch
  */
-export function collectLayerModifications(
+export function acdbCollectLayerModifications(
   database: AcDbDatabase,
   changes: AcDbDatabaseChange[],
   inverse = false
@@ -394,8 +394,8 @@ export function collectLayerModifications(
     }
 
     const attrChanges = inverse
-      ? diffLayerTableRecordAttrs(after, before)
-      : diffLayerTableRecordAttrs(before, after)
+      ? acdbDiffLayerTableRecordAttrs(after, before)
+      : acdbDiffLayerTableRecordAttrs(before, after)
     if (Object.keys(attrChanges).length === 0) {
       continue
     }

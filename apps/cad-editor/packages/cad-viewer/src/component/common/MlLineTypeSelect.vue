@@ -1,12 +1,15 @@
 <template>
   <div class="ml-linetype-select">
     <el-select
+      ref="selectRef"
       :model-value="resolvedModelValue"
       :disabled="props.disabled || !resolvedOptions.length"
       :placeholder="props.placeholder"
+      :filterable="resolvedOptions.length > 50"
       class="ml-linetype-select__control"
       style="width: 100%"
       @change="onSelect"
+      @visible-change="onVisibleChange"
     >
       <template #label>
         <div
@@ -44,15 +47,8 @@
         <div class="ml-linetype-item">
           <span
             class="ml-linetype-preview"
-            :class="{ 'ml-linetype-preview--svg': !!item.previewSvgString }"
             :style="{ '--ml-linetype-bg': resolveLineTypeBackground(item) }"
-          >
-            <span
-              class="ml-linetype-preview-svg"
-              aria-hidden="true"
-              v-html="item.previewSvgString ?? ''"
-            />
-          </span>
+          />
           <span class="ml-linetype-text">{{ item.label }}</span>
         </div>
       </el-option>
@@ -62,14 +58,16 @@
 
 <script setup lang="ts">
 import { AcApDocManager } from '@mlightcad/cad-simple-viewer'
-import { ElOption, ElSelect } from 'element-plus'
+import { ElOption, ElSelect, type SelectInstance } from 'element-plus'
 import {
   type Component,
   computed,
   onMounted,
   onUnmounted,
+  ref,
   shallowRef
 } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 import {
   buildLineTypeOptions,
@@ -99,12 +97,30 @@ interface LineTypeSelectProps {
 }
 
 const props = defineProps<LineTypeSelectProps>()
+const { locale } = useI18n()
+
+function localizeSymbolicLineTypeLabel(
+  value: string,
+  label: string
+) {
+  if (locale.value !== 'ar') return label
+
+  const normalized = value.trim().toLowerCase()
+
+  if (normalized === 'bylayer') return 'حسب الطبقة'
+  if (normalized === 'byblock') return 'حسب الكتلة'
+  if (normalized === 'continuous') return 'متصل'
+
+  return label
+}
 
 const emit = defineEmits<{
   (e: 'update:modelValue', value: string): void
   (e: 'change', value: string): void
+  (e: 'visible-change', visible: boolean): void
 }>()
 
+const selectRef = ref<SelectInstance>()
 const activeDatabase = shallowRef(
   AcApDocManager.instance?.curDocument?.database
 )
@@ -112,7 +128,11 @@ const activeDatabase = shallowRef(
 const resolvedOptions = computed(() =>
   (props.options ?? buildLineTypeOptions(activeDatabase.value)).map(item => ({
     ...item,
-    previewSvgString: resolveLineTypePreviewSvg(item)
+    label: localizeSymbolicLineTypeLabel(item.value, item.label)
+    // Intentionally omit per-option SVG. Large linetype tables (800+ complex
+    // TEXT styles) plus multiple selects explode DOM/memory; CSS dash
+    // previews stay cheap. The closed control still resolves SVG for the
+    // selected value only.
   }))
 )
 const selectedOption = computed(() =>
@@ -146,6 +166,14 @@ function onSelect(value: string) {
   emit('change', value)
 }
 
+/**
+ * Forwards dropdown open/close so hosts (e.g. click-to-edit layer cells) can
+ * tear down the select when the menu closes.
+ */
+function onVisibleChange(visible: boolean) {
+  emit('visible-change', visible)
+}
+
 onMounted(() => {
   AcApDocManager.instance?.events.documentActivated.addEventListener(
     handleDocumentActivated
@@ -157,6 +185,13 @@ onUnmounted(() => {
   AcApDocManager.instance?.events.documentActivated.removeEventListener(
     handleDocumentActivated
   )
+})
+
+defineExpose({
+  /** Opens the dropdown (used by click-to-edit table cells). */
+  open: () => {
+    selectRef.value?.toggleMenu?.()
+  }
 })
 </script>
 

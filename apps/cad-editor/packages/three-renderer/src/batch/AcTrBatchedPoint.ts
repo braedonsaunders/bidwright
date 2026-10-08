@@ -352,7 +352,13 @@ export class AcTrBatchedPoint extends AcTrBatchedPointBase {
     const batchGeometry = this.geometry
     const geometryInfo = this._geometryInfo[geometryId]
 
-    applyGeometryAt(geometryInfo, batchGeometry, geometry, 'AcTrBatchedPoint')
+    applyGeometryAt(
+      geometryInfo,
+      batchGeometry,
+      geometry,
+      'AcTrBatchedPoint',
+      geometryId
+    )
 
     return geometryId
   }
@@ -426,6 +432,12 @@ export class AcTrBatchedPoint extends AcTrBatchedPointBase {
    * Returns cached axis-aligned bounds for one geometry id.
    *
    * Iterates the slot's vertex range in the non-indexed position buffer.
+   *
+   * This class keeps the mixin cache rather than scanning packed vertices on
+   * every aggregate query. POINT slot counts are typically tiny; a dense point
+   * cloud is usually one slot with many vertices, where a cached AABB is
+   * cheaper than a full-buffer rescan. See {@link AcTrBatchedLine} for the
+   * opposite cost profile (many 2-vertex slots).
    *
    * @param geometryId - Slot index to query.
    * @param target - Reusable {@link THREE.Box3} that receives the result.

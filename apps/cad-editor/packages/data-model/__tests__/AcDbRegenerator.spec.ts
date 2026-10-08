@@ -8,9 +8,6 @@ class TestRegenerator extends AcDbRegenerator {
   parsePublic() {
     return this.parse()
   }
-  getFontsPublic() {
-    return this.getFonts()
-  }
   processEntitiesPublic(
     source: AcDbDatabase,
     target: AcDbDatabase,
@@ -56,7 +53,7 @@ class TestRegenerator extends AcDbRegenerator {
 }
 
 describe('AcDbRegenerator', () => {
-  it('exposes parse/fonts and processes entity/object/layer events', async () => {
+  it('exposes parse and processes entity/object/layer events', async () => {
     const db = new AcDbDatabase()
     new AcDbDataGenerator(db).createDefaultLayer()
     const lineA = new AcDbLine({ x: 0, y: 0, z: 0 }, { x: 1, y: 0, z: 0 })
@@ -71,7 +68,6 @@ describe('AcDbRegenerator', () => {
     const parsed = await reg.parsePublic()
     expect(parsed.model).toBe(db)
     expect(parsed.data.unknownEntityCount).toBe(0)
-    expect(reg.getFontsPublic()).toEqual([])
 
     const entityEvents: unknown[] = []
     const objectEvents: unknown[] = []

@@ -1,3 +1,5 @@
+import { accmYieldToUi } from '@mlightcad/common'
+
 // Callback function to execute business logic of chunk processing.
 type AcDbChunkProcessingCallback = (start: number, end: number) => Promise<void>
 
@@ -143,8 +145,8 @@ export class AcDbBatchProcessing {
   /**
    * Schedules a task to be executed asynchronously.
    *
-   * This method uses requestAnimationFrame in browser environments or setTimeout
-   * in Node.js environments to schedule the task.
+   * Yields via {@link accmYieldToUi} so the UI can remain responsive between
+   * chunks, then runs `callback` on the resumed turn.
    *
    * @param callback - The callback function to schedule
    * @returns Promise that resolves when the task completes
@@ -156,24 +158,9 @@ export class AcDbBatchProcessing {
    * });
    * ```
    */
-  private scheduleTask(callback: () => void | Promise<void>): Promise<void> {
-    return new Promise<void>((resolve, reject) => {
-      const executeCallback = () => {
-        // Execute the callback and handle the result
-        Promise.resolve(callback()).then(resolve).catch(reject)
-      }
-
-      if (
-        typeof window !== 'undefined' &&
-        typeof window.requestAnimationFrame === 'function'
-      ) {
-        // Browser environment with requestAnimationFrame
-        window.requestAnimationFrame(executeCallback)
-      } else {
-        // Node.js or fallback to setTimeout
-        setTimeout(executeCallback, 0)
-      }
-    })
+  private async scheduleTask(callback: () => void | Promise<void>): Promise<void> {
+    await accmYieldToUi()
+    await callback()
   }
 
   /**

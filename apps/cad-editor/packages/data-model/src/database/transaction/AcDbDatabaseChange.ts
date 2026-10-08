@@ -63,7 +63,7 @@ export type AcDbDatabaseChange =
  * @param b - Second container descriptor
  * @returns True when both descriptors identify the same append/remove target
  */
-export function areChangeContainersEqual(
+export function acdbAreChangeContainersEqual(
   a: AcDbChangeContainer,
   b: AcDbChangeContainer
 ): boolean {

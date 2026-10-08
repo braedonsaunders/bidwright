@@ -12,15 +12,24 @@ import {
   type AcApHtmlExportOptions,
   resolveAcApHtmlExportOptions
 } from './AcApHtmlExportOptions'
+import type { AcApHtmlPluginOptions } from './AcApHtmlPluginOptions'
 
 /**
- * Editor command that exports the active drawing as a self-contained HTML file.
+ * Editor command that exports the active drawing as a self-contained HTML file
+ * using command-line prompts (`-chtml`).
  *
  * The command delegates to {@link AcApHtmlConvertor}, which serializes the
  * current Three.js scene into an {@link AcExSnapshot} HTML snapshot,
  * bundles the offline viewer runtime, and triggers a browser download.
  */
 export class AcApExportHtmlCmd extends AcEdCommand {
+  /**
+   * @param pluginOptions - HTML plugin options (e.g. `viewerRuntimeUrl`)
+   */
+  constructor(private readonly pluginOptions: AcApHtmlPluginOptions = {}) {
+    super()
+  }
+
   /**
    * Runs the HTML export workflow for the drawing in `context`.
    *
@@ -34,7 +43,7 @@ export class AcApExportHtmlCmd extends AcEdCommand {
       return
     }
 
-    const converter = new AcApHtmlConvertor()
+    const converter = new AcApHtmlConvertor(this.pluginOptions)
     await converter.convert(
       context.doc.fileName || context.doc.docTitle,
       options,
@@ -43,8 +52,26 @@ export class AcApExportHtmlCmd extends AcEdCommand {
   }
 
   private async promptOptions(): Promise<AcApHtmlExportOptions | undefined> {
-    const exportInvisibleLayers = await this.promptExportInvisibleLayers()
+    const defaults = resolveAcApHtmlExportOptions()
+
+    const exportFormat = await this.promptExportFormat()
+    if (exportFormat === undefined) {
+      return undefined
+    }
+
+    const exportInvisibleLayers = await this.promptYesNo(
+      'jig.chtml.exportInvisibleLayers',
+      defaults.exportInvisibleLayers
+    )
     if (exportInvisibleLayers === undefined) {
+      return undefined
+    }
+
+    const exportLayouts = await this.promptYesNo(
+      'jig.chtml.exportLayouts',
+      defaults.exportLayouts
+    )
+    if (exportLayouts === undefined) {
       return undefined
     }
 
@@ -53,18 +80,65 @@ export class AcApExportHtmlCmd extends AcEdCommand {
       return undefined
     }
 
+    const viewerMode = await this.promptViewerMode()
+    if (viewerMode === undefined) {
+      return undefined
+    }
+
     return resolveAcApHtmlExportOptions({
+      exportFormat,
       exportInvisibleLayers,
-      initialView
+      exportLayouts,
+      initialView,
+      viewerMode
     })
   }
 
-  private async promptExportInvisibleLayers(): Promise<boolean | undefined> {
+  private async promptExportFormat(): Promise<
+    AcApHtmlExportOptions['exportFormat'] | undefined
+  > {
     const defaults = resolveAcApHtmlExportOptions()
-    const current = defaults.exportInvisibleLayers ? 'Yes' : 'No'
     const prompt = new AcEdPromptKeywordOptions(
-      `${AcApI18n.t('jig.chtml.exportInvisibleLayers')} <${current}>`
+      AcApI18n.t('jig.chtml.exportFormat')
     )
+    prompt.allowNone = true
+    const single = prompt.keywords.add(
+      AcApI18n.t('jig.chtml.keywords.single.display'),
+      AcApI18n.t('jig.chtml.keywords.single.global'),
+      AcApI18n.t('jig.chtml.keywords.single.local')
+    )
+    const multi = prompt.keywords.add(
+      AcApI18n.t('jig.chtml.keywords.multi.display'),
+      AcApI18n.t('jig.chtml.keywords.multi.global'),
+      AcApI18n.t('jig.chtml.keywords.multi.local')
+    )
+    prompt.keywords.default =
+      defaults.exportFormat === 'multi' ? multi : single
+
+    const result = await AcApDocManager.instance.editor.getKeywords(prompt)
+    if (result.status === AcEdPromptStatus.Cancel) {
+      return undefined
+    }
+    if (result.status === AcEdPromptStatus.None) {
+      return defaults.exportFormat
+    }
+    if (
+      result.status === AcEdPromptStatus.OK ||
+      result.status === AcEdPromptStatus.Keyword
+    ) {
+      if (!result.stringResult) {
+        return defaults.exportFormat
+      }
+      return result.stringResult === 'Multi' ? 'multi' : 'single'
+    }
+    return undefined
+  }
+
+  private async promptYesNo(
+    messageKey: string,
+    defaultYes: boolean
+  ): Promise<boolean | undefined> {
+    const prompt = new AcEdPromptKeywordOptions(AcApI18n.t(messageKey))
     prompt.allowNone = true
     const yes = prompt.keywords.add(
       AcApI18n.t('jig.chtml.keywords.yes.display'),
@@ -76,21 +150,21 @@ export class AcApExportHtmlCmd extends AcEdCommand {
       AcApI18n.t('jig.chtml.keywords.no.global'),
       AcApI18n.t('jig.chtml.keywords.no.local')
     )
-    prompt.keywords.default = defaults.exportInvisibleLayers ? yes : no
+    prompt.keywords.default = defaultYes ? yes : no
 
     const result = await AcApDocManager.instance.editor.getKeywords(prompt)
     if (result.status === AcEdPromptStatus.Cancel) {
       return undefined
     }
     if (result.status === AcEdPromptStatus.None) {
-      return defaults.exportInvisibleLayers
+      return defaultYes
     }
     if (
       result.status === AcEdPromptStatus.OK ||
       result.status === AcEdPromptStatus.Keyword
     ) {
       if (!result.stringResult) {
-        return defaults.exportInvisibleLayers
+        return defaultYes
       }
       return result.stringResult === 'Yes'
     }
@@ -101,12 +175,8 @@ export class AcApExportHtmlCmd extends AcEdCommand {
     AcApHtmlExportOptions['initialView'] | undefined
   > {
     const defaults = resolveAcApHtmlExportOptions()
-    const current =
-      defaults.initialView === 'current'
-        ? AcApI18n.t('jig.chtml.keywords.current.global')
-        : AcApI18n.t('jig.chtml.keywords.extents.global')
     const prompt = new AcEdPromptKeywordOptions(
-      `${AcApI18n.t('jig.chtml.initialView')} <${current}>`
+      AcApI18n.t('jig.chtml.initialView')
     )
     prompt.allowNone = true
     const extents = prompt.keywords.add(
@@ -137,6 +207,45 @@ export class AcApExportHtmlCmd extends AcEdCommand {
         return defaults.initialView
       }
       return result.stringResult === 'Current' ? 'current' : 'fit'
+    }
+    return undefined
+  }
+
+  private async promptViewerMode(): Promise<
+    AcApHtmlExportOptions['viewerMode'] | undefined
+  > {
+    const defaults = resolveAcApHtmlExportOptions()
+    const prompt = new AcEdPromptKeywordOptions(
+      AcApI18n.t('jig.chtml.viewerMode')
+    )
+    prompt.allowNone = true
+    const view = prompt.keywords.add(
+      AcApI18n.t('jig.chtml.keywords.view.display'),
+      AcApI18n.t('jig.chtml.keywords.view.global'),
+      AcApI18n.t('jig.chtml.keywords.view.local')
+    )
+    const measure = prompt.keywords.add(
+      AcApI18n.t('jig.chtml.keywords.measure.display'),
+      AcApI18n.t('jig.chtml.keywords.measure.global'),
+      AcApI18n.t('jig.chtml.keywords.measure.local')
+    )
+    prompt.keywords.default = defaults.viewerMode === 'view' ? view : measure
+
+    const result = await AcApDocManager.instance.editor.getKeywords(prompt)
+    if (result.status === AcEdPromptStatus.Cancel) {
+      return undefined
+    }
+    if (result.status === AcEdPromptStatus.None) {
+      return defaults.viewerMode
+    }
+    if (
+      result.status === AcEdPromptStatus.OK ||
+      result.status === AcEdPromptStatus.Keyword
+    ) {
+      if (!result.stringResult) {
+        return defaults.viewerMode
+      }
+      return result.stringResult === 'View' ? 'view' : 'measure'
     }
     return undefined
   }

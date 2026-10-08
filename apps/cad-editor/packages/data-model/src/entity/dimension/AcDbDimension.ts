@@ -1,6 +1,8 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeLine3d,
+  AcGeMathUtil,
   AcGeMatrix3d,
   AcGePoint2dLike,
   AcGePoint3d,
@@ -11,6 +13,7 @@ import {
 import {
   AcGiArrowStyle,
   AcGiArrowType,
+  AcGiMTextAttachmentPoint,
   AcGiRenderer
 } from '@mlightcad/graphic-interface'
 
@@ -28,6 +31,7 @@ import {
   AcDbEntityRuntimeProperty
 } from '../AcDbEntityProperties'
 import { acdbForEachGripIndex } from '../AcDbGripHelpers'
+import { acdbTransformIntersectPrimitives } from '../AcDbIntersectHelpers'
 
 /**
  * Defines the line spacing style for dimension text.
@@ -69,6 +73,14 @@ export abstract class AcDbDimension extends AcDbEntity {
   private _dimBlockId: string | null
   /** The relative position point of the block referenced by the dimension (in WCS coordinates). */
   private _dimBlockPosition: AcGePoint3d
+  /**
+   * DXF group code 10 definition point captured during {@link dxfInFields}.
+   *
+   * This is **not** {@link dimBlockPosition} (DXF group 12). Subclasses use it
+   * as the dim-line / center / far-chord point when their typed point codes are
+   * absent (matching AutoCAD DXF and dxf-json-converter).
+   */
+  protected _dxfDefinitionPoint: AcGePoint3d
   /** The dimension style name used by this dimension */
   private _dimensionStyleName: string | null
   /** The user-supplied dimension annotation text */
@@ -83,6 +95,20 @@ export abstract class AcDbDimension extends AcDbEntity {
   private _textPosition: AcGePoint3d
   /** The rotation angle of the dimension text */
   private _textRotation: number
+  /**
+   * Horizontal direction for the dimension entity (DXF group 51), in radians.
+   * Negative of the angle between the OCS X axis and the UCS X axis.
+   */
+  private _horizontalRotation: number
+  /**
+   * Dimension type flags (DXF group 70). Low bits select the dimension kind;
+   * bit 32 marks user-defined text position, etc.
+   */
+  private _dimensionType: number
+  /** Dimension text attachment point (DXF group 71). */
+  private _attachmentPoint: AcGiMTextAttachmentPoint
+  /** DXF class version (group 280); 0 = R2010+. */
+  private _dxfVersion: number
   /** The cached dimension style record */
   private _dimStyle?: AcDbDimStyleTableRecord
   /** The normal vector of the plane containing the block reference */
@@ -112,12 +138,17 @@ export abstract class AcDbDimension extends AcDbEntity {
     super()
     this._dimBlockId = null
     this._dimBlockPosition = new AcGePoint3d()
+    this._dxfDefinitionPoint = new AcGePoint3d()
     this._dimensionStyleName = null
     this._dimensionText = null
     this._textLineSpacingFactor = 1.0
     this._textLineSpacingStyle = AcDbLineSpacingStyle.AtLeast
     this._textPosition = new AcGePoint3d()
     this._textRotation = 0
+    this._horizontalRotation = 0
+    this._dimensionType = 0
+    this._attachmentPoint = AcGiMTextAttachmentPoint.MiddleCenter
+    this._dxfVersion = 0
     this._normal = new AcGeVector3d(0, 0, 1)
     this._dimBlockRotation = 0
   }
@@ -180,18 +211,18 @@ export abstract class AcDbDimension extends AcDbEntity {
    * Sets the relative position point of the block referenced by the dimension (in WCS coordinates).
    * The block position is the insertion point of the block referenced by the dimension, relative to
    * the primary definition point (DXF group code 10) of the dimension itself.
-   * 
+   *
    * The block position (in WCS) is added to the dimension primary definition point (also in WCS) to
    * get the actual insertion point for the anonymous block that is referenced by the dimension. So,
-   * for example, changing a dimension's block position from (0,0,0) to (0,0,1) (in WCS) will cause 
+   * for example, changing a dimension's block position from (0,0,0) to (0,0,1) (in WCS) will cause
    * the dimension to display as though it has been moved 1 unit along the WCS Z axis.
-   * 
-   * For a dimension newly created via any dimension command, the block position will be (0,0,0). 
-   * For copies of existing dimensions, or if a dimension is moved, the block position will be the 
-   * offset vector (in WCS) from where the original dimension was located. For example, moving a 
-   * dimension 1 unit down the WCS Y axis will cause AutoCAD to update the block position value from 
+   *
+   * For a dimension newly created via any dimension command, the block position will be (0,0,0).
+   * For copies of existing dimensions, or if a dimension is moved, the block position will be the
+   * offset vector (in WCS) from where the original dimension was located. For example, moving a
+   * dimension 1 unit down the WCS Y axis will cause AutoCAD to update the block position value from
    * (0,0,0) to (0,-1,0) (in WCS coordinates).
-   * 
+   *
    * The position point is used for DXF group code 12.
    *
    * @param value - The relative position point of the block referenced by the dimension.
@@ -336,6 +367,52 @@ export abstract class AcDbDimension extends AcDbEntity {
   }
   set textRotation(value: number) {
     this._textRotation = value
+  }
+
+  /**
+   * Horizontal direction for the dimension entity (DXF group 51), in radians.
+   *
+   * Per the AutoCAD DXF reference this is the negative of the angle between
+   * the OCS X axis and the UCS X axis, always in the OCS XY plane.
+   */
+  get horizontalRotation() {
+    return this._horizontalRotation
+  }
+  set horizontalRotation(value: number) {
+    this._horizontalRotation = value
+  }
+
+  /**
+   * Dimension type flags from DXF group 70.
+   *
+   * Bits 0–3 encode the dimension kind; bit 5 (32) indicates the text was
+   * placed at a user-defined location.
+   */
+  get dimensionType() {
+    return this._dimensionType
+  }
+  set dimensionType(value: number) {
+    this._dimensionType = value
+  }
+
+  /**
+   * Attachment point of the dimension text (DXF group 71).
+   */
+  get attachmentPoint() {
+    return this._attachmentPoint
+  }
+  set attachmentPoint(value: AcGiMTextAttachmentPoint) {
+    this._attachmentPoint = value
+  }
+
+  /**
+   * DXF class version (group 280). `0` means R2010+.
+   */
+  get dxfVersion() {
+    return this._dxfVersion
+  }
+  set dxfVersion(value: number) {
+    this._dxfVersion = value
   }
 
   /**
@@ -488,6 +565,23 @@ export abstract class AcDbDimension extends AcDbEntity {
     }
     const group = renderer.group([])
     return group
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const blockTableRecord = this.getDimBlockTableRecord()
+    if (!blockTableRecord) return []
+    const matrix = this.getFullDimBlockTransform()
+    const primitives: AcGeIntersectPrimitive[] = []
+    for (const entity of blockTableRecord.newIterator()) {
+      primitives.push(
+        ...acdbTransformIntersectPrimitives(
+          entity.subGetIntersectCurves(),
+          matrix
+        )
+      )
+    }
+    return primitives
   }
 
   /**
@@ -989,19 +1083,130 @@ export abstract class AcDbDimension extends AcDbEntity {
         ? this.database.tables.dimStyleTable.getAt(this.dimensionStyleName)
         : undefined
     filer.writeSubclassMarker('AcDbDimension')
-    filer.writeInt16(280, 0)
+    filer.writeInt16(280, this.dxfVersion)
     filer.writeString(2, this.dimBlockId ?? undefined)
     filer.writeString(3, this.dimensionStyleName ?? this.dimensionStyle.name)
-    filer.writePoint3d(10, this.dimBlockPosition)
+    filer.writePoint3d(10, this._dxfDefinitionPoint)
     filer.writeString(1, this.dimensionText ?? '')
     filer.writeAngle(53, this.textRotation)
+    if (this.horizontalRotation !== 0) {
+      filer.writeAngle(51, this.horizontalRotation)
+    }
     filer.writePoint3d(11, this.textPosition)
-    filer.writeInt16(70, 0)
+    filer.writeInt16(70, this.dimensionType)
+    filer.writeInt16(71, this.attachmentPoint)
     filer.writeInt16(72, this.textLineSpacingStyle)
     filer.writeDouble(41, this.textLineSpacingFactor)
     filer.writeDouble(42, this.measurement)
     filer.writeVector3d(210, this.normal)
     filer.writeObjectId(340, dimStyle?.objectId)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    // Tolerate missing AcDbDimension marker.
+    filer.atSubclassData('AcDbDimension')
+
+    // Group 10 is the definition point — NOT dimBlockPosition (group 12).
+    // Leaving dimBlockPosition at (0,0,0) unless a subclass sees group 12
+    // matches dxf-json-converter and avoids double-offsetting *D* blocks.
+    let dx = this._dxfDefinitionPoint.x
+    let dy = this._dxfDefinitionPoint.y
+    let dz = this._dxfDefinitionPoint.z
+    let tx = this.textPosition.x
+    let ty = this.textPosition.y
+    let tz = this.textPosition.z
+    let textRotDeg = (this.textRotation * 180) / Math.PI
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      if (code === 100) {
+        // Next dimension subclass (AcDbAlignedDimension, …).
+        filer.pushBackItem(item)
+        break
+      }
+      switch (code) {
+        case 1:
+          this.dimensionText = String(item.value)
+          break
+        case 2:
+          this.dimBlockId = String(item.value)
+          break
+        case 3:
+          this.dimensionStyleName = String(item.value)
+          break
+        case 10:
+          dx = n
+          break
+        case 20:
+          dy = n
+          break
+        case 30:
+          dz = n
+          break
+        case 11:
+          tx = n
+          break
+        case 21:
+          ty = n
+          break
+        case 31:
+          tz = n
+          break
+        case 41:
+          this.textLineSpacingFactor = n
+          break
+        case 42:
+          this.measurement = n
+          break
+        case 53:
+          textRotDeg = n
+          break
+        case 51:
+          this.horizontalRotation = AcGeMathUtil.degToRad(n)
+          break
+        case 70:
+          this.dimensionType = n
+          break
+        case 71:
+          this.attachmentPoint = n as AcGiMTextAttachmentPoint
+          break
+        case 72:
+          this.textLineSpacingStyle = n as AcDbLineSpacingStyle
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        case 280:
+          this.dxfVersion = n
+          break
+        case 340:
+          // Dimstyle hard pointer — style is resolved via name (group 3).
+          break
+        default:
+          // Dimstyle overrides and other optional codes may appear here.
+          // Keep scanning so the typed subclass marker (100) is still reached.
+          break
+      }
+    }
+
+    this._dxfDefinitionPoint.set(dx, dy, dz)
+    this.textPosition.copy(new AcGePoint3d(tx, ty, tz))
+    this.textRotation = (textRotDeg * Math.PI) / 180
+    this.normal.copy(new AcGeVector3d(nx, ny, nz))
     return this
   }
 }

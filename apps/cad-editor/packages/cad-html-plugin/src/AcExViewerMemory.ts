@@ -2,52 +2,82 @@ import * as THREE from 'three'
 
 import type { AcExLayoutSnapshot, AcExSnapshot } from './AcExSnapshotTypes'
 
-/** Returns a shallow copy of a float vertex buffer. */
-export function copyFloat32Buffer(source: Float32Array): Float32Array {
-  return new Float32Array(source)
-}
-
-/** Returns a shallow copy of an index buffer. */
-export function copyUint32Buffer(source: Uint32Array): Uint32Array {
-  return new Uint32Array(source)
+/**
+ * True when a layout still holds tessellated CPU batches.
+ */
+export function layoutHasBatchGeometry(layout: AcExLayoutSnapshot): boolean {
+  return layout.lineBatches.length > 0 || layout.meshBatches.length > 0
 }
 
 /**
- * Whether tessellated batch buffers on the active layout can be dropped after
- * the THREE scene is built.
- *
- * When an analytic OSNAP catalog exists, layer visibility toggles filter
- * primitives only and never re-read {@link AcExLayoutSnapshot.lineBatches}.
+ * Copies geometry + OSNAP catalog from a freshly decoded layout onto a
+ * skeleton / previously released layout (same `btrId`).
  */
-export function canReleaseActiveLayoutBatches(
-  layout: AcExLayoutSnapshot
-): boolean {
-  return (layout.osnap?.primitives.length ?? 0) > 0
+export function assignLayoutGeometryFrom(
+  target: AcExLayoutSnapshot,
+  source: AcExLayoutSnapshot
+): void {
+  target.lineBatches = source.lineBatches
+  target.meshBatches = source.meshBatches
+  target.osnap = source.osnap
 }
 
 /**
- * Clears tessellated batch typed arrays on snapshot layouts to reclaim CPU memory.
- *
- * Inactive layouts are always cleared. The active layout is cleared only when
- * {@link canReleaseActiveLayoutBatches} is true so OSNAP can still fall back to
- * tessellated segments when no analytic catalog was exported.
+ * Clears tessellated batch typed arrays on one layout so inactive package
+ * layouts can be unloaded and re-fetched later.
  */
-export function releaseSnapshotBatchBuffers(
+export function releaseLayoutBatchBuffers(layout: AcExLayoutSnapshot): void {
+  clearLayoutBatchBuffers(layout)
+}
+
+/**
+ * Clears tessellated batch typed arrays on every snapshot layout.
+ *
+ * Call only after the THREE scene has uploaded geometry to the GPU and any
+ * OSNAP index has been built from analytic primitives or tessellated segments.
+ */
+export function releaseSnapshotBatchBuffers(snapshot: AcExSnapshot): void {
+  for (const layout of snapshot.layouts) {
+    clearLayoutBatchBuffers(layout)
+  }
+}
+
+/**
+ * Clears CPU batches for every layout except the ones that must stay resident
+ * until GPU upload / hybrid OSNAP finish (typically the active layout and
+ * model space when paper viewports need it).
+ */
+export function releaseInactiveLayoutBatchBuffers(
   snapshot: AcExSnapshot,
-  activeLayoutBtrId: string
+  keepBtrIds: ReadonlySet<string>
 ): void {
   for (const layout of snapshot.layouts) {
-    const isActive = layout.btrId === activeLayoutBtrId
-    if (!isActive || canReleaseActiveLayoutBatches(layout)) {
-      clearLayoutBatchBuffers(layout)
-    }
+    if (keepBtrIds.has(layout.btrId)) continue
+    clearLayoutBatchBuffers(layout)
+    layout.osnap = undefined
+  }
+}
+
+/**
+ * Drops {@link AcExLayoutSnapshot.osnap} from every layout after
+ * {@link AcExOsnapIndex.rebuild}.
+ *
+ * Call only after the index has copied or retained the catalog's
+ * `primitives` array (the runtime keeps that reference internally).
+ * Inactive layout catalogs become fully reclaimable; the active layout
+ * catalog wrapper is removed from the snapshot while primitive data
+ * remains alive for nearest / intersection snap queries.
+ */
+export function releaseSnapshotOsnapCatalogs(snapshot: AcExSnapshot): void {
+  for (const layout of snapshot.layouts) {
+    layout.osnap = undefined
   }
 }
 
 /**
  * Removes the embedded snapshot script from the DOM after decode.
  *
- * The gzip/base64 payload is often the largest resident string in memory.
+ * The compressed/base64 payload is often the largest resident string in memory.
  */
 export function removeSnapshotElement(element: HTMLElement): void {
   element.textContent = ''
@@ -89,6 +119,8 @@ function clearLayoutBatchBuffers(layout: AcExLayoutSnapshot): void {
     batch.positions = new Float32Array(0)
     if (batch.indices) batch.indices = new Uint32Array(0)
     if (batch.gradientPositions) batch.gradientPositions = new Float32Array(0)
+    if (batch.uvs) batch.uvs = new Float32Array(0)
+    if (batch.texture) batch.texture = { mimeType: '', bytes: new Uint8Array(0) }
   }
   layout.meshBatches.length = 0
 }

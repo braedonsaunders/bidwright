@@ -5,7 +5,7 @@
 
 This package provides the **high-performance** core components of a CAD viewer such as document management, command handling, and collaboration between the UI and rendering engines. It's designed for optimal performance when handling large CAD files.
 
-This module doesn't depend on any UI framework and doesn't provide any UI except canvas. If you want to integrate a high-performance CAD viewer into a web application with your own UI, this module is the correct choice.
+This module doesn't depend on any UI framework and doesn't provide any UI except canvas. If you want to integrate a high-performance CAD viewer into a web application with your own UI, this module is the correct choice. It fully supports **mobile layout and touch interaction**—responsive chrome for phones and tablets, plus pinch-to-zoom, single-finger pan, and tap-to-select—so hosts can ship a mobile-friendly viewer without a separate mobile stack.
 
 ## Key Features
 - Document management optimized for large files
@@ -13,6 +13,7 @@ This module doesn't depend on any UI framework and doesn't provide any UI except
 - Optimized integration with rendering engines
 - Performance-focused settings and context management
 - Framework-agnostic design for maximum flexibility
+- Mobile-ready layout and touch gestures for phones and tablets
 
 ## When Should You Choose cad-simple-viewer?
 
@@ -28,6 +29,7 @@ Use `cad-simple-viewer` if you need **core CAD logic only** (document management
 - `src/app/` – Document/context management, settings
 - `src/command/` – Command implementations (open, zoom, select, etc.)
 - `src/editor/` – Command stack, input handling, global functions
+- `src/service/` – Layer/entity services and UI layer store
 - `src/view/` – Layout and scene management
 - `src/util/` – Utilities
 
@@ -40,6 +42,10 @@ npm install @mlightcad/cad-simple-viewer
 ## Usage
 
 Please refer to [cad-simple-viewer-example](https://github.com/mlight-lee/cad-simple-viewer-example) on basic usage and advanced usage.
+
+To learn about the built-in notification center (and how to replace the default bell UI while still receiving font-missing and unsupported-entity alerts), see [docs/notification-center.md](./docs/notification-center.md).
+
+For the plain-DOM toolbar engine (`AcUiToolbar`, shortcut bar, and host customization), see [docs/toolbar.md](./docs/toolbar.md).
 
 While `cad-simple-viewer` doesn't support saving drawings to DWG/DXF files, it provides comprehensive support for **modifying drawings in real-time**. You can add, edit, and delete entities within the drawing, and the viewer will automatically update to reflect these changes.
 
@@ -54,14 +60,101 @@ This capability makes `cad-simple-viewer` suitable for applications that need to
 
 In [cad-simple-viewer-example](https://github.com/mlight-lee/cad-simple-viewer-example) it demonstrates how to create one drawing with [**realdwg-web API**](https://mlight-lee.github.io/realdwg-web/).
 
+## Layer services
+
+Layer table mutations are centralized in `AcApLayerService`. UI integrations should use `AcApDocument.layerStore`, which observes that document's layer table and delegates mutations to its layer service.
+
+### Turning layers on/off from UI vs CLI
+
+`AcApLayerService.setLayerOn` accepts `{ switchCurrentLayer?: boolean }`:
+
+- **CLI commands** leave the default `false`. Batch helpers skip the current layer instead.
+- **UI callers** (`AcApLayerStore`, Vue `useLayers`) pass `true` so hiding or freezing the active layer moves `CLAYER` to another visible layer first.
+
+### LAYISO `LockAndFade` mode
+
+The `LockAndFade` isolation keyword matches AutoCAD naming but the viewer **locks** non-isolated layers only. It does not apply a visual fade; users are notified when selecting this mode in the `LAYISO` command.
+
+## Web Worker deployment
+
+The viewer ships an MTEXT layout worker. DXF is parsed by the built-in converter
+in `@mlightcad/data-model` (no separate worker). **DWG support is opt-in**: this
+package does not depend on or register `@mlightcad/libredwg-converter` (GPL).
+Hosts that need DWG must add that dependency (or another converter), deploy its
+worker (+ wasm) assets, register the converter, and optionally pass
+`webworkerFileUrls.dwgParser` for readiness checks.
+
+```typescript
+import {
+  AcApDocManager,
+  LIBREDWG_PARSER_WORKER_FILE,
+  MTEXT_RENDERER_WORKER_FILE
+} from '@mlightcad/cad-simple-viewer'
+import {
+  AcDbDatabaseConverterManager,
+  AcDbFileType
+} from '@mlightcad/data-model'
+import { AcDbLibreDwgConverter } from '@mlightcad/libredwg-converter'
+
+const dwgParserUrl = `./workers/${LIBREDWG_PARSER_WORKER_FILE}`
+AcDbDatabaseConverterManager.instance.register(
+  AcDbFileType.DWG,
+  new AcDbLibreDwgConverter({
+    convertByEntityType: false,
+    useWorker: true,
+    parserWorkerUrl: dwgParserUrl
+  })
+)
+
+const workerUrls = {
+  dwgParser: dwgParserUrl,
+  mtextRender: `./workers/${MTEXT_RENDERER_WORKER_FILE}`
+}
+
+// Option 1: check before creating the manager
+const ready = await AcApDocManager.checkWebworkerReadiness(workerUrls)
+if (!ready) {
+  throw new Error('CAD worker scripts are missing or blocked')
+}
+
+const manager = AcApDocManager.createInstance({ webworkerFileUrls: workerUrls })
+
+// Option 2: check on an existing manager instance
+if (!(await manager.areWorkersReady())) {
+  throw new Error('CAD worker scripts are missing or blocked')
+}
+```
+
+`areWorkersReady()` and `checkWebworkerReadiness()` use HEAD requests internally. Successful URL probes are cached for the current page lifecycle; failures are not cached at the probe layer, so a transient network error can succeed on a later `areWorkersReady()` call. After each check, `manager.workersReady` is `true` or `false` (`null` only before the first check). Only URLs you pass are probed — `dwgParser` is skipped when omitted.
+
+You can also enable automatic checks during initialization:
+
+```typescript
+AcApDocManager.createInstance({
+  webworkerFileUrls: workerUrls,
+  checkWorkersOnInit: true
+})
+
+manager.events.workersReady.addEventListener(({ ready }) => {
+  if (!ready) console.error('CAD workers are not reachable')
+})
+```
+
 ## Available Exports
 
 ### Core Classes
 
 - `AcApContext` - Main application context
 - `AcApDocManager` - Document management
-- `AcApDocument` - Individual document handling
+- `AcApDocument` - Individual document handling (includes `layerService` and `layerStore`)
 - `AcApSettingManager` - Settings management
+
+### Services
+
+- `AcApLayerService` - Layer table mutations with undo
+- `AcApLayerStore` - Cached layer rows and UI-friendly mutations (via `AcApDocument.layerStore`)
+- `AcApEntityService` - Entity selection, transform, and edit helpers
+- `acapRunServiceEdit` - Undo-wrapped edits outside command transactions
 
 ### Commands
 

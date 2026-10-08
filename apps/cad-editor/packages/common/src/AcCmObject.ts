@@ -56,16 +56,43 @@ export interface AcCmObjectAttributeChangedEventArgs<T extends AcCmAttributes>
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class AcCmObject<T extends AcCmAttributes = any> {
   attributes: Partial<T>
-  changed: Partial<T>
 
-  public readonly events = {
-    attrChanged: new AcCmEventManager<AcCmObjectAttributeChangedEventArgs<T>>(),
-    modelChanged: new AcCmEventManager<AcCmObjectChangedEventArgs<T>>()
+  private _events?: {
+    attrChanged: AcCmEventManager<AcCmObjectAttributeChangedEventArgs<T>>
+    modelChanged: AcCmEventManager<AcCmObjectChangedEventArgs<T>>
+  }
+  private _changed?: Partial<T>
+  private _changing: boolean = false
+  private _previousAttributes?: Partial<T>
+  private _pending: boolean = false
+
+  /**
+   * Change-event managers of this object, materialized on first read.
+   *
+   * Reading this property is what "somebody observes this object" means for the
+   * {@link set} fast path: until a listener is registered the underlying
+   * managers (and their listener arrays) are never allocated.
+   */
+  get events(): {
+    attrChanged: AcCmEventManager<AcCmObjectAttributeChangedEventArgs<T>>
+    modelChanged: AcCmEventManager<AcCmObjectChangedEventArgs<T>>
+  } {
+    return (this._events ??= {
+      attrChanged: new AcCmEventManager<
+        AcCmObjectAttributeChangedEventArgs<T>
+      >(),
+      modelChanged: new AcCmEventManager<AcCmObjectChangedEventArgs<T>>()
+    })
   }
 
-  private _changing: boolean = false
-  private _previousAttributes: Partial<T> = {}
-  private _pending: boolean = false
+  /**
+   * Attributes changed during the current change session, materialized on first
+   * read. Stays `undefined` while no tracked write happened, so importing code
+   * that never looks at it pays nothing.
+   */
+  get changed(): Partial<T> {
+    return (this._changed ??= {})
+  }
 
   /**
    * Create one object to store attributes. For performance reason, values of attributes passed to constructor
@@ -79,7 +106,6 @@ export class AcCmObject<T extends AcCmAttributes = any> {
       defaults(attrs, defaultAttrs)
     }
     this.attributes = attrs
-    this.changed = {}
   }
 
   /**
@@ -172,23 +198,83 @@ export class AcCmObject<T extends AcCmAttributes = any> {
     // Extract attributes and options.
     const unset = options.unset
     const silent = options.silent
-    const changes = []
+
+    // Untracked fast path: nobody observes this object's change events, so the
+    // session snapshot (`_previousAttributes` / `changed`), the per-attribute
+    // deep comparisons and the event payloads would all be invisible work.
+    // Write straight to `attributes` instead (see the class doc for the
+    // `hasChanged()` / `previous()` contract narrowing this implies). This
+    // reads the private `_events` field instead of the `events` getter so the
+    // check itself never materializes the managers.
+    const events = this._events
+    if (
+      !unset &&
+      !this._changing &&
+      (events === undefined ||
+        (events.attrChanged.listenerCount === 0 &&
+          events.modelChanged.listenerCount === 0))
+    ) {
+      if (typeof key === 'object') {
+        const directAttrs = key as Partial<T>
+        for (const attr in directAttrs) {
+          this.attributes[attr] = directAttrs[attr]
+        }
+      } else {
+        this.attributes[key] = val as T[A]
+      }
+      return this
+    }
+
+    if (!unset) {
+      // Fast path: when every written value is reference-equal to the current
+      // value, no attribute walk can produce changes. Replicate the session
+      // bookkeeping (snapshot + changed reset) exactly, then return — the
+      // per-attribute deep `isEqual` walks are the only work skipped.
+      let allUnchanged = true
+      for (const attr in attrs) {
+        if (this.attributes[attr] !== attrs[attr]) {
+          allUnchanged = false
+          break
+        }
+      }
+      if (allUnchanged) {
+        if (!this._changing) {
+          this._previousAttributes = clone(this.attributes)
+          this._changed = {}
+        }
+        return this
+      }
+    }
+
+    // `changes` is allocated lazily: sets that change nothing never dispatch.
+    let changes: string[] | null = null
     const changing = this._changing
     this._changing = true
 
     if (!changing) {
       this._previousAttributes = clone(this.attributes)
-      this.changed = {}
+      this._changed = {}
     }
 
     const current = this.attributes
-    const changed = this.changed
-    const prev = this._previousAttributes
+    const changed: Partial<T> = (this._changed ??= {})
+    const prev: Partial<T> = this._previousAttributes ?? ({} as Partial<T>)
 
     // For each `set` attribute, update or delete the current value.
     for (const attr in attrs) {
       val = attrs[attr]
-      if (!isEqual(current[attr], val)) changes.push(attr)
+      if (!unset && current[attr] === val) {
+        // Reference-equal: no write, no change event. `changed` still needs
+        // reconciling against the session snapshot when the attribute was
+        // mutated earlier in this session and set back to its current value.
+        if (prev[attr] === val || isEqual(prev[attr], val)) {
+          delete changed[attr]
+        } else {
+          changed[attr] = val
+        }
+        continue
+      }
+      if (!isEqual(current[attr], val)) (changes || (changes = [])).push(attr)
       if (!isEqual(prev[attr], val)) {
         changed[attr] = val
       } else {
@@ -200,14 +286,16 @@ export class AcCmObject<T extends AcCmAttributes = any> {
     // Trigger all relevant attribute changes.
     if (!silent) {
       // @ts-expect-error just keep backbone implementation as is
-      if (changes.length) this._pending = options
-      for (let i = 0; i < changes.length; i++) {
-        this.events.attrChanged.dispatch({
-          object: this,
-          attrName: changes[i],
-          attrValue: current[changes[i]],
-          options: options
-        })
+      if (changes) this._pending = options
+      if (changes) {
+        for (let i = 0; i < changes.length; i++) {
+          this._events?.attrChanged.dispatch({
+            object: this,
+            attrName: changes[i],
+            attrValue: current[changes[i]],
+            options: options
+          })
+        }
       }
     }
 
@@ -219,7 +307,7 @@ export class AcCmObject<T extends AcCmAttributes = any> {
         // @ts-expect-error just keep backbone implementation as is
         options = this._pending
         this._pending = false
-        this.events.modelChanged.dispatch({
+        this._events?.modelChanged.dispatch({
           object: this,
           options: options
         })
@@ -239,8 +327,8 @@ export class AcCmObject<T extends AcCmAttributes = any> {
    * If you specify an attribute name, determine if that attribute has changed.
    */
   hasChanged(key?: AcCmStringKey<T>) {
-    if (key == null) return !isEmpty(this.changed)
-    return has(this.changed, key)
+    if (key == null) return !isEmpty(this._changed)
+    return this._changed ? has(this._changed, key) : false
   }
 
   /**
@@ -251,12 +339,14 @@ export class AcCmObject<T extends AcCmAttributes = any> {
    * the model, determining if there *would be* a change.
    */
   changedAttributes(diff?: Partial<T>): Partial<T> {
-    if (!diff) return this.hasChanged() ? clone(this.changed) : {}
+    if (!diff) {
+      return this.hasChanged() ? clone(this._changed ?? ({} as Partial<T>)) : {}
+    }
     const old = this._changing ? this._previousAttributes : this.attributes
     const changed: Partial<T> = {}
     for (const attr in diff) {
       const val = diff[attr]
-      if (isEqual(old[attr], val)) continue
+      if (isEqual(old?.[attr], val)) continue
       changed[attr] = val
     }
     return changed
@@ -266,15 +356,15 @@ export class AcCmObject<T extends AcCmAttributes = any> {
    * Get the previous value of an attribute, recorded at the time the last `"change"` event was fired.
    */
   previous<A extends AcCmStringKey<T>>(key: A): T[A] | null | undefined {
-    if (key == null || !this._previousAttributes) return null
-    return this._previousAttributes[key]
+    if (key == null) return null
+    return this._previousAttributes?.[key]
   }
 
   /**
    * Get all of the attributes of the model at the time of the previous `"change"` event.
    */
   previousAttributes(): Partial<T> {
-    return clone(this._previousAttributes)
+    return clone(this._previousAttributes ?? ({} as Partial<T>))
   }
 
   /**

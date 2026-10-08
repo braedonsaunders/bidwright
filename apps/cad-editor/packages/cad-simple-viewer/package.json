@@ -1,6 +1,6 @@
 {
   "name": "@mlightcad/cad-simple-viewer",
-  "version": "1.5.6",
+  "version": "1.7.4",
   "license": "MIT",
   "type": "module",
   "repository": {
@@ -21,6 +21,8 @@
   "files": [
     "dist",
     "lib",
+    "icons.ts",
+    "src/ui/icons.ts",
     "README.md",
     "package.json"
   ],
@@ -32,20 +34,25 @@
       "types": "./lib/index.d.ts",
       "import": "./dist/cad-simple-viewer.js",
       "require": "./dist/cad-simple-viewer.umd.cjs"
+    },
+    "./icons": {
+      "types": "./src/ui/icons.ts",
+      "import": "./src/ui/icons.ts",
+      "default": "./lib/ui/icons.js"
     }
   },
   "scripts": {
     "clean": "rimraf dist lib tsconfig.tsbuildinfo",
     "build": "tsc && vite build",
+    "copy:workers": "node ../../tools/copy-workers.mjs",
     "lint": "eslint src/",
     "lint:fix": "eslint --fix --quiet src/"
   },
   "devDependencies": {
-    "@mlightcad/data-model": "workspace:*",
-    "@mlightcad/dxf-json-converter": "workspace:*",
-    "@mlightcad/libredwg-converter": "workspace:*",
-    "@mlightcad/mtext-input-box": "^0.2.19",
-    "@mlightcad/mtext-renderer": "^0.11.5",
+    "@mlightcad/data-model": "^1.15.1",
+    "@mlightcad/mtext-input-box": "^0.3.2",
+    "@mlightcad/mtext-parser": "^1.5.3",
+    "@mlightcad/mtext-renderer": "^0.13.2",
     "@mlightcad/three-renderer": "workspace:*",
     "@mlightcad/three-viewcube": "0.0.9",
     "@types/lodash-es": "^4.17.12",
@@ -57,8 +64,10 @@
     "three": "^0.172.0"
   },
   "peerDependencies": {
-    "@mlightcad/data-model": "workspace:*",
-    "@mlightcad/dxf-json-converter": "workspace:*",
+    "@mlightcad/data-model": "^1.15.1",
+    "@mlightcad/mtext-parser": "^1.5.3",
+    "@mlightcad/mtext-renderer": "^0.13.2",
+    "@mlightcad/three-renderer": "workspace:*",
     "lodash-es": "4.17.21",
     "three": "^0.172.0"
   }

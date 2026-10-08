@@ -8,7 +8,10 @@ const config: Config = {
     '^.+\\.(ts|tsx)$': [
       'ts-jest',
       {
-        tsconfig: '<rootDir>/tsconfig.jest.json'
+        tsconfig: '<rootDir>/tsconfig.jest.json',
+        // Package builds enforce unused parameters. Jest disables that rule for
+        // fixtures, so upstream documentation suppressions become unused here.
+        diagnostics: { ignoreCodes: [2578] }
       }
     ],
     '^.+\\.js$': [

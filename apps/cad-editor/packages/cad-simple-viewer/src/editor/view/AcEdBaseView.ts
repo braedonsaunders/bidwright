@@ -14,9 +14,22 @@ import {
 import { debounce } from 'lodash-es'
 
 import type { AcTrSpatialSearchOptions } from '../../spatialIndex/AcTrSpatialIndex'
+import type {
+  AcEdSessionAccessory,
+  AcEdSessionAccessoryHostInfo
+} from '../command/AcEdSessionAccessory'
+import { AcEdSessionProviderRegistry } from '../command/AcEdSessionProviderRegistry'
 import { AcEdCorsorType, AcEdSelectionSet } from '../input'
 import { AcEditor } from '../input/AcEditor'
-import { AcEdOsnapResolver } from '../input/AcEdOsnapResolver'
+import {
+  type AcEdOsnapPoint,
+  AcEdOsnapResolver
+} from '../input/AcEdOsnapResolver'
+import { AcEdMarkerManager } from '../input/marker'
+import {
+  acedHideMobileSnapLoupe,
+  acedRefreshMobileSnapLoupe
+} from '../input/ui/AcEdMobileSnapLoupe'
 import { AcEdHoverController } from './AcEdHoverController'
 import {
   AcEdSelectionAction,
@@ -26,6 +39,9 @@ import {
   AcEdSpatialQueryResultItemEx,
   isEffectiveSpatialQueryHit
 } from './AcEdSpatialQueryResult'
+import { AcEdViewMode } from './AcEdViewMode'
+
+export { AcEdViewMode } from './AcEdViewMode'
 
 /**
  * Interface to define arguments of mouse event events.
@@ -74,6 +90,21 @@ export interface AcEdViewHoverEventArgs {
 }
 
 /**
+ * Screen-fixed snap-loupe overlay: CSS rectangle on the canvas plus the
+ * world box shown inside it.
+ */
+export interface AcEdSnapLoupeViewState {
+  /** Canvas-local left of the loupe (CSS pixels). */
+  x: number
+  /** Canvas-local top of the loupe (CSS pixels). */
+  y: number
+  /** Width and height of the square loupe (CSS pixels). */
+  size: number
+  /** World-space box mapped onto the loupe. */
+  viewBox: AcGeBox2d
+}
+
+/**
  * Interface to define arguments of render frame events.
  */
 export interface AcEdViewRenderFrameEventArgs {
@@ -88,43 +119,6 @@ export interface AcEdViewRenderFrameEventArgs {
 }
 
 /**
- * Enumeration of view interaction modes.
- *
- * The view mode determines how the view responds to user mouse interactions:
- * - In SELECTION mode, clicks select entities
- * - In PAN mode, clicks and drags pan the view
- *
- * @example
- * ```typescript
- * // Set to selection mode for entity picking
- * view.mode = AcEdViewMode.SELECTION;
- *
- * // Set to pan mode for view navigation
- * view.mode = AcEdViewMode.PAN;
- * ```
- */
-export enum AcEdViewMode {
-  /**
-   * Selection mode - mouse clicks select entities.
-   *
-   * In this mode:
-   * - Single clicks select individual entities
-   * - Drag operations can create selection boxes
-   * - Selected entities are highlighted with grip points
-   */
-  SELECTION = 0,
-  /**
-   * Pan mode - mouse interactions pan the view.
-   *
-   * In this mode:
-   * - Click and drag operations move the view
-   * - The cursor typically changes to indicate pan mode
-   * - Entity selection is disabled
-   */
-  PAN = 1
-}
-
-/**
  * Selection box interaction mode.
  */
 export type AcEdSelectionMode = 'window' | 'crossing'
@@ -136,11 +130,25 @@ export {
 } from './AcEdSelectionAction'
 
 /**
+ * One unresolved external reference reported by the viewer.
+ */
+export interface AcEdMissedXref {
+  /** Block table record name of the xref */
+  name: string
+  /** Saved path from the drawing (may be empty if the converter did not provide it) */
+  pathName: string
+  /** True when the xref is an overlay reference */
+  isOverlay: boolean
+}
+
+/**
  * Represents missed data when rendering entities in the drawing
  */
 export interface AcEdMissedData {
   fonts: Record<string, number>
   images: Map<string, string>
+  /** Unresolved external references in the current database */
+  xrefs: AcEdMissedXref[]
 }
 
 /**
@@ -174,7 +182,7 @@ export type AcEdCalculateSizeCallback = () => { width: number; height: number }
  * ```typescript
  * class MyView extends AcEdBaseView {
  *   // Implement required abstract methods
- *   get missedData() { return { fonts: {}, images: new Map() }; }
+ *   get missedData() { return { fonts: {}, images: new Map(), xrefs: [] }; }
  *   get mode() { return this._mode; }
  *   set mode(value) { this._mode = value; }
  *   // ... other abstract methods
@@ -204,8 +212,19 @@ export abstract class AcEdBaseView {
    * the canvas bounding-rect origin (`viewportToCanvas`).
    */
   private _curMousePos: AcGePoint2d
+  /**
+   * True after at least one mouse or pointer sample has updated
+   * {@link curMousePos}. Touch devices never fire `mousemove` until a finger
+   * is down, so the default `(0, 0)` must not be treated as a real cursor.
+   */
+  private _hasCursorPos = false
   /** Set of currently selected entities */
   private _selectionSet: AcEdSelectionSet
+  /**
+   * When false, pointer hover and click/box gestures do not select or
+   * highlight CAD entities. Markup overlays can still be picked.
+   */
+  private _entitySelectionEnabled = true
   /** Input manager for handling user interactions */
   private _editor: AcEditor
   /** Size of selection box in pixels for entity picking */
@@ -228,11 +247,22 @@ export abstract class AcEdBaseView {
   /** Resolves object snap points using this view's pick and coordinate APIs. */
   private _osnapResolver: AcEdOsnapResolver
 
+  /** OSNAP markers shown while dragging overlay measurement / markup grips. */
+  private _overlayGripOsnapMarkers: AcEdMarkerManager | null = null
+  /** Last object snap acquired during {@link resolveOverlayGripPoint}, if any. */
+  private _lastOverlayGripOsnap: AcEdOsnapPoint | null = null
+
   /** The HTML canvas element for rendering */
   protected _canvas: HTMLCanvasElement
 
   /** The HTML element to contain this view */
   protected _container: HTMLElement
+
+  /**
+   * Long-lived session UI providers for this view (draw-style, etc.).
+   * Feature installs register here; mountable accessories are minted on demand.
+   */
+  readonly sessionProviders = new AcEdSessionProviderRegistry()
 
   /** Events fired by the view for various interactions */
   public readonly events = {
@@ -269,10 +299,21 @@ export abstract class AcEdBaseView {
     this._height = rect.height
     this._curPos = new AcGePoint2d()
     this._curMousePos = new AcGePoint2d()
+    this._hasCursorPos = false
     this._selectionSet = new AcEdSelectionSet()
     this._editor = new AcEditor(this)
     this._osnapResolver = new AcEdOsnapResolver(this)
     this._canvas.addEventListener('mousemove', event => this.onMouseMove(event))
+    // Touch does not fire `mousemove`. Keep cursor (and therefore the next
+    // point-prompt preview) in sync with the finger, otherwise `curMousePos`
+    // stays at canvas (0, 0) — the top-left of the view. Mouse already has
+    // `mousemove`; do not also handle pointer events or hover runs twice.
+    this._canvas.addEventListener('pointerdown', event => {
+      if (event.pointerType === 'touch') this.onMouseMove(event)
+    })
+    this._canvas.addEventListener('pointermove', event => {
+      if (event.pointerType === 'touch') this.onMouseMove(event)
+    })
     this._canvas.addEventListener('mousedown', event => {
       if (event.button === 1) {
         // Middle mouse button (button === 1)
@@ -291,7 +332,11 @@ export abstract class AcEdBaseView {
       trailing: true
     })
     const resizeObserver = new ResizeObserver(debouncedWindowResize)
-    resizeObserver.observe(this._canvas.parentElement as Element)
+    resizeObserver.observe(this._container)
+    const containerParent = this._container.parentElement
+    if (containerParent) {
+      resizeObserver.observe(containerParent)
+    }
 
     this._selectionBoxSize = 4
 
@@ -313,6 +358,29 @@ export abstract class AcEdBaseView {
    */
   get editor() {
     return this._editor
+  }
+
+  /**
+   * Active mount target for session accessories (desktop slot or mobile panel).
+   */
+  get sessionAccessoryHost(): AcEdSessionAccessoryHostInfo {
+    return this._editor.inputManager.sessionAccessoryHost
+  }
+
+  /**
+   * Selection-driven session accessory shown when no command accessory is mounted.
+   */
+  get selectionSessionAccessory(): AcEdSessionAccessory | null {
+    return this._editor.inputManager.selectionSessionAccessory
+  }
+
+  /**
+   * Updates the selection-driven session accessory forwarded to the input manager.
+   *
+   * @param value - Accessory to show on selection, or `null` to clear.
+   */
+  set selectionSessionAccessory(value: AcEdSessionAccessory | null) {
+    this._editor.inputManager.selectionSessionAccessory = value
   }
 
   /**
@@ -429,6 +497,18 @@ export abstract class AcEdBaseView {
   abstract zoomTo(box: AcGeBox2d, margin: number): void
 
   /**
+   * Returns the axis-aligned world XY extents of drawable geometry in the
+   * active layout.
+   *
+   * Prefer this over database header `EXTMIN`/`EXTMAX` (`database.extents`)
+   * for framing and export: real DWGs often ship stale header boxes that are
+   * many times larger than the geometry that is actually drawn.
+   *
+   * @returns Drawable extents, or `undefined` when the scene has no geometry.
+   */
+  abstract getDrawingExtents(): AcGeBox2d | undefined
+
+  /**
    * Zooms the view to fit all visible entities in the current drawing.
    *
    * This method automatically calculates the bounding box of all entities
@@ -459,6 +539,18 @@ export abstract class AcEdBaseView {
    * @return - Return true if zoomed to the layer successfully.
    */
   abstract zoomToFitLayer(layerName: string): boolean
+
+  /**
+   * Zooms to the dominant geometry cluster, peeling far outlier entities.
+   *
+   * Falls back to {@link zoomToFitDrawing} when clustering cannot produce a
+   * tighter box (empty scene, too few boxes, or no outliers).
+   *
+   * @param timeout - Maximum time (ms) to wait for entity conversion. Default: 0.
+   * @returns Resolves when the zoom has been applied (or skipped if still waiting
+   *   was cancelled — currently always resolves after the fit action runs).
+   */
+  abstract zoomToSmartExtents(timeout?: number): void | Promise<void>
 
   /**
    * Moves the current view to the specified 2D point at the given scale.
@@ -590,10 +682,7 @@ export abstract class AcEdBaseView {
    * @param handleId - Preview handle returned by {@link createEntityPreview}
    * @param matrix - World transform to apply to the preview geometry
    */
-  abstract updateEntityPreview(
-    handleId: string,
-    matrix: AcGeMatrix3d
-  ): void
+  abstract updateEntityPreview(handleId: string, matrix: AcGeMatrix3d): void
 
   /**
    * Removes one batched preview overlay.
@@ -787,6 +876,7 @@ export abstract class AcEdBaseView {
    * Applies selection based on action.
    */
   applySelection(ids: AcDbObjectId[], action: AcEdSelectionAction) {
+    if (!this.entitySelectionEnabled) return
     if (action === 'replace') {
       this.selectionSet.clear()
       const unique = ids.filter(id => !this.selectionSet.has(id))
@@ -819,17 +909,33 @@ export abstract class AcEdBaseView {
 
   /**
    * Collects ids using window or crossing selection rules.
+   *
+   * Crossing hits come from entity AABBs in the spatial index. Long polylines
+   * can therefore match a pick rectangle that sits in empty interior space.
+   * Subclasses with access to the drawing database should override
+   * {@link refineCrossingSelectionHits} to drop those false positives.
    */
   protected collectSelectionIdsByBox(box: AcGeBox2d, mode: AcEdSelectionMode) {
-    const results = this.search(box, { selectionMode: mode })
-    const ids: AcDbObjectId[] = []
-    results.forEach(item => {
-      if (!isEffectiveSpatialQueryHit(item)) {
-        return
-      }
-      ids.push(item.id)
-    })
-    return ids
+    const results = this.search(box, { selectionMode: mode }).filter(
+      isEffectiveSpatialQueryHit
+    )
+    if (mode === 'crossing') {
+      return this.refineCrossingSelectionHits(box, results)
+    }
+    return results.map(item => item.id)
+  }
+
+  /**
+   * Optional crossing-selection refinement after the spatial query.
+   *
+   * Default keeps the AABB hits unchanged. {@link AcTrView2d} overrides this
+   * to test curve geometry against the pick box.
+   */
+  protected refineCrossingSelectionHits(
+    _box: AcGeBox2d,
+    results: AcEdSpatialQueryResultItemEx[]
+  ): AcDbObjectId[] {
+    return results.map(item => item.id)
   }
 
   /**
@@ -946,10 +1052,48 @@ export abstract class AcEdBaseView {
   }
 
   /**
+   * Whether {@link curMousePos} has been set by a real pointer sample.
+   *
+   * @returns False until the first mouse or pointer event on the canvas.
+   */
+  get hasCursorPos() {
+    return this._hasCursorPos
+  }
+
+  /**
+   * Marks {@link curMousePos} as stale so the next point prompt does not
+   * treat a leftover touch sample as a live cursor.
+   *
+   * Touch picking commits on `pointerup`. The finger position must not seed
+   * the following prompt's jig (that would draw a short segment next to the
+   * pick). The next real pointer sample sets this flag again.
+   */
+  clearCursorPos() {
+    this._hasCursorPos = false
+  }
+
+  /**
    * The selection set in current view.
    */
   get selectionSet() {
     return this._selectionSet
+  }
+
+  /**
+   * Whether CAD entities can be selected and hover-highlighted.
+   *
+   * Markup / review overlays are unaffected. Default is `true`.
+   */
+  get entitySelectionEnabled() {
+    return this._entitySelectionEnabled
+  }
+  set entitySelectionEnabled(value: boolean) {
+    if (this._entitySelectionEnabled === value) return
+    this._entitySelectionEnabled = value
+    if (!value) {
+      this.clearHover()
+      this.selectionSet.clear()
+    }
   }
 
   /**
@@ -959,15 +1103,123 @@ export abstract class AcEdBaseView {
     return this._osnapResolver
   }
 
-  protected onWindowResize() {
+  /**
+   * Enables or disables camera pan/zoom (OrbitControls) for this view.
+   * Default is a no-op; {@link AcTrView2d} toggles the active layout controls.
+   *
+   * @param _enabled - When false, the user cannot pan or zoom this view.
+   */
+  setNavigationEnabled(_enabled: boolean): void {
+    // Optional; 2D view overrides this.
+  }
+
+  /**
+   * Shows or hides the screen-fixed snap loupe overlay viewport.
+   * Pass `null` to hide. Default is a no-op.
+   *
+   * @param _state - Loupe screen rectangle and world box, or `null` to hide.
+   */
+  setSnapLoupe(_state: AcEdSnapLoupeViewState | null): void {
+    // Optional; 2D view overrides this.
+  }
+
+  /**
+   * Resolves a world XY cursor through object snap and updates overlay grip
+   * snap markers. Used by HTML overlay endpoint drags (measure / markup).
+   *
+   * @param cursor - Raw world XY under the pointer.
+   * @param lastPoint - Grip origin passed to the osnap resolver as lastPoint.
+   * @returns Snapped world XY, or `cursor` when nothing is in aperture.
+   */
+  resolveOverlayGripPoint(
+    cursor: { x: number; y: number },
+    lastPoint?: { x: number; y: number }
+  ): { x: number; y: number } {
+    const cursorWcs = { x: cursor.x, y: cursor.y, z: 0 }
+    this._overlayGripOsnapMarkers ??= new AcEdMarkerManager(this)
+    const snapPoint = this._osnapResolver.resolve({
+      cursorWcs,
+      lastPoint: lastPoint
+        ? { x: lastPoint.x, y: lastPoint.y, z: 0 }
+        : cursorWcs
+    })
+    this._lastOverlayGripOsnap = snapPoint ?? null
+    this._overlayGripOsnapMarkers.setHintMarkers(
+      AcEdOsnapResolver.displayCenterMarks(
+        this._osnapResolver.acquiredCenterMarks,
+        snapPoint
+      )
+    )
+    if (snapPoint) {
+      this._overlayGripOsnapMarkers.showOrRepositionMarker(
+        snapPoint,
+        AcEdOsnapResolver.osnapModeToMarkerType(snapPoint.type)
+      )
+      return { x: snapPoint.x, y: snapPoint.y }
+    }
+    this._overlayGripOsnapMarkers.hideMarker()
+    return { x: cursor.x, y: cursor.y }
+  }
+
+  /**
+   * Last object snap from {@link resolveOverlayGripPoint}, or `null` when the
+   * cursor is not within aperture of any snap.
+   */
+  get lastOverlayGripOsnap(): AcEdOsnapPoint | null {
+    return this._lastOverlayGripOsnap
+  }
+
+  /**
+   * Shows or repositions the shared mobile snap loupe around a client sample.
+   * Used by overlay grip drag and point pick on phone/pad.
+   *
+   * @param clientX - Sample X in viewport/client CSS pixels.
+   * @param clientY - Sample Y in viewport/client CSS pixels.
+   * @param snap - Active object snap in world space, if any.
+   */
+  refreshMobileSnapLoupe(
+    clientX: number,
+    clientY: number,
+    snap?: { x: number; y: number; type: number } | null
+  ): void {
+    acedRefreshMobileSnapLoupe(this, clientX, clientY, snap)
+  }
+
+  /**
+   * Hides the shared mobile snap loupe for this view.
+   */
+  hideMobileSnapLoupe(): void {
+    acedHideMobileSnapLoupe(this)
+  }
+
+  /**
+   * Hides overlay grip snap markers and clears acquired centers.
+   */
+  clearOverlayGripOsnap(): void {
+    this._lastOverlayGripOsnap = null
+    this._overlayGripOsnapMarkers?.clear()
+    this._osnapResolver.clearAcquiredCenters()
+  }
+
+  /**
+   * Updates {@link width} / {@link height} from the size callback or canvas
+   * client size without notifying listeners. Subclasses that must sync
+   * projection (camera frustum, renderer buffer) before notifying should call
+   * this first, then dispatch {@link events.viewResize} themselves.
+   */
+  protected refreshViewSize() {
     if (this._calculateSizeCallback) {
       const { width, height } = this._calculateSizeCallback()
-      this._width = width
-      this._height = height
+      this._width = Math.max(1, Math.floor(width))
+      this._height = Math.max(1, Math.floor(height))
     } else {
-      this._width = this._canvas.clientWidth
-      this._height = this._canvas.clientHeight
+      this._width = Math.max(1, Math.floor(this._canvas.clientWidth))
+      this._height = Math.max(1, Math.floor(this._canvas.clientHeight))
     }
+  }
+
+  protected onWindowResize() {
+    this.refreshViewSize()
     this.events.viewResize.dispatch({
       width: this._width,
       height: this._height
@@ -982,11 +1234,14 @@ export abstract class AcEdBaseView {
   }
 
   /**
-   * Mouse move event handler.
-   * @param event Input mouse event argument
+   * Pointer sample handler. Updates canvas-local and world cursor from mouse
+   * or touch coordinates.
+   *
+   * @param event - Mouse or pointer event with client coordinates.
    */
-  private onMouseMove(event: MouseEvent) {
+  private onMouseMove(event: MouseEvent | PointerEvent) {
     // Keep one canonical conversion path for all view input code.
+    this._hasCursorPos = true
     this._curMousePos = this.viewportToCanvas({
       x: event.clientX,
       y: event.clientY
@@ -996,7 +1251,7 @@ export abstract class AcEdBaseView {
     this.events.mouseMove.dispatch({ x: wcsPos.x, y: wcsPos.y })
 
     // Hover handler
-    if (this.mode == AcEdViewMode.SELECTION) {
+    if (this.entitySelectionEnabled && this.mode == AcEdViewMode.SELECTION) {
       // If it is in “input acquisition” mode, disable hover behavior
       if (!this._editor.isActive) {
         this._hoverController.handleMouseMove(wcsPos.x, wcsPos.y)

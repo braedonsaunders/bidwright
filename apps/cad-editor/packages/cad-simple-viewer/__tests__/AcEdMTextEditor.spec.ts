@@ -73,8 +73,11 @@ jest.mock(
   { virtual: true }
 )
 
+jest.mock('@mlightcad/mtext-parser', () => ({
+  MTextColor: class MTextColor {}
+}))
+
 jest.mock('@mlightcad/mtext-renderer', () => ({
-  MTextColor: class MTextColor {},
   MTextAttachmentPoint: { TopLeft: 1 }
 }))
 
@@ -171,7 +174,8 @@ function createView() {
         removeEventListener: jest.fn()
       }
     },
-    isDirty: false
+    isDirty: false,
+    isHtmlDirty: false
   }
 }
 

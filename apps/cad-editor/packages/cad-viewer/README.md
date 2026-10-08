@@ -51,7 +51,7 @@ The MlCadViewer component supports multiple ways to load CAD files:
 
 ### 1. Local File Loading
 Users can load files directly from their computer:
-- **File Dialog**: Click the main menu (☰) and select "Open" to browse and select local DWG/DXF files
+- **File Dialog**: Click the File menu on the ribbon and select "Open" to browse and select local DWG/DXF files
 - **Drag & Drop**: Drag and drop CAD files directly onto the viewer (if implemented in your application)
 - **File Input**: Use the built-in file reader component for programmatic file selection
 - **Component Prop**: Pass a File object directly to the `localFile` prop for automatic loading
@@ -60,13 +60,13 @@ Users can load files directly from their computer:
 ```vue
 <template>
   <div>
-    <input 
-      type="file" 
-      accept=".dwg,.dxf" 
+    <input
+      type="file"
+      accept=".dwg,.dxf"
       @change="handleFileSelect"
     />
-    <MlCadViewer 
-      :local-file="selectedFile" 
+    <MlCadViewer
+      :local-file="selectedFile"
     />
   </div>
 </template>
@@ -132,22 +132,22 @@ Then create one vue component as follows.
   <div>
     <!-- For local file loading (users can open files via menu) -->
     <MlCADViewer :background="0x808080" />
-    
+
     <!-- For remote file loading (automatically loads from URL) -->
-    <!-- <MlCADViewer 
-      :background="0x808080" 
-      :url="'https://example.com/drawing.dwg'" 
+    <!-- <MlCADViewer
+      :background="0x808080"
+      :url="'https://example.com/drawing.dwg'"
     /> -->
-    
+
     <!-- For local file loading (automatically loads from File object) -->
-    <!-- <MlCADViewer 
-      :background="0x808080" 
-      :local-file="selectedFile" 
+    <!-- <MlCADViewer
+      :background="0x808080"
+      :local-file="selectedFile"
     /> -->
-    
+
     <!-- With custom base URL for fonts and templates -->
-    <!-- <MlCADViewer 
-      :background="0x808080" 
+    <!-- <MlCADViewer
+      :background="0x808080"
       :base-url="'https://my-cdn.com/cad-data/'"
     /> -->
   </div>
@@ -187,7 +187,7 @@ The `MlCadViewer` component accepts the following props:
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `locale` | `'en' \| 'zh' \| 'default'` | `'default'` | Sets the language for the component interface. Use `'en'` for English, `'zh'` for Chinese, or `'default'` to use the browser's default language. |
-| `url` | `string` | `undefined` | Optional URL to automatically load a CAD file when the component mounts. The file will be fetched and opened automatically. **Note**: If not provided, users can still load local files using the main menu "Open" option. |
+| `url` | `string` | `undefined` | Optional URL to automatically load a CAD file when the component mounts. The file will be fetched and opened automatically. **Note**: If not provided, users can still load local files using the ribbon File menu "Open" option. |
 | `localFile` | `File` | `undefined` | Optional local File object to automatically load a CAD file when the component mounts. The file will be read and opened automatically. **Note**: This takes precedence over the `url` prop if both are provided. |
 | `background` | `number` | `undefined` | Background color as 24-bit hexadecimal RGB (e.g., `0x000000` for black, `0x808080` for gray). |
 | `baseUrl` | `string` | `undefined` | Base URL for loading fonts, templates, and example files. This URL is used by the CAD viewer to load resources like fonts and drawing templates. **Note**: If not provided, uses the default URL. |
@@ -198,6 +198,8 @@ The `MlCadViewer` component accepts the following props:
 
 The `MlCadViewer` reads its UI visibility from the global `AcApSettingManager` (provided by `@mlightcad/cad-simple-viewer`). Configure these flags anywhere before rendering the viewer to customize the UI.
 
+Settings resolve in three layers (later wins): built-in defaults, user preferences in `localStorage`, and session overrides. Only user preferences are persisted. Use `{ persist: false }` for host layout (for example hide the command line on mobile) so the change does not leak into other products or later visits on the same origin.
+
 | Setting | Type | Default | Description |
 |---------|------|---------|-------------|
 | `isShowToolbar` | `boolean` | `true` | Controls toolbar visibility |
@@ -205,30 +207,30 @@ The `MlCadViewer` reads its UI visibility from the global `AcApSettingManager` (
 | `isShowCoordinate` | `boolean` | `true` | Controls coordinate display visibility |
 | `isShowEntityInfo` | `boolean` | `false` | Controls entity info card visibility |
 | `isShowLanguageSelector` | `boolean` | `true` | Controls language selector visibility |
-| `isShowMainMenu` | `boolean` | `true` | Controls main menu visibility |
+| `isShowRibbon` | `boolean` | `true` | Controls ribbon visibility |
 | `isShowStats` | `boolean` | `false` | Controls performance statistics display |
 
 #### Example (recommended)
 ```vue
 <template>
-  <!-- Local file loading - users can open files via main menu -->
+  <!-- Local file loading - users can open files via the ribbon File menu -->
   <MlCadViewer locale="en" />
-  
+
   <!-- Remote file loading - automatically loads from URL -->
-  <!-- <MlCadViewer 
-    locale="en" 
-    :url="'https://example.com/drawing.dwg'" 
+  <!-- <MlCadViewer
+    locale="en"
+    :url="'https://example.com/drawing.dwg'"
   /> -->
-  
+
   <!-- Local file loading - automatically loads from File object -->
-  <!-- <MlCadViewer 
-    locale="en" 
-    :local-file="selectedFile" 
+  <!-- <MlCadViewer
+    locale="en"
+    :local-file="selectedFile"
   /> -->
-  
+
   <!-- Custom baseUrl for fonts and templates -->
-  <!-- <MlCadViewer 
-    locale="en" 
+  <!-- <MlCadViewer
+    locale="en"
     :base-url="'https://my-cdn.com/cad-data/'"
   /> -->
 </template>
@@ -237,13 +239,22 @@ The `MlCadViewer` reads its UI visibility from the global `AcApSettingManager` (
 import { MlCadViewer } from '@mlightcad/cad-viewer'
 import { AcApSettingManager } from '@mlightcad/cad-simple-viewer'
 
-// Configure global UI flags before the viewer mounts
-AcApSettingManager.instance.isShowCommandLine = false
-// Optional toggles
-// AcApSettingManager.instance.isShowToolbar = false
-// AcApSettingManager.instance.isShowStats = true
-// AcApSettingManager.instance.isShowCoordinate = false
-// AcApSettingManager.instance.isShowEntityInfo = false
+// Optional: isolate this product's preferences on a shared origin
+AcApSettingManager.configure({
+  storageKey: 'mlightcad.settings.cad-viewer'
+})
+
+// Host layout before mount — session only (does not write localStorage)
+AcApSettingManager.instance.apply(
+  {
+    isShowCommandLine: false
+    // isShowToolbar: false,
+    // isShowStats: true,
+    // isShowCoordinate: false,
+    // isShowEntityInfo: false
+  },
+  { persist: false }
+)
 </script>
 ```
 
@@ -251,6 +262,8 @@ AcApSettingManager.instance.isShowCommandLine = false
 
 - Settings are global and immediately reflected by `MlCadViewer`.
 - You can change them at runtime using the same `AcApSettingManager.instance` reference.
+- Property setters (for example `isShowToolbar = false`) and the in-app settings menu persist user preferences by default.
+- On the same origin, give each product its own `storageKey` via `AcApSettingManager.configure` so preferences do not cross-contaminate. Call `configure` before the first settings read/write.
 
 ### Base URL Configuration
 
@@ -276,7 +289,7 @@ your-base-url/
 #### Example: Custom Base URL
 ```vue
 <template>
-  <MlCadViewer 
+  <MlCadViewer
     :base-url="'https://my-company.com/cad-resources/'"
     :url="'https://my-company.com/drawings/project.dwg'"
   />
@@ -292,7 +305,7 @@ This configuration will:
 
 The `MlCadViewer` component includes:
 
-- **Main Menu** - File operations (including local file opening), view controls, and settings
+- **Ribbon** - File operations (including local file opening), CAD commands, and settings
 - **Toolbars** - Drawing tools, zoom controls, and selection tools
 - **Layer Manager** - Layer visibility and property management
 - **Command Line** - AutoCAD-style command input
@@ -336,7 +349,6 @@ Please refer to [readme of cad-simple-viewer](../cad-simple-viewer/README.md) to
 ### Components
 
 - `MlPointStyleDlg` - Point style dialog
-- `MlReplacementDlg` - Replacement dialog
 - Various layout and UI components
 
 ### Composables

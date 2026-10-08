@@ -1,4 +1,3 @@
-import { AcDbFontNameCollector } from '../converter/AcDbFontNameCollector'
 import { DEFAULT_TEXT_STYLE } from '../misc/AcDbConstants'
 import { AcDbDatabase } from './AcDbDatabase'
 import { AcDbSymbolTable } from './AcDbSymbolTable'
@@ -37,8 +36,25 @@ export class AcDbTextStyleTable extends AcDbSymbolTable<AcDbTextStyleTableRecord
     super(db)
   }
 
+  /**
+   * Normalizes a font file name: strips the extension and lowercases.
+   *
+   * @param fontFileName - Raw font file name (e.g. `Arial.ttf`, `SIMHEI`)
+   * @returns Normalized name, or `undefined` when the input is empty
+   */
+  static normalizeFontFileName(fontFileName?: string): string | undefined {
+    if (!fontFileName) {
+      return undefined
+    }
+    const lastDotIndex = fontFileName.lastIndexOf('.')
+    if (lastDotIndex >= 0) {
+      return fontFileName.substring(0, lastDotIndex).toLowerCase()
+    }
+    return fontFileName.toLowerCase()
+  }
+
   protected override get dxfEntryCount() {
-    return this._recordsById.size
+    return this.totalRecordCount
   }
 
   /**
@@ -138,13 +154,11 @@ export class AcDbTextStyleTable extends AcDbSymbolTable<AcDbTextStyleTableRecord
   get fonts() {
     const fonts = new Set<string>()
     for (const item of this.newIterator()) {
-      const fileName = AcDbFontNameCollector.normalizeFontFileName(
-        item.fileName
-      )
+      const fileName = AcDbTextStyleTable.normalizeFontFileName(item.fileName)
       if (fileName) {
         fonts.add(fileName)
       }
-      const bigFontFileName = AcDbFontNameCollector.normalizeFontFileName(
+      const bigFontFileName = AcDbTextStyleTable.normalizeFontFileName(
         item.bigFontFileName
       )
       if (bigFontFileName) {

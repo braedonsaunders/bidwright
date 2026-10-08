@@ -9,7 +9,8 @@ import {
   type MTextToolbarColorPickerFactory,
   type MTextToolbarTheme
 } from '@mlightcad/mtext-input-box'
-import { MTextAttachmentPoint, MTextColor } from '@mlightcad/mtext-renderer'
+import { MTextColor } from '@mlightcad/mtext-parser'
+import { MTextAttachmentPoint } from '@mlightcad/mtext-renderer'
 import * as THREE from 'three'
 
 import { AcApDocManager } from '../../../app'
@@ -491,7 +492,7 @@ export class AcEdMTextEditor {
       const onRenderFrame = () => {
         if (done) return
         mtextInputBox.update()
-        view.isDirty = true
+        view.isHtmlDirty = true
       }
 
       const onSysVarChanged = (args: { name: string; database: unknown }) => {
@@ -502,7 +503,7 @@ export class AcEdMTextEditor {
           return
         }
         mtextInputBox.setToolbarTheme(getToolbarTheme())
-        view.isDirty = true
+        view.isHtmlDirty = true
       }
 
       const cleanup = () => {
@@ -517,7 +518,7 @@ export class AcEdMTextEditor {
         AcDbSysVarManager.instance().events.sysVarChanged.removeEventListener(
           onSysVarChanged
         )
-        view.isDirty = true
+        view.isHtmlDirty = true
       }
 
       const finish = (result: AcEdMTextEditorResult | null) => {

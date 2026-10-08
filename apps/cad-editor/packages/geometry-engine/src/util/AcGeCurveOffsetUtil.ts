@@ -1,7 +1,7 @@
 import { AcGePolyline2d } from '../geometry/AcGePolyline2d'
 import {
-  offsetAcGePolyline2d,
-  preparePolylineForOffset
+  acgeOffsetPolyline2d,
+  acgePreparePolylineForOffset
 } from '../geometry/AcGePolyline2dOffset'
 import { AcGePoint3d, AcGePoint3dLike, AcGeVector3dLike } from '../math'
 import { AcGePoint2d } from '../math/AcGePoint2d'
@@ -15,7 +15,7 @@ import { AcGeTol } from './AcGeTol'
  * @param offsetDist - Signed offset distance in drawing units
  * @returns Translated point, or `null` when the XY direction is degenerate
  */
-export function offsetPointByDirectionInXY(
+export function acgeOffsetPointByDirectionInXY(
   point: AcGePoint3dLike,
   direction: AcGeVector3dLike,
   offsetDist: number
@@ -35,18 +35,18 @@ export function offsetPointByDirectionInXY(
  * @param offsetDist - Signed offset distance in drawing units
  * @returns The first offset polyline, or `null` when offsetting fails
  */
-export function offsetVertexPath(
+export function acgeOffsetVertexPath(
   points: AcGePoint2d[],
   closed: boolean,
   offsetDist: number
 ): AcGePolyline2d | null {
   if (points.length < 2) return null
-  const polyline = preparePolylineForOffset(
+  const polyline = acgePreparePolylineForOffset(
     new AcGePolyline2d(
       points.map(point => ({ x: point.x, y: point.y })),
       closed
     )
   )
-  const results = offsetAcGePolyline2d(polyline, offsetDist)
+  const results = acgeOffsetPolyline2d(polyline, offsetDist)
   return results[0] ?? null
 }

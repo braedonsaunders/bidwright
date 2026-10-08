@@ -7,10 +7,19 @@ export default {
       description: '图层属性管理器'
     },
     md: {
-      description: '替换缺失的字体和图片'
+      description: '打开缺失/外部资源面板以处理字体、图片和外部参照'
+    },
+    xref: {
+      description: '打开缺失/外部资源面板并定位到外部参照标签'
     },
     properties: {
       description: '图元属性面板'
+    },
+    countlist: {
+      description: '打开计数面板以显示并管理块计数'
+    },
+    mem: {
+      description: '打开内存分析面板以排查图纸内存占用'
     },
     pttype: {
       description: '设置点的显示样式和尺寸'
@@ -24,6 +33,12 @@ export default {
     },
     style: {
       description: '创建、修改或指定文字与多行文字的文字样式'
+    },
+    attedit: {
+      description: '编辑块参照的属性值及其显示特性'
+    },
+    attdef: {
+      description: '创建用于块的属性定义'
     }
   },
   USER: {}

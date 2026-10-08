@@ -1,9 +1,8 @@
-import { AcGiRenderer } from '@mlightcad/graphic-interface'
+import { AcGiEntity, AcGiRenderer } from '@mlightcad/graphic-interface'
 
 import { AcDbDxfFiler } from '../base/AcDbDxfFiler'
 import { AcDbMText } from './AcDbMText'
 import { AcDbText } from './AcDbText'
-
 /**
  * Attribute definition flags.
  *
@@ -322,15 +321,86 @@ export class AcDbAttributeDefinition extends AcDbText {
   }
 
   /**
-   * Draws nothing for attribute definition.
+   * Returns true when this ATTDEF is loose in model/paper space rather than
+   * stored inside a named block definition.
    *
-   * @param renderer - The renderer to use for drawing
-   * @returns Always return undefined because of drawing nothing for attribute definition.
+   * Fail closed when ownership cannot be resolved to a block table record.
+   * DWG import may reassign a BTR handle after entities are appended (handle
+   * collision), leaving ATTDEF.ownerId pointing at a non-BTR object. Treating
+   * that as "loose" would draw attribute tags into the block render cache and
+   * overlap INSERT ATTRIB values.
    */
-  subWorldDraw(_renderer: AcGiRenderer): undefined {
+  private isLooseInDrawingSpace(): boolean {
+    const db = this.database
+    if (!db) {
+      return false
+    }
+    const ownerId = this.getAttrWithoutException('ownerId')
+    if (!ownerId) {
+      return false
+    }
+    const owner = db.tables.blockTable.getIdAt(ownerId)
+    if (!owner) {
+      return false
+    }
+    return owner.isModelSapce || owner.isPaperSapce
+  }
+
+  /**
+   * Resolves the on-screen glyph for this ATTDEF.
+   *
+   * - Invisible: not drawn
+   * - Loose in model/paper space: tag (placeholder while editing)
+   * - Constant (or constant MText) inside a block: default value is geometry
+   * - Non-constant inside a block: not drawn — INSERT ATTRIB supplies the value
+   */
+  private resolveDisplayText(): string | undefined {
+    if (this.isInvisible) {
+      return undefined
+    }
+    if (this.isLooseInDrawingSpace()) {
+      return this.tag || this.textString
+    }
+    if (this.isConst || this.isConstMTextAttribute) {
+      return this.textString
+    }
+    // Non-constant template ATTDEF: the INSERT's ATTRIB draws the value.
     return undefined
   }
 
+  /**
+   * Draws an attribute definition following AutoCAD ATTDEF semantics.
+   *
+   * Loose definitions in model/paper space show the tag. Constant definitions
+   * inside a block show the default value. Non-constant definitions inside a
+   * block are not drawn (INSERT ATTRIB draws the value). Invisible definitions
+   * are not drawn.
+   *
+   * @param renderer - The renderer to use for drawing
+   * @param delay - When true, the renderer may defer heavy work
+   * @returns The rendered text entity, or undefined when not drawn
+   */
+  override subWorldDraw(
+    renderer: AcGiRenderer,
+    delay?: boolean
+  ): AcGiEntity | undefined {
+    const display = this.resolveDisplayText()
+    if (display === undefined) {
+      return undefined
+    }
+
+    if (display === this.textString) {
+      return super.subWorldDraw(renderer, delay)
+    }
+
+    const saved = this.textString
+    this.textString = display
+    try {
+      return super.subWorldDraw(renderer, delay)
+    } finally {
+      this.textString = saved
+    }
+  }
   /**
    * Writes DXF fields for this object.
    *
@@ -342,9 +412,59 @@ export class AcDbAttributeDefinition extends AcDbText {
     filer.writeSubclassMarker('AcDbAttributeDefinition')
     filer.writeString(3, this.prompt)
     filer.writeString(2, this.tag)
-    filer.writeInt16(70, this.isInvisible ? 1 : 0)
+    // Group 70: Invisible | Constant | Verifiable | Preset bit flags
+    filer.writeInt16(70, this._flags)
     filer.writeInt16(73, this.fieldLength)
-    filer.writeInt16(74, this.isReallyLocked ? 1 : 0)
+    // Group 74: lock position within the block (not isReallyLocked)
+    filer.writeInt16(74, this.lockPositionInBlock ? 1 : 0)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbAttributeDefinition')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 2:
+          this.tag = String(item.value)
+          break
+        case 3:
+          this.prompt = String(item.value)
+          break
+        case 70:
+          this.isInvisible = (n & AcDbAttributeFlags.Invisible) !== 0
+          this.isConst = (n & AcDbAttributeFlags.Const) !== 0
+          this.isVerifiable = (n & AcDbAttributeFlags.Verifiable) !== 0
+          this.isPreset = (n & AcDbAttributeFlags.Preset) !== 0
+          break
+        case 71:
+          this.isMTextAttribute =
+            (n & AcDbAttributeMTextFlag.MultiLine) !== 0
+          this.isConstMTextAttribute =
+            (n & AcDbAttributeMTextFlag.ConstMultiLine) !== 0
+          break
+        case 73:
+          this.fieldLength = n
+          break
+        case 74:
+          // DXF: vertical text justification for ATTDEF.
+          this.verticalMode = n
+          break
+        case 280:
+          this.lockPositionInBlock = n !== 0
+          break
+        case 340:
+          // Soft-pointer ID to FIELD object — optional; keep scanning.
+          break
+        default:
+          break
+      }
+    }
     return this
   }
 }

@@ -107,4 +107,14 @@ describe('Test AcGeMathUtil', () => {
       AcGeMathUtil.isBetweenAngle((Math.PI * 3) / 4, Math.PI, Math.PI / 2, true)
     ).toBeTruthy()
   })
+
+  it('.isAngleOnCcwSweep checks whether an angle lies on a CCW sweep', () => {
+    expect(AcGeMathUtil.isAngleOnCcwSweep(0, Math.PI / 4, Math.PI / 2)).toBe(
+      true
+    )
+    expect(AcGeMathUtil.isAngleOnCcwSweep(0, Math.PI, Math.PI / 2)).toBe(false)
+    expect(AcGeMathUtil.isAngleOnCcwSweep(Math.PI, (3 * Math.PI) / 2, 0)).toBe(
+      true
+    )
+  })
 })

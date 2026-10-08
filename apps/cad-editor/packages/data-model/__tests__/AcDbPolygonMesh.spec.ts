@@ -39,7 +39,9 @@ describe('AcDbPolygonMesh', () => {
     expect(mesh.closedN).toBe(false)
     expect(mesh.closed).toBe(true)
     expect(mesh.numberOfVertices).toBe(4)
-    expect(mesh.objectId.startsWith('TEMP_')).toBe(false)
+    // Detached entities keep TEMP_ ids until committed to a database, even when
+    // a working database is present.
+    expect(mesh.objectId.startsWith('TEMP_')).toBe(true)
 
     mesh.closed = false
     expect(mesh.closed).toBe(false)

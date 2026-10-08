@@ -1,5 +1,6 @@
 import {
   AcGeBox3d,
+  AcGeMathUtil,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGePoint3dLike,
@@ -494,8 +495,7 @@ export class AcDbShape extends AcDbEntity {
       : undefined
 
     const shapeData: AcGiShapeData = {
-      name: this._name.trim() || undefined,
-      shapeNumber: this._shapeNumber !== 0 ? this._shapeNumber : undefined,
+      ...this.renderGlyphIdentity(),
       size: this.size,
       position: this._position,
       rotation: this._rotation,
@@ -504,6 +504,30 @@ export class AcDbShape extends AcDbEntity {
     }
 
     return renderer.shape(shapeData, style, delay)
+  }
+
+  /**
+   * Glyph identity passed to renderers.
+   *
+   * Purely numeric names are treated as shape codes (common for DWG→DXF
+   * exports). Renderers look up by name only when a non-numeric name is set,
+   * so keeping `"9"` as a name would hide glyphs that exist only by code.
+   */
+  private renderGlyphIdentity(): Pick<AcGiShapeData, 'name' | 'shapeNumber'> {
+    const trimmedName = this._name.trim()
+    const asNumber = Number(trimmedName)
+    if (
+      trimmedName !== '' &&
+      Number.isInteger(asNumber) &&
+      asNumber !== 0 &&
+      String(asNumber) === trimmedName
+    ) {
+      return { shapeNumber: asNumber }
+    }
+    return {
+      name: trimmedName || undefined,
+      shapeNumber: this._shapeNumber !== 0 ? this._shapeNumber : undefined
+    }
   }
 
   /**
@@ -522,12 +546,31 @@ export class AcDbShape extends AcDbEntity {
     return style?.textStyle
   }
 
+  /**
+   * DXF group 2 identity for this shape.
+   *
+   * Autodesk documents group 2 as the shape name. DWG stores only the numeric
+   * shape index; CadLib / libredwg treat post-R12 DXF group 2 as that index
+   * when no name is available. Prefer an explicit name (DXF-sourced), otherwise
+   * fall back to the shape number so round-trips from DWG stay resolvable.
+   */
+  private get dxfShapeIdentity(): string {
+    const trimmedName = this._name.trim()
+    if (trimmedName) {
+      return trimmedName
+    }
+    return this._shapeNumber !== 0 ? String(this._shapeNumber) : ''
+  }
+
   override dxfOutFields(filer: AcDbDxfFiler) {
     super.dxfOutFields(filer)
     filer.writeSubclassMarker('AcDbShape')
     filer.writePoint3d(10, this.position)
     filer.writeDouble(40, this.size)
-    filer.writeString(2, this.name)
+    const shapeId = this.dxfShapeIdentity
+    if (shapeId) {
+      filer.writeString(2, shapeId)
+    }
     filer.writeAngle(50, this.rotation)
     filer.writeDouble(41, this.widthFactor)
     filer.writeAngle(51, this.oblique)
@@ -536,6 +579,85 @@ export class AcDbShape extends AcDbEntity {
       filer.writeString(3, this._styleName)
     }
     filer.writeVector3d(210, this.normal)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbShape')
+
+    let px = this.position.x
+    let py = this.position.y
+    let pz = this.position.z
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+          px = n
+          break
+        case 20:
+          py = n
+          break
+        case 30:
+          pz = n
+          break
+        case 2: {
+          const shapeName = String(item.value).trim()
+          const asNumber = Number(shapeName)
+          if (
+            shapeName !== '' &&
+            Number.isInteger(asNumber) &&
+            asNumber !== 0 &&
+            String(asNumber) === shapeName
+          ) {
+            this.shapeNumber = asNumber
+            this.name = ''
+          } else {
+            this.name = shapeName
+          }
+          break
+        }
+        case 3:
+          this.styleName = String(item.value)
+          break
+        case 39:
+          this.thickness = n
+          break
+        case 40:
+          this.size = n
+          break
+        case 41:
+          this.widthFactor = n
+          break
+        case 50:
+          this.rotation = AcGeMathUtil.degToRad(n)
+          break
+        case 51:
+          this.oblique = AcGeMathUtil.degToRad(n)
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        default:
+          break
+      }
+    }
+
+    this.position = { x: px, y: py, z: pz }
+    this.normal = { x: nx, y: ny, z: nz }
     return this
   }
 }

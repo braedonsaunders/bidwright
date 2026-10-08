@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 
 import { AcTrCommonUtil } from '../util'
+import { getMaterialRuntimeUserData } from '../util/AcTrObjectUserData'
 import {
   AcTrBatchGeometryDefaultFlags,
   AcTrBatchGeometryFlags,
@@ -16,6 +17,26 @@ import {
   type AcTrBatchDrawVisibilityInfo,
   applyBatchSlotDrawVisibility
 } from './drawVisibility'
+import {
+  type AcTrBatchCompareRole,
+  type AcTrBatchHighlightKind,
+  AcTrBatchHighlightState,
+  BATCH_SLOT_ID_ATTRIBUTE,
+  bindBatchHighlightUniforms,
+  ensureSlotIdAttribute,
+  installBatchHighlightRenderer,
+  writeSlotIdRange
+} from './highlight'
+
+/** Whether any material in the batch was patched for highlight/compare shaders. */
+function hasBatchHighlightMaterial(
+  material: THREE.Material | THREE.Material[]
+): boolean {
+  const materials = Array.isArray(material) ? material : [material]
+  return materials.some(
+    entry => getMaterialRuntimeUserData(entry).batchHighlightPatched
+  )
+}
 
 /**
  * Generic constructor type used to parameterize the batched mixin factory.
@@ -118,6 +139,9 @@ export function initializeGeometry(
   maxIndexCount: number | null
 ) {
   for (const attributeName in reference.attributes) {
+    if (attributeName === BATCH_SLOT_ID_ATTRIBUTE) {
+      continue
+    }
     const srcAttribute = reference.getAttribute(attributeName)
     const { array, itemSize, normalized } = srcAttribute
 
@@ -130,6 +154,8 @@ export function initializeGeometry(
     )
     geometry.setAttribute(attributeName, dstAttribute)
   }
+
+  ensureSlotIdAttribute(geometry, maxVertexCount)
 
   if (maxIndexCount != null && reference.getIndex() !== null) {
     const indexArray =
@@ -170,6 +196,9 @@ export function validateGeometry(
   }
 
   for (const attributeName in batchGeometry.attributes) {
+    if (attributeName === BATCH_SLOT_ID_ATTRIBUTE) {
+      continue
+    }
     if (!geometry.hasAttribute(attributeName)) {
       throw new Error(
         `${typeName}: Added geometry missing "${attributeName}". All geometries must have consistent attributes.`
@@ -402,6 +431,9 @@ export function copyGeometryAttributes(
   reservedVertexCount: number
 ) {
   for (const attributeName in batchGeometry.attributes) {
+    if (attributeName === BATCH_SLOT_ID_ATTRIBUTE) {
+      continue
+    }
     const srcAttribute = geometry.getAttribute(attributeName)
     const dstAttribute = batchGeometry.getAttribute(
       attributeName
@@ -466,21 +498,34 @@ export function copyGeometryIndices(
  * Writes a full source geometry into one reserved batched geometry range.
  *
  * Validates that the source fits within the slot's reserved vertex (and index,
- * when applicable) capacity, copies attributes and indices, updates actual
- * counts, and invalidates cached bounds.
+ * when applicable) capacity, copies attributes and indices, and updates actual
+ * counts. When the new local extents match {@link previousBounds} (or the
+ * slot's cached box), the per-slot `boundingBox` cache is retained; otherwise
+ * it is cleared so the next {@link AcTrBatchBounds.getBoundingBoxAt} rescans.
  *
  * @typeParam T - Geometry-info record type extending {@link AcTrBatchGeometryLike}.
  * @param geometryInfo - Target slot metadata describing buffer offsets and reservations.
  * @param batchGeometry - Combined destination geometry.
  * @param geometry - Source geometry payload to write.
  * @param typeName - Batch class name included in error messages.
+ * @param slotId - Geometry slot id written into the `slotId` vertex attribute.
+ * @param previousBounds - Pre-write local bounds of the slot, scanned by the
+ *   caller from the packed buffer before this function mutates it. Used when
+ *   the slot does not keep a cached `Box3` (e.g. dematerialized line batches).
+ *   Pass `null` for freshly reserved slots whose region holds no meaningful
+ *   data yet.
+ * @returns `false` when the slot's new local extents equal the previous ones
+ *   (cached box kept when present); `true` when extents changed or no
+ *   reference box was available (cached box cleared).
  * @throws {Error} When the source geometry exceeds the slot's reserved capacity.
  */
 export function applyGeometryAt<T extends AcTrBatchGeometryLike>(
   geometryInfo: T,
   batchGeometry: THREE.BufferGeometry,
   geometry: THREE.BufferGeometry,
-  typeName: string
+  typeName: string,
+  slotId: number,
+  previousBounds?: THREE.Box3 | null
 ) {
   const hasIndex = batchGeometry.getIndex() !== null
   const srcIndex = geometry.getIndex()
@@ -520,7 +565,26 @@ export function applyGeometryAt<T extends AcTrBatchGeometryLike>(
     )
   }
 
-  geometryInfo.boundingBox = null
+  // Retain the per-slot cached box when the rewrite keeps the same local
+  // extents (e.g. copying identical packed positions back). Identical
+  // positions yield bitwise-identical boxes, so exact equality is a sound
+  // cheap comparison. All other packing work still runs.
+  let boundsChanged = true
+  const referenceBox = previousBounds ?? geometryInfo.boundingBox
+  if (referenceBox != null) {
+    // Always recompute: the source's own box may be stale (rebased in place
+    // after it was first computed).
+    geometry.computeBoundingBox()
+    if (
+      geometry.boundingBox != null &&
+      geometry.boundingBox.equals(referenceBox)
+    ) {
+      boundsChanged = false
+    }
+  }
+  if (boundsChanged) {
+    geometryInfo.boundingBox = null
+  }
 
   if (isBatchGeometryActive(geometryInfo.flags)) {
     delete geometryInfo.hiddenDrawSnapshot
@@ -532,30 +596,40 @@ export function applyGeometryAt<T extends AcTrBatchGeometryLike>(
       )
     }
   }
+
+  writeSlotIdRange(batchGeometry, vertexStart, reservedVertexCount, slotId)
+  return boundsChanged
 }
+
+/** Reused when converting one slot's AABB into a bounding sphere. */
+const slotBoundingBoxScratch = /*@__PURE__*/ new THREE.Box3()
 
 /**
  * Computes global bounding box of all active geometry records in a batch.
  *
- * Unions lazily cached per-slot boxes; slots without computed bounds are skipped.
+ * Per-slot bounds come from the `getBoundsAt` callback so batches that scan
+ * their packed buffers never materialize a cached `Box3` per slot.
  *
  * @typeParam T - Geometry-info record type extending {@link AcTrBatchGeometryLike}.
  * @param currentBoundingBox - Existing aggregate box to reuse, or `null` to allocate.
  * @param geometryInfo - Array of per-slot mapping records.
- * @returns A bounding box containing all active sub-geometries with known bounds.
+ * @param getBoundsAt - Per-slot bounds provider filling a reusable `Box3`.
+ * @returns A bounding box containing all active sub-geometries.
  */
 export function computeBoundingBox<T extends AcTrBatchGeometryLike>(
   currentBoundingBox: THREE.Box3 | null,
-  geometryInfo: T[]
+  geometryInfo: T[],
+  getBoundsAt: (geometryId: number, target: THREE.Box3) => THREE.Box3 | null
 ) {
   const boundingBox = currentBoundingBox ?? new THREE.Box3()
   boundingBox.makeEmpty()
 
+  const box = new THREE.Box3()
   for (let i = 0, l = geometryInfo.length; i < l; i++) {
-    const geometry = geometryInfo[i]
-    if (!isBatchGeometryActive(geometry.flags)) continue
-    if (geometry.boundingBox != null) {
-      boundingBox.union(geometry.boundingBox)
+    if (!isBatchGeometryActive(geometryInfo[i].flags)) continue
+    const bounds = getBoundsAt(i, box)
+    if (bounds) {
+      boundingBox.union(bounds)
     }
   }
 
@@ -741,6 +815,8 @@ export function createAcTrBatchedMixin<
     > = this._batchIntersects as Array<
       THREE.Intersection & { batchId?: number; objectId?: string }
     >
+    /** CPU/GPU highlight mask for packed geometry slots in this batch. */
+    readonly _highlightState = new AcTrBatchHighlightState()
 
     /**
      * Estimated memory footprint and slot count of `_geometryInfo` records.
@@ -776,23 +852,77 @@ export function createAcTrBatchedMixin<
     /**
      * Recomputes the aggregate bounding box from all active sub-geometries.
      *
+     * Uses {@link computeBoundingBoxAt}, so batches that scan their packed
+     * buffers never materialize a cached `Box3` per slot.
+     *
      * @returns This instance for chaining.
      */
     computeBoundingBox() {
       this.boundingBox = computeBoundingBox(
         this.boundingBox,
-        this._geometryInfo
+        this._geometryInfo,
+        (geometryId, target) => this.computeBoundingBoxAt(geometryId, target)
       )
     }
 
     /**
+     * Computes the object-space AABB of one packed geometry slot into `target`.
+     *
+     * Unlike {@link AcTrBatchBounds.getBoundingBoxAt}, this hook does not
+     * require a cached `Box3` on the slot. The default still delegates to
+     * `getBoundingBoxAt` (lazy cache), which is the right tradeoff for
+     * {@link AcTrBatchedMesh} and {@link AcTrBatchedPoint}: those batches have
+     * far fewer slots than line batches, and each slot typically holds many
+     * vertices (a hatch/solid tessellation, or a point cloud). Caching the AABB
+     * costs little memory and keeps later aggregate / raycast queries O(slots)
+     * instead of O(vertices).
+     *
+     * {@link AcTrBatchedLine} and {@link AcTrBatchedLine2} override this to
+     * scan the packed vertex array instead. A large drawing can pack hundreds
+     * of thousands of 2-vertex slots, and retaining one `Box3` per slot would
+     * stay resident for the rest of the session (~100MB at ~234B each).
+     *
+     * @param geometryId - Slot index to query.
+     * @param target - Reusable {@link THREE.Box3} that receives the result.
+     * @returns `target` when the id is valid, otherwise `null`.
+     * @internal
+     */
+    computeBoundingBoxAt(geometryId: number, target: THREE.Box3) {
+      return (this as unknown as AcTrBatchBounds).getBoundingBoxAt(
+        geometryId,
+        target
+      )
+    }
+
+    /**
+     * Computes the object-space bounding sphere of one packed geometry slot
+     * into `target`, as the circumsphere of that slot's AABB.
+     *
+     * @param geometryId - Slot index to query.
+     * @param target - Reusable {@link THREE.Sphere} that receives the result.
+     * @returns `target` when the id is valid, otherwise `null`.
+     * @internal
+     */
+    computeBoundingSphereAt(geometryId: number, target: THREE.Sphere) {
+      const bounds = this.computeBoundingBoxAt(
+        geometryId,
+        slotBoundingBoxScratch
+      )
+      return bounds === null ? null : bounds.getBoundingSphere(target)
+    }
+
+    /**
      * Unions axis-aligned bounds of every active, visible packed geometry slot
-     * into `target`. Uses lazily computed per-slot boxes derived from batch
-     * vertex buffers (not entity-level metadata boxes).
+     * into `target`. Uses {@link computeBoundingBoxAt}, i.e. per-slot boxes
+     * derived from batch vertex buffers without retaining a cached `Box3` per
+     * slot when the concrete batch can scan its packed buffer.
      */
     unionActiveVisibleBoundingBoxInto(
       target: THREE.Box3,
-      options?: { excludeObjectIds?: ReadonlySet<string> }
+      options?: {
+        excludeObjectIds?: ReadonlySet<string>
+        includeObjectIds?: ReadonlySet<string>
+      }
     ) {
       const self = this as unknown as THREE.Object3D
       self.updateMatrixWorld(true)
@@ -808,10 +938,14 @@ export function createAcTrBatchedMixin<
         ) {
           continue
         }
-        const bounds = (this as unknown as AcTrBatchBounds).getBoundingBoxAt(
-          i,
-          this._box
-        )
+        if (
+          options?.includeObjectIds &&
+          info.objectId &&
+          !options.includeObjectIds.has(info.objectId)
+        ) {
+          continue
+        }
+        const bounds = this.computeBoundingBoxAt(i, this._box)
         if (bounds) {
           // Per-slot boxes are in batch-local space; translate by batch origin.
           this._box.applyMatrix4(self.matrixWorld)
@@ -821,19 +955,48 @@ export function createAcTrBatchedMixin<
     }
 
     /**
+     * Computes the aggregate object-space bounding sphere of every active slot
+     * into `target`.
+     *
+     * The default implementation unions one {@link computeBoundingSphereAt} per
+     * active slot. {@link AcTrBatchedMesh} and {@link AcTrBatchedPoint} keep
+     * this path: after the per-slot AABB cache is warm, dirty-sync is O(slots).
+     * Scanning every packed vertex on each aggregate rebuild would be slower
+     * for high-vertex mesh slots.
+     *
+     * {@link AcTrBatchedLine} / {@link AcTrBatchedLine2} override it to build a
+     * single aggregate AABB from one packed-array min/max pass and take its
+     * circumsphere. Line slots are tiny, so a full-buffer scan is cheaper than
+     * one `Box3` + `Sphere.union` per slot, and no per-slot bounds object is
+     * ever created.
+     *
+     * Both variants return a sphere that encloses every active slot's vertices,
+     * so frustum culling can never drop geometry that is actually in view.
+     *
+     * @param target - Sphere that receives the aggregate result.
+     * @returns `target`, or `null` when no aggregate could be computed.
+     * @internal
+     */
+    computeAggregateBoundingSphere(
+      target: THREE.Sphere
+    ): THREE.Sphere | null {
+      return computeBoundingSphere(
+        target,
+        this._geometryInfo,
+        (geometryId, sphere) => this.computeBoundingSphereAt(geometryId, sphere)
+      )
+    }
+
+    /**
      * Recomputes the aggregate bounding sphere from all active sub-geometries.
      *
      * @returns This instance for chaining.
      */
     computeBoundingSphere() {
-      this.boundingSphere = computeBoundingSphere(
-        this.boundingSphere,
-        this._geometryInfo,
-        (geometryId, target) =>
-          (
-            this as unknown as AcTrBatchBaseObject & AcTrBatchBounds
-          ).getBoundingSphereAt(geometryId, target)
-      )
+      const sphere = this.boundingSphere ?? new THREE.Sphere()
+      sphere.makeEmpty()
+      this.boundingSphere =
+        this.computeAggregateBoundingSphere(sphere) ?? sphere
     }
 
     /**
@@ -864,6 +1027,10 @@ export function createAcTrBatchedMixin<
       )
       if (applied) {
         info.flags = setBatchGeometryVisible(info.flags, value)
+        // Draw-visibility collapse zeroes the slot's packed vertices, so any
+        // per-slot box materialized while hidden is degenerate. Drop the
+        // cached box on every toggle.
+        info.boundingBox = null
       }
 
       return this
@@ -879,6 +1046,173 @@ export function createAcTrBatchedMixin<
     getVisibleAt(geometryId: number) {
       this.validateGeometryId(geometryId)
       return isBatchGeometryVisible(this._geometryInfo[geometryId].flags)
+    }
+
+    /**
+     * Marks one geometry slot as selected or hovered without copying geometry.
+     *
+     * @param geometryId - Slot index within the batch container.
+     * @param kind - Whether to update selection or hover state.
+     * @param enabled - `true` to highlight the slot, `false` to clear it.
+     * @returns `true` when the slot mask changed.
+     */
+    setHighlightAt(
+      geometryId: number,
+      kind: AcTrBatchHighlightKind,
+      enabled: boolean
+    ) {
+      try {
+        this.validateGeometryId(geometryId)
+      } catch {
+        return false
+      }
+
+      const changed = this._highlightState.setHighlight(
+        geometryId,
+        kind,
+        enabled
+      )
+      if (changed) {
+        installBatchHighlightRenderer(this, this._highlightState)
+      }
+      return changed
+    }
+
+    /**
+     * Sets the compare-display role for one geometry slot.
+     *
+     * @param geometryId - Slot index within the batch container.
+     * @param role - Compare role, or `null` to clear.
+     * @returns `true` when the slot mask changed.
+     */
+    setCompareRoleAt(geometryId: number, role: AcTrBatchCompareRole | null) {
+      try {
+        this.validateGeometryId(geometryId)
+      } catch {
+        return false
+      }
+
+      const changed = this._highlightState.setCompareRole(geometryId, role)
+      if (changed || this._highlightState.compareEnabled) {
+        installBatchHighlightRenderer(this, this._highlightState)
+      }
+      return changed
+    }
+
+    /**
+     * Writes compare roles for every packed slot from `objectId` metadata.
+     *
+     * This is the source of truth for GPU tinting: it does not depend on
+     * `Object3D.getObjectById` or the group-level entity map, so late-appended
+     * handles (and slots whose Three.js container id lookup fails) still
+     * receive added/deleted/modified colors.
+     *
+     * @param roles - Compare roles keyed by entity object id.
+     * @returns This instance for chaining.
+     */
+    applyPackedCompareRoles(roles: ReadonlyMap<string, AcTrBatchCompareRole>) {
+      for (let slotId = 0; slotId < this._geometryInfo.length; slotId++) {
+        const info = this._geometryInfo[slotId]
+        if (!isBatchGeometryActive(info.flags)) {
+          continue
+        }
+        const objectId = info.objectId
+        const role =
+          objectId != null && objectId !== ''
+            ? (roles.get(String(objectId)) ?? null)
+            : null
+        this.setCompareRoleAt(slotId, role)
+      }
+      this.flushHighlightMask()
+      return this
+    }
+
+    /**
+     * Applies compare-display colors to the batch highlight state.
+     *
+     * @param options.enabled - Whether compare coloring is active.
+     * @param options.baseColor - Unchanged-entity color.
+     * @param options.deletedColor - Deleted-entity color.
+     * @param options.addedColor - Added-entity color.
+     * @param options.modifiedColor - Modified-entity color.
+     * @returns This instance for chaining.
+     */
+    setCompareDisplayColors(options: {
+      /** Whether compare coloring is active. */
+      enabled: boolean
+      /** Unchanged-entity color. */
+      baseColor?: number
+      /** Deleted-entity color. */
+      deletedColor?: number
+      /** Added-entity color. */
+      addedColor?: number
+      /** Modified-entity color. */
+      modifiedColor?: number
+    }) {
+      this._highlightState.compareEnabled = options.enabled
+      if (options.baseColor != null) {
+        this._highlightState.compareBaseColor.setHex(options.baseColor)
+      }
+      if (options.deletedColor != null) {
+        this._highlightState.compareDeletedColor.setHex(options.deletedColor)
+      }
+      if (options.addedColor != null) {
+        this._highlightState.compareAddedColor.setHex(options.addedColor)
+      }
+      if (options.modifiedColor != null) {
+        this._highlightState.compareModifiedColor.setHex(options.modifiedColor)
+      }
+      this._highlightState.dirty = true
+      installBatchHighlightRenderer(this, this._highlightState)
+      this.flushHighlightMask()
+      return this
+    }
+
+    /**
+     * Uploads the batch highlight mask texture after bulk selection updates.
+     *
+     * @returns This instance for chaining.
+     */
+    flushHighlightMask() {
+      this._highlightState.setAddressableSlotCount(this._geometryInfo.length)
+      const wasDirty = this._highlightState.dirty
+      if (wasDirty) {
+        this._highlightState.uploadMaskTexture()
+      }
+      const shouldSyncHighlightUniforms =
+        !!this.material &&
+        (this._highlightState.hasAnyHighlight() ||
+          this._highlightState.needsCompareUniforms() ||
+          (wasDirty && hasBatchHighlightMaterial(this.material)))
+      if (shouldSyncHighlightUniforms) {
+        bindBatchHighlightUniforms(this.material, this._highlightState)
+      }
+      return this
+    }
+
+    /**
+     * Clears highlight state for one geometry slot.
+     *
+     * @param geometryId - Slot index whose selection and hover flags are cleared.
+     * @returns This instance for chaining.
+     */
+    clearHighlightSlot(geometryId: number) {
+      if (this._highlightState.clearSlot(geometryId)) {
+        installBatchHighlightRenderer(this, this._highlightState)
+      }
+      return this
+    }
+
+    /**
+     * Clears all highlight state owned by this batch.
+     *
+     * @returns This instance for chaining.
+     */
+    clearHighlightState() {
+      if (this._highlightState.clearAll()) {
+        installBatchHighlightRenderer(this, this._highlightState)
+      }
+      return this
     }
 
     /**
@@ -900,6 +1234,7 @@ export function createAcTrBatchedMixin<
         return this
       }
 
+      this.clearHighlightSlot(geometryId)
       return this
     }
 
@@ -997,9 +1332,11 @@ export function createAcTrBatchedMixin<
       start: number,
       count: number
     ) {
-      const self = this as unknown as AcTrBatchBaseObject & AcTrBatchBounds
-      self.getBoundingBoxAt(index, this._box)
-      self.getBoundingSphereAt(index, this._sphere)
+      // Deriving the sphere from `_box` (instead of re-deriving the slot bounds)
+      // is numerically identical: `getBoundingSphereAt` also derived it from the
+      // very same slot box, and `_box` now already holds it.
+      this.computeBoundingBoxAt(index, this._box)
+      this._box.getBoundingSphere(this._sphere)
       setRaycastObjectInfo(raycastObject, start, count, this._box, this._sphere)
     }
 
@@ -1036,9 +1373,7 @@ export function createAcTrBatchedMixin<
       }
 
       if (geometryInfo.bboxIntersectionCheck) {
-        ;(
-          this as unknown as AcTrBatchBaseObject & AcTrBatchBounds
-        ).getBoundingBoxAt(geometryId, this._box)
+        this.computeBoundingBoxAt(geometryId, this._box)
         this._box.applyMatrix4((this as unknown as THREE.Object3D).matrixWorld)
         if (raycaster.ray.intersectBox(this._box, this._vector)) {
           const distance = raycaster.ray.origin.distanceTo(this._vector)

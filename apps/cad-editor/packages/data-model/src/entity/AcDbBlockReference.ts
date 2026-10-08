@@ -1,5 +1,7 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
+  AcGeMathUtil,
   AcGeMatrix3d,
   AcGePoint3d,
   AcGePoint3dLike,
@@ -14,6 +16,7 @@ import { AcDbObjectId } from '../base/AcDbObject'
 import { AcDbObjectIterator } from '../misc/AcDbObjectIterator'
 import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbRenderingCache } from '../misc/AcDbRenderingCache'
+import { AcDbDynBlockReference } from '../object/AcDbDynBlockReference'
 import { AcDbAttribute } from './AcDbAttribute'
 import { AcDbEntity } from './AcDbEntity'
 import {
@@ -21,6 +24,7 @@ import {
   AcDbEntityPropertyGroup
 } from './AcDbEntityProperties'
 import { acdbMovePrimaryGripPointAt } from './AcDbGripHelpers'
+import { acdbTransformIntersectPrimitives } from './AcDbIntersectHelpers'
 import { acdbPickNearestOsnapPoint } from './AcDbOsnapHelpers'
 
 /**
@@ -65,6 +69,14 @@ export class AcDbBlockReference extends AcDbEntity {
   private _blockName: string
   /** Attributes associated with this block reference */
   private _attribs: Map<string, AcDbAttribute>
+  /** MINSERT column count (DXF group 70); default 1 */
+  private _columnCount = 1
+  /** MINSERT row count (DXF group 71); default 1 */
+  private _rowCount = 1
+  /** MINSERT column spacing (DXF group 44) */
+  private _columnSpacing = 0
+  /** MINSERT row spacing (DXF group 45) */
+  private _rowSpacing = 0
 
   /**
    * Creates a new block reference entity.
@@ -83,7 +95,7 @@ export class AcDbBlockReference extends AcDbEntity {
    */
   constructor(blockName: string) {
     super()
-    this._blockName = blockName
+    this._blockName = blockName ?? ''
     this._position = new AcGePoint3d()
     this._rotation = 0.0
     this._normal = new AcGeVector3d(0, 0, 1)
@@ -225,6 +237,46 @@ export class AcDbBlockReference extends AcDbEntity {
   }
 
   /**
+   * Sets the name of the block table record referenced by this insert.
+   * Used when filing in from DXF (group code 2).
+   */
+  set blockName(value: string) {
+    this._blockName = value
+  }
+
+  /** MINSERT column count (DXF group 70). */
+  get columnCount() {
+    return this._columnCount
+  }
+  set columnCount(value: number) {
+    this._columnCount = Math.max(1, Math.floor(value) || 1)
+  }
+
+  /** MINSERT row count (DXF group 71). */
+  get rowCount() {
+    return this._rowCount
+  }
+  set rowCount(value: number) {
+    this._rowCount = Math.max(1, Math.floor(value) || 1)
+  }
+
+  /** MINSERT column spacing (DXF group 44). */
+  get columnSpacing() {
+    return this._columnSpacing
+  }
+  set columnSpacing(value: number) {
+    this._columnSpacing = value
+  }
+
+  /** MINSERT row spacing (DXF group 45). */
+  get rowSpacing() {
+    return this._rowSpacing
+  }
+  set rowSpacing(value: number) {
+    this._rowSpacing = value
+  }
+
+  /**
    * Gets the block table record referenced by this block reference.
    *
    * The referenced block table record contains the entities that the block reference will display.
@@ -240,7 +292,22 @@ export class AcDbBlockReference extends AcDbEntity {
    * ```
    */
   get blockTableRecord() {
+    // Missing block names must not throw when looking up the BTR.
+    if (!this._blockName) {
+      return undefined
+    }
     return this.database.tables.blockTable.getAt(this._blockName)
+  }
+
+  /**
+   * Block table record used for drawing, extents, osnap, and intersection.
+   *
+   * For dynamic block references that use an anonymous `*U` representation,
+   * this returns that anonymous record (via {@link AcDbDynBlockReference});
+   * otherwise it returns {@link blockTableRecord}.
+   */
+  get drawableBlockTableRecord() {
+    return AcDbDynBlockReference.drawableBlockTableRecord(this)
   }
 
   /**
@@ -258,14 +325,25 @@ export class AcDbBlockReference extends AcDbEntity {
   /**
    * Propagates this INSERT's database association to all attached attributes.
    *
+   * Also refreshes each attribute's {@link AcDbObject.ownerId} and commits a
+   * real database handle. Attributes may have been appended while this INSERT
+   * still had a TEMP_ id; once the INSERT is committed those stale owner ids
+   * (and TEMP_ attribute handles) must be replaced so DXF round-trips and
+   * owner lookups keep working.
+   *
    * @internal
    */
   syncAttributeDatabases() {
     try {
       const db = this.database
+      const next = new Map<string, AcDbAttribute>()
       this._attribs.forEach(attrib => {
         attrib.database = db
+        attrib.ownerId = this.objectId
+        db.commitObjectHandle(attrib)
+        next.set(attrib.objectId, attrib)
       })
+      this._attribs = next
     } catch {
       // INSERT not yet associated with a database.
     }
@@ -312,11 +390,16 @@ export class AcDbBlockReference extends AcDbEntity {
    *
    * ```
    * blockTransform =
-   *   T(position)
+   *   T(position.x, position.y, 0)
    * · R(rotation about OCS Z)
    * · S(scaleFactors)
    * · T(-blockBasePoint)
    * ```
+   *
+   * Insertion Z is flattened to 0 so elevated nested INSERTs stay inside the
+   * 2D orthographic near/far band (same plan-view policy as
+   * {@link AcDbLine.subWorldDraw}). {@link position}.z is still stored on the
+   * entity.
    *
    * ### Notes
    *
@@ -332,7 +415,7 @@ export class AcDbBlockReference extends AcDbEntity {
     // Retrieve the referenced block table record.
     // The block definition contains its own local coordinate system
     // whose origin is the block base point.
-    const blockTableRecord = this.blockTableRecord
+    const blockTableRecord = this.drawableBlockTableRecord
 
     // The base point (origin) of the block definition.
     // All entities inside the block are defined relative to this point.
@@ -386,18 +469,25 @@ export class AcDbBlockReference extends AcDbEntity {
     //
     // This moves the transformed block geometry from the origin
     // to its final insertion point, still in OCS.
+    //
+    // Plan-view note: translation Z is forced to 0. Orthographic 2D
+    // cameras use a narrow near/far band around Z≈0 (see
+    // AcDbLine.subWorldDraw). Nested INSERTs often carry large
+    // elevations (e.g. title-block signature stamps at |Z|≈9000);
+    // preserving that Z depth-clips their geometry even though XY is
+    // on-screen. The stored position.z is unchanged for properties / DXF.
     // ------------------------------------------------------------
     const mInsert = new AcGeMatrix3d().makeTranslation(
       this._position.x,
       this._position.y,
-      this._position.z
+      0
     )
 
     // ------------------------------------------------------------
     // Final composition (right-multiply convention)
     //
     // blockTransform =
-    //   T(position)
+    //   T(position.x, position.y, 0)
     // · R(rotation about OCS Z)
     // · S(scaleFactors)
     // · T(-blockBasePoint)
@@ -726,7 +816,7 @@ export class AcDbBlockReference extends AcDbEntity {
    */
   get geometricExtents(): AcGeBox3d {
     const box = new AcGeBox3d()
-    const blockTableRecord = this.blockTableRecord
+    const blockTableRecord = this.drawableBlockTableRecord
     if (blockTableRecord != null) {
       const entities = blockTableRecord.newIterator()
       for (const entity of entities) {
@@ -739,13 +829,44 @@ export class AcDbBlockReference extends AcDbEntity {
     return box
   }
 
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const blockTableRecord = this.drawableBlockTableRecord
+    if (blockTableRecord == null) return []
+
+    const primitives: AcGeIntersectPrimitive[] = []
+    const cols = Math.max(1, this.columnCount)
+    const rows = Math.max(1, this.rowCount)
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const localOffset = new AcGeMatrix3d().makeTranslation(
+          col * this.columnSpacing,
+          row * this.rowSpacing,
+          0
+        )
+        const matrix = new AcGeMatrix3d().multiplyMatrices(
+          this.getFullInsertionTransform(),
+          localOffset
+        )
+        for (const entity of blockTableRecord.newIterator()) {
+          primitives.push(
+            ...acdbTransformIntersectPrimitives(
+              entity.subGetIntersectCurves(),
+              matrix
+            )
+          )
+        }
+      }
+    }
+    return primitives
+  }
+
   /**
    * @inheritdoc
    */
   subWorldDraw(renderer: AcGiRenderer) {
-    const blockTableRecord = this.blockTableRecord
+    const blockTableRecord = this.drawableBlockTableRecord
     if (blockTableRecord != null) {
-      const matrix = this.blockTransform
       const attribs: AcGiEntity[] = []
       this._attribs.forEach(attrib => {
         if (!attrib.isInvisible) {
@@ -753,16 +874,44 @@ export class AcDbBlockReference extends AcDbEntity {
           if (result) attribs.push(result)
         }
       })
-      const block = AcDbRenderingCache.instance.draw(
-        renderer,
-        blockTableRecord,
-        this.resolvedColor,
-        attribs,
-        true,
-        matrix,
-        this._normal
-      )
-      return block
+      const cols = Math.max(1, this.columnCount)
+      const rows = Math.max(1, this.rowCount)
+      if (cols === 1 && rows === 1) {
+        return AcDbRenderingCache.instance.draw(
+          renderer,
+          blockTableRecord,
+          this.resolvedColor,
+          attribs,
+          true,
+          this.blockTransform,
+          this._normal
+        )
+      }
+      const instances: AcGiEntity[] = []
+      for (let row = 0; row < rows; row++) {
+        for (let col = 0; col < cols; col++) {
+          const localOffset = new AcGeMatrix3d().makeTranslation(
+            col * this.columnSpacing,
+            row * this.rowSpacing,
+            0
+          )
+          const matrix = new AcGeMatrix3d().multiplyMatrices(
+            this.blockTransform,
+            localOffset
+          )
+          const drawn = AcDbRenderingCache.instance.draw(
+            renderer,
+            blockTableRecord,
+            this.resolvedColor,
+            col === 0 && row === 0 ? attribs : [],
+            true,
+            matrix,
+            this._normal
+          )
+          if (drawn) instances.push(drawn)
+        }
+      }
+      return renderer.group(instances)
     } else {
       const block = renderer.group([])
       return block
@@ -788,7 +937,7 @@ export class AcDbBlockReference extends AcDbEntity {
     for (const attrib of this.attributeIterator()) {
       hasAttributes = true
       filer.writeStart('ATTRIB')
-      attrib.dxfOut(filer)
+      attrib.dxfOut(filer, allXdata)
     }
     if (hasAttributes) {
       filer.writeStart('SEQEND')
@@ -809,7 +958,7 @@ export class AcDbBlockReference extends AcDbEntity {
     snapPoints: AcGePoint3dLike[],
     parentInsertionMat: AcGeMatrix3d
   ) {
-    const blockTableRecord = this.blockTableRecord
+    const blockTableRecord = this.drawableBlockTableRecord
     if (!blockTableRecord) return
 
     const thisInsertionMat = new AcGeMatrix3d().multiplyMatrices(
@@ -898,7 +1047,7 @@ export class AcDbBlockReference extends AcDbEntity {
     visitedRefs.add(this.objectId)
 
     try {
-      const blockTableRecord = this.blockTableRecord
+      const blockTableRecord = this.drawableBlockTableRecord
       if (blockTableRecord == null) return false
 
       const thisInsertionMat = new AcGeMatrix3d().multiplyMatrices(
@@ -971,7 +1120,8 @@ export class AcDbBlockReference extends AcDbEntity {
    * @returns The insertion point in the caller coordinate space.
    */
   private getInsertionPoint(parentInsertionMat: AcGeMatrix3d) {
-    const blockBasePoint = this.blockTableRecord?.origin ?? AcGePoint3d.ORIGIN
+    const blockBasePoint =
+      this.drawableBlockTableRecord?.origin ?? AcGePoint3d.ORIGIN
     const insertionMat = new AcGeMatrix3d().multiplyMatrices(
       parentInsertionMat,
       this.getFullInsertionTransform()
@@ -1008,7 +1158,118 @@ export class AcDbBlockReference extends AcDbEntity {
     filer.writeDouble(42, this.scaleFactors.y)
     filer.writeDouble(43, this.scaleFactors.z)
     filer.writeAngle(50, this.rotation)
+    if (this.columnCount > 1) {
+      filer.writeInt16(70, this.columnCount)
+    }
+    if (this.rowCount > 1) {
+      filer.writeInt16(71, this.rowCount)
+    }
+    if (this.columnSpacing !== 0) {
+      filer.writeDouble(44, this.columnSpacing)
+    }
+    if (this.rowSpacing !== 0) {
+      filer.writeDouble(45, this.rowSpacing)
+    }
     filer.writeVector3d(210, this.normal)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbBlockReference')
+
+    let x = this.position.x
+    let y = this.position.y
+    let z = this.position.z
+    let sx = this.scaleFactors.x
+    let sy = this.scaleFactors.y
+    let sz = this.scaleFactors.z
+    let rotDeg = AcGeMathUtil.radToDeg(this.rotation)
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+    let columnCount = this.columnCount
+    let rowCount = this.rowCount
+    let columnSpacing = this.columnSpacing
+    let rowSpacing = this.rowSpacing
+
+    const commit = () => {
+      this.position = new AcGePoint3d(x, y, z)
+      this.scaleFactors = new AcGePoint3d(sx, sy, sz)
+      this.rotation = AcGeMathUtil.degToRad(rotDeg)
+      this.normal.copy(new AcGeVector3d(nx, ny, nz))
+      this.columnCount = columnCount > 0 ? columnCount : 1
+      this.rowCount = rowCount > 0 ? rowCount : 1
+      this.columnSpacing = columnSpacing
+      this.rowSpacing = rowSpacing
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 10:
+          x = n
+          break
+        case 20:
+          y = n
+          break
+        case 30:
+          z = n
+          break
+        case 2:
+          this.blockName = String(item.value)
+          break
+        case 41:
+          sx = n
+          break
+        case 42:
+          sy = n
+          break
+        case 43:
+          sz = n
+          break
+        case 44:
+          columnSpacing = n
+          break
+        case 45:
+          rowSpacing = n
+          break
+        case 50:
+          rotDeg = n
+          break
+        case 66:
+          // Attributes-follow flag — ATTRIB entities are streamed separately.
+          break
+        case 70:
+          columnCount = n
+          break
+        case 71:
+          rowCount = n
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        case 100:
+          // Next subclass (e.g. AcDbTable) — hand off.
+          filer.pushBackItem(item)
+          commit()
+          return this
+        default:
+          // Unknown optional INSERT codes — keep scanning within this subclass.
+          break
+      }
+    }
+
+    commit()
     return this
   }
 }

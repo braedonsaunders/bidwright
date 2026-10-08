@@ -1,5 +1,6 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint2d,
   AcGePoint3d,
@@ -15,6 +16,7 @@ import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbCurve } from './AcDbCurve'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
 import { acdbForEachGripIndex } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
 import {
   acdbCollectLineSegmentOsnapPoints,
   acdbPickNearestOsnapPoint
@@ -150,6 +152,15 @@ export class AcDb3dPolyline extends AcDbCurve {
         new AcGePoint3d(vertex.x, vertex.y, (vertex as AcGePoint3dLike).z || 0)
     )
     return new AcGeBox3d().setFromPoints(points)
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const points: AcGePoint3d[] = []
+    for (let i = 0; i < this.numberOfVertices; i++) {
+      points.push(this.getPointAt(i))
+    }
+    return acdbIntersectPrimitivesFromPointPath(points, this.closed)
   }
 
   /**
@@ -326,6 +337,15 @@ export class AcDb3dPolyline extends AcDbCurve {
         }
       ]
     }
+  }
+
+  /**
+   * This 3d polyline always draws as a single `lineStrip` primitive.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    return 'lineStrip' as const
   }
 
   /**

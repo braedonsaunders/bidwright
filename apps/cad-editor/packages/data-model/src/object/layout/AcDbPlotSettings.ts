@@ -251,6 +251,8 @@ export class AcDbPlotSettings extends AcDbObject {
   private _plotPaperMargins: AcDbPlotPaperMargins
   /** Named view used when plot type is set to view. */
   private _plotViewName: string
+  /** Paper image origin offset in paper units (DXF groups 148/149). */
+  private _paperImageOrigin: AcGePoint2d
   /** Plot window area used when plot type is set to window. */
   private _plotWindowArea: AcGeBox2d
   /** Whether this plot settings object is for model space. */
@@ -313,6 +315,7 @@ export class AcDbPlotSettings extends AcDbObject {
     this._plotPaperSize = new AcGePoint2d()
     this._plotPaperMargins = { left: 0, right: 0, top: 0, bottom: 0 }
     this._plotViewName = ''
+    this._paperImageOrigin = new AcGePoint2d()
     this._plotWindowArea = new AcGeBox2d()
     this._modelType = modelType
     this._plotCentered = false
@@ -528,6 +531,20 @@ export class AcDbPlotSettings extends AcDbObject {
    */
   getPlotViewName() {
     return this._plotViewName
+  }
+
+  /**
+   * Gets the paper image origin offset in paper units (DXF groups 148/149).
+   */
+  get paperImageOrigin() {
+    return this._paperImageOrigin
+  }
+
+  /**
+   * Sets the paper image origin offset in paper units (DXF groups 148/149).
+   */
+  set paperImageOrigin(value: AcGePoint2d) {
+    this._paperImageOrigin = value
   }
 
   /**
@@ -984,7 +1001,134 @@ export class AcDbPlotSettings extends AcDbObject {
     filer.writeInt16(77, this.shadePlotResLevel)
     filer.writeInt16(78, this.shadePlotCustomDPI)
     filer.writeDouble(147, this.stdScale)
+    filer.writeDouble(148, this.paperImageOrigin.x)
+    filer.writeDouble(149, this.paperImageOrigin.y)
     filer.writeObjectId(333, this.shadePlotId)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbPlotSettings')
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+      switch (code) {
+        case 1:
+          this.plotSettingsName = String(item.value)
+          break
+        case 2:
+          this.plotCfgName = String(item.value)
+          break
+        case 4:
+          this.canonicalMediaName = String(item.value)
+          break
+        case 6:
+          this.plotViewName = String(item.value)
+          break
+        case 7:
+          this.currentStyleSheet = String(item.value)
+          break
+        case 40:
+          this.plotPaperMargins.left = n
+          break
+        case 41:
+          this.plotPaperMargins.bottom = n
+          break
+        case 42:
+          this.plotPaperMargins.right = n
+          break
+        case 43:
+          this.plotPaperMargins.top = n
+          break
+        case 44:
+          this.plotPaperSize.x = n
+          break
+        case 45:
+          this.plotPaperSize.y = n
+          break
+        case 46:
+          this.plotOrigin.x = n
+          break
+        case 47:
+          this.plotOrigin.y = n
+          break
+        case 48:
+          this.plotWindowArea.min.x = n
+          break
+        case 49:
+          this.plotWindowArea.min.y = n
+          break
+        case 140:
+          this.plotWindowArea.max.x = n
+          break
+        case 141:
+          this.plotWindowArea.max.y = n
+          break
+        case 142:
+          this.customPrintScale.numerator = n
+          break
+        case 143:
+          this.customPrintScale.denominator = n
+          break
+        case 70: {
+          const flag = n
+          this.plotViewportBorders = (flag & 1) !== 0
+          this.showPlotStyles = (flag & 2) !== 0
+          this.plotCentered = (flag & 4) !== 0
+          this.plotHidden = (flag & 8) !== 0
+          this.useStandardScale = (flag & 16) !== 0
+          this.plotPlotStyles = (flag & 32) !== 0
+          this.scaleLineweights = (flag & 64) !== 0
+          this.printLineweights = (flag & 128) !== 0
+          this.drawViewportsFirst = (flag & 512) !== 0
+          this.modelType = (flag & 1024) !== 0
+          break
+        }
+        case 72:
+          this.plotPaperUnits = n as AcDbPlotPaperUnits
+          break
+        case 73:
+          this.plotRotation = n as AcDbPlotRotation
+          break
+        case 74:
+          this.plotType = n as AcDbPlotType
+          break
+        case 75:
+          this.stdScaleType = n as AcDbPlotStdScaleType
+          break
+        case 76:
+          this.shadePlot = n as AcDbPlotShadePlotType
+          break
+        case 77:
+          this.shadePlotResLevel = n as AcDbPlotShadePlotResLevel
+          break
+        case 78:
+          this.shadePlotCustomDPI = n
+          break
+        case 147:
+          // Derived from stdScaleType on write; ignore on read.
+          break
+        case 148:
+          this.paperImageOrigin.x = n
+          break
+        case 149:
+          this.paperImageOrigin.y = n
+          break
+        case 333:
+          this.shadePlotId = String(item.value)
+          break
+        case 100:
+          // Next subclass (AcDbLayout) — push back for derived class.
+          filer.pushBackItem(item)
+          return this
+        default:
+          break
+      }
+    }
     return this
   }
 }

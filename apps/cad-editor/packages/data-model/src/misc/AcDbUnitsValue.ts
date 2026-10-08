@@ -78,11 +78,11 @@ export enum AcDbUnitsValue {
  *
  * @example
  * ```typescript
- * const isMetric = isMetricUnits(AcDbUnitsValue.Millimeters); // true
- * const isMetric2 = isMetricUnits(AcDbUnitsValue.Inches); // false
+ * const isMetric = acdbIsMetricUnits(AcDbUnitsValue.Millimeters); // true
+ * const isMetric2 = acdbIsMetricUnits(AcDbUnitsValue.Inches); // false
  * ```
  */
-export function isMetricUnits(units: AcDbUnitsValue) {
+export function acdbIsMetricUnits(units: AcDbUnitsValue) {
   return (
     units == AcDbUnitsValue.Millimeters ||
     units == AcDbUnitsValue.Centimeters ||
@@ -108,11 +108,11 @@ export function isMetricUnits(units: AcDbUnitsValue) {
  *
  * @example
  * ```typescript
- * const isImperial = isImperialUnits(AcDbUnitsValue.Inches); // true
- * const isImperial2 = isImperialUnits(AcDbUnitsValue.Millimeters); // false
+ * const isImperial = acdbIsImperialUnits(AcDbUnitsValue.Inches); // true
+ * const isImperial2 = acdbIsImperialUnits(AcDbUnitsValue.Millimeters); // false
  * ```
  */
-export function isImperialUnits(units: AcDbUnitsValue) {
+export function acdbIsImperialUnits(units: AcDbUnitsValue) {
   return (
     units == AcDbUnitsValue.Inches ||
     units == AcDbUnitsValue.Feet ||

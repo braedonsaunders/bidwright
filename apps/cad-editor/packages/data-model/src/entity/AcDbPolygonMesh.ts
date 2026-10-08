@@ -1,5 +1,6 @@
 import {
   AcGeBox3d,
+  AcGeIntersectPrimitive,
   AcGeMatrix3d,
   AcGePoint2d,
   AcGePoint3d,
@@ -13,7 +14,8 @@ import { AcDbOsnapMode } from '../misc/AcDbOsnapMode'
 import { AcDbCurve } from './AcDbCurve'
 import { AcDbEntityProperties } from './AcDbEntityProperties'
 import { acdbForEachGripIndex } from './AcDbGripHelpers'
-import { AcDbPolyline, offsetVertexPathAsPolyline } from './AcDbPolyline'
+import { acdbIntersectPrimitivesFromPointPath } from './AcDbIntersectHelpers'
+import { acdbOffsetVertexPathAsPolyline,AcDbPolyline } from './AcDbPolyline'
 
 /**
  * Represents a polygon mesh vertex in AutoCAD.
@@ -179,6 +181,46 @@ export class AcDbPolygonMesh extends AcDbCurve {
       new AcGePoint3d(minX, minY, minZ),
       new AcGePoint3d(maxX, maxY, maxZ)
     )
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    const primitives: AcGeIntersectPrimitive[] = []
+    for (let m = 0; m < this._mCount; m++) {
+      for (let n = 0; n < this._nCount; n++) {
+        const current = this.getVertexAtMN(m, n)
+        let nextN = n + 1
+        if (nextN >= this._nCount) {
+          if (this._closedN) nextN = 0
+          else continue
+        }
+        primitives.push(
+          ...acdbIntersectPrimitivesFromPointPath(
+            [current.position, this.getVertexAtMN(m, nextN).position],
+            false,
+            false
+          )
+        )
+      }
+    }
+    for (let n = 0; n < this._nCount; n++) {
+      for (let m = 0; m < this._mCount; m++) {
+        const current = this.getVertexAtMN(m, n)
+        let nextM = m + 1
+        if (nextM >= this._mCount) {
+          if (this._closedM) nextM = 0
+          else continue
+        }
+        primitives.push(
+          ...acdbIntersectPrimitivesFromPointPath(
+            [current.position, this.getVertexAtMN(nextM, n).position],
+            false,
+            false
+          )
+        )
+      }
+    }
+    return primitives
   }
 
   /**
@@ -444,7 +486,7 @@ export class AcDbPolygonMesh extends AcDbCurve {
    * @returns Offset polyline along the mesh boundary, or `null` on failure
    */
   private createOffsetCurve(offsetDist: number): AcDbCurve | null {
-    return offsetVertexPathAsPolyline(
+    return acdbOffsetVertexPathAsPolyline(
       this.collectBoundary2d(),
       this.isBoundaryClosed(),
       offsetDist

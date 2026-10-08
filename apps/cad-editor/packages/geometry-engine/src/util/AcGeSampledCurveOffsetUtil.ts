@@ -20,7 +20,7 @@ type SegmentIntersection = {
  * when the offset distance exceeds the local radius of curvature are trimmed.
  *
  * Sign convention: positive `offsetDist` offsets to the left of the travel
- * direction along the sampled path (consistent with {@link offsetAcGePolyline2d}).
+ * direction along the sampled path (consistent with {@link acgeOffsetPolyline2d}).
  *
  * @param points - Sampled path points in travel order
  * @param closed - Whether the path is treated as a closed polygon for trimming
@@ -29,7 +29,7 @@ type SegmentIntersection = {
  * tangents are estimated from neighboring samples via central differences
  * @returns Offset polyline, or `null` when input is degenerate or offset distance is zero
  */
-export function offsetSmoothedSampledPath(
+export function acgeOffsetSmoothedSampledPath(
   points: AcGePoint2d[],
   closed: boolean,
   offsetDist: number,

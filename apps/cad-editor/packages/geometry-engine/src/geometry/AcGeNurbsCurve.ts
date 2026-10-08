@@ -15,10 +15,10 @@ function distSq3d(a: AcGePoint3dLike, b: number[]): number {
 }
 import { AcGePoint2d } from '../math/AcGePoint2d'
 import {
-  calculateCurveLength,
-  evaluateNurbsDerivatives,
-  interpolateNurbsCurve,
-  signedPlanarCurvature
+  acgeCalculateCurveLength,
+  acgeEvaluateNurbsDerivatives,
+  acgeInterpolateNurbsCurve,
+  acgeSignedPlanarCurvature
 } from '../util'
 import { AcGeCatmullRomCurve3d } from './AcGeCatmullRomCurve3d'
 
@@ -124,7 +124,7 @@ export class AcGeNurbsCurve {
    */
   evaluate(u: number) {
     const controlPointsArray = this._controlPoints.map(p => [p.x, p.y, p.z])
-    return evaluateNurbsDerivatives(
+    return acgeEvaluateNurbsDerivatives(
       u,
       this._degree,
       this._knots,
@@ -145,7 +145,7 @@ export class AcGeNurbsCurve {
    */
   signedPlanarCurvatureAt(u: number): number {
     const evaluation = this.evaluate(u)
-    return signedPlanarCurvature(evaluation.deriv1, evaluation.deriv2)
+    return acgeSignedPlanarCurvature(evaluation.deriv1, evaluation.deriv2)
   }
 
   /**
@@ -224,7 +224,7 @@ export class AcGeNurbsCurve {
   length(): number {
     // Convert AcGePoint3dLike[] to number[][] for utility functions
     const controlPointsArray = this._controlPoints.map(p => [p.x, p.y, p.z])
-    return calculateCurveLength(
+    return acgeCalculateCurveLength(
       this._degree,
       this._knots,
       controlPointsArray,
@@ -254,7 +254,7 @@ export class AcGeNurbsCurve {
     startTangent?: number[],
     endTangent?: number[]
   ): AcGeNurbsCurve {
-    const result = interpolateNurbsCurve(
+    const result = acgeInterpolateNurbsCurve(
       points,
       degree,
       parameterization,

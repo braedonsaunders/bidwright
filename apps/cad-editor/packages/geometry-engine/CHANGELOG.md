@@ -1,5 +1,316 @@
 # @mlightcad/geometry-engine
 
+## 3.15.1
+
+### Patch Changes
+
+- feat: paints wipeouts with the layout background fill so covered geometry stays hidden. DXF export expands XData points and binary chunks, and attribute definitions keep their owner ids when block table record handles collide. Imported XData is stored in a compacted form that uses less memory
+- Updated dependencies
+  - @mlightcad/common@1.15.1
+
+## 3.15.0
+
+### Minor Changes
+
+- fix: aligns DWG converter license failure markers with the current @mlightcad/dwg-converter messages so expired evaluation and invalid license key errors classify correctly as license_expired and license_invalid instead of falling through as generic open failures
+
+### Patch Changes
+
+- Updated dependencies
+  - @mlightcad/common@1.15.0
+
+## 3.14.14
+
+### Patch Changes
+
+- feat: vendors emf-converter as the @mlightcad/emf-converter workspace package and exposes raster image and OLE frame properties so the property palette can edit them. Missing image paths draw without MTEXT control codes, and DWG import no longer aborts when handles are assigned before attributes
+- Updated dependencies
+  - @mlightcad/common@1.14.14
+
+## 3.14.13
+
+### Patch Changes
+
+- feat: draws closed wide polylines with index-aligned offsetRing so outer and inner stroke loops share sample order and count, letting renderers triangulate the stroke band without area holes. fillType updates stay on the successful draw path, and closed wide polylines skip area batching
+- Updated dependencies
+  - @mlightcad/common@1.14.13
+
+## 3.14.12
+
+### Patch Changes
+
+- fix: keeps compact MTEXT line spacing under the At Least style so lines expand only when the factor would pack them closer than the text height, and passes Exact spacing through DWG import. DXF load and block draw allocate less via span-based pair parsing, lazy entity geometry, in-place OCS transforms, and LRU rendering-cache eviction. Incomplete MLINESTYLE entries no longer abort opens, and WASM out-of-memory faults are reported as worker_oom
+- Updated dependencies
+  - @mlightcad/common@1.14.12
+
+## 3.14.11
+
+### Patch Changes
+
+- feat: adds dynamic block INSERT drawing via anonymous \*U representations and LibreDWG dyn-block dictionary metadata, plus AcDbArcAlignedText with DXF group 90 color round-trip. AcDbBlockRepresentationData remains for converters and dyn-block references but is no longer publicly re-exported
+- Updated dependencies
+  - @mlightcad/common@1.14.11
+
+## 3.14.10
+
+### Patch Changes
+
+- fix: keeps tapered LWPOLYLINE vertex widths when converting from libredwg-web 0.7.13 so valve triangles and other variable-width polylines retain start and end widths instead of collapsing to constant width
+- Updated dependencies
+  - @mlightcad/common@1.14.10
+
+## 3.14.9
+
+### Patch Changes
+
+- fix: preserves complex linetype shape and text DXF extras on round-trip by reading and writing shape number, style object id, scale, rotation, X/Y offsets, and embedded text for non-dash pattern elements, so those attributes are no longer dropped when parsing or exporting DXF linetype table records
+- Updated dependencies
+  - @mlightcad/common@1.14.9
+
+## 3.14.8
+
+### Patch Changes
+
+- fix: renders tapered wide polylines that taper to zero width as filled geometry instead of falling back to strokes, including collapsed-inner circular widths as solid disks. LibreDWG solid hatches named \_SOLID (and leading-underscore variants) are recognized as solid fills so empty definitionLines are no longer dropped during convert
+- Updated dependencies
+  - @mlightcad/common@1.14.8
+
+## 3.14.7
+
+### Patch Changes
+
+- fix: decodes Korean CP949 DXF text via euc-kr so layer names and annotations no longer garble, hardens DXF transparency header reads and full-ellipse/full-circle hatch arcs for round-trip fidelity, and fixes Excel OLE EMF text clipping plus CJK font fallback when rendering embedded previews
+- Updated dependencies
+  - @mlightcad/common@1.14.7
+
+## 3.14.6
+
+### Patch Changes
+
+- fix: anchors TEXT by DXF group 11 presence instead of matching coordinates, prefers Ole10Native BMP over OlePres WMF for Paintbrush OLE so raster previews render correctly, and flattens INSERT elevation in blockTransform so 2D clipping no longer misses elevated block references
+- Updated dependencies
+  - @mlightcad/common@1.14.6
+
+## 3.14.5
+
+### Patch Changes
+
+- fix: ignores non-finite geometry points so NaN bounding boxes no longer poison spatial indexes, and empty polyline OCS boxes return an empty WCS box instead of transforming infinity. Also skips drawing non-constant ATTDEFs inside block definitions so only constant attribute templates render as block geometry while INSERT ATTRIB draws the editable values
+- Updated dependencies
+  - @mlightcad/common@1.14.5
+
+## 3.14.4
+
+### Patch Changes
+
+- feat: extracts and rasterizes OLE WMF/EMF metafile previews so embedded OLE content can render as images, and classifies DWG converter license failures into clearer open-database errors. LibreDWG layer import maps CMC RGB true colors when colorIndex is 256 instead of losing those layer colors
+- Updated dependencies
+  - @mlightcad/common@1.14.4
+
+## 3.14.3
+
+### Patch Changes
+
+- feat: adds chord-height curve tessellation so short arcs use fewer segments than a full circle, while opening a drawing without circleSides defaults to draft quality so stored VIEWRES 1000 is not applied accidentally. Circles, arcs, ellipses, polylines, leaders, and splines tessellate from the open-time setting, and renderers can read drawCircleSides from the draw context
+- Updated dependencies
+  - @mlightcad/common@1.14.3
+
+## 3.14.2
+
+### Patch Changes
+
+- feat: adds AutoCAD-compatible DWG Compare system variables so drawings can store COMPAREHATCH, COMPARETEXT, COMPARERCMARGIN, and COMPARETOLERANCE with AutoCAD defaults and ranges, while COMPAREPROPS stays a registry-backed bitcode for property-only diffs. DXF HEADER import reads in-range compare values and ignores out-of-range ones, and the database exposes typed getters plus COMPAREPROPS color, layer, and linetype bit flags
+- Updated dependencies
+  - @mlightcad/common@1.14.2
+
+## 3.14.1
+
+### Patch Changes
+
+- fix: defaults omitted DXF entity colors to ByLayer instead of the current CECOLOR system variable, matching AutoCAD when color group 62 is absent. LibreDWG dwg2dxf often writes $CECOLOR 0 while omitting that group on ByLayer entities, so import no longer copies CECOLOR onto them. Also upgrades @mlightcad/libredwg-web to 0.7.10
+- Updated dependencies
+  - @mlightcad/common@1.14.1
+
+## 3.14.0
+
+### Minor Changes
+
+- feat: adds ObjectARX-style entity intersection so callers can query WCS intersection points between drawing entities via AcDbEntity.intersectWith, with extend-this, extend-arg, and extend-both flags plus optional apparent intersection on a projection plane. Curve entities, hatches, inserts, and dimensions expose primitives, while text-like entities stay empty. The geometry engine adds acgeIntersectCurves for pairwise line, arc, ellipse, and spline intersection with de-duplication
+
+### Patch Changes
+
+- Updated dependencies
+  - @mlightcad/common@1.14.0
+
+## 3.13.1
+
+### Patch Changes
+
+- feat: adds circular-arc factory helpers so callers can build 2D circles and arcs from center-radius, diameter, three points, start-end-bulge, and start-center-end constructions. Three-point arcs now pick a unique circumcircle and honor AutoCAD-style reverse-direction sweep, so near-collinear points and complementary arcs stay numerically stable
+- Updated dependencies
+  - @mlightcad/common@1.13.1
+
+## 3.13.0
+
+### Minor Changes
+
+- feat: adds a session-scoped LOGINNAME system variable so drawings can expose the current login name, and fixes LibreDWG converter packaging so the wasm module is emitted beside the parser worker for reliable runtime loading
+
+### Patch Changes
+
+- Updated dependencies
+  - @mlightcad/common@1.13.0
+
+## 3.12.5
+
+### Patch Changes
+
+- feat: adds directBatchPrimitive for faster entity geometry batching, fixes OCS transforms for non-default extrusions so arcs and circles render correctly, and tolerates missing LibreDWG symbol and table names without throwing
+- Updated dependencies
+  - @mlightcad/common@1.12.5
+
+## 3.12.4
+
+### Patch Changes
+
+- feat: speeds up drawing open by loading fonts on demand, skipping font work when no loader is set, streaming large-block font collection, batching font loads in parallel, and deferring mid-size block compaction
+- Updated dependencies
+  - @mlightcad/common@1.12.4
+
+## 3.12.3
+
+### Patch Changes
+
+- feat: improve block rendering cache hits, trim font preload, and correctly apply ACIS body transforms to solid geometry
+- Updated dependencies
+  - @mlightcad/common@1.12.3
+
+## 3.12.2
+
+### Patch Changes
+
+- feat: faster DWG/DXF parsing via zero-copy worker transfers and windowed UTF-8 decoding, plus private dwg-converter setup tooling
+- Updated dependencies
+  - @mlightcad/common@1.12.2
+
+## 3.12.1
+
+### Patch Changes
+
+- feat: adds time-budgeted UI feedback, block-cache templates, MINSERT parameters, OLE2FRAME geometry, ByBlock ACI7, native DXF registration, and migrates GPL converters
+- Updated dependencies
+  - @mlightcad/common@1.12.1
+
+## 3.12.0
+
+### Minor Changes
+
+- Fix xref import, add MIT DXF converter, attach ACDSDATA to 3DSOLIDs, and improve DXF open progress
+
+### Patch Changes
+
+- Updated dependencies
+  - @mlightcad/common@1.12.0
+
+## 3.11.3
+
+### Patch Changes
+
+- feat: support drawing thumbnails and viewport DCS-to-WCS mapping
+- Updated dependencies
+  - @mlightcad/common@1.11.3
+
+## 3.11.2
+
+### Patch Changes
+
+- fix: draw ATTDEF per AutoCAD semantics and fix DXF flags
+- Updated dependencies
+  - @mlightcad/common@1.11.2
+
+## 3.11.1
+
+### Patch Changes
+
+- feat: upgraded to Vite 6 & dxf-json 1.2.8, and improved data model by storing block PreviewIcons as bytes and fixed nested layer filter behavior
+- Updated dependencies
+  - @mlightcad/common@1.11.1
+
+## 3.11.0
+
+### Patch Changes
+
+- feat: adds support for OLE frames and layer filters, improves image frame selection, assigns TEMP handles to unbound AcDbObjects, and refactors helper naming with consistent acdb/acge prefixes for better maintainability
+- Updated dependencies
+  - @mlightcad/common@1.11.0
+
+## 3.10.7
+
+### Patch Changes
+
+- feat: added block cross-reference flags & unresolved detection, and improved data model flexibility by making the CLASSES conversion stage optional
+- Updated dependencies
+  - @mlightcad/common@1.10.7
+
+## 3.10.6
+
+### Patch Changes
+
+- feat: improved DXF compatibility and data integrity with corrected group codes, CLASSES and SOLID export support, fixed proxy DXF codes, preserved SHAPE round-trip identity, and maintained circular arc endpoints when reversing loop edges
+- Updated dependencies
+  - @mlightcad/common@1.10.6
+
+## 3.10.5
+
+### Patch Changes
+
+- feat: added a heuristic memory estimator for AcDbDatabase and fixed saved view restoration by correctly applying VPORT view target and twist, improving memory estimation and view consistency
+- Updated dependencies
+  - @mlightcad/common@1.10.5
+
+## 3.10.4
+
+### Patch Changes
+
+- feat: sync latest upstream changes for ACIS SAB decoding, 3DSOLID wireframes, CI update, and FCF GDT/TOLERANCE improvements
+- Updated dependencies
+  - @mlightcad/common@1.10.4
+
+## 3.10.3
+
+### Patch Changes
+
+- feat: add AcDbFcf and AcDb3dSolid
+- Updated dependencies
+  - @mlightcad/common@1.10.3
+
+## 3.10.2
+
+### Patch Changes
+
+- feat: improved data model reliability with structured database error reporting, resilient font loading, accurate leader hook line rendering, and global handle registry to prevent cross-table handle collisions
+- Updated dependencies
+  - @mlightcad/common@1.10.2
+
+## 3.10.1
+
+### Patch Changes
+
+- fix: improved AutoCAD compatibility by normalizing symbol table names and enhanced wide polyline fill rendering for self-overlapping paths
+- Updated dependencies
+  - @mlightcad/common@1.10.1
+
+## 3.10.0
+
+### Minor Changes
+
+- feat: refactor symbol table storage with typed attributes, enforce write access controls, dispatch layerModified events, fix entityModified dispatch on commit, and resolve MLine grip issues for improved data integrity
+
+### Patch Changes
+
+- Updated dependencies
+  - @mlightcad/common@1.10.0
+
 ## 3.4.14
 
 ### Patch Changes

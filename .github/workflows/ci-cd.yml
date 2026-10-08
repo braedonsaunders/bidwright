@@ -129,6 +129,8 @@ jobs:
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
           packages/mcp-server/src/tool-access.test.ts
+          scripts/cad-editor/piping.test.ts
+          scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
@@ -278,8 +280,35 @@ jobs:
       - name: Validate launcher compose
         run: docker compose -f scripts/launcher/docker-compose.yml config > /dev/null
 
+  verify-cad:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/cad-editor/pnpm-lock.yaml
+      - name: Install CAD workspace
+        run: pnpm --dir apps/cad-editor install --frozen-lockfile
+      - name: Build CAD editor and workers
+        run: pnpm --dir apps/cad-editor run build:bidwright
+      - name: Check DXF dialect and legacy DWG metadata
+        run: pnpm --dir apps/cad-editor exec jest --runInBand --runTestsByPath packages/data-model/__tests__/AcDbDxfVersionDialect.spec.ts packages/libredwg-converter/__tests__/legacyDictionary.spec.ts
+      - name: Install pinned test browser
+        run: pnpm --dir apps/cad-editor --filter @bidwright/cad-editor exec playwright install --with-deps chromium
+      - name: Verify piping workflow in browser
+        env:
+          PLAYWRIGHT_BROWSER_CHANNEL: chromium
+        run: pnpm --dir apps/cad-editor --filter @bidwright/cad-editor test:e2e
+
   publish:
     needs:
+      - verify-cad
       - verify
       - changes
     runs-on: ubuntu-latest

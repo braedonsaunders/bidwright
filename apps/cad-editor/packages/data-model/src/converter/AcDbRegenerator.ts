@@ -37,15 +37,6 @@ export class AcDbRegenerator extends AcDbDatabaseConverter<AcDbDatabase> {
   }
 
   /**
-   * Does nothing and always returns one empty array.
-   *
-   * @returns An empty array
-   */
-  protected getFonts() {
-    return []
-  }
-
-  /**
    * Processes entities in batches to maintain UI responsiveness.
    *
    * This method breaks up the entity processing work into smaller chunks that are
@@ -128,6 +119,13 @@ export class AcDbRegenerator extends AcDbDatabaseConverter<AcDbDatabase> {
   }
 
   /**
+   * Processes class definitions. Already resident on the database.
+   */
+  protected processClasses() {
+    // Do nothing
+  }
+
+  /**
    * Processes block table records.
    */
   protected processBlockTables() {
@@ -163,6 +161,24 @@ export class AcDbRegenerator extends AcDbDatabaseConverter<AcDbDatabase> {
         database: this._database,
         object: mleaderStyle,
         key: mleaderStyle.objectId
+      })
+    }
+
+    const layerFilters = this._database.objects.layerFilter.newIterator()
+    for (const layerFilter of layerFilters) {
+      this._database.events.dictObjetSet.dispatch({
+        database: this._database,
+        object: layerFilter,
+        key: layerFilter.objectId
+      })
+    }
+
+    const layerIndexes = this._database.objects.layerIndex.newIterator()
+    for (const layerIndex of layerIndexes) {
+      this._database.events.dictObjetSet.dispatch({
+        database: this._database,
+        object: layerIndex,
+        key: layerIndex.objectId
       })
     }
   }

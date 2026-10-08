@@ -5,20 +5,20 @@ import {
   AcGeTol
 } from '@mlightcad/data-model'
 
-import { AcApAnnotation, AcApContext, AcApDocManager } from '../../app'
+import { AcApContext, AcApDocManager } from '../../app'
 import {
   AcEdCommand,
   AcEdOpenMode,
   AcEdPromptAngleOptions,
   AcEdPromptPointOptions,
-  AcEdPromptSelectionOptions,
   AcEdPromptStatus
 } from '../../editor'
 import { AcApI18n } from '../../i18n'
+import { resolveSelectedEntities } from '../../service'
+import { createRotationMatrix } from '../../util/AcApGeTransform'
 import {
   AcApRotatePreviewJig,
-  AcApRotateStaticJig,
-  createRotationMatrix
+  AcApRotateStaticJig
 } from './AcApRotatePreviewJig'
 
 /**
@@ -32,11 +32,11 @@ import {
  */
 export class AcApRotateCmd extends AcEdCommand {
   /**
-   * Creates the ROTATE command and marks it as a review-mode command.
+   * Creates the ROTATE command. Drawing geometry may only be rotated in Write mode.
    */
   constructor() {
     super()
-    this.mode = AcEdOpenMode.Review
+    this.mode = AcEdOpenMode.Write
   }
 
   /**
@@ -268,36 +268,12 @@ export class AcApRotateCmd extends AcEdCommand {
    */
   async execute(context: AcApContext) {
     const selectionSet = context.view.selectionSet
-    const annotation = new AcApAnnotation(context.doc.database)
-    const blockTable = context.doc.database.tables.blockTable
+    const resolved = await resolveSelectedEntities(context, {
+      promptKey: 'rotate'
+    })
+    if (!resolved) return
 
-    const selectionIds =
-      selectionSet.count > 0
-        ? selectionSet.ids
-        : ((
-            await AcApDocManager.instance.editor.getSelection(
-              new AcEdPromptSelectionOptions(AcApI18n.sysCmdPrompt('rotate'))
-            )
-          ).value?.ids ?? [])
-
-    if (selectionIds.length === 0) return
-
-    const ids =
-      context.doc.openMode == AcEdOpenMode.Review
-        ? annotation.filterAnnotationEntities(selectionIds)
-        : selectionIds
-    if (ids.length === 0) {
-      selectionSet.clear()
-      return
-    }
-
-    const sourceEntities = ids
-      .map(id => blockTable.getEntityById(id))
-      .filter((entity): entity is AcDbEntity => !!entity)
-    if (sourceEntities.length === 0) {
-      selectionSet.clear()
-      return
-    }
+    const { entities: sourceEntities } = resolved
 
     const basePointPrompt = new AcEdPromptPointOptions(
       AcApI18n.t('jig.rotate.basePoint')
@@ -326,26 +302,13 @@ export class AcApRotateCmd extends AcEdCommand {
       return
     }
 
-    const matrix = createRotationMatrix(
-      basePoint,
-      rotation.angleRad
-    )
+    const matrix = createRotationMatrix(basePoint, rotation.angleRad)
 
+    const entityService = context.doc.entityService
     if (rotation.copyMode) {
-      const clones = sourceEntities
-        .map(entity => entity.clone())
-        .filter((entity): entity is AcDbEntity => !!entity)
-      clones.forEach(entity => entity.transformBy(matrix))
-      if (clones.length > 0) {
-        blockTable.modelSpace.appendEntity(clones)
-      }
+      entityService.cloneAndTransform(sourceEntities, matrix)
     } else {
-      sourceEntities.forEach(entity => {
-        const opened = context.doc.database.openEntityForWrite(entity)
-        if (!opened) return
-        opened.transformBy(matrix)
-        opened.triggerModifiedEvent()
-      })
+      entityService.transformEntities(sourceEntities, matrix)
     }
 
     selectionSet.clear()

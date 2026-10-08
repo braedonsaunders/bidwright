@@ -1,5 +1,6 @@
-import { AcCmColor } from '@mlightcad/data-model'
+import { AcCmColor, AcGiLineWeight } from '@mlightcad/data-model'
 import * as THREE from 'three'
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js'
 
 import {
   getMaterialMetadata,
@@ -9,6 +10,26 @@ import { AcTrStyleManager } from '../src/style/AcTrStyleManager'
 import { AcTrSubEntityTraitsUtil } from '../src/util/AcTrEntityTraitsUtil'
 
 describe('AcTrStyleManager', () => {
+  it('preserves entity color when updateLayerMaterial receives layer name only', () => {
+    const styleManager = new AcTrStyleManager()
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = 'ROAD'
+    traits.color.setRGB(255, 0, 0)
+
+    const original = styleManager.getLineMaterial(
+      traits
+    ) as THREE.LineBasicMaterial
+    expect(original.color.getHex()).toBe(0xff0000)
+
+    const updates = styleManager.updateLayerMaterial('ROAD', {
+      layer: 'ROAD'
+    })
+    const updated = updates[original.id] as THREE.LineBasicMaterial
+
+    expect(updated).toBeDefined()
+    expect(updated.color.getHex()).toBe(0xff0000)
+  })
+
   it('binds inherited materials onto the effective layer for later layer updates', () => {
     const styleManager = new AcTrStyleManager()
     const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
@@ -86,6 +107,140 @@ describe('AcTrStyleManager', () => {
     expect(refreshed.color.getHex()).toBe(0xffff00)
   })
 
+  it('does not share materials between ByLayer and explicit colours that resolve to the same rgb', () => {
+    const styleManager = new AcTrStyleManager()
+    const byLayerTraits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    byLayerTraits.layer = 'ROAD'
+    byLayerTraits.color.setByLayer()
+
+    const explicitTraits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    explicitTraits.layer = 'ROAD'
+    explicitTraits.color.setRGB(255, 0, 0)
+
+    const byLayerMaterial = styleManager.getLineMaterial(byLayerTraits)
+    const explicitMaterial = styleManager.getLineMaterial(explicitTraits)
+
+    expect(byLayerMaterial).not.toBe(explicitMaterial)
+
+    const layerColor = new AcCmColor()
+    layerColor.setRGB(255, 0, 0)
+    const updates = styleManager.updateLayerMaterial('ROAD', {
+      layer: 'ROAD',
+      color: layerColor
+    })
+
+    expect(updates[byLayerMaterial.id]).toBe(byLayerMaterial)
+    expect((byLayerMaterial as THREE.LineBasicMaterial).color.getHex()).toBe(
+      0xff0000
+    )
+    expect((explicitMaterial as THREE.LineBasicMaterial).color.getHex()).toBe(
+      0xff0000
+    )
+  })
+
+  it('does not share materials across layers for the same explicit colour', () => {
+    const styleManager = new AcTrStyleManager()
+    const roadTraits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    roadTraits.layer = 'ROAD'
+    roadTraits.color.setRGB(255, 0, 0)
+
+    const wallTraits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    wallTraits.layer = 'WALL'
+    wallTraits.color.setRGB(255, 0, 0)
+
+    const roadMaterial = styleManager.getLineMaterial(roadTraits)
+    const wallMaterial = styleManager.getLineMaterial(wallTraits)
+
+    expect(roadMaterial).not.toBe(wallMaterial)
+  })
+
+  it('refreshes ByLayer line materials in place when the layer colour changes', () => {
+    const styleManager = new AcTrStyleManager()
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = 'Wall'
+    traits.color.setByLayer()
+
+    const original = styleManager.getLineMaterial(
+      traits
+    ) as THREE.LineBasicMaterial
+
+    const red = new AcCmColor()
+    red.setRGB(255, 0, 0)
+    const updates = styleManager.updateLayerMaterial('Wall', {
+      layer: 'Wall',
+      color: red
+    })
+    const refreshed = updates[original.id] as THREE.LineBasicMaterial
+
+    expect(refreshed).toBe(original)
+    expect(refreshed.color.getHex()).toBe(0xff0000)
+
+    const green = new AcCmColor()
+    green.setRGB(0, 255, 0)
+    const secondUpdates = styleManager.updateLayerMaterial('Wall', {
+      layer: 'Wall',
+      color: green
+    })
+
+    expect(secondUpdates[original.id]).toBe(original)
+    expect(refreshed.color.getHex()).toBe(0x00ff00)
+  })
+
+  it('updates layer materials when traits still carry ByLayer color but metadata lost the flag', () => {
+    const styleManager = new AcTrStyleManager()
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = 'ROAD'
+    traits.color.setByLayer()
+
+    const original = styleManager.getLineMaterial(
+      traits
+    ) as THREE.LineBasicMaterial
+    setMaterialMetadata(original, { isByLayerColor: false })
+
+    const green = new AcCmColor()
+    green.setRGB(0, 255, 0)
+    const updates = styleManager.updateLayerMaterial('ROAD', {
+      layer: 'ROAD',
+      color: green
+    })
+    const updated = updates[original.id] as THREE.LineBasicMaterial
+
+    expect(updated).toBeDefined()
+    expect(updated.color.getHex()).toBe(0x00ff00)
+  })
+
+  it('preserves ByLayer resolved colour when lineweight change remaps the material key', () => {
+    const styleManager = new AcTrStyleManager()
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = 'Wall'
+    traits.color.setByLayer()
+
+    const original = styleManager.getLineMaterial(
+      traits
+    ) as THREE.LineBasicMaterial
+
+    const red = new AcCmColor()
+    red.setRGB(255, 0, 0)
+    const colorUpdates = styleManager.updateLayerMaterial('Wall', {
+      layer: 'Wall',
+      color: red
+    })
+    expect(
+      (colorUpdates[original.id] as THREE.LineBasicMaterial).color.getHex()
+    ).toBe(0xff0000)
+
+    const weightUpdates = styleManager.updateLayerMaterial('Wall', {
+      layer: 'Wall',
+      color: red.clone(),
+      lineWeight: AcGiLineWeight.LineWeight070
+    })
+    const remapped = weightUpdates[original.id] as THREE.LineBasicMaterial
+
+    expect(remapped).toBeDefined()
+    expect(remapped).not.toBe(original)
+    expect(remapped.color.getHex()).toBe(0xff0000)
+  })
+
   it('remaps layer-0 foreground ByLayer materials to inherited INSERT layer color', () => {
     const styleManager = new AcTrStyleManager()
     styleManager.currentBackgroundColor = 0x000000
@@ -118,16 +273,7 @@ describe('AcTrStyleManager', () => {
     expect(getMaterialMetadata(inherited).isForeground).toBe(false)
   })
 
-  it('solid foreground hatches fuse with the canvas bg (AutoCAD-aligned)', () => {
-    // AutoCAD reference: a solid ACI 7 hatch is rendered as if painted with
-    // the paper colour, so it fuses into both light and dark canvases and
-    // only the overlaid wireframe remains visible. See
-    // images-ex/hatch-bg-bug-refact-lee/autocad/tower-{light,dark}.png and
-    // the "drawing" pair in the same folder for the reference visuals.
-    //
-    // Linework-tier fills (drawOrder >= 0 — wide polylines, MText glyphs)
-    // are NOT hatches: they represent linework rasterized as a mesh and
-    // must invert with the theme so ACI 7 stays legible.
+  it('solid foreground hatches invert with the theme like linework', () => {
     const styleManager = new AcTrStyleManager()
     styleManager.currentBackgroundColor = 0xffffff
 
@@ -148,25 +294,50 @@ describe('AcTrStyleManager', () => {
       lineworkFillTraits
     ) as THREE.MeshBasicMaterial
 
-    // Solid hatch and linework-tier fill must NOT share a cache slot —
-    // otherwise the bg-tracked hatch material would be repainted by
-    // `changeForeground` and vice-versa.
     expect(hatchMaterial).not.toBe(lineworkFillMaterial)
 
     const hatchMetadata = getMaterialMetadata(hatchMaterial)
     expect(hatchMetadata.drawOrder).toBe(-1)
-    expect(hatchMetadata.isBackgroundFill).toBe(true)
-    expect(hatchMetadata.isForeground).toBe(false)
-    // Material is BORN with the current bg colour, not its trait RGB —
-    // so a DWG opened in dark theme does not flash a white silhouette
-    // before the first changeBackground call.
-    expect(hatchMaterial.color.getHex()).toBe(0xffffff)
+    expect(hatchMetadata.isBackgroundFill).toBe(false)
+    expect(hatchMetadata.isForeground).toBe(true)
+    expect(hatchMaterial.color.getHex()).toBe(0x000000)
 
     const lineworkFillMetadata = getMaterialMetadata(lineworkFillMaterial)
     expect(lineworkFillMetadata.drawOrder).toBe(0)
     expect(lineworkFillMetadata.isForeground).toBe(true)
     expect(lineworkFillMetadata.isBackgroundFill).toBe(false)
     expect(lineworkFillMaterial.color.getHex()).toBe(0x000000)
+
+    styleManager.currentBackgroundColor = 0x000000
+    expect(hatchMaterial.color.getHex()).toBe(0xffffff)
+    expect(lineworkFillMaterial.color.getHex()).toBe(0xffffff)
+  })
+
+  it('wipeout fills fuse with the canvas background and track theme flips (#671)', () => {
+    const styleManager = new AcTrStyleManager()
+    styleManager.currentBackgroundColor = 0xffffff
+
+    const wipeoutTraits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    wipeoutTraits.layer = '0'
+    // Entity colour is typically ACI 7 / ByLayer — must not paint black.
+    wipeoutTraits.color = new AcCmColor().setForeground()
+    wipeoutTraits.drawOrder = 0
+    wipeoutTraits.isBackgroundFill = true
+
+    const material = styleManager.getFillMaterial(
+      wipeoutTraits
+    ) as THREE.MeshBasicMaterial
+    const metadata = getMaterialMetadata(material)
+
+    expect(metadata.isBackgroundFill).toBe(true)
+    expect(metadata.isForeground).toBe(false)
+    expect(material.color.getHex()).toBe(0xffffff)
+
+    styleManager.currentBackgroundColor = 0x000000
+    expect(material.color.getHex()).toBe(0x000000)
+
+    styleManager.currentBackgroundColor = 0xffffff
+    expect(material.color.getHex()).toBe(0xffffff)
   })
 
   it('keeps patterned foreground hatches as visible shader linework', () => {
@@ -211,8 +382,7 @@ describe('AcTrStyleManager', () => {
     // A DWG author who picked an explicit RGB via the truecolor picker
     // (e.g. 255,255,255 from the colour palette) gets a literal hatch.
     // `traits.color.isForeground` is only true for the ACI 7 / foreground
-    // pseudo-colour, so an explicit truecolor falls outside the bg-fuse
-    // rule even when the picked RGB happens to match the canvas paper.
+    // pseudo-colour, so an explicit truecolor is not repainted by theme flips.
     const styleManager = new AcTrStyleManager()
     styleManager.currentBackgroundColor = 0xffffff
 
@@ -236,29 +406,124 @@ describe('AcTrStyleManager', () => {
     expect(material.color.getHex()).toBe(0x808080)
   })
 
-  it('repaints solid foreground hatches on theme flip', () => {
-    // Lock the `_bgfill` cache partition + `isBackgroundFill` metadata
-    // contract: changeBackground must walk these materials and repaint
-    // them so the fuse-with-bg behaviour persists across theme flips.
+  /**
+   * Regression for #464: ByLayer entities on ACI-7 layers bake white at
+   * material-create time. A later layer sync (the background-change bridge)
+   * must mark them foreground-tracked and invert with the theme — without
+   * that, light canvases leave white-on-white text/hatches.
+   */
+  it('tracks ByLayer-on-ACI-7 line materials as foreground across theme flips (#464)', () => {
     const styleManager = new AcTrStyleManager()
-    styleManager.currentBackgroundColor = 0xffffff
+    styleManager.currentBackgroundColor = 0x000000
 
     const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
-    traits.layer = 'A-WALL'
-    traits.color = new AcCmColor().setForeground()
+    traits.layer = 'A-ANNO'
+    traits.color.setByLayer()
+
+    const material = styleManager.getLineMaterial(
+      traits
+    ) as THREE.LineBasicMaterial
+    expect(material.color.getHex()).toBe(0xffffff)
+    expect(getMaterialMetadata(material).isForeground).toBe(false)
+
+    const layerColor = new AcCmColor().setForeground()
+    styleManager.updateLayerMaterial('A-ANNO', {
+      layer: 'A-ANNO',
+      color: layerColor
+    })
+
+    expect(getMaterialMetadata(material).isForeground).toBe(true)
+    expect(material.color.getHex()).toBe(0xffffff)
+
+    styleManager.currentBackgroundColor = 0xffffff
+    expect(material.color.getHex()).toBe(0x000000)
+
+    styleManager.currentBackgroundColor = 0x000000
+    expect(material.color.getHex()).toBe(0xffffff)
+  })
+
+  it('tracks ByLayer-on-ACI-7 hatch fills as foreground across theme flips (#464)', () => {
+    const styleManager = new AcTrStyleManager()
+    styleManager.currentBackgroundColor = 0x000000
+
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = 'A-HATCH'
+    traits.color.setByLayer()
     traits.drawOrder = -1
 
     const material = styleManager.getFillMaterial(
       traits
     ) as THREE.MeshBasicMaterial
+    expect(getMaterialMetadata(material).isForeground).toBe(false)
 
+    const layerColor = new AcCmColor().setForeground()
+    styleManager.updateLayerMaterial('A-HATCH', {
+      layer: 'A-HATCH',
+      color: layerColor
+    })
+
+    expect(getMaterialMetadata(material).isForeground).toBe(true)
     expect(material.color.getHex()).toBe(0xffffff)
-
-    styleManager.currentBackgroundColor = 0x000000
-    expect(material.color.getHex()).toBe(0x000000)
 
     styleManager.currentBackgroundColor = 0xffffff
+    expect(material.color.getHex()).toBe(0x000000)
+
+    styleManager.currentBackgroundColor = 0x000000
     expect(material.color.getHex()).toBe(0xffffff)
+  })
+
+  it('marks newly layer-bound ByLayer-on-ACI-7 materials as foreground (#464)', () => {
+    const styleManager = new AcTrStyleManager()
+    styleManager.currentBackgroundColor = 0xffffff
+
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = '0'
+    traits.color.setByLayer()
+    const base = styleManager.getLineMaterial(traits)
+
+    const layerColor = new AcCmColor().setForeground()
+    const bound = styleManager.getLayerBoundMaterial(base, 'TXT', {
+      layer: 'TXT',
+      color: layerColor
+    }) as THREE.LineBasicMaterial
+
+    expect(bound).toBeDefined()
+    expect(getMaterialMetadata(bound!).isForeground).toBe(true)
+    expect(bound!.color.getHex()).toBe(0x000000)
+
+    styleManager.currentBackgroundColor = 0x000000
+    expect(bound!.color.getHex()).toBe(0xffffff)
+  })
+
+  it('clears foreground tracking when an ACI-7 layer becomes an absolute colour', () => {
+    const styleManager = new AcTrStyleManager()
+    styleManager.currentBackgroundColor = 0x000000
+
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.layer = 'A-ANNO'
+    traits.color.setByLayer()
+    const material = styleManager.getLineMaterial(
+      traits
+    ) as THREE.LineBasicMaterial
+
+    styleManager.updateLayerMaterial('A-ANNO', {
+      layer: 'A-ANNO',
+      color: new AcCmColor().setForeground()
+    })
+    expect(getMaterialMetadata(material).isForeground).toBe(true)
+
+    const yellow = new AcCmColor()
+    yellow.setRGB(255, 255, 0)
+    styleManager.updateLayerMaterial('A-ANNO', {
+      layer: 'A-ANNO',
+      color: yellow
+    })
+
+    expect(getMaterialMetadata(material).isForeground).toBe(false)
+    expect(material.color.getHex()).toBe(0xffff00)
+
+    styleManager.currentBackgroundColor = 0xffffff
+    expect(material.color.getHex()).toBe(0xffff00)
   })
 
   it('creates a new patterned hatch material when pattern offset changes', () => {
@@ -331,5 +596,19 @@ describe('AcTrStyleManager', () => {
     const metadata = getMaterialMetadata(material)
     expect(metadata.drawOrder).toBe(-1)
     expect(metadata.isBackgroundFill).toBe(false)
+  })
+
+  it('uses fat line materials when forceShowLineWeight is on even if LWDISPLAY is off', () => {
+    const styleManager = new AcTrStyleManager()
+    const traits = AcTrSubEntityTraitsUtil.createDefaultTraits()
+    traits.lineWeight = AcGiLineWeight.LineWeight211
+
+    const hairline = styleManager.getLineMaterial(traits)
+    expect(hairline).toBeInstanceOf(THREE.LineBasicMaterial)
+
+    styleManager.forceShowLineWeight = true
+    const fat = styleManager.getLineMaterial(traits)
+    expect(fat).toBeInstanceOf(LineMaterial)
+    expect((fat as LineMaterial).linewidth).toBeCloseTo(211 / 40)
   })
 })

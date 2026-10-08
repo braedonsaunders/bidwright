@@ -14,6 +14,9 @@ export class AcEdPromptPointOptions extends AcEdPromptOptions<AcGePoint3d> {
   private _useDashedLine: boolean = false
   private _allowNone: boolean = false
   private _disableOSnap: boolean = false
+  private _showConfirmedPointMark?: boolean
+  private _defaultValue?: AcGePoint3d
+  private _useDefaultValue: boolean = false
 
   /**
    * Constructs a new `AcEdPromptPointOptions` with a given prompt message.
@@ -21,6 +24,47 @@ export class AcEdPromptPointOptions extends AcEdPromptOptions<AcGePoint3d> {
    */
   constructor(message: string, globalKeywords?: string) {
     super(message, globalKeywords)
+  }
+
+  /**
+   * Gets or sets the default point used when the user presses ENTER without
+   * picking or typing a point, if {@link useDefaultValue} is true.
+   *
+   * AutoCAD .NET `PromptPointOptions` does not expose this property; it is
+   * provided here so commands can show and accept defaults such as `<0,0>`.
+   */
+  get defaultValue(): AcGePoint3d | undefined {
+    return this._defaultValue
+  }
+  set defaultValue(point: AcGePoint3d | undefined) {
+    if (!this.isReadOnly) {
+      if (point == null) {
+        this._defaultValue = point
+      } else {
+        this._defaultValue = this._defaultValue
+          ? this._defaultValue.copy(point)
+          : new AcGePoint3d(point)
+      }
+    }
+  }
+
+  /**
+   * Gets or sets whether {@link defaultValue} should be used when the user
+   * presses ENTER without providing other input.
+   */
+  get useDefaultValue(): boolean {
+    return this._useDefaultValue
+  }
+  set useDefaultValue(flag: boolean) {
+    if (!this.isReadOnly) {
+      this._useDefaultValue = flag
+    }
+  }
+
+  override getDefaultValueDisplayText(): string | undefined {
+    if (!this._useDefaultValue || !this._defaultValue) return undefined
+    const { x, y, z } = this._defaultValue
+    return z === 0 ? `${x},${y}` : `${x},${y},${z}`
   }
 
   /**
@@ -92,6 +136,27 @@ export class AcEdPromptPointOptions extends AcEdPromptOptions<AcGePoint3d> {
   set disableOSnap(flag: boolean) {
     if (!this.isReadOnly) {
       this._disableOSnap = flag
+    }
+  }
+
+  /**
+   * Gets or sets whether a confirmed pick should contribute a plus-shaped mark
+   * while later point prompts in the same command run (similar to acquired
+   * center ticks). Marks appear when the next interactive point prompt starts,
+   * not immediately on confirm, so single-point commands do not flash a mark.
+   *
+   * - `undefined` (default): track on phone/pad UI, ignore on desktop.
+   * - `true` / `false`: override the platform default.
+   *
+   * Useful on touch devices where short taps skip the jig preview and users
+   * otherwise cannot see points they have already picked.
+   */
+  get showConfirmedPointMark(): boolean | undefined {
+    return this._showConfirmedPointMark
+  }
+  set showConfirmedPointMark(flag: boolean | undefined) {
+    if (!this.isReadOnly) {
+      this._showConfirmedPointMark = flag
     }
   }
 }

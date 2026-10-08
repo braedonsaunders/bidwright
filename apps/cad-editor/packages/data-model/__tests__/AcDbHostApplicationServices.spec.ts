@@ -1,7 +1,7 @@
 import {
   AcDbHostApplicationServices,
   acdbHostApplicationServices,
-  setAcDbLayoutManagerFactory
+  acdbSetLayoutManagerFactory
 } from '../src/base/AcDbHostApplicationServices'
 import { AcDbDatabase } from '../src/database/AcDbDatabase'
 import { AcDbLayoutManager } from '../src/object/layout/AcDbLayoutManager'
@@ -22,7 +22,7 @@ describe('AcDbHostApplicationServices', () => {
     expect(services.workingDatabase).toBe(db)
     ;(services as unknown as { _layoutManager?: unknown })._layoutManager =
       undefined
-    setAcDbLayoutManagerFactory(() => ({ kind: 'layout' }) as never)
+    acdbSetLayoutManagerFactory(() => ({ kind: 'layout' }) as never)
     expect(services.layoutManager).toEqual({ kind: 'layout' })
   })
 
@@ -30,7 +30,7 @@ describe('AcDbHostApplicationServices', () => {
     const services = acdbHostApplicationServices()
     ;(services as unknown as { _layoutManager?: unknown })._layoutManager =
       undefined
-    setAcDbLayoutManagerFactory(undefined as never)
+    acdbSetLayoutManagerFactory(undefined as never)
     expect(services.layoutManager).toBeInstanceOf(AcDbLayoutManager)
   })
 })

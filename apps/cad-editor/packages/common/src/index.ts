@@ -34,6 +34,12 @@ export { AcCmTransparency } from './AcCmTransparency'
 export { AcCmTransparencyMethod } from './AcCmTransparencyMethod'
 export { AcCmTask, AcCmTaskScheduler } from './AcCmTaskScheduler'
 export type { AcCmCompleteCallback, AcCmTaskError } from './AcCmTaskScheduler'
+export {
+  ACCM_DEFAULT_UI_YIELD_BUDGET_MS,
+  AcCmUiYieldGate,
+  accmYieldForPaint,
+  accmYieldToUi
+} from './AcCmYieldToUi'
 export { AcCmLoader, AcCmLoadingManager, DefaultLoadingManager } from './loader'
 export type {
   AcCmLoaderProgressCallback,

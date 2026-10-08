@@ -54,7 +54,7 @@ type SegmentJoinInfo = {
  * @param offsetDist - Signed offset distance in drawing units (left = positive)
  * @returns One or more offset polylines; empty array when offsetting fails or input is degenerate
  */
-export function offsetAcGePolyline2d(
+export function acgeOffsetPolyline2d(
   polyline: AcGePolyline2d,
   offsetDist: number
 ): AcGePolyline2d[] {
@@ -81,7 +81,7 @@ export function offsetAcGePolyline2d(
  * @param polyline - Input polyline (typically straight segments only)
  * @returns The same instance if already normalized, otherwise a new polyline with cleaned vertices
  */
-export function preparePolylineForOffset(
+export function acgePreparePolylineForOffset(
   polyline: AcGePolyline2d
 ): AcGePolyline2d {
   return normalizeVertexPolyline(polyline)

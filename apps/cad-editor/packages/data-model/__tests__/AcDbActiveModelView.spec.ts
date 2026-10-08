@@ -1,4 +1,4 @@
-import { AcGeBox2d, AcGePoint2d } from '@mlightcad/geometry-engine'
+import { AcGeBox2d, AcGePoint2d, AcGePoint3d } from '@mlightcad/geometry-engine'
 
 import { AcDbDatabase } from '../src/database/AcDbDatabase'
 import { AcDbViewportTableRecord } from '../src/database/AcDbViewportTableRecord'
@@ -78,6 +78,37 @@ describe('AcDbActiveModelView', () => {
     const box = record.modelViewBox(2)
     expect(box!.min).toEqual({ x: -10, y: -5 })
     expect(box!.max).toEqual({ x: 10, y: 5 })
+  })
+
+  it('offsets the DCS view center by the WCS view target', () => {
+    // Real-world regression: cad-viewer PR #423 test DWGs store
+    // target (750984, -1587549) with center (165042, 1206723); the WCS
+    // view center is their sum (916026, -380826). Ignoring the target
+    // framed empty space ~1.9M units away from the drawing.
+    const record = new AcDbViewportTableRecord()
+    record.centerPoint = new AcGePoint2d(165042, 1206723)
+    record.viewTarget = new AcGePoint3d(750984, -1587549, 0)
+    record.viewHeight = 40000
+    setVportAspectRatio(record, 2)
+
+    const box = record.modelViewBox(2)
+    expect(box!.min).toEqual({ x: 916026 - 40000, y: -380826 - 20000 })
+    expect(box!.max).toEqual({ x: 916026 + 40000, y: -380826 + 20000 })
+  })
+
+  it('rotates the DCS view center by the view twist angle', () => {
+    const record = new AcDbViewportTableRecord()
+    record.centerPoint = new AcGePoint2d(100, 0)
+    record.viewTwistAngle = Math.PI / 2
+    record.viewHeight = 10
+    setVportAspectRatio(record, 1)
+
+    // center (100, 0) rotated +90° -> (0, 100)
+    const box = record.modelViewBox(1)
+    expect(box!.min.x).toBeCloseTo(-5)
+    expect(box!.max.x).toBeCloseTo(5)
+    expect(box!.min.y).toBeCloseTo(95)
+    expect(box!.max.y).toBeCloseTo(105)
   })
 
   it('returns undefined when view height is invalid', () => {

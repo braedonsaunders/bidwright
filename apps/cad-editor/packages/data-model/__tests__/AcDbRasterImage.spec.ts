@@ -5,7 +5,7 @@ import {
   AcGeVector2d
 } from '@mlightcad/geometry-engine'
 
-import { acdbHostApplicationServices, AcDbDxfFiler } from '../src/base'
+import { AcDbDxfFiler, acdbHostApplicationServices } from '../src/base'
 import { AcDbDatabase } from '../src/database'
 import { AcDbRasterImage, AcDbRasterImageClipBoundaryType } from '../src/entity'
 import { AcDbOsnapMode } from '../src/misc'
@@ -18,7 +18,14 @@ describe('AcDbRasterImage', () => {
   })
   const createRenderer = () => ({
     lines: jest.fn(() => ({ kind: 'lines' })),
-    image: jest.fn(() => ({ kind: 'image' }))
+    image: jest.fn(() => ({ kind: 'image' })),
+    area: jest.fn(() => ({ kind: 'area' })),
+    mtext: jest.fn(() => ({ kind: 'mtext' })),
+    group: jest.fn(entities => ({ kind: 'group', entities })),
+    subEntityTraits: {
+      fillType: undefined,
+      transparency: undefined
+    }
   })
 
   const parsePairs = (text: string) => {
@@ -99,6 +106,7 @@ describe('AcDbRasterImage', () => {
     const { db, image } = setupInDatabase()
 
     expect(image.imageFileName).toBe('')
+    expect(image.imageDisplayName).toBe('')
 
     image.imageDefId = 'NOT_EXIST'
     expect(image.imageFileName).toBe('')
@@ -108,6 +116,68 @@ describe('AcDbRasterImage', () => {
     db.objects.imageDefinition.setAt('TEST_IMG_DEF', imageDef)
     image.imageDefId = imageDef.objectId
     expect(image.imageFileName).toBe('textures/test.png')
+    expect(image.imageDisplayName).toBe('test.png')
+  })
+
+  it('resolves image file name when dictionary key is the DWG handle but objectId was reminted', () => {
+    const { db, image } = setupInDatabase()
+    const imageDef = new AcDbRasterImageDef()
+    imageDef.sourceFileName = 'C:\\Pictures\\shot.png'
+    // Simulate LibreDWG import: keyed by original handle, then objectId reminted
+    // with a clean handle-registry update (as commitObjectHandle does).
+    const originalHandle = '8D9CF'
+    imageDef.objectId = originalHandle
+    db.objects.imageDefinition.setAt(originalHandle, imageDef)
+    db.releaseObjectHandle(imageDef)
+    imageDef.objectId = '8DAD8'
+    db.registerObjectHandle(imageDef)
+    image.imageDefId = originalHandle
+
+    expect(db.objects.imageDefinition.getIdAt(originalHandle)).toBeUndefined()
+    expect(db.objects.imageDefinition.getAt(originalHandle)).toBe(imageDef)
+    expect(image.imageFileName).toBe('C:\\Pictures\\shot.png')
+    expect(image.imageDisplayName).toBe('shot.png')
+  })
+
+  it('exposes raster-image-specific properties for the property palette', () => {
+    const { db, image } = setupInDatabase()
+    const imageDef = new AcDbRasterImageDef()
+    imageDef.sourceFileName = 'C:\\images\\site photo.png'
+    db.objects.imageDefinition.setAt('SITE', imageDef)
+    image.imageDefId = imageDef.objectId
+    image.position = new AcGePoint3d(1, 2, 3)
+    image.width = 40
+    image.height = 30
+    image.rotation = 0.5
+    image.brightness = 60
+    image.contrast = 40
+    image.fade = 5
+    image.isImageShown = true
+    image.isImageTransparent = false
+    image.isClipped = true
+    image.isShownClipped = true
+
+    const props = image.properties
+    expect(props.type).toBe('RasterImage')
+    const geometry = props.groups.find(g => g.groupName === 'geometry')
+    const imageGroup = props.groups.find(g => g.groupName === 'image')
+    expect(geometry).toBeDefined()
+    expect(imageGroup).toBeDefined()
+
+    const byName = Object.fromEntries(
+      [...(geometry?.properties ?? []), ...(imageGroup?.properties ?? [])].map(
+        p => [p.name, p]
+      )
+    )
+    expect(byName.name.accessor.get()).toBe('C:\\images\\site photo.png')
+    expect(byName.positionX.accessor.get()).toBe(1)
+    expect(byName.width.accessor.get()).toBe(40)
+    expect(byName.height.accessor.get()).toBe(30)
+    expect(byName.brightness.accessor.get()).toBe(60)
+    expect(byName.isClipped.accessor.get()).toBe(true)
+
+    byName.fade.accessor.set?.(12)
+    expect(image.fade).toBe(12)
   })
 
   it('calculates geometric extents', () => {
@@ -221,22 +291,91 @@ describe('AcDbRasterImage', () => {
     expect(perpendicularPoints).toHaveLength(1)
   })
 
-  it('draws via renderer.lines when image data is absent and renderer.image when present', () => {
-    const { image } = setupInDatabase()
+  it('draws a pickable frame when image data is absent and renderer.image when shown', () => {
+    const { db, image } = setupInDatabase()
     image.position = new AcGePoint3d(0, 0, 0)
     image.width = 12
     image.height = 6
 
     const renderer = createRenderer()
-    const lineDrawable = image.subWorldDraw(renderer as never)
-    expect(lineDrawable).toEqual({ kind: 'lines' })
+    const frameDrawable = image.subWorldDraw(renderer as never)
+    expect(frameDrawable).toEqual({
+      kind: 'group',
+      entities: [{ kind: 'area' }, { kind: 'lines' }]
+    })
+    expect(renderer.area).toHaveBeenCalledTimes(1)
     expect(renderer.lines).toHaveBeenCalledTimes(1)
+    expect(renderer.mtext).not.toHaveBeenCalled()
     expect(renderer.image).not.toHaveBeenCalled()
 
+    const imageDef = new AcDbRasterImageDef()
+    imageDef.sourceFileName = 'folder\\missing-photo.jpg'
+    db.objects.imageDefinition.setAt('MISSING', imageDef)
+    image.imageDefId = imageDef.objectId
+
+    const labeledRenderer = createRenderer()
+    const labeledDrawable = image.subWorldDraw(labeledRenderer as never)
+    expect(labeledDrawable).toEqual({
+      kind: 'group',
+      entities: [
+        { kind: 'group', entities: [{ kind: 'area' }, { kind: 'lines' }] },
+        { kind: 'mtext' }
+      ]
+    })
+    expect(labeledRenderer.mtext).toHaveBeenCalledTimes(1)
+    const mtextArg = (labeledRenderer.mtext as jest.Mock).mock.calls[0][0] as {
+      text: string
+      height: number
+      position: { x: number; y: number }
+    }
+    expect(mtextArg.text).toBe('folder\\\\missing-photo.jpg')
+    expect(mtextArg.height).toBeGreaterThan(0)
+    expect(mtextArg.height).toBeLessThanOrEqual(6 * 0.85)
+    expect(mtextArg.position.x).toBeCloseTo(6)
+    expect(mtextArg.position.y).toBeCloseTo(3)
+
+    // Windows path segments that collide with MTEXT codes (`\P`, `\S`) must
+    // be escaped so the frame label stays a single readable path line.
+    imageDef.sourceFileName =
+      '..\\..\\..\\Pictures\\Screenshots\\Screenshot 2026-09-25 105710.png'
+    const pathRenderer = createRenderer()
+    image.subWorldDraw(pathRenderer as never)
+    const pathMtext = (pathRenderer.mtext as jest.Mock).mock.calls[0][0] as {
+      text: string
+    }
+    expect(pathMtext.text).toBe(
+      '..\\\\..\\\\..\\\\Pictures\\\\Screenshots\\\\Screenshot 2026-09-25 105710.png'
+    )
+
     image.image = new Blob(['raw'], { type: 'application/octet-stream' })
+    image.isImageShown = true
     const imageDrawable = image.subWorldDraw(renderer as never)
     expect(imageDrawable).toEqual({ kind: 'image' })
     expect(renderer.image).toHaveBeenCalledTimes(1)
+  })
+
+  it('draws the pickable frame when isImageShown is false even if image data exists', () => {
+    const { db, image } = setupInDatabase()
+    image.position = new AcGePoint3d(0, 0, 0)
+    image.width = 12
+    image.height = 6
+    image.image = new Blob(['raw'], { type: 'application/octet-stream' })
+    image.isImageShown = false
+    const imageDef = new AcDbRasterImageDef()
+    imageDef.sourceFileName = 'C:\\images\\hidden.png'
+    db.objects.imageDefinition.setAt('HIDDEN', imageDef)
+    image.imageDefId = imageDef.objectId
+
+    const renderer = createRenderer()
+    const frameDrawable = image.subWorldDraw(renderer as never)
+    expect(frameDrawable).toEqual({
+      kind: 'group',
+      entities: [{ kind: 'area' }, { kind: 'lines' }]
+    })
+    expect(renderer.image).not.toHaveBeenCalled()
+    expect(renderer.mtext).not.toHaveBeenCalled()
+    expect(renderer.area).toHaveBeenCalledTimes(1)
+    expect(renderer.lines).toHaveBeenCalledTimes(1)
   })
 
   it('transforms geometry and resets scale', () => {

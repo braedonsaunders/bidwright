@@ -3,7 +3,14 @@ import { AcGePoint2dLike } from '@mlightcad/data-model'
 /**
  * Supported marker shapes.
  */
-export type AcEdMarkerType = 'circle' | 'triangle' | 'rect' | 'diamond' | 'x'
+export type AcEdMarkerType =
+  | 'circle'
+  | 'triangle'
+  | 'rect'
+  | 'diamond'
+  | 'x'
+  | 'plus'
+  | 'intersection'
 
 /**
  * Represents a single marker displayed in screen coordinates.
@@ -118,31 +125,31 @@ export class AcEdMarker {
         z-index: 1;
         box-sizing: border-box;
       }
-    
+
       .ml-marker-circle {
         border-radius: 50%;
         border: 2px solid currentColor;
         background: transparent;
       }
-    
+
       .ml-marker-rect {
         border: 2px solid currentColor;
         background: transparent;
       }
-    
+
       .ml-marker-triangle {
         background: currentColor;
         clip-path: polygon(50% 0%, 0% 100%, 100% 100%);
         /* Centroid of the upward triangle is 2/3 of the height from the apex. */
         transform: translate(-50%, -66.6667%);
       }
-    
+
       .ml-marker-diamond {
         border: 2px solid currentColor;
         background: transparent;
         transform: translate(-50%, -50%) rotate(45deg);
       }
-    
+
       .ml-marker-x::before,
       .ml-marker-x::after {
         content: '';
@@ -154,12 +161,59 @@ export class AcEdMarker {
         background: currentColor;
         transform-origin: center;
       }
-    
+
       .ml-marker-x::before {
         transform: translate(-50%, -50%) rotate(45deg);
       }
-    
+
       .ml-marker-x::after {
+        transform: translate(-50%, -50%) rotate(-45deg);
+      }
+
+      .ml-marker-plus::before,
+      .ml-marker-plus::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        background: currentColor;
+        transform-origin: center;
+      }
+
+      .ml-marker-plus::before {
+        width: 100%;
+        height: 2px;
+        transform: translate(-50%, -50%);
+      }
+
+      .ml-marker-plus::after {
+        width: 2px;
+        height: 100%;
+        transform: translate(-50%, -50%);
+      }
+
+      .ml-marker-intersection {
+        border: 2px solid currentColor;
+        background: transparent;
+      }
+
+      .ml-marker-intersection::before,
+      .ml-marker-intersection::after {
+        content: '';
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        width: 70%;
+        height: 2px;
+        background: currentColor;
+        transform-origin: center;
+      }
+
+      .ml-marker-intersection::before {
+        transform: translate(-50%, -50%) rotate(45deg);
+      }
+
+      .ml-marker-intersection::after {
         transform: translate(-50%, -50%) rotate(-45deg);
       }
     `
@@ -206,6 +260,18 @@ export class AcEdMarker {
 
       case 'x':
         this._el.classList.add('ml-marker-x')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+
+      case 'plus':
+        this._el.classList.add('ml-marker-plus')
+        this._el.style.width = `${this._size}px`
+        this._el.style.height = `${this._size}px`
+        break
+
+      case 'intersection':
+        this._el.classList.add('ml-marker-intersection')
         this._el.style.width = `${this._size}px`
         this._el.style.height = `${this._size}px`
         break

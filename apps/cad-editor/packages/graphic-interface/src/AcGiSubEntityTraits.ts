@@ -72,4 +72,14 @@ export interface AcGiSubEntityTraits {
    * are visually linework even though they are rasterized as meshes.
    */
   drawOrder: number
+
+  /**
+   * When true, solid fills use the current canvas / layout background
+   * colour and track theme flips, ignoring {@link color}.
+   *
+   * Used by wipeouts so the masked area matches the paper rather than
+   * the entity's ACI colour (which is typically ACI 7 / black on a light
+   * background).
+   */
+  isBackgroundFill?: boolean
 }

@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "clean": "rimraf dist tsconfig.tsbuildinfo",
     "dev": "vite",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "@mlightcad/cad-html-plugin": "workspace:*",
@@ -22,7 +23,10 @@
     "lodash-es": "4.17.21",
     "three": "^0.172.0",
     "vue": "^3.4.21",
-    "vue-i18n": "^11.4.4"
+    "vue-i18n": "^11.4.4",
+    "@mlightcad/libredwg-converter": "workspace:*",
+    "pdf-lib": "^1.17.1",
+    "@pdf-lib/fontkit": "^1.1.1"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^5.1.3",
@@ -30,6 +34,8 @@
     "typescript": "^5.5.2",
     "vite": "^5.4.19",
     "vite-svg-loader": "^5.1.0",
-    "vite-plugin-static-copy": "^3.1.1"
+    "vite-plugin-static-copy": "^3.1.1",
+    "@types/three": "^0.172.0",
+    "@playwright/test": "^1.55.0"
   }
 }

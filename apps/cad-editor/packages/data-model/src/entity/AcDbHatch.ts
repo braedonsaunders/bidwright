@@ -1,10 +1,16 @@
-import { AcCmColor, AcCmColorMethod, AcCmTransparency } from '@mlightcad/common'
+import {
+  AcCmColor,
+  AcCmColorMethod,
+  AcCmColorUtil,
+  AcCmTransparency
+} from '@mlightcad/common'
 import {
   AcGeArea2d,
   AcGeBox3d,
   AcGeCircArc2d,
   AcGeEllipseArc2d,
   AcGeIndexNode,
+  AcGeIntersectPrimitive,
   AcGeLine2d,
   AcGeLoop2d,
   AcGeLoop2dType,
@@ -15,6 +21,8 @@ import {
   AcGePoint3dLike,
   AcGePolyline2d,
   AcGeSpline3d,
+  acgeTransformOcsPointToWcs,
+  AcGeVector3d,
   AcGeVector3dLike
 } from '@mlightcad/geometry-engine'
 import {
@@ -27,6 +35,7 @@ import type { AcDbDatabase } from '../database/AcDbDatabase'
 import { AcDbSystemVariables } from '../database/AcDbSystemVariables'
 import { AcDbSysVarManager } from '../database/AcDbSysVarManager'
 import {
+  acdbIsSolidHatchPatternName,
   DEFAULT_GRADIENT_HATCH_NAME,
   HATCH_PATTERN_SOLID,
   HATCH_PATTERN_USER
@@ -39,6 +48,7 @@ import {
   acdbForEachGripIndex,
   acdbMovePolyline2dVertexAt
 } from './AcDbGripHelpers'
+import { acdbIntersectPrimitivesFromAreaLoops } from './AcDbIntersectHelpers'
 import {
   acdbCollectPolyline2dSegmentOsnapPoints,
   acdbPickNearestOsnapPoint
@@ -176,10 +186,17 @@ export class AcDbHatch extends AcDbEntity {
 
   /** The underlying geometric area object */
   private _geo: AcGeArea2d
+  /**
+   * Cached result of {@link buildAreasFromLoops}. Cleared when loops change
+   * (`add`, `transformBy`, grip edits).
+   */
+  private _areasFromLoopsCache: AcGeArea2d[] | null = null
   /** The flag to indicate whether the hatch object is configured for solid fill */
   private _isSolidFill: boolean
   /** The elevation (Z-coordinate) of the hatch plane */
   private _elevation: number
+  /** Extrusion direction / plane normal (DXF group 210). */
+  private _normal = new AcGeVector3d(0, 0, 1)
   /** The definition lines for the hatch pattern */
   private _definitionLines: AcGiHatchPatternLine[]
   /** Whether current definition lines were generated from a predefined PAT entry. */
@@ -235,6 +252,12 @@ export class AcDbHatch extends AcDbEntity {
   private _gradientStartColor?: number
   /** Optional end color for gradient fill, stored as packed 0xRRGGBB. */
   private _gradientEndColor?: number
+  /**
+   * Pixel size used to determine the density for intersection and ray-casting
+   * operations in hatch pattern computation for associative hatches and
+   * hatches created with the Flood method (DXF group 47).
+   */
+  private _pixelSize?: number
   /** The type of the gradient pattern. */
   private _gradientType: AcDbGradientPatternType
   /** The name of the current gradient. */
@@ -290,6 +313,7 @@ export class AcDbHatch extends AcDbEntity {
     this._shadeTintValue = 0
     this._gradientStartColor = undefined
     this._gradientEndColor = undefined
+    this._pixelSize = undefined
     this._gradientType = AcDbGradientPatternType.PreDefinedGradient
     this._gradientName = ''
     this._gradientOneColorMode = false
@@ -315,8 +339,7 @@ export class AcDbHatch extends AcDbEntity {
   get isSolidFill() {
     return (
       this._isSolidFill ||
-      this.getEffectivePatternName().trim().toUpperCase() ===
-        HATCH_PATTERN_SOLID
+      acdbIsSolidHatchPatternName(this.getEffectivePatternName())
     )
   }
   /**
@@ -382,8 +405,7 @@ export class AcDbHatch extends AcDbEntity {
   }
   set patternName(value: string) {
     this._patternName = value ?? ''
-    this._isSolidFill =
-      this._patternName.trim().toUpperCase() === HATCH_PATTERN_SOLID
+    this._isSolidFill = acdbIsSolidHatchPatternName(this._patternName)
     this._patternNameSet = true
     this.updatePredefinedPatternDefinitionLines()
   }
@@ -483,6 +505,19 @@ export class AcDbHatch extends AcDbEntity {
   }
   set elevation(value: number) {
     this._elevation = value
+  }
+
+  /**
+   * Extrusion direction / plane normal (DXF group 210).
+   */
+  get normal(): AcGeVector3d {
+    return this._normal
+  }
+  set normal(value: AcGeVector3dLike) {
+    this._normal.copy(value)
+    if (this._normal.lengthSq() > 0) {
+      this._normal.normalize()
+    }
   }
 
   /**
@@ -618,6 +653,22 @@ export class AcDbHatch extends AcDbEntity {
   set gradientEndColor(value: number | undefined) {
     this._gradientEndColor =
       value == null || !Number.isFinite(value) ? undefined : value & 0xffffff
+  }
+
+  /**
+   * Gets the pixel size used for intersection/ray-casting density
+   * calculations (DXF group 47), for associative or Flood-method hatches.
+   */
+  get pixelSize() {
+    return this._pixelSize
+  }
+
+  /**
+   * Sets the pixel size used for intersection/ray-casting density
+   * calculations (DXF group 47).
+   */
+  set pixelSize(value: number | undefined) {
+    this._pixelSize = value
   }
 
   /**
@@ -859,7 +910,7 @@ export class AcDbHatch extends AcDbEntity {
     const normalizedPatternName = patternName.trim().toUpperCase()
     if (
       !normalizedPatternName ||
-      normalizedPatternName === HATCH_PATTERN_SOLID
+      acdbIsSolidHatchPatternName(normalizedPatternName)
     ) {
       this._definitionLines = []
       this._definitionLinesAutoGenerated = false
@@ -914,12 +965,27 @@ export class AcDbHatch extends AcDbEntity {
    */
   add(loop: AcGeLoop2dType) {
     this._geo.add(loop)
+    this.invalidateAreasFromLoopsCache()
+  }
+
+  private invalidateAreasFromLoopsCache() {
+    this._areasFromLoopsCache = null
   }
 
   private buildAreasFromLoops() {
+    if (this._areasFromLoopsCache != null) {
+      return this._areasFromLoopsCache
+    }
+
     const loops = this._geo.loops
-    if (loops.length === 0) return []
-    if (loops.length === 1) return [this._geo]
+    if (loops.length === 0) {
+      this._areasFromLoopsCache = []
+      return this._areasFromLoopsCache
+    }
+    if (loops.length === 1) {
+      this._areasFromLoopsCache = [this._geo]
+      return this._areasFromLoopsCache
+    }
 
     const hierarchy = this._geo.buildHierarchy()
     const areas: AcGeArea2d[] = []
@@ -940,7 +1006,8 @@ export class AcDbHatch extends AcDbEntity {
 
     hierarchy.children.forEach(child => visit(child, 0))
 
-    return areas.length > 0 ? areas : [this._geo]
+    this._areasFromLoopsCache = areas.length > 0 ? areas : [this._geo]
+    return this._areasFromLoopsCache
   }
 
   private getCalculatedAreaValue(): number {
@@ -968,13 +1035,36 @@ export class AcDbHatch extends AcDbEntity {
     areas.forEach(area => {
       const box = area.box
       extents.union(
-        new AcGeBox3d(
-          { x: box.min.x, y: box.min.y, z: this._elevation },
-          { x: box.max.x, y: box.max.y, z: this._elevation }
-        )
+        new AcGeBox3d().setFromPoints([
+          acgeTransformOcsPointToWcs(
+            { x: box.min.x, y: box.min.y, z: this._elevation },
+            this._normal
+          ),
+          acgeTransformOcsPointToWcs(
+            { x: box.max.x, y: box.min.y, z: this._elevation },
+            this._normal
+          ),
+          acgeTransformOcsPointToWcs(
+            { x: box.max.x, y: box.max.y, z: this._elevation },
+            this._normal
+          ),
+          acgeTransformOcsPointToWcs(
+            { x: box.min.x, y: box.max.y, z: this._elevation },
+            this._normal
+          )
+        ])
       )
     })
     return extents
+  }
+
+  /** @inheritdoc */
+  override subGetIntersectCurves(): AcGeIntersectPrimitive[] {
+    return acdbIntersectPrimitivesFromAreaLoops(
+      this._geo.loops,
+      this._elevation,
+      this._normal
+    )
   }
 
   /**
@@ -1130,6 +1220,7 @@ export class AcDbHatch extends AcDbEntity {
     acdbForEachGripIndex(indices, index => {
       this.moveBoundaryGripPointAt(index, offset)
     })
+    this.invalidateAreasFromLoopsCache()
     return this
   }
 
@@ -1570,6 +1661,23 @@ export class AcDbHatch extends AcDbEntity {
   }
 
   /**
+   * Solid (non-gradient) hatches that draw as a single `area` call.
+   * Multi-loop hatches that become a `group` of areas stay on the legacy path.
+   *
+   * @internal
+   */
+  override get directBatchPrimitive() {
+    if (!this.isSolidFill || this.isGradient) {
+      return null
+    }
+    const areas = this.buildAreasFromLoops()
+    if (areas.length > 1) {
+      return null
+    }
+    return 'area' as const
+  }
+
+  /**
    * @inheritdoc
    */
   subWorldDraw(renderer: AcGiRenderer) {
@@ -1621,9 +1729,14 @@ export class AcDbHatch extends AcDbEntity {
       1
     )
     this._geo.transform(matrix2d)
+    this.invalidateAreasFromLoopsCache()
     this._elevation = new AcGePoint3d(0, 0, this._elevation).applyMatrix4(
       matrix
     ).z
+    this._normal.transformDirection(matrix)
+    if (this._normal.lengthSq() > 0) {
+      this._normal.normalize()
+    }
 
     const xAxis = new AcGePoint3d(1, 0, 0).applyMatrix4(matrix)
     const origin = new AcGePoint3d().applyMatrix4(matrix)
@@ -1655,7 +1768,7 @@ export class AcDbHatch extends AcDbEntity {
     this.updatePredefinedPatternDefinitionLines(patternName, patternScale)
     filer.writeSubclassMarker('AcDbHatch')
     filer.writePoint3d(10, { x: 0, y: 0, z: this.elevation })
-    filer.writeVector3d(210, { x: 0, y: 0, z: 1 })
+    filer.writeVector3d(210, this.normal)
     filer.writeString(
       2,
       patternName ||
@@ -1703,8 +1816,17 @@ export class AcDbHatch extends AcDbEntity {
             filer.writeInt16(72, 2)
             filer.writePoint2d(10, edge.center)
             filer.writeDouble(40, edge.radius)
+            // A full-circle edge normalizes to start == end (0 ≡ 2π) in
+            // AcGeCircArc2d. Writing both verbatim emits a degenerate
+            // zero-length arc; strict DXF readers (ezdxf, AutoCAD) then treat
+            // the boundary as open and drop the fill. A closed arc edge in a
+            // hatch boundary loop can only be a full circle — restore the
+            // 360° span.
             filer.writeAngle(50, edge.startAngle)
-            filer.writeAngle(51, edge.endAngle)
+            filer.writeAngle(
+              51,
+              edge.closed ? edge.startAngle + Math.PI * 2 : edge.endAngle
+            )
             filer.writeInt16(73, edge.clockwise ? 0 : 1)
             continue
           }
@@ -1722,8 +1844,15 @@ export class AcDbHatch extends AcDbEntity {
                 ? 0
                 : edge.minorAxisRadius / edge.majorAxisRadius
             filer.writeDouble(40, ratio)
+            // Same full-span restore as circular arcs: a closed ellipse edge
+            // (start ≡ end mod 2π, including the constructor's 0..2π form
+            // where deltaAngle normalizes to 0) must write a 360° span, or
+            // strict DXF readers treat the boundary as open and drop the fill.
             filer.writeAngle(50, edge.startAngle)
-            filer.writeAngle(51, edge.endAngle)
+            filer.writeAngle(
+              51,
+              edge.closed ? edge.startAngle + Math.PI * 2 : edge.endAngle
+            )
             filer.writeInt16(73, edge.clockwise ? 0 : 1)
             continue
           }
@@ -1763,23 +1892,682 @@ export class AcDbHatch extends AcDbEntity {
     filer.writeInt16(77, 0)
     filer.writeInt16(78, this.definitionLines.length)
     this.definitionLines.forEach(line => {
+      // Hatch pattern lines use 43/44 and 45/46 (not code+10 point pairs).
       filer.writeAngle(53, line.angle)
-      filer.writePoint2d(43, line.base)
-      filer.writePoint2d(45, line.offset)
+      filer.writeDouble(43, line.base.x)
+      filer.writeDouble(44, line.base.y)
+      filer.writeDouble(45, line.offset.x)
+      filer.writeDouble(46, line.offset.y)
       filer.writeInt16(79, line.dashLengths.length)
       line.dashLengths.forEach(length => filer.writeDouble(49, length))
     })
-    // Gradient fill parameters
+    if (this._pixelSize != null) {
+      filer.writeDouble(47, this._pixelSize)
+    }
+    // Gradient fill parameters (DXF group 460 is radians, not degrees).
     if (this.isGradient) {
       filer.writeInt16(450, this._hatchObjectType)
       filer.writeInt16(451, 0)
-      filer.writeInt16(452, this._gradientOneColorMode ? 1 : 0)
-      filer.writeAngle(460, this._gradientAngle)
+      filer.writeDouble(460, this._gradientAngle)
       filer.writeDouble(461, this._gradientShift)
+      filer.writeInt16(452, this._gradientOneColorMode ? 1 : 0)
+      filer.writeDouble(462, this._shadeTintValue)
+      const startColor = this._gradientStartColor
+      const endColor = this._gradientEndColor
+      const colorCount =
+        startColor != null && endColor != null
+          ? 2
+          : startColor != null || endColor != null
+            ? 1
+            : 0
+      filer.writeInt16(453, colorCount)
+      const writeGradientColor = (position: number, rgb: number) => {
+        filer.writeDouble(463, position)
+        const aci = AcCmColorUtil.getIndexByColor(rgb)
+        if (aci != null) {
+          filer.writeInt16(63, aci)
+        }
+        filer.writeInt32(421, rgb)
+      }
+      if (startColor != null) {
+        writeGradientColor(0, startColor)
+      }
+      if (endColor != null) {
+        writeGradientColor(1, endColor)
+      }
       filer.writeString(470, this.gradientName)
     }
     // TODO: Write the number of seed points
     filer.writeInt16(98, 0)
+    return this
+  }
+
+  override dxfInFields(filer: AcDbDxfFiler): this {
+    super.dxfInFields(filer)
+    filer.atSubclassData('AcDbHatch')
+
+    this.definitionLines.length = 0
+
+    type PendingVertex = { x: number; y: number; bulge?: number }
+    type EdgeBuilder =
+      | { kind: 'line'; sx: number; sy: number; ex: number; ey: number }
+      | {
+          kind: 'arc'
+          cx: number
+          cy: number
+          radius: number
+          startDeg: number
+          endDeg: number
+          isCcw: boolean
+        }
+      | {
+          kind: 'ellipse'
+          cx: number
+          cy: number
+          mx: number
+          my: number
+          ratio: number
+          startDeg: number
+          endDeg: number
+          isCcw: boolean
+        }
+      | {
+          kind: 'spline'
+          degree: number
+          rational: boolean
+          closed: boolean
+          knots: number[]
+          controlPoints: { x: number; y: number; weight?: number }[]
+          fitPoints: { x: number; y: number }[]
+          expectedKnots: number
+          expectedControls: number
+          expectedFits: number
+          /** True after the spline-edge fit-count (group 97) has been consumed. */
+          fitCountSeen: boolean
+        }
+
+    let elevation = this.elevation
+    let nx = this.normal.x
+    let ny = this.normal.y
+    let nz = this.normal.z
+    let patternAngleDeg = (this.patternAngle * 180) / Math.PI
+    let boundaryFlag = 0
+    let isPolylineBoundary = false
+    let hasBulge = false
+    let polyClosed = false
+    let expectedVertices = 0
+    let expectedEdges = 0
+    let pendingVertices: PendingVertex[] = []
+    let pendingVertex: PendingVertex | null = null
+    let edges: EdgeBuilder[] = []
+    let currentEdge: EdgeBuilder | null = null
+    let edgePhase: 'type' | 'line-end' | 'arc' | 'ellipse' | 'spline' = 'type'
+    let loopsRemaining = 0
+    let inPatternLines = false
+    let currentPatternLine: AcGiHatchPatternLine | null = null
+    let expectedDashes = 0
+    void expectedDashes
+    let afterBoundaries = false
+    let gradientColorIndex = 0
+    let pendingGradientAci: number | undefined
+
+    const applyGradientRgb = (rgb: number) => {
+      if (gradientColorIndex === 0) {
+        this.gradientStartColor = rgb
+      } else {
+        this.gradientEndColor = rgb
+      }
+      gradientColorIndex++
+      pendingGradientAci = undefined
+    }
+
+    const flushPendingGradientAci = () => {
+      if (pendingGradientAci == null) return
+      const rgb = AcCmColorUtil.getColorByIndex(pendingGradientAci)
+      if (rgb != null) {
+        applyGradientRgb(rgb)
+      } else {
+        pendingGradientAci = undefined
+      }
+    }
+
+    const flushVertex = () => {
+      if (pendingVertex) {
+        pendingVertices.push(pendingVertex)
+        pendingVertex = null
+      }
+    }
+
+    const flushPolylineLoop = () => {
+      flushVertex()
+      if (pendingVertices.length === 0) return
+      const polyline = new AcGePolyline2d()
+      polyline.closed = polyClosed
+      pendingVertices.forEach((vertex, index) => {
+        polyline.addVertexAt(index, {
+          x: vertex.x,
+          y: vertex.y,
+          bulge: vertex.bulge ?? 0
+        })
+      })
+      this.add(polyline)
+      pendingVertices = []
+    }
+
+    const flushEdgeLoop = () => {
+      if (edges.length === 0) return
+      const built: import('@mlightcad/geometry-engine').AcGeLoop2dType[] = []
+      // Convert edges to geometry types (mirrors AcDbEntityConverter.convertHatch).
+      const geoEdges: (
+        | AcGeLine2d
+        | AcGeCircArc2d
+        | AcGeEllipseArc2d
+        | AcGeSpline3d
+      )[] = []
+      for (const edge of edges) {
+        if (edge.kind === 'line') {
+          geoEdges.push(
+            new AcGeLine2d(
+              { x: edge.sx, y: edge.sy },
+              { x: edge.ex, y: edge.ey }
+            )
+          )
+        } else if (edge.kind === 'arc') {
+          geoEdges.push(
+            new AcGeCircArc2d(
+              { x: edge.cx, y: edge.cy },
+              edge.radius,
+              (edge.startDeg * Math.PI) / 180,
+              (edge.endDeg * Math.PI) / 180,
+              !edge.isCcw
+            )
+          )
+        } else if (edge.kind === 'ellipse') {
+          const majorAxisRadius = Math.hypot(edge.mx, edge.my)
+          const minorAxisRadius = majorAxisRadius * edge.ratio
+          let startAngle = (edge.startDeg * Math.PI) / 180
+          let endAngle = (edge.endDeg * Math.PI) / 180
+          const rotation = Math.atan2(edge.my, edge.mx)
+          if (!edge.isCcw) {
+            startAngle = Math.PI * 2 - startAngle
+            endAngle = Math.PI * 2 - endAngle
+          }
+          geoEdges.push(
+            new AcGeEllipseArc2d(
+              { x: edge.cx, y: edge.cy, z: 0 },
+              majorAxisRadius,
+              minorAxisRadius,
+              startAngle,
+              endAngle,
+              !edge.isCcw,
+              rotation
+            )
+          )
+        } else {
+          const spline = AcGeSpline3d.fromDwgSplineEdge({
+            degree: edge.degree,
+            numberOfControlPoints: edge.controlPoints.length,
+            numberOfKnots: edge.knots.length,
+            numberOfFitData: edge.fitPoints.length,
+            knots: edge.knots,
+            controlPoints: edge.controlPoints.map(p => ({
+              x: p.x,
+              y: p.y,
+              z: 0,
+              weight: edge.rational ? (p.weight ?? 1) : undefined
+            })),
+            fitDatum: edge.fitPoints.map(p => ({ x: p.x, y: p.y, z: 0 })),
+            startTangent: null,
+            endTangent: null
+          })
+          if (spline) geoEdges.push(spline)
+        }
+      }
+      const loops = AcGeLoop2d.buildFromEdges(geoEdges)
+      if (loops.length === 0 && geoEdges.length > 0) {
+        this.add(new AcGeLoop2d(geoEdges))
+      } else {
+        loops.forEach(loop => this.add(loop))
+      }
+      void built
+      edges = []
+      currentEdge = null
+    }
+
+    const flushCurrentLoop = () => {
+      if (isPolylineBoundary) {
+        flushPolylineLoop()
+      } else {
+        flushEdgeLoop()
+      }
+    }
+
+    /** Commit the in-progress edge into `edges` before ending a path. */
+    const commitCurrentEdge = () => {
+      if (currentEdge) {
+        edges.push(currentEdge)
+        currentEdge = null
+      }
+    }
+
+    /**
+     * End the current boundary path (source-boundary count / next path).
+     * Matches dxf-json: spline edge owns its own group 97 (fit count); the
+     * following group 97 is the path-level source-boundary object count.
+     */
+    const endCurrentPath = () => {
+      commitCurrentEdge()
+      flushCurrentLoop()
+      loopsRemaining = Math.max(0, loopsRemaining - 1)
+      if (loopsRemaining === 0) {
+        afterBoundaries = true
+      }
+    }
+
+    while (!filer.atEndOfObject && !filer.atEof && !filer.atExtendedData) {
+      const item = filer.readItem()
+      if (!item) break
+      const code = Number(item.code)
+      const n = Number(item.value)
+
+      // Pattern definition lines after boundaries.
+      if (inPatternLines || afterBoundaries) {
+        switch (code) {
+          case 75:
+            this.hatchStyle = n as AcDbHatchStyle
+            afterBoundaries = true
+            break
+          case 76:
+            this.patternType = n as AcDbHatchPatternType
+            break
+          case 52:
+            patternAngleDeg = n
+            break
+          case 41:
+            this.patternScale = n
+            break
+          case 77:
+            break
+          case 78:
+            inPatternLines = true
+            break
+          case 53:
+            if (currentPatternLine) {
+              this.definitionLines.push(currentPatternLine)
+            }
+            currentPatternLine = {
+              angle: (n * Math.PI) / 180,
+              base: { x: 0, y: 0 },
+              offset: { x: 0, y: 0 },
+              dashLengths: []
+            }
+            break
+          case 43:
+            if (currentPatternLine) currentPatternLine.base.x = n
+            break
+          case 44:
+            if (currentPatternLine) currentPatternLine.base.y = n
+            break
+          case 45:
+            if (currentPatternLine) currentPatternLine.offset.x = n
+            break
+          case 46:
+            if (currentPatternLine) currentPatternLine.offset.y = n
+            break
+          case 79:
+            expectedDashes = n
+            break
+          case 49:
+            if (currentPatternLine) {
+              currentPatternLine.dashLengths.push(n)
+            }
+            break
+          case 47:
+            this.pixelSize = n
+            break
+          case 99:
+            // MPolygon-only: number of degenerate boundary paths; not
+            // applicable to HATCH entities.
+            break
+          case 450:
+            this.hatchObjectType = n as AcDbHatchObjectType
+            this.gradientStartColor = undefined
+            this.gradientEndColor = undefined
+            gradientColorIndex = 0
+            pendingGradientAci = undefined
+            break
+          case 451:
+            break
+          case 452:
+            this.gradientOneColorMode = n !== 0
+            break
+          case 453:
+            // Number of gradient colors (0 or 2); colors follow via 463/63/421.
+            break
+          case 460:
+            // DXF group 460 stores gradient rotation in radians.
+            this.gradientAngle = n
+            break
+          case 461:
+            this.gradientShift = n
+            break
+          case 462:
+            this.shadeTintValue = n
+            break
+          case 463:
+            flushPendingGradientAci()
+            break
+          case 63:
+            // Gradient color ACI (optional when true-color 421 follows).
+            pendingGradientAci = n
+            break
+          case 421:
+            applyGradientRgb(n)
+            break
+          case 470:
+            flushPendingGradientAci()
+            this.gradientName = String(item.value)
+            break
+          case 98:
+            // Seed point count — skip seed points.
+            break
+          case 10:
+          case 20:
+            // Seed points after 98 — ignore.
+            break
+          default:
+            break
+        }
+        continue
+      }
+
+      switch (code) {
+        case 10:
+          if (
+            isPolylineBoundary ||
+            (currentEdge &&
+              currentEdge.kind !== 'line' &&
+              currentEdge.kind !== 'arc' &&
+              currentEdge.kind !== 'ellipse' &&
+              currentEdge.kind !== 'spline')
+          ) {
+            // handled below in boundary context
+          }
+          if (loopsRemaining > 0 && isPolylineBoundary) {
+            flushVertex()
+            pendingVertex = { x: n, y: 0 }
+          } else if (currentEdge?.kind === 'line' && edgePhase === 'type') {
+            currentEdge.sx = n
+          } else if (currentEdge?.kind === 'arc') {
+            currentEdge.cx = n
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.cx = n
+          } else if (currentEdge?.kind === 'spline') {
+            currentEdge.controlPoints.push({ x: n, y: 0 })
+          } else if (loopsRemaining <= 0) {
+            // Elevation point (0,0,elevation) or seed — use z via 30.
+          }
+          // First 10 before boundaries is elevation origin x (ignored).
+          break
+        case 20:
+          if (loopsRemaining > 0 && isPolylineBoundary && pendingVertex) {
+            pendingVertex.y = n
+          } else if (currentEdge?.kind === 'line' && edgePhase === 'type') {
+            currentEdge.sy = n
+          } else if (currentEdge?.kind === 'arc') {
+            currentEdge.cy = n
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.cy = n
+          } else if (
+            currentEdge?.kind === 'spline' &&
+            currentEdge.controlPoints.length > 0
+          ) {
+            currentEdge.controlPoints[currentEdge.controlPoints.length - 1]!.y =
+              n
+          }
+          break
+        case 30:
+          if (loopsRemaining <= 0 && !afterBoundaries) {
+            elevation = n
+          }
+          break
+        case 2:
+          this.patternName = String(item.value)
+          break
+        case 70:
+          this.isSolidFill = n !== 0
+          break
+        case 71:
+          this.associative = n !== 0
+          break
+        case 91:
+          loopsRemaining = n
+          break
+        case 92:
+          if (
+            loopsRemaining > 0 &&
+            (pendingVertices.length > 0 || edges.length > 0 || currentEdge)
+          ) {
+            commitCurrentEdge()
+            flushCurrentLoop()
+          }
+          boundaryFlag = n
+          isPolylineBoundary = (boundaryFlag & 0x02) !== 0
+          hasBulge = false
+          polyClosed = false
+          expectedVertices = 0
+          expectedEdges = 0
+          pendingVertices = []
+          edges = []
+          currentEdge = null
+          edgePhase = 'type'
+          break
+        case 72:
+          if (isPolylineBoundary) {
+            hasBulge = n !== 0
+          } else {
+            // Edge type.
+            commitCurrentEdge()
+            if (n === 1) {
+              currentEdge = {
+                kind: 'line',
+                sx: 0,
+                sy: 0,
+                ex: 0,
+                ey: 0
+              }
+              edgePhase = 'type'
+            } else if (n === 2) {
+              currentEdge = {
+                kind: 'arc',
+                cx: 0,
+                cy: 0,
+                radius: 0,
+                startDeg: 0,
+                endDeg: 0,
+                isCcw: true
+              }
+            } else if (n === 3) {
+              currentEdge = {
+                kind: 'ellipse',
+                cx: 0,
+                cy: 0,
+                mx: 0,
+                my: 0,
+                ratio: 1,
+                startDeg: 0,
+                endDeg: 0,
+                isCcw: true
+              }
+            } else if (n === 4) {
+              currentEdge = {
+                kind: 'spline',
+                degree: 3,
+                rational: false,
+                closed: false,
+                knots: [],
+                controlPoints: [],
+                fitPoints: [],
+                expectedKnots: 0,
+                expectedControls: 0,
+                expectedFits: 0,
+                fitCountSeen: false
+              }
+            } else {
+              currentEdge = null
+            }
+          }
+          break
+        case 73:
+          if (isPolylineBoundary) {
+            polyClosed = n !== 0
+          } else if (currentEdge?.kind === 'arc') {
+            currentEdge.isCcw = n !== 0
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.isCcw = n !== 0
+          } else if (currentEdge?.kind === 'spline') {
+            currentEdge.rational = n !== 0
+          }
+          break
+        case 74:
+          if (currentEdge?.kind === 'spline') {
+            currentEdge.closed = n !== 0
+          }
+          break
+        case 93:
+          if (isPolylineBoundary) {
+            expectedVertices = n
+          } else {
+            expectedEdges = n
+          }
+          void expectedVertices
+          void expectedEdges
+          break
+        case 42:
+          if (isPolylineBoundary && hasBulge && pendingVertex) {
+            pendingVertex.bulge = n
+          } else if (
+            currentEdge?.kind === 'spline' &&
+            currentEdge.rational &&
+            currentEdge.controlPoints.length > 0
+          ) {
+            currentEdge.controlPoints[
+              currentEdge.controlPoints.length - 1
+            ]!.weight = n
+          }
+          break
+        case 11:
+          if (currentEdge?.kind === 'line') {
+            currentEdge.ex = n
+            edgePhase = 'line-end'
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.mx = n
+          } else if (currentEdge?.kind === 'spline') {
+            currentEdge.fitPoints.push({ x: n, y: 0 })
+          }
+          break
+        case 21:
+          if (currentEdge?.kind === 'line') {
+            currentEdge.ey = n
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.my = n
+          } else if (
+            currentEdge?.kind === 'spline' &&
+            currentEdge.fitPoints.length > 0
+          ) {
+            currentEdge.fitPoints[currentEdge.fitPoints.length - 1]!.y = n
+          }
+          break
+        case 40:
+          if (currentEdge?.kind === 'arc') {
+            currentEdge.radius = n
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.ratio = n
+          } else if (currentEdge?.kind === 'spline') {
+            currentEdge.knots.push(n)
+          }
+          break
+        case 50:
+          if (currentEdge?.kind === 'arc') {
+            currentEdge.startDeg = n
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.startDeg = n
+          }
+          break
+        case 51:
+          if (currentEdge?.kind === 'arc') {
+            currentEdge.endDeg = n
+          } else if (currentEdge?.kind === 'ellipse') {
+            currentEdge.endDeg = n
+          }
+          break
+        case 94:
+          if (currentEdge?.kind === 'spline') {
+            currentEdge.degree = n
+          }
+          break
+        case 95:
+          if (currentEdge?.kind === 'spline') {
+            currentEdge.expectedKnots = n
+          }
+          break
+        case 96:
+          if (currentEdge?.kind === 'spline') {
+            currentEdge.expectedControls = n
+          }
+          break
+        case 97:
+          // Spline edges carry their own group 97 (fit-point count), which may
+          // be 0. The next group 97 is the path-level source-boundary count
+          // (dxf-json: SplineEdgeSnippets vs CommonBoundaryPathDataSnippets).
+          if (
+            currentEdge?.kind === 'spline' &&
+            !currentEdge.fitCountSeen &&
+            (currentEdge.controlPoints.length > 0 ||
+              currentEdge.knots.length > 0)
+          ) {
+            currentEdge.expectedFits = n
+            currentEdge.fitCountSeen = true
+            break
+          }
+          endCurrentPath()
+          break
+        case 75:
+          commitCurrentEdge()
+          flushCurrentLoop()
+          loopsRemaining = 0
+          afterBoundaries = true
+          this.hatchStyle = n as AcDbHatchStyle
+          break
+        case 210:
+          nx = n
+          break
+        case 220:
+          ny = n
+          break
+        case 230:
+          nz = n
+          break
+        default:
+          break
+      }
+    }
+
+    if (currentEdge) {
+      edges.push(currentEdge)
+      currentEdge = null
+    }
+    flushCurrentLoop()
+    if (currentPatternLine) {
+      this.definitionLines.push(currentPatternLine)
+    }
+    flushPendingGradientAci()
+    this.elevation = elevation
+    const extrusion = new AcGeVector3d(nx, ny, nz)
+    if (extrusion.lengthSq() > 0) {
+      this.normal = extrusion
+    }
+    this.patternAngle = (patternAngleDeg * Math.PI) / 180
     return this
   }
 }

@@ -121,6 +121,38 @@ describe('AcDbShape', () => {
     expect(dxf).toContain('39\n0.5\n')
   })
 
+  it('writes shapeNumber as DXF group 2 when name is empty', () => {
+    createWorkingDb()
+    const shape = new AcDbShape()
+    shape.shapeNumber = 9
+    shape.styleName = 'TECOGISSHAPE0'
+    shape.position = { x: 1, y: 2, z: 0 }
+    shape.size = 0.01
+    shape.ownerId = '0'
+    const filer = new AcDbDxfFiler()
+
+    shape.dxfOutFields(filer)
+    const dxf = filer.toString()
+
+    expect(dxf).toContain('2\n9\n')
+    expect(dxf).not.toContain('2\n0\n')
+    expect(dxf).toContain('3\nTECOGISSHAPE0\n')
+  })
+
+  it('prefers shape name over shapeNumber for DXF group 2', () => {
+    createWorkingDb()
+    const shape = new AcDbShape()
+    shape.name = '_GV_'
+    shape.shapeNumber = 9
+    shape.ownerId = '0'
+    const filer = new AcDbDxfFiler()
+
+    shape.dxfOutFields(filer)
+    const dxf = filer.toString()
+
+    expect(dxf).toContain('2\n_GV_\n')
+  })
+
   it('transforms position, size, and orientation', () => {
     createWorkingDb()
     const shape = new AcDbShape()
@@ -201,5 +233,27 @@ describe('AcDbShape', () => {
       obliqueAngle: 10
     })
     expect(delay).toBe(true)
+  })
+
+  it('passes numeric shape name to renderer as shapeNumber only', () => {
+    const db = new AcDbDatabase()
+    db.createDefaultData()
+    acdbHostApplicationServices().workingDatabase = db
+
+    const shape = new AcDbShape()
+    shape.database = db
+    shape.name = '9'
+    shape.size = 0.01
+    shape.position = new AcGePoint3d(1, 2, 0)
+
+    const renderer = {
+      shape: jest.fn(() => ({ objectId: 'S1' }))
+    } as unknown as { shape: jest.Mock }
+
+    shape.subWorldDraw(renderer as never)
+
+    const [shapeData] = renderer.shape.mock.calls[0]
+    expect(shapeData.name).toBeUndefined()
+    expect(shapeData.shapeNumber).toBe(9)
   })
 })

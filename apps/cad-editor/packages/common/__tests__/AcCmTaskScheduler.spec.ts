@@ -47,22 +47,37 @@ describe('AcCmTaskScheduler', () => {
     expect(complete).toHaveBeenCalledWith(3)
   })
 
-  it('uses requestAnimationFrame path when window API exists', async () => {
+  it('uses requestAnimationFrame path when available', async () => {
     const scheduler = new AcCmTaskScheduler<number, number>()
-    const originalWindow = (globalThis as any).window
+    const raf = jest.fn((cb: FrameRequestCallback) => {
+      cb(0)
+      return 1
+    })
+    const previous = (globalThis as { requestAnimationFrame?: unknown })
+      .requestAnimationFrame
+    ;(
+      globalThis as unknown as { requestAnimationFrame: typeof raf }
+    ).requestAnimationFrame = raf
 
-    ;(globalThis as any).window = {
-      requestAnimationFrame: (cb: FrameRequestCallback) => cb(0)
+    try {
+      scheduler.addTask(new AddOneTask())
+      const done = jest.fn()
+      scheduler.setCompleteCallback(done)
+
+      await scheduler.run(10)
+
+      expect(raf).toHaveBeenCalled()
+      expect(done).toHaveBeenCalledWith(11)
+    } finally {
+      if (previous == null) {
+        delete (globalThis as { requestAnimationFrame?: unknown })
+          .requestAnimationFrame
+      } else {
+        ;(
+          globalThis as unknown as { requestAnimationFrame: unknown }
+        ).requestAnimationFrame = previous
+      }
     }
-
-    scheduler.addTask(new AddOneTask())
-    const done = jest.fn()
-    scheduler.setCompleteCallback(done)
-
-    await scheduler.run(10)
-
-    expect(done).toHaveBeenCalledWith(11)
-    ;(globalThis as any).window = originalWindow
   })
 
   it('handles errors without interrupt and still completes', async () => {

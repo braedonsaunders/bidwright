@@ -169,6 +169,10 @@ export class AcGeBox2d {
    * @returns Return this box
    */
   expandByPoint(point: AcGeVector2dLike) {
+    // Non-finite coords poison min/max via Math.min/Math.max (NaN spreads to parents).
+    if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+      return this
+    }
     this.min.min(point)
     this.max.max(point)
 

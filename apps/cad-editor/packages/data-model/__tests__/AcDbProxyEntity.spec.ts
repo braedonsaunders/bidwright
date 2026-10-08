@@ -4,7 +4,7 @@ import { AcDbProxyEntity } from '../src/entity/AcDbProxyEntity'
 import {
   AcDbProxyGraphic,
   AcDbProxyGraphicType,
-  loadAcDbProxyGraphicFromDxf
+  acdbLoadProxyGraphicFromDxf
 } from '../src/misc/proxyGraphic'
 import { setupWorkingDatabase } from '../test-utils/entityTestUtils'
 
@@ -99,7 +99,7 @@ describe('AcDbProxyGraphic', () => {
     const hex = Array.from(graphic, byte =>
       byte.toString(16).padStart(2, '0')
     ).join('')
-    const loaded = loadAcDbProxyGraphicFromDxf(graphic.length, [hex])
+    const loaded = acdbLoadProxyGraphicFromDxf(graphic.length, [hex])
     expect(loaded).toEqual(graphic)
   })
 })

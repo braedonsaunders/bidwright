@@ -1,34 +1,41 @@
 import { AcApContext } from '../../app'
 import { AcEdCommand, AcEdOpenMode } from '../../editor'
 import { AcTrView2d } from '../../view'
+import { runMeasurementEdit } from './AcApMeasurementHistory'
+import {
+  MEASUREMENT_LAYER,
+  MEASUREMENT_LIVE_LAYER
+} from './AcApMeasurementStore'
 
-/** Cleanup callbacks registered by measurement commands. */
-const cleanups: (() => void)[] = []
+export {
+  MEASUREMENT_LAYER,
+  MEASUREMENT_LIVE_LAYER,
+  commitMeasurementGroup,
+  type AcApMeasurementGroupExtras
+} from './AcApMeasurementStore'
 
 /**
- * Registers a cleanup function to be called when the Clear Measurements command
- * runs. Used for CAD transient entities, canvas overlays, and viewChanged
- * listeners that are not managed by the htmlTransientManager.
+ * Removes committed measurement overlays on the active layout (detached so
+ * Undo can restore them) and disposes live jig overlays.
  */
-export function registerMeasurementCleanup(fn: () => void): void {
-  cleanups.push(fn)
+export function clearLayoutMeasurements(view: AcTrView2d): void {
+  const ht = view.htmlTransientManager
+  const layoutId = view.activeLayoutBtrId
+  runMeasurementEdit(view, 'Clear Measurements', () => {
+    ht.deselectAll()
+    for (const group of ht.groupsOnLayer(MEASUREMENT_LAYER)) {
+      if (group.layoutId == null || group.layoutId === layoutId) {
+        ht.detach(group.id)
+      }
+    }
+  })
+  ht.clear(MEASUREMENT_LIVE_LAYER)
+  view.isHtmlDirty = true
 }
 
 /**
- * Runs every measurement-cleanup callback registered via
- * `registerMeasurementCleanup` and clears the measurement HTML overlay
- * layer on the given view. Shared between the user-facing
- * `AcApClearMeasurementsCmd` command and internal lifecycle hooks
- * (e.g. clearing measurements when the user switches paper-space
- * layouts, where any pending measurement would otherwise leak across
- * layouts in coordinates that no longer make sense).
+ * Command that clears committed measurement overlays on the current layout.
  */
-export function clearAllMeasurements(view: AcTrView2d): void {
-  cleanups.forEach(fn => fn())
-  cleanups.length = 0
-  view.htmlTransientManager.clear('measurement')
-}
-
 export class AcApClearMeasurementsCmd extends AcEdCommand {
   constructor() {
     super()
@@ -36,6 +43,6 @@ export class AcApClearMeasurementsCmd extends AcEdCommand {
   }
 
   async execute(context: AcApContext) {
-    clearAllMeasurements(context.view as AcTrView2d)
+    clearLayoutMeasurements(context.view as AcTrView2d)
   }
 }

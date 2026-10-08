@@ -34,6 +34,74 @@ export interface AcTrFillMaterialOptions {
   side?: AcTrMaterialSide
 }
 
+const PATTERN_BASE_WRAP_EPS = 1e-9
+
+const _wrapScratch = /*@__PURE__*/ new THREE.Vector2()
+
+/** Matches hatch shader `rotate` (column-vector convention). */
+function rotatePatternVec2(
+  x: number,
+  y: number,
+  angle: number,
+  out: THREE.Vector2
+): THREE.Vector2 {
+  const c = Math.cos(angle)
+  const s = Math.sin(angle)
+  return out.set(c * x - s * y, c * y + s * x)
+}
+
+/**
+ * Wraps an origin-shifted pattern `base` into one pattern period so
+ * `v_pos - base` stays float32-friendly in the hatch shader.
+ *
+ * Pattern bases are often near WCS (0,0) while geometry is origin-shifted to a
+ * far survey coordinate. Subtracting `rebaseOffset` alone leaves `|base|` huge,
+ * and `fract(dist / spacing)` collapses again. Reducing `base` by integer
+ * periods in the sample frame preserves the pattern phase.
+ *
+ * @param base - Mutable base already subtracted by the geometry origin.
+ * @param offset - Pattern offset already rotated by `-lineAngle` (same frame as
+ *   the hatch shader uniform / exported AcEx hatch line offset).
+ * @param lineAngle - Definition-line angle in radians.
+ * @param patternAngle - Hatch-level pattern angle in radians.
+ * @param patternLength - Dash repeat length (`0` for continuous lines).
+ */
+export function wrapPatternBaseToLocalFrame(
+  base: THREE.Vector2,
+  offset: THREE.Vector2,
+  lineAngle: number,
+  patternAngle: number,
+  patternLength: number
+): void {
+  const spacing = Math.abs(offset.y)
+  if (
+    spacing <= PATTERN_BASE_WRAP_EPS &&
+    patternLength <= PATTERN_BASE_WRAP_EPS
+  ) {
+    return
+  }
+
+  // samplePos = rotate(v - base, -(lineAngle + patternAngle))
+  const totalAngle = lineAngle + patternAngle
+  const inSample = rotatePatternVec2(base.x, base.y, -totalAngle, _wrapScratch)
+
+  if (spacing > PATTERN_BASE_WRAP_EPS) {
+    const periods = Math.round(inSample.y / spacing)
+    inSample.y -= periods * spacing
+    // Parallel-line steps also shift dash phase by offset.x (AutoCAD PAT model).
+    inSample.x -= periods * offset.x
+  }
+  if (patternLength > PATTERN_BASE_WRAP_EPS) {
+    inSample.x -= Math.round(inSample.x / patternLength) * patternLength
+  } else {
+    // Continuous lines ignore along-line phase; clear it so `base` stays small
+    // in XY and `v_pos - base` does not reintroduce large float32 magnitudes.
+    inSample.x = 0
+  }
+
+  rotatePatternVec2(inSample.x, inSample.y, totalAngle, base)
+}
+
 /**
  * Material manager for hatch and solid fill entities.
  *
@@ -73,51 +141,39 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
    * MText glyphs and wide polylines — meshes that are rasterized as
    * fill but represent linework.
    *
-   * Patterned hatches at the hatch tier (`drawOrder < 0` with non-empty
-   * `definitionLines`) also invert: their visible component is the
-   * pattern lines themselves, which must stay legible against both
-   * light and dark canvases.
+   * Hatch-tier fills (`drawOrder < 0`, including solid and patterned
+   * hatches) also invert with the theme so ACI 7 stays visible against
+   * both light and dark canvases, matching AutoCAD model-space behaviour.
    *
-   * Solid foreground hatches are deliberately excluded from this
-   * branch — they go through `shouldTrackBackground` instead so they
-   * fuse with the canvas bg (matching AutoCAD's reference rendering;
-   * see `images-ex/hatch-bg-bug-refact-lee/autocad/tower-*.png`).
+   * Background fills (wipeouts) never invert — they fuse with the canvas.
    */
   protected shouldTrackForeground(
     traits: AcGiSubEntityTraits,
     _options: AcTrFillMaterialOptions
   ): boolean {
-    if (!traits.color.isForeground) return false
-    const drawOrder = traits.drawOrder ?? 0
-    if (drawOrder >= 0) return true
+    if (traits.isBackgroundFill) {
+      return false
+    }
     const style = traits.fillType
-    const isPatterned = !style.gradient && !!style.definitionLines?.length
-    return isPatterned
+    const isVisibleHatch =
+      (traits.drawOrder ?? 0) < 0 &&
+      !style.gradient &&
+      (style.solidFill || !!style.definitionLines?.length)
+    return (
+      traits.color.isForeground &&
+      ((traits.drawOrder ?? 0) >= 0 || isVisibleHatch)
+    )
   }
 
   /**
-   * Solid foreground hatch fills (ACI 7, `drawOrder < 0`, no pattern,
-   * no gradient) follow the canvas background colour rather than carry
-   * an absolute RGB. AutoCAD renders them as if they were painted with
-   * the paper colour, so they fuse into both light and dark canvases
-   * and only the overlaid wireframe remains visible.
-   *
-   * Hatches with an explicit RGB (including a literal truecolor white
-   * 0xFFFFFF) fall outside this rule — `traits.color.isForeground` is
-   * only true for the ACI 7 / foreground pseudo-colour, so a DWG
-   * author who picked `255,255,255` via the truecolor picker still
-   * gets a literal white hatch.
+   * Wipeouts opt into canvas-background tracking so the masked area stays
+   * fused with MODELBKCOLOR / PAPERBKCOLOR across theme flips.
    */
   protected shouldTrackBackground(
     traits: AcGiSubEntityTraits,
     _options: AcTrFillMaterialOptions
   ): boolean {
-    if (!traits.color.isForeground) return false
-    if ((traits.drawOrder ?? 0) >= 0) return false
-    const style = traits.fillType
-    if (style.gradient) return false
-    const isSolid = !style.definitionLines || style.definitionLines.length === 0
-    return isSolid
+    return traits.isBackgroundFill === true
   }
 
   /**
@@ -125,14 +181,13 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
    */
   protected createMaterialImpl(
     traits: AcGiSubEntityTraits,
-    options: AcTrFillMaterialOptions
+    options: AcTrFillMaterialOptions,
+    layerColorRgb?: number
   ): THREE.Material {
     const style = traits.fillType
     const side = options.side ?? 'front'
     const threeSide = side === 'back' ? THREE.BackSide : THREE.FrontSide
-    const rgb = this.shouldTrackBackground(traits, options)
-      ? this.options.currentBackgroundColor
-      : this.resolveTraitsRgb(traits)
+    const rgb = this.resolveMaterialRgb(traits, layerColorRgb)
 
     let material: THREE.Material
     if (style.gradient) {
@@ -156,6 +211,8 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
       material = this.createHatchShaderMaterial(traits, rgb, options, threeSide)
     }
 
+    this.applyTransparency(material, traits)
+
     // Store side in userData so getBackSideVariant can check idempotency.
     // Draw-order metadata is stamped by the base material manager from
     // `traits.drawOrder`.
@@ -163,6 +220,28 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
       side
     })
     return material
+  }
+
+  /**
+   * Honours {@link AcGiSubEntityTraits.transparency} on fill meshes.
+   * Fully transparent fills (alpha 0) stay raycastable for IMAGE/OLE frames
+   * while remaining invisible — matching AutoCAD pick-through-frame behaviour.
+   */
+  private applyTransparency(
+    material: THREE.Material,
+    traits: AcGiSubEntityTraits
+  ) {
+    const transparency = traits.transparency
+    if (!transparency || typeof transparency.alpha !== 'number') {
+      return
+    }
+    const alpha = transparency.alpha
+    if (alpha >= 255) {
+      return
+    }
+    material.transparent = true
+    material.opacity = Math.max(0, Math.min(1, alpha / 255))
+    material.depthWrite = alpha > 0
   }
 
   private createGradientShaderMaterial(
@@ -255,6 +334,16 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
         dashLengths[i] = 0
       }
 
+      // Keep (v_pos - base) small after geometry origin-shift. Pattern bases are
+      // often near WCS 0 while verts are rebased to a far local origin.
+      wrapPatternBaseToLocalFrame(
+        base,
+        offset,
+        hatchPatternLine.angle,
+        style.patternAngle,
+        patternLength
+      )
+
       const angle = hatchPatternLine.angle
       const patternLine = {
         angle,
@@ -308,11 +397,6 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
    *   line-like fill meshes (wide polylines, text glyphs) because the
    *   batcher groups by material id and applies one `renderOrder` tier
    *   per batch.
-   * - `_bgfill`: background-tracked fills (solid foreground hatches)
-   *   get their own partition so `changeBackground` can mutate them
-   *   in place without affecting any literal-RGB hatch that happens
-   *   to share layer + colour (e.g. a truecolor 0xFFFFFF hatch on the
-   *   same layer as an ACI 7 hatch).
    *
    * All suffixes are appended only when they differ from the default,
    * keeping existing keys stable and avoiding unnecessary cache
@@ -325,20 +409,16 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
     const style = traits.fillType
     const sideSuffix = options.side === 'back' ? '_back' : ''
     const drawOrderSuffix = this.buildDrawOrderSuffix(traits)
-    const bgSuffix = this.shouldTrackBackground(traits, options)
-      ? '_bgfill'
-      : ''
-    const rgb = this.shouldTrackBackground(traits, options)
-      ? this.options.currentBackgroundColor
-      : this.resolveTraitsRgb(traits)
-    // Use color + layer + rebaseOffset + pattern info for key
+    const bgFillSuffix = traits.isBackgroundFill ? '_bgfill' : ''
+    const colorKey = this.buildKeyColorSegment(traits)
+    // Use colour semantics + layer + rebaseOffset + pattern info for key
     if (style.gradient) {
       const gradient = style.gradient
       const bounds = normalizeGradientBounds(options.gradientBounds)
       return [
         'gradient',
         traits.layer,
-        rgb,
+        colorKey,
         gradient.name || 'LINEAR',
         gradient.angle ?? 0,
         gradient.shift ?? 0,
@@ -350,14 +430,17 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
         bounds.minY,
         bounds.maxX,
         bounds.maxY,
+        `a${this.transparencyKey(traits)}`,
         sideSuffix,
-        drawOrderSuffix
+        drawOrderSuffix,
+        bgFillSuffix
       ].join('_')
     }
 
     const isSolid = !style.definitionLines || style.definitionLines.length === 0
+    const alphaKey = this.transparencyKey(traits)
     if (isSolid) {
-      return `solid_${traits.layer}_${rgb}${sideSuffix}${drawOrderSuffix}${bgSuffix}`
+      return `solid_${traits.layer}_${colorKey}_a${alphaKey}${sideSuffix}${drawOrderSuffix}${bgFillSuffix}`
     }
 
     const patternHash = style.definitionLines
@@ -379,14 +462,21 @@ export class AcTrFillMaterialManager extends AcTrMaterialManager<AcTrFillMateria
     return [
       'hatch',
       traits.layer,
-      rgb,
+      colorKey,
       style.patternAngle,
       options.rebaseOffset.x,
       options.rebaseOffset.y,
       patternHash,
+      `a${alphaKey}`,
       sideSuffix,
-      drawOrderSuffix
+      drawOrderSuffix,
+      bgFillSuffix
     ].join('_')
+  }
+
+  private transparencyKey(traits: AcGiSubEntityTraits): number {
+    const alpha = traits.transparency?.alpha
+    return typeof alpha === 'number' ? alpha : 255
   }
 
   /**

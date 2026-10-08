@@ -5,18 +5,18 @@ import {
   AcGePoint3dLike
 } from '@mlightcad/data-model'
 
-import { AcApAnnotation, AcApContext, AcApDocManager } from '../../app'
+import { AcApContext, AcApDocManager } from '../../app'
 import {
   AcEdCommand,
   AcEdOpenMode,
   AcEdPromptIntegerOptions,
   AcEdPromptKeywordOptions,
   AcEdPromptPointOptions,
-  AcEdPromptSelectionOptions,
   AcEdPromptStatus,
   scaleCopyDisplacement
 } from '../../editor'
 import { AcApI18n } from '../../i18n'
+import { resolveSelectedEntities } from '../../service'
 import { AcApCopyPreviewJig } from './AcApCopyPreviewJig'
 
 type CopyMode = 'Single' | 'Multiple'
@@ -40,11 +40,11 @@ export class AcApCopyCmd extends AcEdCommand {
   private static _defaultMode: CopyMode = 'Multiple'
 
   /**
-   * Creates the COPY command and marks it as a review-mode command.
+   * Creates the COPY command. Drawing geometry may only be copied in Write mode.
    */
   constructor() {
     super()
-    this.mode = AcEdOpenMode.Review
+    this.mode = AcEdOpenMode.Write
   }
 
   /**
@@ -75,11 +75,7 @@ export class AcApCopyCmd extends AcEdCommand {
     basePoint: AcGePoint3dLike,
     targetPoint: AcGePoint3dLike
   ) {
-    return new AcGePoint3d(
-      targetPoint.x - basePoint.x,
-      targetPoint.y - basePoint.y,
-      targetPoint.z - basePoint.z
-    )
+    return new AcGePoint3d(targetPoint).sub(basePoint)
   }
 
   /**
@@ -166,11 +162,15 @@ export class AcApCopyCmd extends AcEdCommand {
    */
   private async promptCopyMode(currentMode: CopyMode) {
     const prompt = new AcEdPromptKeywordOptions(
-      `${AcApI18n.t('jig.copy.modePrompt')} <${currentMode}>`
+      AcApI18n.t('jig.copy.modePrompt')
     )
     prompt.allowNone = true
     this.addKeyword(prompt, 'single')
     this.addKeyword(prompt, 'multiple')
+    const defaultKeyword = prompt.keywords.findByGlobalName(currentMode)
+    if (defaultKeyword) {
+      prompt.keywords.default = defaultKeyword
+    }
 
     const result = await AcApDocManager.instance.editor.getKeywords(prompt)
     if (result.status === AcEdPromptStatus.None) {
@@ -364,30 +364,13 @@ export class AcApCopyCmd extends AcEdCommand {
    */
   async execute(context: AcApContext) {
     const selectionSet = context.view.selectionSet
-    const annotation = new AcApAnnotation(context.doc.database)
+    const resolved = await resolveSelectedEntities(context, {
+      promptKey: 'copy'
+    })
+    if (!resolved) return
 
-    const selectionIds =
-      selectionSet.count > 0
-        ? selectionSet.ids
-        : ((
-            await AcApDocManager.instance.editor.getSelection(
-              new AcEdPromptSelectionOptions(AcApI18n.sysCmdPrompt('copy'))
-            )
-          ).value?.ids ?? [])
-
-    if (selectionIds.length === 0) return
-
-    const ids =
-      context.doc.openMode == AcEdOpenMode.Review
-        ? annotation.filterAnnotationEntities(selectionIds)
-        : selectionIds
-    if (ids.length === 0) {
-      selectionSet.clear()
-      return
-    }
-
-    const sourceEntities = ids
-      .map(id => context.doc.database.openEntityForRead(id))
+    const sourceEntities = resolved.entities
+      .map(entity => context.doc.database.openEntityForRead(entity.objectId))
       .filter((entity): entity is AcDbEntity => !!entity)
     if (sourceEntities.length === 0) {
       selectionSet.clear()

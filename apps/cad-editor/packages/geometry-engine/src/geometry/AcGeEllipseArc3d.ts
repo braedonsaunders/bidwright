@@ -10,9 +10,12 @@ import {
   AcGeVector3d,
   AcGeVector3dLike
 } from '../math'
-import { AcGeMathUtil, ORIGIN_POINT_3D, TAU } from '../util'
+import { AcGeMathUtil, FLOAT_TOL, ORIGIN_POINT_3D, TAU } from '../util'
 import { AcGeTol } from '../util/AcGeTol'
+import { AcGeCircArc2d } from './AcGeCircArc2d'
+import { AcGeCircArc3d } from './AcGeCircArc3d'
 import { AcGeCurve3d } from './AcGeCurve3d'
+import type { AcGeTessellateOptions } from './AcGeCurveTessellate'
 
 /**
  * Class representing a 3d ellipse arc defined by center, normal, majorAxis, majorAxisRadius,
@@ -373,6 +376,43 @@ export class AcGeEllipseArc3d extends AcGeCurve3d {
       points.push(point)
     }
     return points
+  }
+
+  /**
+   * Sample this ellipse to a polyline whose chord height is bounded by `options`.
+   *
+   * Circular ellipses use the closed-form circular segment count. Non-circular
+   * ellipses use coarse sampling plus local refinement with an evaluation budget.
+   *
+   * @param options - Chord-height tessellation options
+   */
+  tessellate(options?: AcGeTessellateOptions): AcGePoint3d[] {
+    const resolved = AcGeCircArc2d.resolveTessellateOptions(options)
+    const sweep = this.closed ? TAU : this.deltaAngle
+    const radius = Math.max(this.majorAxisRadius, this.minorAxisRadius)
+    const isFull = Math.abs(sweep) >= TAU - 1e-8
+    const minSegments = resolved.minSegments ?? (isFull ? 8 : 3)
+    if (this.isCircular) {
+      const numPoints = AcGeCircArc3d.segmentCount(radius, sweep, {
+        ...options,
+        minSegments
+      })
+      return this.getPoints(numPoints)
+    }
+    const deviation =
+      resolved.deviation ??
+      AcGeCircArc2d.chordDeviationFromRadius(radius, resolved.circleSides)
+    const startAngle = this.closed ? 0 : this.startAngle
+    return AcGeCurve3d.tessellateParametricCurve(
+      startAngle,
+      startAngle + sweep,
+      angle => this.getPointAtAngle(angle),
+      {
+        deviation: Math.max(FLOAT_TOL, deviation),
+        minSegments,
+        maxSegments: resolved.maxSegments
+      }
+    )
   }
 
   /**

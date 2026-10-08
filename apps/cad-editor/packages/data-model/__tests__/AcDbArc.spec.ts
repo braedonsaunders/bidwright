@@ -264,6 +264,7 @@ describe('AcDbArc', () => {
 
     const out = filer.toString()
     expect(out).toContain('100\nAcDbEntity')
+    expect(out).toContain('100\nAcDbCircle')
     expect(out).toContain('100\nAcDbArc')
     expect(out).toContain('10\n1')
     expect(out).toContain('20\n2')
@@ -274,6 +275,106 @@ describe('AcDbArc', () => {
     expect(out).toContain('210\n0')
     expect(out).toContain('220\n0')
     expect(out).toContain('230\n1')
+  })
+
+  it('reads AutoCAD ARC layout (AcDbCircle then AcDbArc)', () => {
+    createWorkingDb()
+    const dxf = [
+      '0',
+      'ARC',
+      '5',
+      'AA',
+      '100',
+      'AcDbEntity',
+      '8',
+      '0',
+      '100',
+      'AcDbCircle',
+      '10',
+      '1',
+      '20',
+      '2',
+      '30',
+      '0',
+      '40',
+      '5',
+      '100',
+      'AcDbArc',
+      '50',
+      '0',
+      '51',
+      '90',
+      '0',
+      'EOF'
+    ].join('\n')
+
+    const filer = AcDbDxfFiler.fromString(dxf)
+    const type = filer.readItem()
+    expect(type?.value).toBe('ARC')
+
+    const arc = new AcDbArc(new AcGePoint3d(), 1, 0, Math.PI)
+    arc.dxfIn(filer)
+
+    expect(arc.center.x).toBeCloseTo(1)
+    expect(arc.center.y).toBeCloseTo(2)
+    expect(arc.radius).toBeCloseTo(5)
+    expect(arc.startAngle).toBeCloseTo(0)
+    expect(arc.endAngle).toBeCloseTo(Math.PI / 2)
+  })
+
+  it('syncs OCS refVec when dxfIn reads a -Z extrusion ARC', () => {
+    createWorkingDb()
+    // OCS center (1,2,0), r=4, angles 0°→90°, extrusion (0,0,-1)
+    // WCS center = (-1,2,0); start = (-5,2,0); end = (-1,6,0)
+    const dxf = [
+      '0',
+      'ARC',
+      '5',
+      'BB',
+      '100',
+      'AcDbEntity',
+      '8',
+      '0',
+      '100',
+      'AcDbCircle',
+      '10',
+      '1',
+      '20',
+      '2',
+      '30',
+      '0',
+      '40',
+      '4',
+      '210',
+      '0',
+      '220',
+      '0',
+      '230',
+      '-1',
+      '100',
+      'AcDbArc',
+      '50',
+      '0',
+      '51',
+      '90',
+      '0',
+      'EOF'
+    ].join('\n')
+
+    const filer = AcDbDxfFiler.fromString(dxf)
+    expect(filer.readItem()?.value).toBe('ARC')
+
+    // Factory path mirrors AcDbDxfEntityFactory: default +Z refVec before dxfIn.
+    const arc = new AcDbArc(new AcGePoint3d(), 1, 0, Math.PI / 2)
+    arc.dxfIn(filer)
+
+    expect(arc.normal.z).toBeCloseTo(-1, 8)
+    expect(arc.center.x).toBeCloseTo(-1, 8)
+    expect(arc.center.y).toBeCloseTo(2, 8)
+    expect(arc.startPoint.x).toBeCloseTo(-5, 8)
+    expect(arc.startPoint.y).toBeCloseTo(2, 8)
+    expect(arc.endPoint.x).toBeCloseTo(-1, 8)
+    expect(arc.endPoint.y).toBeCloseTo(6, 8)
   })
 
   it('writes ARC center and angles in OCS for non-default extrusion', () => {

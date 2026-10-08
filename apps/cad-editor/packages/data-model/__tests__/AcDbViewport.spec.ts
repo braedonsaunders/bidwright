@@ -37,6 +37,8 @@ describe('AcDbViewport', () => {
     expect(viewport.viewHeight).toBe(0)
     expect(viewport.centerPoint).toMatchObject({ x: 0, y: 0, z: 0 })
     expect(viewport.viewCenter).toMatchObject({ x: 0, y: 0, z: 0 })
+    expect(viewport.viewTarget).toMatchObject({ x: 0, y: 0, z: 0 })
+    expect(viewport.viewTwistAngle).toBe(0)
 
     viewport.number = 2
     viewport.height = 8
@@ -44,6 +46,8 @@ describe('AcDbViewport', () => {
     viewport.viewHeight = 24
     viewport.centerPoint = new AcGePoint3d(10, 20, 0)
     viewport.viewCenter = new AcGePoint3d(5, 6, 0)
+    viewport.viewTarget = new AcGePoint3d(100, 200, 0)
+    viewport.viewTwistAngle = Math.PI / 4
 
     expect(viewport.number).toBe(2)
     expect(viewport.height).toBe(8)
@@ -51,6 +55,8 @@ describe('AcDbViewport', () => {
     expect(viewport.viewHeight).toBe(24)
     expect(viewport.centerPoint).toMatchObject({ x: 10, y: 20, z: 0 })
     expect(viewport.viewCenter).toMatchObject({ x: 5, y: 6, z: 0 })
+    expect(viewport.viewTarget).toMatchObject({ x: 100, y: 200, z: 0 })
+    expect(viewport.viewTwistAngle).toBeCloseTo(Math.PI / 4)
   })
 
   it('returns geometricExtents and maps itself to AcGiViewport', () => {
@@ -75,6 +81,37 @@ describe('AcDbViewport', () => {
     expect(giViewport.viewHeight).toBe(20)
     expect(giViewport.centerPoint).toMatchObject({ x: 2, y: 4, z: 0 })
     expect(giViewport.viewCenter).toMatchObject({ x: 1, y: 1, z: 0 })
+    expect(giViewport.viewTarget).toMatchObject({ x: 0, y: 0, z: 0 })
+    expect(giViewport.viewTwistAngle).toBe(0)
+  })
+
+  it('maps DCS view center through viewTarget into WCS viewBox', () => {
+    const db = createDb()
+    const viewport = new AcDbViewport()
+    viewport.width = 420
+    viewport.height = 296.6468489892975
+    viewport.viewHeight = 8899.405469678924
+    viewport.viewCenter = new AcGePoint3d(
+      -1108628.2173647524,
+      -354100.8830431862,
+      0
+    )
+    viewport.viewTarget = new AcGePoint3d(
+      1111867.66380098,
+      300645.9460363481,
+      -24329.16594455871
+    )
+    db.tables.blockTable.modelSpace.appendEntity(viewport)
+
+    const giViewport = viewport.toGiViewport()
+    const box = giViewport.viewBox
+    const centerX = (box.min.x + box.max.x) / 2
+    const centerY = (box.min.y + box.max.y) / 2
+
+    expect(centerX).toBeCloseTo(3239.446436227532, 3)
+    expect(centerY).toBeCloseTo(-53454.937006838096, 3)
+    expect(box.max.x - box.min.x).toBeCloseTo(giViewport.viewWidth, 3)
+    expect(box.max.y - box.min.y).toBeCloseTo(giViewport.viewHeight, 3)
   })
 
   it('returns geometricExtents and recomputes when centerPoint changes', () => {

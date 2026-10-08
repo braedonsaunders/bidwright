@@ -4,35 +4,49 @@ import {
   AcEdCommandStack
 } from '@mlightcad/cad-simple-viewer'
 
+import packageJson from '../package.json'
 import { AcApExportHtmlCmd } from './AcApExportHtmlCmd'
+import type { AcApHtmlPluginOptions } from './AcApHtmlPluginOptions'
 
 /**
  * HTML export plugin for cad-simple-viewer.
  *
- * Registers `chtml` when loaded. Register this plugin lazily via
+ * Registers `-chtml` when loaded. Register this plugin lazily via
  * {@link registerLazyHtmlPlugin} so the export bundle is fetched on demand.
  */
 export class AcApHtmlPlugin implements AcApPlugin {
   /** @inheritdoc */
   name = 'HtmlPlugin'
   /** @inheritdoc */
-  version = '1.0.0'
+  version = packageJson.version
   /** @inheritdoc */
-  description = 'HTML export (chtml) command'
+  description = 'HTML export (-chtml) command'
 
   /** Commands registered in {@link onLoad} for cleanup in {@link onUnload}. */
   private registeredCommands: Array<{ group: string; name: string }> = []
 
   /**
-   * Registers the `chtml` system command.
+   * @param options - HTML export options (e.g. where to fetch `viewer-runtime.iife.js`)
+   */
+  constructor(private readonly options: AcApHtmlPluginOptions = {}) {}
+
+  /**
+   * Registers the `-chtml` system command (command-line, no dialog).
    *
    * @param _context - Application context (unused)
    * @param commandManager - Command stack used to register the HTML export command
    */
   onLoad(_context: AcApContext, commandManager: AcEdCommandStack): void {
     const group = AcEdCommandStack.SYSTEMT_COMMAND_GROUP_NAME
-    commandManager.addCommand(group, 'chtml', 'chtml', new AcApExportHtmlCmd())
-    this.registeredCommands.push({ group, name: 'chtml' })
+    const exportCmd = new AcApExportHtmlCmd(this.options)
+
+    commandManager.addCommand(group, '-chtml', '-chtml', exportCmd)
+    this.registeredCommands.push({ group, name: '-chtml' })
+
+    if (!commandManager.lookupGlobalCmd('chtml')) {
+      commandManager.addCommand(group, 'chtml', 'chtml', exportCmd)
+      this.registeredCommands.push({ group, name: 'chtml' })
+    }
   }
 
   /**

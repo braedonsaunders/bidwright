@@ -24,8 +24,10 @@ describe('AcDbFace', () => {
     expect(face.getVertexAt(0)).toMatchObject({ x: 0, y: 0, z: 0 })
     expect(face.getVertexAt(-1)).toBe(face.getVertexAt(0))
     expect(face.getVertexAt(1)).toMatchObject({ x: 0, y: 0, z: 0 })
+    // Default face has 3 verts; index 3+ clamps to the last vertex (DXF triangle
+    // convention: fourth corner equals the third until setVertexAt(3, …)).
+    expect(face.getVertexAt(3)).toBe(face.getVertexAt(2))
     expect(face.getVertexAt(4)).toBe(face.getVertexAt(2))
-    expect(face.getVertexAt(3)).toBeUndefined()
   })
 
   it('supports setVertexAt for normal and high indexes, and keeps current negative-index behavior', () => {

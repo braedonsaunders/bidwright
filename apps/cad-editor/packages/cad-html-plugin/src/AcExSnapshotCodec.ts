@@ -1,28 +1,37 @@
-import { gunzipSync, gzipSync } from 'fflate'
-
 import {
   decodeSnapshotBinary,
   encodeSnapshotBinary
 } from './AcExSnapshotBinaryCodec'
+import {
+  type AcExEncodedSnapshot,
+  type AcExSnapshotCompression,
+  compressSnapshotBinary,
+  decompressSnapshotBinary
+} from './AcExSnapshotCompression'
 import { ACEX_SNAPSHOT_VERSION, type AcExSnapshot } from './AcExSnapshotTypes'
 
 const SNAPSHOT_MIME = 'application/vnd.mlightcad.acex-snapshot+binary'
+
+export type { AcExEncodedSnapshot, AcExSnapshotCompression }
 
 /**
  * Serializes a snapshot to a gzip-compressed base64 string for HTML embedding.
  *
  * @param snapshot - Snapshot to encode; {@link AcExSnapshot.version} must match
  *   {@link ACEX_SNAPSHOT_VERSION}.
- * @returns Base64-encoded gzip payload (no data-URL prefix).
+ * @returns Base64 payload and the compression format written into the HTML.
  * @throws When the snapshot version is unsupported.
  */
-export function encodeSnapshot(snapshot: AcExSnapshot): string {
+export function encodeSnapshot(snapshot: AcExSnapshot): AcExEncodedSnapshot {
   if (snapshot.version !== ACEX_SNAPSHOT_VERSION) {
     throw new Error(`Unsupported snapshot version: ${snapshot.version}`)
   }
   const binary = encodeSnapshotBinary(snapshot)
-  const compressed = gzipSync(binary)
-  return uint8ToBase64(compressed)
+  const compressed = compressSnapshotBinary(binary)
+  return {
+    payload: uint8ToBase64(compressed.bytes),
+    compression: compressed.compression
+  }
 }
 
 /**
@@ -33,9 +42,26 @@ export function encodeSnapshot(snapshot: AcExSnapshot): string {
  * @throws When decompression, parsing, or version validation fails.
  */
 export function decodeSnapshot(payload: string): AcExSnapshot {
-  const bytes = base64ToUint8(payload.trim())
-  const binary = gunzipSync(bytes)
+  return decodeSnapshotFromCompressedBytes(snapshotPayloadToCompressedBytes(payload))
+}
+
+/**
+ * Decodes a gzip-compressed ACEX binary (no base64).
+ * Prefer this when the runtime already retains compressed bytes for later
+ * per-layout rehydration after CPU release.
+ */
+export function decodeSnapshotFromCompressedBytes(
+  compressed: Uint8Array
+): AcExSnapshot {
+  const binary = decompressSnapshotBinary(compressed)
   return decodeSnapshotBinary(binary)
+}
+
+/**
+ * Converts a monolithic snapshot `<script>` body to gzip bytes.
+ */
+export function snapshotPayloadToCompressedBytes(payload: string): Uint8Array {
+  return base64ToUint8(payload.trim())
 }
 
 /**
