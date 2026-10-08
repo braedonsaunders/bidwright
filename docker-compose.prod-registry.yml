@@ -160,6 +160,10 @@ services:
       EMBEDDING_BASE_URL: "${EMBEDDING_BASE_URL:-http://ollama:11434/v1}"
       EMBEDDING_MODEL: "${EMBEDDING_MODEL:-snowflake-arctic-embed}"
       EMBEDDING_DIMENSIONS: "${EMBEDDING_DIMENSIONS:-1024}"
+      # Anthropic models on OpenRouter get prompt caching through the loopback
+      # bridge. Set BIDWRIGHT_OPENROUTER_PROMPT_CACHE=off in the Dokploy env to
+      # disable it without a release.
+      BIDWRIGHT_OPENROUTER_PROMPT_CACHE: "${BIDWRIGHT_OPENROUTER_PROMPT_CACHE:-on}"
       # Provider credentials are intentionally absent. Server-mode AI calls
       # resolve the signed-in user's override or the tenant's encrypted
       # Settings → Integrations credential; deployment env is not a fallback.
