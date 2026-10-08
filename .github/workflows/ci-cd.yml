@@ -100,6 +100,9 @@ jobs:
           DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
           BIDWRIGHT_SEARCH_TEST_DATABASE_URL: postgresql://postgres@127.0.0.1:5432/postgres
         run: |
+          pnpm --filter @bidwright/ingestion build
+          pnpm --filter @bidwright/integrations build
+          pnpm --filter @bidwright/vector build
           pnpm --filter @bidwright/db exec prisma db push --skip-generate
           pnpm exec tsx --test apps/api/src/services/reference-search.integration.test.ts
 
