@@ -7,8 +7,9 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
-test("queryKnowledgeDataset uses typed filters for an exact one-digit pipe-size row", async () => {
+test("queryKnowledgeDataset uses typed filters for an exact row and reads a dataset by id alone", async () => {
   let queryBody: unknown;
+  let rowsUrl = "";
   const api = createServer((request, response) => {
     response.setHeader("Content-Type", "application/json");
     if (request.method === "POST" && request.url === "/datasets/ds-piping/query") {
@@ -28,6 +29,14 @@ test("queryKnowledgeDataset uses typed filters for an exact one-digit pipe-size 
           },
         }]));
       });
+      return;
+    }
+    if (request.method === "GET" && request.url?.startsWith("/datasets/ds-piping/rows?")) {
+      rowsUrl = request.url;
+      response.end(JSON.stringify({
+        rows: Array.from({ length: 25 }, (_, i) => ({ id: `row-${i}`, data: { NominalDiameter: String(i + 1), FittingHrs: i / 4 } })),
+        total: 40,
+      }));
       return;
     }
     if (request.method === "GET" && request.url === "/datasets/ds-piping") {
@@ -77,6 +86,19 @@ test("queryKnowledgeDataset uses typed filters for an exact one-digit pipe-size 
     assert.equal(payload.rows.total, 1);
     assert.equal(payload.rows.values[0].NominalDiameter, "3");
     assert.equal(payload.evidence.match, "exact_filters");
+
+    const browse = await client.callTool({
+      name: "queryKnowledgeDataset",
+      arguments: { datasetId: "ds-piping", offset: 5, rowLimit: 20 },
+    });
+    const browseContent = (browse as { content: Array<{ type: string; text?: string }>; isError?: boolean });
+    assert.notEqual(browseContent.isError, true);
+    const rows = JSON.parse(String(browseContent.content.find((item) => item.type === "text")?.text)).rows;
+    assert.equal(rowsUrl, "/datasets/ds-piping/rows?limit=25");
+    assert.equal(rows.values.length, 20);
+    assert.equal(rows.values[0].NominalDiameter, "6");
+    assert.equal(rows.total, 40);
+    assert.equal(rows.hasMore, true);
   } finally {
     await client.close().catch(() => undefined);
     await server.close().catch(() => undefined);

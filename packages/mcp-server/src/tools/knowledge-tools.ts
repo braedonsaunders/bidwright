@@ -240,7 +240,7 @@ export function registerKnowledgeTools(server: McpServer) {
     {
       query: z.string().optional().describe("Search query — e.g. 'weld neck flange 6 inch 150 lb man hours'"),
       q: z.string().optional().describe("Alias for query; accepted for consistency with other search tools."),
-      datasetId: z.string().optional().describe("Search within a specific dataset ID (if known from previous query)"),
+      datasetId: z.string().optional().describe("A dataset ID from discovery. Alone, reads its rows in order (use offset/rowLimit to page); with query or filters, searches within it."),
       filters: z.array(z.object({
         column: z.string().min(1).describe("Exact dataset column key returned by discovery."),
         op: z.enum(["eq", "gt", "lt", "gte", "lte", "contains"]).default("eq"),
@@ -254,21 +254,29 @@ export function registerKnowledgeTools(server: McpServer) {
     async (input) => {
       const query = resolveQuery(input);
       const { datasetId, filters, limit, offset, rowLimit, sampleRowLimit } = input;
-      if (!query && !(datasetId && filters.length > 0)) {
+      if (!query && !datasetId) {
         return {
-          content: [{ type: "text" as const, text: "ERROR: pass query for discovery/fuzzy search, or pass datasetId with at least one exact filter." }],
+          content: [{ type: "text" as const, text: "ERROR: pass query for discovery/fuzzy search, or pass datasetId to read or filter a dataset's rows." }],
           isError: true,
         };
       }
       if (datasetId) {
         // Exact filters are deterministic and preferred for numeric/keyed rows.
         // Fuzzy search remains available for unstructured discovery within a known dataset.
+        // A dataset id alone reads its rows in order, like opening the table.
+        const browsing = filters.length === 0 && !query;
         const data = filters.length > 0
           ? await apiPost(`/datasets/${datasetId}/query`, { filters })
-          : await apiGet(`/datasets/${datasetId}/search?${new URLSearchParams({ q: query })}`);
+          : query
+            ? await apiGet(`/datasets/${datasetId}/search?${new URLSearchParams({ q: query })}`)
+            : await apiGet(`/datasets/${datasetId}/rows?${new URLSearchParams({ limit: String(offset + rowLimit) })}`);
         const dataset = await apiGet(`/datasets/${datasetId}`);
         const rawRows = Array.isArray(data) ? data : (Array.isArray(data.rows) ? data.rows : []);
         const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset }, 50, 200);
+        if (browsing && typeof data?.total === "number") {
+          page.total = data.total;
+          page.hasMore = offset + page.rows.length < data.total;
+        }
         return { content: [{ type: "text" as const, text: JSON.stringify({
           dataset: {
             id: dataset.id,
@@ -291,7 +299,7 @@ export function registerKnowledgeTools(server: McpServer) {
             hasMore: page.hasMore,
             values: page.rows,
           },
-          evidence: filters.length > 0 ? { match: "exact_filters", filters } : { match: "fuzzy_query", query },
+          evidence: filters.length > 0 ? { match: "exact_filters", filters } : browsing ? { match: "all_rows" } : { match: "fuzzy_query", query },
           note: filters.length > 0
             ? "Rows matched every typed filter. Use the returned dataset name, column keys, values, and units in the answer."
             : "Rows compact + paginated. For sizes, quantities, rates, or factors, repeat with datasetId + exact filters. Column names encode units and conditions.",
