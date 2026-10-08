@@ -90,7 +90,7 @@ export interface LineDerivationProcurement {
   packSize?: number | null;
   /** Fraction added for waste/breakage, e.g. 0.15. */
   wasteFactor?: number | null;
-  /** Required when supplied base units exceed twice the requirement. */
+  /** Optional note on why the purchase exceeds the requirement. */
   surplusRationale?: string | null;
 }
 
@@ -519,9 +519,9 @@ export interface ProcurementLinkResult {
 }
 
 /**
- * Evaluate a declared installed/procurement relationship. Shortfalls are
- * errors; a surplus above 2x needs a written rationale; a packaged UOM
- * without packSize is an error because nothing can be reconciled.
+ * Evaluate a declared installed/procurement relationship. A shortfall is an
+ * error, and so are purchase and installed units that differ with no packSize
+ * to convert between them.
  */
 export function evaluateProcurementLink(
   procurement: LineDerivationProcurement | null | undefined,
