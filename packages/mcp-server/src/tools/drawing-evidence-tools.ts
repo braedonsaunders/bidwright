@@ -1854,7 +1854,7 @@ function extractRepeatedMarkHints(textValue: unknown, queryValue: unknown = "") 
         repeatedMarks,
         estimatorNote: repeatedMarks.length > 0
           ? "Repeated mark IDs are not the same as physical quantity. Count physical occurrences/placements unless the source explicitly says the repeated mark is typical or already included elsewhere."
-          : "These are physical mark occurrences. Verify whether the source uses mark IDs as unique fabrication types or physical placements before pricing.",
+          : "These are physical mark occurrences. Check whether the source uses mark IDs as unique fabrication types or physical placements.",
       };
     })
     .sort((a, b) => b.occurrenceCount - a.occurrenceCount)
@@ -2091,8 +2091,8 @@ function detectContradictions(claimsValue: unknown) {
       values: distinct,
       claimIds: entries.map((claim) => claim.claimId ?? claim.id).filter(Boolean),
       message: authorityConflict
-        ? `Conflicting values for ${entries[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. A BOM/spec/schedule/vendor table is in conflict with lower-context evidence. Do not resolve this by drawing date alone; either use the high-authority table or attach explicit supersession/order-of-precedence evidence before pricing. A carried assumption cannot price the lower-context drawing value unless an explicit override is cited.`
-        : `Conflicting values for ${entries[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. Reconcile sources or carry an explicit assumption before pricing.`,
+        ? `Conflicting values for ${entries[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. A BOM/spec/schedule/vendor table disagrees with lower-context drawing evidence.`
+        : `Conflicting values for ${entries[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. Reconcile the sources or record which one governs.`,
     });
   }
   return contradictions;
@@ -2279,7 +2279,7 @@ function detectUnclaimedHighAuthorityEvidence(claims: JsonRecord[], atlas: Drawi
         `${claim.quantityName ?? claim.claim ?? "drawing claim"} = ${claim.value} is based on ${method},`,
         `but high-authority ${entry.region.regionType} evidence in ${entry.region.fileName} page ${entry.region.pageNumber}`,
         `also matches this subject and contains different numeric value(s): ${[...new Set(entry.values)].slice(0, 8).join(", ")}.`,
-        `Save a separate BOM/spec/table claim or document explicit supersession/order-of-precedence evidence before pricing.`,
+        `Consider saving a separate BOM/spec/table claim, or note which source governs.`,
         `Region ${entry.region.id}: ${compactText(entry.region.text, 260)}`,
       ].join(" "));
     }
@@ -2358,6 +2358,9 @@ async function fetchViewsById(ids: string[]): Promise<JsonRecord[]> {
 }
 
 export async function resolveClaimEvidenceViews(evidence: JsonRecord[], fetchViews: (ids: string[]) => Promise<JsonRecord[]> = fetchViewsById): Promise<{ evidence: JsonRecord[]; failures: string[] }> {
+  // imageHashVerifiedAt and sourceChecksum are written only by the server from
+  // a resolved view; an agent cannot mark its own evidence as verified.
+  evidence = evidence.map(({ imageHashVerifiedAt: _verified, sourceChecksum: _checksum, ...entry }) => entry);
   const ids = [...new Set(evidence.map((entry) => String(entry.viewId ?? "").trim()).filter(Boolean))];
   if (ids.length === 0) return { evidence, failures: [] };
   let views: JsonRecord[];
@@ -2404,94 +2407,15 @@ export async function resolveClaimEvidenceViews(evidence: JsonRecord[], fetchVie
   return { evidence: resolved, failures };
 }
 
-/**
- * Save-time mechanical check of one claim: the same evidence rules the ledger
- * verifier applies to it (schema, server-resolved views, crop tool, hash,
- * atlas regions; all already enforced before save) plus contradiction with
- * claims already in the ledger. It is evidence bookkeeping, not a review of
- * whether the quantity is right, and it never replaces the ledger-wide
- * verifier that finalize requires.
- */
-export function mechanicalClaimCheck(claim: JsonRecord, contradictions: unknown[]): JsonRecord {
-  const claimId = String(claim.claimId ?? claim.id ?? "");
-  const key = claimKey(claim);
-  const involved = asArray(contradictions).map(asRecord).filter((entry) =>
-    asArray(entry.claimIds).map(String).includes(claimId) || String(entry.key ?? "") === key,
-  );
-  const sourceChecksums = Object.fromEntries(
-    asArray(claim.evidence).map(asRecord)
-      .filter((evidence) => evidence.viewId && evidence.sourceChecksum)
-      .map((evidence) => [String(evidence.viewId), String(evidence.sourceChecksum)]),
-  );
-  return {
-    kind: "mechanical_on_save",
-    status: involved.length > 0 ? "failed" : "passed",
-    checkedAt: new Date().toISOString(),
-    checks: ["schema", "server_views_resolved", "crop_tool_and_hash", "atlas_regions", "no_contradiction"],
-    problems: involved.map((entry) => String(entry.message ?? entry.key ?? "contradiction with another claim")),
-    sourceChecksums,
-    note: "Mechanical evidence check only; not a human review of the quantity.",
-  };
-}
-
 export function validateClaimEvidence(claim: JsonRecord, atlas?: DrawingAtlas) {
   const failures: string[] = [];
-  const method = normalizedText(claim.method);
-  const evidence = asArray(claim.evidence).map(asRecord);
   if (!claim.quantityName && !claim.claim) failures.push("quantityName is required.");
   if (claim.value === undefined || claim.value === null || claim.value === "") failures.push("value is required.");
-  if (!method) failures.push("method is required.");
-  if (evidence.length === 0 && method !== "assumption") failures.push("at least one evidence entry is required.");
-
-  for (const [index, entry] of evidence.entries()) {
-    if (!entry.documentId) failures.push(`evidence[${index}] is missing documentId.`);
-    if (!entry.pageNumber) failures.push(`evidence[${index}] is missing pageNumber.`);
+  if (!normalizedText(claim.method)) failures.push("method is required.");
+  for (const [index, entry] of asArray(claim.evidence).map(asRecord).entries()) {
     if (entry.regionId && atlas && !findRegion(atlas, String(entry.regionId))) failures.push(`evidence[${index}] regionId is not in the current atlas.`);
-    if (["visual_count", "takeoff"].includes(method)) {
-      if (!entry.regionId && !entry.bbox) failures.push(`visual evidence[${index}] needs regionId or bbox.`);
-      if (!entry.imageHash) failures.push(`visual evidence[${index}] needs the viewId returned by readDrawingTile/inspectDrawingRegion (the server fills imageHash from it).`);
-      const tool = normalizedText(entry.tool);
-      const inspectedCropTool = ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols", "readdrawingtile"].some((name) => tool.replace(/\s+/g, "").includes(name));
-      if (!inspectedCropTool) {
-        failures.push(`visual evidence[${index}] must come from a targeted crop (readDrawingTile or inspectDrawingRegion, cite its viewId), not a full page or search-only metadata.`);
-      }
-    }
-    if (["bom_table", "drawing_table", "ocr_text"].includes(method) && !entry.sourceText && !entry.regionId) {
-      failures.push(`text evidence[${index}] needs sourceText or regionId.`);
-    }
   }
-
-  if (method === "bom_table" && !isHighAuthorityClaim(claim)) {
-    failures.push("bom_table claims must cite an actual BOM, parts list, schedule, spec sheet, vendor quote, model BOM, or comparable quantity table. Use ocr_text for ordinary drawing notes.");
-  }
-
-  if (method === "assumption" && String(claim.assumption ?? claim.rationale ?? "").trim().length < 20) {
-    failures.push("assumption claims require a substantive assumption/rationale.");
-  }
-
   return failures;
-}
-
-function claimMutationRejection(existing: JsonRecord, next: JsonRecord) {
-  const existingMethod = normalizedText(existing.method);
-  const nextMethod = normalizedText(next.method);
-  const existingValue = comparableClaimValue(existing.value);
-  const nextValue = comparableClaimValue(next.value);
-  const existingAuthority = isHighAuthorityClaim(existing) ? "high" : "lower";
-  const nextAuthority = isHighAuthorityClaim(next) ? "high" : "lower";
-  const valueChanged = existingValue !== null && nextValue !== null
-    ? Math.abs(existingValue - nextValue) > 0.0001
-    : String(existing.value ?? "") !== String(next.value ?? "");
-  const methodChanged = existingMethod !== nextMethod;
-
-  if (!valueChanged && !methodChanged) return null;
-
-  return [
-    `Existing evidence claim ${existing.claimId ?? existing.id} is immutable for value and method.`,
-    `Existing: value=${String(existing.value ?? "")}, method=${String(existing.method ?? "")}, authority=${existingAuthority}.`,
-    `Attempted: value=${String(next.value ?? "")}, method=${String(next.method ?? "")}, authority=${nextAuthority}.`,
-    "Save a separate competing claim for a different source value, or re-save this claim only with the same value/method plus reconciliation text.",
-  ].join(" ");
 }
 
 function highRiskClaim(claim: JsonRecord) {
@@ -2726,7 +2650,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
             regionTypeCounts: countBy(atlas.regions.map((region) => region.regionType)),
           } : atlasResult,
           promotedDocumentCount: asArray((engine as JsonRecord).promotedDocuments).length,
-          next: "Now call searchDrawingRegions with this documentId or a scope query, then inspectDrawingRegion before saving any drawing-driven quantity claim.",
+          next: "searchDrawingRegions can now find regions in this document.",
         }, null, 2) }],
       };
     },
@@ -2856,7 +2780,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     "inspectDrawingRegion",
     [
       "Render a selected atlas region as a targeted high-resolution crop.",
-      "Use this after searchDrawingRegions and before any drawing-driven quantity claim. This is the visual evidence primitive for the ledger.",
+      "Use after searchDrawingRegions to look closely at a region.",
       "Returns the crop and a viewId. Cite that viewId in saveDrawingEvidenceClaim only after the crop itself proves the value; the server fills the hash and geometry. If you already read this area with readDrawingTile, cite that viewId and skip this call.",
     ].join(" "),
     {
@@ -2963,7 +2887,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     [
       "Persist an evidence-ledger claim for a drawing-driven quantity or scope fact.",
       "For visual evidence, cite the viewId of the image you already examined (from readDrawingTile, readDrawingPage or inspectDrawingRegion) in evidence[].viewId. The server fills imageHash, document, page, bbox and tool from that view. Do not re-open or re-inspect a region you have already read just to obtain a hash, and never type an imageHash yourself.",
-      "Every drawing-driven worksheet quantity needs one of these before pricing: visual_count, bom_table, drawing_table, ocr_text, takeoff, assumption, library, or vendor_quote.",
+      "Methods: visual_count, bom_table, drawing_table, ocr_text, takeoff, assumption, library, or vendor_quote.",
       "Use method bom_table for formal quantity sources including BOMs, line lists, bid sheets, quote sheets, takeoff tables, parts lists, schedules, spec sheets, vendor quotes, model BOMs, spreadsheets, or CSVs.",
       "If another source gives a conflicting value, save a separate claim for each source using the same packageId/quantityName/unit so the ledger can detect the conflict.",
       "BOMs, schedules, vendor specs, and revision-controlled submittals may carry more authority than a general drawing note; do not mark them superseded by drawing date alone. Resolve in favor of the high-authority table, attach explicit supersession/order-of-precedence evidence, or use reconciliation.status='carried_assumption' while pricing the high-authority baseline/asking the user.",
@@ -3020,19 +2944,6 @@ export function registerDrawingEvidenceTools(server: McpServer) {
       const currentEngine = engineFromStrategy(await getStrategy());
       const currentClaims = asArray(currentEngine.claims).map(asRecord);
       const existingClaim = currentClaims.find((entry) => String(entry.claimId ?? entry.id) === claim.claimId);
-      const mutationRejection = existingClaim ? claimMutationRejection(existingClaim, claim) : null;
-      if (mutationRejection) {
-        return {
-          content: [{ type: "text" as const, text: JSON.stringify({
-            success: false,
-            claim: existingClaim,
-            rejectedClaim: claim,
-            validationFailures: [mutationRejection],
-            unresolvedContradictions: asArray(currentEngine.contradictions),
-            next: "Do not overwrite an evidence claim to make a contradiction disappear. Save the competing source as a separate claim, or keep the high-authority source as baseline and carry the lower-context source as an alternate/clarification.",
-          }, null, 2) }],
-        };
-      }
       const resolvedViews = await resolveClaimEvidenceViews(asArray(claim.evidence).map(asRecord));
       claim.evidence = resolvedViews.evidence as typeof claim.evidence;
       const claimToSave = existingClaim ? mergeExistingClaim(existingClaim, claim) : claim;
@@ -3044,7 +2955,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
             rejectedClaim: claimToSave,
             validationFailures,
             unresolvedContradictions: asArray(currentEngine.contradictions),
-            next: "This claim was not saved. Repair the method/evidence and resubmit it as a new valid claim before pricing.",
+            next: "This claim was not saved; fix the listed fields and save it again.",
           }, null, 2) }],
         };
       }
@@ -3054,7 +2965,6 @@ export function registerDrawingEvidenceTools(server: McpServer) {
         const savedClaimId = String(savedClaim.claimId ?? savedClaim.id);
         const withoutExisting = claims.filter((entry) => String(entry.claimId ?? entry.id) !== savedClaimId);
         const contradictionsAfterSave = detectContradictions([claimToSave, ...withoutExisting]);
-        (claimToSave as JsonRecord).mechanicalCheck = mechanicalClaimCheck(claimToSave as JsonRecord, contradictionsAfterSave);
         const nextClaims = [claimToSave, ...withoutExisting];
         return {
           ...state,
@@ -3071,15 +2981,8 @@ export function registerDrawingEvidenceTools(server: McpServer) {
           updatedExistingClaim: !!existingClaim,
           validationFailures,
           highAuthorityReviewWarnings,
-          pricingBlocked: contradictions.length > 0,
           unresolvedContradictions: contradictions,
-          next: validationFailures.length > 0
-            ? "Repair the claim evidence before using this quantity for pricing."
-            : contradictions.length > 0
-              ? "Reconcile contradictions or carry an explicit assumption before pricing/finalize."
-            : highAuthorityReviewWarnings.length > 0
-              ? "Claim saved with high-authority review warnings. Inspect the suggested sources and save a competing claim if they govern the same quantity field."
-              : "Claim saved with a passed save-time check; rows citing it can be priced for its package. Run verifyDrawingEvidenceLedger before finalize.",
+          next: contradictions.length > 0 ? "Saved. Another claim gives a different value for this quantity; see unresolvedContradictions." : "Saved.",
         }, null, 2) }],
       };
     },
@@ -3131,7 +3034,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
     [
       "Run the independent drawing evidence verifier.",
       "It samples high-risk claims, checks that visual claims point to targeted inspected crops with image hashes, checks region IDs against the atlas, and detects unresolved contradictions.",
-      "Use this after saveDrawingEvidenceClaim and before pricing/finalize.",
+      "Optional; useful as a self-check after saving several claims.",
     ].join(" "),
     {
       sampleLimit: z.coerce.number().int().positive().max(25).default(12),
@@ -3209,7 +3112,7 @@ export function registerDrawingEvidenceTools(server: McpServer) {
           success: failures.length === 0,
           verification,
           next: failures.length > 0
-            ? "Fix missing evidence, unresolved contradictions, or uninspected visual claims before creating/pricing drawing-driven worksheet rows."
+            ? "Review the listed issues."
             : "Verifier pass saved. Continue with pricing, keeping claim IDs in worksheet sourceEvidence/sourceNotes.",
         }, null, 2) }],
       };

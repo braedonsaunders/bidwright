@@ -206,49 +206,6 @@ function workspaceCategories(workspacePayload: any): EntityCategoryRecord[] {
   return Array.isArray(categories) ? categories : [];
 }
 
-function workspaceSourceDocuments(workspacePayload: any): Record<string, unknown>[] {
-  const workspace = workspacePayload?.workspace ?? workspacePayload ?? {};
-  const docs = workspace.sourceDocuments ?? workspace.workspace?.sourceDocuments ?? [];
-  return Array.isArray(docs) ? docs.filter((doc) => doc && typeof doc === "object" && !Array.isArray(doc)) as Record<string, unknown>[] : [];
-}
-
-function isDrawingLikeSourceDocument(doc: Record<string, unknown>) {
-  const documentType = normalizeKey(doc.documentType);
-  const fileType = normalizeKey(doc.fileType);
-  const fileName = normalizeKey(doc.fileName);
-  if (/^__macosx\/|\/__macosx\/|(^|\/)\._|(^|\/)\.ds_store$|(^|\/)thumbs\.db$/.test(fileName)) return false;
-  if (fileType !== "application/pdf" && fileType !== "pdf" && !fileName.endsWith(".pdf")) return false;
-  return documentType === "drawing";
-}
-
-function evidenceBasisRequiresDrawing(evidenceBasis: Record<string, unknown>) {
-  const quantityBasis = asObject(evidenceBasis.quantity);
-  return ["drawing_quantity", "visual_takeoff", "drawing_table", "drawing_note"].includes(
-    normalizeKey(quantityBasis.type ?? evidenceBasis.quantityType ?? evidenceBasis.type),
-  );
-}
-
-function evidenceBasisClaimIds(evidenceBasis: Record<string, unknown>) {
-  const quantityBasis = asObject(evidenceBasis.quantity);
-  return [
-    ...asArray(evidenceBasis.drawingClaimIds),
-    ...asArray(quantityBasis.drawingClaimIds),
-  ]
-    .map((value) => String(value ?? "").trim())
-    .filter(Boolean);
-}
-
-function claimIdsMentionedInCandidateLine(input: Record<string, unknown>, evidenceBasis: Record<string, unknown>) {
-  const text = [
-    input.entityName,
-    input.description,
-    input.sourceNotes,
-    JSON.stringify(input.candidate ?? {}),
-    JSON.stringify(evidenceBasis),
-  ].join("\n");
-  return [...new Set([...text.matchAll(/\bclaim-[0-9a-f]{12}\b/gi)].map((match) => match[0]))];
-}
-
 function sortedEnabledCategories(categories: EntityCategoryRecord[]) {
   return categories
     .filter((category) => category.enabled !== false)
@@ -1001,7 +958,7 @@ export function registerResourceTools(server: McpServer) {
 
   server.tool(
     "recommendEstimateBasis",
-    "Find the best source basis for an estimate row: exact cost intelligence when available, similar vendor/product context when useful, labor productivity units, and existing takeoff annotations. Use this before creating or updating priced worksheet rows.",
+    "Find the best source basis for an estimate row: exact cost intelligence when available, similar vendor/product context when useful, labor productivity units, and existing takeoff annotations. Useful before creating or updating priced worksheet rows.",
     {
       q: z.string().describe("Scope phrase, product, activity, material, or line item to estimate."),
       categoryId: z.string().optional().describe("Stable EntityCategory id to prefer for category-aware search."),
@@ -1238,7 +1195,7 @@ export function registerResourceTools(server: McpServer) {
         sourceRefs: sourceRefArray(),
         assumptionIds: z.array(z.string()).default([]),
         rationale: z.string().optional(),
-      }).passthrough().optional().describe("Line-level evidence contract. Required when drawings exist. Prefer quantity/pricing axes. Drawing/takeoff quantity basis needs quantity.drawingClaimIds; pricing can separately be rate_schedule, knowledge_labor, material_quote, vendor_quote, allowance, indirect, document_quantity, assumption, subcontract, equipment_rental, or mixed."),
+      }).passthrough().optional().describe("Optional line-level evidence (sources, assumptions, claims, views). Quantity and pricing axes can be recorded separately; pricing can separately be rate_schedule, knowledge_labor, material_quote, vendor_quote, allowance, indirect, document_quantity, assumption, subcontract, equipment_rental, or mixed."),
     },
     async (input) => {
       let candidate = input.candidate as SearchCandidate | undefined;
@@ -1263,58 +1220,7 @@ export function registerResourceTools(server: McpServer) {
       }
 
       const ws = await apiGet<any>(projectPath("/workspace")).catch(() => null);
-      const drawingDocs = workspaceSourceDocuments(ws).filter(isDrawingLikeSourceDocument);
       const evidenceBasis = asObject(input.evidenceBasis);
-      const declaredClaimIds = evidenceBasisClaimIds(evidenceBasis);
-      const mentionedClaimIds = claimIdsMentionedInCandidateLine(input, evidenceBasis);
-      const missingDeclaredClaimIds = mentionedClaimIds.filter((id) => !declaredClaimIds.includes(id));
-      if (drawingDocs.length > 0 && Object.keys(evidenceBasis).length === 0) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: "Line evidence basis is required because this project contains drawings. Prefer evidenceBasis.quantity.type plus evidenceBasis.pricing.type. Use drawing_quantity/visual_takeoff/drawing_table/drawing_note with quantity.drawingClaimIds only when the row quantity is drawing-derived; otherwise declare the non-drawing quantity and pricing source classes such as rate_schedule, knowledge_labor, material_quote, vendor_quote, allowance, indirect, document_quantity, assumption, subcontract, equipment_rental, or mixed.",
-          }],
-          isError: true,
-        };
-      }
-      if (missingDeclaredClaimIds.length > 0) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Drawing evidence claim id(s) are mentioned but not attached to evidenceBasis.quantity.drawingClaimIds: ${missingDeclaredClaimIds.join(", ")}. Split the row provenance into evidenceBasis.quantity for quantity evidence and evidenceBasis.pricing for cost/rate evidence.`,
-          }],
-          isError: true,
-        };
-      }
-      if (declaredClaimIds.length > 0 && !evidenceBasisRequiresDrawing(evidenceBasis)) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: "Drawing claim IDs belong under evidenceBasis.quantity. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and move claim IDs to evidenceBasis.quantity.drawingClaimIds. Put candidate/library/material/rate support under evidenceBasis.pricing.",
-          }],
-          isError: true,
-        };
-      }
-      const pricingBasis = asObject(evidenceBasis.pricing);
-      const pricingType = normalizeKey(pricingBasis.type ?? evidenceBasis.pricingType);
-      if (evidenceBasisRequiresDrawing(evidenceBasis) && (!pricingType || ["drawing_quantity", "visual_takeoff", "drawing_table", "drawing_note"].includes(pricingType))) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: "Drawing quantity evidence proves count/measurement, not price/rate/productivity. Add evidenceBasis.pricing.type with the candidate/library/material/rate/vendor/subcontract/allowance source that supports cost or productivity.",
-          }],
-          isError: true,
-        };
-      }
-      if (evidenceBasisRequiresDrawing(evidenceBasis) && declaredClaimIds.length === 0) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: "This candidate row is marked as drawing/takeoff quantity driven, so evidenceBasis.quantity.drawingClaimIds must name the Drawing Evidence Engine claim(s) that prove the quantity. Use evidenceBasis.pricing for the candidate/library source that supports pricing.",
-          }],
-          isError: true,
-        };
-      }
       const categories = workspaceCategories(ws);
       const defaultMarkup = Number(ws?.workspace?.currentRevision?.defaultMarkup ?? ws?.currentRevision?.defaultMarkup ?? 0);
       const body = worksheetItemFromCandidate(candidate, {

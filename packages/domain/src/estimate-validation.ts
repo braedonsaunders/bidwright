@@ -1,4 +1,3 @@
-import { derivationSourceLookup, flagDerivationAssumptions, normalizeLineDerivation } from "./line-derivation";
 
 export type EstimateValidationSeverity = "info" | "warning" | "error" | "critical";
 
@@ -360,58 +359,6 @@ export function createDefaultEstimateValidationRegistry() {
 }
 
 /** Convenience entry point for the default BidWright estimate validation rule set. */
-// ── declared no-charge rows ─────────────────────────────────────────────────
-
-function rowEvidenceBasis(item: EstimateValidationWorksheetItemLike): Record<string, any> {
-  const fromEvidence = (item.sourceEvidence && typeof item.sourceEvidence === "object" ? (item.sourceEvidence as Record<string, any>).evidenceBasis : null);
-  const direct = (item as Record<string, any>).evidenceBasis;
-  const basis = fromEvidence ?? direct;
-  return basis && typeof basis === "object" && !Array.isArray(basis) ? basis as Record<string, any> : {};
-}
-
-function basisList(basis: Record<string, any>, key: string): unknown[] {
-  return [basis[key], basis.quantity?.[key], basis.pricing?.[key]].flatMap((value) => (Array.isArray(value) ? value : []));
-}
-
-const NO_CHARGE_PRICING_TYPES = new Set(["allowance", "subcontract"]);
-
-/**
- * Mirrors the pricing gate's honest path for a $0 lump sum: pricing type
- * allowance or subcontract, backed by assumption ids that resolve to saved
- * strategy assumptions, or by an explicit
- * user instruction ("user: …" or {kind:"user", ref}). An accidental zero row
- * (no basis, or a material/vendor quote basis) is still an error.
- */
-/** Ids of assumptions saved on the estimate strategy, or null when the workspace does not carry them. */
-function savedAssumptionIds(context: EstimateValidationContext): Set<string> | null {
-  const assumptions = (context.workspace.estimateStrategy as Record<string, unknown> | null | undefined)?.assumptions;
-  if (!Array.isArray(assumptions)) return null;
-  return new Set(assumptions.map((entry) => String((entry as Record<string, unknown>)?.id ?? "").trim()).filter(Boolean));
-}
-
-function isDeclaredNoChargeRow(item: EstimateValidationWorksheetItemLike, saved: Set<string> | null): boolean {
-  const basis = rowEvidenceBasis(item);
-  const pricingType = String(basis.pricing?.type ?? basis.pricingType ?? basis.type ?? "").trim().toLowerCase();
-  if (!NO_CHARGE_PRICING_TYPES.has(pricingType)) return false;
-  const assumptionIds = basisList(basis, "assumptionIds").map((value) => String(value ?? "").trim()).filter(Boolean);
-  const userRefs = basisList(basis, "sourceRefs").filter((ref) => {
-    if (ref && typeof ref === "object") return String((ref as Record<string, unknown>).kind ?? "").toLowerCase() === "user" && String((ref as Record<string, unknown>).ref ?? "").trim().length >= 2;
-    return /^(user|client|owner|customer|estimator)\s*[:\-]\s*\S{2,}/i.test(String(ref ?? ""));
-  });
-  // Assumption ids must resolve against the saved strategy: rows written via
-  // the API or UI never passed the MCP gate's resolution check. When the
-  // workspace carries no strategy, only an explicit user instruction counts.
-  const assumptionsResolve = assumptionIds.length > 0 && saved !== null && assumptionIds.every((id) => saved.has(id));
-  return assumptionsResolve || userRefs.length > 0;
-}
-
-function noChargeBasisLabel(item: EstimateValidationWorksheetItemLike): string {
-  const basis = rowEvidenceBasis(item);
-  const pricingType = String(basis.pricing?.type ?? basis.type ?? "").trim().toLowerCase();
-  const assumptionIds = basisList(basis, "assumptionIds").map(String).filter(Boolean);
-  return `${pricingType}${assumptionIds.length ? ` (${assumptionIds.join(", ")})` : " (user instruction)"}`;
-}
-
 export function validateEstimateWorkspace(
   workspace: EstimateValidationWorkspaceLike,
   options: EstimateValidationOptions = {},
@@ -474,7 +421,7 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
     weight: 12,
     ruleSets: ["default", "readiness"],
     validate(context) {
-      return context.rows.flatMap((row): EstimateValidationIssueInput[] => {
+      return context.rows.flatMap((row) => {
         const quantity = toFiniteNumber(row.item.quantity);
         if (quantity <= 0) {
           return [];
@@ -487,20 +434,6 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
         }
 
         const bothZero = cost <= 0 && price <= 0;
-        // A row the estimate deliberately carries at $0 (fabrication by
-        // others, owner-supplied equipment) is declared as such on its
-        // evidence basis; it is reported, not treated as missing pricing.
-        // Exactly zero: a negative amount is a credit, never a no-charge row.
-        if (cost === 0 && price === 0 && isDeclaredNoChargeRow(row.item, savedAssumptionIds(context))) {
-          return [{
-            message: `Worksheet item "${displayItemName(row.item)}" is carried at no charge as a declared ${noChargeBasisLabel(row.item)}.`,
-            severity: "info",
-            element: itemRef(row),
-            suggestions: ["Confirm the no-charge scope with the client before issuing the quote."],
-            details: { quantity, cost, price, noCharge: true },
-            scoreImpact: 0,
-          }];
-        }
         return [{
           message: bothZero
             ? `Worksheet item "${displayItemName(row.item)}" has zero cost and zero price.`
@@ -764,40 +697,6 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
             });
           }
         }
-      }
-      return issues;
-    },
-  },
-  {
-    id: "worksheet.evidence.assumed_derivation_unreviewed",
-    name: "Assumed derivation inputs are reviewed",
-    description: "A row whose quantity or hours are sized by assumptions, even when labelled drawing-driven, stays visible until an estimator reviews it. Never blocks a draft.",
-    severity: "warning",
-    category: "evidence",
-    weight: 8,
-    ruleSets: ["default", "readiness"],
-    validate(context) {
-      const issues: EstimateValidationIssueInput[] = [];
-      const strategy = (context.workspace.estimateStrategy ?? {}) as Record<string, any>;
-      const lookup = derivationSourceLookup(strategy.summary?.drawingEvidenceEngine?.claims, context.rows.map((row) => row.item as { id?: unknown; derivation?: unknown }));
-      for (const row of context.rows) {
-        const derivation = normalizeLineDerivation((row.item as Record<string, unknown>).derivation);
-        if (!derivation || derivation.status === "reviewed" || derivation.status === "stale") continue;
-        const [flag] = flagDerivationAssumptions(derivation, lookup);
-        if (!flag) continue;
-        const dominated = flag.code === "assumption_dominated";
-        // One real object x assumed hours is legitimate: visible, not a warning.
-        const warn = dominated && flag.basis !== "physical_count";
-        issues.push({
-          message: `"${displayItemName(row.item)}" ${dominated ? "is sized entirely by assumptions" : "uses assumed inputs"} and has not been reviewed by an estimator. ${flag.message}`,
-          severity: warn ? "warning" : "info",
-          element: itemRef(row),
-          suggestions: [
-            "Confirm the assumed inputs, replace them with a sourced value, or mark the derivation reviewed.",
-          ],
-          details: { flag: flag.code, basis: flag.basis, inputs: flag.inputs, derivationStatus: derivation.status },
-          scoreImpact: warn ? 0.6 : 0.2,
-        });
       }
       return issues;
     },
