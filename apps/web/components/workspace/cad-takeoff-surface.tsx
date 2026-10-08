@@ -196,6 +196,7 @@ export function CadTakeoffSurface({
       const messageText = saveError instanceof Error ? saveError.message : "Unknown save error";
       setError(messageText);
       setStatus("Save failed");
+      throw saveError;
     } finally {
       setSaving(false);
     }

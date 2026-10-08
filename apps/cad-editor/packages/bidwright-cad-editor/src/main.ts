@@ -23,6 +23,14 @@ interface BidwrightCadEditorBootOptions {
   syncChannelName: string | null;
 }
 
+interface CadSaveSnapshot {
+  projectId: string | null;
+  documentId: string;
+  sourceKind: SourceKind | null;
+  fileName: string;
+  dxfContent: string;
+}
+
 interface CadEntityRow {
   id: string;
   type: string;
@@ -91,6 +99,19 @@ class BidwrightCadBridge {
   private loaded = false;
   private cancelSnapshotTask: (() => void) | null = null;
   private hostMessagesBound = false;
+  private dxfSnapshot: CadSaveSnapshot | undefined;
+  private persistenceListeners: Array<() => void> = [];
+  private readonly captureListener = (event: Event) => {
+    const detail = (event as CustomEvent<{ capture?: () => ReturnType<BidwrightCadBridge["captureDxf"]> }>).detail;
+    detail.capture = () => this.captureDxf();
+  };
+  private readonly saveShortcutListener = (event: KeyboardEvent) => {
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      this.saveDxf();
+    }
+  };
   private selectionSet: AnyRecord | null = null;
   private readonly hostMessageListener = (event: MessageEvent) => {
     const message = event.data as Partial<HostMessage> | undefined;
@@ -113,6 +134,8 @@ class BidwrightCadBridge {
 
   attach(): void {
     this.bindHostMessages();
+    window.addEventListener("bidwright:cad-document-capture", this.captureListener);
+    window.addEventListener("keydown", this.saveShortcutListener, true);
     this.post("bidwright:cad-ready", {});
     AcApDocManager.instance.events.documentActivated.addEventListener(() => {
       this.handleDocumentActivated();
@@ -122,8 +145,11 @@ class BidwrightCadBridge {
   dispose(): void {
     this.cancelScheduledSnapshot();
     window.removeEventListener("message", this.hostMessageListener);
+    window.removeEventListener("bidwright:cad-document-capture", this.captureListener);
+    window.removeEventListener("keydown", this.saveShortcutListener, true);
     this.channel?.removeEventListener("message", this.channelMessageListener);
     this.channel?.close();
+    this.persistenceListeners.forEach((remove) => remove());
   }
 
   protected setStatus(_text: string): void {
@@ -144,6 +170,18 @@ class BidwrightCadBridge {
 
   private handleDocumentActivated(): void {
     this.loaded = true;
+    this.dxfSnapshot = undefined;
+    this.persistenceListeners.forEach((remove) => remove());
+    this.persistenceListeners = [];
+    const changed = () => { this.dxfSnapshot = undefined; };
+    const events = AcApDocManager.instance.curDocument.database.events;
+    for (const event of [events.entityAppended, events.entityModified, events.entityErased, events.layerAppended, events.layerModified, events.layerErased, events.dictObjetSet, events.dictObjectErased]) {
+      event.addEventListener(changed);
+      this.persistenceListeners.push(() => event.removeEventListener(changed));
+    }
+    const sysvars = AcDbSysVarManager.instance().events.sysVarChanged;
+    sysvars.addEventListener(changed);
+    this.persistenceListeners.push(() => sysvars.removeEventListener(changed));
     this.setStatus(`Loaded ${this.options.fileName}`);
     this.bindSelectionEvents();
     const snapshot = this.options.mode === "takeoff"
@@ -218,18 +256,26 @@ class BidwrightCadBridge {
     this.publishSelection(ids);
   }
 
+  private captureDxf(): CadSaveSnapshot | undefined {
+    if (!this.loaded) return undefined;
+    // Export allocates transient block handles. Cache the snapshot until the
+    // database changes so idle autosave neither serializes nor uploads again.
+    this.dxfSnapshot ??= {
+      projectId: this.options.projectId,
+      documentId: this.documentId,
+      sourceKind: this.options.sourceKind,
+      fileName: ensureDxfName(this.options.fileName),
+      dxfContent: AcApDocManager.instance.curDocument.database.dxfOut(undefined, 6),
+    };
+    return this.dxfSnapshot;
+  }
+
   private saveDxf(): void {
-    if (!this.loaded) return;
     try {
-      const dxfContent = AcApDocManager.instance.curDocument.database.dxfOut(undefined, 6);
-      const savedFileName = ensureDxfName(this.options.fileName);
-      this.post("bidwright:cad-save", {
-        documentId: this.documentId,
-        sourceKind: this.options.sourceKind,
-        fileName: savedFileName,
-        dxfContent,
-      });
-      this.setStatus(`Saved ${savedFileName}`);
+      const snapshot = this.captureDxf();
+      if (!snapshot) return;
+      this.post("bidwright:cad-save", { ...snapshot });
+      this.setStatus(`Saving ${snapshot.fileName}…`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not export DXF";
       this.post("bidwright:cad-error", { message });

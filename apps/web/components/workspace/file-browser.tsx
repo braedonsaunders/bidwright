@@ -2537,32 +2537,37 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [projectId, selectedItem?.fileNode?.parentId, userNodes, notifyFilesMutated]);
 
+  const savedCadNodesRef = useRef(new Map<string, FileNode>());
+
   const handleCadDocumentSave = useCallback(async (message: BidwrightCadDocumentSaveMessage) => {
     try {
-      const selectedNativeNode = selectedItem?.fileNode && getFileExtension(selectedItem.fileNode.name) === "dxf"
-        ? selectedItem.fileNode
+      if (message.projectId && message.projectId !== projectId) throw new Error("Drawing belongs to a different project");
+      const sourceNode = message.sourceKind === "file_node"
+        ? userNodes.find((node) => node.id === message.documentId)
         : undefined;
-      const messageNativeNode = message.sourceKind === "file_node" && message.documentId
-        ? userNodes.find((node) => node.id === message.documentId && getFileExtension(node.name) === "dxf")
-        : undefined;
-      const nativeNode = selectedNativeNode ?? messageNativeNode;
-      const fileName = ensureCadDxfDocumentName(nativeNode?.name ?? message.fileName ?? selectedItem?.name ?? "Drawing");
+      const cacheKey = `${projectId}:${message.sourceKind}:${message.documentId}`;
+      const savedCopy = savedCadNodesRef.current.get(cacheKey);
+      // Resolve the snapshot's own file, even when a save finishes after the
+      // user switches drawings. Imported DWGs reuse their saved DXF copy.
+      const nativeNode = sourceNode && getFileExtension(sourceNode.name) === "dxf" ? sourceNode
+        : savedCopy && (userNodes.find((node) => node.id === savedCopy.id) ?? savedCopy);
+      const fileName = ensureCadDxfDocumentName(nativeNode?.name ?? message.fileName ?? "Drawing");
       const file = new globalThis.File([message.dxfContent], fileName, { type: "application/dxf" });
 
       const savedNode = nativeNode
         ? await saveFileNodeContent(projectId, nativeNode.id, file)
-        : await uploadFile(projectId, file, selectedItem?.fileNode?.parentId ?? null);
+        : await uploadFile(projectId, file, sourceNode?.parentId ?? null);
+      savedCadNodesRef.current.set(cacheKey, savedNode);
       if (!nativeNode) notifyFilesMutated();
 
       setUserNodes((prev) => {
         const exists = prev.some((node) => node.id === savedNode.id);
         return exists ? prev.map((node) => (node.id === savedNode.id ? savedNode : node)) : [...prev, savedNode];
       });
-      setSelectedId(savedNode.id);
     } catch (err) {
-      showError(`Failed to save CAD drawing: ${err instanceof Error ? err.message : "Unknown error"}`);
+      throw new Error(`Failed to save CAD drawing: ${err instanceof Error ? err.message : "Unknown error"}`);
     }
-  }, [projectId, selectedItem?.fileNode?.parentId, selectedItem?.name, showError, userNodes, notifyFilesMutated]);
+  }, [projectId, userNodes, notifyFilesMutated]);
 
   // Reset to file tab when selection changes
   useEffect(() => {

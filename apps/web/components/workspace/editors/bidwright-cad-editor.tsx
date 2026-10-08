@@ -2,6 +2,9 @@
 
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { cn } from "@/lib/utils";
+import { Button } from "@braedonsaunders/appkit-ui";
+import { Loader2, Save } from "lucide-react";
+import { useCadDocumentAutosave } from "@/lib/use-cad-document-autosave";
 
 export type BidwrightCadSourceKind = "source_document" | "file_node";
 export type BidwrightCadMode = "preview" | "takeoff";
@@ -42,6 +45,7 @@ export interface BidwrightCadIntelligenceSnapshot {
 }
 
 export interface BidwrightCadDocumentSaveMessage {
+  projectId?: string | null;
   documentId: string;
   sourceKind?: BidwrightCadSourceKind | null;
   fileName: string;
@@ -156,6 +160,7 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
       }),
       [documentId, fileName, fileUrl, mode, projectId, sourceKind, syncChannelName],
     );
+    const persistence = useCadDocumentAutosave({ iframe: iframeRef, documentKey: src, autosave: mode === "preview", onSave: onSaveDocument });
 
     const postToEditor = useCallback((message: Record<string, unknown>) => {
       iframeRef.current?.contentWindow?.postMessage({ source: "bidwright-cad-host", ...message }, "*");
@@ -176,9 +181,9 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
         postToEditor({ type: "bidwright:cad-fit" });
       },
       resize: resizeEditor,
-      save: () => postToEditor({ type: "bidwright:cad-save" }),
+      save: persistence.save,
       selectEntities: (entityIds) => postToEditor({ type: "bidwright:cad-select-entities", entityIds }),
-    }), [postToEditor, resizeEditor]);
+    }), [postToEditor, resizeEditor, persistence.save]);
 
     useEffect(() => {
       const sync = () => setTheme(resolveHostCadTheme());
@@ -218,6 +223,7 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
     useEffect(() => {
       function handleMessage(event: MessageEvent) {
         const data = event.data as Partial<EditorMessage> | undefined;
+        if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow) return;
         if (!data || data.source !== "bidwright-cad-editor") return;
         if (data.type === "bidwright:cad-ready") {
           onReady?.();
@@ -233,13 +239,6 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
           });
         } else if (data.type === "bidwright:cad-intelligence" && data.snapshot) {
           onIntelligenceChange?.(data.snapshot);
-        } else if (data.type === "bidwright:cad-save") {
-          void onSaveDocument?.({
-            documentId: data.documentId ?? documentId ?? fileName,
-            sourceKind: data.sourceKind,
-            fileName: data.fileName ?? fileName,
-            dxfContent: data.dxfContent ?? "",
-          });
         }
       }
 
@@ -248,12 +247,24 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
     }, [documentId, fileName, onError, onIntelligenceChange, onLoaded, onReady, onSaveDocument, onSelectionChange]);
 
     return (
-      <div ref={containerRef} className={cn("flex h-full min-h-0 w-full flex-1 overflow-hidden bg-bg", className)}>
+      <div ref={containerRef} className={cn("flex h-full min-h-0 w-full flex-1 flex-col overflow-hidden bg-bg", className)}>
+        {onSaveDocument && mode === "preview" && (
+          <div className="flex h-10 shrink-0 items-center gap-2 border-b border-line bg-panel px-3">
+            <span className="min-w-0 flex-1 truncate text-xs font-semibold text-fg">{fileName}</span>
+            <span role={persistence.status === "error" ? "alert" : "status"} title={persistence.error || "Drawing autosaves to Project Files"} className={cn("text-[10px]", persistence.status === "error" ? "text-red-500" : "text-fg/50")}>
+              {persistence.status === "opening" ? "Opening…" : persistence.status === "saving" ? "Saving…" : persistence.status === "unsaved" ? "Unsaved" : persistence.status === "error" ? "Save failed" : "Saved"}
+            </span>
+            <Button size="sm" variant="ghost" aria-label={persistence.status === "error" ? "Retry saving drawing" : "Save drawing"} title={persistence.error || "Save drawing to Project Files (Ctrl/Cmd+S)"} disabled={persistence.status === "opening"} onClick={persistence.save}>
+              {persistence.status === "saving" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
+              Save
+            </Button>
+          </div>
+        )}
         <iframe
           ref={iframeRef}
           title={`${fileName} CAD editor`}
           src={src}
-          className="block h-full min-h-0 w-full flex-1 border-0 bg-bg"
+          className="block min-h-0 w-full flex-1 border-0 bg-bg"
           sandbox="allow-downloads allow-forms allow-modals allow-same-origin allow-scripts"
           onLoad={() => {
             syncThemeToEditor(theme);
