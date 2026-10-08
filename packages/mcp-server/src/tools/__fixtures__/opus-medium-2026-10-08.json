@@ -1,5 +1,5 @@
 {
- "_source": "Opus 5.5 medium, prod project-1ad2c246 (sha-638331e), exact MCP arguments from the archived run; each was refused by a judgment gate that no longer exists",
+ "_source": "Opus 5.5 medium, a production run, exact MCP arguments from the archived run; each was refused by a judgment gate that no longer exists",
  "shortGroutClaim": {
   "unit": "in",
   "value": 1,
@@ -58,8 +58,8 @@
     "formula": "working_days*hours_per_day"
    },
    "entityName": "MECH:Foreman",
-   "description": "Working foreman: supervision, coordination with Teva/vendors, lift planning, mechanical checkout and turnover support (no separate vendor commissioning crew).",
-   "sourceNotes": "Duration basis A-DURATION: ~260 trade MH / 3 trades = ~11 working days -> 88 foreman hrs; 8 hrs OT = 20% of platform-phase foreman time (A-OT). Teva 2026 D2D MECH Foreman rate. Checkout/turnover in foreman scope per user directive 4.",
+   "description": "Working foreman: supervision, coordination with client/vendors, lift planning, mechanical checkout and turnover support (no separate vendor commissioning crew).",
+   "sourceNotes": "Duration basis A-DURATION: ~260 trade MH / 3 trades = ~11 working days -> 88 foreman hrs; 8 hrs OT = 20% of platform-phase foreman time (A-OT). client MECH foreman rate. Checkout/turnover in foreman scope per user directive 4.",
    "evidenceBasis": {
     "pricing": {
      "type": "rate_schedule"
@@ -138,8 +138,8 @@
     "formula": "(platform_trade_hrs + equipment_trade_hrs + mob_trade_hrs)/trades_supervised"
    },
    "entityName": "MECH:Foreman",
-   "description": "Working foreman: supervision, coordination with Teva/vendors, lift planning, mechanical checkout and turnover support (no separate vendor commissioning crew).",
-   "sourceNotes": "Duration derived from priced trade hours: platform 107.5 MH (li-f4c0097b, li-a87e359a, li-591ce066) + equipment/connections 128 MH (li-025b7b13, li-ad765d3a, li-3ab52667) + mob 24 MH = 259.5 MH / 3 trades = 86.5 crew hrs -> 88 foreman hrs. OT share matches platform phase OT (21.5 trade OT hrs / 3 ~ 7 -> carried 16 incl. checkout). Checkout/turnover within foreman per user directive 4. Teva 2026 D2D MECH Foreman.",
+   "description": "Working foreman: supervision, coordination with client/vendors, lift planning, mechanical checkout and turnover support (no separate vendor commissioning crew).",
+   "sourceNotes": "Duration derived from priced trade hours: platform 107.5 MH (li-f4c0097b, li-a87e359a, li-591ce066) + equipment/connections 128 MH (li-025b7b13, li-ad765d3a, li-3ab52667) + mob 24 MH = 259.5 MH / 3 trades = 86.5 crew hrs -> 88 foreman hrs. OT share matches platform phase OT (21.5 trade OT hrs / 3 ~ 7 -> carried 16 incl. checkout). Checkout/turnover within foreman per user directive 4. Client MECH Foreman rate.",
    "evidenceBasis": {
     "pricing": {
      "type": "rate_schedule"
@@ -228,8 +228,8 @@
     "formula": "(platform_trade_hrs + equipment_trade_hrs + mob_trade_hrs)/trades_supervised"
    },
    "entityName": "MECH:Foreman",
-   "description": "Working foreman: supervision, coordination with Teva/vendors, lift planning, mechanical checkout and turnover support (no separate vendor commissioning crew).",
-   "sourceNotes": "Duration derived from priced trade hours: platform 107.5 MH (li-f4c0097b, li-a87e359a, li-591ce066) + equipment/connections 128 MH (li-025b7b13, li-ad765d3a, li-3ab52667) + mob 24 MH = 259.5 MH / ~2.95 trades = 88 foreman hrs. 16 OT hrs covers platform-phase OT plus checkout. Checkout/turnover within foreman per user directive 4. Teva 2026 D2D MECH Foreman.",
+   "description": "Working foreman: supervision, coordination with client/vendors, lift planning, mechanical checkout and turnover support (no separate vendor commissioning crew).",
+   "sourceNotes": "Duration derived from priced trade hours: platform 107.5 MH (li-f4c0097b, li-a87e359a, li-591ce066) + equipment/connections 128 MH (li-025b7b13, li-ad765d3a, li-3ab52667) + mob 24 MH = 259.5 MH / ~2.95 trades = 88 foreman hrs. 16 OT hrs covers platform-phase OT plus checkout. Checkout/turnover within foreman per user directive 4. Client MECH Foreman rate.",
    "evidenceBasis": {
     "pricing": {
      "type": "rate_schedule"

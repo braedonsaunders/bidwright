@@ -7,14 +7,14 @@ import { resolveClaimEvidenceViews, validateClaimEvidence } from "./drawing-evid
 /**
  * A row write is refused only when what it cites is not real or its stated
  * arithmetic or explicit unit conversion is wrong. The regression payloads are
- * the exact arguments Opus 5.5 sent on the Alexanderwerk run (prod project
- * 1ad2c246); each was refused by a judgment rule that no longer exists.
+ * the exact arguments Opus 5.5 sent on a production equipment-installation
+ * run; each was refused by a judgment rule that no longer exists.
  */
 
 const fixture = JSON.parse(readFileSync(new URL("./__fixtures__/opus-medium-2026-10-08.json", import.meta.url), "utf8"));
 const row = (key: string) => structuredClone(fixture[key].item ?? fixture[key]);
 
-const DOC = { id: "doc_alexanderwerk01", fileName: "AW layout.pdf", checksum: "sha-current" };
+const DOC = { id: "doc_layout01", fileName: "layout.pdf", checksum: "sha-current" };
 const deliveredViews = new Set([
   "view-8e493054-e6b7-4227-8cef-7875783bba30",
   "view-95d5c3eb-9c52-42db-b4b7-7ed618779374",

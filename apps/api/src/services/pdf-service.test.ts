@@ -205,7 +205,7 @@ function tenantLabourWorkspace() {
     ],
     rateSchedules: [{
       id: "rs-1",
-      name: "Birla Carbon 2026 (MECH)",
+      name: "Client 2026 (MECH)",
       // Deliberately not in display order — sortOrder is what must win.
       tiers: [
         { id: "rst-f77e654e", name: "Double Time", multiplier: 2, sortOrder: 2, uom: "HR" },

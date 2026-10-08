@@ -13,7 +13,7 @@
  *
  *   BIDWRIGHT_API_URL=https://bidwright.rassaun.com/proxy \
  *   BIDWRIGHT_AUTH_TOKEN_FILE=... \
- *   npx tsx scripts/eval/probe-agent-memory.ts --source project-92c0a6f3-... --ledger .../test-projects.txt
+ *   npx tsx scripts/eval/probe-agent-memory.ts --source <projectId> --ledger .../test-projects.txt
  */
 import { appendFile, readFile, writeFile } from "node:fs/promises";
 

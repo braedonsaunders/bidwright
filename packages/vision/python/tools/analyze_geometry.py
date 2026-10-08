@@ -749,8 +749,7 @@ def _fit_arc_to_cubic(
 
 # Density-grid + arc-merge constants. Frozen here rather than parameterised
 # because the autoresearch loop (`/tmp/autoresearch/iter_extract_v3.py`)
-# settled on these values across 4 real construction PDFs (Soprema, Home
-# Hardware, Birla, Stelco), cutting primitive emission by 95-99% on the
+# settled on these values across 4 real construction PDFs, cutting primitive emission by 95-99% on the
 # text-heavy samples while preserving every visually-real drawing line. See
 # the iteration notes saved under `/tmp/autoresearch/` for the parameter
 # sweep that justified each constant.
