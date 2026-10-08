@@ -118,6 +118,7 @@ jobs:
           apps/api/src/services/cli-run-selection.test.ts
           apps/api/src/services/pdf-service.test.ts
           apps/api/src/services/pdf-attachments.test.ts
+          apps/api/src/services/send-project-quote.test.ts
           apps/api/src/services/vendor-evidence-lines.test.ts
           packages/ingestion/src/pdf-parser.test.ts
           packages/ingestion/src/zip.test.ts

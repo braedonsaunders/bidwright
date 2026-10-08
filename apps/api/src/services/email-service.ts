@@ -5,7 +5,7 @@ export interface SendQuoteInput {
   subject: string;
   message: string;
   quoteNumber: string;
-  pdfHtml?: string;
+  pdf: { filename: string; content: Buffer };
 }
 
 export interface EmailConfig {
@@ -116,14 +116,12 @@ export async function sendQuoteEmail(input: SendQuoteInput, config?: EmailConfig
       </div>`,
     };
 
-    // If PDF HTML is provided, attach as HTML file
-    if (input.pdfHtml) {
-      mailOptions.attachments = [{
-        filename: `Quote-${input.quoteNumber}.html`,
-        content: input.pdfHtml,
-        contentType: "text/html",
-      }];
-    }
+    mailOptions.attachments = [{
+      filename: input.pdf.filename,
+      content: input.pdf.content,
+      contentType: "application/pdf",
+      contentDisposition: "attachment",
+    }];
 
     await transporter.sendMail(mailOptions);
     return { sent: true, message: `Quote sent to ${input.to.length} recipient(s)` };
