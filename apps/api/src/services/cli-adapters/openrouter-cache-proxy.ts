@@ -16,9 +16,22 @@
  * passes every other byte through unchanged: image payloads, SSE streams and
  * error bodies. When the client goes away the upstream request is aborted.
  * Nothing about prompts or keys is logged.
+ *
+ * Inside the agent sandbox all HTTP goes through an authenticated egress
+ * proxy that refuses loopback, so Codex could not reach a loopback bridge.
+ * The bridge therefore also serves as the Codex process's HTTP_PROXY
+ * (`childEnv`): requests for its own address are answered here, every other
+ * plain-HTTP request is relayed unchanged to the original HTTP_PROXY (whose
+ * allowlist still decides), and CONNECT is refused because HTTPS_PROXY stays
+ * the egress proxy. The bridge's own call to OpenRouter tunnels through the
+ * original HTTPS_PROXY, so it is held to the same allowlist.
  */
 import { timingSafeEqual } from "node:crypto";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import { createServer, request as httpRequest, type IncomingMessage, type ServerResponse } from "node:http";
+import { request as httpsRequest } from "node:https";
+import type { Socket } from "node:net";
+import { connect as tlsConnect } from "node:tls";
+import { createBrotliDecompress, createGunzip, createInflate } from "node:zlib";
 import type { AddressInfo } from "node:net";
 
 export const OPENROUTER_API_BASE = "https://openrouter.ai/api/v1";
@@ -31,11 +44,25 @@ const DROPPED_REQUEST_HEADERS = new Set([
   "host", "connection", "keep-alive", "proxy-connection", "transfer-encoding", "upgrade",
   "te", "trailer", "content-length", "expect",
 ]);
-const DROPPED_RESPONSE_HEADERS = new Set([
+const HOP_BY_HOP_RESPONSE_HEADERS = new Set([
   "connection", "keep-alive", "transfer-encoding", "upgrade", "trailer",
-  // fetch decodes compressed bodies, so the original encoding/length no longer apply.
-  "content-encoding", "content-length",
 ]);
+// When the bridge decodes a body (fetch always does; the tunnel does when the
+// client did not ask for that encoding) the original encoding and length no
+// longer describe the bytes forwarded.
+const DECODED_BODY_HEADERS = new Set(["content-encoding", "content-length"]);
+
+/** A decoder for a content-encoding the client did not accept, or null to pass bytes through. */
+function decoderFor(contentEncoding: string | undefined, acceptEncoding: string | undefined) {
+  const encoding = String(contentEncoding ?? "").trim().toLowerCase();
+  if (!encoding || encoding === "identity") return null;
+  const accepted = String(acceptEncoding ?? "").toLowerCase().split(",").map((entry) => entry.split(";")[0].trim());
+  if (accepted.includes(encoding) || accepted.includes("*")) return null;
+  if (encoding === "gzip" || encoding === "x-gzip") return createGunzip();
+  if (encoding === "deflate") return createInflate();
+  if (encoding === "br") return createBrotliDecompress();
+  return null;
+}
 
 export interface OpenRouterCacheProxyOptions {
   /** The session's OpenRouter key; callers must present it as their Bearer token. */
@@ -50,12 +77,20 @@ export interface OpenRouterCacheProxyOptions {
   fetchImpl?: typeof fetch;
   /** Called when a request handler has fully finished (tests use it to prove none hang). */
   onRequestSettled?: () => void;
+  /** The sandbox's original HTTP_PROXY (with credentials); other plain-HTTP traffic is relayed to it. */
+  relayProxyUrl?: string;
+  /** The sandbox's original HTTPS_PROXY; the upstream call tunnels through it with CONNECT. */
+  upstreamProxyUrl?: string;
+  /** Extra CA for the upstream TLS connection (tests use a self-signed mock). */
+  upstreamCa?: string | Buffer;
 }
 
 export interface OpenRouterCacheProxy {
   /** Use as the Codex provider base_url, e.g. http://127.0.0.1:41234/api/v1 */
   baseUrl: string;
   sessionId?: string;
+  /** Env overrides for the Codex child: point HTTP_PROXY at this bridge. Empty when there is no proxy to relay to. */
+  childEnv: Record<string, string>;
   close(): Promise<void>;
 }
 
@@ -123,6 +158,102 @@ function sendError(response: ServerResponse, status: number, message: string) {
   response.end(JSON.stringify({ error: { message, type: "bidwright_cache_proxy" } }));
 }
 
+function proxyAuthorization(proxy: URL): string | undefined {
+  if (!proxy.username && !proxy.password) return undefined;
+  const credentials = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+  return `Basic ${Buffer.from(credentials, "utf8").toString("base64")}`;
+}
+
+interface UpstreamResult {
+  status: number;
+  headers: Record<string, string>;
+  body: AsyncIterable<Uint8Array> | null;
+  /** True when body bytes were decoded (fetch), so encoding/length headers must go. */
+  decoded: boolean;
+}
+
+/** POST to the upstream through an HTTP CONNECT proxy (the sandbox's egress proxy). */
+function tunnelledRequest(
+  target: URL,
+  proxy: URL,
+  init: { method: string; headers: Record<string, string>; body: Buffer },
+  signal: AbortSignal,
+  ca?: string | Buffer,
+): Promise<UpstreamResult> {
+  return new Promise((resolve, reject) => {
+    const targetPort = Number(target.port) || (target.protocol === "https:" ? 443 : 80);
+    const authority = `${target.hostname}:${targetPort}`;
+    const auth = proxyAuthorization(proxy);
+    const connect = httpRequest({
+      host: proxy.hostname,
+      port: Number(proxy.port) || 80,
+      method: "CONNECT",
+      path: authority,
+      headers: { host: authority, ...(auth ? { "proxy-authorization": auth } : {}) },
+      signal,
+    });
+    connect.once("error", reject);
+    connect.once("connect", (res, socket: Socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        reject(Object.assign(new Error(`upstream proxy refused CONNECT ${authority} (${res.statusCode})`), { status: 502 }));
+        return;
+      }
+      const tunnel = target.protocol === "https:" ? tlsConnect({ socket, servername: target.hostname, ...(ca ? { ca } : {}) }) : socket;
+      const send = target.protocol === "https:" ? httpsRequest : httpRequest;
+      const upstreamRequest = send({
+        host: target.hostname,
+        port: targetPort,
+        method: init.method,
+        path: `${target.pathname}${target.search}`,
+        headers: { ...init.headers, host: target.host, "content-length": String(init.body.length) },
+        createConnection: () => tunnel,
+        signal,
+      }, (upstreamResponse) => {
+        const headers: Record<string, string> = {};
+        for (const [name, value] of Object.entries(upstreamResponse.headers)) {
+          if (value !== undefined) headers[name] = Array.isArray(value) ? value.join(", ") : value;
+        }
+        // Codex sends no Accept-Encoding and cannot decode a compressed SSE
+        // stream, so decode anything the client did not ask for.
+        const decoder = decoderFor(headers["content-encoding"], init.headers["accept-encoding"]);
+        if (decoder) {
+          upstreamResponse.pipe(decoder);
+          upstreamResponse.on("error", (error) => decoder.destroy(error));
+          resolve({ status: upstreamResponse.statusCode ?? 502, headers, body: decoder, decoded: true });
+          return;
+        }
+        resolve({ status: upstreamResponse.statusCode ?? 502, headers, body: upstreamResponse, decoded: false });
+      });
+      upstreamRequest.once("error", reject);
+      upstreamRequest.end(init.body);
+    });
+    connect.end();
+  });
+}
+
+/** Relay a plain-HTTP absolute-form request unchanged to the original proxy. */
+function relayToProxy(request: IncomingMessage, response: ServerResponse, proxy: URL) {
+  const auth = proxyAuthorization(proxy);
+  const headers = { ...request.headers };
+  delete headers["proxy-authorization"];
+  if (auth) headers["proxy-authorization"] = auth;
+  const forwarded = httpRequest({
+    host: proxy.hostname,
+    port: Number(proxy.port) || 80,
+    method: request.method,
+    path: request.url,
+    headers,
+  }, (proxied) => {
+    response.writeHead(proxied.statusCode ?? 502, proxied.headers);
+    proxied.pipe(response);
+  });
+  forwarded.on("error", () => sendError(response, 502, "relay to the egress proxy failed"));
+  response.on("close", () => forwarded.destroy());
+  request.pipe(forwarded);
+  return new Promise<void>((resolve) => response.on("close", resolve));
+}
+
 export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOptions): Promise<OpenRouterCacheProxy> {
   if (!options.apiKey) throw new Error("startOpenRouterCacheProxy needs the session's OpenRouter apiKey");
   const apiKey = options.apiKey;
@@ -131,13 +262,37 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
   const shouldCache = options.shouldCache ?? isAnthropicModel;
   const maxBodyBytes = options.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const relayProxy = options.relayProxyUrl ? new URL(options.relayProxyUrl) : null;
+  const upstreamProxy = options.upstreamProxyUrl ? new URL(options.upstreamProxyUrl) : null;
+  let ownPort = 0;
 
   const server = createServer((request, response) => {
     handle(request, response).finally(() => options.onRequestSettled?.());
   });
+  // HTTPS keeps using the egress proxy directly; this bridge never tunnels.
+  server.on("connect", (_request, socket: Socket) => {
+    socket.end("HTTP/1.1 405 Method Not Allowed\r\nconnection: close\r\n\r\n");
+  });
+
+  function isOwnAddress(target: URL): boolean {
+    const host = target.hostname.replace(/^\[|\]$/g, "");
+    return (host === "127.0.0.1" || host === "localhost" || host === "::1") && Number(target.port || 80) === ownPort;
+  }
 
   async function handle(request: IncomingMessage, response: ServerResponse) {
-    const url = new URL(request.url ?? "/", "http://127.0.0.1");
+    const raw = request.url ?? "/";
+    const absolute = /^https?:\/\//i.test(raw);
+    const url = new URL(raw, `http://127.0.0.1:${ownPort}`);
+    if (absolute && !isOwnAddress(url)) {
+      // Anything that is not for this bridge goes to the real egress proxy.
+      if (!relayProxy) {
+        request.resume();
+        sendError(response, 403, "No egress proxy to relay to");
+        return;
+      }
+      await relayToProxy(request, response, relayProxy);
+      return;
+    }
     if (url.pathname.replace(/\/+$/, "") !== RESPONSES_PATH) {
       sendError(response, 404, "Only POST /api/v1/responses is forwarded");
       return;
@@ -163,35 +318,42 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
       const relativePath = "/responses";
       const body = withCacheControl(relativePath, rawBody, shouldCache);
 
-      const headers = new Headers();
+      const forwardHeaders: Record<string, string> = {};
       for (const [name, value] of Object.entries(request.headers)) {
-        if (value === undefined || DROPPED_REQUEST_HEADERS.has(name.toLowerCase())) continue;
-        headers.set(name, Array.isArray(value) ? value.join(", ") : value);
+        if (value === undefined || DROPPED_REQUEST_HEADERS.has(name.toLowerCase()) || name.toLowerCase() === "proxy-authorization") continue;
+        forwardHeaders[name] = Array.isArray(value) ? value.join(", ") : value;
+      }
+      const target = new URL(`${upstreamBase}${relativePath}${url.search}`);
+
+      let upstreamResult: UpstreamResult;
+      if (upstreamProxy) {
+        upstreamResult = await tunnelledRequest(target, upstreamProxy, { method: "POST", headers: forwardHeaders, body }, abort.signal, options.upstreamCa);
+      } else {
+        const fetched = await fetchImpl(target, { method: "POST", headers: forwardHeaders, body: new Uint8Array(body), signal: abort.signal });
+        const headers: Record<string, string> = {};
+        fetched.headers.forEach((value, name) => { headers[name] = value; });
+        upstreamResult = { status: fetched.status, headers, body: fetched.body as AsyncIterable<Uint8Array> | null, decoded: true };
       }
 
-      const upstreamResponse = await fetchImpl(`${upstreamBase}${relativePath}${url.search}`, {
-        method: request.method,
-        headers,
-        body: new Uint8Array(body),
-        signal: abort.signal,
-      });
-
       const responseHeaders: Record<string, string> = {};
-      upstreamResponse.headers.forEach((value, name) => {
-        if (!DROPPED_RESPONSE_HEADERS.has(name.toLowerCase())) responseHeaders[name] = value;
-      });
-      response.writeHead(upstreamResponse.status, responseHeaders);
+      for (const [name, value] of Object.entries(upstreamResult.headers)) {
+        const lower = name.toLowerCase();
+        if (HOP_BY_HOP_RESPONSE_HEADERS.has(lower)) continue;
+        if (upstreamResult.decoded && DECODED_BODY_HEADERS.has(lower)) continue;
+        responseHeaders[name] = value;
+      }
+      response.writeHead(upstreamResult.status, responseHeaders);
       response.flushHeaders();
 
-      if (!upstreamResponse.body) {
+      if (!upstreamResult.body) {
         response.end();
         return;
       }
       // Stream chunk by chunk so SSE events reach Codex as they arrive.
-      const reader = upstreamResponse.body.getReader();
+      const reader = upstreamResult.body[Symbol.asyncIterator]();
       try {
         while (!abort.signal.aborted) {
-          const { done, value } = await reader.read();
+          const { done, value } = await reader.next();
           if (done) break;
           if (!response.write(value)) {
             // Wait for the client to catch up, or for it to go away; a client
@@ -213,8 +375,8 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
           }
         }
       } finally {
-        await reader.cancel().catch(() => undefined);
-        reader.releaseLock();
+        // Cancels a fetch stream / destroys a tunnelled response.
+        await reader.return?.().catch(() => undefined);
       }
       if (abort.signal.aborted || response.destroyed) return;
       response.end();
@@ -233,10 +395,13 @@ export async function startOpenRouterCacheProxy(options: OpenRouterCacheProxyOpt
     server.listen(0, "127.0.0.1", () => resolve());
   });
   const { port } = server.address() as AddressInfo;
+  ownPort = port;
+  const bridgeProxy = `http://127.0.0.1:${port}`;
 
   return {
-    baseUrl: `http://127.0.0.1:${port}/api/v1`,
+    baseUrl: `${bridgeProxy}/api/v1`,
     sessionId: options.sessionId,
+    childEnv: relayProxy ? { HTTP_PROXY: bridgeProxy, http_proxy: bridgeProxy } : {},
     close: () => new Promise<void>((resolve) => {
       server.closeAllConnections();
       server.close(() => resolve());

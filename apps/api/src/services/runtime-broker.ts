@@ -19,6 +19,8 @@ export type RuntimeBrokerRequest =
       appServerArgs: string[];
       /** Anthropic via OpenRouter requires an explicit cache opt-in. */
       openRouterPromptCache?: boolean;
+      /** Explicit canary overrides the deployment flag, without changing it. */
+      promptCaching?: boolean;
       suppressUnknownModelMetadataWarning?: boolean;
     }
   | {
