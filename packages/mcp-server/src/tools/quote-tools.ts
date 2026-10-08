@@ -8,7 +8,6 @@ import {
   rollupWorksheetUnits,
   normalizeLineDerivation,
   validateLineDerivation,
-  detectPerInstanceContradictions,
   collectBatchOperationProblems,
   evaluateProcurementLink,
   type LineDerivation,
@@ -175,655 +174,8 @@ function normalizedToolId(toolId: unknown) {
     .trim();
 }
 
-function collectVisualToolEvidence(ws: any) {
-  const evidence = {
-    renderedPages: 0,
-    zoomedRegions: 0,
-    symbolScans: 0,
-    imageSymbolScans: 0,
-    renderedPageCalls: [] as Array<{ documentId: string; pageNumber: number }>,
-    zoomRegionCalls: [] as Array<{
-      documentId: string;
-      pageNumber: number;
-      region: Record<string, any>;
-    }>,
-  };
-
-  for (const run of asArray(ws.aiRuns)) {
-    const events = asArray(asRecord(run.output).events);
-    for (const event of events) {
-      if (!event || (event.type !== "tool_call" && event.type !== "tool")) continue;
-      const data = asRecord(event.data);
-      const toolId = normalizedToolId(data.toolId ?? event.toolId);
-      const input = asRecord(data.input ?? event.input);
-      if (toolId === "renderDrawingPage") {
-        evidence.renderedPages += 1;
-        const documentId = String(input.documentId ?? "").trim();
-        const pageNumber = Number(input.pageNumber);
-        if (documentId && Number.isFinite(pageNumber)) {
-          evidence.renderedPageCalls.push({ documentId, pageNumber });
-        }
-      }
-      if (toolId === "zoomDrawingRegion") {
-        evidence.zoomedRegions += 1;
-        const documentId = String(input.documentId ?? "").trim();
-        const pageNumber = Number(input.pageNumber);
-        const region = asRecord(input.region);
-        if (documentId && Number.isFinite(pageNumber) && Object.keys(region).length > 0) {
-          evidence.zoomRegionCalls.push({ documentId, pageNumber, region });
-        }
-      }
-      if (toolId === "scanDrawingSymbols") {
-        evidence.symbolScans += 1;
-        if (input.includeImage === true || String(input.includeImage ?? "").toLowerCase() === "true") {
-          evidence.imageSymbolScans += 1;
-        }
-      }
-    }
-  }
-
-  return evidence;
-}
-
-function evidenceDocumentIdsMatch(a: unknown, b: unknown) {
-  const left = String(a ?? "").trim();
-  const right = String(b ?? "").trim();
-  if (!left || !right) return false;
-  if (left === right) return true;
-
-  const normalize = (value: string) => value.replace(/\.\.\.|…/g, "");
-  const compactLeft = normalize(left);
-  const compactRight = normalize(right);
-  if (compactLeft.length >= 12 && right.startsWith(compactLeft)) return true;
-  if (compactRight.length >= 12 && left.startsWith(compactRight)) return true;
-  return false;
-}
-
-function visualPageEvidenceMatchesActual(
-  evidence: unknown,
-  actualCalls: Array<{ documentId: string; pageNumber: number }>,
-) {
-  const entry = asRecord(evidence);
-  const pageNumber = Number(entry.pageNumber);
-  if (!Number.isFinite(pageNumber)) return false;
-  return actualCalls.some((call) =>
-    call.pageNumber === pageNumber &&
-    evidenceDocumentIdsMatch(entry.documentId, call.documentId)
-  );
-}
-
-function numericRegionValue(region: Record<string, any>, key: string) {
-  const value = Number(region[key]);
-  return Number.isFinite(value) ? value : null;
-}
-
-function isTargetedZoomRegion(regionValue: unknown) {
-  const region = asRecord(regionValue);
-  const width = numericRegionValue(region, "width");
-  const height = numericRegionValue(region, "height");
-  const imageWidth = numericRegionValue(region, "imageWidth");
-  const imageHeight = numericRegionValue(region, "imageHeight");
-  if (!width || !height || width <= 0 || height <= 0) return false;
-  if (!imageWidth || !imageHeight || imageWidth <= 0 || imageHeight <= 0) return true;
-  const areaRatio = (width * height) / (imageWidth * imageHeight);
-  return areaRatio < 0.75 && width < imageWidth * 0.95 && height < imageHeight * 0.95;
-}
-
-function regionsApproximatelyMatch(aValue: unknown, bValue: unknown) {
-  const a = asRecord(aValue);
-  const b = asRecord(bValue);
-  const keys = ["x", "y", "width", "height"];
-  return keys.every((key) => {
-    const left = numericRegionValue(a, key);
-    const right = numericRegionValue(b, key);
-    if (left === null || right === null) return false;
-    const tolerance = Math.max(8, Math.abs(right) * 0.03);
-    return Math.abs(left - right) <= tolerance;
-  });
-}
-
-function visualZoomEvidenceMatchesActual(
-  evidence: unknown,
-  actualCalls: Array<{ documentId: string; pageNumber: number; region: Record<string, any> }>,
-) {
-  const entry = asRecord(evidence);
-  const pageNumber = Number(entry.pageNumber);
-  if (!Number.isFinite(pageNumber) || !isTargetedZoomRegion(entry.region)) return false;
-  return actualCalls.some((call) =>
-    call.pageNumber === pageNumber &&
-    evidenceDocumentIdsMatch(entry.documentId, call.documentId) &&
-    isTargetedZoomRegion(call.region) &&
-    regionsApproximatelyMatch(entry.region, call.region)
-  );
-}
-
-function hasAuditArrayEvidence(entry: Record<string, any>, keys: string[]) {
-  return keys.some((key) => asArray(entry[key]).length > 0);
-}
-
 function drawingEvidenceEngine(strategy: any) {
   return asRecord(asRecord(strategy?.summary).drawingEvidenceEngine);
-}
-
-function normalizeEvidenceClaimKey(value: unknown) {
-  return String(value ?? "")
-    .toLowerCase()
-    .replace(/\([^)]*\)/g, " ")
-    .replace(/[^a-z0-9]+/g, " ")
-    .replace(/\b(number|qty|quantity|count|total|each|ea|of|the|drawing|source|visual|bom|spec|table|ocr|text|governing|alternate|older|newer|orientation|plan|sheet|shop|schedule|quote|vendor|manufacturer|revision|rev|issued|production|baseline|primary|per|as|built|actual|fabrication|detail|order|line|dated|date|model|document|doc|reference|superseded|supersedes)\b/g, " ")
-    .replace(/\b(?:[a-z]+\d+[a-z0-9]*|\d+[a-z]+[a-z0-9]*)\b/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function comparableEvidenceClaimValue(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string") {
-    const match = value.match(/-?\d[\d,]*(?:\.\d+)?/);
-    if (match) {
-      const parsed = Number(String(match[0]).replace(/,/g, ""));
-      if (Number.isFinite(parsed)) return parsed;
-    }
-  }
-  return null;
-}
-
-function evidenceClaimGroupKey(claim: Record<string, any>) {
-  return [
-    String(claim.packageId ?? claim.packageName ?? "unknown").toLowerCase(),
-    normalizeEvidenceClaimKey(claim.quantityName ?? claim.claim),
-    String(claim.unit ?? "").toLowerCase(),
-  ].join("|");
-}
-
-const HIGH_AUTHORITY_EVIDENCE_TERMS = [
-  "bill of material",
-  "bill of materials",
-  "bom",
-  "parts list",
-  "part list",
-  "schedule",
-  "spec sheet",
-  "specification sheet",
-  "accessories quantity description",
-  "vendor quote",
-  "vendor quotation",
-  "model bom",
-  "model quantity",
-  "quantity table",
-  "material table",
-];
-
-function hasHighAuthorityEvidenceLanguage(text: string) {
-  const normalized = ` ${normalizedText(text)} `;
-  return HIGH_AUTHORITY_EVIDENCE_TERMS.some((term) => normalized.includes(` ${term} `));
-}
-
-function isHighAuthorityEvidenceClaim(claim: Record<string, any>) {
-  const method = normalizedText(claim.method);
-  const evidenceText = evidenceClaimEvidenceText(claim);
-  if (method === "vendor_quote") return true;
-  return hasHighAuthorityEvidenceLanguage(evidenceText);
-}
-
-function evidenceClaimEvidenceText(claim: Record<string, any>) {
-  const evidenceText = asArray(claim.evidence).flatMap((entryValue) => {
-    const entry = asRecord(entryValue);
-    return [
-      entry.result,
-      entry.sourceText,
-      entry.quotedText,
-      entry.quote,
-      entry.ocrText,
-      entry.rawText,
-      entry.tool,
-      entry.regionType,
-      entry.fileName,
-      entry.documentTitle,
-    ];
-  });
-  return normalizedText([
-    claim.quantityName,
-    claim.claim,
-    claim.rationale,
-    claim.assumption,
-    claim.method,
-    claim.packageName,
-    ...evidenceText,
-  ].join(" "));
-}
-
-function hasExplicitEvidenceOverride(entries: Array<Record<string, any>>) {
-  const sourceText = normalizedText(entries.flatMap((claim) =>
-    asArray(claim.evidence).flatMap((entryValue) => {
-      const entry = asRecord(entryValue);
-      return [entry.sourceText, entry.quotedText, entry.quote, entry.ocrText, entry.rawText];
-    })
-  ).join(" "));
-  return [
-    "supersedes",
-    "superseded by",
-    "replaces",
-    "replaced by",
-    "obsolete",
-    "void",
-    "addendum",
-    "revision history",
-    "order of precedence",
-    "client confirmed",
-    "vendor confirmed",
-    "approved submittal",
-    "change order",
-    "rfi response",
-    "field directive",
-  ].some((term) => sourceText.includes(term));
-}
-
-function textReferencesEvidenceClaimValue(text: string, claim: Record<string, any>) {
-  const value = comparableEvidenceClaimValue(claim.value);
-  if (value === null) return false;
-  return new RegExp(`(^|[^0-9.])${String(value).replace(".", "\\.")}([^0-9.]|$)`).test(text);
-}
-
-function resolutionSelectsHighAuthorityEvidence(entries: Array<Record<string, any>>) {
-  const resolutionText = normalizedText(entries.map((claim) =>
-    asRecord(claim.reconciliation).resolution ?? ""
-  ).join(" "));
-  if (!resolutionText) return false;
-
-  const highAuthorityEntries = entries.filter(isHighAuthorityEvidenceClaim);
-  const lowerAuthorityEntries = entries.filter((claim) => !isHighAuthorityEvidenceClaim(claim));
-  const mentionsHighValue = highAuthorityEntries.some((claim) => textReferencesEvidenceClaimValue(resolutionText, claim));
-  const mentionsLowerValue = lowerAuthorityEntries.some((claim) => textReferencesEvidenceClaimValue(resolutionText, claim));
-  const mentionsHighAuthoritySource = [
-    "bom",
-    "bill of material",
-    "parts list",
-    "schedule",
-    "spec sheet",
-    "vendor quote",
-    "table",
-  ].some((term) => resolutionText.includes(term));
-  const lowerSourceGoverns = [
-    "drawing governs",
-    "shop drawing governs",
-    "new drawing governs",
-    "newer drawing",
-    "visual governs",
-    "visual count governs",
-    "shop drawing supersedes",
-    "drawing supersedes",
-    "superseded by shop drawing",
-    "superseded by drawing",
-  ].some((term) => resolutionText.includes(term)) ||
-    [/drawing.{0,90}supersed/, /supersed.{0,90}drawing/, /as\s*built\s+drawing/].some((pattern) => pattern.test(resolutionText));
-
-  if (lowerSourceGoverns || (mentionsLowerValue && !mentionsHighValue)) return false;
-  if (mentionsHighValue && mentionsHighAuthoritySource) return true;
-  return mentionsHighAuthoritySource && [
-    "governing",
-    "governs",
-    "baseline",
-    "use",
-    "carry",
-    "prevail",
-    "selected",
-  ].some((term) => resolutionText.includes(term));
-}
-
-function resolutionKeepsHighAuthorityEvidence(entries: Array<Record<string, any>>) {
-  return resolutionSelectsHighAuthorityEvidence(entries);
-}
-
-function evidenceContradictionIsResolved(entries: Array<Record<string, any>>) {
-  const hasCarriedAssumption = entries.some((claim) => normalizedText(asRecord(claim.reconciliation).status) === "carried_assumption");
-  if (hasCarriedAssumption) {
-    const hasHighAuthority = entries.some(isHighAuthorityEvidenceClaim);
-    const hasLowerAuthority = entries.some((claim) => !isHighAuthorityEvidenceClaim(claim));
-    if (!hasHighAuthority || !hasLowerAuthority) return true;
-    return resolutionKeepsHighAuthorityEvidence(entries) || hasExplicitEvidenceOverride(entries);
-  }
-
-  const hasResolved = entries.some((claim) => normalizedText(asRecord(claim.reconciliation).status) === "resolved");
-  if (!hasResolved) return false;
-
-  const hasHighAuthority = entries.some(isHighAuthorityEvidenceClaim);
-  const hasLowerAuthority = entries.some((claim) => !isHighAuthorityEvidenceClaim(claim));
-  if (!hasHighAuthority || !hasLowerAuthority) return true;
-
-  return resolutionKeepsHighAuthorityEvidence(entries) || hasExplicitEvidenceOverride(entries);
-}
-
-function detectDrawingEvidenceClaimContradictions(claimsValue: unknown) {
-  const claims = asArray(claimsValue).map(asRecord);
-  const groups = new Map<string, Array<Record<string, any>>>();
-  for (const claim of claims) {
-    const key = evidenceClaimGroupKey(claim);
-    if (!normalizeEvidenceClaimKey(claim.quantityName ?? claim.claim)) continue;
-    groups.set(key, [...(groups.get(key) ?? []), claim]);
-  }
-
-  const contradictions: string[] = [];
-  for (const [key, claimsInGroup] of groups.entries()) {
-    const values = claimsInGroup
-      .map((claim) => comparableEvidenceClaimValue(claim.value))
-      .filter((value): value is number => value !== null);
-    const distinct = [...new Set(values)];
-    if (distinct.length <= 1) continue;
-    if (!evidenceContradictionIsResolved(claimsInGroup)) {
-      const authorityConflict = claimsInGroup.some(isHighAuthorityEvidenceClaim) && claimsInGroup.some((claim) => !isHighAuthorityEvidenceClaim(claim));
-      contradictions.push(
-        authorityConflict
-          ? `${claimsInGroup[0]?.quantityName ?? key}: ${distinct.join(" vs ")}. BOM/spec/schedule/vendor-table conflict needs explicit supersession/order-of-precedence evidence or high-authority table selection. A carried assumption cannot price the lower-context drawing value unless an explicit override is cited.`
-          : `${claimsInGroup[0]?.quantityName ?? key}: ${distinct.join(" vs ")}`
-      );
-    }
-  }
-  return contradictions;
-}
-
-function packageMatchesClaim(entry: Record<string, any>, claim: Record<string, any>) {
-  const packageKeys = [entry.packageId, entry.packageName].map(packageEvidenceKey).filter(Boolean);
-  const claimKeys = [claim.packageId, claim.packageName].map(packageEvidenceKey).filter(Boolean);
-  if (packageKeys.some((left) => claimKeys.some((right) => packageEvidenceKeysMatch(left, right)))) return true;
-  return false;
-}
-
-function packageEvidenceKey(value: unknown) {
-  return normalizedText(value)
-    .split("-")
-    .filter((token) => token && !["pkg", "package", "scope", "drawing", "visual", "takeoff"].includes(token))
-    .join("-");
-}
-
-function packageEvidenceKeysMatch(left: string, right: string) {
-  if (!left || !right) return false;
-  if (left === right) return true;
-  if (left.includes(right) || right.includes(left)) return true;
-  const leftTokens = left.split("-").filter((token) => token.length >= 3);
-  const rightTokens = right.split("-").filter((token) => token.length >= 3);
-  if (leftTokens.length === 0 || rightTokens.length === 0) return false;
-  const shared = leftTokens.filter((token) => rightTokens.includes(token)).length;
-  const required = Math.min(2, Math.min(leftTokens.length, rightTokens.length));
-  return shared >= required && shared / Math.min(leftTokens.length, rightTokens.length) >= 0.67;
-}
-
-function claimHasUsableDrawingEvidence(claimValue: unknown) {
-  const claim = asRecord(claimValue);
-  const method = normalizedText(claim.method);
-  const evidence = asArray(claim.evidence).map(asRecord);
-  if (!normalizeEvidenceClaimKey(claim.quantityName ?? claim.claim)) return false;
-  if (claim.value === undefined || claim.value === null || claim.value === "") return false;
-  if (method === "assumption") return String(claim.assumption ?? claim.rationale ?? "").trim().length >= 20;
-  if (evidence.length === 0) return false;
-  if (method === "visual_count" || method === "takeoff") {
-    return evidence.some((entry) =>
-      (entry.regionId || Object.keys(asRecord(entry.bbox)).length > 0) &&
-      String(entry.imageHash ?? "").trim().length >= 16 &&
-      ["inspectdrawingregion", "zoomdrawingregion", "scandrawingsymbols", "readdrawingtile"].some((name) =>
-        normalizedText(entry.tool).replace(/\s+/g, "").includes(name)
-      )
-    );
-  }
-  if (method === "bom_table" || method === "drawing_table" || method === "ocr_text") {
-    return evidence.some((entry) => entry.regionId || String(entry.sourceText ?? "").trim().length >= 20);
-  }
-  return evidence.length > 0 || String(claim.rationale ?? "").trim().length >= 20;
-}
-
-function targetMatchesDrawingDrivenPackage(entry: Record<string, any>, targetText: string, strategy: any) {
-  const target = normalizedText(targetText);
-  if (!target) return true;
-
-  const packageId = normalizedText(entry.packageId);
-  const packageName = normalizedText(entry.packageName);
-  const packagePlan = asArray(strategy?.packagePlan).map(asRecord).find((plan) => {
-    const planId = normalizedText(plan.id ?? plan.packageId);
-    const planName = normalizedText(plan.name ?? plan.packageName);
-    return (packageId && planId === packageId) || (packageName && planName === packageName);
-  });
-  const bindings = asRecord(packagePlan?.bindings);
-  const candidates = [
-    packageId,
-    packageName,
-    normalizedText(packagePlan?.name),
-    ...asArray(bindings.worksheetNames).map(normalizedText),
-    ...asArray(bindings.textMatchers).map(normalizedText),
-  ].filter((value) => value.length >= 3);
-
-  return candidates.some((candidate) => target.includes(candidate) || candidate.includes(target));
-}
-
-/** Selected claims whose evidence rests on a document that was replaced or removed. */
-function staleClaimEvidence(claims: Array<Record<string, any>>, sourceDocuments: unknown[]): string[] {
-  const documents = new Map(sourceDocuments.map(asRecord).map((doc) => [String(doc.id ?? ""), doc]));
-  if (documents.size === 0) return [];
-  const stale: string[] = [];
-  for (const claim of claims) {
-    for (const evidence of asArray(claim.evidence).map(asRecord)) {
-      const documentId = String(evidence.documentId ?? "").trim();
-      if (!documentId.startsWith("doc_")) continue;
-      const doc = documents.get(documentId);
-      const recorded = String(evidence.sourceChecksum ?? "").trim();
-      if (!doc) stale.push(`${String(claim.claimId ?? "?")} (document ${documentId} is no longer in the project)`);
-      else if (recorded && doc.checksum && String(doc.checksum) !== recorded) stale.push(`${String(claim.claimId ?? "?")} (document ${documentId} changed since the claim was saved)`);
-    }
-  }
-  return [...new Set(stale)];
-}
-
-function validateDrawingEvidenceEngineForPricing(
-  strategy: any,
-  drawingDrivenPackages: Array<Record<string, any>>,
-  targetText = "",
-  evidenceBasis?: Record<string, any> | null,
-  scope: { rowPackageId?: string | null; sourceDocuments?: unknown[] } = {},
-) {
-  if (drawingDrivenPackages.length === 0) return null;
-  const claimIds = evidenceBasisClaimIds(evidenceBasis);
-  const targetPackages = targetText
-    ? drawingDrivenPackages.filter((entry) => targetMatchesDrawingDrivenPackage(entry, targetText, strategy))
-    : drawingDrivenPackages;
-  const packagesToCheck = targetPackages.length > 0 ? targetPackages : drawingDrivenPackages;
-
-  const engine = drawingEvidenceEngine(strategy);
-  const atlas = asRecord(engine.atlas);
-  const claims = asArray(engine.claims).map(asRecord);
-  const latestVerification = asRecord(asArray(engine.verifications)[0]);
-  const unresolvedStoredContradictions = asArray(engine.contradictions)
-    .map(asRecord)
-    .filter((entry) => !["resolved", "carried_assumption"].includes(normalizedText(entry.status)));
-  const detectedContradictions = detectDrawingEvidenceClaimContradictions(claims);
-
-  if (Object.keys(atlas).length === 0 || Number(atlas.regionCount ?? 0) <= 0) {
-    return "Drawing Evidence Engine atlas is missing. Call buildDrawingAtlas before creating worksheets/items from drawing-driven scope.";
-  }
-
-  if (claims.length === 0) {
-    return "Drawing evidence ledger is empty. For each drawing-driven quantity, call searchDrawingRegions, inspectDrawingRegion, then saveDrawingEvidenceClaim before creating worksheets/items.";
-  }
-
-  if (lineEvidenceBasisRequiresDrawing(evidenceBasis)) {
-    if (claimIds.length === 0) {
-      return "This line is marked as drawing/takeoff quantity driven, so evidenceBasis.quantity.drawingClaimIds must name the Drawing Evidence Engine claim(s) that prove the quantity. Put labour manual, rate schedule, vendor quote, allowance model, indirect-cost model, document reference, or assumption support under evidenceBasis.pricing when those sources justify price/rate/productivity instead of quantity.";
-    }
-    const selectedClaims = claimIds
-      .map((id) => claims.find((claim) => String(claim.claimId ?? claim.id ?? "") === id))
-      .filter((claim): claim is Record<string, any> => !!claim);
-    const missingClaimIds = claimIds.filter((id) => !selectedClaims.some((claim) => String(claim.claimId ?? claim.id ?? "") === id));
-    if (missingClaimIds.length > 0) {
-      return `Drawing evidence claim id(s) not found for this line: ${missingClaimIds.join(", ")}. Call getDrawingEvidenceLedger or saveDrawingEvidenceClaim, then retry with valid claim ids.`;
-    }
-    const unusable = selectedClaims.filter((claim) => !claimHasUsableDrawingEvidence(claim));
-    if (unusable.length > 0) {
-      return `Selected drawing evidence claim(s) are not usable for pricing: ${unusable.map((claim) => String(claim.claimId ?? claim.quantityName ?? "unknown")).join(", ")}. Repair the claim evidence first.`;
-    }
-
-    const selectedKeys = new Set(selectedClaims.map(evidenceClaimGroupKey));
-    const relevantStoredContradictions = unresolvedStoredContradictions.filter((entry) => {
-      const contradictionClaimIds = asArray(entry.claimIds).map((id) => String(id ?? ""));
-      const contradictionKey = String(entry.key ?? "");
-      return contradictionClaimIds.some((id) => claimIds.includes(id)) || selectedKeys.has(contradictionKey);
-    });
-    const relevantDetectedContradictions = detectDrawingEvidenceClaimContradictions(
-      claims.filter((claim) => selectedKeys.has(evidenceClaimGroupKey(claim))),
-    );
-    if (relevantStoredContradictions.length > 0 || relevantDetectedContradictions.length > 0) {
-      const stored = relevantStoredContradictions.map((entry) => String(entry.message ?? entry.quantityName ?? entry.id)).slice(0, 5);
-      const detected = relevantDetectedContradictions.slice(0, 5);
-      return `Selected drawing evidence has unresolved contradictions: ${[...stored, ...detected].join("; ")}. Reconcile the specific selected claim(s), choose the governing claim, or carry an explicit assumption before pricing this drawing-driven line.`;
-    }
-
-    if (scope.rowPackageId) {
-      const foreign = selectedClaims.filter((claim) => String(claim.packageId ?? "").trim() && String(claim.packageId).trim() !== scope.rowPackageId);
-      if (foreign.length > 0) {
-        return `This row is priced for package ${scope.rowPackageId}, but drawing claim(s) ${foreign.map((claim) => `${String(claim.claimId)} (package ${String(claim.packageId)})`).join(", ")} belong to another package. Cite this package's own claims, or save one for it.`;
-      }
-    }
-    const stale = staleClaimEvidence(selectedClaims, scope.sourceDocuments ?? []);
-    if (stale.length > 0) {
-      return `Selected drawing evidence claim(s) rest on outdated sources: ${stale.join("; ")}. Re-read the current document and save a new claim.`;
-    }
-
-    // A passing ledger verifier, or each cited claim's own mechanical check
-    // from saveDrawingEvidenceClaim, lets this row be priced. Finalize still
-    // requires a ledger-wide verifier pass.
-    const mechanicallyChecked = selectedClaims.length > 0 && selectedClaims.every((claim) => normalizedText(asRecord(claim.mechanicalCheck).status) === "passed");
-    if ((!latestVerification || !latestVerification.status) && !mechanicallyChecked) {
-      const failedChecks = selectedClaims.filter((claim) => normalizedText(asRecord(claim.mechanicalCheck).status) === "failed");
-      if (failedChecks.length > 0) {
-        return `Cited claim(s) failed their save-time check: ${failedChecks.map((claim) => `${String(claim.claimId)}: ${asArray(asRecord(claim.mechanicalCheck).problems).slice(0, 2).join("; ")}`).join(" | ")}. Reconcile or replace them before pricing.`;
-      }
-      return "Independent drawing evidence verification has not run. Call verifyDrawingEvidenceLedger, or re-save the cited claims so each carries a passed save-time check, before pricing drawing-driven quantity lines.";
-    }
-    if (normalizedText(latestVerification.status) === "failed") {
-      const verificationText = normalizedText(JSON.stringify(latestVerification));
-      const selectedFailure = claimIds.some((id) => verificationText.includes(normalizedText(id)));
-      if (selectedFailure) {
-        return `Independent drawing evidence verification failed for a selected claim. Repair: ${asArray(latestVerification.failures).slice(0, 5).join("; ")}`;
-      }
-    }
-
-    return null;
-  }
-
-  const packagesWithoutClaims = packagesToCheck.filter((entry) =>
-    !claims.some((claim) => packageMatchesClaim(entry, claim) && claimHasUsableDrawingEvidence(claim)),
-  );
-  if (packagesWithoutClaims.length > 0) {
-    const names = packagesWithoutClaims
-      .slice(0, 6)
-      .map((entry) => String(entry.packageId ?? entry.packageName ?? "unnamed package"))
-      .join(", ");
-    return `Drawing evidence ledger is missing usable claims for drawing-driven package(s): ${names}. For visual quantities, saveDrawingEvidenceClaim with evidence[].viewId of a tile or crop you already read (readDrawingTile or inspectDrawingRegion); the server fills the hash and geometry. For non-visual quantities, use BOM/OCR/assumption evidence.`;
-  }
-
-  if (unresolvedStoredContradictions.length > 0 || detectedContradictions.length > 0) {
-    const stored = unresolvedStoredContradictions.map((entry) => String(entry.message ?? entry.quantityName ?? entry.id)).slice(0, 5);
-    const detected = detectedContradictions.slice(0, 5);
-    return `Drawing evidence ledger has unresolved contradictions: ${[...stored, ...detected].join("; ")}. Reconcile sources or carry an explicit assumption before creating worksheets/items.`;
-  }
-
-  if (!latestVerification || !latestVerification.status) {
-    return "Independent drawing evidence verification has not run. Call verifyDrawingEvidenceLedger before creating worksheets/items from drawing-driven quantities.";
-  }
-  if (normalizedText(latestVerification.status) === "failed") {
-    return `Independent drawing evidence verification failed. Repair: ${asArray(latestVerification.failures).slice(0, 5).join("; ")}`;
-  }
-
-  return null;
-}
-
-// ── Pricing readiness: whole-strategy or one declared package ─────────────
-//
-// Round 3 (2026-10-07): Opus and Sonnet researched for 90 minutes and never
-// priced a row, because the first worksheet needed every strategy section
-// (scope, execution plan, assumptions, package plan) and the first drawing row
-// needed the whole visual audit and a ledger-wide verifier pass. A row may now
-// be priced for ONE package as soon as that package is declared, bound and
-// scoped, with every per-row evidence gate unchanged. The missing sections and
-// the other packages stay finalize blockers; nothing here marks the project
-// ready.
-
-export interface PricingReadiness {
-  ok: boolean;
-  /**
-   * package: the row's worksheet resolves to one packagePlan entry, and the row
-   * is checked against that package alone (even when every strategy section is
-   * saved: four non-empty sections do not mean every package is ready).
-   * legacy_full: unbound worksheet, every section saved; the old global gates.
-   * incremental_blocked: neither; the row is refused.
-   */
-  mode: "package" | "legacy_full" | "incremental_blocked";
-  reason?: string;
-  packageId?: string | null;
-  packageName?: string | null;
-  /** What finalize will still reject; reported, never waived. */
-  finalizeBlockers: string[];
-}
-
-function strategySections(strategy: any) {
-  return {
-    scopeGraph: !!strategy && Object.keys(asRecord(strategy.scopeGraph)).length > 0,
-    executionPlan: !!strategy && Object.keys(asRecord(strategy.executionPlan)).length > 0,
-    assumptions: !!strategy && Array.isArray(strategy.assumptions) && strategy.assumptions.length > 0,
-    packagePlan: !!strategy && Array.isArray(strategy.packagePlan) && strategy.packagePlan.length > 0,
-    reconcileReport: !!strategy && Object.keys(asRecord(strategy.reconcileReport)).length > 0,
-  };
-}
-
-/** The packagePlan entry a worksheet is bound to (by id, bound name, or package name). */
-export function resolveWorksheetPackage(strategy: any, worksheet: { id?: unknown; name?: unknown } | null | undefined): { entry: Record<string, any> | null; reason?: string } {
-  const plans = asArray(strategy?.packagePlan).map(asRecord);
-  if (!worksheet || (!worksheet.id && !worksheet.name)) return { entry: null, reason: "the row's worksheet was not found" };
-  const id = String(worksheet.id ?? "").trim();
-  const name = normalizedText(worksheet.name);
-  const matches = plans.filter((plan) => {
-    const bindings = asRecord(plan.bindings);
-    return (id && asArray(bindings.worksheetIds).map(String).includes(id))
-      || (name && asArray(bindings.worksheetNames).map(normalizedText).includes(name))
-      || (name && normalizedText(plan.name ?? plan.packageName) === name);
-  });
-  if (matches.length === 1) return { entry: matches[0] };
-  if (matches.length === 0) return { entry: null, reason: `worksheet "${String(worksheet.name ?? id)}" is not bound to a packagePlan entry (bindings.worksheetIds or worksheetNames, or a package of the same name)` };
-  return { entry: null, reason: `worksheet "${String(worksheet.name ?? id)}" is bound to more than one package (${matches.map((plan) => String(plan.id ?? plan.name)).join(", ")})` };
-}
-
-function packageScopeProblem(strategy: any, entry: Record<string, any>): string | null {
-  const scopeItems = asArray(asRecord(strategy?.scopeGraph).scopeItems).map(asRecord);
-  const known = new Set(scopeItems.map((item) => String(item.id ?? "").trim()).filter(Boolean));
-  const packageId = String(entry.id ?? entry.packageId ?? "").trim();
-  const refs = asArray(entry.scopeRefs).map((ref) => String(ref ?? "").trim()).filter(Boolean);
-  const ownedByPackage = scopeItems.some((item) => packageId && String(item.packageId ?? "") === packageId);
-  if (refs.length === 0 && !ownedByPackage) return `package ${packageId || entry.name} has no scopeRefs into scopeGraph.scopeItems`;
-  const missing = refs.filter((ref) => !known.has(ref));
-  if (missing.length > 0) return `package ${packageId || entry.name} cites scope items not in scopeGraph: ${missing.join(", ")}`;
-  return null;
-}
-
-export function strategyPricingReadiness(strategy: any, gate: "createWorksheet" | "createWorksheetItem", worksheet?: { id?: unknown; name?: unknown } | null): PricingReadiness {
-  const has = strategySections(strategy);
-  const finalizeBlockers = [
-    ...(has.executionPlan ? [] : ["executionPlan"]),
-    ...(has.assumptions ? [] : ["assumptions"]),
-    ...(has.reconcileReport ? [] : ["reconcileReport"]),
-    ...asArray(strategy?.packagePlan).map(asRecord)
-      .filter((plan) => asArray(asRecord(plan.bindings).worksheetIds).length === 0 && asArray(asRecord(plan.bindings).worksheetNames).length === 0)
-      .map((plan) => `package ${String(plan.id ?? plan.name)} has no bound worksheet`),
-  ];
-  const full = has.scopeGraph && has.executionPlan && has.assumptions && has.packagePlan;
-  if (!has.scopeGraph) return { ok: false, mode: "incremental_blocked", reason: "Save scopeGraph (saveEstimateScopeGraph or saveEstimateStrategyStages) with at least the package you are about to price.", finalizeBlockers };
-  if (!has.packagePlan) return { ok: false, mode: "incremental_blocked", reason: "Save packagePlan with at least the package you are about to price (id, name, scopeRefs).", finalizeBlockers };
-  if (gate === "createWorksheet") return { ok: true, mode: full ? "legacy_full" : "package", finalizeBlockers };
-  const resolved = resolveWorksheetPackage(strategy, worksheet);
-  if (resolved.entry) {
-    // Package-scoped whenever the worksheet resolves, whatever else is saved.
-    const scopeProblem = packageScopeProblem(strategy, resolved.entry);
-    if (scopeProblem) return { ok: false, mode: "incremental_blocked", reason: `Pricing package ${String(resolved.entry.id ?? resolved.entry.name)} needs it scoped: ${scopeProblem}.`, packageId: String(resolved.entry.id ?? ""), finalizeBlockers };
-    return { ok: true, mode: "package", packageId: String(resolved.entry.id ?? ""), packageName: String(resolved.entry.name ?? ""), finalizeBlockers };
-  }
-  if (full) return { ok: true, mode: "legacy_full", packageId: null, packageName: null, finalizeBlockers };
-  return { ok: false, mode: "incremental_blocked", reason: `Rows are priced one declared package at a time, and ${resolved.reason}. Bind the worksheet in packagePlan (bindings.worksheetIds).`, finalizeBlockers };
 }
 
 const LINE_EVIDENCE_BASIS_TYPES = [
@@ -872,21 +224,8 @@ const derivationSchema = z.object({
     packSize: z.coerce.number().nullable().optional().describe("Base units per purchase unit: rods per pack, anchors per cartridge, ft3 per bag. REQUIRED when the row UOM is a package (PK, BOX, CARTRIDGE, BAG, ...)."),
     wasteFactor: z.coerce.number().nullable().optional().describe("Fraction added for waste, e.g. 0.15."),
     surplusRationale: z.string().nullable().optional().describe("Required (>= 20 chars) when supplied base units exceed twice the requirement, e.g. 'minimum one cartridge; remainder is spares'."),
-  }).passthrough().nullable().optional().describe("REQUIRED on material/consumable rows that supply an installed quantity priced on another row. Declares the link explicitly; the gate checks pack size, waste and shortfall/surplus against it."),
+  }).passthrough().nullable().optional().describe("Optional link from a purchased material row to the row whose installed quantity it supplies. When given, pack size, units and shortfall are checked arithmetically."),
 }).passthrough();
-
-const DRAWING_QUANTITY_BASIS_TYPES = [
-  "drawing_quantity",
-  "visual_takeoff",
-  "drawing_table",
-  "drawing_note",
-] as const;
-
-function lineEvidenceBasisRequiresDrawing(evidenceBasis?: Record<string, any> | null) {
-  const quantityBasis = asRecord(evidenceBasis?.quantity);
-  const type = normalizedText(quantityBasis.type ?? evidenceBasis?.quantityType ?? evidenceBasis?.type);
-  return (DRAWING_QUANTITY_BASIS_TYPES as readonly string[]).includes(type);
-}
 
 function evidenceBasisClaimIds(evidenceBasis?: Record<string, any> | null) {
   const basis = asRecord(evidenceBasis);
@@ -933,11 +272,6 @@ function collectEvidenceAxisArray(evidenceBasis: Record<string, any>, key: strin
     .filter(Boolean);
 }
 
-/** Refs naming a direct instruction from the estimator/client, e.g. {kind:"user", ref:"scope item 3"} or "user: scope item 3". */
-function userInstructionRefCount(basis: Record<string, any>): number {
-  return collectEvidenceAxisArray(basis, "sourceRefs").filter((ref) => /^(user|client|owner|customer|estimator)\s*[:\-]\s*\S{2,}/i.test(ref)).length;
-}
-
 /**
  * Document ids cited in sourceRefs ("doc_<id>", "document:<id>", "doc:<id>")
  * that are not SourceDocuments of this project. A pattern-only check let any
@@ -954,24 +288,6 @@ function unresolvedDocumentRefs(ws: any, basis: Record<string, any>): string[] {
     if (match && !known.has(match[1])) unresolved.push(match[1]);
   }
   return [...new Set(unresolved)];
-}
-
-/** Pricing types whose amount is a single commercial number, not a sum of components. */
-const USER_DIRECTED_COMMERCIAL_PRICING_TYPES = new Set(["allowance", "subcontract"]);
-
-function claimIdsMentionedInLine(input: {
-  evidenceBasis?: Record<string, any> | null;
-  sourceNotes?: string;
-  sourceEvidence?: Record<string, any>;
-  targetText?: string;
-}) {
-  const text = [
-    input.targetText,
-    input.sourceNotes,
-    JSON.stringify(input.evidenceBasis ?? {}),
-    JSON.stringify(input.sourceEvidence ?? {}),
-  ].join("\n");
-  return [...new Set([...text.matchAll(/\bclaim-[0-9a-f]{12}\b/gi)].map((match) => match[0]))];
 }
 
 /** Fields that carry the substance of a row. A real row sets at least one. */
@@ -1010,52 +326,6 @@ const TRUNCATED_ITEM_PAYLOAD_MESSAGE = [
   "For Labour, Equipment, Rental Equipment, and General Conditions rows prefer createRateScheduleWorksheetItem — it takes a much smaller payload for the same result.",
 ].join(" ");
 
-/**
- * Examples printed in gate rejections. These are real minted id prefixes —
- * the old hint said "doc-", which nothing in the system produces, so an agent
- * following it literally could never satisfy the gate.
- */
-const STRUCTURED_SOURCE_REF_HINT = "plain strings like doc_<id>, lu-<id>, ds-<id>, kb-<id>, lis_<id>, rsi-<id>, ecost-<id>, a URL, or 'File.pdf p.12'";
-
-function looksLikeStructuredSourceRef(ref: unknown): boolean {
-  if (typeof ref !== "string") return false;
-  const value = ref.trim();
-  if (value.length < 4) return false;
-  // Accept "doc:<id>:<page>", "dataset:<id>:<row>", "book:<id>:<page>", "lu:<id>", "vendor:<id>", "uri:..."
-  if (/^(doc|document|dataset|ds|book|kb|knowledge|lu|labor|vendor|invoice|quote|catalog|cat|costres|effcost|sku|standard|spec|page|sheet|cell|row|atlas|claim)[-:_]/i.test(value)) return true;
-  // Accept DB ids like ds-<uuid>, lu-<uuid>, rsi-<uuid>, ecost-<uuid> — and the
-  // underscore-separated ones. SourceDocument mints `doc_<uuid>` and
-  // LineItemSearchDocument mints `lis_<hex>`, so a hyphen-only rule silently
-  // scored a cited source document as zero structured refs: the row was then
-  // rejected for "needs structured cite", the agent re-cited the same real
-  // document id, and the loop repeated. Those two are the ids an agent is most
-  // likely to have for a material row, which is where this bit hardest.
-  if (/^[a-z]{2,8}[-_][a-z0-9]{6,}/i.test(value)) return true;
-  // Accept URIs
-  if (/^https?:\/\//i.test(value)) return true;
-  // Accept document filename + page/section "Foo.pdf p.12" or "Foo.xlsx Sheet 'x' row 4"
-  if (/\.(pdf|xlsx|xls|csv|tsv|md|txt|docx|doc)\b/i.test(value)) return true;
-  return false;
-}
-
-/**
- * Distinct structured cites across the quantity and pricing axes. The same
- * "doc_x p2" in both axes used to count twice, so one cite satisfied the
- * composite rule's "2+ structured sourceRefs" (found by the 2026-10-07 live
- * gate preflight).
- */
-function structuredSourceRefCount(basis: Record<string, any>): number {
-  const all = collectEvidenceAxisArray(basis, "sourceRefs").filter(looksLikeStructuredSourceRef);
-  return new Set(all.map((ref) => ref.toLowerCase().replace(/\s+/g, " ").trim())).size;
-}
-
-function resourceCompositionEntryCount(composition: unknown): number {
-  if (!composition || typeof composition !== "object") return 0;
-  const obj = composition as Record<string, unknown>;
-  const resources = Array.isArray(obj.resources) ? obj.resources : [];
-  return resources.length;
-}
-
 function categoryEntityType(ws: any, categoryId?: string | null, categoryName?: string | null) {
   if (!categoryId && !categoryName) return "";
   const cats = asArray(ws.entityCategories).map(asRecord);
@@ -1067,183 +337,6 @@ function categoryEntityType(ws: any, categoryId?: string | null, categoryName?: 
     return String(categoryName).toLowerCase();
   }
   return "";
-}
-
-function compositeMaterialThreshold(): number {
-  return 5000; // applies to Material/Subcontractor rows priced at >= $5K with no structured pricing link
-}
-
-export function validateLineEvidenceBasisForPricing(ws: any, input: {
-  evidenceBasis?: Record<string, any> | null;
-  strategy?: any;
-  sourceNotes?: string;
-  laborUnitId?: string | null;
-  rateScheduleItemId?: string | null;
-  sourceEvidence?: Record<string, any>;
-  targetText?: string;
-  categoryId?: string | null;
-  category?: string | null;
-  costResourceId?: string | null;
-  effectiveCostId?: string | null;
-  itemId?: string | null;
-  resourceComposition?: Record<string, unknown> | null;
-  cost?: number | null;
-  price?: number | null;
-  uom?: string | null;
-  quantity?: number | null;
-}) {
-  // Applies to EVERY project. The old classifier short-circuit returned null
-  // when no SourceDocument was typed "drawing", which is exactly how the
-  // Alexanderwerk ZIP-only quote priced 32 invented anchors with no evidence
-  // check at all.
-  const basis = asRecord(input.evidenceBasis);
-  const type = normalizedText(basis.type);
-  const quantityType = evidenceAxisType(basis, "quantity");
-  const pricingType = evidenceAxisType(basis, "pricing");
-  const declaredClaimIds = evidenceBasisClaimIds(basis);
-  const mentionedClaimIds = claimIdsMentionedInLine(input);
-  const missingDeclaredClaimIds = mentionedClaimIds.filter((id) => !declaredClaimIds.includes(id));
-  if (!type && !quantityType && !pricingType) {
-    return [
-      "Line evidence basis is required on every priced row.",
-      "Prefer evidenceBasis.quantity.type and evidenceBasis.pricing.type so quantity provenance and pricing/rate provenance are separate.",
-      "Legacy evidenceBasis.type is still accepted as a single-source shorthand. Use one of:",
-      LINE_EVIDENCE_BASIS_TYPES.join(", "),
-      "Use drawing_quantity/visual_takeoff/drawing_table/drawing_note in evidenceBasis.quantity only when this row's quantity is directly driven by drawing evidence and include drawingClaimIds.",
-      "Use indirect, rate_schedule, knowledge_labor, vendor_quote, allowance, subcontract, equipment_rental, material_quote, document_quantity, assumption, or mixed when the row is justified by a non-drawing estimating basis.",
-    ].join(" ");
-  }
-  for (const [label, value] of [["type", type], ["quantity.type", quantityType], ["pricing.type", pricingType]] as const) {
-    if (value && !(LINE_EVIDENCE_BASIS_TYPES as readonly string[]).includes(value)) {
-      return `Unsupported evidenceBasis.${label} '${String(value)}'. Use one of: ${LINE_EVIDENCE_BASIS_TYPES.join(", ")}.`;
-    }
-  }
-  if (type && !(LINE_EVIDENCE_BASIS_TYPES as readonly string[]).includes(type)) {
-    return `Unsupported evidenceBasis.type '${String(basis.type ?? "")}'. Use one of: ${LINE_EVIDENCE_BASIS_TYPES.join(", ")}.`;
-  }
-
-  if (missingDeclaredClaimIds.length > 0) {
-    return `Drawing evidence claim id(s) are mentioned in line text/sourceEvidence but not attached to the quantity evidence basis: ${missingDeclaredClaimIds.join(", ")}. Put them in evidenceBasis.quantity.drawingClaimIds and set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note; use evidenceBasis.pricing for the material/rate/vendor basis.`;
-  }
-
-  if (declaredClaimIds.length > 0 && !lineEvidenceBasisRequiresDrawing(basis)) {
-    return "Drawing evidence claim IDs belong to quantity provenance. Set evidenceBasis.quantity.type to drawing_quantity, visual_takeoff, drawing_table, or drawing_note and place the claim IDs in evidenceBasis.quantity.drawingClaimIds. Put material_quote, knowledge_labor, rate_schedule, subcontract, equipment_rental, or allowance under evidenceBasis.pricing when that source sets the price/rate. If the drawing only shows the scope and this row's quantity (e.g. labour hours) comes from a crew assumption or labour unit, leave drawingClaimIds off this row, keep quantity.type assumption or knowledge_labor, and cite the drawing in sourceRefs instead.";
-  }
-
-  if (lineEvidenceBasisRequiresDrawing(basis)) {
-    if (!pricingType || (DRAWING_QUANTITY_BASIS_TYPES as readonly string[]).includes(pricingType)) {
-      return "Drawing quantity evidence proves count/measurement, not price/rate/productivity. Add evidenceBasis.pricing.type with the rate schedule, labour manual, vendor/material quote, equipment/subcontract source, allowance model, or assumption that supports the unit cost/hours.";
-    }
-    return null;
-  }
-
-  const notes = String(input.sourceNotes ?? "").trim();
-  const quantityBasis = asRecord(basis.quantity);
-  const pricingBasis = asRecord(basis.pricing);
-  const rationale = [
-    basis.rationale,
-    quantityBasis.rationale,
-    pricingBasis.rationale,
-  ].map((value) => String(value ?? "").trim()).filter(Boolean).join(" ");
-  const sourceRefs = collectEvidenceAxisArray(basis, "sourceRefs");
-  const assumptionIds = collectEvidenceAxisArray(basis, "assumptionIds");
-  const hasStructuredEvidence = Object.keys(asRecord(input.sourceEvidence)).length > 0 || sourceRefs.length > 0 || assumptionIds.length > 0;
-  if (notes.length < 40 && rationale.length < 40 && !hasStructuredEvidence) {
-    return "Non-drawing line items still need evidence. Provide sourceNotes, evidenceBasis.rationale, sourceRefs, assumptionIds, or sourceEvidence explaining the labour/manual/rate/vendor/allowance/indirect basis.";
-  }
-  if ((type === "rate_schedule" || pricingType === "rate_schedule") && !input.rateScheduleItemId) {
-    return "evidenceBasis.pricing.type='rate_schedule' requires a concrete rateScheduleItemId from listRateScheduleItems/getItemConfig.";
-  }
-  if ((type === "knowledge_labor" || pricingType === "knowledge_labor") && !input.laborUnitId && !hasStructuredEvidence && !/knowledge|manual|page|labor|labour/i.test(notes)) {
-    return "evidenceBasis.pricing.type='knowledge_labor' requires laborUnitId or source evidence/notes naming the labour manual, page, or analog used.";
-  }
-  if ((type === "assumption" || quantityType === "assumption" || pricingType === "assumption") && assumptionIds.length === 0 && rationale.length < 40) {
-    return "evidenceBasis assumption basis requires assumptionIds from saveEstimateAssumptions or a substantive rationale.";
-  }
-  if (assumptionIds.length > 0) {
-    // assumptionIds used to be accepted unresolved — any non-empty string
-    // passed. They must name assumptions that were actually saved.
-    const savedAssumptionIds = new Set(
-      asArray(input.strategy?.assumptions).map((entry) => String(asRecord(entry).id ?? "").trim()).filter(Boolean),
-    );
-    const unknownAssumptionIds = assumptionIds.filter((id) => !savedAssumptionIds.has(id));
-    if (unknownAssumptionIds.length > 0) {
-      return `assumptionIds not found among saved assumptions: ${unknownAssumptionIds.join(", ")}. Call saveEstimateAssumptions with these ids first, or getEstimateStrategy to see the saved ids.`;
-    }
-  }
-
-  const unresolvedDocs = unresolvedDocumentRefs(ws, basis);
-  if (unresolvedDocs.length > 0) {
-    return `sourceRefs cite documents that are not in this project: ${unresolvedDocs.join(", ")}. Cite a documentId from listDocuments/readDocumentText.`;
-  }
-
-  // Category-aware citation discipline (domain-agnostic)
-  const entityType = categoryEntityType(ws, input.categoryId, input.category);
-  const structuredRefs = structuredSourceRefCount(basis);
-  const hasAssumptionIds = assumptionIds.length > 0;
-  const compositionCount = resourceCompositionEntryCount(input.resourceComposition);
-  const cost = Number.isFinite(input.cost) ? Number(input.cost) : 0;
-  const price = Number.isFinite(input.price) ? Number(input.price) : 0;
-  const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
-  const rowDollar = Math.max(cost * Math.max(quantity, 1), price * Math.max(quantity, 1), cost, price);
-
-  // #1: Labour rows must have laborUnitId OR structured sourceRefs.
-  // Validator messages are deliberately short — repeated rejections used to
-  // print 500-700 chars of full rule text per call which ate the agent's
-  // context window after a handful of misses.
-  if (entityType === "labour" || entityType === "labor") {
-    const hasLaborUnit = !!input.laborUnitId;
-    const hasStructuredRef = structuredRefs > 0;
-    if (!hasLaborUnit && !hasStructuredRef && !hasAssumptionIds) {
-      return `Labour row needs laborUnitId, evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}), or assumptionIds.`;
-    }
-  }
-
-  // #1: Material / Subcontractor rows must have a structured pricing link OR equivalent
-  const isMaterialish = entityType === "material" || entityType === "subcontractor" || entityType === "consumables" || entityType === "consumable" || entityType === "rental equipment" || entityType === "rental_equipment" || entityType === "equipment" || entityType === "other charges" || entityType === "allowance";
-  if (isMaterialish) {
-    const hasStructuredLink = !!(input.costResourceId || input.effectiveCostId || input.itemId);
-    const hasStructuredRef = structuredRefs > 0;
-    const hasComposition = compositionCount > 0;
-    const hasUserDirection = USER_DIRECTED_COMMERCIAL_PRICING_TYPES.has(pricingType || type) && userInstructionRefCount(basis) > 0;
-    if (!hasStructuredLink && !hasStructuredRef && !hasAssumptionIds && !hasComposition && !hasUserDirection) {
-      return `Material/Sub/Equip/Allowance row needs costResourceId, effectiveCostId, or itemId; or evidenceBasis.pricing.sourceRefs with a structured cite (${STRUCTURED_SOURCE_REF_HINT}); or assumptionIds; or resourceComposition.resources. A client-directed allowance/subcontract amount: set pricing.type "allowance" or "subcontract" and cite either a saved assumption (pricing.assumptionIds: ["A-COMMERCIAL"]) or the instruction itself (pricing.sourceRefs: ["user: carry Greystone at $25,000"] or [{kind: "user", ref: "carry Greystone at $25,000"}]). Free text like "User fixed $25,000" is not a cite.`;
-    }
-
-    // #3: Composite (LS / high-value) Material/Sub rows need component-level evidence.
-    // Two cases have no components to cite, and demanding two refs only invites
-    // a padded or invented second cite (2026-10-07 GPT matrix: a $0
-    // fabrication-by-others placeholder and a client-fixed $25,000 allowance
-    // were rejected four times):
-    //   - a zero-value row (nothing is being priced);
-    //   - an allowance/subcontract amount fixed by a saved assumption or an
-    //     explicit user instruction. The assumption is resolved above and is
-    //     shown in review, so the number stays traceable.
-    const isLumpSum = String(input.uom ?? "").toUpperCase() === "LS";
-    const isZeroValue = cost === 0 && price === 0;
-    const isUserDirectedCommercial = USER_DIRECTED_COMMERCIAL_PRICING_TYPES.has(pricingType || type)
-      && (hasAssumptionIds || userInstructionRefCount(basis) > 0);
-    if ((isLumpSum || rowDollar >= compositeMaterialThreshold()) && !hasStructuredLink && !isZeroValue && !isUserDirectedCommercial) {
-      const hasComponentEvidence = compositionCount >= 2 || structuredRefs >= 2;
-      if (!hasComponentEvidence) {
-        return `Composite LS / >=$${compositeMaterialThreshold().toLocaleString()} row needs costResourceId/effectiveCostId/itemId, or 2+ structured sourceRefs (${STRUCTURED_SOURCE_REF_HINT}), or 2+ resourceComposition.resources. A client-fixed allowance/subcontract amount instead needs pricing.type allowance|subcontract plus a saved assumptionId or a "user: <instruction>" ref.`;
-      }
-    }
-  }
-
-  return null;
-}
-
-/** Dollar value above which an assumption-based quantity must be confirmed with the user. */
-function assumptionQuantityDollarThreshold() {
-  const raw = Number(process.env.BIDWRIGHT_ASSUMPTION_QTY_DOLLAR_THRESHOLD ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : 2500;
-}
-
-/** Labour hours above which an assumption-based quantity must be confirmed with the user. */
-function assumptionQuantityHoursThreshold() {
-  const raw = Number(process.env.BIDWRIGHT_ASSUMPTION_QTY_HOURS_THRESHOLD ?? "");
-  return Number.isFinite(raw) && raw > 0 ? raw : 24;
 }
 
 interface EvidenceViewRecord {
@@ -1291,8 +384,7 @@ function staleEvidenceViewError(views: EvidenceViewRecord[], ws: any): string | 
 
 /**
  * Fetch EvidenceView rows (images the server actually delivered to the model).
- * Fails closed: if the service is unavailable the caller must not price a
- * drawing-driven row on unverifiable view ids.
+ * Fails closed: a cited viewId that cannot be looked up is not accepted.
  */
 type EvidenceViewFetcher = (viewIds: string[]) => Promise<{ views: EvidenceViewRecord[]; missingIds: string[] } | { error: string }>;
 
@@ -1313,26 +405,21 @@ async function fetchEvidenceViews(viewIds: string[]): Promise<{ views: EvidenceV
   }
 }
 
-/**
- * Line-level checks that make a quantity traceable to pixels and arithmetic:
- *  - drawing-driven quantities cite >=1 viewId that the server actually
- *    delivered to the model (EvidenceView), not just a claim id;
- *  - drawing-driven quantities carry a derivation (formula + sourced inputs)
- *    that reproduces the row quantity;
- *  - per-instance inputs in the derivation are compared, deterministically,
- *    with explicit callouts in the cited view text and in the agent's own
- *    quoted excerpts ("(1) hole" vs a claimed 4 per plate);
- *  - assumption-based quantities above a $/hours threshold need an askUser
- *    confirmation recorded on the evidence basis.
- */
 let evidenceViewFetcher: EvidenceViewFetcher = fetchEvidenceViews;
 
-/** Test seam: replace the EvidenceView lookup so gate rules can run without an API. */
+/** Test seam: replace the EvidenceView lookup so integrity checks can run without an API. */
 export function __setEvidenceViewFetcherForTests(fetcher: EvidenceViewFetcher | null) {
   evidenceViewFetcher = fetcher ?? fetchEvidenceViews;
 }
 
-export async function validateTraceableQuantityForPricing(ws: any, input: {
+/**
+ * The only checks a worksheet row write has to pass: what the row cites is
+ * real (in this project and the current source version), and the arithmetic
+ * and explicit unit conversions it states are right. How good the evidence
+ * is, which assumptions were made and in what order the work was done are
+ * the estimator's and reviewer's to judge from the row's own fields.
+ */
+export async function rowWriteIntegrityProblem(ws: any, input: {
   evidenceBasis?: Record<string, any> | null;
   derivation?: Record<string, any> | null;
   quantity?: number | null;
@@ -1340,298 +427,68 @@ export async function validateTraceableQuantityForPricing(ws: any, input: {
   tierUnits?: Record<string, number> | null;
   cost?: number | null;
   price?: number | null;
-  categoryId?: string | null;
-  category?: string | null;
   strategy?: any;
 }): Promise<string | null> {
   const basis = asRecord(input.evidenceBasis);
-  const quantityAxis = asRecord(basis.quantity);
-  const quantityType = evidenceAxisType(basis, "quantity") || normalizedText(basis.type);
-  const requiresDrawing = lineEvidenceBasisRequiresDrawing(basis);
-  const viewIds = collectEvidenceAxisArray(basis, "viewIds");
-  const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
-  const tierUnitTotal = Object.values(input.tierUnits ?? {}).reduce((sum, value) => sum + (Number.isFinite(Number(value)) ? Number(value) : 0), 0);
-
-  // ── viewIds for drawing-driven quantities ──
-  let views: EvidenceViewRecord[] = [];
-  if (requiresDrawing && viewIds.length === 0) {
-    return "Drawing-driven quantity requires evidenceBasis.quantity.viewIds: the viewId(s) returned with the image by readDrawingPage / readDrawingTile (or inspectDrawingRegion) that visually prove the count or measurement. A claim id or extracted text alone is not visual evidence; render and look at the region, then cite its viewId.";
+  for (const [label, value] of [["type", normalizedText(basis.type)], ["quantity.type", evidenceAxisType(basis, "quantity")], ["pricing.type", evidenceAxisType(basis, "pricing")]] as const) {
+    if (value && !(LINE_EVIDENCE_BASIS_TYPES as readonly string[]).includes(value)) {
+      return `Unsupported evidenceBasis.${label} '${value}'. Use one of: ${LINE_EVIDENCE_BASIS_TYPES.join(", ")}.`;
+    }
   }
+
+  const assumptionIds = collectEvidenceAxisArray(basis, "assumptionIds");
+  if (assumptionIds.length > 0) {
+    const saved = new Set(asArray(input.strategy?.assumptions).map((entry) => String(asRecord(entry).id ?? "").trim()).filter(Boolean));
+    const unknown = assumptionIds.filter((id) => !saved.has(id));
+    if (unknown.length > 0) return `assumptionIds not found among saved assumptions: ${unknown.join(", ")}. Save them with saveEstimateAssumptions, or drop the reference.`;
+  }
+
+  const unresolvedDocs = unresolvedDocumentRefs(ws, basis);
+  if (unresolvedDocs.length > 0) return `sourceRefs cite documents that are not in this project: ${unresolvedDocs.join(", ")}.`;
+
+  const derivation: LineDerivation | null = normalizeLineDerivation(input.derivation);
+  const derivationRefs = (kind: string) => (derivation?.inputs ?? []).filter((entry) => entry.source?.kind === kind).map((entry) => String(entry.source?.ref ?? "").trim()).filter(Boolean);
+
+  const claimIds = [...new Set([...evidenceBasisClaimIds(basis), ...derivationRefs("claim")])];
+  if (claimIds.length > 0) {
+    const known = new Set(asArray(drawingEvidenceEngine(input.strategy).claims).map((claim) => String(asRecord(claim).claimId ?? asRecord(claim).id ?? "")));
+    const unknown = claimIds.filter((id) => !known.has(id));
+    if (unknown.length > 0) return `Drawing evidence claim id(s) not found in this project: ${unknown.join(", ")}.`;
+  }
+
+  const viewIds = [...new Set([...collectEvidenceAxisArray(basis, "viewIds"), ...derivationRefs("view")])];
   if (viewIds.length > 0) {
     const result = await evidenceViewFetcher(viewIds);
-    if ("error" in result) {
-      return `Could not verify evidenceBasis.quantity.viewIds against the evidence view service (${result.error}). Drawing-driven rows cannot be priced on unverifiable view ids; retry once the view service responds, or cite viewIds returned in this session.`;
-    }
-    if (result.missingIds.length > 0) {
-      return `evidenceBasis.quantity.viewIds not found for this project: ${result.missingIds.join(", ")}. Use only viewIds returned by readDrawingPage / readDrawingTile / inspectDrawingRegion in this project.`;
-    }
-    views = result.views;
-    const staleError = staleEvidenceViewError(views, ws);
-    if (staleError) return staleError;
+    if ("error" in result) return `Could not verify the cited viewIds against the evidence view service (${result.error}); retry when it responds.`;
+    if (result.missingIds.length > 0) return `viewIds not found for this project: ${result.missingIds.join(", ")}. Cite only viewIds returned by readDrawingPage / readDrawingTile / inspectDrawingRegion here.`;
+    const stale = staleEvidenceViewError(result.views, ws);
+    if (stale) return stale;
   }
 
-  // ── derivation ──
-  const derivation: LineDerivation | null = normalizeLineDerivation(input.derivation);
-  if (requiresDrawing && !derivation) {
-    return "Drawing-driven quantities need a derivation so the number is traceable: derivation = { formula: 'basePlates * anchorsPerPlate', inputs: [{ name, value, unit?, perInstance?, instanceOf?, source: { kind: view|claim|text|rateItem|laborUnit|assumption|user|..., ref, excerpt? } }], result: { value, unit } }. Mark per-instance factors (per plate, per column) with perInstance: true.";
-  }
   if (derivation) {
+    const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
+    const tierUnitTotal = Object.values(input.tierUnits ?? {}).reduce((sum, value) => sum + (Number.isFinite(Number(value)) ? Number(value) : 0), 0);
     const target = derivation.target ?? "quantity";
-    const expectedValue = target === "tierUnits"
-      ? tierUnitTotal * (quantity || 1)
+    const expectedValue = target === "tierUnits" ? tierUnitTotal * (quantity || 1)
       : target === "cost" ? (Number.isFinite(input.cost) ? Number(input.cost) : null)
       : target === "price" ? (Number.isFinite(input.price) ? Number(input.price) : null)
       : quantity;
     const issues = validateLineDerivation(derivation, { expectedValue }).filter((issue) => issue.severity === "error");
-    if (issues.length > 0) {
-      return `Derivation is not valid: ${issues.slice(0, 4).map((issue) => issue.message).join(" ")}`;
-    }
-    if (requiresDrawing) {
-      const viewSourced = derivation.inputs.some((entry) => entry.source?.kind === "view" || entry.source?.kind === "claim");
-      if (!viewSourced) {
-        return "At least one derivation input for a drawing-driven quantity must come from source.kind 'view' (a viewId you looked at) or 'claim' (a saved evidence claim). Text/manual inputs alone do not establish a count from a drawing.";
-      }
-    }
-
-    // ── declared installed/procurement link ──
+    if (issues.length > 0) return `Derivation is not valid: ${issues.slice(0, 4).map((issue) => issue.message).join(" ")}`;
     if (derivation.procurement) {
       const items = asArray(ws.worksheets).map(asRecord).flatMap((worksheet) => asArray(worksheet.items).map(asRecord));
-      const procurementResult = evaluateProcurementLink(derivation.procurement, {
+      const procurement = evaluateProcurementLink(derivation.procurement, {
         purchaseQuantity: quantity,
         purchaseUom: input.uom ?? null,
         resolveItem: (itemId) => {
           const linked = items.find((entry) => String(entry.id ?? "") === itemId);
-          return linked
-            ? { quantity: Number(linked.quantity ?? 0), uom: String(linked.uom ?? "") || null, derivation: normalizeLineDerivation(linked.derivation), entityName: String(linked.entityName ?? "") || null }
-            : null;
+          return linked ? { quantity: Number(linked.quantity ?? 0), uom: String(linked.uom ?? "") || null, derivation: normalizeLineDerivation(linked.derivation), entityName: String(linked.entityName ?? "") || null } : null;
         },
       });
-      const procurementErrors = procurementResult.issues.filter((issue) => issue.severity === "error");
-      if (procurementErrors.length > 0) {
-        return `Procurement does not reconcile with the installed requirement${procurementResult.installedQuantity !== null ? ` (${procurementResult.installedQuantity} installed via ${procurementResult.installedSource})` : ""}: ${procurementErrors.map((issue) => issue.message).join(" ")}`;
-      }
-    }
-
-    // ── per-instance contradiction check (deterministic) ──
-    const texts: Array<{ ref: string; text: string }> = [];
-    for (const view of views) {
-      if (view.textSnippet) texts.push({ ref: String(view.id), text: String(view.textSnippet) });
-    }
-    const claimIds = evidenceBasisClaimIds(basis);
-    if (claimIds.length > 0) {
-      const claims = asArray(drawingEvidenceEngine(input.strategy).claims).map(asRecord);
-      for (const claim of claims) {
-        const claimId = String(claim.claimId ?? claim.id ?? "");
-        if (!claimIds.includes(claimId)) continue;
-        for (const evidence of asArray(claim.evidence).map(asRecord)) {
-          const text = [evidence.sourceText, evidence.result].filter(Boolean).join(" ");
-          if (text) texts.push({ ref: claimId, text });
-        }
-      }
-    }
-    for (const entry of derivation.inputs) {
-      if (entry.source?.excerpt) texts.push({ ref: entry.source.ref, text: String(entry.source.excerpt) });
-    }
-    const contradictions = detectPerInstanceContradictions(derivation, texts);
-    if (contradictions.length > 0) {
-      const first = contradictions[0];
-      return `Per-instance contradiction: derivation input '${first.inputName}' = ${first.claimedValue} but the cited text (${first.ref}) says "${first.excerpt}" (${first.textValue} per instance). Either correct the input to what the drawing/spec states, or cite the view/text that actually shows ${first.claimedValue} per instance. Totals are not accepted as proof of a per-instance count.`;
+      const errors = procurement.issues.filter((issue) => issue.severity === "error");
+      if (errors.length > 0) return `Procurement does not reconcile: ${errors.map((issue) => issue.message).join(" ")}`;
     }
   }
-
-  // ── assumption-based quantity above threshold needs user confirmation ──
-  if (quantityType === "assumption") {
-    const confirmation = asRecord(quantityAxis.userConfirmation ?? basis.userConfirmation);
-    const confirmed = String(confirmation.questionId ?? "").trim().length > 0 && String(confirmation.answer ?? "").trim().length > 0;
-    if (!confirmed) {
-      const unit = Number.isFinite(input.price) && Number(input.price) > 0 ? Number(input.price) : Number.isFinite(input.cost) ? Number(input.cost) : 0;
-      const rowDollar = unit * Math.max(quantity, 1);
-      const rowHours = tierUnitTotal * Math.max(quantity, 1);
-      if (rowDollar >= assumptionQuantityDollarThreshold() || rowHours >= assumptionQuantityHoursThreshold()) {
-        return `This row's quantity is assumption-based and the row is significant (${rowDollar > 0 ? `~$${Math.round(rowDollar).toLocaleString()}` : `${rowHours} h`}). Confirm the quantity with the estimator via askUser and record it as evidenceBasis.quantity.userConfirmation = { questionId, answer }, or cite document/drawing evidence (viewIds + derivation) instead of an assumption.`;
-      }
-    }
-  }
-
-  return null;
-}
-
-/** View ids cited as page overview (renderedPages) and as targeted crops (zoomEvidence) by one audit package. */
-function auditPackageViewIds(entry: Record<string, any>) {
-  const ids = (values: unknown[]) => [...new Set(values.map((value) => String(value ?? "").trim()).filter((id) => /^view-/.test(id)))];
-  return {
-    pages: ids(asArray(entry.renderedPages).map((page) => asRecord(page).viewId)),
-    crops: ids(asArray(entry.zoomEvidence).map((zoom) => asRecord(zoom).viewId)),
-  };
-}
-
-/** Audit-cited plus row-cited view ids, bounded to what the agent actually named. */
-function auditViewIds(audit: Record<string, any>, evidenceBasis?: Record<string, any> | null): string[] {
-  const ids = [
-    ...asArray(audit.drawingDrivenPackages).flatMap((entry) => {
-      if (!entry || typeof entry !== "object") return [];
-      const cited = auditPackageViewIds(entry as Record<string, any>);
-      return [...cited.pages, ...cited.crops];
-    }),
-    ...collectEvidenceAxisArray(asRecord(evidenceBasis), "viewIds"),
-  ];
-  return [...new Set(ids.filter((id) => /^view-/.test(id)))].slice(0, 500);
-}
-
-/**
- * readDrawingTile / inspectDrawingRegion views carry a bbox (normalised 0-1 for
- * tiles, pixels with image dimensions for region inspections). A readDrawingPage
- * view has none and is the whole page.
- */
-function nativeViewRegion(view: EvidenceViewRecord): Record<string, number> | null {
-  const box = asRecord(view.bbox);
-  const x = Number(box.x), y = Number(box.y), width = Number(box.width), height = Number(box.height);
-  if (![x, y, width, height].every(Number.isFinite) || width <= 0 || height <= 0) return null;
-  const frameWidth = Number(box.imageWidth ?? NaN);
-  const frameHeight = Number(box.imageHeight ?? NaN);
-  if (Number.isFinite(frameWidth) && Number.isFinite(frameHeight)) return { x, y, width, height, imageWidth: frameWidth, imageHeight: frameHeight };
-  if (x <= 1 && y <= 1 && width <= 1 && height <= 1) return { x, y, width, height, imageWidth: 1, imageHeight: 1 };
-  return null;
-}
-
-/**
- * Server EvidenceView rows are the authoritative record of what the model was
- * shown. A full-page view is overview evidence; a targeted crop is crop
- * evidence. A crop is never promoted to a page overview.
- */
-function nativeViewEvidence(views: EvidenceViewRecord[]) {
-  const pages: Array<{ documentId: string; pageNumber: number }> = [];
-  const crops: Array<{ documentId: string; pageNumber: number; region: Record<string, any> }> = [];
-  const pageViewIds = new Set<string>();
-  const cropViewIds = new Set<string>();
-  for (const view of views) {
-    const documentId = String(view.documentId ?? view.fileNodeId ?? "").trim();
-    const pageNumber = Number(view.pageNumber);
-    if (!documentId || !Number.isFinite(pageNumber)) continue;
-    const region = nativeViewRegion(view);
-    if (region && isTargetedZoomRegion(region)) {
-      crops.push({ documentId, pageNumber, region });
-      cropViewIds.add(view.id);
-    } else {
-      pages.push({ documentId, pageNumber });
-      pageViewIds.add(view.id);
-    }
-  }
-  return { pages, crops, pageViewIds, cropViewIds };
-}
-
-/** The audit gate, with the native page/tile views it cites resolved from the server first. */
-export async function validateVisualTakeoffAuditWithNativeViews(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null, rowPackageId: string | null = null): Promise<string | null> {
-  const audit = asRecord(asRecord(strategy?.scopeGraph).visualTakeoffAudit);
-  const ids = auditViewIds(audit, evidenceBasis);
-  let views: EvidenceViewRecord[] = [];
-  if (ids.length > 0) {
-    const result = await evidenceViewFetcher(ids);
-    // Views the server cannot confirm simply do not count.
-    if (!("error" in result)) views = result.views;
-  }
-  return validateVisualTakeoffAuditForPricing(ws, strategy, targetText, evidenceBasis, views, rowPackageId);
-}
-
-export function validateVisualTakeoffAuditForPricing(ws: any, strategy: any, targetText = "", evidenceBasis?: Record<string, any> | null, nativeViews: EvidenceViewRecord[] = [], rowPackageId: string | null = null): string | null {
-  const drawingDocs = asArray(ws.sourceDocuments).filter(isDrawingLikeSourceDocument);
-  if (drawingDocs.length === 0) return null;
-  if (!lineEvidenceBasisRequiresDrawing(evidenceBasis)) return null;
-
-  const scopeGraph = asRecord(strategy?.scopeGraph);
-  const audit = asRecord(scopeGraph.visualTakeoffAudit);
-  const evidence = collectVisualToolEvidence(ws);
-  const native = nativeViewEvidence(nativeViews);
-  evidence.renderedPages += native.pages.length;
-  evidence.zoomedRegions += native.crops.length;
-  evidence.renderedPageCalls.push(...native.pages);
-  evidence.zoomRegionCalls.push(...native.crops);
-  const packageHasNativePage = (entry: Record<string, any>) => auditPackageViewIds(entry).pages.some((id) => native.pageViewIds.has(id));
-  const packageHasNativeCrop = (entry: Record<string, any>) => auditPackageViewIds(entry).crops.some((id) => native.cropViewIds.has(id));
-  const engine = drawingEvidenceEngine(strategy);
-  const hasLedgerEvidence = Object.keys(asRecord(engine.atlas)).length > 0 && asArray(engine.claims).some(claimHasUsableDrawingEvidence);
-  const drawingNames = drawingDocs.slice(0, 5).map((doc: any) => doc.fileName).join("; ");
-  const sampleLine = drawingNames ? ` Detected drawing PDFs include: ${drawingNames}.` : "";
-
-  if (Object.keys(audit).length === 0) {
-    return `Visual drawing takeoff audit is missing from saveEstimateScopeGraph.${sampleLine} Before creating worksheets/items, read the relevant drawing page (readDrawingPage) and the detail/symbol/table region that drives scope (readDrawingTile or inspectDrawingRegion), saveDrawingEvidenceClaim citing those viewIds, verifyDrawingEvidenceLedger, and re-save saveEstimateScopeGraph with visualTakeoffAudit (renderedPages[].viewId = page views, zoomEvidence[].viewId = crop views).`;
-  }
-
-  if (!hasLedgerEvidence && evidence.renderedPages === 0) {
-    return `No actual atlas/render evidence is recorded for this drawing package.${sampleLine} Read at least one relevant drawing page with readDrawingPage and cite its viewId in visualTakeoffAudit.drawingDrivenPackages[].renderedPages[].viewId (a tile is not a page overview), then re-save saveEstimateScopeGraph before creating worksheets/items.`;
-  }
-
-  if (!hasLedgerEvidence && evidence.zoomedRegions === 0) {
-    return `Full-page drawing evidence is only overview evidence. No targeted crop/region evidence is recorded yet. Read the specific detail, symbol, schedule, dimension, or table region that drives scope with readDrawingTile or inspectDrawingRegion, save a drawing evidence claim citing that viewId, cite it in zoomEvidence[].viewId, then re-save saveEstimateScopeGraph before creating worksheets/items.`;
-  }
-
-  const auditPackages = asArray(audit.drawingDrivenPackages).filter((entry: any) => entry && typeof entry === "object" && !Array.isArray(entry)) as Array<Record<string, any>>;
-  const rowAuditEntry = rowPackageId ? auditPackages.find((entry) => String(entry.packageId ?? entry.id ?? "") === rowPackageId) ?? null : null;
-  const rowPackageAuditComplete = !!rowAuditEntry && (rowAuditEntry.completed === true || rowAuditEntry.completedBeforePricing === true || ["reviewed", "complete", "completed", "verified"].includes(normalizedText(rowAuditEntry.status)));
-  if (audit.completedBeforePricing !== true && !rowPackageAuditComplete) {
-    if (rowPackageId) {
-      return `Incremental pricing of package ${rowPackageId}: its visualTakeoffAudit.drawingDrivenPackages entry must exist with completed: true (after reading its pages and crops), or set visualTakeoffAudit.completedBeforePricing: true once every package is audited.`;
-    }
-    return `saveEstimateScopeGraph.visualTakeoffAudit.completedBeforePricing must be true before creating worksheets/items. Re-save the scope graph after the atlas search, targeted inspection, evidence claims, and ledger verification are complete.`;
-  }
-
-  // Incremental: only the row's own package is checked here; the others stay finalize blockers.
-  const drawingDrivenPackages = rowAuditEntry ? [rowAuditEntry] : auditPackages;
-  const notDrawingDrivenReason = String(audit.notDrawingDrivenReason ?? "").trim();
-
-  if (drawingDrivenPackages.length === 0) {
-    if (notDrawingDrivenReason.length >= 40) return null;
-    return `Drawing PDFs exist, but visualTakeoffAudit has no drawingDrivenPackages and no substantive notDrawingDrivenReason. Identify the drawing-driven packages, or explain why the drawings do not drive quantity/scope, before creating worksheets/items.`;
-  }
-
-  const packagesMissingOverview = drawingDrivenPackages.filter((entry) =>
-    !hasLedgerEvidence && !hasAuditArrayEvidence(entry, ["renderedPages"]),
-  );
-  const packagesMissingDeepEvidence = drawingDrivenPackages.filter((entry) =>
-    !hasLedgerEvidence && !hasAuditArrayEvidence(entry, ["zoomEvidence"]),
-  );
-  // An entry citing a viewId is checked against that server view only.
-  const packagesMissingActualOverview = drawingDrivenPackages.filter((entry) =>
-    !hasLedgerEvidence &&
-    asArray(entry.renderedPages).length > 0 &&
-    !packageHasNativePage(entry) &&
-    !asArray(entry.renderedPages).some((page) => !asRecord(page).viewId && visualPageEvidenceMatchesActual(page, evidence.renderedPageCalls)),
-  );
-  const packagesMissingActualZoom = drawingDrivenPackages.filter((entry) =>
-    !hasLedgerEvidence &&
-    asArray(entry.zoomEvidence).length > 0 &&
-    !packageHasNativeCrop(entry) &&
-    !asArray(entry.zoomEvidence).some((zoom) => !asRecord(zoom).viewId && visualZoomEvidenceMatchesActual(zoom, evidence.zoomRegionCalls)),
-  );
-
-  if (
-    packagesMissingOverview.length > 0 ||
-    packagesMissingDeepEvidence.length > 0 ||
-    packagesMissingActualOverview.length > 0 ||
-    packagesMissingActualZoom.length > 0
-  ) {
-    const summarize = (entries: Array<Record<string, any>>) => entries
-      .slice(0, 5)
-      .map((entry) => String(entry.packageId ?? entry.packageName ?? "unnamed package"))
-      .join(", ");
-    const overview = packagesMissingOverview.length > 0
-      ? ` Missing atlas/page evidence: ${summarize(packagesMissingOverview)}.`
-      : "";
-    const deep = packagesMissingDeepEvidence.length > 0
-      ? ` Missing targeted crop evidence: ${summarize(packagesMissingDeepEvidence)}.`
-      : "";
-    const actualOverview = packagesMissingActualOverview.length > 0
-      ? ` Page evidence does not match an actual atlas/render record: ${summarize(packagesMissingActualOverview)}.`
-      : "";
-    const actualDeep = packagesMissingActualZoom.length > 0
-      ? ` Targeted crop evidence does not match an actual inspected/zoomed region, or is effectively full-page: ${summarize(packagesMissingActualZoom)}.`
-      : "";
-    return `visualTakeoffAudit is incomplete for drawing-driven packages.${overview}${deep}${actualOverview}${actualDeep} Re-save saveEstimateScopeGraph after recording atlas/page evidence plus targeted crop/ledger evidence for each drawing-driven package. Symbol scan/count evidence is optional and only belongs after a specific small symbol or cropped region has been identified.`;
-  }
-
-  const drawingEvidenceGate = validateDrawingEvidenceEngineForPricing(strategy, drawingDrivenPackages, targetText, evidenceBasis, { rowPackageId, sourceDocuments: asArray(ws.sourceDocuments) });
-  if (drawingEvidenceGate) return drawingEvidenceGate;
-
   return null;
 }
 
@@ -1720,7 +577,7 @@ const createWorksheetItemShape = {
     type: z.enum(LINE_EVIDENCE_BASIS_TYPES).optional().describe("Legacy single-source shorthand. Prefer quantity.type plus pricing.type when quantity and price/rate come from different sources."),
     quantity: z.object({
       type: z.enum(LINE_EVIDENCE_BASIS_TYPES).describe("Source class that justifies the row quantity, labour hours, duration, or count."),
-      drawingClaimIds: z.array(z.string()).default([]).describe("Required when quantity.type is drawing_quantity, visual_takeoff, drawing_table, or drawing_note."),
+      drawingClaimIds: z.array(z.string()).default([]).describe("Saved drawing evidence claim ids this quantity relies on. Each must exist in this project."),
       viewIds: z.array(z.string()).default([]).describe("REQUIRED for drawing-driven quantities: viewId(s) returned with the image by readDrawingPage / readDrawingTile / inspectDrawingRegion that visually prove the count or measurement."),
       userConfirmation: z.object({ questionId: z.string(), answer: z.string() }).passthrough().optional().describe("askUser questionId + answer when the estimator confirmed an assumption-based quantity."),
       quantityDriver: z.string().optional().describe("Formula or driver behind quantity/hours/duration."),
@@ -1739,13 +596,13 @@ const createWorksheetItemShape = {
     sourceRefs: sourceRefArray("Document, quote, manual, library, web, schedule, or model refs supporting non-drawing rows."),
     assumptionIds: z.array(z.string()).default([]).describe("Saved assumption IDs when the row is assumption-backed."),
     rationale: z.string().optional().describe("Why this source class is appropriate and how it supports the line."),
-  }).passthrough().optional().describe("Line-level evidence contract. Required on every priced row. Use quantity/pricing axes when quantity evidence and price/rate evidence differ."),
-  derivation: derivationSchema.nullable().optional().describe("How the quantity was derived: formula + sourced inputs + result. Required when quantity is drawing-driven; recommended for every row whose quantity is not read directly from a BOM/schedule."),
+  }).passthrough().optional().describe("Optional line-level evidence: sources, assumptions, claims and views behind the quantity and the price. Use quantity/pricing axes when they differ."),
+  derivation: derivationSchema.nullable().optional().describe("How the quantity was derived: formula + sourced inputs + result. When present, the formula must reproduce the row."),
   classification: z.record(z.unknown()).optional().describe("Optional construction classification JSON, e.g. { masterformat: '03 30 00' }."),
   costCode: z.string().nullable().optional().describe("Optional internal cost code used by cost-code rollups."),
   phaseId: z.string().optional().describe("Phase ID"),
   sourceNotes: z.string().default("").describe(
-    "MANDATORY: knowledge book refs, dataset lookups, correction factors applied, web search URLs/findings, assumptions for this item"
+    "Basis for this item: knowledge book refs, dataset lookups, correction factors applied, web search URLs/findings, assumptions"
   ),
 };
 
@@ -1773,7 +630,7 @@ const updateWorksheetItemShape = {
   phaseId: z.string().nullable().optional().describe("Phase ID. Pass null to clear."),
   sourceNotes: z.string().optional(),
   catalogItemId: z.string().nullable().optional().describe("Catalog item ID for catalog-backed categories. Pass null to clear."),
-  evidenceBasis: z.record(z.unknown()).optional().describe("Replace the row's line-level evidence contract (same shape as createWorksheetItem.evidenceBasis). Required when the change alters quantity/hours and the existing basis no longer supports it."),
+  evidenceBasis: z.record(z.unknown()).optional().describe("Replace the row's line-level evidence contract (same shape as createWorksheetItem.evidenceBasis)."),
   derivation: derivationSchema.nullable().optional().describe("Replace the row's derivation (formula + sourced inputs + result) so it reproduces the new quantity/hours. Pass null to clear. If quantity/uom/tierUnits change without a new derivation, the existing one is marked stale."),
 };
 
@@ -1905,190 +762,52 @@ function worksheetTreeSummary(ws: any) {
     return parentId;
   }
 
-  // ── Tool gating — state-based prerequisite checks ───────────────────
-  // Gates check actual workspace state, not session history.
-  // Resumed sessions / existing quotes pass automatically if data exists.
-  //
-  // Chain: updateQuote → importRateSchedule → createWorksheet → createWorksheetItem
+  // ── Row write integrity ─────────────────────────────────────────────
+  // Worksheet rows are checked for real references, arithmetic and explicit
+  // units only (rowWriteIntegrityProblem). There are no prerequisite steps.
 
-  type GateTarget = "importRateSchedule" | "createWorksheet" | "createWorksheetItem" | "updateWorksheetItem";
-
-  async function checkGate(
-    gate: GateTarget,
-    targetText = "",
-    lineEvidence?: {
-      evidenceBasis?: Record<string, any> | null;
-      derivation?: Record<string, any> | null;
-      tierUnits?: Record<string, number> | null;
-      sourceNotes?: string;
-      laborUnitId?: string | null;
-      rateScheduleItemId?: string | null;
-      sourceEvidence?: Record<string, any>;
-      categoryId?: string | null;
-      category?: string | null;
-      costResourceId?: string | null;
-      effectiveCostId?: string | null;
-      itemId?: string | null;
-      resourceComposition?: Record<string, unknown> | null;
-      cost?: number | null;
-      price?: number | null;
-      uom?: string | null;
-      quantity?: number | null;
-      /** Worksheet the row goes into; resolves the row's declared package. */
-      worksheetId?: string | null;
-    },
-  ): Promise<string | null> {
+  async function rowIntegrity(row: {
+    evidenceBasis?: Record<string, any> | null;
+    derivation?: Record<string, any> | null;
+    tierUnits?: Record<string, number> | null;
+    cost?: number | null;
+    price?: number | null;
+    uom?: string | null;
+    quantity?: number | null;
+  }): Promise<string | null> {
     const ws = await getWs();
-    const project = ws.project || {};
-    const revision = ws.currentRevision || {};
-    const worksheets = ws.worksheets || [];
-    const rateSchedules = ws.rateSchedules || [];
-    const entityCategories = ws.entityCategories || [];
-    const strategy = ws.estimateStrategy || null;
-
-    // Has the agent (or user) filled in quote basics?
-    const hasQuoteInfo = !!(
-      (project.name && project.name !== "Untitled Project" && project.name !== "New Project")
-      || revision.description
-    );
-
-    // Do any categories require rate schedules?
-    const rsCats = entityCategories.filter((c: any) => c.itemSource === "rate_schedule");
-    const needsRateSchedules = rsCats.length > 0;
-    const hasRateSchedules = rateSchedules.length > 0;
-    const hasWorksheets = worksheets.length > 0;
-
-    // Gate 3: quote info required for all gated tools
-    if (!hasQuoteInfo) {
-      const action = gate === "importRateSchedule" ? "importing rate schedules"
-        : gate === "createWorksheet" ? "creating worksheets" : "creating items";
-      return `Quote setup required first. Call updateQuote with projectName and description before ${action}.`;
-    }
-
-    const hasScopeGraph = !!strategy && Object.keys(strategy.scopeGraph || {}).length > 0;
-    const hasExecutionPlan = !!strategy && Object.keys(strategy.executionPlan || {}).length > 0;
-    const hasAssumptions = !!strategy && Array.isArray(strategy.assumptions) && strategy.assumptions.length > 0;
-    const hasPackagePlan = !!strategy && Array.isArray(strategy.packagePlan) && strategy.packagePlan.length > 0;
-    const benchmarkingEnabled = (ws as any)?.meta?.benchmarkingEnabled === true;
-    const hasBenchmarks = !!strategy && Object.keys(strategy.benchmarkProfile || {}).length > 0;
-
-    // Whole-estimate or one declared package (strategyPricingReadiness).
-    let rowPackageId: string | null = null;
-    if (gate === "createWorksheet" || gate === "createWorksheetItem") {
-      const targetWorksheet = lineEvidence?.worksheetId
-        ? asArray(worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === lineEvidence.worksheetId) ?? { id: lineEvidence.worksheetId }
-        : null;
-      const readiness = strategyPricingReadiness(strategy, gate, targetWorksheet);
-      if (!readiness.ok) {
-        return `${readiness.reason} Finalize will still require: ${readiness.finalizeBlockers.join("; ") || "nothing listed yet"}.`;
-      }
-      rowPackageId = readiness.mode === "package" ? readiness.packageId ?? null : null;
-    }
-    void hasScopeGraph; void hasExecutionPlan; void hasAssumptions; void hasPackagePlan;
-    if (benchmarkingEnabled && gate === "createWorksheetItem" && !hasBenchmarks) {
-      return `Historical benchmark pass has not been run. Call recomputeEstimateBenchmarks and saveEstimateAdjustments before creating detailed line items.`;
-    }
-
-    if (gate === "createWorksheetItem" || gate === "updateWorksheetItem") {
-      const lineBasisGate = validateLineEvidenceBasisForPricing(ws, {
-        evidenceBasis: lineEvidence?.evidenceBasis ?? null,
-        strategy,
-        sourceNotes: lineEvidence?.sourceNotes,
-        laborUnitId: lineEvidence?.laborUnitId,
-        rateScheduleItemId: lineEvidence?.rateScheduleItemId,
-        sourceEvidence: lineEvidence?.sourceEvidence,
-        targetText,
-        categoryId: lineEvidence?.categoryId ?? null,
-        category: lineEvidence?.category ?? null,
-        costResourceId: lineEvidence?.costResourceId ?? null,
-        effectiveCostId: lineEvidence?.effectiveCostId ?? null,
-        itemId: lineEvidence?.itemId ?? null,
-        resourceComposition: lineEvidence?.resourceComposition ?? null,
-        cost: lineEvidence?.cost ?? null,
-        price: lineEvidence?.price ?? null,
-        uom: lineEvidence?.uom ?? null,
-        quantity: lineEvidence?.quantity ?? null,
-      });
-      if (lineBasisGate) return lineBasisGate;
-
-      const traceabilityGate = await validateTraceableQuantityForPricing(ws, {
-        evidenceBasis: lineEvidence?.evidenceBasis ?? null,
-        derivation: lineEvidence?.derivation ?? null,
-        quantity: lineEvidence?.quantity ?? null,
-        uom: lineEvidence?.uom ?? null,
-        tierUnits: lineEvidence?.tierUnits ?? null,
-        cost: lineEvidence?.cost ?? null,
-        price: lineEvidence?.price ?? null,
-        categoryId: lineEvidence?.categoryId ?? null,
-        category: lineEvidence?.category ?? null,
-        strategy,
-      });
-      if (traceabilityGate) return traceabilityGate;
-
-      if (gate === "createWorksheetItem") {
-        const visualTakeoffGate = await validateVisualTakeoffAuditWithNativeViews(
-          ws,
-          strategy,
-          targetText,
-          lineEvidence?.evidenceBasis ?? null,
-          rowPackageId,
-        );
-        if (visualTakeoffGate) return visualTakeoffGate;
-      }
-    }
-    if (gate === "updateWorksheetItem") return null; // edits skip the strategy-stage prerequisites below
-
-    // Gate 2: rate schedules required for createWorksheet and createWorksheetItem
-    if ((gate === "createWorksheet" || gate === "createWorksheetItem") && needsRateSchedules && !hasRateSchedules) {
-      const names = rsCats.map((c: any) => c.name).join(", ");
-      return `Rate schedules must be imported first. Categories [${names}] require rate schedules. Call listRateSchedules to see available schedules, then importRateSchedule to import them.`;
-    }
-
-    // Gate 1: worksheets required for createWorksheetItem
-    if (gate === "createWorksheetItem" && !hasWorksheets) {
-      return `No worksheets exist yet. Call createWorksheet to create at least one worksheet before adding items.`;
-    }
-
-    return null; // all gates passed
+    return rowWriteIntegrityProblem(ws, {
+      evidenceBasis: row.evidenceBasis ?? null,
+      derivation: row.derivation ?? null,
+      quantity: row.quantity ?? null,
+      uom: row.uom ?? null,
+      tierUnits: row.tierUnits ?? null,
+      cost: row.cost ?? null,
+      price: row.price ?? null,
+      strategy: ws.estimateStrategy ?? null,
+    });
   }
 
   /**
    * Everything createWorksheetItem does before the POST: truncation check,
-   * gate, category/rate/catalog resolution, UOM and markup normalisation.
+   * row integrity, category/rate/catalog resolution, UOM and markup normalisation.
    * Shared with batchEditWorksheetItems so batched rows get identical checks.
    */
   async function prepareCreateWorksheetItem(input: any): Promise<{ error: string } | { worksheetId: string; body: Record<string, any>; rest: Record<string, any>; cat: string; autoWarnings: string[] }> {
   if (looksLikeTruncatedItemPayload(input as Record<string, any>)) {
     return { error: TRUNCATED_ITEM_PAYLOAD_MESSAGE };
   }
-  const wsForGate = await getWs();
-  const targetWorksheet = asArray(wsForGate.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
-  const gateError = await checkGate("createWorksheetItem", [
-    targetWorksheet?.name,
-    input.entityName,
-    input.description,
-    input.sourceNotes,
-  ].filter(Boolean).join(" "), {
-    worksheetId: input.worksheetId ?? null,
+  const wsForItem = await getWs();
+  const integrityError = await rowIntegrity({
     evidenceBasis: input.evidenceBasis ?? null,
     derivation: input.derivation ?? null,
     tierUnits: input.tierUnits ?? null,
-    sourceNotes: input.sourceNotes,
-    laborUnitId: input.laborUnitId,
-    rateScheduleItemId: input.rateScheduleItemId,
-    sourceEvidence: input.sourceEvidence,
-    categoryId: input.categoryId ?? null,
-    category: input.category ?? null,
-    costResourceId: input.costResourceId ?? null,
-    effectiveCostId: input.effectiveCostId ?? null,
-    itemId: input.itemId ?? null,
-    resourceComposition: input.resourceComposition ?? null,
     cost: input.cost ?? null,
     price: input.price ?? null,
     uom: input.uom ?? null,
     quantity: input.quantity ?? null,
   });
-  if (gateError) return { error: gateError };
+  if (integrityError) return { error: integrityError };
 
   const { worksheetId, evidenceBasis, ...rest } = input;
   if (evidenceBasis) {
@@ -2098,24 +817,16 @@ function worksheetTreeSummary(ws: any) {
     };
   }
   const autoWarnings: string[] = [];
-  {
-    // Readiness telemetry: which package this row was priced under, and what
-    // finalize will still require. Information only; nothing is enforced here.
-    const readiness = strategyPricingReadiness(wsForGate.estimateStrategy ?? null, "createWorksheetItem", targetWorksheet ?? { id: input.worksheetId });
-    if (readiness.ok && readiness.mode === "package") {
-      autoWarnings.push(`Priced incrementally for package ${readiness.packageId}${readiness.packageName ? ` (${readiness.packageName})` : ""}. Finalize still requires: ${readiness.finalizeBlockers.join("; ") || "a ledger verifier pass and the reconcile report"}.`);
-    }
-  }
   for (const key of ["entityName", "description", "sourceNotes"] as const) {
     (rest as any)[key] = stripLeakedToolParameterMarkup((rest as any)[key]);
   }
   if (!rest.category && !rest.categoryId && rest.rateScheduleItemId) {
-    const matchingSchedule = asArray(wsForGate.rateSchedules).map(asRecord).find((schedule) =>
+    const matchingSchedule = asArray(wsForItem.rateSchedules).map(asRecord).find((schedule) =>
       asArray(schedule.items).some((item) => String(asRecord(item).id ?? "") === String(rest.rateScheduleItemId))
     );
     if (matchingSchedule) {
       const scheduleCategory = String(matchingSchedule.category ?? "");
-      const categoryMatch = asArray(wsForGate.entityCategories).map(asRecord).find((category) =>
+      const categoryMatch = asArray(wsForItem.entityCategories).map(asRecord).find((category) =>
         normalizeCategoryToolKey(category.name) === normalizeCategoryToolKey(scheduleCategory) ||
         normalizeCategoryToolKey(category.entityType) === normalizeCategoryToolKey(scheduleCategory)
       );
@@ -2136,7 +847,7 @@ function worksheetTreeSummary(ws: any) {
 
   // ── Dynamic validation from workspace (entity categories + rate schedules) ──
   try {
-    const ws = await getWs(); // reuses cached fetch from gate check
+    const ws = await getWs(); // reuses cached fetch from the integrity check
     const entityCategories = ws.entityCategories || [];
     const catConfig = findEntityCategory(entityCategories, {
       categoryId: requestedCategoryId,
@@ -2274,35 +985,25 @@ function worksheetTreeSummary(ws: any) {
     return { error: `Worksheet item ${itemId} was not found in the current revision. Call getWorkspace or searchItems to find the right itemId.` };
   }
 
-  // Re-gate when the change touches what the row claims or how much it costs.
-  const gatedFields = ["quantity", "uom", "tierUnits", "cost", "price", "markup", "rateScheduleItemId", "laborUnitId", "evidenceBasis", "derivation", "categoryId", "category"];
+  // Re-check integrity when the change touches what the row cites or computes.
+  const integrityFields = ["quantity", "uom", "tierUnits", "cost", "price", "markup", "rateScheduleItemId", "laborUnitId", "evidenceBasis", "derivation", "categoryId", "category"];
   const existingSourceEvidence = asRecord(existing.sourceEvidence);
   const mergedEvidenceBasis = (patch as any).evidenceBasis !== undefined
     ? asRecord((patch as any).evidenceBasis)
     : asRecord(existingSourceEvidence.evidenceBasis);
   const mergedDerivation = (patch as any).derivation !== undefined ? (patch as any).derivation : existing.derivation ?? null;
-  if (providedKeys.some((key) => gatedFields.includes(key))) {
+  if (providedKeys.some((key) => integrityFields.includes(key))) {
     const merged: Record<string, any> = { ...existing, ...patch };
-    const gateError = await checkGate("updateWorksheetItem", [existing.worksheetName, merged.entityName, merged.description, merged.sourceNotes].filter(Boolean).join(" "), {
+    const integrityError = await rowIntegrity({
       evidenceBasis: Object.keys(mergedEvidenceBasis).length > 0 ? mergedEvidenceBasis : null,
       derivation: mergedDerivation,
       tierUnits: (merged.tierUnits as Record<string, number> | undefined) ?? null,
-      sourceNotes: String(merged.sourceNotes ?? ""),
-      laborUnitId: merged.laborUnitId ?? null,
-      rateScheduleItemId: merged.rateScheduleItemId ?? null,
-      sourceEvidence: existingSourceEvidence,
-      categoryId: merged.categoryId ?? null,
-      category: merged.category ?? null,
-      costResourceId: merged.costResourceId ?? null,
-      effectiveCostId: merged.effectiveCostId ?? null,
-      itemId: merged.itemId ?? null,
-      resourceComposition: merged.resourceComposition ?? null,
       cost: Number.isFinite(merged.cost) ? Number(merged.cost) : null,
       price: Number.isFinite(merged.price) ? Number(merged.price) : null,
       uom: merged.uom ?? null,
       quantity: Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
     });
-    if (gateError) return { error: gateError };
+    if (integrityError) return { error: integrityError };
   }
 
   // evidenceBasis lives inside sourceEvidence on the persisted row.
@@ -2628,9 +1329,6 @@ function worksheetTreeSummary(ws: any) {
       folderPath: z.string().optional().describe("Folder path to create/use, e.g. 'Mechanical / Field Install'"),
     },
     async ({ name, description, folderId, folderPath }) => {
-      const gateError = await checkGate("createWorksheet", [folderPath, name, description].filter(Boolean).join(" "));
-      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
-
       const resolvedFolderId = folderId ?? await ensureWorksheetFolderPath(folderPath);
       const data = await apiPost(projectPath("/worksheets"), { name, description, folderId: resolvedFolderId });
       // Extract the worksheet ID from the response
@@ -2754,7 +1452,7 @@ function worksheetTreeSummary(ws: any) {
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For tiered/rate categories, provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price. Use the rate item name as entityName and put task details in the description field, NOT in entityName. For freeform categories, provide quantity plus the editable unit cost/price basis. UOM must be from the category's validUoms list. When drawings exist, every row must include evidenceBasis. Prefer the two-axis form: evidenceBasis.quantity declares where the quantity/hours/duration came from, and evidenceBasis.pricing declares where the unit cost/rate/productivity came from. Drawing/takeoff quantities use drawing_quantity/visual_takeoff/drawing_table/drawing_note under evidenceBasis.quantity and must cite Drawing Evidence Engine claim IDs; pricing can separately be material_quote, rate_schedule, knowledge_labor, vendor_quote, equipment_rental, subcontract, allowance, indirect, assumption, document_quantity, or mixed.`,
+    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For tiered/rate categories, provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price. Use the rate item name as entityName and put task details in the description field, NOT in entityName. For freeform categories, provide quantity plus the editable unit cost/price basis. UOM must be from the category's validUoms list. evidenceBasis is optional and records the basis for review. Two-axis form: evidenceBasis.quantity declares where the quantity/hours/duration came from, and evidenceBasis.pricing declares where the unit cost/rate/productivity came from. Drawing/takeoff quantities use drawing_quantity/visual_takeoff/drawing_table/drawing_note under evidenceBasis.quantity and can cite saved claim IDs and viewIds; pricing can separately be material_quote, rate_schedule, knowledge_labor, vendor_quote, equipment_rental, subcontract, allowance, indirect, assumption, document_quantity, or mixed.`,
     createWorksheetItemShape,
     async (input) => {
       const prepared = await prepareCreateWorksheetItem(input);
@@ -2824,7 +1522,7 @@ function worksheetTreeSummary(ws: any) {
         assumptionIds: z.array(z.string()).default([]),
         rationale: z.string().optional(),
       }).passthrough().describe("Line-level evidence contract. Use quantity/pricing axes."),
-      derivation: derivationSchema.nullable().optional().describe("How the hours/quantity were derived: formula + sourced inputs + result. Required when quantity is drawing-driven; strongly recommended for every labour row (e.g. 'units * hoursPerUnit')."),
+      derivation: derivationSchema.nullable().optional().describe("How the hours/quantity were derived: formula + sourced inputs + result (e.g. 'units * hoursPerUnit'). When present, the formula must reproduce the hours."),
       classification: z.record(z.unknown()).optional(),
       costCode: z.string().nullable().optional(),
     },
@@ -2876,28 +1574,14 @@ function worksheetTreeSummary(ws: any) {
         };
       }
 
-      const targetWorksheet = asArray(ws.worksheets).map(asRecord).find((worksheet) => String(worksheet.id ?? "") === input.worksheetId);
-      const gateError = await checkGate("createWorksheetItem", [
-        targetWorksheet?.name,
-        matchedItem.name,
-        input.description,
-        input.sourceNotes,
-      ].filter(Boolean).join(" "), {
-        worksheetId: input.worksheetId ?? null,
+      const integrityError = await rowIntegrity({
         evidenceBasis: input.evidenceBasis,
         derivation: input.derivation ?? null,
         tierUnits: positiveTierUnits,
-        sourceNotes: input.sourceNotes,
-        laborUnitId: input.laborUnitId,
-        rateScheduleItemId: input.rateScheduleItemId,
-        sourceEvidence: input.sourceEvidence,
-        categoryId: String(categoryMatch.id ?? "") || null,
-        category: String(categoryMatch.name ?? scheduleCategory) || null,
-        resourceComposition: input.resourceComposition ?? null,
         uom: input.uom ?? null,
         quantity: input.quantity ?? null,
       });
-      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
+      if (integrityError) return { content: [{ type: "text" as const, text: integrityError }], isError: true };
 
       const body: Record<string, unknown> = {
         entityName: String(matchedItem.name ?? "Rate Schedule Item"),
@@ -3017,7 +1701,7 @@ function worksheetTreeSummary(ws: any) {
     "batchEditWorksheetItems",
     [
       "Create, update, and delete several worksheet lines in ONE atomic call.",
-      "Every operation is checked with the same gates as createWorksheetItem / updateWorksheetItem (evidence basis, viewIds, derivation, assumption resolution, category/rate validation) BEFORE anything is sent; if any operation fails, the whole batch is rejected with every problem listed and nothing is applied.",
+      "Every operation gets the same integrity checks as createWorksheetItem / updateWorksheetItem (cited ids exist, derivation arithmetic, explicit units, category/rate config) before anything is sent; if any operation fails, the whole batch is rejected with every problem listed and nothing is applied.",
       "The server then applies all operations in one database transaction; a server-side failure rolls back the entire batch.",
       "Use it to add a worksheet's rows together, or to apply a correction that touches several dependent rows at once. Max 100 operations.",
       'Exact shapes (worksheetId sits beside item, not inside it; there is no "type" or "data" key): {"operations":[{"op":"create","worksheetId":"worksheet-…","item":{"category":"Labour","entityName":"…","quantity":1,"uom":"HR","evidenceBasis":{…}}},{"op":"update","itemId":"li-…","patch":{"quantity":5}},{"op":"delete","itemId":"li-…"}]}.',
@@ -3031,12 +1715,10 @@ function worksheetTreeSummary(ws: any) {
     },
     async ({ operations }) => {
       const prepared: Array<Record<string, unknown>> = [];
-      const readinessNotes = new Set<string>();
       const problems = await collectBatchOperationProblems(operations, async (operation) => {
         if (operation.op === "create") {
           const result = await prepareCreateWorksheetItem({ ...operation.item, worksheetId: operation.worksheetId });
           if ("error" in result) return result.error;
-          for (const warning of result.autoWarnings) if (warning.startsWith("Priced incrementally")) readinessNotes.add(warning);
           prepared.push({ op: "create", ref: operation.ref, worksheetId: result.worksheetId, item: result.body });
           return null;
         }
@@ -3067,7 +1749,6 @@ function worksheetTreeSummary(ws: any) {
           applied: results.length,
           results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId })),
           estimateTotals: data?.estimateTotals ?? null,
-          ...(readinessNotes.size > 0 ? { pricingReadiness: [...readinessNotes] } : {}),
         }) }] };
       } catch (error) {
         const message = (error as Error)?.message ?? String(error);
@@ -3317,8 +1998,6 @@ function worksheetTreeSummary(ws: any) {
       scheduleId: z.string().optional().describe("Alias for globalScheduleId."),
     },
     async ({ globalScheduleId, scheduleId }) => {
-      const gateError = await checkGate("importRateSchedule");
-      if (gateError) return { content: [{ type: "text" as const, text: gateError }], isError: true };
       const id = globalScheduleId ?? scheduleId;
       if (!id) {
         return { content: [{ type: "text" as const, text: "ERROR: importRateSchedule requires globalScheduleId. Use the id returned by listRateSchedules." }], isError: true };

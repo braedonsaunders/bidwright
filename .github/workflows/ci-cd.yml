@@ -150,12 +150,8 @@ jobs:
           packages/mcp-server/src/modifier-percent.test.ts
           packages/mcp-server/src/summary-row-contract.test.ts
           packages/mcp-server/src/tools/source-refs.test.ts
-          packages/mcp-server/src/tools/evidence-gate-contract.test.ts
-          packages/mcp-server/src/tools/line-traceability-gate.test.ts
-          packages/mcp-server/src/tools/gpt-matrix-regressions.test.ts
-          packages/mcp-server/src/tools/native-drawing-evidence.test.ts
-          packages/mcp-server/src/native-claim-instructions.test.ts
-          packages/mcp-server/src/tools/progressive-pricing.test.ts
+          packages/mcp-server/src/tools/item-payload-contract.test.ts
+          packages/mcp-server/src/tools/row-write-integrity.test.ts
           packages/domain/src/line-derivation.test.ts
           packages/domain/src/agent-memory.test.ts
           packages/domain/src/estimate-strategy-stages.test.ts

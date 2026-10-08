@@ -1,20 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  detectPerInstanceContradictions,
   derivationInvalidatedByFields,
   derivationReferencesDocument,
   evaluateProcurementLink,
   uomsEquivalent,
   evaluateDerivationFormula,
-  extractPerInstanceCallouts,
   groutVolumeUnderPlates,
   markDerivationStale,
   normalizeLineDerivation,
-  flagDerivationAssumptions,
-  derivationSourceLookup,
-  classifyFactorOneEvidence,
-  summarizeHourBasis,
   packsRequired,
   reconcileProcurementQuantities,
   validateLineDerivation,
@@ -67,7 +61,7 @@ test("a consistent derivation validates clean", () => {
   assert.deepEqual(issues.filter((issue) => issue.severity === "error"), []);
 });
 
-test("result mismatch, missing sources, and target mismatch are errors", () => {
+test("result mismatch, unknown source kinds, and target mismatch are errors; a missing source is not", () => {
   const bad = anchorDerivation(4);
   bad.result.value = 30;
   const issues = validateLineDerivation(bad, { expectedValue: 32 });
@@ -76,61 +70,14 @@ test("result mismatch, missing sources, and target mismatch are errors", () => {
 
   const noSource = anchorDerivation(1);
   (noSource.inputs[0].source as any) = { kind: "", ref: "" };
-  const sourceIssues = validateLineDerivation(noSource);
-  assert.ok(sourceIssues.some((issue) => issue.code === "input_source_kind"));
-  assert.ok(sourceIssues.some((issue) => issue.code === "input_source_ref"));
+  assert.deepEqual(validateLineDerivation(noSource, { expectedValue: 8 }).filter((issue) => issue.severity === "error"), [], "a source is optional");
+  const badKind = anchorDerivation(1);
+  (badKind.inputs[0].source as any) = { kind: "hunch", ref: "x" };
+  assert.ok(validateLineDerivation(badKind).some((issue) => issue.code === "input_source_kind"));
 
   const wrongTarget = anchorDerivation(1);
   const targetIssues = validateLineDerivation(wrongTarget, { expectedValue: 32 });
   assert.ok(targetIssues.some((issue) => issue.code === "result_target_mismatch"));
-});
-
-test("manual inputs need a rationale", () => {
-  const manual = anchorDerivation(1);
-  manual.inputs[0].source = { kind: "manual", ref: "estimator" };
-  const issues = validateLineDerivation(manual);
-  assert.ok(issues.some((issue) => issue.code === "manual_input_rationale"));
-});
-
-test("per-instance callouts are extracted from drafting idioms", () => {
-  const callouts = extractPerInstanceCallouts(platformText.text);
-  assert.ok(callouts.some((callout) => callout.count === 1 && callout.pattern === "parenthesized"));
-
-  const typ = extractPerInstanceCallouts("HSS 4x4x.375 SS TYP 4 ANCHORS PER BASE PLATE, 4-HOLES, TYP. (2)");
-  const counts = typ.map((callout) => `${callout.pattern}:${callout.count}`);
-  assert.ok(counts.includes("per:4"));
-  assert.ok(counts.includes("hyphenated:4"));
-  assert.ok(counts.includes("typ:2"));
-  // dimensions like 8x8 are not callouts
-  assert.equal(extractPerInstanceCallouts("8x8x5/8 plate 12 ft long").length, 0);
-});
-
-test("the Alexanderwerk anchor case: (1) hole per plate contradicts a claimed 4 per plate", () => {
-  const contradictions = detectPerInstanceContradictions(anchorDerivation(4), [platformText]);
-  assert.equal(contradictions.length, 1);
-  assert.equal(contradictions[0].inputName, "anchorsPerPlate");
-  assert.equal(contradictions[0].claimedValue, 4);
-  assert.equal(contradictions[0].textValue, 1);
-  assert.match(contradictions[0].excerpt, /\(1\)/);
-});
-
-test("a per-instance input that matches the text produces no contradiction", () => {
-  assert.deepEqual(detectPerInstanceContradictions(anchorDerivation(1), [platformText]), []);
-});
-
-test("totals are never compared against per-instance callouts", () => {
-  // basePlates is a total, not per-instance; the (1) callout must not flag it.
-  const derivation = anchorDerivation(1);
-  derivation.inputs[0].value = 8;
-  const contradictions = detectPerInstanceContradictions(derivation, [platformText]);
-  assert.deepEqual(contradictions, []);
-});
-
-test("unrelated callouts in the text do not flag an input", () => {
-  const derivation = anchorDerivation(2);
-  const text = { ref: "doc_2#1", text: "Handrail posts c/w (3) 1/2\" dia bolts per post" };
-  // 'bolts per post' shares no stem with 'anchorsPerPlate / base plate' — no contradiction
-  assert.deepEqual(detectPerInstanceContradictions(derivation, [text]), []);
 });
 
 test("procurement reconciliation catches 2 x 10 rod packs for 32 installed anchors", () => {
@@ -234,36 +181,28 @@ test("regression: 2 packs x 10 rods against 32 installed anchors is a shortfall"
   assert.ok(result.issues.some((issue) => issue.code === "procurement_shortfall"));
 });
 
-test("1 cartridge covering 5 anchors passes when the surplus is explained, fails when it is not", () => {
-  const context = { purchaseQuantity: 1, purchaseUom: "CARTRIDGE", resolveItem };
-  const unexplained = evaluateProcurementLink({ installedQuantity: 5, installedUom: "EA", packSize: 19 }, context);
-  assert.equal(unexplained.ok, false);
-  assert.ok(unexplained.issues.some((issue) => issue.code === "procurement_excess_unexplained"));
-
-  const explained = evaluateProcurementLink(
-    { installedQuantity: 5, installedUom: "EA", packSize: 19, surplusRationale: "Minimum purchase is one 330 ml cartridge; remainder is spares." },
-    context,
-  );
-  assert.equal(explained.ok, true);
-  assert.equal(explained.suppliedBaseUnits, 19);
-  assert.equal(explained.requiredPurchaseQuantity, 1);
+test("1 cartridge covering 5 anchors reconciles (a surplus is not an error)", () => {
+  const result = evaluateProcurementLink({ installedQuantity: 5, installedUom: "EA", packSize: 19 }, { purchaseQuantity: 1, purchaseUom: "CARTRIDGE", resolveItem });
+  assert.equal(result.ok, true);
+  assert.equal(result.suppliedBaseUnits, 19);
 });
 
-test("procurement links must name a requirement and resolve their linked row", () => {
-  const missing = evaluateProcurementLink({ packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem });
-  assert.ok(missing.issues.some((issue) => issue.code === "procurement_requirement_missing"));
+test("explicit units: a packSize converts any purchase unit; different units without one are an error", () => {
+  // medium Opus 2026-10-08: 3.3 floz installed against "1 EA" was told "short by 2.3. Buy at least 4."
+  const noConversion = reconcileProcurementQuantities({ installedQuantity: 3.3, installedUom: "floz", purchaseQuantity: 1, purchaseUom: "EA" });
+  assert.equal(noConversion.issues[0].code, "procurement_conversion_missing");
+  assert.equal(reconcileProcurementQuantities({ installedQuantity: 3.3, installedUom: "floz", purchaseQuantity: 1, purchaseUom: "EA", packSize: 11.16 }).ok, true);
+  assert.equal(reconcileProcurementQuantities({ installedQuantity: 5, installedUom: "EA", purchaseQuantity: 4, purchaseUom: "EA" }).issues[0].code, "procurement_shortfall");
+});
+
+test("procurement links resolve their linked row; with no stated requirement there is nothing to reconcile", () => {
+  assert.equal(evaluateProcurementLink({ packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem }).ok, true);
   const unresolved = evaluateProcurementLink({ suppliesItemId: "li-ghost", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem });
   assert.ok(unresolved.issues.some((issue) => issue.code === "procurement_link_unresolved"));
   const noPack = evaluateProcurementLink({ installedQuantity: 32 }, { purchaseQuantity: 2, purchaseUom: "BOX", resolveItem });
   assert.ok(noPack.issues.some((issue) => issue.code === "pack_size_unknown"));
-  // The labour row's quantity is 2 crew units, not 2 anchors: linking without
-  // naming the physical-count input must be refused, not silently compared.
-  const ambiguous = evaluateProcurementLink({ suppliesItemId: "li-labour", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem });
-  assert.equal(ambiguous.ok, false);
-  const issue = ambiguous.issues.find((entry) => entry.code === "procurement_requirement_ambiguous");
-  assert.ok(issue);
-  assert.match(issue!.message, /installedFromInput/);
-  assert.match(issue!.message, /anchors/);
+  // A labour row's quantity is crew units, not anchors: without installedFromInput it is not compared.
+  assert.equal(evaluateProcurementLink({ suppliesItemId: "li-labour", packSize: 10 }, { purchaseQuantity: 2, purchaseUom: "PK", resolveItem }).ok, true);
 });
 
 test("a physical-count row can be linked by quantity; units stay distinct", () => {
@@ -306,165 +245,4 @@ test("an explicit installedUom may not reinterpret a linked input's unit; synony
   assert.equal(uomsEquivalent("EA", "eaches"), true);
   assert.equal(uomsEquivalent("FT", "M"), false);
   assert.equal(uomsEquivalent("", "M"), true, "a missing unit cannot conflict");
-});
-
-test("rate and time inputs are never compared with per-instance count callouts", () => {
-  // 2026-10-07 GPT matrix: "baseDrillHoursPerHole = 0.24 HR/EA" was compared
-  // with "(1) 1\" dia hole" and the labour row was rejected.
-  const text = { ref: "view-40fa", text: '8x8x5/8" Base Plate c/w (1) 1" dia hole for 3/4" SS epoxy anchor 1" epoxy grout' };
-  const derivation = (input: Record<string, unknown>) => ({ formula: "a * b", inputs: [{ name: "installedDeckFastenings", value: 80, unit: "EA" }, input], result: { value: 0, unit: "HR" } }) as any;
-  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "baseDrillHoursPerHole", value: 0.24, unit: "HR/EA" }), [text]), [], "HR/EA rate");
-  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "drillHoursPerHole", value: 0.24, unit: "HR" }), [text]), [], "time unit");
-  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "minutesPerHole", value: 15 }), [text]), [], "rate-like name, no unit");
-  assert.deepEqual(detectPerInstanceContradictions(derivation({ name: "costPerAnchor", value: 12.5, unit: "CAD/EA", perInstance: true }), [text]), [], "explicit perInstance on a money rate");
-  // a count of things per plate is still checked
-  const flagged = detectPerInstanceContradictions(derivation({ name: "holesPerPlate", value: 2, unit: "EA" }), [text]);
-  assert.equal(flagged.length, 1);
-  assert.equal(flagged[0].inputName, "holesPerPlate");
-});
-
-test("plural input names match singular callout words", () => {
-  const text = { ref: "v", text: 'Base Plate c/w (1) 1" dia hole for 3/4" SS epoxy anchor' };
-  for (const name of ["holesPerPlate", "anchorsPerPlate", "boltsPerClip"]) {
-    const derivation = { formula: "x", inputs: [{ name, value: 3, unit: "EA" }], result: { value: 3, unit: "EA" } } as any;
-    const expected = name === "boltsPerClip" ? 0 : 1;
-    assert.equal(detectPerInstanceContradictions(derivation, [text]).length, expected, name);
-  }
-});
-
-test("assumption review flags: dominated when every sizing input is assumed, partial otherwise", () => {
-  const erection = normalizeLineDerivation({
-    target: "tierUnits", formula: "crewMembers * crewDays * hoursPerDay * installationPackages", status: "reviewed",
-    inputs: [
-      { name: "crewMembers", value: 3, unit: "persons", source: { kind: "assumption", ref: "A-CREW" } },
-      { name: "crewDays", value: 4, unit: "DAY", source: { kind: "assumption", ref: "A-CREW" } },
-      { name: "hoursPerDay", value: 8, unit: "HR/person-day", source: { kind: "assumption", ref: "A-CREW" } },
-      { name: "installationPackages", value: 1, unit: "SET", source: { kind: "view", ref: "view-e65fed29" } },
-    ],
-    result: { value: 96, unit: "HR" },
-  })!;
-  const [dominated] = flagDerivationAssumptions(erection);
-  assert.equal(dominated.code, "assumption_dominated");
-  assert.deepEqual(dominated.inputs, ["crewMembers", "crewDays", "hoursPerDay"]);
-  assert.match(dominated.message, /A-CREW/);
-
-  const deck = normalizeLineDerivation({
-    formula: "installedDeckFastenings * baseDrillHoursPerHole",
-    inputs: [
-      { name: "installedDeckFastenings", value: 80, unit: "EA", source: { kind: "assumption", ref: "A-DECK" } },
-      { name: "baseDrillHoursPerHole", value: 0.24, unit: "HR/EA", source: { kind: "laborUnit", ref: "lu-c5d4" } },
-    ],
-    result: { value: 19.2, unit: "HR" },
-  })!;
-  assert.equal(flagDerivationAssumptions(deck)[0].code, "assumed_inputs");
-
-  const sourced = normalizeLineDerivation({
-    formula: "basePlates * anchorsPerPlate",
-    inputs: [{ name: "basePlates", value: 5, source: { kind: "view", ref: "v1" } }, { name: "anchorsPerPlate", value: 1, source: { kind: "view", ref: "v2" } }],
-    result: { value: 5, unit: "EA" },
-  })!;
-  assert.deepEqual(flagDerivationAssumptions(sourced), []);
-});
-
-test("caller-supplied review flags with unknown codes are dropped on normalize", () => {
-  const normalized = normalizeLineDerivation({ formula: "a", inputs: [{ name: "a", value: 2, source: { kind: "view", ref: "v" } }], result: { value: 2 }, reviewFlags: [{ code: "approved_by_ai", message: "fine" }] })!;
-  assert.deepEqual(normalized.reviewFlags, []);
-});
-
-test("assumption flags follow claim and linked-row references, with a cycle guard", () => {
-  const deck = normalizeLineDerivation({
-    formula: "fasteningLocations * drillHoursPerHole",
-    inputs: [
-      { name: "fasteningLocations", value: 80, unit: "EA", source: { kind: "claim", ref: "claim-deck80" } },
-      { name: "drillHoursPerHole", value: 0.24, unit: "HR/EA", source: { kind: "laborUnit", ref: "lu-1" } },
-    ],
-    result: { value: 19.2, unit: "HR" },
-  })!;
-  assert.deepEqual(flagDerivationAssumptions(deck), [], "without a lookup the claim reads as evidence");
-  const lookup = derivationSourceLookup([{ claimId: "claim-deck80", method: "assumption" }, { claimId: "claim-plates", method: "visual_count" }], []);
-  const [flag] = flagDerivationAssumptions(deck, lookup);
-  assert.equal(flag.code, "assumed_inputs");
-  assert.deepEqual(flag.inputs, ["fasteningLocations"]);
-
-  // a visual_count claim stays evidence
-  const plates = normalizeLineDerivation({ formula: "a", inputs: [{ name: "basePlates", value: 5, source: { kind: "claim", ref: "claim-plates" } }], result: { value: 5 } })!;
-  assert.deepEqual(flagDerivationAssumptions(plates, lookup), []);
-
-  // chained: a material row takes installedAnchors from a labour row whose installedAnchors is assumed
-  const rows = [
-    { id: "li-labour", derivation: { formula: "x", inputs: [{ name: "installedAnchors", value: 8, source: { kind: "assumption", ref: "A-LIFT" } }], result: { value: 8 } } },
-    { id: "li-a", derivation: { formula: "x", inputs: [{ name: "n", value: 4, source: { kind: "item", ref: "li-b" } }], result: { value: 4 } } },
-    { id: "li-b", derivation: { formula: "x", inputs: [{ name: "n", value: 4, source: { kind: "item", ref: "li-a" } }], result: { value: 4 } } },
-  ];
-  const chained = derivationSourceLookup([], rows);
-  const material = normalizeLineDerivation({ formula: "ceil(installedAnchors / packSize)", inputs: [{ name: "installedAnchors", value: 8, source: { kind: "item", ref: "li-labour" } }, { name: "packSize", value: 10, source: { kind: "web", ref: "https://www.hilti.com" } }], result: { value: 1 } })!;
-  assert.equal(flagDerivationAssumptions(material, chained)[0].code, "assumed_inputs");
-  // a reference cycle terminates and is treated as unsourced
-  const cyclic = normalizeLineDerivation(rows[1].derivation)!;
-  assert.equal(flagDerivationAssumptions(cyclic, chained)[0]?.code, "assumption_dominated");
-});
-
-test("factor-of-1 evidence is classified narrowly: physical needs a counting claim in a count unit", () => {
-  const lookup = derivationSourceLookup([
-    { claimId: "c-wp200", method: "visual_count", unit: "EA", quantityName: "WP200 compactors" },
-    { claimId: "c-lot", method: "takeoff", unit: "LOT", quantityName: "Vendor hose connection lots" },
-    { claimId: "c-set", method: "takeoff", unit: "SET", quantityName: "Servo-Lift assembly" },
-    { claimId: "c-takeoff-ea", method: "takeoff", unit: "EA", quantityName: "ASBV mounting assemblies" },
-  ], []);
-  const one = (name: string, ref: string, unit = "EA") => ({ name, value: 1, unit, source: { kind: "claim" as const, ref } });
-  assert.equal(classifyFactorOneEvidence(one("equipment", "c-wp200"), lookup), "physical_count");
-  assert.equal(classifyFactorOneEvidence(one("lots", "c-lot", "LOT"), lookup), "scope_only");
-  assert.equal(classifyFactorOneEvidence(one("assembly", "c-set", "SET"), lookup), "unclassified", "SET is ambiguous");
-  assert.equal(classifyFactorOneEvidence(one("mountings", "c-takeoff-ea"), lookup), "physical_count", "a takeoff can count a real object");
-  assert.equal(classifyFactorOneEvidence({ name: "installationPackages", value: 1, unit: "SET", source: { kind: "view", ref: "v" } }, lookup), "scope_only", "package naming");
-  assert.equal(classifyFactorOneEvidence({ name: "units", value: 1, unit: "EA", source: { kind: "view", ref: "v" } }, lookup), "unclassified", "a bare view is not positive physical evidence");
-});
-
-test("dominated flags carry their basis and hour-basis totals come from sources, not labels", () => {
-  const lookup = derivationSourceLookup([
-    { claimId: "c-wp200", method: "visual_count", unit: "EA", quantityName: "WP200 compactors" },
-    { claimId: "c-lot", method: "takeoff", unit: "LOT", quantityName: "Vendor hose connection lots" },
-  ], []);
-  const crew = (evidence: Record<string, unknown>) => ({ formula: `${evidence.name} * mechanics * hours`, inputs: [evidence, { name: "mechanics", value: 3, source: { kind: "assumption", ref: "a-labour" } }, { name: "hours", value: 8, source: { kind: "assumption", ref: "a-labour" } }], result: { value: 24, unit: "HR" } });
-  const machine = normalizeLineDerivation(crew({ name: "equipment", value: 1, unit: "EA", source: { kind: "claim", ref: "c-wp200" } }))!;
-  const lot = normalizeLineDerivation(crew({ name: "packages", value: 1, unit: "LOT", source: { kind: "claim", ref: "c-lot" } }))!;
-  assert.equal(flagDerivationAssumptions(machine, lookup)[0].basis, "physical_count");
-  assert.match(flagDerivationAssumptions(machine, lookup)[0].message, /counts a physical object/);
-  assert.equal(flagDerivationAssumptions(lot, lookup)[0].basis, "scope_only");
-  const library = { formula: "n * h", inputs: [{ name: "n", value: 5, source: { kind: "claim", ref: "c-wp200" } }, { name: "h", value: 0.75, source: { kind: "laborUnit", ref: "lu-1" } }], result: { value: 3.75 } };
-  const rows = [
-    { derivation: machine, hours: 24 },
-    { derivation: lot, hours: 32 },
-    { derivation: library, hours: 3.75 },
-    { derivation: null, hours: 10 },
-  ];
-  const summary = summarizeHourBasis(rows, (row) => row.hours, lookup);
-  assert.equal(summary.unit, "direct_labour_hours_before_estimate_factors");
-  assert.equal(summary.byBasis.assumed_physical_count, 24);
-  assert.equal(summary.byBasis.assumed_scope_only, 32);
-  assert.equal(summary.byBasis.sourced, 3.75);
-  assert.equal(summary.byBasis.no_derivation, 10);
-  assert.equal(summary.total, 69.75);
-  assert.equal(Object.values(summary.byBasis).reduce((a, b) => a + b, 0), summary.total, "categories partition the total");
-  // rows with zero direct labour hours (equipment duration, materials) are not counted
-  assert.equal(summarizeHourBasis([{ derivation: machine, hours: 0 }], (row) => row.hours, lookup).total, 0);
-});
-
-test("evidence inputs the formula does not use neither size the result nor set its basis", () => {
-  // Round-3 GPT row: 24 h = mechanics 2 x crewDuration 12, with three unused evidence inputs attached.
-  const decorated = normalizeLineDerivation({
-    formula: "mechanics*crewDuration",
-    inputs: [
-      { name: "interfaces", value: 2, unit: "EA", source: { kind: "claim", ref: "c-int" } },
-      { name: "steelFixingLocations", value: 12, unit: "EA", source: { kind: "claim", ref: "c-fix" } },
-      { name: "platformAssembly", value: 1, unit: "EA", source: { kind: "claim", ref: "c-plat" } },
-      { name: "mechanics", value: 2, source: { kind: "assumption", ref: "a-labour" } },
-      { name: "crewDuration", value: 12, unit: "HR", source: { kind: "assumption", ref: "a-labour" } },
-    ],
-    result: { value: 24, unit: "HR" },
-  })!;
-  const lookup = derivationSourceLookup([{ claimId: "c-plat", method: "visual_count", unit: "EA", quantityName: "Work platforms" }], []);
-  const [flag] = flagDerivationAssumptions(decorated, lookup);
-  assert.equal(flag.code, "assumption_dominated");
-  assert.equal(flag.basis, "assumption_only", "the unused platform claim does not make it a physical count");
 });
