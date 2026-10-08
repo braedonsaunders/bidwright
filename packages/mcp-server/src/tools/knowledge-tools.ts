@@ -215,7 +215,7 @@ export function registerKnowledgeTools(server: McpServer) {
           hits,
           guidance: [
             "Use matchedTerms to judge fit; refine with trade + material + action + size/class + unit (hours/LF, hours/ea, hours/ton) if top hits are context-only.",
-            "Read the full passage and neighboring table/header context with readKnowledgePassage({bookId, chunkId: id}); use getBookPage when the source has a page number.",
+            "Read the full passage and neighboring table/header context with readKnowledgePassage({bookId, chunkId: id}); use getBookPage when the source has a page number, or searchBookPages to locate it in the original PDF.",
             "For productivity numbers in tabular form, queryKnowledgeDataset is usually more direct.",
           ],
         }, null, 2) }],
@@ -248,6 +248,16 @@ export function registerKnowledgeTools(server: McpServer) {
           text: returned, omittedChars: text.length - returned.length };
       }).sort((a: any, b: any) => a.order - b.order);
       return { content: [{ type: "text" as const, text: JSON.stringify({ book: data.book, chunkId: data.chunkId, chunks }) }] };
+    },
+  );
+
+  server.tool(
+    "searchBookPages",
+    "Locate a phrase in the original reference PDF and return actual physical page numbers and text. Use when a historical book-search hit has no page number, or to locate a table/footnote before viewing it with getBookPage. Searches embedded PDF text locally; scanned pages without a text layer cannot match here.",
+    { bookId: z.string().min(1), query: z.string().min(1), limit: z.coerce.number().int().positive().max(20).default(8) },
+    async ({ bookId, query, limit }) => {
+      const data = await apiGet(`/knowledge/books/${encodeURIComponent(bookId)}/search-pages?${new URLSearchParams({ q: query, limit: String(limit) })}`);
+      return { content: [{ type: "text" as const, text: JSON.stringify(data) }] };
     },
   );
 

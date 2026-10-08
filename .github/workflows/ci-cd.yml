@@ -175,6 +175,7 @@ jobs:
           packages/domain/src/line-derivation.test.ts
           packages/domain/src/agent-memory.test.ts
           packages/domain/src/estimate-strategy-stages.test.ts
+          apps/api/src/services/reference-book-pages.test.ts
           apps/api/src/services/indexed-search.test.ts
           apps/api/src/services/page-provenance.test.ts
           apps/api/src/revision-rate-schedule-scoping.test.ts

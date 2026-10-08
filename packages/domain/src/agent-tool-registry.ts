@@ -83,6 +83,7 @@ export const AGENT_TOOL_REGISTRY = {
   previewAssembly: { id: "previewAssembly", displayName: "Preview assembly", category: "resources" },
 
   queryKnowledgeBook: { id: "queryKnowledgeBook", displayName: "Search global knowledge books", category: "knowledge" },
+  searchBookPages: { id: "searchBookPages", displayName: "Search reference PDF pages", category: "knowledge" },
   readKnowledgePassage: { id: "readKnowledgePassage", displayName: "Read reference passage", category: "knowledge" },
   searchEstimatingKnowledge: { id: "searchEstimatingKnowledge", displayName: "Search estimating knowledge", category: "knowledge" },
   queryProjectFile: { id: "queryProjectFile", displayName: "Search project files", category: "knowledge" },

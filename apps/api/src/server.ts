@@ -131,6 +131,7 @@ import { authRoutes } from "./routes/auth-routes.js";
 import { adminRoutes } from "./routes/admin-routes.js";
 import { rateScheduleRoutes } from "./routes/rate-schedule-routes.js";
 import { registerCliRoutes } from "./routes/cli-routes.js";
+import { referenceBookPages, searchReferenceBookPages } from "./services/reference-book-pages.js";
 import { buildEstimatorSearchProfile, rankEstimatorSearchItems } from "./services/estimator-search.js";
 import { registerReviewRoutes } from "./routes/review-routes.js";
 import { estimateRoutes } from "./routes/estimate-routes.js";
@@ -6602,6 +6603,23 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
     if (!result.success) return reply.code(result.code === "page_out_of_range" ? 400 : 422).send({ message: result.error, code: result.code });
     return { ...result, bookId: book.id, bookName: book.name, sourceFileName: book.sourceFileName,
       textLines: result.textLines?.slice(0, 40).map((line) => ({ text: line.text, bbox: line.bbox })), textLinesOmitted: Math.max(0, (result.textLines?.length ?? 0) - 40) };
+  });
+
+  app.get("/knowledge/books/:bookId/search-pages", async (request, reply) => {
+    const { bookId } = request.params as { bookId: string };
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    if (!q?.trim()) return reply.code(400).send({ message: "Pass a phrase to locate in the original PDF" });
+    const book = await request.store!.getKnowledgeBook(bookId);
+    if (!book?.storagePath) return reply.code(404).send({ message: "Book or stored PDF not found" });
+    let pdfPath: string;
+    try { pdfPath = await realpath(resolveApiPath(book.storagePath)); }
+    catch { return reply.code(404).send({ message: "Stored PDF not found" }); }
+    if (!pdfPath.startsWith(await realpath(apiDataRoot) + path.sep)) return reply.code(403).send({ message: "Book file is outside storage" });
+    const pages = await referenceBookPages(pdfPath);
+    const hits = searchReferenceBookPages(pages, q, Math.max(1, Math.min(Number(limit) || 8, 20)));
+    return { bookId, bookName: book.name, totalPages: pages.length, hits,
+      textAvailable: pages.some((page) => page.trim()),
+      note: "Page numbers are physical PDF pages, not printed handbook labels. These are matches in the original PDF text; inspect the page image for table layout and conditions." };
   });
 
   // ── GET /knowledge/project-corpus/search ─────────────────────────────────
