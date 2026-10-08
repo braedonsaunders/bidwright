@@ -4501,182 +4501,26 @@ export class PrismaApiStore {
     };
   }
 
-  private validatePackagePlanAgainstWorkspace(packagePlanValue: unknown, workspace: ProjectWorkspace) {
+  /** Package bindings that name a worksheet id which no longer exists. */
+  private danglingPackageWorksheetBindings(packagePlanValue: unknown, workspace: ProjectWorkspace) {
+    const worksheetIds = new Set((workspace.worksheets ?? []).map((worksheet) => worksheet.id));
+    const packagePlan = Array.isArray(packagePlanValue) ? packagePlanValue : [];
     const issues: Array<Record<string, unknown>> = [];
-    const packagePlan = Array.isArray(packagePlanValue)
-      ? packagePlanValue.filter((entry): entry is Record<string, unknown> => !!entry && typeof entry === "object" && !Array.isArray(entry))
-      : [];
-    const itemPackageAssignments = new Map<string, string[]>();
-
-    // Build a categoryName → analyticsBucket lookup so policy decisions
-    // ("does this package have a labour line?" / "an allowance line?") key on
-    // the org's configured bucket instead of hardcoded category names.
-    const bucketByCategory = new Map<string, string | null>();
-    for (const cat of workspace.entityCategories ?? []) {
-      bucketByCategory.set(cat.name, cat.analyticsBucket ?? null);
-    }
-    const bucketOf = (item: { category?: string | null; entityType?: string | null }): string | null =>
-      bucketByCategory.get(this.normalizeEstimateCategory(item.category, item.entityType)) ?? null;
-
-    // Categories that contribute "execution" rows — anything with a non-null
-    // analytics bucket counts as an execution category.
-    const isExecutionCategory = (categoryName: string): boolean => {
-      const bucket = bucketByCategory.get(categoryName);
-      return !!bucket;
-    };
-
-    const worksheetRows = (workspace.worksheets ?? []).flatMap((worksheet) =>
-      (worksheet.items ?? []).map((item) => ({ worksheet, item })),
-    );
-
     for (const entry of packagePlan) {
-      const packageId = String(entry.id ?? "");
-      const packageName = String(entry.name ?? (packageId || "Unnamed package")).trim();
-      const pricingMode = String(entry.pricingMode ?? "");
-      const bindings = this.asEstimateObject(entry.bindings);
-      const fallbackBindings = Object.keys(bindings).length > 0 ? bindings : this.asEstimateObject(entry.binding);
-      const worksheetIds = this.asEstimateStringArray(fallbackBindings.worksheetIds);
-      const worksheetNames = this.asEstimateStringArray(fallbackBindings.worksheetNames).map((value) => this.normalizeEstimateBindingText(value));
-      const categories = this.asEstimateStringArray(fallbackBindings.categories ?? fallbackBindings.categoryTargets)
-        .map((value) => this.normalizeEstimateCategory(value));
-      const textMatchers = this.asEstimateStringArray(fallbackBindings.textMatchers ?? fallbackBindings.descriptionMatchers ?? fallbackBindings.itemMatchers)
-        .map((value) => this.normalizeEstimateBindingText(value));
-      const hasBindings = worksheetIds.length > 0 || worksheetNames.length > 0 || categories.length > 0 || textMatchers.length > 0;
-
-      if (!hasBindings) {
-        issues.push({
-          code: "package_binding_missing",
-          packageId,
-          packageName,
-          message: "Package plan entries must bind to worksheets, categories, or text matchers so commercialization can be validated.",
-        });
-        continue;
-      }
-
-      const matchedItems = worksheetRows
-        .filter(({ worksheet, item }) => {
-          const normalizedWorksheetName = this.normalizeEstimateBindingText(worksheet.name);
-          const textHaystack = this.normalizeEstimateBindingText(`${worksheet.name ?? ""} ${item.entityName ?? ""} ${item.description ?? ""} ${item.vendor ?? ""}`);
-          const worksheetIdMatch = worksheetIds.includes(worksheet.id);
-          const worksheetNameMatch = worksheetNames.some((target) =>
-            normalizedWorksheetName === target || normalizedWorksheetName.includes(target) || target.includes(normalizedWorksheetName),
-          );
-          if (worksheetIds.length > 0) return worksheetIdMatch;
-          const worksheetTargetMatch = worksheetIds.length > 0 || worksheetNames.length > 0
-            ? worksheetIdMatch || worksheetNameMatch
-            : true;
-          const categoryMatch = categories.length === 0 || categories.includes(this.normalizeEstimateCategory(item.category, item.entityType));
-          const textMatch = textMatchers.length === 0 || textMatchers.some((matcher) => textHaystack.includes(matcher));
-          return worksheetTargetMatch && categoryMatch && textMatch;
-        })
-        .map(({ item }) => item);
-
-      if (matchedItems.length === 0) {
-        issues.push({
-          code: "package_binding_unresolved",
-          packageId,
-          packageName,
-          pricingMode,
-          message: "Package bindings did not resolve to any worksheet items in the current workspace.",
-        });
-        continue;
-      }
-
-      for (const item of matchedItems) {
-        const assignedPackages = itemPackageAssignments.get(item.id) ?? [];
-        assignedPackages.push(packageId || packageName);
-        itemPackageAssignments.set(item.id, assignedPackages);
-      }
-
-      const labourHours = matchedItems.reduce((sum, item) => sum + this.estimateItemExtendedHours(item), 0);
-      const categoriesPresent = new Set(matchedItems.map((item) => this.normalizeEstimateCategory(item.category, item.entityType)));
-      const bucketsPresent = new Set(matchedItems.map(bucketOf).filter((b): b is string => !!b));
-      const hasLabourLine = bucketsPresent.has("labour");
-      const hasSubcontractorLine = bucketsPresent.has("subcontractor");
-      const hasAllowanceLine = bucketsPresent.has("allowance");
-      const hasCommercialCarryLine = matchedItems.some((item) =>
-        !hasLabourLine &&
-        (bucketOf(item) === "allowance"
-          || Number(item.price ?? 0) !== 0
-          || Number(item.cost ?? 0) !== 0),
-      );
-      const hasDetailedExecutionLine = Array.from(categoriesPresent).some(isExecutionCategory) || labourHours > 0;
-
-      if (pricingMode === "subcontract") {
-        if (labourHours > 0 || hasLabourLine) {
-          issues.push({
-            code: "package_mode_conflict",
-            packageId,
-            packageName,
-            pricingMode,
-            labourHours: Number(labourHours.toFixed(2)),
-            message: "Subcontract packages cannot carry detailed labour hours in persisted worksheet rows.",
-          });
-        }
-        if (!hasSubcontractorLine) {
-          issues.push({
-            code: "package_mode_conflict",
-            packageId,
-            packageName,
-            pricingMode,
-            message: "Subcontract packages must resolve to subcontractor-priced worksheet rows.",
-          });
-        }
-      } else if (pricingMode === "allowance" || pricingMode === "historical_allowance") {
-        if (labourHours > 0 || hasLabourLine) {
-          issues.push({
-            code: "package_mode_conflict",
-            packageId,
-            packageName,
-            pricingMode,
-            labourHours: Number(labourHours.toFixed(2)),
-            message: "Allowance packages cannot carry labour-bearing execution rows in persisted worksheet items.",
-          });
-        }
-        if (!hasAllowanceLine && !hasSubcontractorLine && !hasCommercialCarryLine) {
-          issues.push({
-            code: "package_mode_conflict",
-            packageId,
-            packageName,
-            pricingMode,
-            message: "Allowance packages must resolve to zero-hour commercial carry rows, not only detailed execution rows.",
-          });
-        }
-      } else if (pricingMode === "detailed" && !hasDetailedExecutionLine) {
-        issues.push({
-          code: "package_mode_conflict",
-          packageId,
-          packageName,
-          pricingMode,
-          message: "Detailed packages must resolve to persisted execution rows, not only lump-sum allowance or subcontract rows.",
-        });
-      }
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+      const record = entry as Record<string, unknown>;
+      const bindings = this.asEstimateObject(record.bindings);
+      const binding = Object.keys(bindings).length > 0 ? bindings : this.asEstimateObject(record.binding);
+      const missing = this.asEstimateStringArray(binding.worksheetIds).filter((id) => !worksheetIds.has(id));
+      if (missing.length === 0) continue;
+      issues.push({
+        code: "package_binding_unresolved",
+        packageId: String(record.id ?? ""),
+        packageName: String(record.name ?? record.id ?? ""),
+        message: `Package plan binds worksheet id(s) that do not exist in this revision: ${missing.join(", ")}. Update packagePlan bindings or remove them.`,
+      });
     }
-
-    for (const [itemId, packageIds] of itemPackageAssignments.entries()) {
-      const uniquePackageIds = Array.from(new Set(packageIds));
-      if (uniquePackageIds.length > 1) {
-        issues.push({
-          code: "package_binding_overlap",
-          itemId,
-          packageIds: uniquePackageIds,
-          message: "A worksheet item is governed by multiple package-plan bindings. Package ownership must be exclusive.",
-        });
-      }
-    }
-
     return issues;
-  }
-
-  private normalizeEstimateBindingText(value: unknown) {
-    return String(value ?? "")
-      .toLowerCase()
-      .replace(/&amp;/g, "&")
-      .replace(/&/g, " and ")
-      .replace(/[\u2010-\u2015]/g, "-")
-      .replace(/[^a-z0-9]+/g, " ")
-      .replace(/\s+/g, " ")
-      .trim();
   }
 
   private async buildHistoricalCalibrationEnvelope(
@@ -5870,10 +5714,7 @@ export class PrismaApiStore {
     // sections, coverage notes or reviews exist is visible in the strategy
     // itself and is not a precondition.
     const validationIssues: Array<Record<string, unknown>> = [];
-    validationIssues.push(
-      ...this.validatePackagePlanAgainstWorkspace(existing?.packagePlan, workspace)
-        .filter((issue) => issue.code === "package_binding_unresolved"),
-    );
+    validationIssues.push(...this.danglingPackageWorksheetBindings(existing?.packagePlan, workspace));
 
     // Declared installed/procurement links are re-evaluated here so a
     // mismatch introduced after the agent's gate (web edit, batch) still
