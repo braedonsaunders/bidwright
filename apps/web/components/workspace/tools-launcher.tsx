@@ -103,6 +103,7 @@ export function ToolsLauncher({
         items={items}
         onSelect={onSelect}
         density="compact"
+        className="rounded-none border-0"
       />
       {recent.length > 0 && (
         <div className="px-6 pb-6">

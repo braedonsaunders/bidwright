@@ -99,7 +99,7 @@ export default function ToolsPage() {
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-bg p-4">
+    <div className="flex h-full min-h-0 flex-col bg-bg">
       {workspace ? (
         <FileBrowser
           key={space}

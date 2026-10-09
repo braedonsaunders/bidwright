@@ -2848,9 +2848,11 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     </div>
   );
 
+  const WorkspaceContainer = standalone ? "div" : Card;
+
   return (
-    <div className="flex h-full" ref={containerRef}>
-      <Card className="flex flex-1 flex-row overflow-hidden">
+    <div className="flex h-full min-h-0" ref={containerRef}>
+      <WorkspaceContainer className={cn("flex min-h-0 flex-1 flex-row overflow-hidden", standalone && "bg-panel")}>
         {/* ─── Left Panel: File Tree ─── */}
         <div className="flex flex-col overflow-hidden border-r border-line" style={{ width: `${leftPanelWidth}%` }}>
           <CardHeader className="flex flex-row items-center justify-between gap-3 shrink-0">
@@ -3227,7 +3229,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
           )}
           {!isDetached && previewContent}
         </div>
-      </Card>
+      </WorkspaceContainer>
 
       {/* ─── Detached Window Portal ─── */}
       {isDetached && detachedContainer && createPortal(
