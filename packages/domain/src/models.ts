@@ -1806,6 +1806,7 @@ export const BIDWRIGHT_NAVIGATION_KEYS = [
   "quotes",
   "clients",
   "library",
+  "tools",
   "performance",
   "settings",
   "profile",
