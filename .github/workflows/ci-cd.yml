@@ -129,7 +129,7 @@ jobs:
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
           packages/mcp-server/src/tool-access.test.ts
-          scripts/cad-editor/piping.test.ts
+          scripts/cad-editor/tools-workspace.test.ts
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
@@ -302,7 +302,7 @@ jobs:
         run: pnpm --dir apps/cad-editor exec jest --runInBand --runTestsByPath packages/data-model/__tests__/AcDbDxfVersionDialect.spec.ts packages/libredwg-converter/__tests__/legacyDictionary.spec.ts
       - name: Install pinned test browser
         run: pnpm --dir apps/cad-editor --filter @bidwright/cad-editor exec playwright install --with-deps chromium
-      - name: Verify piping workflow in browser
+      - name: Verify CAD workflow in browser
         env:
           PLAYWRIGHT_BROWSER_CHANNEL: chromium
         run: pnpm --dir apps/cad-editor --filter @bidwright/cad-editor test:e2e

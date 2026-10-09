@@ -760,6 +760,16 @@ export class AcDbLibreDwgConverter extends AcDbDatabaseConverter<DwgDatabase> {
       this.processCommonObjectAttrs(layout, dbLayout)
       layoutDict.setAt(dbLayout.layoutName, dbLayout)
     })
+    // GNU/legacy DWGs may contain block records and no LAYOUT objects.
+    // Keep the default Model layout linked to the imported model block.
+    if (!layouts.some(layout => layout.layoutName === 'Model')) {
+      const layout = layoutDict.getAt('Model') ?? new AcDbLayout()
+      layout.layoutName = 'Model'
+      layout.tabOrder = 0
+      layout.blockTableRecordId = db.tables.blockTable.modelSpace.objectId
+      layoutDict.setAt('Model', layout)
+      db.tables.blockTable.modelSpace.layoutId = layout.objectId
+    }
   }
 
   private processImageDefs(model: DwgDatabase, db: AcDbDatabase) {

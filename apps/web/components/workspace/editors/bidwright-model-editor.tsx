@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Box, ExternalLink, Loader2, RefreshCw, Save, Send, Maximize2, Minimize2 } from "lucide-react";
 import {
   Button,
@@ -215,6 +215,7 @@ interface BidwrightModelEditorProps {
   className?: string;
   title?: string;
   showHeader?: boolean;
+  headerActions?: ReactNode;
   variant?: "editor" | "takeoff";
   linkedLineItems?: BidwrightModelLinkedLineItem[];
   onModelSelection?: (selection: BidwrightModelSelectionMessage) => void;
@@ -390,6 +391,7 @@ export function BidwrightModelEditor({
   className,
   title = "Model Editor",
   showHeader = false,
+  headerActions,
   variant = "editor",
   linkedLineItems = [],
   onModelSelection,
@@ -818,6 +820,7 @@ export function BidwrightModelEditor({
           >
             <ExternalLink className="h-3.5 w-3.5" />
           </Button>
+          {headerActions}
         </div>
       )}
 

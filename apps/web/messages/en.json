@@ -8,7 +8,8 @@
       "library": "Library",
       "performance": "Performance",
       "settings": "Settings",
-      "projects": "Projects"
+      "projects": "Projects",
+      "tools": "Tools"
     },
     "theme": {
       "light": "Light",

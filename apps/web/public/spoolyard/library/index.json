@@ -1,0 +1,101 @@
+[
+  {
+    "slug": "a",
+    "id": "A",
+    "name": "A · Carbon steel · General 150#",
+    "material": "Carbon steel",
+    "service": "General 150#",
+    "rating": "150#",
+    "rowCount": 1563
+  },
+  {
+    "slug": "b",
+    "id": "B",
+    "name": "B · Carbon steel · General 300#",
+    "material": "Carbon steel",
+    "service": "General 300#",
+    "rating": "300#",
+    "rowCount": 1484
+  },
+  {
+    "slug": "c",
+    "id": "C",
+    "name": "C · Carbon steel · General 600#",
+    "material": "Carbon steel",
+    "service": "General 600#",
+    "rating": "600#",
+    "rowCount": 1460
+  },
+  {
+    "slug": "a1",
+    "id": "A1",
+    "name": "A1 · Carbon steel · Sweet Service - 150# ANSI",
+    "material": "Carbon steel",
+    "service": "Sweet Service - 150# ANSI",
+    "rating": "150#",
+    "rowCount": 1239
+  },
+  {
+    "slug": "b1",
+    "id": "B1",
+    "name": "B1 · Carbon steel · Sweet Service - 300# ANSI",
+    "material": "Carbon steel",
+    "service": "Sweet Service - 300# ANSI",
+    "rating": "300#",
+    "rowCount": 1230
+  },
+  {
+    "slug": "c1",
+    "id": "C1",
+    "name": "C1 · Carbon steel · Sweet Service - 600# ANSI",
+    "material": "Carbon steel",
+    "service": "Sweet Service - 600# ANSI",
+    "rating": "600#",
+    "rowCount": 1237
+  },
+  {
+    "slug": "d1",
+    "id": "D1",
+    "name": "D1 · Carbon steel · Sweet Service - 900# ANSI",
+    "material": "Carbon steel",
+    "service": "Sweet Service - 900# ANSI",
+    "rating": "900#",
+    "rowCount": 974
+  },
+  {
+    "slug": "ss-a",
+    "id": "SS-A",
+    "name": "SS-A · Stainless steel · Hydrocarbons - 150#",
+    "material": "Stainless steel",
+    "service": "Hydrocarbons - 150#",
+    "rating": "150#",
+    "rowCount": 1666
+  },
+  {
+    "slug": "ss-b",
+    "id": "SS-B",
+    "name": "SS-B · Stainless steel · Hydrocarbons - 300#",
+    "material": "Stainless steel",
+    "service": "Hydrocarbons - 300#",
+    "rating": "300#",
+    "rowCount": 1663
+  },
+  {
+    "slug": "ss-c",
+    "id": "SS-C",
+    "name": "SS-C · Stainless steel · Hydrocarbons - 600#",
+    "material": "Stainless steel",
+    "service": "Hydrocarbons - 600#",
+    "rating": "600#",
+    "rowCount": 1660
+  },
+  {
+    "slug": "ss-d",
+    "id": "SS-D",
+    "name": "SS-D · Stainless steel · Hydrocarbons - 900#",
+    "material": "Stainless steel",
+    "service": "Hydrocarbons - 900#",
+    "rating": "900#",
+    "rowCount": 1503
+  }
+]

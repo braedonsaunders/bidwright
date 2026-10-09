@@ -4950,7 +4950,7 @@ export class PrismaApiStore {
    */
   private async buildListStoreSnapshot() {
     const projects = await this.db.project.findMany({
-      where: { organizationId: this.organizationId },
+      where: { organizationId: this.organizationId, scope: { not: "__bidwright_tools__" } },
       orderBy: { createdAt: "desc" },
     });
     return { projects: projects.map(mapProject) };
@@ -4958,7 +4958,7 @@ export class PrismaApiStore {
 
   async listProjectsWithState() {
     const projects = await this.db.project.findMany({
-      where: { organizationId: this.organizationId },
+      where: { organizationId: this.organizationId, scope: { not: "__bidwright_tools__" } },
       orderBy: { createdAt: "desc" },
     });
 

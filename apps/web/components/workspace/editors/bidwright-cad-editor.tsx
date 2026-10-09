@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { Button } from "@braedonsaunders/appkit-ui";
 import { Loader2, Save } from "lucide-react";
@@ -63,6 +63,7 @@ export interface BidwrightCadEditorHandle {
   fit: () => void;
   resize: () => void;
   save: () => void;
+  capture: () => BidwrightCadDocumentSaveMessage | undefined;
   selectEntities: (entityIds: string[]) => void;
 }
 
@@ -74,6 +75,7 @@ export interface BidwrightCadEditorProps {
   sourceKind?: BidwrightCadSourceKind | null;
   mode?: BidwrightCadMode;
   className?: string;
+  headerActions?: ReactNode;
   syncChannelName?: string | null;
   onReady?: () => void;
   onLoaded?: (message: { documentId: string; fileName: string; entityCount: number }) => void;
@@ -135,6 +137,7 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
       sourceKind,
       mode = "preview",
       className,
+      headerActions,
       syncChannelName,
       onReady,
       onLoaded,
@@ -182,6 +185,13 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
       },
       resize: resizeEditor,
       save: persistence.save,
+      capture: () => {
+        const target = iframeRef.current?.contentWindow;
+        if (!target) return undefined;
+        const detail: { capture?: () => BidwrightCadDocumentSaveMessage | undefined } = {};
+        target.dispatchEvent(new CustomEvent("bidwright:cad-document-capture", { detail }));
+        return detail.capture?.();
+      },
       selectEntities: (entityIds) => postToEditor({ type: "bidwright:cad-select-entities", entityIds }),
     }), [postToEditor, resizeEditor, persistence.save]);
 
@@ -258,6 +268,7 @@ export const BidwrightCadEditor = forwardRef<BidwrightCadEditorHandle, Bidwright
               {persistence.status === "saving" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Save className="h-3.5 w-3.5" />}
               Save
             </Button>
+            {headerActions}
           </div>
         )}
         <iframe

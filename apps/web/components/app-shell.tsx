@@ -336,6 +336,7 @@ function BidwrightShell({ children }: { children: ReactNode }) {
     pathname.startsWith("/quotes") ||
     pathname.startsWith("/profile");
   const flushWorkspace =
+    pathname.startsWith("/tools") ||
     pathname.startsWith("/library") ||
     pathname === "/clients" ||
     pathname === "/projects" ||

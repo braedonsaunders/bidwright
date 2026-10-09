@@ -54,6 +54,14 @@ export const BIDWRIGHT_NAVIGATION_REGISTRY: readonly BidwrightNavigationRegistry
     mobile: true,
   },
   {
+    key: "tools",
+    label: "Tools",
+    description: "Standalone drawing, modelling and document editors.",
+    iconKey: "wrench",
+    href: "/tools",
+    mobile: true,
+  },
+  {
     key: "library",
     label: "Library",
     description: "Reusable cost, assembly, and knowledge content.",

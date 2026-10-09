@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   AlertTriangle,
@@ -21,6 +21,7 @@ import {
   Folder,
   FolderOpen,
   FolderPlus,
+  GitBranch,
   Image as ImageIcon,
   Loader2,
   Minus,
@@ -152,7 +153,12 @@ import { formatDate } from "@/lib/format";
 import { cadEditorChannelName } from "@/lib/workspace-sync";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 import type { BidwrightModelDocumentSaveMessage } from "./editors/bidwright-model-editor";
-import type { BidwrightCadDocumentSaveMessage } from "./editors/bidwright-cad-editor";
+import type { BidwrightCadEditorHandle, BidwrightCadDocumentSaveMessage } from "./editors/bidwright-cad-editor";
+
+const StandalonePdfEditor = dynamic(() => import("./editors/standalone-pdf-editor").then(m => m.StandalonePdfEditor), { ssr: false });
+import { SpoolyardEditor } from "./editors/spoolyard-editor";
+import type { AuthoringWorkspaceData } from "@/lib/api";
+import { ToolsLauncher, type AuthoringTool } from "./tools-launcher";
 
 /* ─── Types ─── */
 
@@ -175,7 +181,11 @@ interface TreeItem {
 }
 
 export interface FileBrowserProps {
-  workspace: ProjectWorkspaceData;
+  workspace: AuthoringWorkspaceData;
+  standalone?: boolean;
+  /** Replaces the "Project Files" heading, e.g. with the Tools personal/organization switch. */
+  filesTitle?: ReactNode;
+  onAddToQuote?: (file: FileNode) => void;
   /** Bumped when the workspace refreshes; refetches the tree so an agent-created file appears without a page reload. */
   filesRefreshKey?: number;
   packages?: PackageRecord[];
@@ -228,7 +238,7 @@ const FILE_UPLOAD_ACCEPT = [
   ".doc", ".docx", ".rtf", ".pptx",
   ".html", ".htm", ".mhtml", ".mht", ".txt", ".xml",
   ".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp",
-  ".dwg", ".dxf", ".msg", ".eml",
+  ".dwg", ".dxf", ".piping", ".pcf", ".cd", ".step", ".stp", ".glb", ".stl", ".ifc", ".msg", ".eml",
   ".mpp", ".mpt", ".mpx", ".xer", ".p6xml", ".pmxml",
   ".nwd", ".nwf", ".nwc",
 ].join(",");
@@ -364,10 +374,11 @@ const STARTER_DXF_CONTENT = [
   "",
 ].join("\n");
 
-type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "zip" | "rtf" | "none";
+type FilePreviewType = "pdf" | "image" | "spreadsheet" | "text" | "cad" | "docx" | "xlsx" | "email" | "dxf" | "piping" | "zip" | "rtf" | "none";
 type EditorMode = "none" | "rich-text" | "spreadsheet" | "whiteboard" | "markdown" | "checklist" | "model";
 
 function getFilePreviewType(item: TreeItem): FilePreviewType {
+  if (item.name.toLowerCase().endsWith(".piping")) return "piping";
   const ext = getFileExtension(item.name);
   if (PDF_EXTENSIONS.has(ext)) return "pdf";
   if (IMAGE_EXTENSIONS.has(ext)) return "image";
@@ -1513,11 +1524,13 @@ function FileTreeContextMenu({
   canIncludeInQuotePdf,
   onClose,
   onAction,
+  onAddToQuote,
 }: {
   menu: { item: TreeItem; x: number; y: number } | null;
   projectId: string;
   canOpenInTakeoff?: boolean;
   canIncludeInQuotePdf?: boolean;
+  onAddToQuote?: (file: FileNode) => void;
   onClose: () => void;
   onAction: (action: FileContextAction, item: TreeItem) => void;
 }) {
@@ -1595,6 +1608,7 @@ function FileTreeContextMenu({
     >
       {!item.isRoot && button("open", item.type === "directory" ? "Open Folder" : "Open", <Eye className="h-3.5 w-3.5" />)}
       {item.type === "file" && button("open-fullscreen", "Open Fullscreen", <Maximize2 className="h-3.5 w-3.5" />)}
+      {item.fileNode && onAddToQuote && <button className={menuItemClass} onClick={() => { onClose(); onAddToQuote(item.fileNode!); }}><ArrowRight className="h-3.5 w-3.5" />Add to quote…</button>}
       {takeoffDocumentId && button("open-takeoff", "Open in Takeoff", <Ruler className="h-3.5 w-3.5" />)}
       {canIncludeInQuotePdf && isQuotePdfCandidate && button("include-quote-pdf", "Include in quote PDF", <Paperclip className="h-3.5 w-3.5" />)}
       {downloadUrl && (
@@ -1713,9 +1727,10 @@ function DeleteFileModal({
 
 /* ─── Main Component ─── */
 
-export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onIncludeInQuotePdf, onSourceDocumentsChange, filesRefreshKey }: FileBrowserProps) {
+export function FileBrowser({ workspace, packages, selectedWorksheet, modelEditorChannelName, onOpenInTakeoff, onIncludeInQuotePdf, onSourceDocumentsChange, filesRefreshKey, standalone = false, onAddToQuote, filesTitle }: FileBrowserProps) {
   const projectId = workspace.project.id;
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cadEditorRef = useRef<BidwrightCadEditorHandle | null>(null);
   const cadEditorSyncChannelName = useMemo(() => cadEditorChannelName(projectId), [projectId]);
 
   /** Broadcast a "files changed" signal on the shared takeoff channel so
@@ -1871,7 +1886,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
 
     // Determine parent: if a directory is selected, upload into it
     const parentId = parentOverride !== undefined ? parentOverride : activeFileParentId;
-    const shouldUploadAsFileNode = forceFileNode || Boolean(parentId) || Boolean(selectedItem?.fileNode);
+    const shouldUploadAsFileNode = standalone || forceFileNode || Boolean(parentId) || Boolean(selectedItem?.fileNode);
     const documentType = documentTypeOverride ?? selectedItem?.documentType ?? selectedItem?.sourceDocument?.documentType ?? "reference";
 
     try {
@@ -1879,6 +1894,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         if (shouldUploadAsFileNode) {
           const node = await uploadFile(projectId, file, parentId);
           setUserNodes((prev) => [...prev, node]);
+          if (standalone && files.length === 1) setSelectedId(node.id);
         } else {
           const uploaded = sourceDocumentsFromUpload(await uploadSourceDocument(projectId, file, { documentType }));
           setSourceDocuments((prev) => [...prev, ...uploaded]);
@@ -1897,7 +1913,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     } finally {
       setUploading(false);
     }
-  }, [activeFileParentId, projectId, selectedItem?.documentType, selectedItem?.fileNode, selectedItem?.sourceDocument?.documentType, showError, notifyFilesMutated]);
+  }, [activeFileParentId, projectId, selectedItem?.documentType, selectedItem?.fileNode, selectedItem?.sourceDocument?.documentType, showError, notifyFilesMutated, standalone]);
 
   const openFilePickerForParent = useCallback((parentId?: string | null, documentType?: string, forceFileNode = false) => {
     pendingUploadParentIdRef.current = parentId;
@@ -2219,7 +2235,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   }, [isEmbeddedModelEditorPreview, projectId, selectedItem]);
 
   // ── Resizable divider ──────────────────────────────────────────────────
-  const [leftPanelWidth, setLeftPanelWidth] = useState(30);
+  const [leftPanelWidth, setLeftPanelWidth] = useState(standalone ? 33.333 : 30);
   const isDraggingDivider = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -2500,6 +2516,38 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
     }
   }, [activeFileParentId, projectId, showError, userNodes, notifyFilesMutated]);
 
+
+  const handleCreateIsometric = useCallback(async (source?: string) => {
+    try {
+      // Spoolyard opens an empty file as a new drawing on its default specification and saves it back;
+      // a recovered CAD drawing keeps its DXF text, which Spoolyard reads from the embedded piping record.
+      if (source && !source.includes("bidwright-piping"))
+        throw new Error("This drawing has no measured piping model. Import a Spoolyard piping DXF, PCF or .piping file.");
+      const base = source ? "Recovered Isometric" : "Untitled Isometric";
+      let name = base + ".piping", count = 2;
+      while (userNodes.some(n => n.name === name)) name = base + " " + count++ + ".piping";
+      const node = await uploadFile(projectId, new globalThis.File([source ?? "\n"], name, {type:"application/json"}), activeFileParentId);
+      setUserNodes(prev => [...prev, node]);
+      setSelectedId(node.id); setEditorMode("none"); notifyFilesMutated();
+      if (activeFileParentId) setExpandedFolders(prev => new Set([...prev, activeFileParentId]));
+    } catch (err) { showError(err instanceof Error ? err.message : "Could not create isometric"); }
+  }, [projectId, activeFileParentId, userNodes, notifyFilesMutated, showError]);
+
+
+  const launchTool = useCallback((tool: AuthoringTool) => {
+    if (tool === "piping") void handleCreateIsometric();
+    else if (tool === "cad") void handleCreateCadDocument();
+    else if (tool === "model") void handleCreateModelDocument();
+    else if (tool === "spreadsheet") {
+      setEditorFileName("Untitled Spreadsheet");
+      setEditingFileNodeId(null);
+      setEditingFileExtension(null);
+      setEditorInitialContent(null);
+      setEditorInitialSheets(null);
+      setEditorMode("spreadsheet");
+      setSelectedId(null);
+    } else openFilePickerForParent(activeFileParentId, undefined, true);
+  }, [activeFileParentId, handleCreateCadDocument, handleCreateIsometric, handleCreateModelDocument, openFilePickerForParent]);
   const savedModelNodesRef = useRef(new Map<string, FileNode>());
 
   const handleModelDocumentSave = useCallback(async (message: BidwrightModelDocumentSaveMessage) => {
@@ -2575,6 +2623,16 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
   }, [selectedId]);
 
   /* ─── Preview content (extracted for fullscreen / detach reuse) ─── */
+
+  const isSingleHeaderEditor = filePreviewType === "dxf" || filePreviewType === "piping" || isEmbeddedModelEditorPreview || (standalone && filePreviewType === "pdf");
+  const editorHeaderActions = <>
+    {filePreviewType === "dxf" && previewUrl && <Button variant="ghost" size="sm" title="Recover the measured piping model into a standalone isometric" onClick={() => {
+      try { const snapshot = cadEditorRef.current?.capture(); if (!snapshot) throw new Error("Wait for the CAD drawing to finish opening."); void handleCreateIsometric(snapshot.dxfContent); } catch(e) { showError(e instanceof Error ? e.message : String(e)); }
+    }}>Open piping model</Button>}
+    {!isFullscreen && <Button variant="ghost" size="sm" aria-label="Fullscreen editor" onClick={()=>setIsFullscreen(true)}><Maximize2 className="h-3.5 w-3.5"/></Button>}
+    {downloadUrl && <a href={downloadUrl} download><Button variant="ghost" size="sm"><Download className="h-3.5 w-3.5"/>Download</Button></a>}
+    <Button variant="ghost" size="sm" onClick={()=>isFullscreen?setIsFullscreen(false):setSelectedId(null)}><X className="h-3.5 w-3.5"/>Exit</Button>
+  </>;
   const previewContent = editorMode !== "none" ? (
     <div className="flex-1 overflow-hidden flex flex-col">
       {editorMode === "rich-text" && (
@@ -2610,7 +2668,16 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       )}
     </div>
   ) : !selectedItem ? (
-    <EmptyPreviewState />
+    standalone ? (
+      <ToolsLauncher
+        nodes={userNodes}
+        spaceLabel={workspace.project.name}
+        onSelect={launchTool}
+        onOpen={(node) => setSelectedId(node.id)}
+      />
+    ) : (
+      <EmptyPreviewState />
+    )
   ) : selectedItem.type === "directory" ? (
     <div className="flex-1 flex flex-col">
       <div className="flex items-center justify-between px-4 py-3 border-b border-line">
@@ -2637,7 +2704,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       <div className="flex-1 overflow-hidden flex flex-col">
         {previewTab === "file" || !hasExtracted ? (
           <>
-            {filePreviewType === "pdf" && previewUrl && <PdfPreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
+            {filePreviewType === "pdf" && previewUrl && (standalone && selectedItem.fileNode ? <StandalonePdfEditor key={selectedItem.id} projectId={projectId} documentId={"file-"+selectedItem.fileNode.id} fileUrl={previewUrl} fileName={selectedItem.name} headerActions={editorHeaderActions}/> : <PdfPreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />)}
             {filePreviewType === "image" && previewUrl && <ImagePreview key={previewUrl} url={previewUrl} fileName={selectedItem.name} />}
             {filePreviewType === "text" && (
               <div className="flex min-h-0 flex-1 flex-col">
@@ -2665,6 +2732,8 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 {isBidwrightEditableModel(selectedItem.name) ? (
                   <BidwrightModelEditor
                     showHeader
+                    title={selectedItem.name}
+                    headerActions={editorHeaderActions}
                     fileUrl={previewUrl}
                     fileName={selectedItem.name}
                     projectId={projectId}
@@ -2706,9 +2775,22 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                 sourceId={ingestSourceRef?.sourceId}
               />
             )}
+
+            {filePreviewType === "piping" && selectedItem.fileNode && previewUrl && <SpoolyardEditor
+              key={selectedItem.id}
+              fileUrl={previewUrl}
+              fileName={selectedItem.name}
+              headerActions={editorHeaderActions}
+              onSave={async content => {
+                const saved = await saveFileNodeContent(projectId, selectedItem.fileNode!.id, new globalThis.File([content], selectedItem.name, {type:"application/json"}));
+                setUserNodes(prev=>prev.map(n=>n.id===saved.id?saved:n));
+                notifyFilesMutated();
+              }}
+            />}
             {filePreviewType === "dxf" && previewUrl && (
               <div className="flex-1 min-h-[400px]">
                 <BidwrightCadEditor
+                  ref={cadEditorRef}
                   key={previewUrl}
                   fileUrl={previewUrl}
                   fileName={selectedItem.name}
@@ -2716,6 +2798,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                   documentId={ingestSourceRef?.sourceId}
                   sourceKind={ingestSourceRef?.sourceKind}
                   mode="preview"
+                  headerActions={editorHeaderActions}
                   syncChannelName={cadEditorSyncChannelName}
                   onSaveDocument={handleCadDocumentSave}
                 />
@@ -2771,7 +2854,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         {/* ─── Left Panel: File Tree ─── */}
         <div className="flex flex-col overflow-hidden border-r border-line" style={{ width: `${leftPanelWidth}%` }}>
           <CardHeader className="flex flex-row items-center justify-between gap-3 shrink-0">
-            <CardTitle>Project Files</CardTitle>
+            <div className="flex min-w-0 items-center gap-2">{filesTitle ?? <CardTitle>Project Files</CardTitle>}</div>
             <div className="flex items-center gap-1.5">
               <DropdownMenu.Root>
                 <DropdownMenu.Trigger asChild>
@@ -2882,6 +2965,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                     >
                       <Ruler className="h-3.5 w-3.5" />
                       2D CAD
+                    </DropdownMenu.Item>
+                    <DropdownMenu.Item className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2" onSelect={()=>void handleCreateIsometric()}>
+                      <GitBranch className="h-3.5 w-3.5"/>Piping Isometric
                     </DropdownMenu.Item>
                     <DropdownMenu.Item
                       className="flex items-center gap-2 rounded-md px-3 py-2 text-xs text-fg/70 outline-none cursor-pointer hover:bg-panel2 transition-colors"
@@ -3085,9 +3171,9 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
         />
 
         {/* ─── Right Panel: Preview ─── */}
-        <div data-bidwright-file-preview-surface className="flex flex-1 flex-col overflow-hidden min-w-0">
+        <div data-bidwright-file-preview-surface className={cn("flex flex-1 flex-col overflow-hidden min-w-0", isFullscreen && "fixed inset-0 z-50 bg-bg")}>
           {/* File header — only in normal panel view (not in fullscreen/detached) */}
-          {editorMode === "none" && selectedItem && selectedItem.type === "file" && (
+          {editorMode === "none" && !isSingleHeaderEditor && selectedItem && selectedItem.type === "file" && (
             <>
               <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-line shrink-0">
                 <div className="flex min-w-0 flex-1 items-center gap-2">
@@ -3104,7 +3190,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
                   )}
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <Button variant="ghost" size="sm" onClick={() => setIsFullscreen(true)} title="Fullscreen">
+                  <Button variant="ghost" size="sm" onClick={() => setIsFullscreen(v=>!v)} title={isFullscreen ? "Exit fullscreen" : "Fullscreen"}>
                     <Maximize2 className="h-3.5 w-3.5" />
                   </Button>
                   <Button variant="ghost" size="sm" onClick={handlePopOut} title="Open in new window">
@@ -3139,46 +3225,20 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
               )}
             </>
           )}
-          {previewContent}
+          {!isDetached && previewContent}
         </div>
       </Card>
-
-      {/* ─── Fullscreen Overlay ─── */}
-      {isFullscreen && (
-        <div className="fixed inset-0 z-50 bg-bg flex flex-col" onClick={(e) => { if (e.target === e.currentTarget) setIsFullscreen(false); }}>
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-line shrink-0 bg-panel">
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="text-sm font-semibold text-fg truncate">{selectedItem?.name ?? editorFileName}</span>
-              {selectedItem?.documentType && (
-                <Badge tone={TYPE_BADGE_TONE[selectedItem.documentType] ?? "default"}>{selectedItem.documentType}</Badge>
-              )}
-            </div>
-            <div className="flex items-center gap-1.5">
-              {downloadUrl && (
-                <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-3.5 w-3.5" /> Download</Button></a>
-              )}
-              <Button variant="secondary" size="sm" onClick={() => setIsFullscreen(false)}>
-                <Minimize2 className="h-3.5 w-3.5" />
-                Exit
-              </Button>
-            </div>
-          </div>
-          <div data-bidwright-file-preview-surface className="flex-1 overflow-hidden flex flex-col">
-            {previewContent}
-          </div>
-        </div>
-      )}
 
       {/* ─── Detached Window Portal ─── */}
       {isDetached && detachedContainer && createPortal(
         <div className="flex flex-col h-full bg-bg text-fg">
-          <div className="flex items-center justify-between px-4 py-2.5 border-b border-line shrink-0">
+          {!isSingleHeaderEditor && <div className="flex items-center justify-between px-4 py-2.5 border-b border-line shrink-0">
             <span className="text-sm font-semibold truncate">{selectedItem?.name ?? editorFileName}</span>
             {downloadUrl && (
               <a href={downloadUrl} download><Button variant="secondary" size="sm"><Download className="h-3.5 w-3.5" /> Download</Button></a>
             )}
           </div>
-          <div className="flex-1 overflow-hidden flex flex-col">
+          }<div className="flex-1 overflow-hidden flex flex-col">
             {previewContent}
           </div>
         </div>,
@@ -3188,6 +3248,7 @@ export function FileBrowser({ workspace, packages, selectedWorksheet, modelEdito
       <FileTreeContextMenu
         menu={contextMenu}
         projectId={projectId}
+        onAddToQuote={onAddToQuote}
         canOpenInTakeoff={Boolean(onOpenInTakeoff)}
         canIncludeInQuotePdf={Boolean(onIncludeInQuotePdf)}
         onClose={() => setContextMenu(null)}

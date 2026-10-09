@@ -122,6 +122,7 @@ import { knowledgeRoutes } from "./routes/knowledge-routes.js";
 import { datasetRoutes } from "./routes/dataset-routes.js";
 import { takeoffRoutes } from "./routes/takeoff-routes.js";
 import { visionRoutes } from "./routes/vision-routes.js";
+import { toolsAccessPlugin, toolsRoutes } from "./routes/tools-routes.js";
 import { modelRoutes } from "./routes/model-routes.js";
 import { fileIngestRoutes } from "./routes/file-ingest-routes.js";
 import { chunkedUploadRoutes } from "./routes/chunked-upload-routes.js";
@@ -2188,6 +2189,7 @@ export function buildServer() {
   });
 
   app.register(authPlugin);
+  app.register(toolsAccessPlugin);
 
   app.setErrorHandler((error, _request, reply) => {
     const multipartCode = typeof (error as { code?: unknown }).code === "string"
@@ -6936,6 +6938,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(takeoffRoutes);
   app.register(visionRoutes);
   app.register(modelRoutes);
+  app.register(toolsRoutes);
   app.register(fileIngestRoutes);
   app.register(chunkedUploadRoutes);
   app.register(scheduleImportRoutes);

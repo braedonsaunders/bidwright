@@ -125,12 +125,17 @@ export function CadTakeoffSurface({
   }, [documents, selectedDocumentId]);
   const syncChannelName = useMemo(() => cadEditorChannelName(projectId), [projectId]);
 
+  // Parent callbacks change on every render. Reset only when the active source
+  // changes; notifying an empty array through unstable callbacks caused a loop.
+  const resetCallbacks = useRef({ onAnnotationsChange, onIntelligenceChange, onSelectedAnnotationChange, onSelectedEntityChange });
+  resetCallbacks.current = { onAnnotationsChange, onIntelligenceChange, onSelectedAnnotationChange, onSelectedEntityChange };
   useEffect(() => {
-    onAnnotationsChange?.([]);
-    onSelectedAnnotationChange?.(null);
-    onSelectedEntityChange?.(null);
-    onIntelligenceChange?.(null);
-  }, [activeDocument?.id, onAnnotationsChange, onIntelligenceChange, onSelectedAnnotationChange, onSelectedEntityChange]);
+    const callbacks = resetCallbacks.current;
+    callbacks.onAnnotationsChange?.([]);
+    callbacks.onSelectedAnnotationChange?.(null);
+    callbacks.onSelectedEntityChange?.(null);
+    callbacks.onIntelligenceChange?.(null);
+  }, [activeDocument?.id]);
 
   useEffect(() => {
     if (!actionsRef) return;

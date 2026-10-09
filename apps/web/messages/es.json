@@ -8,7 +8,8 @@
       "library": "Biblioteca",
       "performance": "Rendimiento",
       "settings": "Configuración",
-      "projects": "Proyectos"
+      "projects": "Proyectos",
+      "tools": "Tools"
     },
     "theme": {
       "light": "Claro",

@@ -8020,3 +8020,23 @@ export async function identifyScanSegments(
     },
   );
 }
+
+// Standalone authoring uses the existing Files storage without any quote.
+export type ToolsSpace = "personal" | "organization";
+export interface AuthoringWorkspaceData {
+  space?: ToolsSpace;
+  project: { id: string; name: string };
+  sourceDocuments: SourceDocument[];
+  quote: { quoteNumber?: string } | null;
+  currentRevision: { defaultMarkup: number };
+}
+export function getToolsWorkspace(space: ToolsSpace = "personal") {
+  return apiRequest<AuthoringWorkspaceData>("/tools/workspace", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ space }),
+  });
+}
+export function addToolsFileToQuote(nodeId: string, input: { projectId?: string; quoteName?: string }) {
+  return apiRequest<{ projectId: string; quoteId: string | null; fileNodeId: string }>("/tools/files/"+encodeURIComponent(nodeId)+"/to-quote", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
+  });
+}

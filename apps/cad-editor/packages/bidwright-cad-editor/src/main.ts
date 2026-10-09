@@ -339,6 +339,7 @@ class BidwrightCadBridge {
   private forceResizeAndFit(fit = true): void {
     const run = () => {
       try {
+        this.applyActiveViewTheme();
         window.dispatchEvent(new Event("resize"));
         const view = AcApDocManager.instance.curView as unknown as AnyRecord;
         const resize = view.onWindowResize;
@@ -571,7 +572,6 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
     import("vue"),
   ]);
   const { MlCadViewer, i18n } = cadViewer;
-  const { PipingWorkbench } = await import("./piping/workbench");
   const { createApp, defineComponent, h, onMounted, ref, shallowRef } = vue;
   const NativeCadEditorApp = defineComponent({
     name: "BidwrightNativeCadEditorApp",
@@ -580,16 +580,7 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
       const loading = ref(Boolean(options.fileUrl));
       const error = ref<string | null>(null);
       const bridge = new BidwrightCadBridge(options);
-      const pipingRoot = ref<HTMLElement>();
-      const pipingVisible = ref(false);
-      let piping: InstanceType<typeof PipingWorkbench> | undefined;
-      const showMode = (value: boolean) => {
-        pipingVisible.value = value;
-        piping?.setVisible(value);
-        if (!value) window.setTimeout(() => {
-          window.dispatchEvent(new Event("resize"));
-        }, 0);
-      };
+
 
       onMounted(async () => {
         if (!options.fileUrl) return;
@@ -622,12 +613,7 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
       });
 
       return () => h("div", { class: "bidwright-native-cad-shell" }, [
-        h("nav", { class: "bw-cad-modes", "aria-label": "Drawing workspace" }, [
-          h("button", { class: !pipingVisible.value ? "active" : "", onClick: () => showMode(false) }, "2D CAD"),
-          h("button", { class: pipingVisible.value ? "active" : "", onClick: () => showMode(true) }, "Piping isometric"),
-          h("span", {}, "MLightCAD 1.7.4"),
-        ]),
-        h("div", { class: "bw-cad-native-view", style: { visibility: pipingVisible.value ? "hidden" : "visible" } }, [h(MlCadViewer, {
+        h("div", { class: "bw-cad-native-view", style: { top: "0" } }, [h(MlCadViewer, {
           locale: "en",
           localFile: localFile.value,
           theme: options.theme,
@@ -640,11 +626,9 @@ async function mountNativeEditor(options: BidwrightCadEditorBootOptions): Promis
           htmlViewerRuntimeUrl: "./viewer-runtime.iife.js",
           onCreate: () => {
             bridge.attach();
-            if (pipingRoot.value) piping = new PipingWorkbench(pipingRoot.value, () => bridge.saveDxf());
           },
-          onDestroy: () => { piping?.dispose(); bridge.dispose(); },
+          onDestroy: () => { bridge.dispose(); },
         })]),
-        h("div", { ref: pipingRoot }),
         loading.value
           ? h("div", { class: "bidwright-native-cad-overlay" }, "Opening drawing...")
           : null,

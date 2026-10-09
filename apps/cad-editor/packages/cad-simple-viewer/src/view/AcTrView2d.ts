@@ -769,7 +769,7 @@ export class AcTrView2d extends AcEdBaseView {
     this._layoutViewManager = new AcTrLayoutViewManager()
     this._progressiveOpenFit = new AcTrProgressiveOpenFitController(
       (box, margin) => {
-        this.activeLayoutView.zoomTo(box, margin ?? 1.1)
+        this.activeLayoutView?.zoomTo(box, margin ?? 1.1)
         this._isDirty = true
       }
     )
@@ -1325,6 +1325,10 @@ export class AcTrView2d extends AcEdBaseView {
   }
   set activeLayoutBtrId(value: string) {
     const previous = this._scene.activeLayoutBtrId
+    // Some import paths omit the LAYOUT event while still supplying entities.
+    // Activation must attach a camera to that block, including legacy DWGs.
+    if (!this._scene.layouts.has(value)) this._scene.addEmptyLayout(value)
+    this.createLayoutViewIfNeeded(value)
     this._layoutViewManager.activeLayoutBtrId = value
     this._scene.activeLayoutBtrId = value
     this.htmlTransientManager.setActiveLayoutId(value)
