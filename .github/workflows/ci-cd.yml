@@ -43,7 +43,8 @@ jobs:
     timeout-minutes: 40
     services:
       reference-search-db:
-        image: postgres:16
+        # Docker Official Images mirror avoids shared-runner Docker Hub limits.
+        image: public.ecr.aws/docker/library/postgres:16
         env:
           POSTGRES_HOST_AUTH_METHOD: trust
         ports:
@@ -319,7 +320,7 @@ jobs:
     if: >
       (github.event_name == 'workflow_dispatch' ||
        (github.event_name == 'push' && github.ref == 'refs/heads/main'))
-      && needs.changes.outputs.code == 'true'
+      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true')
     permissions:
       contents: read
       packages: write
@@ -411,7 +412,7 @@ jobs:
        (github.event_name == 'push' &&
         github.ref == 'refs/heads/main' &&
         vars.ENABLE_SERVER_DEPLOY == 'true'))
-      && needs.changes.outputs.code == 'true'
+      && (github.event_name == 'workflow_dispatch' || needs.changes.outputs.code == 'true')
     concurrency:
       group: bidwright-production-deploy
       cancel-in-progress: false
