@@ -12,6 +12,11 @@ test("project image tools discover file nodes and return native image content", 
 
   const api = createServer((request, response) => {
     response.setHeader("Content-Type", "application/json");
+    if (request.method === "POST" && request.url === "/api/vision/read-page") {
+      response.statusCode = 500;
+      response.end(JSON.stringify({ success: false, code: "page_read_timeout", message: "Python tool timed out after 60000 ms" }));
+      return;
+    }
     if (
       request.method === "GET"
       && request.url === "/projects/project-test/files/tree?scope=project"
@@ -125,6 +130,13 @@ test("project image tools discover file nodes and return native image content", 
     assert.ok(image && image.type === "image");
     assert.equal(image.mimeType, "image/jpeg");
     assert.equal(image.data, jpegBase64);
+
+    for (const name of ["readDrawingPage", "readDrawingTile"]) {
+      const failed = await client.callTool({ name, arguments: { documentId: "dense-drawing", ...(name === "readDrawingTile" ? { tile: "r1c1" } : {}) } });
+      assert.equal(failed.isError, true, "failed visual reads must not appear successful to the agent");
+      const text = (failed.content as Array<{ type: string; text?: string }>).find((item) => item.type === "text")?.text;
+      assert.match(String(text), /timed out after 60000 ms/);
+    }
   } finally {
     await client.close().catch(() => undefined);
     await server.close().catch(() => undefined);

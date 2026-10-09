@@ -7,6 +7,7 @@ export interface PythonSpawnResult {
   stderr: string;
   code: number | null;
   command: string;
+  timedOut?: boolean;
 }
 
 function getPythonCandidates(): string[] {
@@ -28,7 +29,6 @@ function spawnSingleCommand(args: {
   return new Promise((resolve) => {
     const proc = spawn(args.command, args.scriptArgs, {
       cwd: args.cwd,
-      timeout: args.timeoutMs,
       env: {
         ...args.env,
         PYTHONUNBUFFERED: "1",
@@ -38,12 +38,19 @@ function spawnSingleCommand(args: {
     let stdout = "";
     let stderr = "";
     let settled = false;
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      proc.kill("SIGTERM");
+    }, args.timeoutMs);
+    timeout.unref();
 
     const finish = (result: PythonSpawnResult & { notFound: boolean }) => {
       if (settled) {
         return;
       }
       settled = true;
+      clearTimeout(timeout);
       resolve(result);
     };
 
@@ -53,9 +60,10 @@ function spawnSingleCommand(args: {
     proc.on("close", (code) => {
       finish({
         stdout,
-        stderr,
+        stderr: timedOut ? `Python tool timed out after ${args.timeoutMs} ms${stderr ? `\n${stderr}` : ""}` : stderr,
         code,
         command: args.command,
+        timedOut,
         notFound: false,
       });
     });

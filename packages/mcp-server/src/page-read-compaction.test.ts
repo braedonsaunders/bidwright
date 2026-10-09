@@ -12,6 +12,7 @@ test("page reads keep exact text but drop duplicated coordinates and excess line
   const raw = {
     viewId: "view-1",
     rotation: 270,
+    analysisWarnings: ["Automatic table detection skipped on dense drawing geometry; read schedules from the image and zoom grid."],
     textLines: Array.from({ length: 120 }, (_, i) => line(i)),
     textLinesTotal: 120,
     regions: [{ id: "R1", kind: "view", label: "Platform Framing Arrangement", bbox: { x: 0.0328, y: 0.0654, width: 0.3056, height: 0.4853 }, pageBbox: { x: 0.4493, y: 0.0328, width: 0.4853, height: 0.3056 } }],
@@ -24,6 +25,7 @@ test("page reads keep exact text but drop duplicated coordinates and excess line
   assert.equal(compact.textLinesOmitted, 80);
   assert.deepEqual(compact.regions, ['R1 view "Platform Framing Arrangement" @0.033,0.065,0.306,0.485']);
   assert.deepEqual(compact.grid, { rows: 2, cols: 2, tileIds: ["r1c1", "r1c2"] });
+  assert.deepEqual(compact.analysisWarnings, raw.analysisWarnings);
   assert.ok(!JSON.stringify(compact).includes("pageBbox"));
   assert.ok(JSON.stringify(compact).length < JSON.stringify(raw).length / 5);
 

@@ -160,6 +160,8 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 
 Read the original pages yourself. Use \`readDrawingPage(documentId, pageNumber)\` for an overview and \`readDrawingTile\` for a detail, dimension, note or repeated component. Positioned text, search hits and layout help you navigate; they do not replace looking at the pixels. Schedules, BOMs, specifications and drawing revisions can corroborate or qualify what you see.
 
+If an overview times out or fails during layout analysis, try \`readDrawingTile\` on the same page with an explicit \`bbox: { x: 0, y: 0, width: 1, height: 1 }\`; this bypasses optional overview analysis. Zoom into the needed portions after that succeeds. A failed request is not a viewed source, and one overview timeout does not establish that the PDF itself is unreadable. If visual reads still fail, state the actual failure and affected source/page, identify the missing evidence, and qualify dependent quantities rather than claiming complete inspection.
+
 Keep the returned viewIds with the quantities they support. \`saveDrawingEvidenceClaim\` can preserve a reusable observation with its source; cite the existing viewId and the server records the image details. Reuse unchanged views instead of inspecting again just to obtain an ID or hash. Reopen a detail when a specific uncertainty or source change warrants it.
 
 Distinguish physical instances from multiple views of the same object, per-component counts from totals, and quantities from productivity rates. Keep measured quantities separate from waste, purchase rounding and estimator allowances. State which parts came from the source and which are your judgment. A scope answer does not approve quantities it did not address.
@@ -253,6 +255,16 @@ Think through how the work will be performed: supply versus installation, sequen
 
 Choose tools and timing to suit the work. Strategy, package plans, benchmarks, drawing claims and reconciliation tools can help you organize or check the job. If you use \`saveEstimateStrategyStages\`, each supplied section replaces that section: preserve the accumulated entries and add your changes. \`readMemory\` / \`writeMemory\` can checkpoint decisions and source locations for continuity.
 
+## Customer-facing quote introduction
+
+Writing the quote's **Setup → General → Description / Scope of Work** is part of building the estimate. Save it with \`updateQuote({ description: ... })\`; the field is \`revision.description\`, and it appears as Scope of Work in the customer PDF. A chat summary, report section, leadLetter, or internal scratchpad does not fill this field.
+
+Write a professional front-of-quote narrative in connected paragraphs, opening naturally with wording such as "We are pleased to provide our quotation for..." followed by the actual work and project. Explain what the customer is buying: the main systems, areas and deliverables; supply, fabrication and installation responsibilities; relevant execution, testing and turnover work; and the agreed decisions, allowances, assumptions and exclusions that materially define the offer. Describe only work included in the saved estimate, and make work by the customer or others clear. Keep qualifications consistent with the structured conditions and the quote's Firm/Budget type. Do not promise unconfirmed dates, quantities, certifications or services, expose internal pricing/margins or tool references, or invent client/site details.
+
+Scale the detail to the scope and complexity, not just the price: a small, straightforward job normally needs one substantial paragraph (roughly 100–180 words); a moderate project needs two or three paragraphs (roughly 250–400 words); a large or complex project may need four to six paragraphs, approaching a page (roughly 450–700 words). These are writing guides, not quotas: use available facts, avoid padding, and respect an explicit user request for shorter wording. Never leave a completed estimate with "Estimate for unassigned client", "TBA", "TBD", a project-name-only description, or a one-line placeholder. When information is missing, explain the relevant basis or limitation in customer-facing language instead of inserting placeholder text.
+
+Read the existing description in \`getWorkspace\` first. Preserve substantive human wording and approved commercial terms, expanding or correcting it as the scope develops; replace seeded placeholders. Draft once the scope is understood, then reconcile it with the final saved worksheets and conditions. Save rich text using <p> paragraphs (or plain text separated by blank lines), then reread \`getWorkspace\` and verify \`revision.description\` contains the current narrative before declaring the estimate complete. For a narrow follow-up edit, update the introduction only when that edit changes the offered scope or qualifications.
+
 ## Project documents
 
 ${buildDocumentManifestRows(params.documents)}
@@ -287,7 +299,7 @@ For follow-up questions, read the saved derivation and current rows. If the calc
 
 ## Delivering the work
 
-Check that the estimate covers the requested work, that inclusions and exclusions agree, and that quantities, labour, purchasing and totals make sense together. Focus any additional source checks on consequential uncertainties. Correct actual errors and leave unresolved assumptions visible. Save the estimate and summarize its price, labour, scope and important qualifications; do not stop at a research report when an estimate was requested.
+Check that the estimate covers the requested work, that inclusions and exclusions agree, and that quantities, labour, purchasing and totals make sense together. Verify the saved Description / Scope of Work is a substantive customer-facing introduction consistent with that final scope. Focus any additional source checks on consequential uncertainties. Correct actual errors and leave unresolved assumptions visible. Save the estimate and summarize its price, labour, scope and important qualifications; do not stop at a research report when an estimate was requested.
 
 Use \`createProjectFile\` for deliverable files so they appear in the user's Files area; for an existing file pass \`sourcePath\` to preserve its format. Local scratch files are not delivered artifacts. Read large files by relevant search results or page ranges rather than loading entire libraries. Project memory and previous summaries help navigation but do not independently prove a quantity. Report progress through saved work and remaining decisions.`;
 }

@@ -128,6 +128,7 @@ jobs:
           apps/api/src/services/session-continuity.test.ts
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
+          packages/mcp-server/src/quote-description.test.ts
           packages/mcp-server/src/tool-access.test.ts
           scripts/cad-editor/tools-workspace.test.ts
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
@@ -242,6 +243,7 @@ jobs:
       - name: Run web component tests
         run: >
           pnpm --filter @bidwright/web exec tsx --test
+          components/navigation-config-editor.test.tsx
           components/workspace/review-tab.test.tsx
           components/workspace/calibration-review-panel.test.tsx
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { parsePythonJson } from "./python-runtime";
+import { parsePythonJson, spawnPythonCommand } from "./python-runtime";
 
 test("a clean reply parses as-is", () => {
   const parsed = parsePythonJson<{ success: boolean; width: number }>('{"success": true, "width": 595}');
@@ -47,4 +47,24 @@ test("empty output is reported as empty rather than as malformed JSON", () => {
   const parsed = parsePythonJson("   ");
   assert.ok(!parsed.ok);
   assert.match(parsed.error, /no output/);
+});
+
+test("a stalled Python tool reports timeout ahead of an advisory banner", async () => {
+  const previousPython = process.env.PYTHON_PATH;
+  // Exercise the process timeout without depending on a local Python install.
+  process.env.PYTHON_PATH = process.execPath;
+  try {
+    const result = await spawnPythonCommand({
+      scriptArgs: ["-e", 'process.stderr.write("Consider using the pymupdf_layout package\\n"); setInterval(() => {}, 1000);'],
+      cwd: process.cwd(),
+      timeoutMs: 500,
+    });
+    assert.equal(result.timedOut, true);
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /^Python tool timed out after 500 ms/);
+    assert.match(result.stderr, /pymupdf_layout/);
+  } finally {
+    if (previousPython === undefined) delete process.env.PYTHON_PATH;
+    else process.env.PYTHON_PATH = previousPython;
+  }
 });

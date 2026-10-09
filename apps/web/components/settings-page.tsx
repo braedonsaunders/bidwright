@@ -51,7 +51,6 @@ import {
   Input,
   Label,
   MultiSelect,
-  NavigationConfigEditor,
   type MultiSelectOption,
   SearchSelect,
   Separator,
@@ -157,6 +156,7 @@ import {
   type KnowledgeDocumentRecord,
   type AuthUser,
 } from "@/lib/api";
+import { NavigationConfigEditor } from "@/components/navigation-config-editor";
 import { BIDWRIGHT_NAVIGATION_REGISTRY } from "@/lib/navigation-config";
 import { useAuth } from "@/components/auth-provider";
 import { PluginsPage } from "@/components/plugins-page";

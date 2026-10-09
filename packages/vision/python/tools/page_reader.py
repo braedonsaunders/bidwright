@@ -30,6 +30,11 @@ MAX_DPI = 400
 TILE_TARGET_DPI = 200
 MAX_GRID = 6
 MAX_TEXT_LINES = {"overview": 120, "tile": 400}
+# Layout is optional metadata. Never rasterize an oversized sheet at 72 dpi
+# or send a CAD drawing with hundreds of thousands of paths to find_tables.
+LAYOUT_MAX_EDGE = 1568
+TABLE_MAX_PATHS = 2000
+TABLE_MAX_SEGMENTS = 10000
 
 
 def _rotation_from_text(page) -> int:
@@ -117,13 +122,14 @@ def _text_lines(page, clip, matrix, display):
     return lines
 
 
-def _layout_regions(page, rotation, matrix, display, text_lines):
+def _layout_regions(page, rotation, matrix, display, text_lines, drawing_count, segment_count, word_count, warnings):
     """Cluster drawn geometry into view/detail regions; add tables and big text."""
     regions = []
     try:
         import cv2
         import numpy as np
-        pix = page.get_pixmap(matrix=fitz.Matrix(1, 1).prerotate(rotation), alpha=False, colorspace=fitz.csGRAY)
+        zoom = min(1.0, LAYOUT_MAX_EDGE / max(display.width, display.height, 1.0))
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom, zoom).prerotate(rotation), alpha=False, colorspace=fitz.csGRAY)
         img = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width)
         ink = (img < 200).astype(np.uint8) * 255
         # Drop the sheet border: a frame touching all four edges would merge everything.
@@ -135,8 +141,8 @@ def _layout_regions(page, rotation, matrix, display, text_lines):
         ink[:, -border:] = 0
         # Erase sheet frames and title-block rules: lines spanning most of the
         # sheet would otherwise glue every view into one region.
-        long_h = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (int(w * 0.6), 1)))
-        long_v = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, int(h * 0.6))))
+        long_h = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (max(1, int(w * 0.6)), 1)))
+        long_v = cv2.morphologyEx(ink, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(1, int(h * 0.6)))))
         ink = cv2.subtract(ink, cv2.bitwise_or(long_h, long_v))
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (max(9, w // 60), max(9, h // 60)))
         merged = cv2.dilate(ink, kernel)
@@ -157,11 +163,17 @@ def _layout_regions(page, rotation, matrix, display, text_lines):
     except Exception as exc:  # opencv missing or render failure: text/tables still work
         regions.append({"kind": "note", "error": f"geometry clustering unavailable: {exc}"})
 
-    try:
-        for table in page.find_tables().tables:
-            regions.append({"kind": "table", "bbox": _to_display_norm(table.bbox, matrix, display)})
-    except Exception:
-        pass
+    # Native table discovery compares vector paths and can exhaust the entire
+    # page-read timeout on dense CAD exports. A textless page has no table text
+    # to recover anyway: the image and zoom grid remain the evidence to read.
+    if drawing_count is None or segment_count is None or drawing_count > TABLE_MAX_PATHS or segment_count > TABLE_MAX_SEGMENTS:
+        warnings.append("Automatic table detection skipped on dense drawing geometry; read schedules from the image and zoom grid.")
+    elif word_count >= 4:
+        try:
+            for table in page.find_tables().tables:
+                regions.append({"kind": "table", "bbox": _to_display_norm(table.bbox, matrix, display)})
+        except Exception as exc:
+            warnings.append(f"Automatic table detection unavailable: {exc}")
 
     # Title each view with the largest text line inside or just below it.
     for region in regions:
@@ -251,7 +263,19 @@ def read_page(request: dict) -> dict:
 
         text_lines = _text_lines(page, clip, matrix, display)
         word_count = len(page.get_text("words"))
-        drawing_count = len(page.get_drawings()) if mode == "overview" else None
+        warnings = []
+        drawing_count = segment_count = None
+        if mode == "overview":
+            try:
+                # Compact paths use plain tuples instead of hundreds of
+                # thousands of Python Point/Rect objects. Release them before
+                # optional layout processing allocates any more memory.
+                drawings = page.get_cdrawings()
+                drawing_count = len(drawings)
+                segment_count = sum(len(drawing.get("items", [])) for drawing in drawings)
+                del drawings
+            except Exception as exc:
+                warnings.append(f"Drawing complexity unavailable: {exc}")
 
         result = {
             "success": True,
@@ -272,12 +296,14 @@ def read_page(request: dict) -> dict:
         }
         if mode == "overview":
             result["grid"] = grid
-            result["regions"] = _layout_regions(page, rotation, matrix, display, text_lines)
+            result["regions"] = _layout_regions(page, rotation, matrix, display, text_lines, drawing_count, segment_count, word_count, warnings)
             result["wordCount"] = word_count
             result["drawingCount"] = drawing_count
             # CAD exports often draw dimensions and notes as strokes; those are
             # invisible to text extraction and only readable from pixels.
             result["vectorTextLikely"] = bool(drawing_count and drawing_count > 200 and word_count < 80)
+        if warnings:
+            result["analysisWarnings"] = warnings
         return result
     finally:
         doc.close()

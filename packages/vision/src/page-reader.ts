@@ -65,6 +65,7 @@ export interface ReadPdfPageResult {
   wordCount?: number;
   drawingCount?: number;
   vectorTextLikely?: boolean;
+  analysisWarnings?: string[];
   code?: string;
   error?: string;
   duration_ms: number;
@@ -72,7 +73,7 @@ export interface ReadPdfPageResult {
 
 export async function readPdfPage(request: ReadPdfPageRequest): Promise<ReadPdfPageResult> {
   const start = Date.now();
-  const { stdout, stderr, code } = await spawnPythonCommand({
+  const { stdout, stderr, code, timedOut } = await spawnPythonCommand({
     scriptArgs: [READER_SCRIPT],
     cwd: PYTHON_DIR,
     timeoutMs: 60_000,
@@ -80,6 +81,9 @@ export async function readPdfPage(request: ReadPdfPageRequest): Promise<ReadPdfP
     stdin: JSON.stringify(request),
   });
   const duration_ms = Date.now() - start;
+  if (timedOut) {
+    return { success: false, code: "page_read_timeout", error: stderr, duration_ms };
+  }
   if (code !== 0) {
     return { success: false, error: stderr || `exit code ${code}`, duration_ms };
   }

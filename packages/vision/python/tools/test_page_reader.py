@@ -14,13 +14,14 @@ import base64
 import os
 import tempfile
 import unittest
+from unittest.mock import patch
 
 try:
     import pymupdf as fitz
 except ImportError:
     import fitz
 
-from tools.page_reader import read_page
+from tools.page_reader import read_page, LAYOUT_MAX_EDGE, TABLE_MAX_PATHS, TABLE_MAX_SEGMENTS
 
 
 def _sideways_sheet(path: str) -> None:
@@ -90,6 +91,61 @@ class PageReaderTest(unittest.TestCase):
             read_page({"pdfPath": self.path, "pageNumber": 1, "mode": "tile", "tile": "r9c9"})["code"],
             "unknown_tile",
         )
+
+    def test_dense_cad_geometry_keeps_image_without_table_discovery(self) -> None:
+        # The incident sheet had 313,386 paths and no text. Even a sheet with
+        # real notes must remain readable when vector table analysis is skipped.
+        with patch.object(fitz.Page, "get_cdrawings", return_value=[{"items": []}] * (TABLE_MAX_PATHS + 1)), \
+                patch.object(fitz.Page, "find_tables", side_effect=AssertionError("dense paths must not reach table analysis")) as tables:
+            result = read_page({"pdfPath": self.path, "pageNumber": 1, "mode": "overview"})
+        self.assertTrue(result["success"])
+        self.assertTrue(result["image"].startswith("data:image/png;base64,"))
+        self.assertTrue(result["grid"]["tiles"])
+        self.assertTrue(result["regions"])
+        self.assertIn("BASE PLATE (1) ANCHOR", [line["text"] for line in result["textLines"]])
+        self.assertIn("table detection skipped", result["analysisWarnings"][0])
+        tables.assert_not_called()
+
+    def test_many_segments_in_one_path_also_skip_table_analysis(self) -> None:
+        with patch.object(fitz.Page, "get_cdrawings", return_value=[{"items": [None] * (TABLE_MAX_SEGMENTS + 1)}]), \
+                patch.object(fitz.Page, "find_tables") as tables:
+            result = read_page({"pdfPath": self.path, "pageNumber": 1, "mode": "overview"})
+        self.assertTrue(result["success"])
+        tables.assert_not_called()
+
+    def test_optional_table_failure_preserves_the_drawing(self) -> None:
+        with patch.object(fitz.Page, "find_tables", side_effect=RuntimeError("broken table metadata")):
+            result = read_page({"pdfPath": self.path, "pageNumber": 1, "mode": "overview"})
+        self.assertTrue(result["success"])
+        self.assertIn("broken table metadata", result["analysisWarnings"][0])
+        self.assertTrue(result["grid"]["tiles"])
+
+    def test_small_sheet_still_discovers_tables(self) -> None:
+        table = type("Table", (), {"bbox": (80, 80, 260, 360)})()
+        with patch.object(fitz.Page, "find_tables", return_value=type("Tables", (), {"tables": [table]})()) as tables:
+            result = read_page({"pdfPath": self.path, "pageNumber": 1, "mode": "overview"})
+        tables.assert_called_once()
+        self.assertTrue(any(region["kind"] == "table" for region in result["regions"]))
+
+    def test_large_sheet_layout_raster_is_bounded(self) -> None:
+        doc = fitz.open()
+        page = doc.new_page(width=2384, height=3370)
+        page.draw_rect(fitz.Rect(80, 80, 1000, 1200))
+        doc.save(self.path)
+        doc.close()
+        original = fitz.Page.get_pixmap
+        sizes = []
+
+        def record_pixmap(page, *args, **kwargs):
+            pix = original(page, *args, **kwargs)
+            sizes.append((pix.width, pix.height))
+            return pix
+
+        with patch.object(fitz.Page, "get_pixmap", record_pixmap):
+            result = read_page({"pdfPath": self.path, "pageNumber": 1, "mode": "overview", "maxEdge": 1000})
+        self.assertTrue(result["success"])
+        self.assertEqual(len(sizes), 2, "overview and optional geometry each render once")
+        self.assertLessEqual(max(sizes[1]), LAYOUT_MAX_EDGE + 1)
 
 
 if __name__ == "__main__":

@@ -649,6 +649,13 @@ export function registerQuoteTools(server: McpServer) {
 
   function invalidateWs() { cachedWs = null; }
 
+  async function resolveRevisionId(): Promise<string | undefined> {
+    const pinnedRevisionId = getRevisionId();
+    if (pinnedRevisionId) return pinnedRevisionId;
+    const ws = await getWs();
+    return ws.currentRevision?.id || ws.currentRevisionId || ws.quote?.currentRevisionId || ws.revisions?.[0]?.id;
+  }
+
   function normalizeCategoryToolKey(value: unknown) {
     return typeof value === "string" ? value.trim().toLowerCase() : "";
   }
@@ -1023,7 +1030,7 @@ function worksheetTreeSummary(ws: any) {
   // ── getWorkspace ──────────────────────────────────────────
   server.tool(
     "getWorkspace",
-    "Get the current quote workspace — all worksheets, items, phases, estimate factors, modifiers, conditions, totals. Call this to understand the current state of the estimate.",
+    "Get the current quote workspace — saved revision description (Setup → General → Description / Scope of Work), customer-facing notes and lead letter, worksheets, items, phases, estimate factors, modifiers, conditions, totals. Read revision.description to preserve existing wording and verify the customer-facing scope narrative after saving it.",
     {},
     async () => {
       const data = await apiGet(projectPath("/workspace"));
@@ -1035,6 +1042,7 @@ function worksheetTreeSummary(ws: any) {
         revision: {
           id: rev.id, title: rev.title, status: rev.status, type: rev.type,
           breakoutStyle: rev.breakoutStyle, defaultMarkup: rev.defaultMarkup,
+          description: rev.description ?? "", notes: rev.notes ?? "", leadLetter: rev.leadLetter ?? "",
         },
         worksheets: (ws.worksheets || []).map((w: any) => ({
           id: w.id,
@@ -1760,14 +1768,14 @@ function worksheetTreeSummary(ws: any) {
   // ── updateQuote ───────────────────────────────────────────
   server.tool(
     "updateQuote",
-    "Update the quote metadata — project name, client info, scope description, and customer-facing estimate notes. The description supports rich text (HTML). If you provide plain text with newlines, it will be auto-converted to HTML paragraphs. Use updateRevision.scratchpad for internal estimator notes or scratch work.",
+    "Update the quote metadata and save the customer-facing front-of-quote introduction in Setup → General → Description / Scope of Work. Write a substantive paragraph for a small job, multiple paragraphs for larger work, and up to about a page for a complex project, grounded in the saved estimate and agreed commercial scope. Replace seeded placeholders; preserve substantive human wording. The description supports HTML, or plain text with newlines auto-converted to paragraphs. Read getWorkspace.revision.description to verify it was saved. Use updateRevision.scratchpad for internal estimator notes or scratch work.",
     {
       projectName: z.string().optional(),
       clientName: z.string().optional(),
       clientEmail: z.string().optional(),
       projectAddress: z.string().optional(),
       notes: z.string().optional().describe("Customer-facing estimate notes that may appear in quote/PDF output. Do not put internal reasoning, TODOs, or private estimator scratch work here."),
-      description: z.string().optional().describe("Scope of work description. Can be plain text (auto-converted to HTML) or HTML. Use \\n for line breaks in plain text, or provide HTML directly with <p>, <ul>, <li>, <strong>, <h3> tags."),
+      description: z.string().optional().describe("Customer-facing quote introduction / scope narrative saved to revision.description, shown in Setup → General and the quote PDF. Explain included work, deliverables, responsibilities and material qualifications in paragraphs proportional to project complexity; not a one-line title, TBA, or unassigned-client placeholder. Plain text is auto-converted to HTML, or supply <p> paragraphs directly."),
     },
     async (input) => {
       // Convert plain text description to HTML if it doesn't contain HTML tags
@@ -1781,26 +1789,26 @@ function worksheetTreeSummary(ws: any) {
       if (input.clientName) projectFields.clientName = input.clientName;
       if (input.clientEmail) projectFields.clientEmail = input.clientEmail;
       if (input.projectAddress) projectFields.projectAddress = input.projectAddress;
-      if (input.description) projectFields.description = input.description;
-      if (input.notes) projectFields.notes = input.notes;
 
-      if (Object.keys(projectFields).length > 0) {
-        await apiPatch(projectPath(""), projectFields);
-      }
-
-      // Also update revision title and description so the Setup tab reflects changes
+      // Narrative fields belong only to this revision. The legacy project route
+      // chooses the first project quote, which may be a different quote.
       const revisionFields: Record<string, unknown> = {};
       if (input.projectName) revisionFields.title = input.projectName;
       if (input.description) revisionFields.description = input.description;
       if (input.notes) revisionFields.notes = input.notes;
 
-      const revisionId = getRevisionId();
-      if (revisionId && Object.keys(revisionFields).length > 0) {
-        try {
-          await apiPatch(projectPath(`/revisions/${revisionId}`), revisionFields);
-        } catch {
-          // Non-fatal — project-level update already succeeded
-        }
+      const hasRevisionFields = Object.keys(revisionFields).length > 0;
+      const revisionId = hasRevisionFields ? await resolveRevisionId() : undefined;
+      if (hasRevisionFields && !revisionId) {
+        return { content: [{ type: "text" as const, text: "Error: Could not determine current revision ID; quote description and notes were not saved." }], isError: true };
+      }
+
+      invalidateWs();
+      if (Object.keys(projectFields).length > 0) {
+        await apiPatch(projectPath(""), projectFields);
+      }
+      if (hasRevisionFields) {
+        await apiPatch(projectPath(`/revisions/${revisionId}`), revisionFields);
       }
 
       invalidateWs();
@@ -2578,7 +2586,7 @@ function percentToRatio(percent: number | null | undefined): number | null | und
       status: z.enum(["Open", "Pending", "Awarded", "DidNotGet", "Declined", "Cancelled", "Closed", "Other"]).optional(),
       type: z.enum(["Firm", "Budget", "BudgetDNE"]).optional().describe("Quote type: Firm (binding), Budget (estimate), BudgetDNE (do not exceed)"),
       title: z.string().optional().describe("Revision title"),
-      description: z.string().optional(),
+      description: z.string().optional().describe("Customer-facing front-of-quote scope narrative for Setup → General → Description / Scope of Work. Use substantive paragraphs scaled to project complexity; HTML or plain text with blank lines. This is separate from leadLetter and internal scratchpad."),
       notes: z.string().optional().describe("Customer-facing estimate notes that may appear in quote/PDF output."),
       scratchpad: z.string().optional().describe("Internal estimator/agent notes and scratch work. Not customer-facing."),
       defaultMarkup: z.coerce.number().optional().describe("Default markup percentage for new items"),
@@ -2596,12 +2604,14 @@ function percentToRatio(percent: number | null | undefined): number | null | und
       printPhaseTotalOnly: z.boolean().optional().describe("Show only phase totals, hide individual items"),
     },
     async (input) => {
-      const wsData = await apiGet(projectPath("/workspace"));
-      const ws = wsData.workspace || wsData;
-      const revisionId = ws.revisions?.[0]?.id || ws.currentRevisionId;
+      const revisionId = await resolveRevisionId();
       if (!revisionId) {
-        return { content: [{ type: "text" as const, text: "Error: Could not determine current revision ID" }] };
+        return { content: [{ type: "text" as const, text: "Error: Could not determine current revision ID" }], isError: true };
       }
+      if (input.description && !/<[a-z][\s\S]*>/i.test(input.description)) {
+        input.description = plainTextToHtml(input.description);
+      }
+      invalidateWs();
       await apiPatch(projectPath(`/revisions/${revisionId}`), input);
       const updated: string[] = Object.keys(input).filter(k => (input as any)[k] !== undefined);
       return { content: [{ type: "text" as const, text: `Updated revision: ${updated.join(", ")}` }] };

@@ -102,7 +102,7 @@ async function readDrawingImage(input: {
 
   const base64 = typeof result.image === "string" ? result.image.match(/^data:image\/png;base64,(.+)$/)?.[1] : undefined;
   if (!result.success || !base64) {
-    return { content: [{ type: "text" as const, text: `Could not read the page: ${result.message ?? result.error ?? "unknown error"}` }] };
+    return { isError: true, content: [{ type: "text" as const, text: `Could not read the page: ${result.message ?? result.error ?? "unknown error"}` }] };
   }
 
   const { image: _image, imageHash: _hash, duration_ms: _ms, ...raw } = result;
@@ -438,6 +438,8 @@ COMMON PITFALLS:
     `Look at a drawing page yourself. This is the primary way to read drawings: you get the sheet as an upright image sized for you to see clearly, plus its real text layer with positions, its layout regions (views/details/tables) and a zoom grid.
 
 USE IT FOR every drawing that drives scope or quantity, page by page. Then zoom with readDrawingTile on the views, notes, schedules and dimensions you will rely on. Dimensions and notes on CAD sheets are often drawn as strokes (vectorTextLikely=true): they are NOT in textLines and can only be read from the image, so zoom until you can read them.
+
+If overview analysis times out, try readDrawingTile on the same page with bbox {x:0,y:0,width:1,height:1} to see the sheet without optional layout analysis, then zoom into details. A failed request does not mean the PDF itself is unreadable.
 
 OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] ("R3 view \"label\" @x,y,w,h", normalized to the image), grid (rows x cols tile ids like "r2c3"), textLines[] ("exact text @x,y,w,h", up to 40; fullText:true for all), and vectorTextLikely. Every @x,y,w,h is normalized 0..1 in THIS image's frame, after rotation (x right, y down from the top-left of the image you see), and can be passed straight to readDrawingTile as bbox. fullText:true adds full per-line boxes only when you need every line.
 
