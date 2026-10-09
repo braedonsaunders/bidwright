@@ -62,9 +62,10 @@ export function compactPageReadMeta(meta: Record<string, any>, mode: "overview" 
   const shown = lines.slice(0, limit).map((line: { text: string; bbox?: NormBox }) =>
     fullText ? { text: line.text, bbox: line.bbox } : `${line.text} @${compactBox(line.bbox) ?? ""}`);
   const total = Number(meta.textLinesTotal ?? lines.length);
-  const { textLines: _lines, textLinesTotal: _total, textLinesTruncated: _truncated, regions, grid, ...rest } = meta;
+  const { textLines: _lines, textLinesTotal: _total, textLinesTruncated: _truncated, regions, grid, analysisWarnings, ...rest } = meta;
   return {
     ...rest,
+    ...(Array.isArray(analysisWarnings) ? { analysisWarnings: analysisWarnings.filter((warning): warning is string => typeof warning === "string") } : {}),
     ...(grid ? { grid: { rows: grid.rows, cols: grid.cols, tileIds: (grid.tiles ?? []).map((tile: { id: string }) => tile.id) } } : {}),
     ...(Array.isArray(regions) ? {
       regions: regions.map((region: { id: string; kind: string; label?: string; bbox?: NormBox }) =>
