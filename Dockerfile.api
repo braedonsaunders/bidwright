@@ -1,4 +1,4 @@
-FROM node:22-bookworm-slim AS base
+FROM public.ecr.aws/docker/library/node:22-bookworm-slim AS base
 RUN corepack enable
 WORKDIR /app
 
@@ -64,7 +64,7 @@ FROM builder AS app
 RUN rm -rf node_modules apps/*/node_modules packages/*/node_modules
 
 # --- LibreDWG builder stage ---
-FROM debian:bookworm-slim AS libredwg-builder
+FROM public.ecr.aws/docker/library/debian:bookworm-slim AS libredwg-builder
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     pkg-config \
@@ -84,7 +84,7 @@ RUN wget -q -O /tmp/libredwg.tar.gz "https://github.com/LibreDWG/libredwg/releas
     && rm -rf /tmp/libredwg.tar.gz /tmp/libredwg-src
 
 # --- runtime stage ---
-FROM node:22-bookworm-slim AS runner
+FROM public.ecr.aws/docker/library/node:22-bookworm-slim AS runner
 RUN corepack enable
 # bubblewrap is the per-tenant CLI sandbox primitive used by
 # BubblewrappedHost whenever BIDWRIGHT_MODE=server.
