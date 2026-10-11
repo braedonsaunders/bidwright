@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { imageProbePattern } from "./image-probe-pattern.js";
 import { scoreSavedOutcome } from "./outcome-score.js";
-import { blindCopiedRevision, BLIND_REVISION_PATCH } from "./blind-copy.js";
+import { blindCopiedRevision, BLIND_REVISION_PATCH, excludeCopiedAnswerFiles } from "./blind-copy.js";
 import { referenceEvalOutputDir } from "./eval-output.js";
 import { normalizedUnit, pickupSnapshot, scoreTakeoff, summarizeScores, type TakeoffReference, type TakeoffResult } from "./takeoff-reference.js";
 
@@ -231,6 +231,24 @@ test("shared blinding clears copied revision narrative and refuses the source pr
   assert.equal(revision.status, "Open");
   for (const key of ["description", "notes", "scratchpad", "leadLetter", "followUpNote", "shippingMethod", "shippingTerms", "freightOnBoard"] as const) assert.equal(revision[key], "");
   await assert.rejects(blindCopiedRevision("source", "source", "rev", async () => assert.fail("Source mutation")), /isolated/);
+});
+
+test("answer-file exclusions remove only explicitly named files on the copy", async () => {
+  const files = [
+    { id: "answer", projectId: "copy", name: "estimate-summary.md", type: "file" },
+    { id: "bom", projectId: "copy", name: "BOM.xlsx", type: "file" },
+  ];
+  const removed: string[] = [];
+  assert.deepEqual(await excludeCopiedAnswerFiles("source", "copy", ["estimate-summary.md"], files,
+    async (path) => removed.push(path)), [{ id: "answer", name: "estimate-summary.md" }]);
+  assert.deepEqual(removed, ["/projects/copy/files/answer"]);
+  const neverRemove = async () => assert.fail("Unsafe deletion");
+  await assert.rejects(excludeCopiedAnswerFiles("source", "source", [], files, neverRemove), /isolated/);
+  await assert.rejects(excludeCopiedAnswerFiles("source", "copy", ["missing.md"], files, neverRemove), /not found/);
+  for (const change of [{ projectId: "source" }, { type: "directory" }, { documentId: "source-doc" }]) {
+    await assert.rejects(excludeCopiedAnswerFiles("source", "copy", ["estimate-summary.md"],
+      [{ ...files[0], ...change }], neverRemove), /unlinked files/);
+  }
 });
 
 test("reference output defaults outside the checkout, including matrix child destinations", async () => {

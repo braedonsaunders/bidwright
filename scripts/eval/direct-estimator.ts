@@ -12,6 +12,7 @@
  *   BIDWRIGHT_AUTH_TOKEN_FILE=<file> \
  *   npx tsx scripts/eval/direct-estimator.ts prepare --source <projectId> \
  *     --out <dir> --ledger <file> [--scope-file <file>] [--label <name>] [--not-blind] [--runtime claude-code|codex]
+ *     [--exclude-answer-file <exact name>] (repeat for known saved estimate artifacts)
  *   npx tsx scripts/eval/direct-estimator.ts cleanup --project <projectId>
  *
  * `prepare` copies the source project (estimate reset), records the copy in
@@ -23,7 +24,7 @@
  * lessons, which include the source quote itself. askUser is always disabled
  * because no in-app run exists to carry the answer.
  */
-import { blindCopiedRevision } from "./blind-copy.js";
+import { blindCopiedRevision, excludeCopiedAnswerFiles } from "./blind-copy.js";
 import { spawnSync } from "node:child_process";
 import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -108,6 +109,8 @@ async function prepare() {
   // Benchmarks and calibration lessons include the source quote itself, so a
   // run compared against that quote must not see them.
   const blind = !rest.includes("--not-blind");
+  const excludedFileNames = rest.flatMap((value, index) => value === "--exclude-answer-file" ? [rest[index + 1]] : []);
+  if (excludedFileNames.some((name) => !name || name.startsWith("--"))) throw new Error("--exclude-answer-file needs an exact file name");
 
   const copied = await api<any>(`/projects/${source}/copy`, { body: { resetEstimate: true } });
   const copiedWorkspace = copied?.workspace ?? copied;
@@ -115,6 +118,11 @@ async function prepare() {
   if (!projectId || projectId === source) throw new Error(`copy returned no isolated project: ${JSON.stringify(copied).slice(0, 200)}`);
   await appendFile(ledger, `${projectId} A ${label} ${new Date().toISOString()}\n`);
   console.error(`copied ${source} -> ${projectId} (ledgered)`);
+
+  const excludedAnswerFiles = excludedFileNames.length
+    ? await excludeCopiedAnswerFiles(source, projectId, excludedFileNames,
+      await api(`/projects/${projectId}/files`), (path) => api(path, { method: "DELETE" }))
+    : [];
 
   for (const document of copiedWorkspace?.sourceDocuments ?? []) {
     if (ARCHIVE.test(String(document.fileName ?? ""))) {
@@ -139,6 +147,7 @@ async function prepare() {
 
   const dir = resolve(out, projectId);
   await mkdir(join(dir, "documents"), { recursive: true });
+  await writeFile(join(dir, "excluded-answer-files.json"), JSON.stringify(excludedAnswerFiles, null, 2));
   await mkdir(join(dir, ".bidwright"), { recursive: true });
   const documents = (workspace?.sourceDocuments ?? []).map((d: any) => ({
     id: d.id,
