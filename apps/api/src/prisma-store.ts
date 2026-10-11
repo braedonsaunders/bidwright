@@ -1,3 +1,4 @@
+import { mutateWorkspaceStateLocked, patchTakeoffCalibrations, type CalibrationChange } from "./services/takeoff-calibration-state.js";
 import { randomUUID, createHash } from "node:crypto";
 import { hashPassword } from "./services/auth-service.js";
 import { derivePagesForIndexing } from "./services/page-provenance.js";
@@ -7350,45 +7351,23 @@ export class PrismaApiStore {
   }
 
   async updateWorkspaceState(projectId: string, patch: Record<string, unknown>) {
+    // Calibrations have a dedicated per-key operation; stale workspace snapshots
+    // cannot replace them when updating unrelated UI state.
+    const { takeoffCalibrations: _ignored, ...rest } = patch;
+    return this.mutateWorkspaceState(projectId, state => ({ ...state, ...rest }));
+  }
+
+  async updateTakeoffCalibrationKeys(projectId: string, documentId: string, changes: CalibrationChange[], options: { agent?: boolean; replaceHuman?: boolean } = {}) {
+    return this.mutateWorkspaceState(projectId, state => patchTakeoffCalibrations(state, documentId, changes, options));
+  }
+
+  private async mutateWorkspaceState(projectId: string, change: (state: Record<string, unknown>) => Record<string, unknown>) {
     await this.requireProject(projectId);
-    const existing = await this.db.workspaceState.findFirst({ where: { projectId } });
-
-    if (!existing) {
+    const ws = await mutateWorkspaceStateLocked(this.db, projectId, change, async () => {
       const { quote, revision } = await this.findCurrentRevision(projectId);
-      const worksheet = revision
-        ? await this.db.worksheet.findFirst({ where: { revisionId: revision.id }, orderBy: { order: "asc" } })
-        : null;
-
-      const state = {
-        activeTab: "overview",
-        selectedQuoteId: quote?.id ?? null,
-        selectedRevisionId: revision?.id ?? null,
-        selectedWorksheetId: worksheet?.id ?? null,
-        selectedDocumentId: null,
-        openDocumentIds: [],
-        filters: { documentKinds: [], search: "" },
-        ...patch,
-      };
-
-      const ws = await this.db.workspaceState.create({
-        data: {
-          projectId,
-          state: state as any,
-          updatedAt: new Date(),
-        },
-      });
-
-      const record = mapWorkspaceState(ws);
-      await writeJsonAtomic(resolveApiPath(record.storagePath), record);
-      return record;
-    }
-
-    const merged = { ...(existing.state as any), ...patch };
-    const ws = await this.db.workspaceState.update({
-      where: { id: existing.id },
-      data: { state: merged as any, updatedAt: new Date() },
+      const worksheet = revision ? await this.db.worksheet.findFirst({ where: { revisionId: revision.id }, orderBy: { order: "asc" } }) : null;
+      return { activeTab: "overview", selectedQuoteId: quote?.id ?? null, selectedRevisionId: revision?.id ?? null, selectedWorksheetId: worksheet?.id ?? null, selectedDocumentId: null, openDocumentIds: [], filters: { documentKinds: [], search: "" } };
     });
-
     const record = mapWorkspaceState(ws);
     await writeJsonAtomic(resolveApiPath(record.storagePath), record);
     return record;
@@ -15131,11 +15110,11 @@ export class PrismaApiStore {
     return mapPickup(annotation);
   }
 
-  async updatePickup(pickupId: string, patch: PickupPatchInput) {
+  async updatePickup(pickupId: string, patch: PickupPatchInput, expectedUpdatedAt?: string) {
     const annotation = await this.db.pickup.findFirst({ where: { id: pickupId } });
     if (!annotation) throw new Error(`Takeoff annotation ${pickupId} not found`);
 
-    const data: any = { updatedAt: new Date() };
+    const data: any = { updatedAt: new Date(Math.max(Date.now(), annotation.updatedAt.getTime() + 1)) };
     if (patch.label !== undefined) data.label = patch.label;
     if (patch.color !== undefined) data.color = patch.color;
     if (patch.lineThickness !== undefined) data.lineThickness = patch.lineThickness;
@@ -15146,7 +15125,12 @@ export class PrismaApiStore {
     if (patch.calibration !== undefined) data.calibration = patch.calibration as any;
     if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
 
-    const updated = await this.db.pickup.update({ where: { id: pickupId }, data });
+    const updated = await this.db.pickup.update({
+      where: { id: pickupId, ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}) }, data,
+    }).catch(error => {
+      if (expectedUpdatedAt && error.code === "P2025") throw new Error("Pickup changed while measuring; refresh before applying this edit");
+      throw error;
+    });
 
     // Live sync: if measurement/points/calibration changed, cascade to linked line items
     if (patch.measurement !== undefined || patch.points !== undefined || patch.calibration !== undefined) {

@@ -23,6 +23,7 @@ import { isToolAllowed } from "./tool-access.js";
 import { registerQuoteTools } from "./tools/quote-tools.js";
 import { registerKnowledgeTools } from "./tools/knowledge-tools.js";
 import { registerSystemTools } from "./tools/system-tools.js";
+import { registerTakeoffTools } from "./tools/takeoff-tools.js";
 import { registerVisionTools } from "./tools/vision-tools.js";
 import { registerDrawingEvidenceTools } from "./tools/drawing-evidence-tools.js";
 import { registerReviewTools } from "./tools/review-tools.js";
@@ -95,6 +96,7 @@ export async function registerTools(server: McpServer, options: { mode?: string;
   registerWebTools(server);
   registerSourceTools(server);
 
+  registerTakeoffTools(server);
   await registerIntegrationTools(server);
 
   server.tool(

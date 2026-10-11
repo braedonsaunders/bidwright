@@ -23,6 +23,17 @@ export interface AgentToolDefinition {
 
 export const AGENT_TOOL_REGISTRY = {
   getSourceOverview: { id: "getSourceOverview", displayName: "Read source overview", category: "documents", mutates: false },
+  getTakeoffCalibration: { id: "getTakeoffCalibration", displayName: "getTakeoffCalibration", category: "vision", mutates: false },
+  setTakeoffCalibration: { id: "setTakeoffCalibration", displayName: "setTakeoffCalibration", category: "vision", mutates: true },
+  measureTakeoff: { id: "measureTakeoff", displayName: "measureTakeoff", category: "vision", mutates: false },
+  saveTakeoffMeasurement: { id: "saveTakeoffMeasurement", displayName: "saveTakeoffMeasurement", category: "vision", mutates: true },
+  updateTakeoffMeasurement: { id: "updateTakeoffMeasurement", displayName: "updateTakeoffMeasurement", category: "vision", mutates: true },
+  traceDrawingRun: { id: "traceDrawingRun", displayName: "traceDrawingRun", category: "vision", mutates: false },
+  detectDrawingScale: { id: "detectDrawingScale", displayName: "detectDrawingScale", category: "vision", mutates: false },
+  extractDrawingLegend: { id: "extractDrawingLegend", displayName: "extractDrawingLegend", category: "vision", mutates: false },
+  createSymbolTemplateFromRegion: { id: "createSymbolTemplateFromRegion", displayName: "createSymbolTemplateFromRegion", category: "vision", mutates: true },
+  renderTakeoffOverlay: { id: "renderTakeoffOverlay", displayName: "renderTakeoffOverlay", category: "vision", mutates: false },
+
   getWorkspace: { id: "getWorkspace", displayName: "Read workspace", category: "workspace" },
   getWorksheetTree: { id: "getWorksheetTree", displayName: "Read worksheet tree", category: "worksheet" },
   getItemConfig: { id: "getItemConfig", displayName: "Read line item config", category: "worksheet" },
