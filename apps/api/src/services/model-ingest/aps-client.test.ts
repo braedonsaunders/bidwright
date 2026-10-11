@@ -161,3 +161,35 @@ test("APS properties timeout cannot become an indexed empty model", async (t) =>
     ? jsonResponse({ access_token: "test", expires_in: 3600 }) : jsonResponse({ result: "success" }, 202));
   await assert.rejects(new ApsClient("client", "secret").getViewProperties("urn", "view", 10), /still processing.*202/);
 });
+
+test("APS Plant3D quantities retain units and exclude containers and duplicate identities", async t => {
+  const client = new ApsClient("client", "secret");
+  client.getMetadataViews = async () => ({ data: { type: "metadata", metadata: [{ guid: "main", role: "3d", name: "Main" }] } });
+  const properties = { Item: { Icon: "Geometry", "Source File": "plant.dwg" }, AutoCAD: {
+    Class: "Pipe", PnPGuid: "pipe-1", Length: "120", Size: '3"', Spec: "150S1", Port1_LengthUnit: "in",
+    Port1_NominalDiameter: "3", Port2_NominalDiameter: "3", MinCutLength: "3", Nozzle1_Length: "99",
+  } };
+  client.getViewProperties = async () => ({ data: { type: "properties", collection: [
+    { objectid: 1, name: "Layer", properties: { Item: { Icon: "Layer" }, AutoCAD: { Length: "999" } } },
+    { objectid: 4, name: "Container", properties: { Item: { Icon: "InsertGroup" }, AutoCAD: { Length: "999" } } },
+    { objectid: 2, name: "Pipe", properties },
+    { objectid: 3, name: "Duplicate", properties },
+  ] } });
+  const { objects } = await client.extractModelData("urn");
+  const pipe = objects.find((o) => o.objectid === 3)!; // Flattened stack order selects this physical occurrence.
+  assert.deepEqual(pipe.quantities, [{ quantityType: "Length", value: 120, unit: "in" }, { quantityType: "nominal_diameter", value: 3, unit: "in" }]);
+  assert.equal(pipe.properties["AutoCAD.Size"], '3"');
+  assert.equal(objects.filter((o) => o.estimateRelevant).length, 1);
+  assert.equal(objects.filter((o) => !o.estimateRelevant).every((o) => o.quantities.length === 0), true);
+  t.mock.method(ApsClient.prototype, "getObjectDetails", async () => ({ urn: "urn", size: 1 }) as any);
+  t.mock.method(ApsClient.prototype, "getManifest", async () => ({ status: "success" }) as any);
+  t.mock.method(ApsClient.prototype, "extractModelData", async () => ({ objects, views: [] }));
+  const { autodeskApsAdapter } = await import("./adapters/autodesk-aps-adapter.js");
+  const result = await autodeskApsAdapter.ingest({ id: "source", projectId: "project", fileName: "plant.nwd", source: "source_document" }, {
+    absPath: "/unused", checksum: "checksum", size: 1, format: "nwd", settings: { integrations: { autodeskClientId: "test", autodeskClientSecret: "test" } },
+  });
+  assert.equal(result.status, "indexed");
+  assert.equal(result.bomRows.length, 1);
+  assert.deepEqual((result.bomRows[0].quantities as any[]).find(q => q.type === "Length"), { type: "Length", value: 10, unit: "ft" });
+
+});

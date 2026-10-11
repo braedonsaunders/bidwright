@@ -1,3 +1,4 @@
+import { resolveProjectFileNode } from "./project-source-resolver.js";
 import { z } from "zod";
 import { prisma } from "@bidwright/db";
 import type { PrismaApiStore } from "../prisma-store.js";
@@ -38,11 +39,11 @@ export async function saveSourceQuantityTakeoff(
   projectId: string,
   input: z.infer<typeof sourceQuantitySchema>,
 ) {
-  const fileNodeId = input.documentId.startsWith("file-") ? input.documentId.slice(5) : null;
-  const source = fileNodeId
-    ? await prisma.fileNode.findFirst({ where: { id: fileNodeId, projectId, type: "file" } })
-    : await prisma.sourceDocument.findFirst({ where: { id: input.documentId, projectId } });
-  if (!source) throw new Error("Source not found in project");
+  const doc = await prisma.sourceDocument.findFirst({ where: { id: input.documentId, projectId } });
+  const node = doc ? null : await resolveProjectFileNode(projectId, input.documentId,
+    (id) => prisma.fileNode.findFirst({ where: { id, projectId, type: "file" } }));
+  if (!doc && !node) throw new Error("Source not found in project");
+  if (node) input = { ...input, documentId: `file-${node.id}` };
   const pickup = await store.ensureSourceQuantityPickup(projectId, sourceQuantityPickup(input));
   if (!input.linkToItemId) return { pickup, link: null };
   // As with PDF takeoff, a failed optional link leaves a visible, saved pickup.

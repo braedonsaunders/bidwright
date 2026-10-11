@@ -20,14 +20,19 @@ test("quote tools save and expose the customer-facing revision narrative", async
         project: { name: "Cooling water installation", clientName: "Customer" },
         currentRevision: missingRevision ? {} : revision,
         revisions: missingRevision ? [] : [oldRevision, revision],
+        conditions: [{ id: "condition-1", type: "exclusion", value: "Electrical excluded" }],
       } }));
       return;
+    }
+    if (request.method === "DELETE" && request.url === "/projects/project-test/conditions/condition-1") {
+      writes.push({ path: request.url, body: {} }); response.end("{}"); return;
     }
     if (request.method === "PATCH") {
       let body = "";
       for await (const chunk of request) body += chunk;
       const patch = JSON.parse(body);
       writes.push({ path: request.url!, body: patch });
+      if (request.url === "/projects/project-test/conditions/condition-1") { response.end("{}"); return; }
       if (request.url === "/projects/project-test/revisions/revision-active") {
         if (failRevisionSave) {
           response.statusCode = 400;
@@ -94,6 +99,17 @@ test("quote tools save and expose the customer-facing revision narrative", async
     assert.equal(saved.revision.leadLetter, revision.leadLetter);
   });
 
+  await t.test("condition tools expose stored text and use the supported mutation routes", async context => {
+    const client = await connect(context);
+    writes.length = 0;
+    const conditions = readResult(await client.callTool({ name: "getConditions", arguments: {} }));
+    assert.equal(conditions[0].text, "Electrical excluded");
+    assert.notEqual((await client.callTool({ name: "updateCondition", arguments: { conditionId: "condition-1", text: "Painting excluded" } })).isError, true);
+    assert.deepEqual(writes[0], { path: "/projects/project-test/conditions/condition-1", body: { value: "Painting excluded" } });
+    assert.notEqual((await client.callTool({ name: "deleteCondition", arguments: { conditionId: "condition-1" } })).isError, true);
+    assert.equal(writes[1].path, "/projects/project-test/conditions/condition-1");
+  });
+
   await t.test("updateQuote saves paragraphs to the active revision and exposes them on readback", async context => {
     const client = await connect(context);
     writes.length = 0;
@@ -117,11 +133,12 @@ test("quote tools save and expose the customer-facing revision narrative", async
     writes.length = 0;
     const result = await client.callTool({ name: "updateQuote", arguments: {
       projectName: "Cooling water replacement",
+      projectAddress: "123 Plant Road",
       description: "<p>Included installation.</p>",
       notes: "Owner supplies the pumps.",
     } });
     assert.notEqual(result.isError, true);
-    assert.deepEqual(writes[0], { path: "/projects/project-test", body: { projectName: "Cooling water replacement" } });
+    assert.deepEqual(writes[0], { path: "/projects/project-test", body: { projectName: "Cooling water replacement", location: "123 Plant Road" } });
     assert.deepEqual(writes[1], { path: "/projects/project-test/revisions/revision-active", body: {
       title: "Cooling water replacement", description: "<p>Included installation.</p>", notes: "Owner supplies the pumps.",
     } });

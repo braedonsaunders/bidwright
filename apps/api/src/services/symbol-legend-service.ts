@@ -1,3 +1,4 @@
+import { resolveProjectFileNode } from "./project-source-resolver.js";
 // Symbol legend reader — extract legend / schedule entries from a drawing
 // page using Azure Document Intelligence's prebuilt-layout model.
 //
@@ -153,7 +154,7 @@ export async function extractLegendFromPage(
   }
 
   if (!storagePath) {
-    const node = await prisma.fileNode.findFirst({ where: { id: documentId.replace(/^file-/, ""), projectId } });
+    const node = await resolveProjectFileNode(projectId, documentId, (id) => prisma.fileNode.findFirst({ where: { id, projectId } }));
     if (node?.storagePath && node.type !== "directory") {
       storagePath = node.storagePath;
       fileName = node.name;

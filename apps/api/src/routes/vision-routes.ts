@@ -1,3 +1,4 @@
+import { resolveProjectSource } from "../services/project-source-resolver.js";
 import type { FastifyInstance } from "fastify";
 import { resolveApiPath } from "../paths.js";
 import { access, readFile } from "node:fs/promises";
@@ -9,32 +10,13 @@ import { validateAgentProjectImage } from "../services/project-image-service.js"
 
 /** Helper: resolve a document's absolute PDF path from its storagePath. */
 async function resolveDocPdf(store: any, projectId: string, documentId: string): Promise<{ absPath: string; doc: any } | { error: string; status: number }> {
-  const doc = await store.getDocument(projectId, documentId);
-  if (doc) {
+  const source = await resolveProjectSource(store, projectId, documentId);
+  if (source) {
+    const { doc, fileNodeId } = source;
     if (!doc.storagePath) return { error: "Document has no file on disk", status: 400 };
     const absPath = resolveApiPath(doc.storagePath);
     try { await access(absPath); } catch { return { error: `PDF not on disk: ${doc.storagePath}`, status: 404 }; }
-    return { absPath, doc };
-  }
-
-  const fileNodeId = documentId.startsWith("file-") ? documentId.slice(5) : documentId;
-  if (typeof store.getFileNode === "function") {
-    const node = await store.getFileNode(fileNodeId);
-    if (node?.projectId === projectId && node.type !== "directory") {
-      if (node.documentId) {
-        const nodeDoc = await store.getDocument(projectId, node.documentId);
-        if (nodeDoc?.storagePath) {
-          const absPath = resolveApiPath(nodeDoc.storagePath);
-          try { await access(absPath); } catch { return { error: `PDF not on disk: ${nodeDoc.storagePath}`, status: 404 }; }
-          return { absPath, doc: { ...nodeDoc, fileNodeId: node.id } };
-        }
-      }
-      if (node.storagePath) {
-        const absPath = resolveApiPath(node.storagePath);
-        try { await access(absPath); } catch { return { error: `PDF not on disk: ${node.storagePath}`, status: 404 }; }
-        return { absPath, doc: { id: node.id, fileName: node.name, storagePath: node.storagePath, metadata: node.metadata ?? {}, source: "file_node" } };
-      }
-    }
+    return { absPath, doc: { ...doc, fileNodeId } };
   }
 
   if (typeof store.getKnowledgeBook === "function") {
@@ -49,7 +31,9 @@ async function resolveDocPdf(store: any, projectId: string, documentId: string):
   return { error: "Document not found", status: 404 };
 }
 
-async function repairStoredNativePdfPageCount(doc: any, nativePageCount: unknown) {
+export async function repairStoredNativePdfPageCount(doc: any, nativePageCount: unknown) {
+  // Files and library books are readable sources, but have no SourceDocument row to repair.
+  if (doc?.source === "file_node" || doc?.source === "knowledge_book") return;
   const pageCount = Number(nativePageCount);
   if (!doc?.id || !Number.isFinite(pageCount) || pageCount <= 0) return;
   const normalizedPageCount = Math.floor(pageCount);

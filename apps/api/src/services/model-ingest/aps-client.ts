@@ -367,6 +367,7 @@ export class ApsClient {
       material: string;
       system: string;
       properties: Record<string, unknown>;
+      estimateRelevant: boolean;
       quantities: Array<{ quantityType: string; value: number; unit: string }>;
     }>;
     views: ApsMetadataResponse["data"]["metadata"];
@@ -384,6 +385,7 @@ export class ApsClient {
     const propertyObjects = propsResponse.data?.collection ?? propsResponse.data?.objects ?? [];
     const flatObjects = flattenApsTree(propertyObjects);
 
+    const seenPhysicalIds = new Set<string>();
     const mapped = flatObjects.map((obj) => {
       const props = obj.properties ?? {};
       const classVal = firstStringValue(props, "Class", "Item Class", "__category__", "Category", "Layer") || "";
@@ -403,7 +405,14 @@ export class ApsClient {
         "System",
       ) || "";
 
-      const quantities = extractQuantities(props);
+      const icon = String(apsPropertyValue(props.Item?.Icon) ?? "");
+      const container = /^(File|Layer|Group|Insert ?Group|Composite ?Object)$/i.test(icon) || Boolean(obj.children?.length);
+      const guid = firstStringValue(props, "PnPGuid", "GUID");
+      const physicalKey = guid ? `${firstStringValue(props, "Source File") ?? ""}:${guid}` : "";
+      const duplicate = !container && Boolean(physicalKey && seenPhysicalIds.has(physicalKey));
+      if (!container && physicalKey) seenPhysicalIds.add(physicalKey);
+      const estimateRelevant = !container && !duplicate;
+      const quantities = estimateRelevant ? extractQuantities(props) : [];
 
       return {
         objectid: obj.objectid,
@@ -413,7 +422,8 @@ export class ApsClient {
         level: levelVal,
         material: materialVal,
         system: systemVal,
-        properties: serializeProperties(props),
+        properties: { ...serializeProperties(props), estimateRelevant, ...(duplicate ? { duplicatePhysicalIdentity: physicalKey } : {}) },
+        estimateRelevant,
         quantities,
       };
     });
@@ -466,7 +476,11 @@ function extractQuantities(
   ]);
 
   for (const group of Object.values(props)) {
+    const lengthUnit = firstStringValue({ group }, "LengthUnit", "Length Unit", "Port1_LengthUnit");
     for (const [key, entry] of Object.entries(group)) {
+      // Port/nozzle dimensions and minimum cut lengths describe components or
+      // fabrication constraints, not additional installed pipe lengths.
+      if (/^(Port\d+_|Nozzle\d+_|MinCutLength$|MaxCutLength$)/i.test(key)) continue;
       const rawValue = apsPropertyValue(entry);
       const value = typeof rawValue === "number"
         ? rawValue
@@ -483,10 +497,15 @@ function extractQuantities(
         quantities.push({
           quantityType: key,
           value,
-          unit: apsPropertyUnits(entry),
+          unit: apsPropertyUnits(entry) || (lengthUnit && /length|width|height|depth|thickness|radius|diameter|offset|elevation/i.test(lowerKey) ? lengthUnit : ""),
         });
       }
     }
+  }
+  const nominal = firstStringValue(props, "NominalDiameter", "Port1_NominalDiameter");
+  const nominalUnit = firstStringValue(props, "LengthUnit", "Port1_LengthUnit");
+  if (nominal && nominalUnit && Number.isFinite(Number(nominal))) {
+    quantities.push({ quantityType: "nominal_diameter", value: Number(nominal), unit: nominalUnit });
   }
   return quantities;
 }

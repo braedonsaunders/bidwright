@@ -5,7 +5,7 @@ import { buildEstimateLens, createId, makeCanonicalManifest, makeProvenance } fr
 import type { ModelAdapterIngestResult, ModelIngestAdapter, ModelIngestContext, ModelIngestSettings, ModelIngestSource } from "../types.js";
 
 const ADAPTER_ID = "autodesk-aps.model-derivative";
-const ADAPTER_VERSION = "2.0.0";
+const ADAPTER_VERSION = "2.1.0";
 const FORMATS = new Set(["rvt", "dwg", "nwd", "nwf", "nwc"]);
 const MAX_TRANSLATION_WAIT_MS = 600_000;
 
@@ -138,9 +138,9 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
         system: obj.system || undefined,
         level: obj.level || undefined,
         material: obj.material || undefined,
-        estimateRelevant: isEstimateRelevant(obj.elementClass, obj.elementType),
+        estimateRelevant: obj.estimateRelevant && isEstimateRelevant(obj.elementClass, obj.elementType),
         classification,
-        properties: Object.keys(obj.properties).length > 0 ? obj.properties : undefined,
+        properties: { ...obj.properties, estimateRelevant: obj.estimateRelevant },
       };
     });
     const elementIdByExternalId = new Map(elements.map((element) => [element.externalId, element.id]));
@@ -157,8 +157,8 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
           id: createId("mq"),
           elementId,
           quantityType: q.quantityType,
-          value: q.value,
-          unit: q.unit || guessUnit(q.quantityType),
+          value: /^length$/i.test(q.quantityType) && q.unit === "in" ? q.value / 12 : q.value,
+          unit: /^length$/i.test(q.quantityType) && q.unit === "in" ? "ft" : q.unit,
           method: "aps_model_derivative_property",
           confidence: 0.85,
         });
@@ -263,15 +263,6 @@ function isEstimateRelevant(elementClass: string, elementType: string): boolean 
   return keywords.some((kw) => lower.includes(kw));
 }
 
-function guessUnit(quantityType: string): string {
-  const lower = quantityType.toLowerCase();
-  if (lower.includes("area")) return "sq ft";
-  if (lower.includes("volume")) return "cu ft";
-  if (lower.includes("length") || lower.includes("width") || lower.includes("height") || lower.includes("depth") || lower.includes("perimeter") || lower.includes("thickness") || lower.includes("radius") || lower.includes("diameter") || lower.includes("offset") || lower.includes("elevation")) return "ft";
-  if (lower.includes("count")) return "ea";
-  return "";
-}
-
 function guessUnits(format: string): string {
   if (format === "rvt" || format === "dwg") return "ft";
   return "ft";
@@ -287,14 +278,14 @@ function buildBomRows(
     rows.push(q);
     qtyByElement.set(q.elementId ?? "", rows);
   }
-  return elements.map((el) => ({
+  return elements.filter((el) => el.properties?.estimateRelevant !== false).map((el) => ({
     elementId: el.id,
     name: el.name,
     class: el.elementClass,
     type: el.elementType,
     level: el.level,
     material: el.material,
-    quantities: (qtyByElement.get(el.externalId) ?? []).map((q) => ({
+    quantities: (qtyByElement.get(el.id) ?? []).map((q) => ({
       type: q.quantityType,
       value: q.value,
       unit: q.unit,

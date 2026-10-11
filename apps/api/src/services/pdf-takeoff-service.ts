@@ -1,3 +1,4 @@
+import { resolveProjectSource } from "./project-source-resolver.js";
 import type { PrismaApiStore } from "../prisma-store.js";
 import { runPdfTakeoff } from "@bidwright/vision";
 import { resolveApiPath } from "../paths.js";
@@ -61,34 +62,10 @@ export class PdfTakeoffService {
       (view?.fileNodeId ? `file-${view.fileNodeId}` : view?.documentId);
     const pageNumber = view?.pageNumber ?? input.pageNumber ?? 1;
     if (!documentId) throw new Error("documentId or viewId is required");
-    let doc: {
-      id: string;
-      storagePath?: string | null;
-      checksum?: string;
-      source?: string;
-      fileName?: string;
-    } | null = documentId.startsWith("file-")
-      ? null
-      : await this.store.getDocument(projectId, documentId);
-    let nodeId: string | undefined;
-    if (!doc && this.store.getFileNode) {
-      const node = await this.store.getFileNode(
-        documentId.replace(/^file-/, ""),
-      );
-      if (node?.projectId === projectId && node.type !== "directory") {
-        nodeId = node.id;
-        documentId = `file-${node.id}`;
-        const linked = node.documentId
-          ? await this.store.getDocument(projectId, node.documentId)
-          : null;
-        doc = linked ?? {
-          id: node.id,
-          storagePath: node.storagePath,
-          fileName: node.name,
-          source: "file_node",
-        };
-      }
-    }
+    const resolved = await resolveProjectSource(this.store, projectId, documentId);
+    const doc = resolved?.doc;
+    const nodeId = resolved?.fileNodeId;
+    documentId = resolved?.documentId ?? documentId;
     if (
       view &&
       (view.fileNodeId

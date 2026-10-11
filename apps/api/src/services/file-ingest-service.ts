@@ -1,3 +1,4 @@
+import { resolveProjectFileNode } from "./project-source-resolver.js";
 import { prisma } from "@bidwright/db";
 import { generateFileIngestManifest, getFileIngestCapabilities } from "./file-ingest/orchestrator.js";
 import type { FileIngestSettings, FileIngestSource, FileIngestSourceKind } from "./file-ingest/types.js";
@@ -40,7 +41,7 @@ export async function resolveProjectFileIngestSource(
     };
   }
 
-  const node = await prisma.fileNode.findFirst({ where: { id: sourceId, projectId, type: "file" } });
+  const node = await resolveProjectFileNode(projectId, sourceId, (id) => prisma.fileNode.findFirst({ where: { id, projectId, type: "file" } }));
   if (!node) throw new Error(`File node ${sourceId} not found`);
   return {
     id: node.id,

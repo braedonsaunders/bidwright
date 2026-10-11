@@ -6,9 +6,12 @@ import { saveSourceQuantityTakeoff, sourceQuantitySchema } from "./source-quanti
 
 test("authored BOM quantities save visible provenance and link through the existing service", async (t) => {
   const saved: any[] = []; const links: any[] = [];
+  const originalDocument = prisma.sourceDocument.findFirst;
+  prisma.sourceDocument.findFirst = (async () => null) as any;
+  t.after(() => { prisma.sourceDocument.findFirst = originalDocument; });
   const originalFile = prisma.fileNode.findFirst, originalItem = prisma.worksheetItem.findFirst;
   t.after(() => { prisma.fileNode.findFirst = originalFile; prisma.worksheetItem.findFirst = originalItem; });
-  prisma.fileNode.findFirst = (async ({ where }: any) => where.id === "node" && where.projectId === "project" ? { id: "node" } : null) as any;
+  prisma.fileNode.findFirst = (async ({ where }: any) => where.id === "node" && where.projectId === "project" ? { id: "node", projectId: "project", type: "file" } : null) as any;
   prisma.worksheetItem.findFirst = (async () => ({ uom: "ft" })) as any;
   const store: any = {
     ensureSourceQuantityPickup: async (_project: string, input: any) => { saved.push(input); return { id: "pickup", ...input }; },
@@ -39,9 +42,12 @@ test("authored BOM quantities save visible provenance and link through the exist
 test("HTTP retries and overlapping saves reuse source pickups and worksheet links", async (t) => {
   const pickups: any[] = [], links: any[] = [];
   let itemQuantity = 0, lockCalls = 0;
+  const originalDocument = prisma.sourceDocument.findFirst;
+  prisma.sourceDocument.findFirst = (async () => null) as any;
+  t.after(() => { prisma.sourceDocument.findFirst = originalDocument; });
   const originalFile = prisma.fileNode.findFirst, originalItem = prisma.worksheetItem.findFirst;
   t.after(() => { prisma.fileNode.findFirst = originalFile; prisma.worksheetItem.findFirst = originalItem; });
-  prisma.fileNode.findFirst = (async () => ({ id: "node" })) as any;
+  prisma.fileNode.findFirst = (async () => ({ id: "node", projectId: "project", type: "file" })) as any;
   prisma.worksheetItem.findFirst = (async () => ({ uom: "ft" })) as any;
   t.mock.method(PrismaApiStore.prototype as any, "recalcLinkedItemQuantity", async () => {
     itemQuantity = links.reduce((sum, link) => sum + link.derivedQuantity, 0);

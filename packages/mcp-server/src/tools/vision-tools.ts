@@ -668,7 +668,7 @@ COMMON PITFALLS:
     "readDrawingPage",
     `Read an upright drawing-page image with viewId, rotation, layout regions, tile grid and positioned text. All returned boxes use normalized 0..1 coordinates in the returned image frame (x right, y down). Concise metadata includes up to 40 text lines; fullText returns all lines, and responseFormat=detailed returns full metadata. readDrawingTile provides a closer view of a region or tile.`,
     {
-      documentId: z.string().describe("Source document id or Files-area file id of the PDF"),
+      documentId: z.string().describe("SourceDocument ID or FileNode ID (fn-…, file-… or Files UI key file-<nodeId>) of the PDF"),
       pageNumber: z.coerce.number().int().min(1).default(1).describe("Page number (1-based)"),
       rotation: z.coerce.number().int().optional().describe("Override auto-orientation, degrees clockwise (0/90/180/270). Normally omit."),
       responseFormat: z.enum(["concise", "detailed"]).default("concise").describe("Detailed returns full page metadata and text boxes."),

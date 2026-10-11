@@ -1,13 +1,16 @@
 type Element = { id: string; name?: string | null; externalId?: string; elementClass?: string; elementType?: string | null; level?: string | null; system?: string | null; material?: string | null; properties?: any; bbox?: any; quantities: any[] };
 
-export function aggregatePersistedElements(elements: Element[], input: { groupBy: string; property?: string; elementIds?: string[]; limit?: number; offset?: number }) {
+export function aggregatePersistedElements(elements: Element[], input: { groupBy: string; property?: string; elementClass?: string; propertyFilters?: Record<string, string>; elementIds?: string[]; limit?: number; offset?: number }) {
   const selected = input.elementIds ? new Set(input.elementIds) : null;
   const duplicateElementIds = input.elementIds?.filter((id, i, ids) => ids.indexOf(id) !== i) ?? [];
   const groups = new Map<string, { key: string; elementIds: string[]; quantities: Map<string, any> }>();
   for (const element of elements) {
     if (selected && !selected.has(element.id)) continue;
+    if (element.properties?.estimateRelevant === false) continue;
+    if (input.elementClass && element.elementClass !== input.elementClass) continue;
+    if (Object.entries(input.propertyFilters ?? {}).some(([key, value]) => String(element.properties?.[key] ?? "") !== value)) continue;
     const field = input.groupBy === "class" ? "elementClass" : input.groupBy === "type" ? "elementType" : input.groupBy;
-    const value = field === "property" ? input.property?.split(".").reduce<any>((v, k) => v?.[k], element.properties) : (element as any)[field];
+    const value = field === "property" ? (input.property ? element.properties?.[input.property] ?? input.property.split(".").reduce<any>((v, k) => v?.[k], element.properties) : undefined) : (element as any)[field];
     const key = value == null ? "(unspecified)" : typeof value === "object" ? JSON.stringify(value) : String(value);
     const group = groups.get(key) ?? { key, elementIds: [] as string[], quantities: new Map<string, any>() };
     group.elementIds.push(element.id);
