@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { extname } from "node:path";
 import { prisma } from "@bidwright/db";
 import type { PrismaApiStore } from "../../prisma-store.js";
@@ -7,13 +7,32 @@ import { resolveApiPath } from "../../paths.js";
 import { parsePcf } from "./pcf-parser.js";
 import { parseSpoolyard } from "./spoolyard-parser.js";
 
+export const MAX_PROJECT_SOURCE_BYTES = 8_000_000;
+export async function readBoundedProjectFile(storagePath: string): Promise<Buffer> {
+  const file = await open(resolveApiPath(storagePath), "r");
+  try {
+    const { size } = await file.stat();
+    if (size > MAX_PROJECT_SOURCE_BYTES) throw new Error(`Source is ${size} bytes; the read limit is 8 MB (${MAX_PROJECT_SOURCE_BYTES} bytes).`);
+    // Read at most the limit plus one byte even if the file grows after stat.
+    const bytes = Buffer.alloc(Math.min(size + 1, MAX_PROJECT_SOURCE_BYTES + 1));
+    let length = 0;
+    while (length < bytes.length) {
+      const { bytesRead } = await file.read(bytes, length, bytes.length - length, null);
+      if (!bytesRead) break;
+      length += bytesRead;
+    }
+    if (length > size) throw new Error("Source grew while reading; retry using the current source (8 MB read limit).");
+    return bytes.subarray(0, length);
+  } finally { await file.close(); }
+}
+
 export type ProjectSource = { sourceId: string; sourceKind: "source_document" | "file_node" };
 export async function readProjectSource(projectId: string, input: ProjectSource) {
   if (input.sourceKind === "source_document") {
     const doc = await prisma.sourceDocument.findFirst({ where: { id: input.sourceId, projectId } });
     if (!doc) throw new Error("Source document not found in project");
     if (!doc.storagePath) throw new Error("Source document has no stored file");
-    return { bytes: await readFile(resolveApiPath(doc.storagePath)), fileName: doc.fileName, documentId: doc.id, fileNodeId: null };
+    return { bytes: await readBoundedProjectFile(doc.storagePath), fileName: doc.fileName, documentId: doc.id, fileNodeId: null };
   }
   const file = await prisma.fileNode.findFirst({ where: { id: input.sourceId, projectId, type: "file" } });
   if (!file) throw new Error("File not found in project");
@@ -21,7 +40,7 @@ export async function readProjectSource(projectId: string, input: ProjectSource)
   if (file.documentId && !doc) throw new Error("File references a source document outside this project or a missing document");
   const storagePath = file.storagePath || doc?.storagePath;
   if (!storagePath) throw new Error("File has no stored content");
-  return { bytes: await readFile(resolveApiPath(storagePath)), fileName: file.name, documentId: doc?.id ?? file.id, fileNodeId: file.id };
+  return { bytes: await readBoundedProjectFile(storagePath), fileName: file.name, documentId: `file-${file.id}`, fileNodeId: file.id };
 }
 
 export async function getPipingMto(projectId: string, input: ProjectSource) {

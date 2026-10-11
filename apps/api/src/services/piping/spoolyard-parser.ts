@@ -25,16 +25,34 @@ export function parseSpoolyard(text: string): PipingMto {
   const catalogItems = doc.specs.flatMap(s => s.fittings);
   const fittings = new Map(catalogItems.map(f => [f.id, f]));
   if (fittings.size !== catalogItems.length) throw new Error("Duplicate piping catalog id");
+  const runs = new Map(doc.runs.map(r => [r.id, r]));
+  const connected = new Map<string, typeof doc.runs>();
+  for (const run of doc.runs) for (const nodeId of new Set([run.from, run.to])) {
+    const edges = connected.get(nodeId) ?? [];
+    edges.push(run);
+    connected.set(nodeId, edges);
+  }
+  const sizesBySpec = new Map(doc.specs.map(s => [s.id, new Map(s.sizes.map(size => [size.nps, size]))]));
   const refs = new Map<string, SourceRef>();
-  // JSON paths remain precise for compact files, where every item is on line 1.
+  const lineStarts = [0];
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) lineStarts.push(i + 1);
+  const lineAt = (offset: number) => {
+    let low = 0, high = lineStarts.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (lineStarts[middle] <= offset) low = middle + 1;
+      else high = middle;
+    }
+    return low;
+  };
+  // Scan each array once; paths disambiguate compact JSON whose items share line 1.
   for (const group of ["nodes", "runs"] as const) {
-    let cursor = new RegExp(`"${group}"\\s*:\\s*\\[`).exec(text)?.index ?? 0;
+    const ids = /"id"\s*:\s*("(?:\\.|[^"\\])*")/g;
+    ids.lastIndex = new RegExp(`"${group}"\\s*:\\s*\\[`).exec(text)?.index ?? 0;
     for (const [i, entry] of doc[group].entries()) {
-      const escapedId = JSON.stringify(entry.id).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const match = new RegExp('"id"\\s*:\\s*' + escapedId).exec(text.slice(cursor));
-      const offset = match ? cursor + match.index : cursor;
-      refs.set(`${group}:${entry.id}`, { id: entry.id, path: `/${group}/${i}`, line: text.slice(0, offset).split("\n").length });
-      cursor = offset + (match?.[0].length ?? 0);
+      const match = ids.exec(text);
+      if (!match || JSON.parse(match[1]) !== entry.id) throw new Error(`Cannot locate ${group} source reference ${entry.id}`);
+      refs.set(`${group}:${entry.id}`, { id: entry.id, path: `/${group}/${i}`, line: lineAt(match.index) });
     }
   }
   const ref = (group: string, id: string) => refs.get(`${group}:${id}`)!;
@@ -49,7 +67,7 @@ export function parseSpoolyard(text: string): PipingMto {
     const a = nodes.get(r.from), b = nodes.get(r.to), s = specs.get(r.specId);
     if (!a || !b || !s) throw new Error(`Run ${r.id} references a missing node or spec`);
     if (r.connector) continue;
-    const size = s.sizes.find(v => v.nps === r.nps);
+    const size = sizesBySpec.get(s.id)?.get(r.nps);
     const overall = Math.hypot(...a.position.map((v, i) => v - b.position[i]));
     const ts = [takeout(a, r.id), takeout(b, r.id)];
     const gaps = [a, b].map((n, i) => {
@@ -65,9 +83,9 @@ export function parseSpoolyard(text: string): PipingMto {
   }
   for (const n of doc.nodes) {
     if (["end", "annotation"].includes(n.kind)) continue;
-    const edges = doc.runs.filter(r => r.from === n.id || r.to === n.id);
-    const edge = edges[0] ?? doc.runs.find(r => r.id === n.associatedRunId);
-    if (n.associatedRunId && !doc.runs.some(r => r.id === n.associatedRunId)) throw new Error(`Node ${n.id} references a missing run`);
+    const edges = connected.get(n.id) ?? [];
+    const edge = edges[0] ?? runs.get(n.associatedRunId ?? "");
+    if (n.associatedRunId && !runs.has(n.associatedRunId)) throw new Error(`Node ${n.id} references a missing run`);
     const s = edge ? specs.get(edge.specId) : undefined, f = n.catalogId ? fittings.get(n.catalogId) : undefined;
     if (n.catalogId && !f) warnings.push(`Node ${n.id}: catalog item ${n.catalogId} not found.`);
     const size = f?.nps ?? (edges.length ? Math.max(...edges.map(r => r.nps)) : edge?.nps);

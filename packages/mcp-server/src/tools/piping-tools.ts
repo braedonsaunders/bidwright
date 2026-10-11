@@ -23,7 +23,7 @@ export function registerPipingTools(server: McpServer) {
     const suffix = operation === "identify" ? "segments/identify" : "segment";
     return result(await apiPost(`/api/models/${encodeURIComponent(getProjectId())}/assets/${encodeURIComponent(modelId)}/${suffix}`, input));
   });
-  server.tool("getRevisionImpact", "Read affected pickups, links and worksheet rows for a document checksum/replacement or saved model revision diff. Reports human and unrecorded provenance; makes no edits.", {
+  server.tool("getRevisionImpact", "Read affected pickups, links and worksheet rows for a source document, FileNode (raw id or file-<id>), or saved model revision diff. Reports human and unrecorded provenance; makes no edits.", {
     documentId: z.string().optional(), priorDocumentId: z.string().optional(), priorChecksum: z.string().optional(), pageNumbers: z.array(z.number().int().positive()).optional(), diffId: z.string().optional(),
   }, async input => {
     const query = new URLSearchParams();

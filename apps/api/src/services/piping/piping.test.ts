@@ -207,3 +207,133 @@ test("MCP wrappers forward scoped source IDs to existing photo/scan services and
     }
   } finally { globalThis.fetch = originalFetch; }
 });
+
+test("PCF retains common variants and reports unknown component blocks with source refs", () => {
+  const types = ["TEE-SET-ON", "TEE-STUB", "PIPE-FIXED", "MISC-COMPONENT", "ELBOW-REDUCING", "CUSTOM-FITTING"];
+  const text = "UNITS-CO-ORDS MM\nUNITS-BORE INCH\nPIPELINE-REFERENCE P1\n" + types.map((type, i) => `${type}\n    END-POINT ${i * 1000} 0 0 2 BW\n    END-POINT ${i * 1000 + 100} 0 0 2 BW`).join("\n");
+  const mto = parsePcf(text);
+  assert.deepEqual(mto.lines.filter(l => l.type !== "JOINT").map(l => l.type), types.slice(0, -1));
+  assert.equal(mto.lines.find(l => l.type === "PIPE-FIXED")?.quantity, 0.1);
+  assert.ok(mto.warnings.some(w => w.includes("CUSTOM-FITTING")));
+  const unknown = mto.joints.unknown.find(u => u.reason.includes("CUSTOM-FITTING"));
+  assert.equal(unknown?.refs[0].line, 19);
+  assert.equal(unknown?.refs[0].endLine, 21);
+});
+
+test("Spoolyard PCF weld-node and tagged CO-ORDS records count one physical weld", () => {
+  // Geometry from exportPcf() for two runs meeting at one tagged weld node;
+  // upstream welds() returns one. Both explicit records describe that weld.
+  const text = `UNITS-CO-ORDS MM
+UNITS-BORE INCH
+PIPELINE-REFERENCE L1
+WELD
+    CENTRE-POINT 1000 0 0 2 BW
+    END-POINT 1000 0 0 2 BW
+    END-POINT 1000 0 0 2 BW
+    CATEGORY-ERECTION
+    WELD-IDENTIFIER W1
+PIPE
+    END-POINT 0 0 0 2 BW
+    END-POINT 1000 0 0 2 BW
+PIPE
+    END-POINT 1000 0 0 2 BW
+    END-POINT 2000 0 0 2 BW
+WELD
+    CO-ORDS 1000 0 0 2 BW
+    WELD-IDENTIFIER W1
+    CATEGORY-ERECTION`;
+  const mto = parsePcf(text);
+  assert.equal(mto.joints.knownCount, 1);
+  assert.equal(mto.lines.find(l => l.type === "JOINT")?.refs.length, 2);
+  assert.equal(mto.lines.find(l => l.type === "JOINT")?.scope, "field");
+  assert.equal(parsePcf(text.replaceAll("CATEGORY-ERECTION", "CATEGORY-FABRICATION")).lines.find(l => l.type === "JOINT")?.scope, "shop");
+  // A tagged CO-ORDS record also suppresses a joint derived from pipe endpoints.
+  assert.equal(parsePcf(text.replace(/WELD\n    CENTRE-POINT[\s\S]*?    WELD-IDENTIFIER W1\n/, "")).joints.knownCount, 1);
+});
+
+test("large Spoolyard drawings retain accurate refs without quadratic scans", () => {
+  const nodes = Array.from({ length: 8000 }, (_, i) => ({ id: `n${i}`, kind: i === 0 || i === 7999 ? "end" : "weld", position: [i * 1000, 0, 0] }));
+  const runs = nodes.slice(1).map((_, i) => ({ id: `r${i}`, from: `n${i}`, to: `n${i + 1}`, specId: "S1", nps: 2, endPrep: "BW" }));
+  const text = JSON.stringify({ schema: "bidwright-piping", version: 1, specs: [spec], nodes, runs }, null, 2);
+  const start = performance.now();
+  const mto = parseSpoolyard(text);
+  const elapsed = performance.now() - start;
+  assert.ok(elapsed < 5000, `8000 nodes took ${elapsed.toFixed(0)} ms`);
+  const ref = mto.lines.flatMap(l => l.refs).find(r => r.id === "r7998")!;
+  assert.ok(text.split("\n")[ref.line - 1].includes('"r7998"'));
+  assert.equal(mto.joints.knownCount, 7998);
+});
+
+test("bounded source reads reject oversized files and FileNode save/revision IDs match the UI", async () => {
+  const { mkdtemp, writeFile, truncate, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { prisma } = await import("@bidwright/db");
+  const { getPipingMto, readBoundedProjectFile, MAX_PROJECT_SOURCE_BYTES } = await import("./piping-service.js");
+  const { getRevisionImpact } = await import("../revision-impact-service.js");
+  const root = await mkdtemp(join(tmpdir(), "piping-revision-"));
+  const storagePath = join(root, "source.piping");
+  const originals = { doc: prisma.sourceDocument.findFirst, file: prisma.fileNode.findFirst, views: prisma.evidenceView.findMany, pickups: prisma.pickup.findMany };
+  try {
+    await writeFile(storagePath, "");
+    await truncate(storagePath, MAX_PROJECT_SOURCE_BYTES + 1);
+    await assert.rejects(readBoundedProjectFile(storagePath), /8 MB/);
+    await writeFile(storagePath, JSON.stringify(drawing()));
+    prisma.sourceDocument.findFirst = (async () => null) as any;
+    prisma.fileNode.findFirst = (async ({ where }: any) => {
+      assert.equal(where.projectId, "project");
+      const ids = where.OR?.map((clause: any) => clause.id) ?? [where.id];
+      return ids.includes("file-node") ? { id: "file-node", documentId: null, storagePath, name: "source.piping" } : null;
+    }) as any;
+    prisma.evidenceView.findMany = (async () => []) as any;
+    prisma.pickup.findMany = (async ({ where }: any) => {
+      assert.ok(where.documentId.in.includes("file-file-node"));
+      assert.ok(where.documentId.in.includes("file-node"));
+      return ["file-file-node", "file-node"].map((documentId, i) => ({ id: `p${i}`, documentId, pageNumber: 1, modelId: null, modelElementId: null, metadata: { sourceChecksum: "prior", measuredBy: "person" }, selection: {}, createdBy: null, pickupLinks: [] }));
+    }) as any;
+    const mto = await getPipingMto("project", { sourceId: "file-node", sourceKind: "file_node" });
+    assert.equal(pipingPickupInput(mto, { lineId: mto.lines[0].id }).documentId, "file-file-node");
+    for (const documentId of ["file-node", "file-file-node"]) {
+      const impact = await getRevisionImpact("project", { documentId, priorChecksum: "prior" });
+      assert.equal(impact.pickups.length, 2);
+      assert.equal(impact.summary.humanPickups, 2);
+    }
+  } finally {
+    prisma.sourceDocument.findFirst = originals.doc;
+    prisma.fileNode.findFirst = originals.file;
+    prisma.evidenceView.findMany = originals.views;
+    prisma.pickup.findMany = originals.pickups;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("piping and scan routes reject inaccessible projects before global services run", async () => {
+  const { default: Fastify } = await import("fastify");
+  const { pipingRoutes } = await import("../../routes/piping-routes.js");
+  const { modelRoutes } = await import("../../routes/model-routes.js");
+  const app = Fastify();
+  app.decorateRequest("store", null);
+  app.addHook("onRequest", async request => {
+    request.store = new Proxy({ getProject: async () => null }, { get(target, key) {
+      if (key === "getProject") return target.getProject;
+      throw new Error(`Unexpected store access: ${String(key)}`);
+    } }) as any;
+  });
+  await app.register(pipingRoutes);
+  await app.register(modelRoutes);
+  try {
+    const requests = [
+      { method: "GET" as const, url: "/api/takeoff/foreign/piping/mto?sourceId=x&sourceKind=file_node" },
+      { method: "POST" as const, url: "/api/takeoff/foreign/piping/pickups", payload: { sourceId: "x", sourceKind: "file_node", lines: [{ lineId: "x" }] } },
+      { method: "GET" as const, url: "/api/takeoff/foreign/revision-impact?documentId=x" },
+      { method: "POST" as const, url: "/api/models/foreign/assets/x/segment", payload: {} },
+      { method: "GET" as const, url: "/api/models/foreign/assets/x/segments" },
+      { method: "POST" as const, url: "/api/models/foreign/assets/x/segments/identify", payload: { sources: [{ sourceId: "x", sourceKind: "file_node" }] } },
+    ];
+    for (const request of requests) {
+      const response = await app.inject(request);
+      assert.equal(response.statusCode, 404, request.url);
+      assert.equal(response.json().message, "Project not found");
+    }
+  } finally { await app.close(); }
+});

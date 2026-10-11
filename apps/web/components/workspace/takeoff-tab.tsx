@@ -184,6 +184,7 @@ import {
   takeoffShortcutLabel,
   type TakeoffShortcutPreset,
 } from "@/lib/takeoff-shortcuts";
+import { PipingTakeoffSurface } from "./piping-takeoff-surface";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 import type {
   BidwrightModelLineItemDraft,
@@ -392,6 +393,10 @@ function isBimFile(fileName: string): boolean {
 
 function isMeshFile(fileName: string): boolean {
   return MESH_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isPipingFile(fileName: string): boolean {
+  return /\.(piping|pcf)$/i.test(fileName);
 }
 
 function isCadFile(fileName: string): boolean {
@@ -1008,7 +1013,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet" | "scan";
+  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet" | "scan" | "piping";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -1155,6 +1160,7 @@ function takeoffChannelName(projectId: string): string {
 }
 
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
+  if (isPipingFile(fileName)) return "piping";
   if (isDwgFile(fileName)) return "dwg";
   if (isBimFile(fileName)) return "bim";
   if (isScanFile(fileName)) return "scan";
@@ -1170,7 +1176,7 @@ function takeoffDisplayFileName(fileName: string) {
 function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDocument | null {
   if (
     node.type !== "file" ||
-    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name) && !isScanFile(node.name))
+    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name) && !isScanFile(node.name) && !isPipingFile(node.name))
   ) {
     return null;
   }
@@ -1186,6 +1192,7 @@ function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDo
 }
 
 function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
+  if (kind === "piping") return "Piping";
   if (kind === "dwg") return "DWG/DXF";
   if (kind === "bim") return "BIM";
   if (kind === "model") return "3D";
@@ -2024,7 +2031,7 @@ export function TakeoffTab({
    * downstream re-fire every render, calling parent setState and looping. */
   const projectPdfs: TakeoffDocument[] = useMemo(
     () => (workspace.sourceDocuments ?? [])
-      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName) || isScanFile(d.fileName))
+      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName) || isScanFile(d.fileName) || isPipingFile(d.fileName))
       .map((d) => ({
         id: d.id,
         label: takeoffDisplayFileName(d.fileName),
@@ -2072,7 +2079,7 @@ export function TakeoffTab({
   // source, but it must not silently bypass the launcher on a fresh estimate
   // visit. Detached viewers remain direct-document surfaces.
   const [showLanding, setShowLanding] = useState(!detached && !initialEditorOpen);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo" | "files";
+  type IntakeOptionId = "piping" | "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo" | "files";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
@@ -2557,6 +2564,7 @@ export function TakeoffTab({
   const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
   const spreadsheetDocuments = takeoffDocuments.filter((d) => d.kind === "spreadsheet");
   const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
+  const isPipingDocument = selectedDocumentKind === "piping";
   const isPdfDocument = selectedDocumentKind === "pdf";
   const isBimDocument = selectedDocumentKind === "bim";
   const isSpreadsheetDocument = selectedDocumentKind === "spreadsheet";
@@ -8702,6 +8710,7 @@ export function TakeoffTab({
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
   const bimDocuments = takeoffDocuments.filter((doc) => doc.kind === "bim");
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
+  const pipingDocuments = takeoffDocuments.filter(doc => doc.kind === "piping");
   const scanDocuments = takeoffDocuments.filter((doc) => doc.kind === "scan");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
@@ -8821,6 +8830,7 @@ export function TakeoffTab({
   }
 
   const intakeOptions: WorkspaceLaunchItem<IntakeOptionId>[] = [
+    { id: "piping", title: "Piping", description: "Review and edit saved piping quantities.", metric: pipingDocuments.length.toLocaleString(), metricLabel: "sources", icon: FileJson, tone: "teal", ghostIcon: true },
     {
       id: "spreadsheet",
       title: "Spreadsheet / CSV",
@@ -8908,7 +8918,9 @@ export function TakeoffTab({
   ];
 
   const activeSourcePanel =
-    activeIntakeOption === "pdf"
+    activeIntakeOption === "piping"
+      ? { title: "Piping sources", detail: "Spoolyard and PCF files", emptyLabel: "No piping sources", docs: pipingDocuments, icon: FileJson }
+      : activeIntakeOption === "pdf"
       ? {
           title: "PDF sources",
           detail: sourceCountText(pdfDocuments.length, "PDF", "PDFs") || "Drawing sheets ready for takeoff",
@@ -9604,7 +9616,20 @@ export function TakeoffTab({
 
       {/* ─── Main Area ─── */}
       <div className="relative flex flex-1 overflow-hidden min-h-0">
-        {isSpreadsheetDocument ? (
+        {isPipingDocument && selectedDoc ? (
+          <PipingTakeoffSurface key={selectedDoc.id} projectId={projectId} fileNodeId={selectedDoc.fileNodeId}
+            fileName={selectedDoc.fileName} fileUrl={documentUrl} pickups={annotations}
+            onSelect={updateAnnotationSelection}
+            onFilesChanged={() => { postTakeoffMessage({ type: "files-mutated" }); onWorkspaceMutated?.(); }}
+            onUpdate={async updated => {
+              await updatePickup(projectId, updated.id, { label: updated.label, measurement: updated.measurement, metadata: updated.metadata });
+              setAnnotations(current => current.map(p => p.id === updated.id ? updated : p));
+              notifyAnnotationsMutated();
+              await loadPickupLinks();
+              onWorkspaceMutated?.();
+            }}
+          />
+        ) : isSpreadsheetDocument ? (
           <div className="relative flex h-full w-full min-h-0 flex-col bg-bg/50">
             {spreadsheetPreview ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
