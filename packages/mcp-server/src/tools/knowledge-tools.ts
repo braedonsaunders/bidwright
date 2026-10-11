@@ -1,3 +1,4 @@
+import { sourceQuantityTakeoffHint } from "../takeoff-hints.js";
 import { promoteSourceDocumentId, resolveSourceDocumentId } from "../source-document.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
@@ -671,6 +672,9 @@ export function registerKnowledgeTools(server: McpServer) {
         output += `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readDocumentText again with offset=${chunk.offset + chunk.text.length} and the same pages/maxChars to continue, or request a narrower page range.]`;
       }
 
+      if (!doc.bookName && !doc.documentTitle && doc.sourceType !== "knowledge_document") {
+        output += `\n\n${sourceQuantityTakeoffHint(documentId)}`;
+      }
       return { content: [{ type: "text" as const, text: output }] };
     }
   );
@@ -692,6 +696,7 @@ export function registerKnowledgeTools(server: McpServer) {
         fileName: doc.fileName,
         pageCount: doc.pageCount,
         documentType: doc.documentType,
+        takeoff: !doc.bookName && !doc.documentTitle && doc.sourceType !== "knowledge_document" ? sourceQuantityTakeoffHint(documentId) : undefined,
       };
       if (doc.structuredData) {
         const tables = Array.isArray(doc.structuredData.tables) ? doc.structuredData.tables : [];
@@ -751,7 +756,7 @@ export function registerKnowledgeTools(server: McpServer) {
         const suffix = chunk.hasMore
           ? `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readSpreadsheet again with offset=${chunk.offset + chunk.text.length} and the same sheet/maxChars to continue, or use sheet to narrow.]`
           : "";
-        return { content: [{ type: "text" as const, text: chunk.text + suffix }] };
+        return { content: [{ type: "text" as const, text: chunk.text + suffix + `\n\n${sourceQuantityTakeoffHint(documentId, [{ sheet: sheet ?? result.sheets[0]?.name ?? "<sheet>", row: 1 }])}` }] };
       } catch (err: any) {
         return {
           content: [{ type: "text" as const, text: `ERROR reading spreadsheet: ${err?.message || String(err)}. This may not be a spreadsheet file, or the document ID may be wrong. Check the document manifest for the correct ID.` }],

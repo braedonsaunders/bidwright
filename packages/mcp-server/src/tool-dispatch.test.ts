@@ -16,6 +16,8 @@ test("direct and indirect calls share schemas, project scope, images, logging an
     requests.push({ path, body: { ...body, query: new URL(url).search } });
     if (path.endsWith("/assets")) return Response.json({ scan: { status: "failed", error: "model.nwd: extractor -777" }, assets: [{ id: "model", status: "failed", progress: "complete", terminalErrors: [{ code: "aps_translation_failed", message: "extractor -777" }] }] });
     if (path === "/integrations") return Response.json({ integrations: [] });
+    if (path.endsWith("/bom")) return Response.json({ model: { id: "model" }, rows: [{ id: "row", quantity: 3, unit: "ft" }] });
+    if (path.endsWith("/aggregate")) return Response.json({ groups: [{ key: "Pipe", count: 3 }], excludedElementCount: 1 });
     if (path.endsWith("/pickups")) return Response.json(init.method === "GET" ? [] : { id: "saved-pickup", ...body });
     if (path.endsWith("/read-page")) return Response.json({ success: true, image: "data:image/png;base64,cG5n", viewId: "view-1", textLines: [{ text: "Dimension", bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 } }], rotation: 90 });
     if (path.endsWith("/render-page")) return Response.json({ success: true, image: "data:image/png;base64,cG5n", viewId: "native-view", width: 1200, height: 900, pageWidth: 576, pageHeight: 432 });
@@ -44,6 +46,29 @@ test("direct and indirect calls share schemas, project scope, images, logging an
       const indirect = await client.callTool({ name: "invokeTool", arguments: { name: "listPickups", args: { projectId: "foreign" } } });
       assert.deepEqual(indirect, direct);
       assert.equal(requests.filter(({ path }) => path.endsWith("/pickups")).every(({ path }) => path === "/api/takeoff/dispatch-project/pickups"), true);
+      for (const name of ["extractModelBom", "aggregateModelElements"]) {
+        const result: any = await client.callTool({ name, arguments: { modelId: "model", groupBy: "class" } });
+        const body = JSON.parse(result.content[0].text);
+        assert.match(body.takeoff, /Model quantities can be saved as linked takeoff marks/);
+        const example = JSON.parse(body.takeoff.split("example: ")[1].slice(0, -1));
+        assert.equal(example.modelId, "model");
+        const description: any = await client.callTool({ name: "describeTools", arguments: { name: "linkModelElementToWorksheetItem" } });
+        if (mode !== "qa") {
+          const schema = JSON.parse(description.content[0].text)[0].inputSchema;
+          assert.ok(schema.required.every((key: string) => key in example));
+        }
+        if (name === "extractModelBom") assert.equal(body.rows[0].quantity, 3);
+        else assert.equal(body.excludedElementCount, 1);
+      }
+      for (const wrapper of ["describeTools", "invokeTool"]) {
+        const result: any = await client.callTool({ name: wrapper, arguments: { name: "readSpreadsheeet" } });
+        assert.equal(result.isError, true);
+        assert.match(result.content[0].text, /Closest registered tools: readSpreadsheet/);
+        const unavailable: any = await client.callTool({ name: wrapper, arguments: { name: "saveSourceQuantityTakeof" } });
+        const suggestions = unavailable.content[0].text.split("Closest registered tools: ")[1].split(". ")[0].split(", ");
+        assert.ok(suggestions.every((id: string) => listed.tools.some(tool => tool.name === id)));
+        assert.equal(suggestions.includes("saveSourceQuantityTakeoff"), mode !== "qa");
+      }
       const readArgs = { documentId: "drawing", pageNumber: "1" };
       const directImage = await client.callTool({ name: "readDrawingPage", arguments: readArgs });
       const indirectImage = await client.callTool({ name: "invokeTool", arguments: { name: "readDrawingPage", args: readArgs } });

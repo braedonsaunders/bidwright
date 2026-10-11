@@ -1,3 +1,4 @@
+import { modelQuantityTakeoffHint } from "../takeoff-hints.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiDelete, apiGet, apiPost, getProjectId, projectPath } from "../api-client.js";
@@ -122,8 +123,9 @@ function summarizeModelAsset(asset: any) {
   const elements = asArray(asset.elements);
   const issues = asArray(asset.issues);
   const manifestCounts = asRecord(manifest.counts);
-  const elementCount = counts.elements ?? manifestCounts.elements ?? manifest.elementCount ?? elements.length;
-  const quantityCount = counts.quantities ?? manifestCounts.quantities ?? manifest.quantityCount ?? quantities.length;
+  const quantityCoverage = asRecord(manifest.quantityCoverage);
+  const elementCount = counts.elements ?? quantityCoverage.elementCount ?? manifestCounts.elements ?? manifest.elementCount ?? elements.length;
+  const quantityCount = counts.quantities ?? quantityCoverage.quantityCount ?? manifestCounts.quantities ?? manifest.quantityCount ?? quantities.length;
   const bomCount = bom.length || manifestCounts.bomRows || manifest.bomRowCount || 0;
   const issueCount = counts.issues ?? manifestCounts.issues ?? issues.length;
 
@@ -144,6 +146,7 @@ function summarizeModelAsset(asset: any) {
       bomRows: bomCount,
       issues: issueCount,
     },
+    quantityCoverage: manifest.quantityCoverage ?? null,
     elementStats: topRecordEntries(asset.elementStats, 10),
     bomPreview: previewRows(bom, 10),
     quantityPreview: previewRows(quantities, 10),
@@ -192,7 +195,7 @@ export function registerModelTools(server: McpServer) {
     ...modelInput, groupBy: z.enum(["class", "type", "level", "system", "material", "property"]), property: z.string().optional().describe("Exact flat key (AutoCAD.Size) or nested path (psets.Pset_WallCommon.FireRating)"),
     elementClass: z.string().optional(), propertyFilters: z.record(z.string(), z.string()).optional().describe("Exact matches using the same flat keys or nested paths as property."),
     elementIds: z.array(z.string()).max(10000).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
-  }, async ({ modelId, ...input }) => jsonResult(await apiPost(`/api/models/${getProjectId()}/assets/${modelId}/aggregate`, input)));
+  }, async ({ modelId, ...input }) => jsonResult({ ...await apiPost(`/api/models/${getProjectId()}/assets/${modelId}/aggregate`, input), takeoff: modelQuantityTakeoffHint(modelId) }));
   server.tool("rebuildModelTopology", "Rebuild the model topology used by Takeoff Studio from persisted elements and recipes.", modelInput,
     async ({ modelId }) => jsonResult(await apiPost(`/api/models/${getProjectId()}/assets/${modelId}/topology/rebuild`, {})));
   server.tool("listModelTakeoffRecipes", "List persisted recipes available to this model in Takeoff Studio.", modelInput, async ({ modelId }) => {
@@ -505,6 +508,7 @@ The BOM is conservative: unsupported formats return a clear status and empty row
               {
                 model: normalizedAsset(result.model),
                 grouping: grouping ?? "native",
+                takeoff: modelQuantityTakeoffHint(modelId),
                 status: rows.length > 0 ? "bom_available" : "no_bom_rows_available",
                 rowCount: result.rowCount ?? rows.length,
                 offset: page.offset,
