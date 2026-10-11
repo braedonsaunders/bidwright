@@ -1,3 +1,4 @@
+import { pdfTakeoffRoutes } from "./pdf-takeoff-routes.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
@@ -14,6 +15,8 @@ import {
 } from "../services/symbol-template-service.js";
 import { suggestLineItemsForPickup } from "../services/auto-takeoff-service.js";
 import { getRequestAiConfig } from "../services/request-ai-config.js";
+import { readProjectImages } from "../services/piping/piping-service.js";
+import { projectSourceSchema } from "./piping-routes.js";
 import { generatePhotoTakeoff } from "../services/photo-takeoff-service.js";
 import { resolveApiPath } from "../paths.js";
 
@@ -39,6 +42,7 @@ async function resolveAzureConfig(
 }
 
 export async function takeoffRoutes(app: FastifyInstance) {
+  await pdfTakeoffRoutes(app);
   // ── GET /api/takeoff/:projectId/documents/:documentId/dwg-metadata ───
   // Server-side DXF/DWG intake processing for CAD takeoff. DXF is parsed
   // directly; binary DWG uses the optional BIDWRIGHT_DWG_CONVERTER_CMD
@@ -558,7 +562,8 @@ export async function takeoffRoutes(app: FastifyInstance) {
           }),
         )
         .min(1, "At least one image is required")
-        .max(8, "At most 8 images per request"),
+        .max(8, "At most 8 images per request").optional(),
+      sources: z.array(projectSourceSchema).min(1).max(8).optional(),
       focusPrompt: z.string().max(2000).optional(),
       projectContext: z.array(z.string().max(500)).max(20).optional(),
     });
@@ -650,7 +655,10 @@ export async function takeoffRoutes(app: FastifyInstance) {
       const categories = await request.store!.listEntityCategories();
 
       // Strip any "data:image/...;base64," prefix the browser may have sent.
-      const normalizedImages = parsed.data.images.map((image) => {
+      const sourceImages = parsed.data.sources ? await readProjectImages(projectId, parsed.data.sources) : [];
+      const images = [...(parsed.data.images ?? []), ...sourceImages];
+      if (!images.length || images.length > 8) return reply.code(400).send({ message: "Provide 1–8 images or project image sources" });
+      const normalizedImages = images.map((image) => {
         const commaIdx = image.data.indexOf(",");
         const payload = image.data.startsWith("data:") && commaIdx > 0
           ? image.data.slice(commaIdx + 1)

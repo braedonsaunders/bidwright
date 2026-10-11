@@ -23,7 +23,7 @@ import { parseFile } from './file-handlers.js';
 // ── Unified text extraction ─────────────────────────────────────────
 
 const PDF_EXTENSIONS = new Set(['pdf']);
-const TEXT_EXTENSIONS = new Set(['txt', 'md', 'csv', 'json', 'xml', 'yml', 'yaml', 'log', 'ini', 'toml', 'conf']);
+const TEXT_EXTENSIONS = new Set(['pcf', 'piping', 'txt', 'md', 'csv', 'json', 'xml', 'yml', 'yaml', 'log', 'ini', 'toml', 'conf']);
 const EXCEL_EXTENSIONS = new Set(['xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv']);
 const LOCAL_HANDLER_EXTENSIONS = new Set([
   'xlsx', 'xls', 'xlsm', 'ods', 'csv', 'tsv',

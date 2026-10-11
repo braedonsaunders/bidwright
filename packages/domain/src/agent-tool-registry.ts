@@ -22,6 +22,32 @@ export interface AgentToolDefinition {
 }
 
 export const AGENT_TOOL_REGISTRY = {
+  getSourceOverview: { id: "getSourceOverview", displayName: "Read source overview", category: "documents", mutates: false },
+  getTakeoffCalibration: { id: "getTakeoffCalibration", displayName: "getTakeoffCalibration", category: "vision", mutates: false },
+  setTakeoffCalibration: { id: "setTakeoffCalibration", displayName: "setTakeoffCalibration", category: "vision", mutates: true },
+  measureTakeoff: { id: "measureTakeoff", displayName: "measureTakeoff", category: "vision", mutates: false },
+  saveTakeoffMeasurement: { id: "saveTakeoffMeasurement", displayName: "saveTakeoffMeasurement", category: "vision", mutates: true },
+  updateTakeoffMeasurement: { id: "updateTakeoffMeasurement", displayName: "updateTakeoffMeasurement", category: "vision", mutates: true },
+  traceDrawingRun: { id: "traceDrawingRun", displayName: "traceDrawingRun", category: "vision", mutates: false },
+  detectDrawingScale: { id: "detectDrawingScale", displayName: "detectDrawingScale", category: "vision", mutates: false },
+  extractDrawingLegend: { id: "extractDrawingLegend", displayName: "extractDrawingLegend", category: "vision", mutates: false },
+  createSymbolTemplateFromRegion: { id: "createSymbolTemplateFromRegion", displayName: "createSymbolTemplateFromRegion", category: "vision", mutates: true },
+  renderTakeoffOverlay: { id: "renderTakeoffOverlay", displayName: "renderTakeoffOverlay", category: "vision", mutates: false },
+
+  queryCadEntities: { id: "queryCadEntities", displayName: "queryCadEntities", category: "model", mutates: false },
+  renderCadDrawing: { id: "renderCadDrawing", displayName: "renderCadDrawing", category: "model", mutates: false },
+  saveCadEntityTakeoff: { id: "saveCadEntityTakeoff", displayName: "saveCadEntityTakeoff", category: "model", mutates: true },
+  getModelSolidMetrics: { id: "getModelSolidMetrics", displayName: "getModelSolidMetrics", category: "model", mutates: false },
+  aggregateModelElements: { id: "aggregateModelElements", displayName: "aggregateModelElements", category: "model", mutates: false },
+  rebuildModelTopology: { id: "rebuildModelTopology", displayName: "rebuildModelTopology", category: "model", mutates: true },
+  listModelTakeoffRecipes: { id: "listModelTakeoffRecipes", displayName: "listModelTakeoffRecipes", category: "model", mutates: false },
+  applyModelTakeoffRecipe: { id: "applyModelTakeoffRecipe", displayName: "applyModelTakeoffRecipe", category: "model", mutates: true },
+  getModelRevisionDiff: { id: "getModelRevisionDiff", displayName: "getModelRevisionDiff", category: "model", mutates: false },
+  getPipingMto: { id: "getPipingMto", displayName: "Read piping MTO", category: "model", mutates: false },
+  savePipingTakeoff: { id: "savePipingTakeoff", displayName: "Save piping takeoff", category: "model", mutates: true },
+  runPhotoBom: { id: "runPhotoBom", displayName: "Read photo BOM", category: "vision", mutates: false },
+  segmentPointCloud: { id: "segmentPointCloud", displayName: "Segment or identify scan", category: "model", mutates: true },
+  getRevisionImpact: { id: "getRevisionImpact", displayName: "Read revision impact", category: "documents", mutates: false },
   getWorkspace: { id: "getWorkspace", displayName: "Read workspace", category: "workspace" },
   getWorksheetTree: { id: "getWorksheetTree", displayName: "Read worksheet tree", category: "worksheet" },
   getItemConfig: { id: "getItemConfig", displayName: "Read line item config", category: "worksheet" },
@@ -164,6 +190,30 @@ export const AGENT_TOOL_REGISTRY = {
   describeIntegration: { id: "describeIntegration", displayName: "Describe integration", category: "integration" },
   invokeIntegrationAction: { id: "invokeIntegrationAction", displayName: "Use integration action", category: "integration", mutates: true },
 
+  createProjectFile: { id: "createProjectFile", displayName: "Create project file", category: "documents", mutates: true },
+  getFileIngestCapabilities: { id: "getFileIngestCapabilities", displayName: "Get file ingest capabilities", category: "documents", mutates: false },
+  inspectFileIngest: { id: "inspectFileIngest", displayName: "Inspect file ingest", category: "documents", mutates: true },
+  listScheduleImportCandidates: { id: "listScheduleImportCandidates", displayName: "List schedule import candidates", category: "documents", mutates: false },
+  importProjectScheduleFile: { id: "importProjectScheduleFile", displayName: "Import project schedule file", category: "documents", mutates: true },
+  getModelIngestCapabilities: { id: "getModelIngestCapabilities", displayName: "Get model ingest capabilities", category: "model", mutates: false },
+  getModelElementDetails: { id: "getModelElementDetails", displayName: "Get model element details", category: "model", mutates: false },
+  queryModelTakeoffGroups: { id: "queryModelTakeoffGroups", displayName: "Query model takeoff groups", category: "model", mutates: false },
+  addModelTakeoffGroupToWorksheet: { id: "addModelTakeoffGroupToWorksheet", displayName: "Add model takeoff group to worksheet", category: "model", mutates: true },
+  readDrawingPage: { id: "readDrawingPage", displayName: "Read drawing page", category: "vision", mutates: false },
+  readDrawingTile: { id: "readDrawingTile", displayName: "Read drawing tile", category: "vision", mutates: false },
+  countDrawingSymbol: { id: "countDrawingSymbol", displayName: "Count drawing symbol", category: "vision", mutates: false },
+  findDrawingSymbolCandidates: { id: "findDrawingSymbolCandidates", displayName: "Find drawing symbol candidates", category: "vision", mutates: false },
+  analyzeDrawingGeometry: { id: "analyzeDrawingGeometry", displayName: "Analyze drawing geometry", category: "vision", mutates: true },
+  traceDrawingSystems: { id: "traceDrawingSystems", displayName: "Trace drawing systems", category: "vision", mutates: true },
+  saveDetectionsAsTakeoffMarks: { id: "saveDetectionsAsTakeoffMarks", displayName: "Save detections as takeoff marks", category: "vision", mutates: true },
+  classifyDrawingLayers: { id: "classifyDrawingLayers", displayName: "Classify drawing layers", category: "vision", mutates: true },
+  inspectDetectionRegion: { id: "inspectDetectionRegion", displayName: "Inspect detection region", category: "vision", mutates: false },
+  listDrawingAnalyses: { id: "listDrawingAnalyses", displayName: "List drawing analyses", category: "vision", mutates: false },
+  compareAnalysisToTakeoff: { id: "compareAnalysisToTakeoff", displayName: "Compare analysis to takeoff", category: "vision", mutates: false },
+
+  describeTools: { id: "describeTools", displayName: "Describe tools", category: "system", mutates: false },
+  invokeTool: { id: "invokeTool", displayName: "Invoke tool", category: "system", mutates: false },
+
   command_execution: { id: "command_execution", displayName: "Run command", category: "runtime", mutates: true },
 } satisfies Record<string, AgentToolDefinition>;
 
@@ -171,13 +221,24 @@ export type AgentToolId = keyof typeof AGENT_TOOL_REGISTRY;
 
 export function normalizeAgentToolId(toolId: string) {
   if (!toolId) return "";
+  const unprefixed = toolId.replace(/^mcp__bidwright__/, "");
+  if (unprefixed.startsWith("integration_")) return unprefixed;
   const lastSegment = toolId.includes(".") ? toolId.split(".").pop() || toolId : toolId;
   return lastSegment.replace(/^mcp__bidwright__/, "");
 }
 
 export function getAgentToolDefinition(toolId: string): AgentToolDefinition | null {
   const normalized = normalizeAgentToolId(toolId);
-  return (AGENT_TOOL_REGISTRY as Record<string, AgentToolDefinition>)[normalized] ?? null;
+  const definition = Object.prototype.hasOwnProperty.call(AGENT_TOOL_REGISTRY, normalized)
+    ? (AGENT_TOOL_REGISTRY as Record<string, AgentToolDefinition>)[normalized]
+    : undefined;
+  if (definition) return definition;
+  // Integration action manifests are loaded at runtime. The whole namespace is
+  // conservatively mutating: external actions can have effects beyond Bidwright.
+  if (normalized.startsWith("integration_")) {
+    return { id: normalized, displayName: formatFallbackToolDisplayName(normalized), category: "integration", mutates: true };
+  }
+  return null;
 }
 
 export function formatFallbackToolDisplayName(toolId: string) {
@@ -198,7 +259,5 @@ export function isAgentToolMutating(toolId: string) {
   const definition = getAgentToolDefinition(toolId);
   if (definition) return definition.mutates === true;
 
-  const normalized = normalizeAgentToolId(toolId);
-  return /^(create|update|delete|move|import|recalculate|apply|save|finalize|write|link|generate)/.test(normalized)
-    || /(^|\.)(create|update|delete|add|remove|ingest|index|logActivity)/.test(toolId);
+  return true;
 }

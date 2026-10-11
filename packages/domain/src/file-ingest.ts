@@ -3,6 +3,7 @@ import type { CanonicalModelIngestManifest, ModelIngestCapabilityStatus } from "
 export type FileIngestFamily =
   | "document"
   | "model"
+  | "piping"
   | "spreadsheet"
   | "image"
   | "email"

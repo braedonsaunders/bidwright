@@ -12,6 +12,7 @@ import { randomUUID } from "node:crypto";
 import { detectCli, checkCliAuth, spawnSession, stopSession, getSession, type AgentRuntime } from "../services/cli-runtime.js";
 import { getAdapter, isRegisteredRuntime, tryGetAdapter } from "../services/cli-adapters/registry.js";
 import { generateReviewInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { getSourceOverview } from "../services/source-overview-service.js";
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { resolveProjectDir, apiDataRoot } from "../paths.js";
 import { prisma } from "@bidwright/db";
@@ -407,6 +408,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
 
     // Generate review-specific instruction files for the active runtime
     await generateReviewInstructionFiles(runtime, {
+      sourceOverview: await getSourceOverview(projectId),
       projectDir,
       projectName: project.name || "Untitled Project",
       clientName: project.clientName || "",

@@ -89,6 +89,9 @@ jobs:
           pnpm --filter @bidwright/mcp-server typecheck
           pnpm --filter @bidwright/vision typecheck
 
+      - name: Build vision package for takeoff tests
+        run: pnpm --filter @bidwright/vision build
+
       - name: Build agent package
         run: pnpm --filter @bidwright/agent build
 
@@ -118,6 +121,7 @@ jobs:
       - name: Run focused unit tests
         run: >
           pnpm exec tsx --test
+          apps/api/src/services/piping/piping.test.ts
           apps/api/src/bootstrap-key-validation.test.ts
           apps/api/src/settings-secret-crypto.test.ts
           apps/api/src/services/agent-host/launcher-identity.test.ts
@@ -134,16 +138,23 @@ jobs:
           apps/api/src/services/session-continuity.test.ts
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
+          apps/api/src/services/source-overview-service.test.ts
+          apps/api/src/services/bw-client.test.mjs
           packages/mcp-server/src/quote-description.test.ts
           packages/mcp-server/src/tool-access.test.ts
+          packages/mcp-server/src/tool-dispatch.test.ts
+          packages/mcp-server/src/takeoff-count.test.ts
           scripts/cad-editor/tools-workspace.test.ts
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
+          scripts/eval/takeoff-reference.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
+          apps/api/src/services/cli-runtime-tool-events.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
           apps/api/src/services/cli-run-selection.test.ts
           apps/api/src/services/pdf-service.test.ts
+          apps/api/src/services/pdf-takeoff.test.ts
           apps/api/src/services/pdf-attachments.test.ts
           apps/api/src/services/send-project-quote.test.ts
           apps/api/src/services/vendor-evidence-lines.test.ts
@@ -222,11 +233,23 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Verify agent page reader (orientation, sizing, layout regions)
+      - name: Verify vision page reader and PDF takeoff
         run: |
           python -m venv "${RUNNER_TEMP}/vision-venv"
-          "${RUNNER_TEMP}/vision-venv/bin/pip" install --disable-pip-version-check PyMuPDF numpy opencv-python-headless
-          cd packages/vision/python && "${RUNNER_TEMP}/vision-venv/bin/python" -m unittest tools.test_page_reader
+          "${RUNNER_TEMP}/vision-venv/bin/pip" install --disable-pip-version-check PyMuPDF numpy opencv-python-headless pytest
+          cd packages/vision/python
+          "${RUNNER_TEMP}/vision-venv/bin/python" -m unittest tools.test_page_reader
+          "${RUNNER_TEMP}/vision-venv/bin/python" -m pytest tests/test_pdf_takeoff.py
+
+      - name: Verify CAD takeoff queries, rendering and solid metrics
+        env:
+          PYTHON_PATH: ${{ runner.temp }}/vision-venv/bin/python
+        run: >
+          pnpm exec tsx --test
+          apps/api/src/services/cad-model-takeoff.test.ts
+          apps/api/src/services/cad-pickup-save.test.ts
+          apps/api/src/routes/cad-takeoff-routes.test.ts
+          apps/api/src/services/model-ingest/adapters/occt-metrics.test.ts
 
       - name: Install pinned CAD runtime and sandbox
         run: |

@@ -33,7 +33,6 @@ import {
   dxfHeaderUnitName,
   multiply,
   prettifyLayoutName,
-  rotationOffset,
   transformForInsert,
   uniformScaleFactor,
   unitToInchFactor,
@@ -42,9 +41,8 @@ import { HatchEntityHandler, type IHatchEntity } from "./dxf-hatch-handler.js";
 
 const execFileAsync = promisify(execFile);
 
-// Bumped from 1 → 2 with the dxf-parser rewrite. Cached results from the
-// hand-rolled parser are silently re-processed on next access.
-const PROCESSOR_VERSION = 2;
+// Version 3 retains INSERT records and bulges and corrects arc angle units.
+const PROCESSOR_VERSION = 3;
 const MAX_STORED_VERSIONS = 12;
 
 const ACI_COLORS: Record<number, string> = {
@@ -89,7 +87,7 @@ export interface DwgEntityMetadata {
   end?: DwgPoint;
   center?: DwgPoint;
   radius?: number;
-  vertices?: DwgPoint[];
+  vertices?: Array<DwgPoint & { bulge?: number }>;
   closed?: boolean;
   text?: string;
   bounds: DwgBounds;
@@ -227,7 +225,7 @@ function colorFromLayer(layerColors: Map<string, string>, layerName: string, col
 // INSUNITS mapping) live in dxf-math.ts so they can be tested in isolation.
 
 interface BlockExpansionContext {
-  blocks: Record<string, { entities: IEntity[]; name: string }>;
+  blocks: Record<string, { entities: IEntity[]; name: string; position?: IPoint }>;
   layerColors: Map<string, string>;
   seen: Set<string>;
   stats: {
@@ -299,6 +297,7 @@ function mapEntity(
     colorIndex: entity.colorIndex,
     lineType: entity.lineType,
     lineweight: entity.lineweight,
+    nonUniformTransform: Math.abs(Math.hypot(transform[0], transform[1]) - Math.hypot(transform[2], transform[3])) > 1e-9 || Math.abs(transform[0] * transform[2] + transform[1] * transform[3]) > 1e-9,
   };
   if (blockOrigin) baseRaw.blockOrigin = blockOrigin;
 
@@ -316,7 +315,7 @@ function mapEntity(
     case "LWPOLYLINE":
     case "POLYLINE": {
       const poly = entity as ILwpolylineEntity & IPolylineEntity;
-      const verts = (poly.vertices ?? []).map((v: IPoint) => applyToPoint(transform, v)).filter(Boolean) as DwgPoint[];
+      const verts = (poly.vertices ?? []).map((v: IPoint & { bulge?: number }) => ({ ...applyToPoint(transform, v)!, bulge: (v.bulge ?? 0) * (transform[0] * transform[3] - transform[1] * transform[2] < 0 ? -1 : 1) })).filter(Boolean) as DwgPoint[];
       if (verts.length === 0) return null;
       const closed = Boolean((poly as { shape?: boolean }).shape ?? false);
       const candidate: Omit<DwgEntityMetadata, "bounds"> = {
@@ -345,15 +344,18 @@ function mapEntity(
       const center = applyToPoint(transform, arc.center);
       if (!center || typeof arc.radius !== "number") return null;
       const det = uniformScaleFactor(transform);
-      // Rotation: extract from the affine matrix (angle of the local +X).
-      const rotationDeg = (rotationOffset(transform) * 180) / Math.PI;
+      const angle = (radians: number) => Math.atan2(
+        transform[1] * Math.cos(radians) + transform[3] * Math.sin(radians),
+        transform[0] * Math.cos(radians) + transform[2] * Math.sin(radians),
+      ) * 180 / Math.PI;
+      const reflected = transform[0] * transform[3] - transform[1] * transform[2] < 0;
       const candidate: Omit<DwgEntityMetadata, "bounds"> = {
         id, type: "ARC", layer, layoutName, color,
         center, radius: arc.radius * det,
         raw: {
           ...baseRaw,
-          startAngle: ((arc.startAngle ?? 0) + rotationDeg) % 360,
-          endAngle: ((arc.endAngle ?? 360) + rotationDeg) % 360,
+          startAngle: angle(reflected ? arc.endAngle ?? Math.PI * 2 : arc.startAngle ?? 0),
+          endAngle: angle(reflected ? arc.startAngle ?? 0 : arc.endAngle ?? Math.PI * 2),
         },
       };
       return { ...candidate, bounds: boundsForEntity(candidate) };
@@ -455,11 +457,7 @@ function mapEntity(
       return { ...candidate, bounds: boundsForEntity(candidate) };
     }
     case "INSERT": {
-      // INSERTs are not emitted as their own entity in the modelspace —
-      // they're replaced by their block expansion. We still keep a
-      // breadcrumb for tooling that wants to know "this geometry came from
-      // a USED block".
-      // Block expansion happens in expandEntities, not here.
+      // INSERT rows and their expanded children are emitted by expandEntities.
       return null;
     }
     case "HATCH": {
@@ -561,6 +559,15 @@ function expandEntities(
       ctx.stats.inserts += 1;
       const insert = entity as IInsertEntity;
       const block = ctx.blocks[insert.name];
+      const insertId = entityHandle(insert, `${insert.name}#${index + 1}`);
+      const center = applyToPoint(transform, insert.position) ?? { x: 0, y: 0 };
+      const reference = {
+        id: `${idPrefix}${insertId}`, type: "INSERT", layer: insert.layer ?? "0", layoutName,
+        color: colorForEntity(insert, ctx.layerColors), center,
+        raw: { handle: insert.handle, blockName: insert.name, attributes: (insert as any).attributes ?? {}, insertCount: Math.max(1, insert.rowCount ?? 1) * Math.max(1, insert.columnCount ?? 1), blockOrigin },
+      };
+      const referenceIndex = out.length;
+      out.push({ ...reference, bounds: boundsForEntity(reference) });
       if (!block) {
         ctx.stats.missing.add(insert.name);
         continue;
@@ -572,18 +579,24 @@ function expandEntities(
         continue;
       }
       ctx.seen.add(insert.name);
-      const composed = multiply(transform, transformForInsert(insert));
+      const base = block.position ?? { x: 0, y: 0 };
       const childOrigin = blockOrigin ? `${blockOrigin}>${insert.name}` : insert.name;
-      // Per-instance prefix: use the INSERT's handle when present, else
-      // synthesize a stable fallback from its name + position in the
-      // parent stream so two anonymous-handle inserts of the same block
-      // still get distinct ids.
-      const insertId = entityHandle(insert, `${insert.name}#${index + 1}`);
-      const childPrefix = `${idPrefix}${insertId}::`;
       const before = out.length;
-      out.push(
-        ...expandEntities(block.entities ?? [], composed, ctx, layoutName, childOrigin, depth + 1, childPrefix),
-      );
+      const rows = Math.max(1, insert.rowCount ?? 1), columns = Math.max(1, insert.columnCount ?? 1);
+      const rotation = (insert.rotation ?? 0) * Math.PI / 180;
+      for (let row = 0; row < rows; row++) {
+        for (let column = 0; column < columns; column++) {
+          const dx = column * (insert.columnSpacing ?? 0), dy = row * (insert.rowSpacing ?? 0);
+          const instance = { ...insert, position: { ...insert.position,
+            x: insert.position.x + dx * Math.cos(rotation) - dy * Math.sin(rotation),
+            y: insert.position.y + dx * Math.sin(rotation) + dy * Math.cos(rotation) } };
+          const composed = multiply(transform, multiply(transformForInsert(instance), [1, 0, 0, 1, -base.x, -base.y]));
+          const childPrefix = `${idPrefix}${insertId}${rows * columns > 1 ? `[${row},${column}]` : ""}::`;
+          out.push(...expandEntities(block.entities ?? [], composed, ctx, layoutName, childOrigin, depth + 1, childPrefix)
+            .map((child) => child.layer === "0" ? { ...child, layer: insert.layer ?? "0" } : child));
+        }
+      }
+      if (out.length > before) out[referenceIndex].bounds = unionBounds(out.slice(before).map((child) => child.bounds));
       ctx.stats.expanded += out.length - before;
       ctx.seen.delete(insert.name);
       continue;
@@ -636,9 +649,12 @@ function scaleEntitiesToCanonicalUnits(entities: DwgEntityMetadata[], factor: nu
       end: entity.end ? { x: entity.end.x * factor, y: entity.end.y * factor } : undefined,
       center: entity.center ? { x: entity.center.x * factor, y: entity.center.y * factor } : undefined,
       radius: typeof entity.radius === "number" ? entity.radius * factor : undefined,
-      vertices: entity.vertices?.map((v) => ({ x: v.x * factor, y: v.y * factor })),
+      vertices: entity.vertices?.map((v) => ({ ...v, x: v.x * factor, y: v.y * factor })),
     };
-    return { ...scaled, bounds: boundsForEntity(scaled) };
+    return { ...scaled, bounds: entity.type === "INSERT" ? {
+      minX: entity.bounds.minX * factor, minY: entity.bounds.minY * factor,
+      maxX: entity.bounds.maxX * factor, maxY: entity.bounds.maxY * factor,
+    } : boundsForEntity(scaled) };
   });
 }
 
@@ -759,7 +775,7 @@ export function parseDxfDrawing(input: string, ctx: ParseContext): ParsedDrawing
   // factor at the end of the pipeline in one pass.
   const originalUnits = dxfHeaderUnitName(parsed.header as Record<string, unknown>);
   const unitScaleFactor = unitToInchFactor(originalUnits);
-  const canonicalUnits = "in";
+  const canonicalUnits = originalUnits === "unitless" ? "unitless" : "in";
 
   logVectorPipeline({
     kind: "dxf:unit_normalization",
@@ -782,6 +798,10 @@ export function parseDxfDrawing(input: string, ctx: ParseContext): ParsedDrawing
     stats: { inserts: 0, expanded: 0, maxDepth: 0, missing: new Set() },
   };
 
+  const attributes = readInsertAttributes(input);
+  for (const entity of [...(parsed.entities ?? []), ...Object.values(parsed.blocks ?? {}).flatMap((b) => b.entities ?? [])]) {
+    if (entity.type === "INSERT") (entity as any).attributes = attributes.get(String(entity.handle)) ?? {};
+  }
   const rawEntities = parsed.entities ?? [];
   const rawByType: Record<string, number> = {};
   for (const entity of rawEntities) {
@@ -884,6 +904,29 @@ export function parseDxfDrawing(input: string, ctx: ParseContext): ParsedDrawing
   };
 }
 
+function readInsertAttributes(input: string) {
+  const lines = input.replace(/\r/g, "").split("\n");
+  const result = new Map<string, Record<string, string>>();
+  let type = "", handle = "", owner = "", tag = "", value = "", parent = "";
+  const finish = () => {
+    if (type === "INSERT") parent = handle;
+    else if (type === "ATTRIB" && tag && (owner || parent)) {
+      const id = owner || parent;
+      result.set(id, { ...result.get(id), [tag]: value });
+    } else if (type !== "ATTRIB") parent = "";
+  };
+  for (let i = 0; i + 1 < lines.length; i += 2) {
+    const code = Number(lines[i]), text = lines[i + 1].trim();
+    if (code === 0) { finish(); type = text; handle = owner = tag = value = ""; }
+    else if (code === 5) handle = text;
+    else if (code === 330) owner = text;
+    else if (code === 2) tag = text;
+    else if (code === 1) value = text;
+  }
+  finish();
+  return result;
+}
+
 function parseConverterCommand(command: string, inputPath: string, outputPath: string) {
   const tokens = command.match(/(?:[^\s"]+|"[^"]*")+/g)?.map((token) => token.replace(/^"|"$/g, "")) ?? [];
   if (tokens.length === 0) return null;
@@ -903,11 +946,11 @@ async function convertDwgToDxf(inputPath: string): Promise<{ dxfText?: string; c
         "dwg2dxf {input} -o {output} -y",
         `${process.env.HOME ?? "/root"}/.local/bin/dwg2dxf {input} -o {output} -y`,
         "/usr/local/bin/dwg2dxf {input} -o {output} -y",
-        "ODAFileConverter {input} {output} ACAD2018 DXF",
       ];
 
   const tempDir = await mkdtemp(join(tmpdir(), "bidwright-dwg-"));
   const outputPath = join(tempDir, "converted.dxf");
+  let failure: string | undefined;
   try {
     for (const command of commands) {
       const parsed = parseConverterCommand(command, inputPath, outputPath);
@@ -918,14 +961,15 @@ async function convertDwgToDxf(inputPath: string): Promise<{ dxfText?: string; c
         if (dxfText && dxfText.length > 0) {
           return { dxfText, converter: { status: "configured", command } };
         }
-      } catch {
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") failure = error instanceof Error ? error.message : String(error);
         continue;
       }
     }
     return {
       converter: {
-        status: "missing",
-        message: "No DWG converter found. Install LibreDWG (dwg2dxf) or set BIDWRIGHT_DWG_CONVERTER_CMD.",
+        status: failure ? "failed" : "missing",
+        message: failure ?? "No DWG converter found. Install LibreDWG (dwg2dxf) or set BIDWRIGHT_DWG_CONVERTER_CMD.",
       },
     };
   } finally {
@@ -965,7 +1009,7 @@ async function persistResult(documentId: string, result: DwgProcessingResult, cu
 export async function getDwgProcessingResult(
   projectId: string,
   documentId: string,
-  options: { refresh?: boolean; sourceKind?: "source_document" | "file_node" } = {},
+  options: { persist?: boolean; refresh?: boolean; sourceKind?: "source_document" | "file_node" } = {},
 ): Promise<DwgProcessingResult> {
   const sourceKind = options.sourceKind ?? "source_document";
 
@@ -1086,7 +1130,7 @@ export async function getDwgProcessingResult(
       unitScaleFactor: 1,
       durationMs: Date.now() - parseStart,
     });
-    await persistResult(fileId, result, structuredData, sourceKind);
+    if (options.persist !== false) await persistResult(fileId, result, structuredData, sourceKind);
     return result;
   }
 
@@ -1139,7 +1183,7 @@ export async function getDwgProcessingResult(
       unitScaleFactor: parsed.unitScaleFactor,
       durationMs: Date.now() - parseStart,
     });
-    await persistResult(fileId, result, structuredData, sourceKind);
+    if (options.persist !== false) await persistResult(fileId, result, structuredData, sourceKind);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : "Could not parse DXF entities.";
@@ -1197,7 +1241,19 @@ export async function getDwgProcessingResult(
       durationMs: Date.now() - parseStart,
       error: message,
     });
-    await persistResult(fileId, result, structuredData, sourceKind);
+    if (options.persist !== false) await persistResult(fileId, result, structuredData, sourceKind);
     throw Object.assign(new Error(message), { statusCode: 400, result });
   }
+}
+
+export async function getDwgConverterStatus() {
+  const command = process.env.BIDWRIGHT_DWG_CONVERTER_CMD?.trim();
+  const executable = command ? parseConverterCommand(command, "", "")?.file ?? "dwg2dxf" : "dwg2dxf";
+  const probes = await Promise.all([executable, "dwgread"].map(async (file) => {
+    try {
+      const { stdout, stderr } = await execFileAsync(file, ["--version"], { timeout: 5000, maxBuffer: 64 * 1024 });
+      return { executable: file, status: "available", version: (stdout || stderr).trim().split("\n")[0] };
+    } catch (error) { return { executable: file, status: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "failed" }; }
+  }));
+  return { provider: "LibreDWG", conversionTimeoutMs: 120000, command: command ?? "dwg2dxf {input} -o {output} -y", probes };
 }

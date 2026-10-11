@@ -180,6 +180,32 @@ function normalizedAsset(asset: any) {
 }
 
 export function registerModelTools(server: McpServer) {
+  const jsonResult = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(data) }] });
+  const modelInput = { modelId: z.string() };
+  server.tool("getModelSolidMetrics", "Read persisted per-solid surface area, closure-checked volume, bounds and assembly BOM with units.", modelInput,
+    async ({ modelId }) => jsonResult(await apiGet(`/api/models/${getProjectId()}/assets/${modelId}/solid-metrics`)));
+  server.tool("aggregateModelElements", "Aggregate persisted elements and quantities by class, type, level, system, material or property; separate units, methods and gross/net bases.", {
+    ...modelInput, groupBy: z.enum(["class", "type", "level", "system", "material", "property"]), property: z.string().optional().describe("Dot-separated property path, e.g. psets.Pset_WallCommon.FireRating"),
+    elementIds: z.array(z.string()).max(10000).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
+  }, async ({ modelId, ...input }) => jsonResult(await apiPost(`/api/models/${getProjectId()}/assets/${modelId}/aggregate`, input)));
+  server.tool("rebuildModelTopology", "Rebuild the model topology used by Takeoff Studio from persisted elements and recipes.", modelInput,
+    async ({ modelId }) => jsonResult(await apiPost(`/api/models/${getProjectId()}/assets/${modelId}/topology/rebuild`, {})));
+  server.tool("listModelTakeoffRecipes", "List persisted recipes available to this model in Takeoff Studio.", modelInput, async ({ modelId }) => {
+    const result = await apiGet<any>(`/api/models/${getProjectId()}/assets/${modelId}/topology`);
+    return jsonResult({ modelId, recipes: result.recipes ?? [] });
+  });
+  server.tool("applyModelTakeoffRecipe", "Set a model's default Takeoff Studio recipe and rebuild its topology.", { ...modelInput, recipeId: z.string() }, async ({ modelId, recipeId }) => {
+    const base = `/api/models/${getProjectId()}`;
+    const topology = await apiGet<any>(`${base}/assets/${modelId}/topology`);
+    const recipe = asArray(topology.recipes).find((r) => r.id === recipeId);
+    if (!recipe) throw new Error("Recipe not found for model");
+    // A project-wide template is copied into model scope; other models keep their defaults.
+    return jsonResult(await apiPost(`${base}/takeoff-recipes`, { id: recipe.modelId === modelId ? recipe.id : undefined,
+      modelId, name: recipe.name, trade: recipe.trade, rules: recipe.rules, isDefault: true }));
+  });
+  server.tool("getModelRevisionDiff", "Read a persisted model revision diff and its worksheet impact, or list available diffs.", { diffId: z.string().optional() },
+    async ({ diffId }) => jsonResult(await apiGet(`/api/models/${getProjectId()}/diffs${diffId ? `/${encodeURIComponent(diffId)}` : ""}`)));
+
   server.tool(
     "getModelIngestCapabilities",
     `Report BidWright's CAD/BIM/model ingest capability matrix.
@@ -288,6 +314,7 @@ The manifest includes parser status, source lineage, native file metadata, eleme
 
 This tool returns only extracted data. It does not infer or fabricate model elements.`,
     {
+      responseFormat: z.enum(["concise", "detailed"]).default("concise"),
       modelId: z.string().describe("Model asset id returned by listModels"),
       query: z
         .object({
@@ -303,7 +330,7 @@ This tool returns only extracted data. It does not infer or fabricate model elem
         })
         .default({ limit: 100 }),
     },
-    async ({ modelId, query }) => {
+    async ({ modelId, query, responseFormat }) => {
       const projectId = getProjectId();
       const params = new URLSearchParams();
       for (const [key, value] of Object.entries(query)) {
@@ -322,7 +349,11 @@ This tool returns only extracted data. It does not infer or fabricate model elem
                 offset: query.offset ?? 0,
                 limit: query.limit ?? 100,
                 hasMore: (query.offset ?? 0) + elements.length < (result.count ?? elements.length ?? 0),
-                elements,
+                elements: responseFormat === "detailed" ? elements : elements.map((element: any) => ({
+                  id: element.id, externalId: element.externalId, name: element.name, class: element.elementClass, type: element.elementType,
+                  level: element.level, system: element.system, material: element.material,
+                  quantities: asArray(element.quantities).map((q: any) => ({ id: q.id, type: q.quantityType, value: q.value, unit: q.unit, method: q.method })),
+                })),
               },
               null,
               2,

@@ -25,7 +25,7 @@ const PRESENTATION_FORMATS = new Set(["pptx"]);
 const SPREADSHEET_FORMATS = new Set(["xlsx", "xls", "xlsm", "ods", "csv", "tsv"]);
 const WEB_FORMATS = new Set(["html", "htm", "mhtml", "mht"]);
 const IMAGE_FORMATS = new Set(["png", "jpg", "jpeg", "tiff", "tif", "bmp", "webp", "gif"]);
-const TEXT_FORMATS = new Set(["txt", "md", "markdown", "json", "xml", "yml", "yaml", "log", "ini", "toml", "conf", "cfg"]);
+const TEXT_FORMATS = new Set(["piping", "pcf", "txt", "md", "markdown", "json", "xml", "yml", "yaml", "log", "ini", "toml", "conf", "cfg"]);
 
 const FORMATS = new Set([
   ...PDF_FORMATS,
@@ -48,6 +48,7 @@ function hasAzureDocumentIntelligence(settings: FileIngestSettings | undefined) 
 
 function familyForFormat(format?: string): FileIngestCapability["family"] {
   if (!format) return "document";
+  if (format === "piping" || format === "pcf") return "piping";
   if (SPREADSHEET_FORMATS.has(format)) return "spreadsheet";
   if (IMAGE_FORMATS.has(format)) return "image";
   if (TEXT_FORMATS.has(format)) return "text";

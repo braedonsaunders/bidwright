@@ -26,7 +26,7 @@ async function resolveDocPdf(store: any, projectId: string, documentId: string):
         if (nodeDoc?.storagePath) {
           const absPath = resolveApiPath(nodeDoc.storagePath);
           try { await access(absPath); } catch { return { error: `PDF not on disk: ${nodeDoc.storagePath}`, status: 404 }; }
-          return { absPath, doc: nodeDoc };
+          return { absPath, doc: { ...nodeDoc, fileNodeId: node.id } };
         }
       }
       if (node.storagePath) {
@@ -156,7 +156,7 @@ function asRecord(value: unknown): Record<string, any> {
  * Persist one image delivered to an agent tool call as an EvidenceView, with
  * the exact PNG bytes kept outside the agent's working directory.
  */
-async function recordEvidenceView(input: {
+export async function recordEvidenceView(input: {
   projectId: string;
   doc: any;
   documentId: string;
@@ -182,8 +182,8 @@ async function recordEvidenceView(input: {
   const cropRelPath = ["evidence-views", input.projectId, `${viewId}.${extension}`].join("/");
   await mkdir(dirname(resolveApiPath(cropRelPath)), { recursive: true });
   await writeFile(resolveApiPath(cropRelPath), png);
-  const isFileNode = input.doc?.source === "file_node";
-  const sourceId = String(input.doc?.id ?? input.documentId);
+  const isFileNode = input.documentId.startsWith("file-") || Boolean(input.doc?.fileNodeId) || input.doc?.source === "file_node";
+  const sourceId = isFileNode ? String(input.doc?.fileNodeId ?? input.documentId.replace(/^file-/, "")) : String(input.doc?.id ?? input.documentId);
   await prisma.evidenceView.create({
     data: {
       id: viewId,
@@ -1397,7 +1397,7 @@ export async function visionRoutes(app: FastifyInstance) {
     // Index builds (the drawing atlas) read layout without handing the image
     // to a model; those reads are not evidence and leave no view behind.
     if (body.record === false) {
-      return { ...result, viewId: null, documentId: String(resolved.doc?.id ?? documentId), fileName: resolved.doc?.fileName ?? null };
+      return { ...result, viewId: null, documentId: resolved.doc?.fileNodeId ? `file-${resolved.doc.fileNodeId}` : resolved.doc?.source === "file_node" ? `file-${resolved.doc.id}` : String(resolved.doc?.id ?? documentId), fileName: resolved.doc?.fileName ?? null };
     }
 
     const viewId = await recordEvidenceView({
@@ -1416,7 +1416,7 @@ export async function visionRoutes(app: FastifyInstance) {
       height: result.height ?? 0,
       textSnippet: (result.textLines ?? []).map((line) => line.text).join("\n"),
     });
-    return { ...result, viewId, documentId: String(resolved.doc?.id ?? documentId), fileName: resolved.doc?.fileName ?? null };
+    return { ...result, viewId, documentId: resolved.doc?.fileNodeId ? `file-${resolved.doc.fileNodeId}` : resolved.doc?.source === "file_node" ? `file-${resolved.doc.id}` : String(resolved.doc?.id ?? documentId), fileName: resolved.doc?.fileName ?? null };
   });
 
   // ── GET /api/vision/views ──────────────────────────────────────────────

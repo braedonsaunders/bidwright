@@ -32,6 +32,7 @@ export { bboxInchesToPaddedPixels } from "./symbol-template-coords.js";
 const DEFAULT_RENDER_DPI = 150;
 
 export interface ResolvedDocument {
+  sourceDocumentId?: string;
   absPath: string;
   storagePath: string;
   fileName: string;
@@ -49,7 +50,13 @@ async function resolveDocumentPdf(
 ): Promise<ResolvedDocument | { error: string; status: number }> {
   const doc = await store.getDocument(projectId, documentId).catch(() => null);
   if (doc?.storagePath) {
-    return { absPath: resolveApiPath(doc.storagePath), storagePath: doc.storagePath, fileName: doc.fileName };
+    return { absPath: resolveApiPath(doc.storagePath), storagePath: doc.storagePath, fileName: doc.fileName, sourceDocumentId: doc.id };
+  }
+  if (typeof store.getFileNode === "function") {
+    const node = await store.getFileNode(documentId.replace(/^file-/, ""));
+    if (node?.projectId === projectId && node.type !== "directory" && node.storagePath) {
+      return { absPath: resolveApiPath(node.storagePath), storagePath: node.storagePath, fileName: node.name };
+    }
   }
   if (typeof store.getKnowledgeBook === "function") {
     const book = await store.getKnowledgeBook(documentId).catch(() => null);
@@ -164,7 +171,7 @@ export async function createTemplateFromLegendEntry(
       width: crop.width ?? wPx,
       height: crop.height ?? hPx,
       dpi,
-      sourceDocumentId: input.documentId,
+      sourceDocumentId: resolved.sourceDocumentId,
       sourcePage: input.pageNumber,
       sourceBbox: {
         x: xPx,
@@ -179,6 +186,7 @@ export async function createTemplateFromLegendEntry(
       enabled: true,
       metadata: {
         legendConfidence: input.entry.confidence,
+        sourceRef: { documentId: input.documentId, pageNumber: input.pageNumber },
       },
       createdBy: input.createdBy,
     });
@@ -241,6 +249,9 @@ export interface RunLibraryOnPageResult {
     symbol: string;
     label: string;
     totalCount: number;
+    imageWidth: number;
+    imageHeight: number;
+    dpi: number;
     matches: Array<{
       x: number;
       y: number;
@@ -344,6 +355,9 @@ export async function runLibraryOnPage(
         symbol: tpl.symbol,
         label: tpl.label,
         totalCount: result.totalCount,
+        imageWidth: run.imageWidth,
+        imageHeight: run.imageHeight,
+        dpi: run.dpi,
         matches: result.matches,
         error: result.error,
       });
@@ -374,8 +388,11 @@ export async function runLibraryOnPage(
               rect: { x: m.x, y: m.y, width: m.w, height: m.h },
               confidence: m.confidence,
               scale: m.scale,
-              imageWidth,
-              imageHeight,
+              imageWidth: tr.imageWidth,
+              imageHeight: tr.imageHeight,
+              canvasWidth: tr.imageWidth,
+              canvasHeight: tr.imageHeight,
+              dpi: tr.dpi,
             },
             createdBy: opts.createdBy ?? "symbol-library",
           });

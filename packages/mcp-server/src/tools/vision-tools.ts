@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { apiGet, apiPost, getProjectId } from "../api-client.js";
 
@@ -76,7 +77,7 @@ export function compactPageReadMeta(meta: Record<string, any>, mode: "overview" 
   };
 }
 
-async function readDrawingImage(input: {
+type DrawingImageInput = {
   documentId: string;
   pageNumber: number;
   mode: "overview" | "tile";
@@ -84,7 +85,14 @@ async function readDrawingImage(input: {
   bbox?: { x: number; y: number; width: number; height: number };
   rotation?: number;
   fullText?: boolean;
-}) {
+  responseFormat?: "concise" | "detailed";
+  nativePixels?: boolean;
+  dpi?: number;
+  region?: z.infer<z.ZodObject<typeof boundingBoxSchema>>;
+};
+
+async function readDrawingImage(input: DrawingImageInput) {
+  if (input.nativePixels) return readNativeDrawingImage(input);
   const result = await apiPost<Record<string, any>>("/api/vision/read-page", {
     projectId: getProjectId(),
     documentId: input.documentId,
@@ -107,7 +115,7 @@ async function readDrawingImage(input: {
   }
 
   const { image: _image, imageHash: _hash, duration_ms: _ms, ...raw } = result;
-  const meta = compactPageReadMeta(raw, input.mode, input.fullText === true);
+  const meta = input.responseFormat === "detailed" ? raw : compactPageReadMeta(raw, input.mode, input.fullText === true);
   return {
     content: [
       { type: "image" as const, data: base64, mimeType: "image/png" as const },
@@ -122,6 +130,33 @@ async function readDrawingImage(input: {
       },
     ],
   };
+}
+
+/** Legacy tools keep the unrotated pixel frame and requested DPI. */
+async function readNativeDrawingImage(input: DrawingImageInput) {
+  const zoom = input.mode === "tile";
+  const dpi = zoom ? 300 : input.dpi ?? 150;
+  const result = await apiPost("/api/vision/render-page", {
+    projectId: getProjectId(), documentId: input.documentId, pageNumber: input.pageNumber,
+    dpi, region: input.region,
+    recordView: recordViewPayload(zoom ? "zoomDrawingRegion" : "renderDrawingPage"),
+  });
+  const image = imageBase64(result.image);
+  if (!result.success || !image) return { isError: true, content: [{ type: "text" as const, text: `Failed to render page: ${result.error ?? "unexpected image format"}` }] };
+  const metadata = zoom ? {
+    zoomedWidth: result.width, zoomedHeight: result.height, originalRegion: input.region,
+    viewId: result.viewId ?? null,
+    note: "Use originalRegion.imageWidth/imageHeight for countSymbols coordinates, not the zoomed image dimensions.",
+  } : {
+    imageWidth: result.width, imageHeight: result.height,
+    pageWidth: result.pageWidth, pageHeight: result.pageHeight, pageCount: result.pageCount,
+    pageNumber: input.pageNumber, dpi, viewId: result.viewId ?? null,
+    note: "Bounding boxes for zoomDrawingRegion and countSymbols use this imageWidth/imageHeight pixel frame.",
+  };
+  return { content: [
+    { type: "image" as const, data: image, mimeType: "image/png" as const },
+    { type: "text" as const, text: JSON.stringify(metadata, null, 2) },
+  ] };
 }
 
 const drawingAnalysisPresetSchema = z.enum([
@@ -246,7 +281,30 @@ function isPdfSourceDocument(doc: any) {
   return !isIgnoredSourceDocument(fileName) && (fileType === "application/pdf" || fileType === "pdf" || fileName.endsWith(".pdf"));
 }
 
-/** Helper: save an array of matches as Pickup records via the API */
+type CountMatch = { rect: { x: number; y: number; width?: number; height?: number }; confidence: number; text?: string; method?: string };
+type CountMatchSet = { documentId: string; pageNumber: number; imageWidth: number; imageHeight: number; matches: CountMatch[] };
+// Transient results only; saved takeoff records always go through the Pickup API.
+const countMatchRuns = new Map<string, CountMatchSet[]>();
+function rememberCountMatches(runId: string, input: CountMatchSet) {
+  const sets = countMatchRuns.get(runId) ?? [];
+  sets.push(input);
+  countMatchRuns.set(runId, sets);
+  let retainedMatches = [...countMatchRuns.values()].flat().reduce((total, entry) => total + entry.matches.length, 0);
+  // Keep the current run intact so a large document never returns expired refs.
+  while (countMatchRuns.size > 20 || (retainedMatches > 100_000 && countMatchRuns.size > 1)) {
+    const oldest = countMatchRuns.keys().next().value!;
+    retainedMatches -= countMatchRuns.get(oldest)!.reduce((total, entry) => total + entry.matches.length, 0);
+    countMatchRuns.delete(oldest);
+  }
+  return `${runId}/${sets.length - 1}`;
+}
+function getCountMatchSet(id: string): CountMatchSet | undefined {
+  const parts = id.split("/");
+  if (parts.length !== 2 || String(Number(parts[1])) !== parts[1] || !Number.isInteger(Number(parts[1]))) return undefined;
+  return countMatchRuns.get(parts[0])?.[Number(parts[1])];
+}
+
+/** Count matches use the unrotated 150-DPI detector image, not a zoomed view. */
 async function saveMatchesAsAnnotations(opts: {
   documentId: string;
   pageNumber: number;
@@ -254,36 +312,208 @@ async function saveMatchesAsAnnotations(opts: {
   label: string;
   color: string;
   templateImage?: string;
-}): Promise<{ savedCount: number; errors: string[] }> {
+  imageWidth?: number;
+  imageHeight?: number;
+  pdfPageWidth?: number;
+  pdfPageHeight?: number;
+}) {
   const projectId = getProjectId();
-  const errors: string[] = [];
-  let savedCount = 0;
+  // Older callers did not supply dimensions. Resolve the detector's native frame.
+  const page = opts.imageWidth && opts.imageHeight && opts.pdfPageWidth && opts.pdfPageHeight
+    ? null
+    : await apiPost("/api/vision/render-page", {
+      projectId, documentId: opts.documentId, pageNumber: opts.pageNumber, dpi: 150,
+    });
+  const canvasWidth = opts.imageWidth ?? page?.width;
+  const canvasHeight = opts.imageHeight ?? page?.height;
+  const pdfPageWidth = opts.pdfPageWidth ?? page?.pageWidth;
+  const pdfPageHeight = opts.pdfPageHeight ?? page?.pageHeight;
+  if (![canvasWidth, canvasHeight, pdfPageWidth, pdfPageHeight].every((n) => Number.isFinite(n) && n > 0)) {
+    throw new Error("Could not resolve the count image and PDF page dimensions.");
+  }
+  const pickup = await apiPost(`/api/takeoff/${projectId}/pickups`, {
+    documentId: opts.documentId,
+    pageNumber: opts.pageNumber,
+    annotationType: "count",
+    label: opts.label,
+    color: opts.color,
+    points: opts.matches.map(({ rect }) => ({ x: rect.x + (rect.width ?? 0) / 2, y: rect.y + (rect.height ?? 0) / 2 })),
+    measurement: { value: opts.matches.length, unit: "count" },
+    metadata: {
+      createdBy: "agent",
+      source: "auto-count",
+      coordinateSpace: "pdf-render-pixels",
+      canvasWidth, canvasHeight, pdfPageWidth, pdfPageHeight,
+      matches: opts.matches,
+      templateImage: opts.templateImage || undefined,
+    },
+    createdBy: "agent",
+  });
+  return { savedCount: 1, pickupIds: [pickup.id], errors: [] as string[] };
+}
 
-  for (const match of opts.matches) {
-    try {
-      await apiPost(`/api/takeoff/${projectId}/annotations`, {
-        documentId: opts.documentId,
-        pageNumber: opts.pageNumber,
-        annotationType: "count",
-        label: opts.label,
-        color: opts.color,
-        points: [{ x: match.rect.x, y: match.rect.y }],
-        measurement: { value: opts.matches.length, unit: "count" },
-        metadata: {
-          createdBy: "agent",
-          detection_method: match.method ?? "template_matching",
+const countDrawingSymbolInput = {
+  documentId: z.string().describe("Document ID of the PDF drawing"),
+  pageNumber: z.coerce.number().min(1).describe("Page number to search"),
+  boundingBox: z.object(boundingBoxSchema).describe("Tight box around one clean example of the symbol, in renderDrawingPage coordinate space"),
+  label: z.string().default("Counted symbol").describe("Label to use for returned/saved detections"),
+  threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match threshold"),
+  crossScale: z.boolean().default(false).describe("Enable multi-scale matching"),
+  autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
+};
+
+async function countDrawingSymbolResult({ documentId, pageNumber, boundingBox, label, threshold, crossScale, autoSave }: z.infer<z.ZodObject<typeof countDrawingSymbolInput>>) {
+  const result = await apiPost("/api/vision/count-symbols", {
+    projectId: getProjectId(),
+    documentId,
+    pageNumber,
+    boundingBox,
+    threshold,
+    crossScale,
+  });
+
+  if (!result.success) {
+    return { isError: true, content: [{ type: "text" as const, text: `Symbol count failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
+  }
+
+  const matches = asToolArray(result.matches);
+  const detections = matches.map((match, index) => {
+    const rect = asToolRecord(match.rect);
+    return {
+      id: `symbol-${pageNumber}-${index + 1}`,
+      kind: "symbol",
+      label,
+      annotationType: "count",
+      color: "#22c55e",
+      points: [{ x: Number(rect.x), y: Number(rect.y) }],
+      confidence: Number(match.confidence ?? 0),
+      source: "opencv-template-match",
+      measurement: { value: 1, unit: "count" },
+      metadata: {
+        rect,
+        method: match.detection_method ?? match.method ?? "template_matching",
+        threshold,
+        crossScale,
+      },
+    };
+  });
+
+  return {
+    content: [{
+      type: "text" as const,
+      text: JSON.stringify({
+        documentId,
+        pageNumber,
+        label,
+        duration_ms: result.duration_ms,
+        errors: result.errors?.length ? result.errors : undefined,
+        totalCount: result.totalCount ?? detections.length,
+        threshold,
+        crossScale,
+        imageWidth: result.imageWidth,
+        imageHeight: result.imageHeight,
+        coordinateSpace: "pdf-render-pixels",
+        detections,
+        rawMatches: matches.map((match) => ({
+          rect: match.rect,
           confidence: match.confidence,
-          matchText: match.text || undefined,
-          templateImage: opts.templateImage || undefined,
-        },
-      });
-      savedCount++;
-    } catch (err) {
-      errors.push(`Failed to save match at (${match.rect.x}, ${match.rect.y}): ${err instanceof Error ? err.message : String(err)}`);
+          method: match.detection_method ?? match.method,
+          text: match.text || undefined,
+        })),
+        autoSaved: false,
+        ...(autoSave ? { note: "Counting is read-only. Call saveDetectionsAsTakeoffMarks with these detections to save them." } : {}),
+      }, null, 2),
+    }],
+  };
+}
+
+const findDrawingSymbolInput = {
+  documentId: z.string().describe("Document ID of the PDF drawing"),
+  pageNumber: z.coerce.number().min(1).default(1).describe("Page number"),
+  minSize: z.coerce.number().default(20).describe("Minimum symbol dimension in pixels"),
+  maxSize: z.coerce.number().default(150).describe("Maximum symbol dimension in pixels"),
+  limit: z.coerce.number().min(1).max(80).default(30).describe("Maximum candidates to return in JSON"),
+  includeThumbnails: z.boolean().default(true).describe("Include image thumbnails for the top candidates"),
+  thumbnailLimit: z.coerce.number().min(0).max(12).default(6).describe("Maximum thumbnails to emit"),
+};
+
+async function findDrawingSymbolResult({ documentId, pageNumber, minSize, maxSize, limit, includeThumbnails, thumbnailLimit }: z.infer<z.ZodObject<typeof findDrawingSymbolInput>>, legacy = false) {
+  const result = await apiPost("/api/vision/find-symbols", {
+    projectId: getProjectId(),
+    documentId,
+    pageNumber,
+    minSize,
+    maxSize,
+  });
+
+  if (!result.success) {
+    return { content: [{ type: "text" as const, text: `Symbol candidate search failed: ${result.error ?? result.message ?? "unknown error"}` }] };
+  }
+
+  if (legacy) return { content: [{ type: "text" as const, text: JSON.stringify({
+    total: result.total,
+    imageWidth: result.imageWidth,
+    imageHeight: result.imageHeight,
+    candidates: (result.candidates ?? []).slice(0, 30),
+    note: result.total > 30 ? `Showing top 30 of ${result.total} candidates` : undefined,
+  }, null, 2) }] };
+
+  const candidates = asToolArray(result.candidates).slice(0, limit).map((candidate, index) => ({
+    id: candidate.id ?? `sym-${index + 1}`,
+    x: candidate.x,
+    y: candidate.y,
+    w: candidate.w,
+    h: candidate.h,
+    cx: candidate.cx,
+    cy: candidate.cy,
+    area: candidate.area,
+    aspect: candidate.aspect,
+    confidence: candidate.confidence ?? 0.52,
+    source: candidate.source ?? "connected-component",
+    bbox: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
+    thumbnailIndex: includeThumbnails && index < thumbnailLimit ? index + 1 : undefined,
+  }));
+
+  const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
+  if (includeThumbnails && thumbnailLimit > 0) {
+    for (const candidate of candidates.slice(0, thumbnailLimit)) {
+      const region = paddedRegion({
+        x: Number(candidate.x),
+        y: Number(candidate.y),
+        width: Number(candidate.w),
+        height: Number(candidate.h),
+        imageWidth: Number(result.imageWidth),
+        imageHeight: Number(result.imageHeight),
+      }, 0.35);
+      const crop = await apiPost("/api/vision/render-page", {
+        projectId: getProjectId(),
+        documentId,
+        pageNumber,
+        dpi: 300,
+        region,
+      }).catch(() => null);
+      const base64 = imageBase64(crop?.image);
+      if (base64) {
+        content.push({ type: "image" as const, data: base64, mimeType: "image/png" as const });
+      }
     }
   }
 
-  return { savedCount, errors };
+  content.push({
+    type: "text" as const,
+    text: JSON.stringify({
+      documentId,
+      pageNumber,
+      imageWidth: result.imageWidth,
+      imageHeight: result.imageHeight,
+      total: result.total,
+      returned: candidates.length,
+      candidates,
+      note: "Use candidate.bbox as a starting point for countDrawingSymbol, but tighten the box after visual review if needed.",
+    }, null, 2),
+  });
+
+  return { content };
 }
 
 export function registerVisionTools(server: McpServer) {
@@ -436,31 +666,20 @@ COMMON PITFALLS:
   // ── renderDrawingPage ──────────────────────────────────────
   server.tool(
     "readDrawingPage",
-    `Look at a drawing page yourself. This is the primary way to read drawings: you get the sheet as an upright image sized for you to see clearly, plus its real text layer with positions, its layout regions (views/details/tables) and a zoom grid.
-
-USE IT FOR every drawing that drives scope or quantity, page by page. Then zoom with readDrawingTile on the views, notes, schedules and dimensions you will rely on. Dimensions and notes on CAD sheets are often drawn as strokes (vectorTextLikely=true): they are NOT in textLines and can only be read from the image, so zoom until you can read them.
-
-If overview analysis times out, try readDrawingTile on the same page with bbox {x:0,y:0,width:1,height:1} to see the sheet without optional layout analysis, then zoom into details. A failed request does not mean the PDF itself is unreadable.
-
-OUTPUT: the image, then JSON with viewId, rotation, pageSizeInches, regions[] ("R3 view \"label\" @x,y,w,h", normalized to the image), grid (rows x cols tile ids like "r2c3"), textLines[] ("exact text @x,y,w,h", up to 40; fullText:true for all), and vectorTextLikely. Every @x,y,w,h is normalized 0..1 in THIS image's frame, after rotation (x right, y down from the top-left of the image you see), and can be passed straight to readDrawingTile as bbox. fullText:true adds full per-line boxes only when you need every line.
-
-Every image carries a viewId you can mention in source notes so a reviewer can open the exact image. Quote textLines verbatim when a note drives a quantity. Stacked fractions are split in the text layer (e.g. "for 3" + "4\" SS epoxy anchor" is "for 3/4\" SS epoxy anchor"); confirm such values in the image.
-
-Works with source document ids and Files-area file ids.`,
+    `Read an upright drawing-page image with viewId, rotation, layout regions, tile grid and positioned text. All returned boxes use normalized 0..1 coordinates in the returned image frame (x right, y down). Concise metadata includes up to 40 text lines; fullText returns all lines, and responseFormat=detailed returns full metadata. readDrawingTile provides a closer view of a region or tile.`,
     {
       documentId: z.string().describe("Source document id or Files-area file id of the PDF"),
       pageNumber: z.coerce.number().int().min(1).default(1).describe("Page number (1-based)"),
       rotation: z.coerce.number().int().optional().describe("Override auto-orientation, degrees clockwise (0/90/180/270). Normally omit."),
+      responseFormat: z.enum(["concise", "detailed"]).default("concise").describe("Detailed returns full page metadata and text boxes."),
       fullText: z.boolean().optional().describe("Return every text line with full boxes. Default returns up to 40 lines as \"text @x,y,w,h\"."),
     },
-    async ({ documentId, pageNumber, rotation, fullText }) => readDrawingImage({ documentId, pageNumber, mode: "overview", rotation, fullText }),
+    async ({ documentId, pageNumber, rotation, fullText, responseFormat }) => readDrawingImage({ documentId, pageNumber, mode: "overview", rotation, fullText, responseFormat }),
   );
 
   server.tool(
     "readDrawingTile",
-    `Zoom into part of a drawing page you have already opened with readDrawingPage. Pass a tile id from its grid (e.g. "r2c3") or a region bbox from its regions[] (normalized 0..1, same frame as the overview image). Returns a sharp image of just that area plus the text inside it, and its viewId.
-
-Use it to read dimensions, callouts, notes, schedules, base-plate/anchor details, and to count repeated items (columns, base plates, anchors, supports). When you count, count in the image and say what you counted where; if the text says one thing and the picture another, say so and ask.`,
+    `Read a sharp drawing tile by grid id or bbox from readDrawingPage. Input bbox uses normalized 0..1 coordinates in that overview image frame; returned boxes use normalized coordinates in this tile image. Returns an image, viewId and positioned text. Concise metadata includes up to 80 text lines; detailed returns full metadata.`,
     {
       documentId: z.string().describe("Same documentId used with readDrawingPage"),
       pageNumber: z.coerce.number().int().min(1).default(1),
@@ -475,370 +694,81 @@ Use it to read dimensions, callouts, notes, schedules, base-plate/anchor details
         }),
       ]).optional().describe("Normalized region in the overview image frame: a region's \"x,y,w,h\" from readDrawingPage (optionally padded), or {x,y,width,height}"),
       rotation: z.coerce.number().int().optional().describe("Use the rotation readDrawingPage reported if you overrode it there."),
+      responseFormat: z.enum(["concise", "detailed"]).default("concise").describe("Detailed returns full page metadata and text boxes."),
       fullText: z.boolean().optional().describe("Return every text line in the tile with full boxes. Default returns up to 80 lines as \"text @x,y,w,h\"."),
     },
-    async ({ documentId, pageNumber, tile, bbox, rotation, fullText }) => {
+    async ({ documentId, pageNumber, tile, bbox, rotation, fullText, responseFormat }) => {
       if (!tile && !bbox) {
         return { content: [{ type: "text" as const, text: "Pass a tile id from readDrawingPage's grid or a bbox from its regions." }] };
       }
-      return readDrawingImage({ documentId, pageNumber, mode: "tile", tile, bbox: parseBox(bbox), rotation, fullText });
+      return readDrawingImage({ documentId, pageNumber, mode: "tile", tile, bbox: parseBox(bbox), rotation, fullText, responseFormat });
     },
   );
 
   server.tool(
     "renderDrawingPage",
-    `Render a construction drawing PDF page to an image so you can visually inspect it.
-
-WHEN TO USE: This is the FIRST step whenever you need to look at a drawing — to find symbols, identify elements, understand the layout, or locate items to count. Always start here before zooming or counting.
-
-INPUTS:
-- documentId: Get this from listDrawingPages
-- pageNumber: 1-based page number (default 1)
-- dpi: Resolution — use 150 for overview/browsing, 200-300 for detailed inspection of small symbols. Higher DPI = larger image = more detail but more data
-
-OUTPUT: Returns the page as a viewable PNG image, plus metadata JSON with imageWidth, imageHeight, pageWidth, pageHeight, pageCount, and dpi. The imageWidth/imageHeight define the coordinate space you MUST use for bounding boxes in zoomDrawingRegion and countSymbols.
-
-COMMON PITFALLS:
-- Always note the imageWidth and imageHeight from the response — you need these for bounding box coordinates
-- Start with dpi=150 to get an overview, then zoom into specific areas with zoomDrawingRegion for detail
-- A full-page render is only the overview. If this drawing drives scope or quantity, follow it with zoomDrawingRegion on the exact detail, symbol, schedule, dimension, or dense table area before you mark visual takeoff complete
-- Large pages at 300 DPI produce very large images — only use high DPI when you need to see fine detail`,
+    `Render a drawing page in its native orientation at the requested DPI. Returns imageWidth/imageHeight, PDF page dimensions, and viewId. Bounding boxes for zoomDrawingRegion and countSymbols use this image's pixel coordinates. readDrawingPage offers an upright overview with normalized coordinates and text metadata.`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing (from listDrawingPages)"),
       pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
       dpi: z.coerce.number().min(72).max(300).default(150).describe("Resolution — 150 for overview, 200-300 for detail"),
     },
-    async ({ documentId, pageNumber, dpi }) => {
-      const result = await apiPost("/api/vision/render-page", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        dpi,
-        recordView: recordViewPayload("renderDrawingPage"),
-      });
-
-      if (!result.success || !result.image) {
-        return { content: [{ type: "text" as const, text: `Failed to render page: ${result.error ?? "unknown error"}` }] };
-      }
-
-      // Extract the raw base64 from the data URL
-      const base64Match = (result.image as string).match(/^data:image\/png;base64,(.+)$/);
-      if (!base64Match) {
-        return { content: [{ type: "text" as const, text: "Render succeeded but image format was unexpected" }] };
-      }
-
-      return {
-        content: [
-          {
-            type: "image" as const,
-            data: base64Match[1],
-            mimeType: "image/png" as const,
-          },
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              imageWidth: result.width,
-              imageHeight: result.height,
-              pageWidth: result.pageWidth,
-              pageHeight: result.pageHeight,
-              pageCount: result.pageCount,
-              pageNumber,
-              dpi,
-              viewId: result.viewId ?? null,
-              note: "Use imageWidth and imageHeight as the coordinate space for bounding boxes in zoomDrawingRegion and countSymbols tools. If this sheet affects scope or quantity, follow this overview with a targeted zoomDrawingRegion before marking visual inspection complete. Use countSymbols only after identifying a tight representative symbol box.",
-            }, null, 2),
-          },
-        ],
-      };
-    }
+    (input) => readDrawingImage({ ...input, mode: "overview", nativePixels: true })
   );
 
   // ── zoomDrawingRegion ──────────────────────────────────────
   server.tool(
     "zoomDrawingRegion",
-    `Zoom into a specific region of a drawing page at high resolution (300 DPI).
-
-WHEN TO USE: After calling renderDrawingPage, use this to get a closer look at small symbols, crowded areas, or fine details that are hard to see at overview resolution. Essential for identifying the exact boundaries of small symbols before running countSymbols.
-
-INPUTS:
-- documentId: Same document ID used in renderDrawingPage
-- pageNumber: Same page number
-- region: Bounding box object with {x, y, width, height, imageWidth, imageHeight} — all coordinates MUST be in the renderDrawingPage coordinate space (use the imageWidth/imageHeight from that tool's output)
-
-OUTPUT: A cropped, 300 DPI image of just the specified region, plus metadata. The zoomed image has its own dimensions (zoomedWidth/zoomedHeight) — do NOT use these as coordinates for countSymbols.
-
-COMMON PITFALLS:
-- Coordinates must come from renderDrawingPage's coordinate space, NOT from a previous zoom
-- The zoomed image dimensions are different from the original — always use ORIGINAL coordinates for countSymbols
-- Make the region large enough to see context around the symbol (add 20-30% padding)`,
+    `Compatibility wrapper for a native-orientation drawing crop at 300 DPI. region uses pixel coordinates from renderDrawingPage with its imageWidth/imageHeight. Returns zoomedWidth/zoomedHeight, originalRegion and viewId. The crop dimensions do not change the source coordinate frame for countSymbols.`,
     {
       documentId: z.string().describe("Document ID of the PDF/DXF/DWG drawing"),
       pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
       region: z.object(boundingBoxSchema).describe("Region to zoom into — coordinates from a previous renderDrawingPage result"),
     },
-    async ({ documentId, pageNumber, region }) => {
-      const result = await apiPost("/api/vision/render-page", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        dpi: 300, // Always high-res for zoom
-        region,
-        recordView: recordViewPayload("zoomDrawingRegion"),
-      });
-
-      if (!result.success || !result.image) {
-        return { content: [{ type: "text" as const, text: `Failed to zoom: ${result.error ?? "unknown error"}` }] };
-      }
-
-      const base64Match = (result.image as string).match(/^data:image\/png;base64,(.+)$/);
-      if (!base64Match) {
-        return { content: [{ type: "text" as const, text: "Zoom succeeded but image format was unexpected" }] };
-      }
-
-      return {
-        content: [
-          {
-            type: "image" as const,
-            data: base64Match[1],
-            mimeType: "image/png" as const,
-          },
-          {
-            type: "text" as const,
-            text: JSON.stringify({
-              zoomedWidth: result.width,
-              zoomedHeight: result.height,
-              originalRegion: region,
-              viewId: result.viewId ?? null,
-              note: "This is a high-res crop. To count symbols, use the ORIGINAL region coordinates (from renderDrawingPage's coordinate space) with countSymbols — not the zoomed image dimensions.",
-            }, null, 2),
-          },
-        ],
-      };
-    }
+    (input) => readDrawingImage({ ...input, mode: "tile", nativePixels: true })
   );
 
   // ── countSymbols ───────────────────────────────────────────
   server.tool(
     "countSymbols",
-    `Run the OpenCV computer vision pipeline to count all occurrences of a symbol on a drawing page.
-
-WHEN TO USE: After you have identified a symbol on a drawing page using renderDrawingPage (and optionally zoomDrawingRegion), use this tool to count how many times that symbol appears. You MUST provide an accurate bounding box around ONE clear example of the symbol.
-
-INPUTS:
-- documentId: Document ID from listDrawingPages
-- pageNumber: Page to search (1-based)
-- boundingBox: Tight bounding box around ONE example of the symbol — coordinates in renderDrawingPage's image coordinate space
-- threshold: Match confidence (0.3-0.95). Default 0.65 works well. Lower = more matches but more false positives. Higher = fewer but more confident matches
-- autoSave: If true, automatically saves all matches as Pickup records in the project takeoff. Default false — set to true when you want to persist count results for the user
-- crossScale: If true, matches at multiple scales (0.75x-1.25x) to find the same symbol even when rendered at different sizes. ESSENTIAL for cross-document searches where different CAD sources produce different-sized symbols. ~6x slower but finds symbols that single-scale misses. Default false for same-page, set to true for cross-document.
-
-OUTPUT: totalCount (number of matches), matches array with rect/confidence/text/method for each match, duration_ms, and any errors.
-
-WORKFLOW:
-1. Call renderDrawingPage to see the page (get imageWidth/imageHeight)
-2. If the symbol is small, call zoomDrawingRegion to inspect it closely
-3. Identify ONE clean, unobstructed example of the symbol
-4. Call countSymbols with a tight bounding box around that example
-5. If autoSave=true, matches are automatically saved as takeoff annotations
-6. To count across ALL pages of a document, use countSymbolsAllPages instead
-7. To count across ALL documents in the project, call countSymbolsAllPages for each document with crossScale=true
-
-TIPS FOR ACCURACY:
-- Draw the box tightly around the symbol with minimal surrounding whitespace
-- Pick a clean, unobstructed example (not overlapping with other elements)
-- Optimal threshold is 0.75 (proven across 5 real construction packages)
-- If you get too many false positives, increase threshold to 0.80-0.85
-- If you get too few matches, decrease threshold to 0.60-0.70
-- For cross-document searches, ALWAYS set crossScale=true
-
-COMMON PITFALLS:
-- Bounding box coordinates MUST be in renderDrawingPage coordinate space (NOT zoomed coordinates)
-- Providing too large a bounding box (with lots of surrounding context) reduces accuracy
-- Providing too small a bounding box (clipping the symbol) also reduces accuracy
-- Without crossScale, a template from one CAD source may not match a different source's rendering of the same symbol`,
+    `Compatibility alias for countDrawingSymbol returning matches instead of detections. The template boundingBox uses renderDrawingPage pixel coordinates and image dimensions. Returned matches use the detector imageWidth/imageHeight pixel frame. Counting is read-only; saveCountAsAnnotations saves the result.`,
     {
       documentId: z.string().describe("Document ID of the PDF/DXF/DWG drawing"),
       pageNumber: z.coerce.number().min(1).describe("Page number to search (1-based)"),
       boundingBox: z.object(boundingBoxSchema).describe("Bounding box around ONE example of the symbol to find — in renderDrawingPage coordinate space"),
       threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold. 0.75 is optimal (proven across 5 packages). Lower = more matches, higher = stricter"),
       crossScale: z.boolean().default(false).describe("Enable cross-scale matching (0.75x-1.25x). ESSENTIAL for cross-document searches. ~6x slower but catches different-sized renderings of the same symbol"),
-      autoSave: z.boolean().default(false).describe("If true, automatically persist all matches as Pickup records"),
+      autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
     },
-    async ({ documentId, pageNumber, boundingBox, threshold, crossScale, autoSave }) => {
-      const result = await apiPost("/api/vision/count-symbols", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        boundingBox,
-        threshold,
-        crossScale,
-      });
-
-      if (!result.success) {
-        return { content: [{ type: "text" as const, text: `Symbol counting failed: ${result.error ?? JSON.stringify(result.errors)}` }] };
-      }
-
-      // Strip base64 images from matches to keep context lean
-      const matches = (result.matches ?? []).map((m: any) => ({
-        rect: m.rect,
-        confidence: m.confidence,
-        text: m.text || undefined,
-        method: m.detection_method,
-      }));
-
-      // Auto-save as annotations if requested
-      let saveResult: { savedCount: number; errors: string[] } | undefined;
-      if (autoSave && matches.length > 0) {
-        const totalCount = result.totalCount ?? matches.length;
-        saveResult = await saveMatchesAsAnnotations({
-          documentId,
-          pageNumber,
-          matches,
-          label: `Auto Count: ${totalCount} symbols`,
-          color: "#22c55e",
-        });
-      }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            totalCount: result.totalCount,
-            documentId,
-            pageNumber,
-            threshold,
-            duration_ms: result.duration_ms,
-            matches,
-            errors: result.errors?.length ? result.errors : undefined,
-            ...(saveResult ? {
-              autoSaved: true,
-              savedCount: saveResult.savedCount,
-              saveErrors: saveResult.errors.length ? saveResult.errors : undefined,
-            } : {}),
-          }, null, 2),
-        }],
-      };
+    async (input) => {
+      const response = await countDrawingSymbolResult({ ...input, label: "Counted symbol" });
+      if (response.isError) return response;
+      const result = JSON.parse(response.content[0].text);
+      const { label: _label, detections: _detections, rawMatches, crossScale: _crossScale, note: _note, ...metadata } = result;
+      return { content: [{ type: "text" as const, text: JSON.stringify({
+        ...metadata,
+        matches: rawMatches,
+        ...(input.autoSave ? { note: "Counting is read-only. Call saveCountAsAnnotations with these matches to save them." } : {}),
+      }, null, 2) }] };
     }
   );
 
   // ── countDrawingSymbol ───────────────────────────────────
   server.tool(
     "countDrawingSymbol",
-    `Count a specific drawing symbol with the reusable DrawingDetection schema.
-
-WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use renderDrawingPage/zoomDrawingRegion first, then pass one tight representative symbol box. The response includes both raw matches and detections shaped for saveDetectionsAsTakeoffMarks.`,
-    {
-      documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.coerce.number().min(1).describe("Page number to search"),
-      boundingBox: z.object(boundingBoxSchema).describe("Tight box around one clean example of the symbol, in renderDrawingPage coordinate space"),
-      label: z.string().default("Counted symbol").describe("Label to use for returned/saved detections"),
-      threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match threshold"),
-      crossScale: z.boolean().default(false).describe("Enable multi-scale matching"),
-      autoSave: z.boolean().default(false).describe("Persist detections immediately as takeoff marks after counting"),
-    },
-    async ({ documentId, pageNumber, boundingBox, label, threshold, crossScale, autoSave }) => {
-      const result = await apiPost("/api/vision/count-symbols", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        boundingBox,
-        threshold,
-        crossScale,
-      });
-
-      if (!result.success) {
-        return { content: [{ type: "text" as const, text: `Symbol count failed: ${result.error ?? result.message ?? JSON.stringify(result)}` }] };
-      }
-
-      const matches = asToolArray(result.matches);
-      const detections = matches.map((match, index) => {
-        const rect = asToolRecord(match.rect);
-        return {
-          id: `symbol-${pageNumber}-${index + 1}`,
-          kind: "symbol",
-          label,
-          annotationType: "count",
-          color: "#22c55e",
-          points: [{ x: Number(rect.x), y: Number(rect.y) }],
-          confidence: Number(match.confidence ?? 0),
-          source: "opencv-template-match",
-          measurement: { value: 1, unit: "count" },
-          metadata: {
-            rect,
-            method: match.detection_method ?? match.method ?? "template_matching",
-            threshold,
-            crossScale,
-          },
-        };
-      });
-
-      let saveResult: any = null;
-      if (autoSave && detections.length > 0) {
-        saveResult = await apiPost("/api/vision/save-detections-as-annotations", {
-          projectId: getProjectId(),
-          documentId,
-          pageNumber,
-          imageWidth: boundingBox.imageWidth,
-          imageHeight: boundingBox.imageHeight,
-          groupName: label,
-          color: "#22c55e",
-          detections,
-        });
-      }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            documentId,
-            pageNumber,
-            label,
-            totalCount: result.totalCount ?? detections.length,
-            threshold,
-            crossScale,
-            imageWidth: boundingBox.imageWidth,
-            imageHeight: boundingBox.imageHeight,
-            detections,
-            rawMatches: matches.map((match) => ({
-              rect: match.rect,
-              confidence: match.confidence,
-              method: match.detection_method ?? match.method,
-              text: match.text || undefined,
-            })),
-            autoSaved: autoSave ? {
-              savedCount: saveResult?.savedCount ?? 0,
-              errors: saveResult?.errors?.length ? saveResult.errors : undefined,
-            } : undefined,
-          }, null, 2),
-        }],
-      };
-    }
+    `Count a drawing symbol and return rawMatches plus DrawingDetection objects for saveDetectionsAsTakeoffMarks. The template boundingBox uses renderDrawingPage pixel coordinates and image dimensions. Returned detections use the detector imageWidth/imageHeight pixel frame. Counting is read-only.`,
+    countDrawingSymbolInput,
+    countDrawingSymbolResult
   );
 
   // ── saveCountAsAnnotations ─────────────────────────────────
   server.tool(
     "saveCountAsAnnotations",
-    `Save symbol count results as takeoff annotations in the project. Creates a Pickup record for each match location, preserving the detection metadata.
-
-WHEN TO USE: After running countSymbols (with autoSave=false), call this to persist the results if the user confirms they look correct. This is the manual alternative to countSymbols' autoSave parameter — useful when you want to review results before saving.
-
-INPUTS:
-- documentId: The document the matches were found in
-- pageNumber: The page number the matches were found on
-- matches: Array of match objects (copy from countSymbols output) — each needs at least rect.x, rect.y, and confidence
-- label: Human-readable label for the annotations (e.g. "Fire Sprinkler Heads", "46 valve tags")
-- color: Hex color for the annotation markers (default green #22c55e). Use colors that contrast with the drawing
-
-OUTPUT: Number of successfully saved annotations and any errors.
-
-COMMON PITFALLS:
-- Make sure to pass the matches array from a countSymbols result — don't fabricate match data
-- Each match becomes a separate annotation point on the takeoff
-- The label should be descriptive — it shows up in the takeoff annotation list for the user
-- Annotations are marked with metadata.createdBy = "agent" so users can distinguish them from manual annotations`,
+    `Save count results as one grouped Pickup with N points and quantity N. Matches are in the unrotated detector image's pixel frame (imageWidth/imageHeight from countSymbols). Per-point detection metadata is preserved. A matchSetId from runProjectSymbolLibrary saves its full result without copying rectangles; references last for this MCP session (up to 20 runs / 100,000 matches; the latest run stays intact). Returns the saved pickup id for linking.`,
     {
       documentId: z.string().describe("Document ID where matches were found"),
       pageNumber: z.coerce.number().min(1).describe("Page number where matches were found"),
+      matchSetId: z.string().optional().describe("Transient result reference from runProjectSymbolLibrary; rerun the count if expired."),
       matches: z.array(z.object({
         rect: z.object({
           x: z.coerce.number().describe("X coordinate of the match"),
@@ -849,12 +779,25 @@ COMMON PITFALLS:
         confidence: z.coerce.number().describe("Match confidence (0-1)"),
         text: z.string().optional().describe("Detected text content if applicable"),
         method: z.string().optional().describe("Detection method used"),
-      })).describe("Array of match results from countSymbols"),
+      })).optional().describe("Array of match results from countSymbols, when not using matchSetId"),
       label: z.string().describe("Human-readable label for the annotations (e.g. 'Fire Sprinkler Heads')"),
       color: z.string().default("#22c55e").describe("Hex color for annotation markers (default green)"),
       templateImage: z.string().optional().describe("Optional base64 template image used for matching"),
+      imageWidth: z.number().positive().optional().describe("Detector image width in pixels"),
+      imageHeight: z.number().positive().optional().describe("Detector image height in pixels"),
+      pdfPageWidth: z.number().positive().optional().describe("PDF page width in points"),
+      pdfPageHeight: z.number().positive().optional().describe("PDF page height in points"),
     },
-    async ({ documentId, pageNumber, matches, label, color, templateImage }) => {
+    async ({ documentId, pageNumber, matches: suppliedMatches, matchSetId, label, color, templateImage, ...dimensions }) => {
+      const matchSet = matchSetId ? getCountMatchSet(matchSetId) : undefined;
+      if (matchSetId && (!matchSet || matchSet.documentId !== documentId || matchSet.pageNumber !== pageNumber)) {
+        return { isError: true, content: [{ type: "text" as const, text: "Unknown, expired, or mismatched matchSetId. Rerun the count for this page." }] };
+      }
+      if (matchSetId && suppliedMatches) {
+        return { isError: true, content: [{ type: "text" as const, text: "Pass matches or matchSetId, not both." }] };
+      }
+      const matches = matchSet?.matches ?? suppliedMatches;
+      if (!matches) return { isError: true, content: [{ type: "text" as const, text: "Pass matches or matchSetId." }] };
       if (matches.length === 0) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ savedCount: 0, message: "No matches to save" }, null, 2) }],
@@ -868,6 +811,8 @@ COMMON PITFALLS:
         label,
         color,
         templateImage,
+        ...dimensions,
+        ...(matchSet ? { imageWidth: matchSet.imageWidth, imageHeight: matchSet.imageHeight } : {}),
       });
 
       return {
@@ -875,6 +820,7 @@ COMMON PITFALLS:
           type: "text" as const,
           text: JSON.stringify({
             savedCount: result.savedCount,
+            pickupIds: result.pickupIds,
             totalMatches: matches.length,
             label,
             color,
@@ -952,145 +898,22 @@ EXAMPLE USE CASES:
   // ── findSymbolCandidates ─────────────────────────────────
   server.tool(
     "findSymbolCandidates",
-    `Automatically discover symbol-like elements on a drawing page using computer vision (connected component analysis). Returns bounding boxes of candidate symbols WITHOUT needing a template — useful for exploring a drawing when you don't know what symbols exist.
-
-WHEN TO USE:
-- When you need to find symbols on a drawing but don't have a specific template yet
-- When a user asks "what symbols are on this page?" or "find all instruments"
-- As a discovery step before running countSymbols — find candidates, visually verify them with zoomDrawingRegion, then count
-
-INPUTS:
-- documentId: Document ID from listDrawingPages
-- pageNumber: Page to analyze (1-based, default 1)
-- minSize: Minimum symbol dimension in pixels (default 20). Increase to skip text characters
-- maxSize: Maximum symbol dimension in pixels (default 150). Decrease to skip large elements
-
-OUTPUT: Array of candidates with {x, y, w, h, area, aspect} plus total count and image dimensions. Candidates are sorted by area (largest first) and filtered to exclude title block areas and borders.
-
-TIPS:
-- Set minSize=40 to skip individual text characters and find only real symbols
-- Look for candidates that are roughly square (aspect 0.5-2.0) — these are often instruments, valves, or markers
-- Use zoomDrawingRegion to visually inspect interesting candidates before counting
-- Cluster candidates by size bucket to identify symbol types (e.g. all ~80x80 candidates are likely the same symbol type)`,
+    `Compatibility alias for findDrawingSymbolCandidates, returning up to 30 native candidate boxes without thumbnails. Candidate x/y/w/h use the returned imageWidth/imageHeight pixel frame.`,
     {
       documentId: z.string().describe("Document ID of the PDF drawing"),
       pageNumber: z.coerce.number().min(1).default(1).describe("Page number (1-based)"),
       minSize: z.coerce.number().default(20).describe("Minimum symbol dimension in pixels. Set to 40+ to skip text characters"),
       maxSize: z.coerce.number().default(150).describe("Maximum symbol dimension in pixels"),
     },
-    async ({ documentId, pageNumber, minSize, maxSize }) => {
-      const result = await apiPost("/api/vision/find-symbols", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        minSize,
-        maxSize,
-      });
-
-      if (!result.success) {
-        return { content: [{ type: "text" as const, text: `Failed: ${result.error ?? "unknown error"}` }] };
-      }
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: JSON.stringify({
-            total: result.total,
-            imageWidth: result.imageWidth,
-            imageHeight: result.imageHeight,
-            candidates: (result.candidates ?? []).slice(0, 30), // Cap at 30 to avoid context bloat
-            note: result.total > 30 ? `Showing top 30 of ${result.total} candidates` : undefined,
-          }, null, 2),
-        }],
-      };
-    }
+    (input) => findDrawingSymbolResult({ ...input, limit: 30, includeThumbnails: false, thumbnailLimit: 0 }, true)
   );
 
   // ── findDrawingSymbolCandidates ───────────────────────────
   server.tool(
     "findDrawingSymbolCandidates",
-    `Find symbol-like regions on a drawing and optionally return thumbnails.
-
-WHEN TO USE: Use this as the agent equivalent of symbol discovery before choosing one candidate to count. It returns reusable coordinates in the page image coordinate space plus optional high-resolution crop thumbnails for visual review.`,
-    {
-      documentId: z.string().describe("Document ID of the PDF drawing"),
-      pageNumber: z.coerce.number().min(1).default(1).describe("Page number"),
-      minSize: z.coerce.number().default(20).describe("Minimum symbol dimension in pixels"),
-      maxSize: z.coerce.number().default(150).describe("Maximum symbol dimension in pixels"),
-      limit: z.coerce.number().min(1).max(80).default(30).describe("Maximum candidates to return in JSON"),
-      includeThumbnails: z.boolean().default(true).describe("Include image thumbnails for the top candidates"),
-      thumbnailLimit: z.coerce.number().min(0).max(12).default(6).describe("Maximum thumbnails to emit"),
-    },
-    async ({ documentId, pageNumber, minSize, maxSize, limit, includeThumbnails, thumbnailLimit }) => {
-      const result = await apiPost("/api/vision/find-symbols", {
-        projectId: getProjectId(),
-        documentId,
-        pageNumber,
-        minSize,
-        maxSize,
-      });
-
-      if (!result.success) {
-        return { content: [{ type: "text" as const, text: `Symbol candidate search failed: ${result.error ?? result.message ?? "unknown error"}` }] };
-      }
-
-      const candidates = asToolArray(result.candidates).slice(0, limit).map((candidate, index) => ({
-        id: candidate.id ?? `sym-${index + 1}`,
-        x: candidate.x,
-        y: candidate.y,
-        w: candidate.w,
-        h: candidate.h,
-        cx: candidate.cx,
-        cy: candidate.cy,
-        area: candidate.area,
-        aspect: candidate.aspect,
-        confidence: candidate.confidence ?? 0.52,
-        source: candidate.source ?? "connected-component",
-        bbox: { x: candidate.x, y: candidate.y, width: candidate.w, height: candidate.h },
-        thumbnailIndex: includeThumbnails && index < thumbnailLimit ? index + 1 : undefined,
-      }));
-
-      const content: Array<{ type: "text"; text: string } | { type: "image"; data: string; mimeType: string }> = [];
-      if (includeThumbnails && thumbnailLimit > 0) {
-        for (const candidate of candidates.slice(0, thumbnailLimit)) {
-          const region = paddedRegion({
-            x: Number(candidate.x),
-            y: Number(candidate.y),
-            width: Number(candidate.w),
-            height: Number(candidate.h),
-            imageWidth: Number(result.imageWidth),
-            imageHeight: Number(result.imageHeight),
-          }, 0.35);
-          const crop = await apiPost("/api/vision/render-page", {
-            projectId: getProjectId(),
-            documentId,
-            pageNumber,
-            dpi: 300,
-            region,
-          }).catch(() => null);
-          const base64 = imageBase64(crop?.image);
-          if (base64) {
-            content.push({ type: "image" as const, data: base64, mimeType: "image/png" as const });
-          }
-        }
-      }
-
-      content.push({
-        type: "text" as const,
-        text: JSON.stringify({
-          documentId,
-          pageNumber,
-          imageWidth: result.imageWidth,
-          imageHeight: result.imageHeight,
-          total: result.total,
-          returned: candidates.length,
-          candidates,
-          note: "Use candidate.bbox as a starting point for countDrawingSymbol, but tighten the box after visual review if needed.",
-        }, null, 2),
-      });
-
-      return { content };
-    }
+    `Find symbol-like regions with optional crop thumbnails. Candidate bbox coordinates use the returned full-page imageWidth/imageHeight pixel frame and can be passed to countDrawingSymbol.`,
+    findDrawingSymbolInput,
+    (input) => findDrawingSymbolResult(input)
   );
 
   // ── scanDrawingSymbols ────────────────────────────────────
@@ -1972,41 +1795,31 @@ OUTPUT: Per-template id, symbol token (e.g. "GFI"), label ("Standard duplex rece
   // ── runProjectSymbolLibrary ─────────────────────────────────
   server.tool(
     "runProjectSymbolLibrary",
-    `Run the project's Symbol Library against a drawing page or an entire document. Matches every enabled saved template in one batched pass (one PDF render, N OpenCV matches).
-
-WHEN TO USE: After the user has captured a legend with extract-legend and saved templates via the Symbol Library panel, this counts every saved symbol on the chosen page(s) in a single call. This is the few-shot scale-up to the manual countSymbols flow — instead of running countSymbols once per symbol type, all saved templates run together.
-
-INPUTS:
-- documentId: Document ID from listDrawingPages
-- pageNumber: 1-based page to scan, OR omit and set scope="document" to scan every page in the document
-- scope: "page" (default) or "document"
-- autoSave: If true, persist each match as a Pickup (green count marks). Default false — set to true when the user confirms results look right.
-- templateIds: Optional array; restrict the run to specific saved templates. Omit to run every enabled template.
-
-OUTPUT (scope=page):
-{ documentId, pageNumber, imageWidth, imageHeight, dpi, duration_ms,
-  templateResults: [{ templateId, symbol, label, totalCount, matches:[{x,y,w,h,confidence}], savedAnnotationIds }],
-  errors }
-
-OUTPUT (scope=document): one entry per page in the pages array plus a grandTotal across templates and pages.
-
-TIPS:
-- Run scope="page" first while the user is reviewing one drawing; switch to scope="document" only after they confirm the per-page results look right.
-- A template's threshold lives on the template row — change it via the UI or by updating metadata; this tool does not override per-call.
-- crossScale is also per-template. The library defaults to single-scale (faster); set crossScale=true on individual templates when symbols are rendered at varying sizes across the package.`,
+    `Count saved project symbol templates on one page or every document page. Uses each template’s threshold and crossScale settings. Returns per-template counts and matchSetId references for saveCountAsAnnotations; concise returns counts and references only, detailed includes all matches. Match rectangles use each template result’s imageWidth/imageHeight pixel frame. Counting is read-only.`,
     {
       documentId: z.string().describe("Document ID of the target PDF drawing"),
       pageNumber: z.coerce.number().int().min(1).optional().describe("1-based page number. Required when scope='page'."),
       scope: z.enum(["page", "document"]).default("page").describe("'page' = one page, 'document' = every page in the document"),
-      autoSave: z.boolean().default(false).describe("Persist each match as a Pickup"),
+      responseFormat: z.enum(["concise", "detailed"]).default("concise").describe("Concise returns counts and a saveable matchSetId. Detailed adds all matches."),
+      autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
       templateIds: z.array(z.string()).optional().describe("Restrict to specific saved template ids. Default: all enabled templates."),
     },
-    async ({ documentId, pageNumber, scope, autoSave, templateIds }) => {
+    async ({ documentId, pageNumber, scope, autoSave, templateIds, responseFormat }) => {
+      const runId = randomUUID();
+      const summarizeTemplate = (tr: any, page: any) => {
+        const matches = (tr.matches ?? []).map((m: any) => ({ rect: { x: m.x, y: m.y, width: m.w, height: m.h }, confidence: m.confidence }));
+        return {
+          templateId: tr.templateId, symbol: tr.symbol, label: tr.label, totalCount: tr.totalCount,
+          matchSetId: rememberCountMatches(runId, { documentId, pageNumber: page.pageNumber, imageWidth: tr.imageWidth, imageHeight: tr.imageHeight, matches }),
+          ...(responseFormat === "detailed" ? { matches, imageWidth: tr.imageWidth, imageHeight: tr.imageHeight, dpi: tr.dpi } : {}),
+          error: tr.error,
+        };
+      };
       const projectId = getProjectId();
       if (scope === "document") {
         const result = await apiPost(`/api/takeoff/${projectId}/symbol-templates/run-on-document`, {
           documentId,
-          autoSave,
+          autoSave: false,
           templateIds,
         });
         if ((result as any)?.message) {
@@ -2017,14 +1830,7 @@ TIPS:
           imageWidth: p.imageWidth,
           imageHeight: p.imageHeight,
           dpi: p.dpi,
-          totalsBySymbol: (p.templateResults ?? []).map((tr: any) => ({
-            templateId: tr.templateId,
-            symbol: tr.symbol,
-            label: tr.label,
-            totalCount: tr.totalCount,
-            savedAnnotationIds: tr.savedAnnotationIds ?? undefined,
-            error: tr.error,
-          })),
+          totalsBySymbol: (p.templateResults ?? []).map((tr: any) => summarizeTemplate(tr, p)),
           errors: p.errors?.length ? p.errors : undefined,
         }));
         return {
@@ -2034,6 +1840,8 @@ TIPS:
               documentId,
               pageCount: (result as any)?.pageCount ?? pages.length,
               grandTotal: (result as any)?.grandTotal ?? 0,
+              autoSaved: false,
+              ...(autoSave ? { note: "Counting is read-only. Call saveCountAsAnnotations for each page/template with its matchSetId." } : {}),
               duration_ms: (result as any)?.duration_ms,
               pages,
             }, null, 2),
@@ -2047,26 +1855,13 @@ TIPS:
       const result = await apiPost(`/api/takeoff/${projectId}/symbol-templates/run-on-page`, {
         documentId,
         pageNumber,
-        autoSave,
+        autoSave: false,
         templateIds,
       });
       if ((result as any)?.message) {
         return { content: [{ type: "text" as const, text: `Run failed: ${(result as any).message}` }] };
       }
-      const summary = ((result as any)?.templateResults ?? []).map((tr: any) => ({
-        templateId: tr.templateId,
-        symbol: tr.symbol,
-        label: tr.label,
-        totalCount: tr.totalCount,
-        // Trim match payloads for the agent — the agent rarely needs every
-        // rect, just the totals + saved annotation ids when autoSave was on.
-        sampleMatches: (tr.matches ?? []).slice(0, 3).map((m: any) => ({
-          rect: { x: m.x, y: m.y, width: m.w, height: m.h },
-          confidence: m.confidence,
-        })),
-        savedAnnotationIds: tr.savedAnnotationIds,
-        error: tr.error,
-      }));
+      const summary = ((result as any)?.templateResults ?? []).map((tr: any) => summarizeTemplate(tr, { ...result, pageNumber }));
       return {
         content: [{
           type: "text" as const,
@@ -2078,6 +1873,8 @@ TIPS:
             dpi: (result as any)?.dpi,
             duration_ms: (result as any)?.duration_ms,
             templateResults: summary,
+            autoSaved: false,
+            ...(autoSave ? { note: "Counting is read-only. Call saveCountAsAnnotations with each template’s matchSetId." } : {}),
             errors: (result as any)?.errors?.length ? (result as any).errors : undefined,
           }, null, 2),
         }],

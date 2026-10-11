@@ -153,6 +153,14 @@ export async function extractLegendFromPage(
   }
 
   if (!storagePath) {
+    const node = await prisma.fileNode.findFirst({ where: { id: documentId.replace(/^file-/, ""), projectId } });
+    if (node?.storagePath && node.type !== "directory") {
+      storagePath = node.storagePath;
+      fileName = node.name;
+    }
+  }
+
+  if (!storagePath) {
     return { entries: [], warnings: ["Source file not available for OCR"] };
   }
 

@@ -1,3 +1,4 @@
+import { mutateWorkspaceStateLocked, patchTakeoffCalibrations, type CalibrationChange } from "./services/takeoff-calibration-state.js";
 import { randomUUID, createHash } from "node:crypto";
 import { hashPassword } from "./services/auth-service.js";
 import { derivePagesForIndexing } from "./services/page-provenance.js";
@@ -8,6 +9,7 @@ import path from "node:path";
 
 import {
   calculateTotals,
+  pickupLinkQuantity,
   buildProjectWorkspace,
   buildQuoteRevisionComparison,
   buildSummaryBuilderConfig,
@@ -7349,45 +7351,23 @@ export class PrismaApiStore {
   }
 
   async updateWorkspaceState(projectId: string, patch: Record<string, unknown>) {
+    // Calibrations have a dedicated per-key operation; stale workspace snapshots
+    // cannot replace them when updating unrelated UI state.
+    const { takeoffCalibrations: _ignored, ...rest } = patch;
+    return this.mutateWorkspaceState(projectId, state => ({ ...state, ...rest }));
+  }
+
+  async updateTakeoffCalibrationKeys(projectId: string, documentId: string, changes: CalibrationChange[], options: { agent?: boolean; replaceHuman?: boolean } = {}) {
+    return this.mutateWorkspaceState(projectId, state => patchTakeoffCalibrations(state, documentId, changes, options));
+  }
+
+  private async mutateWorkspaceState(projectId: string, change: (state: Record<string, unknown>) => Record<string, unknown>) {
     await this.requireProject(projectId);
-    const existing = await this.db.workspaceState.findFirst({ where: { projectId } });
-
-    if (!existing) {
+    const ws = await mutateWorkspaceStateLocked(this.db, projectId, change, async () => {
       const { quote, revision } = await this.findCurrentRevision(projectId);
-      const worksheet = revision
-        ? await this.db.worksheet.findFirst({ where: { revisionId: revision.id }, orderBy: { order: "asc" } })
-        : null;
-
-      const state = {
-        activeTab: "overview",
-        selectedQuoteId: quote?.id ?? null,
-        selectedRevisionId: revision?.id ?? null,
-        selectedWorksheetId: worksheet?.id ?? null,
-        selectedDocumentId: null,
-        openDocumentIds: [],
-        filters: { documentKinds: [], search: "" },
-        ...patch,
-      };
-
-      const ws = await this.db.workspaceState.create({
-        data: {
-          projectId,
-          state: state as any,
-          updatedAt: new Date(),
-        },
-      });
-
-      const record = mapWorkspaceState(ws);
-      await writeJsonAtomic(resolveApiPath(record.storagePath), record);
-      return record;
-    }
-
-    const merged = { ...(existing.state as any), ...patch };
-    const ws = await this.db.workspaceState.update({
-      where: { id: existing.id },
-      data: { state: merged as any, updatedAt: new Date() },
+      const worksheet = revision ? await this.db.worksheet.findFirst({ where: { revisionId: revision.id }, orderBy: { order: "asc" } }) : null;
+      return { activeTab: "overview", selectedQuoteId: quote?.id ?? null, selectedRevisionId: revision?.id ?? null, selectedWorksheetId: worksheet?.id ?? null, selectedDocumentId: null, openDocumentIds: [], filters: { documentKinds: [], search: "" } };
     });
-
     const record = mapWorkspaceState(ws);
     await writeJsonAtomic(resolveApiPath(record.storagePath), record);
     return record;
@@ -15130,11 +15110,11 @@ export class PrismaApiStore {
     return mapPickup(annotation);
   }
 
-  async updatePickup(pickupId: string, patch: PickupPatchInput) {
+  async updatePickup(pickupId: string, patch: PickupPatchInput, expectedUpdatedAt?: string) {
     const annotation = await this.db.pickup.findFirst({ where: { id: pickupId } });
     if (!annotation) throw new Error(`Takeoff annotation ${pickupId} not found`);
 
-    const data: any = { updatedAt: new Date() };
+    const data: any = { updatedAt: new Date(Math.max(Date.now(), annotation.updatedAt.getTime() + 1)) };
     if (patch.label !== undefined) data.label = patch.label;
     if (patch.color !== undefined) data.color = patch.color;
     if (patch.lineThickness !== undefined) data.lineThickness = patch.lineThickness;
@@ -15145,7 +15125,12 @@ export class PrismaApiStore {
     if (patch.calibration !== undefined) data.calibration = patch.calibration as any;
     if (patch.metadata !== undefined) data.metadata = patch.metadata as any;
 
-    const updated = await this.db.pickup.update({ where: { id: pickupId }, data });
+    const updated = await this.db.pickup.update({
+      where: { id: pickupId, ...(expectedUpdatedAt ? { updatedAt: new Date(expectedUpdatedAt) } : {}) }, data,
+    }).catch(error => {
+      if (expectedUpdatedAt && error.code === "P2025") throw new Error("Pickup changed while measuring; refresh before applying this edit");
+      throw error;
+    });
 
     // Live sync: if measurement/points/calibration changed, cascade to linked line items
     if (patch.measurement !== undefined || patch.points !== undefined || patch.calibration !== undefined) {
@@ -15390,8 +15375,7 @@ export class PrismaApiStore {
       annotationType: annotation.annotationType ?? "",
       itemUom: (item as any).uom ?? "",
     });
-    const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
-    const derivedQuantity = rawValue * multiplier;
+    const derivedQuantity = pickupLinkQuantity(measurement, quantityField, multiplier);
 
     const link = await this.db.pickupLink.create({
       data: {
@@ -15432,8 +15416,7 @@ export class PrismaApiStore {
         itemUom: (item as any)?.uom ?? "",
       });
     }
-    const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
-    const derivedQuantity = rawValue * multiplier;
+    const derivedQuantity = pickupLinkQuantity(measurement, quantityField, multiplier);
 
     const updated = await this.db.pickupLink.update({
       where: { id: linkId },
@@ -15507,6 +15490,9 @@ export class PrismaApiStore {
       entityType?: string;
       layer?: string;
       quantity: number;
+      unit?: string;
+      measurementType?: string;
+      preserveExisting?: boolean;
       selection?: Record<string, unknown>;
     },
   ) {
@@ -15515,9 +15501,11 @@ export class PrismaApiStore {
       where: { projectId, sourceKind: "cad-entity", documentId: input.documentId, cadEntityId: input.entityId },
     });
     if (!existing) {
-      const pickup = await this.db.pickup.create({
-        data: {
-          id: createId("takeoff"),
+      const id = `cad-${createHash("sha256").update(JSON.stringify([projectId, input.documentId, input.entityId])).digest("hex")}`;
+      const pickup = await this.db.pickup.upsert({
+        where: { id }, update: {},
+        create: {
+          id,
           projectId,
           documentId: input.documentId,
           pageNumber: 0,
@@ -15525,7 +15513,7 @@ export class PrismaApiStore {
           label: `${input.entityType || "entity"} ${input.entityId}`.trim(),
           color: "#3b82f6",
           points: [] as any,
-          measurement: { value: quantity } as any,
+          measurement: { value: quantity, ...(input.unit ? { unit: input.unit } : {}), ...(input.measurementType ? { type: input.measurementType } : {}) } as any,
           metadata: { source: "cad", method: "cad-entity-link", measuredBy: "agent" } as any,
           sourceKind: "cad-entity",
           cadEntityId: input.entityId,
@@ -15539,12 +15527,14 @@ export class PrismaApiStore {
       return { pickup, measurementChanged: false };
     }
 
+    if (input.preserveExisting) return { pickup: existing, measurementChanged: false };
     const measurement = (existing.measurement as Record<string, unknown>) ?? {};
+    const { unit: _oldUnit, type: _oldType, ...untypedMeasurement } = measurement;
     const measurementChanged = Number(measurement.value ?? 0) !== quantity;
     const pickup = await this.db.pickup.update({
       where: { id: existing.id },
       data: {
-        measurement: { ...measurement, value: quantity } as any,
+        measurement: { ...untypedMeasurement, value: quantity, ...(input.unit ? { unit: input.unit } : {}), ...(input.measurementType ? { type: input.measurementType } : {}) } as any,
         cadEntityType: input.entityType ?? existing.cadEntityType,
         cadLayer: input.layer ?? existing.cadLayer,
         selection: (input.selection ?? existing.selection ?? {}) as any,
@@ -15552,6 +15542,64 @@ export class PrismaApiStore {
       },
     });
     return { pickup, measurementChanged };
+  }
+
+  async saveCadEntityPickups(projectId: string, input: {
+    documentId: string;
+    entities: Array<{ entityId: string; entityType: string; layer: string; quantity: number; unit: string; measurementType: string; selection: Record<string, unknown> }>;
+    worksheetItemId?: string;
+    multiplier?: number;
+  }) {
+    return this.db.$transaction(async (tx) => {
+      const store = new PrismaApiStore(tx as unknown as PrismaClient, this.organizationId);
+      await store.requireProject(projectId);
+      if (input.multiplier !== undefined && (!Number.isFinite(input.multiplier) || input.multiplier <= 0)) throw new Error("Invalid CAD link multiplier");
+      let item = null;
+      if (input.worksheetItemId) {
+        item = await tx.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
+        const { revision } = await store.findCurrentRevision(projectId);
+        const worksheet = item ? await tx.worksheet.findFirst({ where: { id: item.worksheetId } }) : null;
+        if (!revision || !worksheet || worksheet.revisionId !== revision.id) throw new Error("Worksheet item not found in project revision");
+      }
+      const conflicts = [];
+      const prepared = [];
+      for (const entity of input.entities) {
+        if (!Number.isFinite(entity.quantity) || entity.quantity < 0) throw new Error("Invalid CAD entity quantity");
+        const existing = await tx.pickup.findFirst({ where: { projectId, documentId: input.documentId, cadEntityId: entity.entityId, sourceKind: "cad-entity" } });
+        const measurement = existing?.measurement as Record<string, unknown> | undefined;
+        const unit = entity.unit.trim().toLowerCase();
+        const existingUnit = String(measurement?.unit ?? "").trim().toLowerCase();
+        const sameCount = store.uomDimension(unit) === "count" && store.uomDimension(existingUnit) === "count";
+        if (existing && (measurement?.type !== entity.measurementType || (!sameCount && existingUnit !== unit))) {
+          conflicts.push({ entityId: entity.entityId, message: "Existing pickup measurement type or unit differs or is unknown", pickup: mapPickup(existing) });
+          continue;
+        }
+        if (measurement && (typeof measurement.value !== "number" || !Number.isFinite(measurement.value) || measurement.value < 0)) throw new Error("Invalid existing CAD pickup quantity");
+        if (item) {
+          const targetUnit = String(item.uom ?? "").trim().toLowerCase();
+          const itemDimension = store.uomDimension(targetUnit);
+          const sameCountUnit = store.uomDimension(unit) === "count" && itemDimension === "count";
+          if (!sameCountUnit && unit !== targetUnit && input.multiplier === undefined) throw new Error(`Explicit multiplier required to convert ${unit || "unknown units"} to ${targetUnit || "unknown units"}`);
+          if (itemDimension && entity.measurementType !== itemDimension) throw new Error("CAD measurement and worksheet item dimensions differ");
+        }
+        prepared.push(entity);
+      }
+      if (conflicts.length) return { saved: false, pickups: [], conflicts };
+
+      const pickups = [];
+      for (const entity of prepared) {
+        const { pickup } = await store.upsertCadEntityPickup(projectId, { ...entity, documentId: input.documentId, preserveExisting: true });
+        let link = input.worksheetItemId ? await tx.pickupLink.findUnique({
+          where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } },
+        }) : null;
+        if (input.worksheetItemId && !link) {
+          await store.createPickupLink(projectId, { pickupId: pickup.id, worksheetItemId: input.worksheetItemId, multiplier: input.multiplier ?? 1 });
+          link = await tx.pickupLink.findUnique({ where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } } });
+        }
+        pickups.push({ pickup: mapPickup(pickup), link });
+      }
+      return { saved: true, pickups, conflicts: [] };
+    }, { isolationLevel: "Serializable", timeout: 30_000 });
   }
 
   async listDwgEntityLinks(

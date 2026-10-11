@@ -70,7 +70,6 @@ export interface McpEnv {
   BIDWRIGHT_REVISION_ID: string;
   BIDWRIGHT_QUOTE_ID: string;
   BIDWRIGHT_AGENT_IMAGE_MAX_EDGE?: string;
-  BIDWRIGHT_AGENT_IMAGE_BUDGET?: string;
   BIDWRIGHT_RUN_ID?: string;
   BIDWRIGHT_SESSION_ID?: string;
   BIDWRIGHT_REVIEW_ONLY?: string;

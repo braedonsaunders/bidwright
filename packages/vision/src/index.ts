@@ -49,3 +49,4 @@ export {
   type PointCloudSegmentationResult,
   type PointCloudSegmentationStats,
 } from "./pointcloud.js";
+export { runPdfTakeoff } from "./pdf-takeoff.js";

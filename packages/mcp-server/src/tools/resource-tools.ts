@@ -811,7 +811,7 @@ function annotationMatchesQuery(annotation: Record<string, unknown>, q?: string)
 async function findTakeoffHints(input: { q?: string; limit?: number; documentId?: string }) {
   const projectId = getProjectId();
   if (!projectId) return [];
-  const annotations = await apiGet(`/api/takeoff/${projectId}/annotations${queryString({ documentId: input.documentId })}`)
+  const annotations = await apiGet(`/api/takeoff/${projectId}/pickups${queryString({ documentId: input.documentId })}`)
     .then(annotationsFromPayload)
     .catch(() => []);
   return annotations
@@ -1053,6 +1053,7 @@ export function registerResourceTools(server: McpServer) {
     "listPickups",
     "List saved PDF/DWG takeoff annotations so an estimate row can cite or link drawing quantity evidence.",
     {
+      responseFormat: z.enum(["concise", "detailed"]).default("concise"),
       q: z.string().optional().describe("Optional scope/symbol/label search to filter annotations."),
       documentId: z.string().optional().describe("Optional drawing/document id."),
       page: z.coerce.number().int().positive().optional().describe("Optional 1-based page number."),
@@ -1064,7 +1065,7 @@ export function registerResourceTools(server: McpServer) {
       if (!projectId) {
         return { content: [{ type: "text" as const, text: "No active project id is available for takeoff annotations." }], isError: true };
       }
-      const data = await apiGet(`/api/takeoff/${projectId}/annotations${queryString({
+      const data = await apiGet(`/api/takeoff/${projectId}/pickups${queryString({
         documentId: input.documentId,
         page: input.page,
       })}`);
@@ -1093,13 +1094,14 @@ export function registerResourceTools(server: McpServer) {
             },
           };
           return {
+            ...(input.responseFormat === "detailed" ? annotation : {}),
             id: annotation.id,
             documentId: annotation.documentId,
             pageNumber: annotation.pageNumber,
             annotationType: annotation.annotationType,
             label,
             groupName: annotation.groupName,
-            measurement,
+            measurement: input.responseFormat === "detailed" ? annotation.measurement : measurement,
             basis,
           };
         });

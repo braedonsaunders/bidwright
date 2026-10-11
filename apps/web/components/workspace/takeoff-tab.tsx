@@ -184,6 +184,7 @@ import {
   takeoffShortcutLabel,
   type TakeoffShortcutPreset,
 } from "@/lib/takeoff-shortcuts";
+import { PipingTakeoffSurface } from "./piping-takeoff-surface";
 import { buildModelEditorUrl, isBidwrightEditableModel } from "./editors/bidwright-model-editor";
 import type {
   BidwrightModelLineItemDraft,
@@ -392,6 +393,10 @@ function isBimFile(fileName: string): boolean {
 
 function isMeshFile(fileName: string): boolean {
   return MESH_EXTENSIONS.has(getFileExtension(fileName));
+}
+
+function isPipingFile(fileName: string): boolean {
+  return /\.(piping|pcf)$/i.test(fileName);
 }
 
 function isCadFile(fileName: string): boolean {
@@ -1008,7 +1013,7 @@ interface TakeoffDocument {
   id: string;
   label: string;
   source: "project" | "knowledge";
-  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet" | "scan";
+  kind: "pdf" | "bim" | "model" | "dwg" | "spreadsheet" | "scan" | "piping";
   fileName: string;
   /** For project docs – use getDocumentDownloadUrl */
   projectId?: string;
@@ -1155,6 +1160,7 @@ function takeoffChannelName(projectId: string): string {
 }
 
 function getTakeoffDocumentKind(fileName: string): TakeoffDocument["kind"] {
+  if (isPipingFile(fileName)) return "piping";
   if (isDwgFile(fileName)) return "dwg";
   if (isBimFile(fileName)) return "bim";
   if (isScanFile(fileName)) return "scan";
@@ -1170,7 +1176,7 @@ function takeoffDisplayFileName(fileName: string) {
 function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDocument | null {
   if (
     node.type !== "file" ||
-    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name) && !isScanFile(node.name))
+    (!node.name.toLowerCase().endsWith(".pdf") && !isCadFile(node.name) && !isSpreadsheetFile(node.name) && !isScanFile(node.name) && !isPipingFile(node.name))
   ) {
     return null;
   }
@@ -1186,6 +1192,7 @@ function fileNodeToTakeoffDocument(projectId: string, node: FileNode): TakeoffDo
 }
 
 function takeoffKindLabel(kind: TakeoffDocument["kind"]) {
+  if (kind === "piping") return "Piping";
   if (kind === "dwg") return "DWG/DXF";
   if (kind === "bim") return "BIM";
   if (kind === "model") return "3D";
@@ -2024,7 +2031,7 @@ export function TakeoffTab({
    * downstream re-fire every render, calling parent setState and looping. */
   const projectPdfs: TakeoffDocument[] = useMemo(
     () => (workspace.sourceDocuments ?? [])
-      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName) || isScanFile(d.fileName))
+      .filter((d) => isPdfSource(d.fileName, d.fileType) || isCadFile(d.fileName) || isScanFile(d.fileName) || isPipingFile(d.fileName))
       .map((d) => ({
         id: d.id,
         label: takeoffDisplayFileName(d.fileName),
@@ -2072,7 +2079,7 @@ export function TakeoffTab({
   // source, but it must not silently bypass the launcher on a fresh estimate
   // visit. Detached viewers remain direct-document surfaces.
   const [showLanding, setShowLanding] = useState(!detached && !initialEditorOpen);
-  type IntakeOptionId = "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo" | "files";
+  type IntakeOptionId = "piping" | "spreadsheet" | "pdf" | "dwg" | "bim" | "model" | "scan" | "photo" | "files";
   const [activeIntakeOption, setActiveIntakeOption] = useState<IntakeOptionId | null>(null);
   const [fileTreeNodes, setFileTreeNodes] = useState<FileNode[]>([]);
   const [spreadsheetPreviewLoading, setSpreadsheetPreviewLoading] = useState(false);
@@ -2261,54 +2268,46 @@ export function TakeoffTab({
     return entries.length > 0 ? Object.fromEntries(entries) : null;
   }
 
-  function applyCalibrationDocCacheSnapshot(docId: string, snapshot: Record<string, Calibration> | null) {
-    const nextCache = { ...calibrationCacheRef.current };
-    if (snapshot && Object.keys(snapshot).length > 0) {
-      nextCache[docId] = { ...(snapshot as CalibrationDocCache) };
-    } else {
-      delete nextCache[docId];
+  const calibrationWritesRef = useRef<Promise<unknown>>(Promise.resolve());
+
+  function applyCalibrationDocCacheSnapshot(docId: string, snapshot: Record<string, Calibration> | null, baseline = cloneCalibrationDocCache(docId)) {
+    const before = baseline ?? {};
+    const after = snapshot ?? {};
+    const changes = [...new Set([...Object.keys(before), ...Object.keys(after)])]
+      .filter(key => JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null))
+      .map(key => ({ key, calibration: after[key] ?? null, expected: before[key] ?? null }));
+    if (!changes.length) return Promise.resolve(true);
+    const docCache = { ...(calibrationCacheRef.current[docId] ?? {}) } as Record<string, Calibration>;
+    for (const change of changes) {
+      if (change.calibration) docCache[change.key] = change.calibration;
+      else delete docCache[change.key];
     }
-    calibrationCacheRef.current = nextCache;
-    if (docId === selectedDocId) {
-      setCalibration(lookupCalibrationFromCache(docId, page));
-    }
-    void updateWorkspaceState(projectId, { takeoffCalibrations: nextCache }).catch(() => {});
+    calibrationCacheRef.current = { ...calibrationCacheRef.current, [docId]: docCache };
+    if (docId === selectedDocId) setCalibration(lookupCalibrationFromCache(docId, page));
+    const persisted = calibrationWritesRef.current.then(() => apiRequest(`/api/takeoff/${projectId}/pdf/patch-calibration-keys`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ documentId: docId, changes }),
+    })).then(() => true).catch(async () => {
+      try {
+        const ws = await apiRequest<WorkspaceStateRecord>(`/projects/${projectId}/workspace-state`);
+        calibrationCacheRef.current = (ws.state?.takeoffCalibrations ?? {}) as Record<string, CalibrationDocCache>;
+        const selected = selectedDocIdRef.current;
+        if (selected) setCalibration(lookupCalibrationFromCache(selected, pageRef.current));
+      } catch { /* Retry on the next workspace refresh. */ }
+      return false;
+    });
+    calibrationWritesRef.current = persisted;
+    return persisted;
   }
 
-  function applyCalibrationSnapshot(
-    docId: string,
-    pageNumber: number,
-    next: Calibration | null,
-    applyToAllPages: boolean,
-  ) {
-    const docCache = { ...(calibrationCacheRef.current[docId] ?? {}) };
+  function applyCalibrationSnapshot(docId: string, pageNumber: number, next: Calibration | null, applyToAllPages: boolean) {
+    const docCache = { ...(calibrationCacheRef.current[docId] ?? {}) } as Record<string, Calibration>;
+    const key = applyToAllPages ? "__default" : String(pageNumber);
     if (applyToAllPages) {
-      for (const key of Object.keys(docCache)) {
-        if (key !== "__default") delete docCache[Number(key)];
-      }
-      if (next) {
-        docCache.__default = next;
-      } else {
-        delete docCache.__default;
-      }
-    } else if (next) {
-      docCache[pageNumber] = next;
-    } else {
-      delete docCache[pageNumber];
+      for (const entry of Object.keys(docCache)) if (/^\d+$/.test(entry)) delete docCache[entry];
     }
-
-    const nextCache = { ...calibrationCacheRef.current };
-    if (Object.keys(docCache).length > 0) {
-      nextCache[docId] = docCache;
-    } else {
-      delete nextCache[docId];
-    }
-    calibrationCacheRef.current = nextCache;
-
-    if (docId === selectedDocId) {
-      setCalibration(lookupCalibrationFromCache(docId, page));
-    }
-    void updateWorkspaceState(projectId, { takeoffCalibrations: nextCache }).catch(() => {});
+    if (next) docCache[key] = next;
+    else delete docCache[key];
+    return applyCalibrationDocCacheSnapshot(docId, docCache);
   }
 
   /* Drawing config (from modal or defaults) */
@@ -2557,6 +2556,7 @@ export function TakeoffTab({
   const dwgDocuments = takeoffDocuments.filter((d) => d.kind === "dwg");
   const spreadsheetDocuments = takeoffDocuments.filter((d) => d.kind === "spreadsheet");
   const selectedDocumentKind = selectedDoc?.kind ?? "pdf";
+  const isPipingDocument = selectedDocumentKind === "piping";
   const isPdfDocument = selectedDocumentKind === "pdf";
   const isBimDocument = selectedDocumentKind === "bim";
   const isSpreadsheetDocument = selectedDocumentKind === "spreadsheet";
@@ -3326,6 +3326,7 @@ export function TakeoffTab({
               groupName: typeof a.groupName === "string" && a.groupName.length > 0 ? a.groupName : undefined,
               opts: annotationOptsFromMetadata(metadata),
               measurement: normalizeAnnotationMeasurement(a.measurement),
+              calibration: a.calibration as Pickup["calibration"],
               canvasWidth: canvasDimensionFromMetadata(metadata, "canvasWidth"),
               canvasHeight: canvasDimensionFromMetadata(metadata, "canvasHeight"),
               // Round-trip the full metadata blob so source-tagged rows
@@ -4557,6 +4558,7 @@ export function TakeoffTab({
     // (undo/redo) keeps its AI provenance (source, matches, thumbnails)
     // instead of silently degrading to a bare manual row.
     const metadata: Record<string, unknown> = { ...(annotation.metadata ?? {}), ...(annotation.opts ?? {}) };
+    metadata.lastEditedBy = "person";
     if (Number.isFinite(annotation.canvasWidth)) metadata.canvasWidth = annotation.canvasWidth;
     if (Number.isFinite(annotation.canvasHeight)) metadata.canvasHeight = annotation.canvasHeight;
     if (Number.isFinite(annotation.pdfPageWidth)) metadata.pdfPageWidth = annotation.pdfPageWidth;
@@ -4585,7 +4587,7 @@ export function TakeoffTab({
       // Record the scale this pickup was measured under. null is honest for
       // an uncalibrated page (px values); remeasureAnnotationsForCalibration
       // stamps the real calibration once the page is calibrated.
-      calibration: calibration ?? null,
+      calibration: annotation.calibration ?? calibration ?? null,
       metadata,
     };
   }
@@ -4603,6 +4605,8 @@ export function TakeoffTab({
       groupName: String(saved?.groupName ?? fallback.groupName ?? ""),
       points: Array.isArray(saved?.points) ? normalizeAnnotationPoints(saved.points) : fallback.points,
       measurement: normalizeAnnotationMeasurement(saved?.measurement) ?? fallback.measurement,
+      calibration: saved?.calibration ?? fallback.calibration,
+      metadata,
       opts: annotationOptsFromMetadata(metadata) ?? fallback.opts,
       canvasWidth: canvasDimensionFromMetadata(metadata, "canvasWidth") ?? fallback.canvasWidth,
       canvasHeight: canvasDimensionFromMetadata(metadata, "canvasHeight") ?? fallback.canvasHeight,
@@ -4676,7 +4680,8 @@ export function TakeoffTab({
         await updatePickupLocal(command.before);
         redoStackRef.current.push(command);
       } else if (command.kind === "calibration") {
-        applyCalibrationDocCacheSnapshot(command.docId, command.beforeDocCache);
+        const applied = await applyCalibrationDocCacheSnapshot(command.docId, command.beforeDocCache, command.afterDocCache);
+        if (!applied) { undoStackRef.current.push(command); return; }
         if (command.docId === selectedDocId) {
           void remeasureAnnotationsForCalibration(lookupCalibrationFromCache(command.docId, page));
         }
@@ -4706,7 +4711,8 @@ export function TakeoffTab({
         await updatePickupLocal(command.after);
         undoStackRef.current.push(command);
       } else if (command.kind === "calibration") {
-        applyCalibrationDocCacheSnapshot(command.docId, command.afterDocCache);
+        const applied = await applyCalibrationDocCacheSnapshot(command.docId, command.afterDocCache, command.beforeDocCache);
+        if (!applied) { redoStackRef.current.push(command); return; }
         if (command.docId === selectedDocId) {
           void remeasureAnnotationsForCalibration(lookupCalibrationFromCache(command.docId, page));
         }
@@ -6650,20 +6656,23 @@ export function TakeoffTab({
     // Persist on WorkspaceState so the calibration survives reloads and
     // syncs to other open tabs / devices.
     if (selectedDocId) {
-      applyCalibrationSnapshot(selectedDocId, page, next, calibrationApplyToAllPages);
+      const persisted = applyCalibrationSnapshot(selectedDocId, page, next, calibrationApplyToAllPages);
       if (!sameCalibration(previous, next)) {
         const afterDocCache = cloneCalibrationDocCache(selectedDocId);
-        pushTakeoffHistory({
-          kind: "calibration",
-          docId: selectedDocId,
-          page,
-          applyToAllPages: calibrationApplyToAllPages,
-          before: previous,
-          after: next,
-          beforeDocCache,
-          afterDocCache,
+        void persisted.then(applied => {
+          if (!applied) return;
+          pushTakeoffHistory({
+            kind: "calibration",
+            docId: selectedDocId,
+            page,
+            applyToAllPages: calibrationApplyToAllPages,
+            before: previous,
+            after: next,
+            beforeDocCache,
+            afterDocCache,
+          });
+          void remeasureAnnotationsForCalibration(next);
         });
-        void remeasureAnnotationsForCalibration(next);
       }
     }
     setActiveTool("select");
@@ -6703,6 +6712,7 @@ export function TakeoffTab({
     const updates: Pickup[] = [];
     for (const a of annotations) {
       if (!CALIBRATION_DEPENDENT_TYPES.has(a.type)) continue;
+      if (a.calibration?.region || String(a.metadata?.calibrationKey ?? "").startsWith("region:")) continue;
       if (!Array.isArray(a.points) || a.points.length < 2) continue;
       const annotationZoom = (a.canvasWidth ?? canvasSize.width) / baseWidth;
       if (!Number.isFinite(annotationZoom) || annotationZoom <= 0) continue;
@@ -6714,14 +6724,14 @@ export function TakeoffTab({
       const prev = a.measurement;
       if (prev && prev.value === measurement.value && prev.unit === measurement.unit
         && prev.area === measurement.area && prev.volume === measurement.volume) continue;
-      updates.push({ ...a, measurement });
+      updates.push({ ...a, measurement, calibration: cal, metadata: { ...a.metadata, lastEditedBy: "person" } });
     }
     if (updates.length === 0) return;
 
     setAnnotations((prev) => prev.map((a) => updates.find((u) => u.id === a.id) ?? a));
     await Promise.all(
       updates.map((u) =>
-        updatePickup(projectId, u.id, { measurement: u.measurement, calibration: cal }).catch(() => {
+        updatePickup(projectId, u.id, { measurement: u.measurement, calibration: cal, metadata: u.metadata }).catch(() => {
           /* Local state already updated; server reconciles on next save/reload. */
         }),
       ),
@@ -6829,7 +6839,7 @@ export function TakeoffTab({
       ...annotation,
       points: newPoints,
       measurement: { value: newCount, unit: "count" },
-      metadata: { ...meta, excludedMatchIndexes: excludedArr },
+      metadata: { ...meta, excludedMatchIndexes: excludedArr, lastEditedBy: "person" },
     };
     setAnnotations((prev) => prev.map((a) => (a.id === pickupId ? updated : a)));
     pushTakeoffHistory({ kind: "update", before: annotation, after: updated });
@@ -6837,7 +6847,7 @@ export function TakeoffTab({
       await updatePickup(projectId, pickupId, {
         points: updated.points,
         measurement: updated.measurement,
-        metadata: { ...meta, excludedMatchIndexes: excludedArr },
+        metadata: { ...meta, excludedMatchIndexes: excludedArr, lastEditedBy: "person" },
       });
     } catch {
       /* Local change persists in-session; server resync on next reload. */
@@ -6902,13 +6912,14 @@ export function TakeoffTab({
 
   function handleSaveAnnotationEdit(id: string, updates: { label?: string; color?: string; groupName?: string }) {
     const before = annotations.find((a) => a.id === id) ?? null;
-    const after = before ? { ...before, ...updates } : null;
+    const metadata = { ...before?.metadata, lastEditedBy: "person" };
+    const after = before ? { ...before, ...updates, metadata } : null;
     const nextAnnotations = annotations.map((a) => (a.id === id && after ? after : a));
     setAnnotations(nextAnnotations);
     if (before && after && JSON.stringify(before) !== JSON.stringify(after)) {
       pushTakeoffHistory({ kind: "update", before, after });
     }
-    updatePickup(projectId, id, updates)
+    updatePickup(projectId, id, { ...updates, metadata })
       .then(() => notifyAnnotationsMutated())
       .catch(() => notifyAnnotationsMutated(nextAnnotations));
     setEditingPickupId(null);
@@ -8702,6 +8713,7 @@ export function TakeoffTab({
   const canRedoTakeoff = historyVersion >= 0 && redoStackRef.current.length > 0;
   const bimDocuments = takeoffDocuments.filter((doc) => doc.kind === "bim");
   const modelDocuments = takeoffDocuments.filter((doc) => doc.kind === "model");
+  const pipingDocuments = takeoffDocuments.filter(doc => doc.kind === "piping");
   const scanDocuments = takeoffDocuments.filter((doc) => doc.kind === "scan");
   const dwgDocumentCount = dwgDocuments.length;
   const spreadsheetSources = fileTreeNodes.filter((node) => node.type === "file" && isSpreadsheetFile(node.name));
@@ -8821,6 +8833,7 @@ export function TakeoffTab({
   }
 
   const intakeOptions: WorkspaceLaunchItem<IntakeOptionId>[] = [
+    { id: "piping", title: "Piping", description: "Review and edit saved piping quantities.", metric: pipingDocuments.length.toLocaleString(), metricLabel: "sources", icon: FileJson, tone: "teal", ghostIcon: true },
     {
       id: "spreadsheet",
       title: "Spreadsheet / CSV",
@@ -8908,7 +8921,9 @@ export function TakeoffTab({
   ];
 
   const activeSourcePanel =
-    activeIntakeOption === "pdf"
+    activeIntakeOption === "piping"
+      ? { title: "Piping sources", detail: "Spoolyard and PCF files", emptyLabel: "No piping sources", docs: pipingDocuments, icon: FileJson }
+      : activeIntakeOption === "pdf"
       ? {
           title: "PDF sources",
           detail: sourceCountText(pdfDocuments.length, "PDF", "PDFs") || "Drawing sheets ready for takeoff",
@@ -9604,7 +9619,20 @@ export function TakeoffTab({
 
       {/* ─── Main Area ─── */}
       <div className="relative flex flex-1 overflow-hidden min-h-0">
-        {isSpreadsheetDocument ? (
+        {isPipingDocument && selectedDoc ? (
+          <PipingTakeoffSurface key={selectedDoc.id} projectId={projectId} fileNodeId={selectedDoc.fileNodeId}
+            fileName={selectedDoc.fileName} fileUrl={documentUrl} pickups={annotations}
+            onSelect={updateAnnotationSelection}
+            onFilesChanged={() => { postTakeoffMessage({ type: "files-mutated" }); onWorkspaceMutated?.(); }}
+            onUpdate={async updated => {
+              await updatePickup(projectId, updated.id, { label: updated.label, measurement: updated.measurement, metadata: updated.metadata });
+              setAnnotations(current => current.map(p => p.id === updated.id ? updated : p));
+              notifyAnnotationsMutated();
+              await loadPickupLinks();
+              onWorkspaceMutated?.();
+            }}
+          />
+        ) : isSpreadsheetDocument ? (
           <div className="relative flex h-full w-full min-h-0 flex-col bg-bg/50">
             {spreadsheetPreview ? (
               <div className="flex min-h-0 flex-1 flex-col overflow-hidden p-4">
