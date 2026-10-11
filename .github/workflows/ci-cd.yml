@@ -89,6 +89,9 @@ jobs:
           pnpm --filter @bidwright/mcp-server typecheck
           pnpm --filter @bidwright/vision typecheck
 
+      - name: Build vision package for takeoff tests
+        run: pnpm --filter @bidwright/vision build
+
       - name: Build agent package
         run: pnpm --filter @bidwright/agent build
 
@@ -144,12 +147,14 @@ jobs:
           scripts/cad-editor/tools-workspace.test.ts
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
+          scripts/eval/takeoff-reference.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
           apps/api/src/services/cli-runtime-tool-events.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
           apps/api/src/services/cli-run-selection.test.ts
           apps/api/src/services/pdf-service.test.ts
+          apps/api/src/services/pdf-takeoff.test.ts
           apps/api/src/services/pdf-attachments.test.ts
           apps/api/src/services/send-project-quote.test.ts
           apps/api/src/services/vendor-evidence-lines.test.ts
@@ -228,11 +233,13 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Verify agent page reader (orientation, sizing, layout regions)
+      - name: Verify vision page reader and PDF takeoff
         run: |
           python -m venv "${RUNNER_TEMP}/vision-venv"
-          "${RUNNER_TEMP}/vision-venv/bin/pip" install --disable-pip-version-check PyMuPDF numpy opencv-python-headless
-          cd packages/vision/python && "${RUNNER_TEMP}/vision-venv/bin/python" -m unittest tools.test_page_reader
+          "${RUNNER_TEMP}/vision-venv/bin/pip" install --disable-pip-version-check PyMuPDF numpy opencv-python-headless pytest
+          cd packages/vision/python
+          "${RUNNER_TEMP}/vision-venv/bin/python" -m unittest tools.test_page_reader
+          "${RUNNER_TEMP}/vision-venv/bin/python" -m pytest tests/test_pdf_takeoff.py
 
       - name: Verify CAD takeoff queries, rendering and solid metrics
         env:

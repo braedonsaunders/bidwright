@@ -61,6 +61,20 @@ test("direct and indirect calls share schemas, project scope, images, logging an
       const definition = JSON.parse(described.content[0].text)[0];
       assert.equal(definition.mutates, false);
       assert.equal(definition.inputSchema.properties.responseFormat.default, "concise");
+      // Every integrated takeoff family must participate in discovery and the
+      // same read/write policy as direct registration.
+      for (const name of ["getSourceOverview", "getTakeoffCalibration", "queryCadEntities", "getModelSolidMetrics", "getPipingMto"]) {
+        const result: any = await client.callTool({ name: "describeTools", arguments: { name } });
+        const tool = JSON.parse(result.content[0].text)[0];
+        assert.equal(tool.name, name);
+        assert.equal(tool.mutates, false);
+        assert.equal(tool.inputSchema.type, "object");
+      }
+      for (const name of ["saveTakeoffMeasurement", "saveCadEntityTakeoff", "savePipingTakeoff"]) {
+        const result: any = await client.callTool({ name: "describeTools", arguments: { name } });
+        assert.equal(result.isError === true, mode === "qa", name);
+        if (mode !== "qa") assert.equal(JSON.parse(result.content[0].text)[0].mutates, true, name);
+      }
       const catalog: any = await client.callTool({ name: "describeTools", arguments: { family: "vision" } });
       const names = JSON.parse(catalog.content[0].text).map((tool: any) => tool.name);
       assert.ok(names.includes("listPickups"));
