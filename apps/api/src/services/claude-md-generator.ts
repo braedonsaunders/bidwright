@@ -174,6 +174,8 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 
 getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. \`describeTools\` describes a family; \`invokeTool\` calls a tool not directly loaded with its documented arguments. These capabilities support estimating judgment without prescribing a workflow.
 
+Pickup person/agent/unrecorded counts reflect saved provenance labels. Legacy unrecorded pickups and UI CAD pickups labelled agent can include human work; inspect the existing takeoff rather than treating those labels as proof of who measured it.
+
 For PDF inspection, use \`readDrawingPage(documentId, pageNumber)\` for an overview and \`readDrawingTile\` for a detail, dimension, note or repeated component. Positioned text, search hits and layout help navigation. Schedules, BOMs, specifications and drawing revisions can corroborate or qualify quantities.
 
 If an overview times out or fails during layout analysis, try \`readDrawingTile\` on the same page with an explicit \`bbox: { x: 0, y: 0, width: 1, height: 1 }\`; this bypasses optional overview analysis. Zoom into the needed portions after that succeeds. A failed request is not a viewed source, and one overview timeout does not establish that the PDF itself is unreadable. If visual reads still fail, state the actual failure and affected source/page, identify the missing evidence, and qualify dependent quantities rather than claiming complete inspection.
@@ -238,7 +240,7 @@ Key files:
 function buildDocumentManifestRows(documents: ClaudeDocument[], overview?: SourceOverview) {
   if (overview) {
     const rows = overview.sources.slice(0, MAX_INSTRUCTION_DOC_ROWS).map((source, i) =>
-      `  ${i + 1}. \`${source.name}\` — ${source.fileType}, ${source.kind}; ${instructionJson({ status: source.extractionStatus, ...source.facts, models: source.models, humanPickups: source.humanPickups }, 700)} [docId: ${source.documentId ?? "none"}; fileIds: ${source.fileNodeIds.join(", ") || "none"}]`
+      `  ${i + 1}. \`${source.name}\` — ${source.fileType}, ${source.kind}; pickups: ${source.pickups} total (${source.pickupCounts.person} person, ${source.pickupCounts.agent} agent, ${source.pickupCounts.unrecorded} unrecorded); ${instructionJson({ status: source.extractionStatus, ...source.facts, models: source.models }, 700)} [docId: ${source.documentId ?? "none"}; fileIds: ${source.fileNodeIds.join(", ") || "none"}]`
     );
     if (overview.sources.length > MAX_INSTRUCTION_DOC_ROWS) rows.push(`  ... ${overview.sources.length - MAX_INSTRUCTION_DOC_ROWS} more sources in .bidwright/source-overview.json or getSourceOverview.`);
     return rows.join("\n") || "  (No project sources currently attached.)";

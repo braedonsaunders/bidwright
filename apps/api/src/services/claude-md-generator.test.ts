@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildCompactClaudeMdContent, buildReviewClaudeMdContent, generateInstructionFiles } from "./claude-md-generator.js";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { claudeCodeAdapter } from "./cli-adapters/claude-code.js";
+import { AGENT_SKILL_NAMES } from "./agent-workspace-assets.js";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 const params = { projectDir: "/tmp/not-created", dataRoot: "/tmp", projectName: "Installation", clientName: "Client", location: "Site", scope: "Install only, exclude fabrication", quoteNumber: "Test", documents: [] };
@@ -11,6 +13,21 @@ test("launch writes the overview, client and discoverable portable skills for ea
     const sourceOverview = { generatedAt: "2026-10-11T00:00:00Z", sources: [], modelScan: null, takeoff: { byDocumentPage: [], calibrations: {} } };
     for (const runtime of ["claude-code", "codex", "openrouter"]) {
       await generateInstructionFiles(runtime, { ...params, projectDir, sourceOverview });
+      if (runtime === "claude-code") {
+        await writeFile(join(projectDir, ".claude/stale-state.json"), "{}");
+        // This is the launch order used before spawn: instructions, then adapter preparation.
+        await claudeCodeAdapter.prepareWorkspace({
+          projectDir, mcpRunner: process.execPath, mcpArgs: [], permissions: [], isWin: false, isResume: false,
+          mcpEnv: { BIDWRIGHT_API_URL: "http://localhost:4001", BIDWRIGHT_AUTH_TOKEN: "", BIDWRIGHT_PROJECT_ID: "project",
+            BIDWRIGHT_REVISION_ID: "", BIDWRIGHT_QUOTE_ID: "", BIDWRIGHT_AGENT_MODE: "build_estimate" },
+        });
+        await assert.rejects(readFile(join(projectDir, ".claude/stale-state.json")), { code: "ENOENT" });
+        assert.ok(JSON.parse(await readFile(join(projectDir, ".claude/settings.json"), "utf8")).mcpServers.bidwright);
+        for (const name of AGENT_SKILL_NAMES) {
+          assert.equal(await readFile(join(projectDir, ".claude/skills", name, "SKILL.md"), "utf8"),
+            await readFile(join(projectDir, ".bidwright/skills", name, "SKILL.md"), "utf8"));
+        }
+      }
       assert.deepEqual(JSON.parse(await readFile(join(projectDir, ".bidwright/source-overview.json"), "utf8")), sourceOverview);
       const instructions = await readFile(join(projectDir, "AGENTS.md"), "utf8");
       assert.equal(instructions.includes("WebFetch"), runtime === "claude-code");

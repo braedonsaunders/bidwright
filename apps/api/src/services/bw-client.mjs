@@ -58,9 +58,9 @@ export async function runBw(args, env = process.env) {
   if (command === "pickups") return client.request("GET", `/api/takeoff/${projectId}/pickups`);
   if (command === "datasets") return client.request("GET", `/datasets?projectId=${projectId}`);
   if (command === "items") {
-    /** @type {{worksheets?: Array<{id: string, items?: Record<string, unknown>[]}>} | null} */
-    const workspace = await client.request("GET", `/projects/${projectId}/workspace`);
-    return (workspace?.worksheets ?? []).flatMap(worksheet => (worksheet.items ?? []).map(item => ({ ...item, worksheetId: worksheet.id })));
+    /** @type {{workspace: {worksheets?: Array<{id: string, items?: Record<string, unknown>[]}>}} | null} */
+    const result = await client.request("GET", `/projects/${projectId}/workspace`);
+    return (result?.workspace.worksheets ?? []).flatMap(worksheet => (worksheet.items ?? []).map(item => ({ ...item, worksheetId: worksheet.id })));
   }
   if (command === "elements" || command === "rows") {
     if (!rest[0] || rest[0].startsWith("--")) throw new Error("A model/dataset ID is required");

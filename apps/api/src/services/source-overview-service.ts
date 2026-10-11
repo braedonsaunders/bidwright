@@ -31,11 +31,11 @@ interface DocumentProgress {
   extractionProvider?: string;
 }
 
-function sourceKind(name: string, fileType: string | null, facts: Facts): string {
+function sourceKind(name: string, fileType: string | null): string {
   const ext = name.includes(".") ? name.split(".").pop()!.toLowerCase() : fileType?.toLowerCase();
   if (ext === "pdf" || fileType === "application/pdf") {
     // Positioned OCR text does not establish a native text layer or vector geometry.
-    return facts.pdfKind === "vector" ? "pdf-vector" : facts.pdfKind === "scanned" ? "pdf-scanned" : "pdf";
+    return "pdf";
   }
   if (["dwg", "dxf", "ifc", "rvt", "nwd"].includes(ext || "")) return ext!;
   if (["step", "stp", "iges", "igs"].includes(ext || "")) return "step";
@@ -73,13 +73,22 @@ export function buildSourceOverview(input: {
     const fileIds = source.source === "file" ? [source.id] : files.map(f => f.id);
     const documentId = source.source === "document" ? source.id : source.documentId && documents.has(source.documentId) ? source.documentId : null;
     const facts = Object.fromEntries([...Object.entries(files[0]?.facts ?? {}), ...Object.entries(source.facts)].filter(([, v]) => v != null));
+    facts.positionedTextAvailable = source.facts.positionedTextAvailable ?? null;
     const progress = input.documentProgress?.find(p => p.id === source.id);
     if (progress) {
       facts.extractionStatus = progress.status;
       facts.extractionProvider = progress.extractionProvider ?? "unknown";
     }
-    const kind = sourceKind(source.name, source.fileType, facts);
-    const pickups = input.pickups.filter(p => p.documentId === documentId || fileIds.includes(p.documentId));
+    const kind = sourceKind(source.name, source.fileType);
+    const takeoffDocumentIds = [...new Set([...(documentId ? [documentId] : []), ...fileIds, ...fileIds.map(id => `file-${id}`)])];
+    const pickups = input.pickups.filter(p => takeoffDocumentIds.includes(p.documentId));
+    const pickupCounts = { person: 0, agent: 0, unrecorded: 0 };
+    for (const pickup of pickups) {
+      const measuredBy = pickup.measuredBy === "person" || pickup.measuredBy === "agent" ? pickup.measuredBy : "unrecorded";
+      pickupCounts[measuredBy] += pickup.count;
+    }
+    const calibrations = Object.fromEntries(Object.entries(input.calibrations && typeof input.calibrations === "object" ? input.calibrations : {})
+      .filter(([key]) => takeoffDocumentIds.includes(key)));
     const models = input.models.filter(m => (documentId && m.sourceDocumentId === documentId) || (m.fileNodeId && fileIds.includes(m.fileNodeId))).map(m => ({
       id: m.id, status: m.status,
       units: m.units && m.units !== "model" ? m.units : "unknown",
@@ -90,11 +99,11 @@ export function buildSourceOverview(input: {
     return {
       id: source.id, name: source.name, fileType: source.fileType || "unknown",
       extension: source.name.includes(".") ? source.name.split(".").pop()!.toLowerCase() : null,
-      kind, documentId, fileNodeIds: fileIds,
+      kind, documentId, fileNodeIds: fileIds, takeoffDocumentIds,
       extractionStatus: facts.extractionStatus ?? "unknown",
       facts, models, toolFamilies: toolFamilies(kind),
       pickups: pickups.reduce((sum, p) => sum + p.count, 0),
-      humanPickups: pickups.filter(p => p.measuredBy === "person").reduce((sum, p) => sum + p.count, 0),
+      pickupCounts, calibrations,
     };
   });
   return {
@@ -109,16 +118,11 @@ export type SourceOverview = ReturnType<typeof buildSourceOverview>;
 // Project only compact persisted facts: no text bodies, entity arrays, meshes or ingest work.
 function sourceFacts(column: Prisma.Sql) {
   return prismaSql`jsonb_build_object(
-    'extractionStatus', ${column}->'extractionStatus',
-    'positionedTextAvailable', (${column}->'pageText') IS NOT NULL,
-    'pdfKind', ${column}->'pdfKind',
-    'detectedScale', ${column}->'detectedScale',
     'cadStatus', ${column}->'dwgTakeoff'->'status',
     'converterStatus', ${column}->'dwgTakeoff'->'converter'->'status',
     'layers', CASE WHEN jsonb_typeof(${column}->'dwgTakeoff'->'layers') = 'array' THEN jsonb_array_length(${column}->'dwgTakeoff'->'layers') END,
     'entities', CASE WHEN jsonb_typeof(${column}->'dwgTakeoff'->'entities') = 'array' THEN jsonb_array_length(${column}->'dwgTakeoff'->'entities') END,
-    'cadUnits', ${column}->'dwgTakeoff'->'units',
-    'blockInserts', ${column}->'dwgTakeoff'->'blockExpansion'->'insertCount'
+    'cadUnits', ${column}->'dwgTakeoff'->'units'
   )`;
 }
 
@@ -126,7 +130,8 @@ export async function getSourceOverview(projectId: string): Promise<SourceOvervi
   const [documents, files, models, pickups, workspace, jobs] = await Promise.all([
     prisma.$queryRaw<OverviewSourceInput[]>(prismaSql`
       SELECT id, "fileName" AS name, "fileType", id AS "documentId", 'document' AS source,
-        ${sourceFacts(prismaSql`"structuredData"`)} || jsonb_build_object('pages', "pageCount", 'extractedTextAvailable', length("extractedText") > 0) AS facts
+        ${sourceFacts(prismaSql`"structuredData"`)} || jsonb_build_object('pages', "pageCount", 'extractedTextAvailable', length("extractedText") > 0,
+          'positionedTextAvailable', CASE WHEN jsonb_typeof("structuredData"->'pageText') = 'array' THEN jsonb_array_length("structuredData"->'pageText') > 0 END) AS facts
       FROM "SourceDocument" WHERE "projectId" = ${projectId} ORDER BY "createdAt", id`),
     prisma.$queryRaw<OverviewSourceInput[]>(prismaSql`
       SELECT id, name, "fileType", "documentId", 'file' AS source,
@@ -135,7 +140,7 @@ export async function getSourceOverview(projectId: string): Promise<SourceOvervi
     prisma.$queryRaw<OverviewModelInput[]>(prismaSql`
       SELECT m.id, m."sourceDocumentId", m."fileNodeId", m.status, m.units,
         jsonb_build_object('schema', m.manifest->'schema', 'parts', m.manifest->'meshCount',
-          'solidCount', m.manifest->'solidCount', 'pointCount', m.manifest->'pointCount',
+          'pointCount', m.manifest->'pointCount',
           'issueCount', CASE WHEN jsonb_typeof(m.manifest->'modelIngest'->'issues') = 'array' THEN jsonb_array_length(m.manifest->'modelIngest'->'issues') END,
           'elementCount', (SELECT count(*)::int FROM "ModelElement" e WHERE e."modelId" = m.id),
           'qtoElementCount', (SELECT count(DISTINCT q."elementId")::int FROM "ModelQuantity" q WHERE q."modelId" = m.id AND q.method = 'ifc_declared_quantity'),
