@@ -1,3 +1,4 @@
+import { pdfTakeoffRoutes } from "./pdf-takeoff-routes.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
 import { z } from "zod";
@@ -39,6 +40,7 @@ async function resolveAzureConfig(
 }
 
 export async function takeoffRoutes(app: FastifyInstance) {
+  await pdfTakeoffRoutes(app);
   // ── GET /api/takeoff/:projectId/documents/:documentId/dwg-metadata ───
   // Server-side DXF/DWG intake processing for CAD takeoff. DXF is parsed
   // directly; binary DWG uses the optional BIDWRIGHT_DWG_CONVERTER_CMD

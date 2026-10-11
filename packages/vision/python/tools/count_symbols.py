@@ -258,33 +258,12 @@ def _to_gray(img: np.ndarray) -> np.ndarray:
 
 
 def _nms(matches: list[dict], min_distance_frac: float = 0.3) -> list[dict]:
-    """Non-maximum suppression: remove overlapping matches, keep highest confidence."""
-    if not matches:
-        return []
-
-    # Sort by confidence desc
-    matches.sort(key=lambda m: -m["confidence"])
-    kept = []
-
-    for m in matches:
-        mx, my, mw, mh = m["x"], m["y"], m["w"], m["h"]
-        mcx = mx + mw / 2
-        mcy = my + mh / 2
-        min_dist = max(mw, mh) * min_distance_frac
-
-        too_close = False
-        for k in kept:
-            kcx = k["x"] + k["w"] / 2
-            kcy = k["y"] + k["h"] / 2
-            dist = ((mcx - kcx)**2 + (mcy - kcy)**2)**0.5
-            if dist < min_dist:
-                too_close = True
-                break
-
-        if not too_close:
-            kept.append(m)
-
-    return kept
+    """Suppress repeated detections in the common page frame across scales/tiles."""
+    try:
+        from tools.dedupe_detections import dedupe_detections
+    except ImportError:
+        from dedupe_detections import dedupe_detections
+    return dedupe_detections(matches, min_distance_frac)
 
 
 # CLI mode

@@ -4557,6 +4557,7 @@ export function TakeoffTab({
     // (undo/redo) keeps its AI provenance (source, matches, thumbnails)
     // instead of silently degrading to a bare manual row.
     const metadata: Record<string, unknown> = { ...(annotation.metadata ?? {}), ...(annotation.opts ?? {}) };
+    metadata.lastEditedBy = "person";
     if (Number.isFinite(annotation.canvasWidth)) metadata.canvasWidth = annotation.canvasWidth;
     if (Number.isFinite(annotation.canvasHeight)) metadata.canvasHeight = annotation.canvasHeight;
     if (Number.isFinite(annotation.pdfPageWidth)) metadata.pdfPageWidth = annotation.pdfPageWidth;
