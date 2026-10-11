@@ -28,6 +28,7 @@ import { registerVisionTools } from "./tools/vision-tools.js";
 import { registerDrawingEvidenceTools } from "./tools/drawing-evidence-tools.js";
 import { registerReviewTools } from "./tools/review-tools.js";
 import { registerEstimateTools } from "./tools/estimate-tools.js";
+import { registerCadTools } from "./tools/cad-tools.js";
 import { registerModelTools } from "./tools/model-tools.js";
 import { registerFileIngestTools } from "./tools/file-ingest-tools.js";
 import { registerIntegrationTools } from "./tools/integration-tools.js";
@@ -97,6 +98,7 @@ export async function registerTools(server: McpServer, options: { mode?: string;
   registerSourceTools(server);
 
   registerTakeoffTools(server);
+  registerCadTools(server);
   await registerIntegrationTools(server);
 
   server.tool(

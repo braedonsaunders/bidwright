@@ -113,6 +113,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && /usr/bin/bwrap --version
 COPY --from=libredwg-builder /usr/local/bin/dwg2dxf /usr/local/bin/dwg2dxf
 COPY --from=libredwg-builder /usr/local/bin/dwgread /usr/local/bin/dwgread
+RUN dwg2dxf --version && dwgread --version
 RUN wget -q -O /tmp/mpxj.zip "https://downloads.sourceforge.net/project/mpxj/mpxj/Version%2016.1.0/mpxj-16.1.0.zip" \
   && mkdir -p /opt/mpxj-dist /opt/mpxj \
   && unzip -q /tmp/mpxj.zip -d /opt/mpxj-dist \

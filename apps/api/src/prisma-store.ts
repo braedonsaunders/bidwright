@@ -15490,6 +15490,9 @@ export class PrismaApiStore {
       entityType?: string;
       layer?: string;
       quantity: number;
+      unit?: string;
+      measurementType?: string;
+      preserveExisting?: boolean;
       selection?: Record<string, unknown>;
     },
   ) {
@@ -15498,9 +15501,11 @@ export class PrismaApiStore {
       where: { projectId, sourceKind: "cad-entity", documentId: input.documentId, cadEntityId: input.entityId },
     });
     if (!existing) {
-      const pickup = await this.db.pickup.create({
-        data: {
-          id: createId("takeoff"),
+      const id = `cad-${createHash("sha256").update(JSON.stringify([projectId, input.documentId, input.entityId])).digest("hex")}`;
+      const pickup = await this.db.pickup.upsert({
+        where: { id }, update: {},
+        create: {
+          id,
           projectId,
           documentId: input.documentId,
           pageNumber: 0,
@@ -15508,7 +15513,7 @@ export class PrismaApiStore {
           label: `${input.entityType || "entity"} ${input.entityId}`.trim(),
           color: "#3b82f6",
           points: [] as any,
-          measurement: { value: quantity } as any,
+          measurement: { value: quantity, ...(input.unit ? { unit: input.unit } : {}), ...(input.measurementType ? { type: input.measurementType } : {}) } as any,
           metadata: { source: "cad", method: "cad-entity-link", measuredBy: "agent" } as any,
           sourceKind: "cad-entity",
           cadEntityId: input.entityId,
@@ -15522,12 +15527,14 @@ export class PrismaApiStore {
       return { pickup, measurementChanged: false };
     }
 
+    if (input.preserveExisting) return { pickup: existing, measurementChanged: false };
     const measurement = (existing.measurement as Record<string, unknown>) ?? {};
+    const { unit: _oldUnit, type: _oldType, ...untypedMeasurement } = measurement;
     const measurementChanged = Number(measurement.value ?? 0) !== quantity;
     const pickup = await this.db.pickup.update({
       where: { id: existing.id },
       data: {
-        measurement: { ...measurement, value: quantity } as any,
+        measurement: { ...untypedMeasurement, value: quantity, ...(input.unit ? { unit: input.unit } : {}), ...(input.measurementType ? { type: input.measurementType } : {}) } as any,
         cadEntityType: input.entityType ?? existing.cadEntityType,
         cadLayer: input.layer ?? existing.cadLayer,
         selection: (input.selection ?? existing.selection ?? {}) as any,
@@ -15535,6 +15542,64 @@ export class PrismaApiStore {
       },
     });
     return { pickup, measurementChanged };
+  }
+
+  async saveCadEntityPickups(projectId: string, input: {
+    documentId: string;
+    entities: Array<{ entityId: string; entityType: string; layer: string; quantity: number; unit: string; measurementType: string; selection: Record<string, unknown> }>;
+    worksheetItemId?: string;
+    multiplier?: number;
+  }) {
+    return this.db.$transaction(async (tx) => {
+      const store = new PrismaApiStore(tx as unknown as PrismaClient, this.organizationId);
+      await store.requireProject(projectId);
+      if (input.multiplier !== undefined && (!Number.isFinite(input.multiplier) || input.multiplier <= 0)) throw new Error("Invalid CAD link multiplier");
+      let item = null;
+      if (input.worksheetItemId) {
+        item = await tx.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
+        const { revision } = await store.findCurrentRevision(projectId);
+        const worksheet = item ? await tx.worksheet.findFirst({ where: { id: item.worksheetId } }) : null;
+        if (!revision || !worksheet || worksheet.revisionId !== revision.id) throw new Error("Worksheet item not found in project revision");
+      }
+      const conflicts = [];
+      const prepared = [];
+      for (const entity of input.entities) {
+        if (!Number.isFinite(entity.quantity) || entity.quantity < 0) throw new Error("Invalid CAD entity quantity");
+        const existing = await tx.pickup.findFirst({ where: { projectId, documentId: input.documentId, cadEntityId: entity.entityId, sourceKind: "cad-entity" } });
+        const measurement = existing?.measurement as Record<string, unknown> | undefined;
+        const unit = entity.unit.trim().toLowerCase();
+        const existingUnit = String(measurement?.unit ?? "").trim().toLowerCase();
+        const sameCount = store.uomDimension(unit) === "count" && store.uomDimension(existingUnit) === "count";
+        if (existing && (measurement?.type !== entity.measurementType || (!sameCount && existingUnit !== unit))) {
+          conflicts.push({ entityId: entity.entityId, message: "Existing pickup measurement type or unit differs or is unknown", pickup: mapPickup(existing) });
+          continue;
+        }
+        if (measurement && (typeof measurement.value !== "number" || !Number.isFinite(measurement.value) || measurement.value < 0)) throw new Error("Invalid existing CAD pickup quantity");
+        if (item) {
+          const targetUnit = String(item.uom ?? "").trim().toLowerCase();
+          const itemDimension = store.uomDimension(targetUnit);
+          const sameCountUnit = store.uomDimension(unit) === "count" && itemDimension === "count";
+          if (!sameCountUnit && unit !== targetUnit && input.multiplier === undefined) throw new Error(`Explicit multiplier required to convert ${unit || "unknown units"} to ${targetUnit || "unknown units"}`);
+          if (itemDimension && entity.measurementType !== itemDimension) throw new Error("CAD measurement and worksheet item dimensions differ");
+        }
+        prepared.push(entity);
+      }
+      if (conflicts.length) return { saved: false, pickups: [], conflicts };
+
+      const pickups = [];
+      for (const entity of prepared) {
+        const { pickup } = await store.upsertCadEntityPickup(projectId, { ...entity, documentId: input.documentId, preserveExisting: true });
+        let link = input.worksheetItemId ? await tx.pickupLink.findUnique({
+          where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } },
+        }) : null;
+        if (input.worksheetItemId && !link) {
+          await store.createPickupLink(projectId, { pickupId: pickup.id, worksheetItemId: input.worksheetItemId, multiplier: input.multiplier ?? 1 });
+          link = await tx.pickupLink.findUnique({ where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } } });
+        }
+        pickups.push({ pickup: mapPickup(pickup), link });
+      }
+      return { saved: true, pickups, conflicts: [] };
+    }, { isolationLevel: "Serializable", timeout: 30_000 });
   }
 
   async listDwgEntityLinks(

@@ -1,3 +1,4 @@
+import { cadTakeoffRoutes } from "./cad-takeoff-routes.js";
 import type { FastifyInstance } from "fastify";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -22,6 +23,8 @@ import {
   deleteModelTakeoffRecipe,
   deleteProjectFederation,
   getModelBom,
+  aggregateModelElements,
+  getModelSolidMetrics,
   getModelTakeoffTopology,
   getProjectFederation,
   getProjectModelAsset,
@@ -192,6 +195,7 @@ function routeError(reply: any, error: unknown) {
 
 export async function modelRoutes(app: FastifyInstance) {
   app.register(cadDesignRoutes);
+  app.register(cadTakeoffRoutes);
   app.post("/api/models/:projectId/design", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
@@ -315,6 +319,22 @@ export async function modelRoutes(app: FastifyInstance) {
     } catch (error) {
       return routeError(reply, error);
     }
+  });
+
+  app.get("/api/models/:projectId/assets/:modelId/solid-metrics", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+    try { return await getModelSolidMetrics(projectId, modelId); } catch (error) { return routeError(reply, error); }
+  });
+
+  app.post("/api/models/:projectId/assets/:modelId/aggregate", async (request, reply) => {
+    const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+    const parsed = z.object({ groupBy: z.enum(["class", "type", "level", "system", "material", "property"]), property: z.string().optional(),
+      elementIds: z.array(z.string()).max(10000).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
+    }).refine((v) => v.groupBy !== "property" || Boolean(v.property), "property path is required").safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
+    try { return await aggregateModelElements(projectId, modelId, parsed.data); } catch (error) { return routeError(reply, error); }
   });
 
   app.get("/api/models/:projectId/assets/:modelId/bom", async (request, reply) => {

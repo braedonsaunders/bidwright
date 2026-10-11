@@ -1,3 +1,5 @@
+import { aggregatePersistedElements, persistedSolidMetrics } from "./model-metrics.js";
+import { getDwgConverterStatus } from "./dwg-processing-service.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -1698,6 +1700,7 @@ export async function getProjectModelIngestCapabilities(format?: string, setting
   return {
     formats: Array.from(MODEL_EXTENSIONS).sort(),
     capabilities: await getModelIngestCapabilities(format, settings),
+    dwgConverter: await getDwgConverterStatus(),
   };
 }
 
@@ -2363,4 +2366,22 @@ export async function removeFederationMember(
     where: { federationId, modelId },
   });
   return { deleted: true };
+}
+
+export async function aggregateModelElements(projectId: string, modelId: string, input: Parameters<typeof aggregatePersistedElements>[1]) {
+  const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId }, include: { elements: { include: { quantities: true } } } });
+  if (!model) throw new Error(`Model ${modelId} not found`);
+  const elementIds = new Set(model.elements.map((element) => element.id));
+  if (input.elementIds?.some((id) => !elementIds.has(id))) throw new Error("Selected element not found in model");
+  return { modelId, ...aggregatePersistedElements(model.elements, input) };
+}
+
+export async function getModelSolidMetrics(projectId: string, modelId: string) {
+  const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId }, include: { elements: { include: { quantities: true } } } });
+  if (!model) throw new Error(`Model ${modelId} not found`);
+  const result = persistedSolidMetrics(model.elements);
+  const storedFacts = (model.manifest as { facts?: unknown } | null)?.facts;
+  if (Array.isArray(storedFacts)) result.facts.push(...storedFacts.filter((fact): fact is string => typeof fact === "string"));
+  if (!model.units || ["model", "unitless", "unknown"].includes(model.units)) result.facts.push("Physical model units are unknown; model-unit quantities are not converted.");
+  return { modelId, format: model.format, units: model.units, checksum: model.checksum, ...result };
 }
