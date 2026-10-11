@@ -1559,8 +1559,11 @@ export function startProjectModelScan(projectId: string, ingestSettings: ModelIn
         }
         const { asset } = await syncProjectModelSource(source, ingestSettings);
         state.syncedIds.push(asset.id);
+        if (asset.status === "failed") {
+          state.error = [state.error, `${asset.fileName}: ${assetErrorMessage(asset)}`].filter(Boolean).join("; ");
+        }
       }
-      state.status = "complete";
+      state.status = state.error ? "failed" : "complete";
     } catch (error) {
       state.status = "failed";
       state.error = error instanceof Error ? error.message : String(error);
@@ -1712,6 +1715,7 @@ export async function listProjectModelAssets(projectId: string, options: { disco
     where: { projectId },
     orderBy: [{ updatedAt: "desc" }, { fileName: "asc" }],
     include: {
+      issues: { where: { severity: "error" }, orderBy: { createdAt: "desc" }, take: 25 },
       _count: {
         select: {
           elements: true,
@@ -1727,6 +1731,10 @@ export async function listProjectModelAssets(projectId: string, options: { disco
   // Clients still read `_count.takeoffLinks`; keep the response name stable.
   return assets.map((asset) => ({
     ...asset,
+    progress: recordValue(asset.manifest).translationProgress ?? (asset.status === "processing" ? "processing" : asset.status),
+    terminalErrors: asset.status === "failed"
+      ? (asset.issues.length ? asset.issues.map(issue => ({ code: issue.code, message: issue.message })) : [{ code: "model_ingest_failed", message: assetErrorMessage(asset) }])
+      : [],
     _count: { ...asset._count, takeoffLinks: asset._count.pickups },
   }));
 }

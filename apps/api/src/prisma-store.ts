@@ -4,7 +4,7 @@ import { hashPassword } from "./services/auth-service.js";
 import { derivePagesForIndexing } from "./services/page-provenance.js";
 import { LABOR_SEARCH_VECTOR, CHUNK_SEARCH_VECTOR, ROW_SEARCH_VECTOR, indexedSearchQuery, rankIndexedCandidates, datasetFilterPredicate } from "./services/indexed-search.js";
 import { createReadStream } from "node:fs";
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -185,6 +185,7 @@ import {
   relativePackageRoot,
   relativeWorkspacePath,
   resolveApiPath,
+  relativeProjectFilePath,
   resolveRelativePath,
   sanitizeFileName,
 } from "./paths.js";
@@ -12146,7 +12147,9 @@ export class PrismaApiStore {
     if (!sourceRevision) throw new Error(`Current revision not found for project ${projectId}`);
     const resetEstimate = options.resetEstimate === true;
 
-    return await this.db.$transaction(async (tx) => {
+    const fileCopies: Array<{ source: string; destination: string }> = [];
+    const copyWarnings: Array<{ source: string; destination: string; message: string }> = [];
+    const result = await this.db.$transaction(async (tx) => {
       const timestamp = new Date();
       const newProjectId = createId("project");
       const newQuoteId = createId("quote");
@@ -12164,6 +12167,8 @@ export class PrismaApiStore {
           packageUploadedAt: sourceProject.packageUploadedAt,
           ingestionStatus: sourceProject.ingestionStatus,
           summary: sourceProject.summary,
+          scope: sourceProject.scope,
+          isStandalone: sourceProject.isStandalone,
           createdAt: timestamp,
           updatedAt: timestamp,
         },
@@ -12408,11 +12413,15 @@ export class PrismaApiStore {
       const oldDocs = await tx.sourceDocument.findMany({ where: { projectId } });
       const documentIdMap = new Map(oldDocs.map(doc => [doc.id, createId("doc")]));
       for (const doc of oldDocs) {
+        const storagePath = doc.storagePath
+          ? relativeProjectFilePath(newProjectId, documentIdMap.get(doc.id)!, doc.fileName)
+          : doc.storagePath;
+        if (doc.storagePath && storagePath) fileCopies.push({ source: doc.storagePath, destination: storagePath });
         await tx.sourceDocument.create({
           data: {
             id: documentIdMap.get(doc.id)!, projectId: newProjectId, fileName: doc.fileName, fileType: doc.fileType,
             documentType: doc.documentType, pageCount: doc.pageCount, checksum: doc.checksum,
-            storagePath: doc.storagePath, extractedText: doc.extractedText,
+            storagePath, extractedText: doc.extractedText,
             structuredData: toPrismaJson((doc as any).structuredData ?? null),
             createdAt: timestamp, updatedAt: timestamp,
           },
@@ -12421,9 +12430,14 @@ export class PrismaApiStore {
       const oldFiles = await tx.fileNode.findMany({ where: { projectId, scope: "project" } });
       const fileIdMap = new Map(oldFiles.map(file => [file.id, createId("file")]));
       for (const file of oldFiles) {
+        const storagePath = file.storagePath && file.type === "file"
+          ? relativeProjectFilePath(newProjectId, fileIdMap.get(file.id)!, file.name)
+          : null;
+        if (file.storagePath && storagePath) fileCopies.push({ source: file.storagePath, destination: storagePath });
         await tx.fileNode.create({
           data: {
             ...file,
+            storagePath,
             id: fileIdMap.get(file.id)!, projectId: newProjectId,
             parentId: file.parentId ? fileIdMap.get(file.parentId) ?? null : null,
             documentId: file.documentId ? documentIdMap.get(file.documentId) ?? null : null,
@@ -12461,6 +12475,19 @@ export class PrismaApiStore {
         revision: mapRevision(newRevision!),
       };
     });
+    // Every row already points at copy-owned storage. Never fall back to the source
+    // path on failure: a later save must remain isolated even when bytes are missing.
+    for (const file of fileCopies) {
+      try {
+        await mkdir(path.dirname(resolveApiPath(file.destination)), { recursive: true });
+        await copyFile(resolveApiPath(file.source), resolveApiPath(file.destination));
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        copyWarnings.push({ ...file, message });
+        console.warn("Project copy could not copy source bytes", { projectId: result.project.id, ...file, message });
+      }
+    }
+    return { ...result, copyWarnings };
   }
 
   async updateQuote(projectId: string, patch: QuotePatchInput) {
@@ -15289,6 +15316,7 @@ export class PrismaApiStore {
     if (quantityField === "count") return "count";
     if (annotationType.startsWith("linear")) return "length";
     if (annotationType.startsWith("area")) return "area";
+    if (annotationType.startsWith("volume")) return "volume";
     if (annotationType.startsWith("count")) return "count";
     return "";
   }

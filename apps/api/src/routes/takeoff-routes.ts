@@ -1,3 +1,4 @@
+import { saveSourceQuantityTakeoff, sourceQuantitySchema } from "../services/source-quantity-takeoff.js";
 import { pdfTakeoffRoutes } from "./pdf-takeoff-routes.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { readFile } from "node:fs/promises";
@@ -43,6 +44,15 @@ async function resolveAzureConfig(
 
 export async function takeoffRoutes(app: FastifyInstance) {
   await pdfTakeoffRoutes(app);
+  app.post("/api/takeoff/:projectId/source-quantities", async (request, reply) => {
+    try {
+      const { projectId } = request.params as { projectId: string };
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
+      return await saveSourceQuantityTakeoff(request.store!, projectId, sourceQuantitySchema.parse(request.body));
+    } catch (error) {
+      return reply.code(400).send({ message: error instanceof Error ? error.message : "Source quantity save failed" });
+    }
+  });
   // ── GET /api/takeoff/:projectId/documents/:documentId/dwg-metadata ───
   // Server-side DXF/DWG intake processing for CAD takeoff. DXF is parsed
   // directly; binary DWG uses the optional BIDWRIGHT_DWG_CONVERTER_CMD

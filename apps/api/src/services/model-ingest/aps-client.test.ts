@@ -123,3 +123,41 @@ test("APS metadata extraction preserves numeric-string BIM quantities", async ()
   assert.equal(result.objects[0].material, "TP304L");
   assert.deepEqual(result.objects[0].quantities, [{ quantityType: "Length", value: 9.043757, unit: "" }]);
 });
+
+test("failed derivative messages survive nested manifests and the terminal error", async (t) => {
+  const { ApsTranslationError } = await import("./aps-client.js");
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => String(input).includes("authentication")
+    ? jsonResponse({ access_token: "test", expires_in: 3600 })
+    : jsonResponse({ urn: "model", status: "failed", progress: "complete", region: "US", derivatives: [{
+      status: "failed", messages: [{ type: "error", code: "TranslationWorker-InternalFailure", message: "Unrecoverable exit code from extractor: -777" }],
+      children: [{ messages: [{ type: "error", code: "Nested", message: ["Missing file", "xref"] }] }],
+    }] }));
+  await assert.rejects(new ApsClient("client", "secret").waitForTranslation("model"), (error: unknown) => {
+    assert.ok(error instanceof ApsTranslationError);
+    assert.match(error.message, /TranslationWorker-InternalFailure.*-777/);
+    assert.equal(error.manifest.messages?.length, 2);
+    assert.match(error.manifest.messages![1].message, /xref/);
+    return true;
+  });
+});
+
+test("APS 202 properties are polled until the actual element collection arrives", async (t) => {
+  let propertyCalls = 0;
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => {
+    if (String(input).includes("authentication")) return jsonResponse({ access_token: "test", expires_in: 3600 });
+    if (String(input).endsWith("/metadata")) return jsonResponse({ data: { metadata: [{ guid: "view", role: "3d" }] } });
+    propertyCalls++;
+    return propertyCalls === 1 ? jsonResponse({ result: "success" }, 202)
+      : jsonResponse({ data: { collection: [{ objectid: 1, name: "Pipe", properties: { Dimensions: { Length: { value: 317, units: "ft" } } } }] } });
+  });
+  const result = await new ApsClient("client", "secret").extractModelData("urn");
+  assert.equal(propertyCalls, 2);
+  assert.equal(result.objects.length, 1);
+  assert.equal(result.objects[0].quantities[0].value, 317);
+});
+
+test("APS properties timeout cannot become an indexed empty model", async (t) => {
+  t.mock.method(globalThis, "fetch", async (input: string | URL | Request) => String(input).includes("authentication")
+    ? jsonResponse({ access_token: "test", expires_in: 3600 }) : jsonResponse({ result: "success" }, 202));
+  await assert.rejects(new ApsClient("client", "secret").getViewProperties("urn", "view", 10), /still processing.*202/);
+});

@@ -1,6 +1,6 @@
 import type { CanonicalModelElement, CanonicalModelQuantity, ModelIngestCapability } from "@bidwright/domain";
 import { classificationDefaultsToRecord, defaultClassificationForIfcClass } from "@bidwright/domain";
-import { ApsClient } from "../aps-client.js";
+import { ApsClient, ApsTranslationError } from "../aps-client.js";
 import { buildEstimateLens, createId, makeCanonicalManifest, makeProvenance } from "../utils.js";
 import type { ModelAdapterIngestResult, ModelIngestAdapter, ModelIngestContext, ModelIngestSettings, ModelIngestSource } from "../types.js";
 
@@ -102,7 +102,7 @@ export const autodeskApsAdapter: ModelIngestAdapter = {
         translationStatus = await client.waitForTranslation(uploaded.urn, MAX_TRANSLATION_WAIT_MS);
       }
     } catch (err) {
-      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_translation_failed", { urn: uploaded.urn });
+      return buildErrorResult(source, context, activeCapability, method, err instanceof Error ? err.message : String(err), "aps_translation_failed", { urn: uploaded.urn, ...(err instanceof ApsTranslationError ? { translationProgress: err.manifest.progress, translationRegion: err.manifest.region, derivativeMessages: err.manifest.messages } : {}) });
     }
 
     if (translationStatus.status === "timeout") {
@@ -325,7 +325,7 @@ function buildErrorResult(
   code: string,
   details: Record<string, unknown> = {},
 ): ModelAdapterIngestResult {
-  const issue = { severity: "error" as const, code, message };
+  const issue = { severity: "error" as const, code, message, metadata: details };
   const provenance = makeProvenance({ source, format: context.format, checksum: context.checksum, size: context.size, capability: activeCapability, method, confidence: 0.1 });
   const summary = { parser: method, nativeFormat: context.format, provider: "autodesk-aps", error: message, ...details };
   const canonicalManifest = makeCanonicalManifest({ status: "failed", units: "", capability: activeCapability, provenance, summary, elementStats: {}, issues: [issue] });

@@ -13,7 +13,8 @@ test("direct and indirect calls share schemas, project scope, images, logging an
   t.mock.method(globalThis, "fetch", async (url: string, init: RequestInit) => {
     const path = new URL(url).pathname;
     const body = init.body ? JSON.parse(String(init.body)) : {};
-    requests.push({ path, body });
+    requests.push({ path, body: { ...body, query: new URL(url).search } });
+    if (path.endsWith("/assets")) return Response.json({ scan: { status: "failed", error: "model.nwd: extractor -777" }, assets: [{ id: "model", status: "failed", progress: "complete", terminalErrors: [{ code: "aps_translation_failed", message: "extractor -777" }] }] });
     if (path === "/integrations") return Response.json({ integrations: [] });
     if (path.endsWith("/pickups")) return Response.json(init.method === "GET" ? [] : { id: "saved-pickup", ...body });
     if (path.endsWith("/read-page")) return Response.json({ success: true, image: "data:image/png;base64,cG5n", viewId: "view-1", textLines: [{ text: "Dimension", bbox: { x: 0.1, y: 0.2, width: 0.3, height: 0.1 } }], rotation: 90 });
@@ -33,6 +34,12 @@ test("direct and indirect calls share schemas, project scope, images, logging an
         assert.equal(listed.tools.find(tool => tool.name === name)?._meta?.["anthropic/alwaysLoad"], true);
       }
       assert.equal(listed.tools.find(tool => tool.name === "readDrawingPage")?._meta?.["anthropic/alwaysLoad"], undefined);
+      const polled: any = await client.callTool({ name: "listModels", arguments: { refresh: false } });
+      assert.equal(requests.at(-1)!.body.query, "?refresh=0");
+      const modelStatus = JSON.parse(polled.content[0].text);
+      assert.equal(modelStatus.scan.status, "failed");
+      assert.equal(modelStatus.models[0].terminalErrors[0].code, "aps_translation_failed");
+      assert.equal(modelStatus.models[0].progress, "complete");
       const direct = await client.callTool({ name: "listPickups", arguments: { projectId: "foreign" } });
       const indirect = await client.callTool({ name: "invokeTool", arguments: { name: "listPickups", args: { projectId: "foreign" } } });
       assert.deepEqual(indirect, direct);
@@ -75,7 +82,7 @@ test("direct and indirect calls share schemas, project scope, images, logging an
         assert.equal(tool.mutates, false);
         assert.equal(tool.inputSchema.type, "object");
       }
-      for (const name of ["saveTakeoffMeasurement", "saveCadEntityTakeoff", "savePipingTakeoff"]) {
+      for (const name of ["saveTakeoffMeasurement", "saveSourceQuantityTakeoff", "saveCadEntityTakeoff", "savePipingTakeoff"]) {
         const result: any = await client.callTool({ name: "describeTools", arguments: { name } });
         assert.equal(result.isError === true, mode === "qa", name);
         if (mode !== "qa") assert.equal(JSON.parse(result.content[0].text)[0].mutates, true, name);

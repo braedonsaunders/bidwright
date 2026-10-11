@@ -169,7 +169,7 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 | BIM/IFC/RVT/NWD | listModels, queryModelElements, aggregateModelElements, extractModelBom, getModelSolidMetrics | Authored elements and quantities after ingestion; check units, gross/net and revision; optional how-to: bim-takeoff |
 | STEP/mesh/point cloud | listModels, getModelSolidMetrics, extractModelBom, segmentPointCloud | Solid metrics, part instances or scan segments where supported; optional how-to: model-3d-takeoff |
 | PCF/.piping | getPipingMto, savePipingTakeoff | Authored pipe/component quantities and joint semantics; optional how-to: piping-mto |
-| Schedules/BOM spreadsheets | readSpreadsheet, readDocumentText | Authored quantities, sizes and specifications; optional how-to: code-aggregation |
+| Schedules/BOM spreadsheets | readSpreadsheet, readDocumentText, saveSourceQuantityTakeoff | Authored quantities, sizes and specifications; optional how-to: code-aggregation |
 | Symbols/legends | extractDrawingLegend, createSymbolTemplateFromRegion | Repeated symbols in a defined region; optional how-to: pdf-takeoff |
 | Existing takeoff | listPickups, linkPickupToWorksheetItem | Saved measurements and provenance, including human edits |
 

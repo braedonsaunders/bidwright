@@ -23,13 +23,41 @@ interface ApsBucketDetails {
   size?: number;
 }
 
-interface ApsManifestProgress {
+export interface ApsManifestProgress {
   urn: string;
   status: "pending" | "processing" | "success" | "failed" | "timeout";
   progress: string;
   region: string;
   totalItems: number;
   completedItems: number;
+  messages?: ApsDerivativeMessage[];
+}
+
+export interface ApsDerivativeMessage {
+  type: string;
+  code: string;
+  message: string;
+}
+
+export function derivativeMessages(node: unknown): ApsDerivativeMessage[] {
+  if (!node || typeof node !== "object") return [];
+  const record = node as Record<string, unknown>;
+  const messages = Array.isArray(record.messages) ? record.messages.map((entry) => ({
+    type: String(entry.type ?? ""), code: String(entry.code ?? ""),
+    message: typeof entry.message === "string" ? entry.message : JSON.stringify(entry.message),
+  })) : [];
+  for (const key of ["derivatives", "children"]) {
+    if (Array.isArray(record[key])) messages.push(...record[key].flatMap(derivativeMessages));
+  }
+  return messages;
+}
+
+export class ApsTranslationError extends Error {
+  constructor(readonly manifest: ApsManifestProgress) {
+    const details = manifest.messages?.map(m => `${m.code}: ${m.message}`).join("; ");
+    super(`APS Model Derivative translation failed. Progress: ${manifest.progress}.${details ? ` ${details}` : " Autodesk returned no detailed message."}`);
+    this.name = "ApsTranslationError";
+  }
 }
 
 interface ApsObjectMetadata {
@@ -280,6 +308,7 @@ export class ApsClient {
       region: result.region,
       totalItems: derivatives.length,
       completedItems: completed,
+      messages: derivativeMessages(result),
     };
   }
 
@@ -290,7 +319,7 @@ export class ApsClient {
       const manifest = await this.getManifest(urn);
       if (manifest.status === "success") return manifest;
       if (manifest.status === "failed") {
-        throw new Error(`APS Model Derivative translation failed for URN ${urn}. Progress: ${manifest.progress}`);
+        throw new ApsTranslationError(manifest);
       }
       const elapsed = deadline - Date.now();
       await new Promise((resolve) => setTimeout(resolve, Math.min(pollInterval, elapsed)));
@@ -303,9 +332,29 @@ export class ApsClient {
     return this.fetchJson(`${APS_MD_URL}/${urn}/metadata`, { headers }) as Promise<ApsMetadataResponse>;
   }
 
-  async getViewProperties(urn: string, guid: string): Promise<ApsPropertiesResponse> {
-    const headers = await this.authedHeaders();
-    return this.fetchJson(`${APS_MD_URL}/${urn}/metadata/${guid}/properties`, { headers }) as Promise<ApsPropertiesResponse>;
+  async getViewProperties(urn: string, guid: string, maxWaitMs = 120_000): Promise<ApsPropertiesResponse> {
+    const url = `${APS_MD_URL}/${urn}/metadata/${guid}/properties`;
+    const deadline = Date.now() + maxWaitMs;
+    // A successful translation can still return 202 { result: "success" }
+    // while APS builds the property database. That is not an empty model.
+    while (Date.now() < deadline) {
+      const response = await fetch(url, {
+        headers: await this.authedHeaders(),
+        signal: AbortSignal.timeout(Math.max(1, Math.min(60_000, deadline - Date.now()))),
+      });
+      if (!response.ok) throw new ApsApiError(response.status, url, await response.text().catch(() => ""));
+      if (response.status === 202) {
+        await response.body?.cancel();
+        await new Promise(resolve => setTimeout(resolve, Math.max(0, Math.min(2_000, deadline - Date.now()))));
+        continue;
+      }
+      const result = await response.json() as ApsPropertiesResponse;
+      if (!Array.isArray(result.data?.collection) && !Array.isArray(result.data?.objects)) {
+        throw new Error("APS returned no property collection after translation; model quantities are not available.");
+      }
+      return result;
+    }
+    throw new Error("APS properties are still processing (HTTP 202) after the polling window; model quantities are not available yet.");
   }
 
   async extractModelData(urn: string): Promise<{

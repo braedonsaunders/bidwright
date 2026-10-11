@@ -4630,7 +4630,7 @@ export function buildServer() {
       return reply.code(404).send({ message: "Project workspace not found" });
     }
     reply.code(201);
-    return payload;
+    return { ...payload, copyWarnings: result.copyWarnings };
   });
 
   // ── Quote-level patch ──────────────────────────────────────────────

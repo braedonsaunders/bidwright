@@ -8,9 +8,11 @@ export function createClient(config) {
   /** @template T @param {"GET" | "POST"} method @param {string} path @param {unknown} [body] @returns {Promise<T | null>} */
   async function request(method, path, body) {
     if (!path.startsWith("/") || path.startsWith("//") || path.includes("\\")) throw new Error("Expected an API path starting with /, not a URL");
-    const url = new URL(path, base);
+    const logical = new URL(path, base.origin);
+    const prefix = base.pathname.replace(/\/$/, "");
+    const url = new URL(`${prefix}${logical.pathname}${logical.search}`, base.origin);
     if (url.origin !== base.origin) throw new Error("API host mismatch");
-    const scoped = url.pathname.match(/^\/(?:api\/)?(?:projects|models|takeoff)\/([^/]+)/);
+    const scoped = logical.pathname.match(/^\/(?:api\/)?(?:projects|models|takeoff)\/([^/]+)/);
     if (scoped && decodeURIComponent(scoped[1]) !== config.projectId) throw new Error("Project path does not match BIDWRIGHT_PROJECT_ID");
     if (method === "POST" && config.readOnly) throw new Error("Writes are unavailable in Q&A/review mode");
     const response = await fetch(url, {

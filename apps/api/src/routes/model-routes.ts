@@ -239,7 +239,7 @@ export async function modelRoutes(app: FastifyInstance) {
         const scan = startProjectModelScan(projectId, { integrations: settings.integrations });
         return { assets: await listProjectModelAssets(projectId), scan };
       }
-      return { assets: await listProjectModelAssets(projectId) };
+      return { assets: await listProjectModelAssets(projectId, { discover: false }), scan: getProjectModelScanStatus(projectId) };
     } catch (error) {
       return routeError(reply, error);
     }

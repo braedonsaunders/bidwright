@@ -22,3 +22,8 @@ The client refuses absolute URLs and redirects so authentication stays on the co
 POST is an explicit write and is unavailable in Q&A/review mode. Use describeTools/invokeTool for discoverable schemas; all changes go through API services.
 Aggregate by stable IDs with explicit units. Deduplicate overlapping element groups and keep gross/net and authored/geometric bases distinct.
 This is a launch snapshot: `.bidwright/source-overview.json`. `bw overview` or getSourceOverview refreshes the live facts.
+
+`saveSourceQuantityTakeoff` records authored BOM/schedule/table quantities as visible takeoff pickups.
+Supply quantity, unit, label, documentId (`file-<nodeId>` for a FileNode) and sourceRefs (sheet/row/page/cell/text).
+An optional linkToItemId, quantityField and explicit conversion multiplier connect the pickup to a worksheet quantity.
+A returned linkError means the pickup was saved but the worksheet link failed; use its id instead of duplicating the pickup.

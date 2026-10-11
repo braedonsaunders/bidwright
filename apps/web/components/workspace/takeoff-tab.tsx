@@ -3310,7 +3310,7 @@ export function TakeoffTab({
       ? selectedDoc.bookId
       : selectedDocId;
     try {
-      const data = await listPickups(projectId, annotationDocumentId, page);
+      const data = await listPickups(projectId, annotationDocumentId, isSpreadsheetDocument ? undefined : page);
       if (Array.isArray(data)) {
         setAnnotations(
           data.map((a: Record<string, unknown>) => {
@@ -3345,7 +3345,7 @@ export function TakeoffTab({
     } catch {
       /* API may not be available yet; use local state */
     }
-  }, [projectId, selectedDoc?.bookId, selectedDoc?.source, selectedDocId, page]);
+  }, [isSpreadsheetDocument, projectId, selectedDoc?.bookId, selectedDoc?.source, selectedDocId, page]);
 
   useEffect(() => {
     loadAnnotationsRef.current = loadAnnotations;
@@ -7004,7 +7004,7 @@ export function TakeoffTab({
                 ? "spreadsheet"
                 : "pdf";
     const inspectAnnotations =
-      mode === "dwg" ? dwgAnnotationsCache : mode === "scan" ? scanAnnotationsCache : mode === "pdf" ? annotations : [];
+      mode === "dwg" ? dwgAnnotationsCache : mode === "scan" ? scanAnnotationsCache : mode === "pdf" || mode === "spreadsheet" ? annotations : [];
     const inspectSelectedPickupId =
       mode === "dwg" || mode === "scan"
         ? selection?.kind === "annotation"
