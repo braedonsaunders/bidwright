@@ -142,6 +142,7 @@ jobs:
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
+          apps/api/src/services/cli-runtime-tool-events.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
           apps/api/src/services/cli-run-selection.test.ts

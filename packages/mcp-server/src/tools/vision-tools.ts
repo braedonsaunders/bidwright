@@ -1795,12 +1795,12 @@ OUTPUT: Per-template id, symbol token (e.g. "GFI"), label ("Standard duplex rece
   // ── runProjectSymbolLibrary ─────────────────────────────────
   server.tool(
     "runProjectSymbolLibrary",
-    `Count saved project symbol templates on one page or every document page. Uses each template’s threshold and crossScale settings. Returns per-template counts and matchSetId references for saveCountAsAnnotations; concise includes up to three sample matches, detailed includes all. Match rectangles use each page’s imageWidth/imageHeight pixel frame. Counting is read-only.`,
+    `Count saved project symbol templates on one page or every document page. Uses each template’s threshold and crossScale settings. Returns per-template counts and matchSetId references for saveCountAsAnnotations; concise returns counts and references only, detailed includes all matches. Match rectangles use each template result’s imageWidth/imageHeight pixel frame. Counting is read-only.`,
     {
       documentId: z.string().describe("Document ID of the target PDF drawing"),
       pageNumber: z.coerce.number().int().min(1).optional().describe("1-based page number. Required when scope='page'."),
       scope: z.enum(["page", "document"]).default("page").describe("'page' = one page, 'document' = every page in the document"),
-      responseFormat: z.enum(["concise", "detailed"]).default("concise").describe("Concise returns counts, sample matches and a saveable matchSetId. Detailed adds all matches."),
+      responseFormat: z.enum(["concise", "detailed"]).default("concise").describe("Concise returns counts and a saveable matchSetId. Detailed adds all matches."),
       autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
       templateIds: z.array(z.string()).optional().describe("Restrict to specific saved template ids. Default: all enabled templates."),
     },
@@ -1810,8 +1810,8 @@ OUTPUT: Per-template id, symbol token (e.g. "GFI"), label ("Standard duplex rece
         const matches = (tr.matches ?? []).map((m: any) => ({ rect: { x: m.x, y: m.y, width: m.w, height: m.h }, confidence: m.confidence }));
         return {
           templateId: tr.templateId, symbol: tr.symbol, label: tr.label, totalCount: tr.totalCount,
-          matchSetId: rememberCountMatches(runId, { documentId, pageNumber: page.pageNumber, imageWidth: page.imageWidth, imageHeight: page.imageHeight, matches }),
-          ...(responseFormat === "detailed" ? { matches } : { sampleMatches: matches.slice(0, 3) }),
+          matchSetId: rememberCountMatches(runId, { documentId, pageNumber: page.pageNumber, imageWidth: tr.imageWidth, imageHeight: tr.imageHeight, matches }),
+          ...(responseFormat === "detailed" ? { matches, imageWidth: tr.imageWidth, imageHeight: tr.imageHeight, dpi: tr.dpi } : {}),
           error: tr.error,
         };
       };
