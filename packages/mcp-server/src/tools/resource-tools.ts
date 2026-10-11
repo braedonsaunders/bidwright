@@ -811,7 +811,7 @@ function annotationMatchesQuery(annotation: Record<string, unknown>, q?: string)
 async function findTakeoffHints(input: { q?: string; limit?: number; documentId?: string }) {
   const projectId = getProjectId();
   if (!projectId) return [];
-  const annotations = await apiGet(`/api/takeoff/${projectId}/annotations${queryString({ documentId: input.documentId })}`)
+  const annotations = await apiGet(`/api/takeoff/${projectId}/pickups${queryString({ documentId: input.documentId })}`)
     .then(annotationsFromPayload)
     .catch(() => []);
   return annotations
@@ -1064,7 +1064,7 @@ export function registerResourceTools(server: McpServer) {
       if (!projectId) {
         return { content: [{ type: "text" as const, text: "No active project id is available for takeoff annotations." }], isError: true };
       }
-      const data = await apiGet(`/api/takeoff/${projectId}/annotations${queryString({
+      const data = await apiGet(`/api/takeoff/${projectId}/pickups${queryString({
         documentId: input.documentId,
         page: input.page,
       })}`);
