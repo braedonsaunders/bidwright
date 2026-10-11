@@ -1,4 +1,5 @@
 #!/usr/bin/env tsx
+import { referenceEvalOutputDir } from "./eval-output.js";
 import { spawn } from "node:child_process";
 import { mkdir, writeFile, open } from "node:fs/promises";
 import { resolve, join } from "node:path";
@@ -9,7 +10,8 @@ const value = (flag: string, fallback?: string) => args.includes(flag) ? args[ar
 const sourceProject = value("--project-id");
 if (!sourceProject) throw new Error("--project-id <source project> is required");
 const api = value("--api-url", process.env.BIDWRIGHT_API_URL || "https://bidwright.rassaun.com/proxy")!;
-const output = resolve(value("--out", `.bidwright/evals/matrix-${Date.now()}`)!);
+const output = resolve(value("--out", value("--reference-file")
+  ? referenceEvalOutputDir(`matrix-${Date.now()}`) : `.bidwright/evals/matrix-${Date.now()}`)!);
 const models = (value("--models", "openrouter:moonshotai/kimi-k3,claude-code:claude-opus-5-5,codex:gpt-6.1-sol,claude-code:claude-sonnet-5-5")!).split(",").map((entry) => {
   const split = entry.indexOf(":");
   if (split < 1) throw new Error("Each model must be runtime:model-id");

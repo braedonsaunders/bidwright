@@ -23,6 +23,7 @@
  * lessons, which include the source quote itself. askUser is always disabled
  * because no in-app run exists to carry the answer.
  */
+import { blindCopiedRevision } from "./blind-copy.js";
 import { spawnSync } from "node:child_process";
 import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -120,14 +121,9 @@ async function prepare() {
   await sleep(5_000);
   await waitForIngestion(projectId);
 
-  // The copy keeps the source revision's description, notes and status,
-  // which carry the human quote's wording.
-  const copiedRevisionId = copiedWorkspace?.currentRevision?.id;
-  if (blind && copiedRevisionId) {
-    await api(`/projects/${projectId}/revisions/${copiedRevisionId}`, {
-      method: "PATCH",
-      body: { description: "", notes: "", status: "Open" },
-    });
+  if (blind) {
+    await blindCopiedRevision(source, projectId, copiedWorkspace?.currentRevision?.id,
+      (path, body) => api(path, { method: "PATCH", body }));
   }
 
   const workspace = (await api<any>(`/projects/${projectId}/workspace`))?.workspace;

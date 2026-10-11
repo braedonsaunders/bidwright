@@ -3,6 +3,7 @@
 // freeze --project-id ID --out /private/reference.json [--pickup-ids ID,ID]
 // prepare --reference-file /private/reference.json --mode independent|reuse --repeat 3 --out /private/runs.json [--execute]
 // score --reference-file /private/reference.json --runs-file /private/runs.json --out /private/score.json [--tolerance 0.05]
+import { blindCopiedRevision } from "./blind-copy.js";
 import { mkdir, readFile, realpath, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -16,7 +17,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const [command, ...args] = process.argv.slice(2);
 const option = (flag: string, fallback = "") => args.includes(flag) ? args[args.indexOf(flag) + 1] : fallback;
 if (!command || args.includes("--help") || command === "--help") {
-  console.log("takeoff-reference-cli.ts freeze|prepare|score --out <outside-repo.json>\nfreeze: --project-id ID [--pickup-ids ID,ID]\nprepare: --reference-file FILE --mode reuse|independent [--repeat N] [--execute]\nscore: --reference-file FILE --runs-file FILE [--tolerance 0.05] [--coordinate-tolerance 0.5]\nAPI: --api-url URL --token-file FILE (or BIDWRIGHT_AUTH_TOKEN). No model runs are launched.");
+  console.log("takeoff-reference-cli.ts freeze|prepare|score --out <outside-repo.json>\nfreeze: --project-id ID [--pickup-ids ID,ID]\nprepare: --reference-file FILE --mode reuse|independent [--repeat N] [--execute]\nscore: --reference-file FILE --runs-file FILE [--tolerance 0.05] [--coordinate-tolerance 0.5] [--mapping-file FILE]\nMapping JSON: {projectId: {agentPickupId: referencePickupId}}\nAPI: --api-url URL --token-file FILE (or BIDWRIGHT_AUTH_TOKEN). No model runs are launched.");
   process.exit(0);
 }
 if (!["freeze", "prepare", "score"].includes(command)) throw new Error("Expected freeze, prepare or score");
@@ -129,7 +130,7 @@ if (command === "freeze") {
     const result = await readResult(projectId);
     const ids = remapDocuments(reference!, result.documents);
     const revisionId = workspace.currentRevision?.id ?? workspace.revision?.id;
-    if (revisionId) await api(`/projects/${projectId}/revisions/${revisionId}`, { description: "", notes: "", status: "Open" }, "PATCH");
+    await blindCopiedRevision(reference!.projectId, projectId, revisionId, (path, body) => api(path, body, "PATCH"));
     for (const pickup of result.pickups) await api(`/api/takeoff/${projectId}/pickups/${pickup.id}`, undefined, "DELETE");
     const calibrations = Object.fromEntries([...ids].filter(([oldId]) => reference!.calibrations[oldId] !== undefined)
       .map(([oldId, newId]) => [newId, reference!.calibrations[oldId]]));
@@ -148,12 +149,14 @@ if (command === "freeze") {
 } else {
   const manifest = JSON.parse(await readFile(option("--runs-file"), "utf8"));
   const scores = [];
+  // JSON shape: { "result-project-id": { "agent-pickup-id": "reference-pickup-id" } }.
+  const mappings = option("--mapping-file") ? JSON.parse(await readFile(option("--mapping-file"), "utf8")) : {};
   for (const run of manifest.runs as PreparedRun[]) {
     if (!run.prepared) throw new Error(`Run ${run.projectId} preparation is incomplete`);
     if (run.sourceProjectId !== reference!.projectId || run.projectId === reference!.projectId) throw new Error("Run manifest does not describe an isolated reference copy");
     const result = await readResult(run.projectId);
     scores.push(scoreTakeoff(reference!, result, { mode: run.mode, baseline: run.baseline,
-      tolerance: Number(option("--tolerance", "0.05")), coordinateTolerance: Number(option("--coordinate-tolerance", "0.5")) }));
+      pickupMapping: mappings[run.projectId], tolerance: Number(option("--tolerance", "0.05")), coordinateTolerance: Number(option("--coordinate-tolerance", "0.5")) }));
   }
   await save({ scores, summary: summarizeScores(scores) });
   console.log(JSON.stringify({ output: destination, summary: summarizeScores(scores) }, null, 2));

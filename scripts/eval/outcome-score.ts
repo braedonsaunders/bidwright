@@ -1,5 +1,5 @@
 export function scoreSavedOutcome(input: {
-  runCompleted: boolean; sourceReady: boolean; failedTools: number; maxToolFailures: number;
+  runCompleted: boolean; sourceReady: boolean; extractedSources: number; failedTools: number; maxToolFailures: number;
   estimating: boolean; items: number; minItems: number; pricedItems: number; total: number | null;
   referenceAccuracy?: number; defects: number; findings: number;
 }) {
@@ -17,7 +17,7 @@ export function scoreSavedOutcome(input: {
     ...(reference === undefined ? {} : { referenceAccuracy: Math.max(0, Math.min(1, reference)) * 20 }),
   };
   const score = Math.round(Object.values(bands).reduce((sum, value) => sum + value, 0) * 10) / 10;
-  const grade = !input.runCompleted || score < 60 ? "fail"
+  const grade = !input.runCompleted || (input.estimating && input.items === 0) || input.extractedSources === 0 || score < 60 ? "fail"
     : score < 85 || input.findings > 0 || input.defects > 0 ? "needs_review" : "pass";
   return { score, grade, bands } as { score: number; grade: "fail" | "needs_review" | "pass"; bands: Record<string, number> };
 }

@@ -67,11 +67,25 @@ export function pickupQuantity(pickup: RecordLike): number {
 const normalized = (value: unknown) => String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
 export function normalizedUnit(value: unknown) {
   const unit = normalized(value);
-  return ({ each: "ea", count: "ea", pcs: "ea", "m²": "m2", "m³": "m3", "ft²": "ft2", "ft³": "ft3" } as Record<string, string>)[unit] ?? unit;
+  return ({
+    ea: "count", each: "count", pcs: "count", pc: "count", piece: "count", pieces: "count",
+    lf: "ft", foot: "ft", feet: "ft", "linear feet": "ft", "linear foot": "ft",
+    sf: "ft2", "sq ft": "ft2", "square feet": "ft2", "ft²": "ft2",
+    sy: "yd2", "sq yd": "yd2", "square yards": "yd2", "yd²": "yd2",
+    cy: "yd3", "cu yd": "yd3", "cubic yards": "yd3", "yd³": "yd3",
+    cf: "ft3", "cu ft": "ft3", "cubic feet": "ft3", "ft³": "ft3",
+    lm: "m", meter: "m", meters: "m", metre: "m", metres: "m",
+    sm: "m2", sqm: "m2", "sq m": "m2", "m²": "m2",
+    cum: "m3", "cu m": "m3", "m³": "m3",
+  } as Record<string, string>)[unit] ?? unit;
 }
 const scopeOf = (pickup: RecordLike) => normalized(pickup.groupName || pickup.label);
 const sourceKey = (source: { fileName: string; checksum: string }) => JSON.stringify([source.fileName, source.checksum]);
-const entryKey = (entry: ReferenceEntry) => JSON.stringify([sourceKey(entry.source), entry.page, normalized(entry.scope), entry.kind]);
+const entryKey = (entry: ReferenceEntry, mode: EvalMode) => JSON.stringify([
+  sourceKey(entry.source), entry.page, entry.kind,
+  mode === "independent" ? normalizedUnit(entry.unit) : normalized(entry.scope),
+]);
+const hasGeometry = (pickup: RecordLike) => Boolean(pickup.cadEntityId || pickup.modelElementId || (Array.isArray(pickup.points) && pickup.points.length));
 
 export function validateReference(reference: TakeoffReference, reviewed = true) {
   if (reference.version !== 1 || !Array.isArray(reference.entries) || !reference.entries.length) throw new Error("Reference v1 needs at least one pickup");
@@ -102,19 +116,26 @@ function overlap(left: RecordLike, right: RecordLike, epsilon: number): boolean 
     const height = Math.min(Math.max(a[0].y, a[1].y), Math.max(b[0].y, b[1].y)) - Math.max(Math.min(a[0].y, a[1].y), Math.min(b[0].y, b[1].y));
     return width > epsilon && height > epsilon;
   }
-  if (left.annotationType === "linear" && right.annotationType === "linear" && a.length === 2 && b.length === 2) {
-    const dx = a[1].x - a[0].x, dy = a[1].y - a[0].y, length = Math.hypot(dx, dy);
-    if (length <= epsilon) return false;
-    const cross = (p: RecordLike) => Math.abs((p.x - a[0].x) * dy - (p.y - a[0].y) * dx) / length;
-    if (b.some((p) => cross(p) > epsilon)) return false;
-    const projected = b.map((p) => ((p.x - a[0].x) * dx + (p.y - a[0].y) * dy) / length);
-    return Math.min(length, Math.max(...projected)) - Math.max(0, Math.min(...projected)) > epsilon;
+  if (pickupKind(left) === "length" && pickupKind(right) === "length") {
+    // A run can be saved as one line or a polyline with intermediate vertices.
+    for (let i = 1; i < a.length; i++) for (let j = 1; j < b.length; j++) {
+      const dx = a[i].x - a[i - 1].x, dy = a[i].y - a[i - 1].y, length = Math.hypot(dx, dy);
+      if (length <= epsilon) continue;
+      const segment = [b[j - 1], b[j]];
+      const cross = (p: RecordLike) => Math.abs((p.x - a[i - 1].x) * dy - (p.y - a[i - 1].y) * dx) / length;
+      if (segment.some((p) => cross(p) > epsilon)) continue;
+      const projected = segment.map((p) => ((p.x - a[i - 1].x) * dx + (p.y - a[i - 1].y) * dy) / length);
+      if (Math.min(length, Math.max(...projected)) - Math.max(0, Math.min(...projected)) > epsilon) return true;
+    }
   }
   return false;
 }
 
 export function scoreTakeoff(reference: TakeoffReference, result: TakeoffResult, options: {
   mode: EvalMode; tolerance?: number; baseline?: RecordLike[]; coordinateTolerance?: number;
+  // Reviewer mapping: result pickup id -> frozen reference pickup id. It can
+  // resolve unmatched geometry, but cannot override source/page/kind/unit.
+  pickupMapping?: Record<string, string>;
 }) {
   validateReference(reference);
   const tolerance = options.tolerance ?? 0.05;
@@ -124,7 +145,12 @@ export function scoreTakeoff(reference: TakeoffReference, result: TakeoffResult,
   if (options.mode === "reuse" && !options.baseline?.length) throw new Error("Reuse scoring needs the prepared run baseline");
   const documents = new Map(result.documents.map((doc) => [doc.id, doc]));
   const groups = new Map<string, ReferenceEntry[]>();
-  for (const entry of reference.entries) groups.set(entryKey(entry), [...(groups.get(entryKey(entry)) ?? []), entry]);
+  for (const entry of reference.entries) groups.set(entryKey(entry, options.mode), [...(groups.get(entryKey(entry, options.mode)) ?? []), entry]);
+  for (const [pickupId, referenceId] of Object.entries(options.pickupMapping ?? {})) {
+    if (!result.pickups.some((pickup) => pickup.id === pickupId) || !reference.entries.some((entry) => entry.pickupId === referenceId)) {
+      throw new Error(`Reviewer mapping refers to an unknown pickup: ${pickupId} -> ${referenceId}`);
+    }
+  }
   const matchedIds = new Set<string>();
   const duplicates: Array<{ pickupIds: string[] }> = [];
   const rows = new Map(result.rows.map((row) => [row.id, row]));
@@ -148,8 +174,15 @@ export function scoreTakeoff(reference: TakeoffReference, result: TakeoffResult,
     const first = entries[0];
     const candidates = result.pickups.filter((pickup) => {
       const doc = documents.get(pickup.documentId);
-      return doc && sourceKey({ fileName: doc.fileName, checksum: doc.checksum }) === sourceKey(first.source) &&
-        pickup.pageNumber === first.page && scopeOf(pickup) === normalized(first.scope) && pickupKind(pickup) === first.kind;
+      const sameSource = doc && sourceKey({ fileName: doc.fileName, checksum: doc.checksum }) === sourceKey(first.source) &&
+        pickup.pageNumber === first.page && pickupKind(pickup) === first.kind;
+      if (!sameSource) return false;
+      if (options.mode === "reuse") return scopeOf(pickup) === normalized(first.scope);
+      if (normalizedUnit(pickup.measurement?.unit) !== normalizedUnit(first.unit)) return false;
+      const mappedId = options.pickupMapping?.[pickup.id];
+      if (mappedId !== undefined) return entries.some((entry) => entry.pickupId === mappedId);
+      const located = entries.filter((entry) => hasGeometry(entry.snapshot));
+      return !hasGeometry(pickup) || !located.length || located.some((entry) => overlap(pickup, entry.snapshot, epsilon));
     });
     for (const pickup of candidates) matchedIds.add(pickup.id);
     for (let i = 0; i < candidates.length; i++) {
@@ -165,8 +198,14 @@ export function scoreTakeoff(reference: TakeoffReference, result: TakeoffResult,
     const unitCorrect = candidates.length > 0 && candidates.every((pickup) => normalizedUnit(pickup.measurement?.unit) === normalizedUnit(first.unit));
     const quantityCorrect = candidates.length > 0 && Number.isFinite(observed) &&
       Math.abs(observed - expected) <= (first.kind === "count" ? 0 : Math.abs(expected) * tolerance);
-    return { scope: first.scope, source: first.source, page: first.page, kind: first.kind, expected, observed: Number.isFinite(observed) ? observed : null,
-      unit: first.unit, unitCorrect, quantityCorrect, pickupIds: candidates.map((pickup) => pickup.id),
+    const referenceScopes = [...new Set(entries.map((entry) => entry.scope))];
+    const observedScopes = [...new Set(candidates.map((pickup) => pickup.groupName || pickup.label || ""))];
+    return { scope: referenceScopes.join(", "), referenceScopes, source: first.source, page: first.page, kind: first.kind, expected, observed: Number.isFinite(observed) ? observed : null,
+      unit: first.unit, unitCorrect, quantityCorrect,
+      labelAgreement: { reference: referenceScopes, observed: observedScopes,
+        agrees: candidates.length > 0 && candidates.every((pickup) => referenceScopes.some((scope) => normalized(scope) === scopeOf(pickup))),
+        scored: false },
+      pickupIds: candidates.map((pickup) => pickup.id),
       usableLinks: candidates.length > 0 && candidates.every(usableLink) };
   });
   const changedHumanPickups = (options.baseline ?? []).filter((baseline) => {
@@ -186,7 +225,7 @@ export function scoreTakeoff(reference: TakeoffReference, result: TakeoffResult,
   return { mode: options.mode, projectId: result.projectId, comparisons, duplicates, changedHumanPickups,
     unmatchedPickupIds: result.pickups.filter((pickup) => !matchedIds.has(pickup.id)).map((pickup) => pickup.id),
     metrics, accuracy: values.reduce((a, b) => a + b, 0) / values.length,
-    note: "Scope matching uses source checksum/name, page, scope label and measurement kind. Unmatched pickups need review; exclusions remain reviewer context. Geometry comparisons use stored coordinates, default 0.5 source pixels; native ids are exact." };
+    note: "Independent matching aggregates by source checksum/name, page, kind and unit, using stored geometry where available; reviewer mappings can resolve geometry differences. Reuse matching retains scope labels. Label agreement is informational. Unmatched pickups need review; exclusions remain reviewer context. Geometry comparisons use stored coordinates, default 0.5 source pixels; native ids are exact." };
 }
 
 export function summarizeScores(scores: ReturnType<typeof scoreTakeoff>[]) {

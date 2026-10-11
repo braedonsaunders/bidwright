@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { imageProbePattern } from "./image-probe-pattern.js";
 import { scoreSavedOutcome } from "./outcome-score.js";
-import { pickupSnapshot, scoreTakeoff, summarizeScores, type TakeoffReference, type TakeoffResult } from "./takeoff-reference.js";
+import { blindCopiedRevision, BLIND_REVISION_PATCH } from "./blind-copy.js";
+import { referenceEvalOutputDir } from "./eval-output.js";
+import { normalizedUnit, pickupSnapshot, scoreTakeoff, summarizeScores, type TakeoffReference, type TakeoffResult } from "./takeoff-reference.js";
 
 function fixture() {
   const document = { id: "doc-copy", fileName: "synthetic.pdf", checksum: "synthetic-v1" };
@@ -67,13 +69,18 @@ test("overlapping linear runs and fractional counts are defects; invalid/unrevie
 });
 
 test("outcome scoring needs no tools, thoughts, strategy saves or visual artifacts", () => {
-  const good = { runCompleted: true, sourceReady: true, failedTools: 0, maxToolFailures: 0,
+  const good = { runCompleted: true, sourceReady: true, extractedSources: 1, failedTools: 0, maxToolFailures: 0,
     estimating: true, items: 1, minItems: 1, pricedItems: 1, total: 10, defects: 0, findings: 0 };
   assert.equal(scoreSavedOutcome(good).score, 100);
   assert.equal(scoreSavedOutcome({ ...good, referenceAccuracy: 0 }).score, 80);
   assert.equal(scoreSavedOutcome({ ...good, defects: 1 }).grade, "needs_review");
   assert.equal(scoreSavedOutcome({ ...good, runCompleted: false }).grade, "fail");
   assert.ok(scoreSavedOutcome({ ...good, failedTools: 1 }).score < 100);
+  const empty = scoreSavedOutcome({ ...good, items: 0, pricedItems: 0, total: 0 });
+  assert.equal(empty.score, 60);
+  assert.equal(empty.grade, "fail");
+  assert.equal(scoreSavedOutcome({ ...good, extractedSources: 0 }).grade, "fail");
+  assert.equal(scoreSavedOutcome({ ...good, estimating: false, items: 0, pricedItems: 0, total: 0 }).grade, "pass");
 });
 
 test("resolution fixtures have native dimensions and no answer metadata", () => {
@@ -99,6 +106,7 @@ test("CLI freezes unreviewed data and prepares isolated repeat copies through AP
   const { result } = fixture();
   const projects = new Map<string, TakeoffResult>([["source", { ...structuredClone(result), projectId: "source" }]]);
   const paths: string[] = [];
+  const revisionPatches: unknown[] = [];
   const server = createServer(async (request, response) => {
     try {
       const path = request.url!;
@@ -120,7 +128,7 @@ test("CLI freezes unreviewed data and prepares isolated repeat copies through AP
       else if (path.endsWith("/pickups") && request.method === "POST") {
         value = { ...body, id: `${projectId}-pickup-${project.pickups.length}` };
         project.pickups.push(value);
-      } else if (path.includes("/revisions/") && request.method === "PATCH") value = {};
+      } else if (path.includes("/revisions/") && request.method === "PATCH") { revisionPatches.push(body); value = {}; }
       else throw new Error(`Unexpected API call: ${request.method} ${path}`);
       response.setHeader("Content-Type", "application/json");
       response.end(JSON.stringify(value));
@@ -151,6 +159,8 @@ test("CLI freezes unreviewed data and prepares isolated repeat copies through AP
       }
       await cli("score", "--reference-file", referencePath, "--runs-file", runsPath, "--out", join(dir, `${mode}-score.json`));
     }
+    assert.equal(revisionPatches.length, 4);
+    assert.ok(revisionPatches.every((patch) => JSON.stringify(patch) === JSON.stringify(BLIND_REVISION_PATCH)));
     assert.equal(projects.get("source")!.pickups.length, 3);
     assert.ok(!paths.some((path) => /\/api\/cli\//.test(path)));
     assert.ok(!paths.some((path) => /^(POST|PATCH|DELETE).*\/source\//.test(path) && !path.endsWith("/copy")));
@@ -158,4 +168,80 @@ test("CLI freezes unreviewed data and prepares isolated repeat copies through AP
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+
+test("independent takeoffs match geometry and UOM even with unrelated or empty labels", () => {
+  const { reference, result } = fixture();
+  result.pickups.forEach((pickup, index) => { pickup.label = index ? "agent choice" : ""; pickup.groupName = ""; });
+  result.pickups[1].annotationType = "linear-polyline";
+  result.pickups[1].points = [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 100, y: 0 }];
+  result.rows[0].unit = "EA";
+  result.rows[1].unit = "M";
+  result.rows[2].unit = "SM";
+  const score = scoreTakeoff(reference, result, { mode: "independent" });
+  assert.equal(score.accuracy, 1);
+  assert.ok(score.comparisons.every((comparison) => !comparison.labelAgreement.agrees && !comparison.labelAgreement.scored));
+
+  // A blinded agent can combine count groups whose human-only labels differ.
+  const extra = structuredClone(reference.entries[0]);
+  extra.pickupId = "human-extra";
+  extra.scope = "Private grouping";
+  extra.quantity = 1;
+  extra.snapshot.points = [{ x: 400, y: 100 }];
+  reference.entries.push(extra);
+  result.pickups[0].points.push({ x: 400, y: 100 });
+  result.pickups[0].measurement.value = result.rows[0].quantity = result.links[0].derivedQuantity = 4;
+  assert.equal(scoreTakeoff(reference, result, { mode: "independent" }).accuracy, 1);
+
+  result.pickups[1].points = [{ x: 0, y: 500 }, { x: 100, y: 500 }];
+  const misplaced = scoreTakeoff(reference, result, { mode: "independent" });
+  assert.equal(misplaced.comparisons[1].quantityCorrect, false);
+  assert.ok(misplaced.unmatchedPickupIds.includes("length-copy"));
+  assert.equal(scoreTakeoff(reference, result, { mode: "independent", pickupMapping: { "length-copy": "human-1" } }).accuracy, 1);
+  result.pickups[1].measurement.unit = "ft";
+  assert.equal(scoreTakeoff(reference, result, { mode: "independent", pickupMapping: { "length-copy": "human-1" } }).comparisons[1].unitCorrect, false);
+  assert.throws(() => scoreTakeoff(reference, result, { mode: "independent", pickupMapping: { "missing": "human-1" } }), /unknown pickup/);
+});
+
+test("worksheet UOM aliases normalize without converting different units", () => {
+  for (const [unit, expected] of Object.entries({ EA: "count", each: "count", LF: "ft", SF: "ft2", SY: "yd2", CY: "yd3", CF: "ft3", M: "m", SM: "m2", "m²": "m2", "m³": "m3" })) {
+    assert.equal(normalizedUnit(unit), expected);
+  }
+  assert.notEqual(normalizedUnit("LF"), normalizedUnit("M"));
+  const { reference, result } = fixture();
+  reference.entries[1].unit = "ft";
+  reference.entries[2].unit = "ft2";
+  result.pickups[1].measurement.unit = "ft";
+  result.pickups[2].measurement.unit = "ft2";
+  result.rows[1].unit = "LF";
+  result.rows[2].unit = "SF";
+  assert.equal(scoreTakeoff(reference, result, { mode: "independent" }).accuracy, 1);
+});
+
+test("shared blinding clears copied revision narrative and refuses the source project", async () => {
+  const revision = { title: "Private title", description: "Private scope", notes: "Private count",
+    scratchpad: "Private calculation", leadLetter: "Private allowance", followUpNote: "Private quantity",
+    shippingMethod: "Private method", shippingTerms: "Private terms", freightOnBoard: "Private freight", status: "Awarded" };
+  await blindCopiedRevision("source", "copy", "rev", async (path, body) => {
+    assert.equal(path, "/projects/copy/revisions/rev");
+    Object.assign(revision, body);
+  });
+  assert.equal(revision.title, "Evaluation");
+  assert.equal(revision.status, "Open");
+  for (const key of ["description", "notes", "scratchpad", "leadLetter", "followUpNote", "shippingMethod", "shippingTerms", "freightOnBoard"] as const) assert.equal(revision[key], "");
+  await assert.rejects(blindCopiedRevision("source", "source", "rev", async () => assert.fail("Source mutation")), /isolated/);
+});
+
+test("reference output defaults outside the checkout, including matrix child destinations", async () => {
+  const { relative, isAbsolute, resolve } = await import("node:path");
+  const { execFile } = await import("node:child_process");
+  const { promisify } = await import("node:util");
+  const output = referenceEvalOutputDir("synthetic-run");
+  const rel = relative(process.cwd(), output);
+  assert.ok(rel.startsWith("..") || isAbsolute(rel));
+  const { stdout } = await promisify(execFile)(process.execPath, ["--import", "tsx", resolve("scripts/eval/run-model-matrix.ts"),
+    "--project-id", "synthetic", "--reference-file", "/tmp/synthetic-reference.json"]);
+  const matrix = JSON.parse(stdout);
+  assert.ok(matrix.output.startsWith(referenceEvalOutputDir("matrix-")));
 });

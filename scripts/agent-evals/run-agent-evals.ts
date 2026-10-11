@@ -4,6 +4,8 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { blindCopiedRevision } from "../eval/blind-copy.js";
+import { referenceEvalOutputDir } from "../eval/eval-output.js";
 import { scoreTakeoff, validateReference, type TakeoffReference } from "../eval/takeoff-reference.js";
 import { scoreSavedOutcome } from "../eval/outcome-score.js";
 import { evidenceMetrics } from "../eval/evidence-metrics.js";
@@ -515,7 +517,7 @@ Options:
   --token-file <path>              Read a bearer token from a mode-0600 file
   --project-id <id>                Reuse an already-ingested project instead of uploading zips
   --cases <dir>                    Directory of .zip cases
-  --out <dir>                      Output directory. Default: ./.bidwright/evals/<timestamp>
+  --out <dir>                      Default: ./.bidwright/evals/<timestamp>; with --reference-file: ~/.bidwright/evals/<timestamp>
   --runtime <runtime>              claude-code | codex | gemini | opencode | openrouter. Default: claude-code
   --model <model>                  Runtime model override
   --reasoning-effort <effort>      Isolated run override: auto|low|medium|high|extra_high|max
@@ -738,7 +740,9 @@ function parseArgs(argv: string[]): Args {
   }
 
   if (!args.outDir) {
-    args.outDir = path.resolve(".bidwright", "evals", timestampSlug(new Date()));
+    args.outDir = args.referenceFile
+      ? referenceEvalOutputDir(timestampSlug(new Date()))
+      : path.resolve(".bidwright", "evals", timestampSlug(new Date()));
   } else {
     args.outDir = path.resolve(args.outDir);
   }
@@ -1095,6 +1099,8 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
       if (!projectId || projectId === args.projectId) throw new Error("Project copy did not return an isolated project; refusing to run.");
       if (process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER) await appendFile(process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER,
         `${projectId} C matrix-${String(args.model || args.runtime).replace(/[^a-z0-9._-]/gi, "_")} ${new Date().toISOString()}\n`);
+      await blindCopiedRevision(args.projectId, projectId, getString(revision.id),
+        (path, body) => client.requestJson(path, { method: "PATCH", body }));
       if (args.reingestArchives) {
         const documents = Array.isArray(copiedWorkspace.sourceDocuments) ? copiedWorkspace.sourceDocuments as Json[] : [];
         for (const document of documents) {
@@ -2911,7 +2917,8 @@ function scoreCase(input: {
     runCompleted: input.runs.length > 0 && input.runs.every((run) => run.status === "completed"),
     failedTools: input.runs.reduce((sum, run) => sum + run.toolMetrics.failedResults, 0),
     maxToolFailures: input.thresholds?.maxToolFailures ?? 0,
-    sourceReady: input.documentMetrics.pending === 0 && input.documentMetrics.failed === 0,
+    sourceReady: input.documentMetrics.pending === 0 && input.documentMetrics.failed === 0 && input.documentMetrics.extracted > 0,
+    extractedSources: input.documentMetrics.extracted,
     estimating: input.runs.some((run) => run.kind === "intake"),
     items: input.estimateMetrics.items,
     minItems: input.thresholds?.minWorksheetItems ?? 1,
