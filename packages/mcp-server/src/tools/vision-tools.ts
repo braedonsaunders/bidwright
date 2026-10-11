@@ -246,7 +246,7 @@ function isPdfSourceDocument(doc: any) {
   return !isIgnoredSourceDocument(fileName) && (fileType === "application/pdf" || fileType === "pdf" || fileName.endsWith(".pdf"));
 }
 
-/** Helper: save an array of matches as Pickup records via the API */
+/** Count matches use the unrotated 150-DPI detector image, not a zoomed view. */
 async function saveMatchesAsAnnotations(opts: {
   documentId: string;
   pageNumber: number;
@@ -254,36 +254,44 @@ async function saveMatchesAsAnnotations(opts: {
   label: string;
   color: string;
   templateImage?: string;
-}): Promise<{ savedCount: number; errors: string[] }> {
+  imageWidth?: number;
+  imageHeight?: number;
+  pdfPageWidth?: number;
+  pdfPageHeight?: number;
+}) {
   const projectId = getProjectId();
-  const errors: string[] = [];
-  let savedCount = 0;
-
-  for (const match of opts.matches) {
-    try {
-      await apiPost(`/api/takeoff/${projectId}/annotations`, {
-        documentId: opts.documentId,
-        pageNumber: opts.pageNumber,
-        annotationType: "count",
-        label: opts.label,
-        color: opts.color,
-        points: [{ x: match.rect.x, y: match.rect.y }],
-        measurement: { value: opts.matches.length, unit: "count" },
-        metadata: {
-          createdBy: "agent",
-          detection_method: match.method ?? "template_matching",
-          confidence: match.confidence,
-          matchText: match.text || undefined,
-          templateImage: opts.templateImage || undefined,
-        },
-      });
-      savedCount++;
-    } catch (err) {
-      errors.push(`Failed to save match at (${match.rect.x}, ${match.rect.y}): ${err instanceof Error ? err.message : String(err)}`);
-    }
+  // Older callers did not supply dimensions. Resolve the detector's native frame.
+  const page = opts.imageWidth && opts.imageHeight && opts.pdfPageWidth && opts.pdfPageHeight
+    ? null
+    : await apiPost("/api/vision/render-page", {
+      projectId, documentId: opts.documentId, pageNumber: opts.pageNumber, dpi: 150,
+    });
+  const canvasWidth = opts.imageWidth ?? page?.imageWidth;
+  const canvasHeight = opts.imageHeight ?? page?.imageHeight;
+  const pdfPageWidth = opts.pdfPageWidth ?? page?.pageWidth;
+  const pdfPageHeight = opts.pdfPageHeight ?? page?.pageHeight;
+  if (![canvasWidth, canvasHeight, pdfPageWidth, pdfPageHeight].every((n) => Number.isFinite(n) && n > 0)) {
+    throw new Error("Could not resolve the count image and PDF page dimensions.");
   }
-
-  return { savedCount, errors };
+  const pickup = await apiPost(`/api/takeoff/${projectId}/pickups`, {
+    documentId: opts.documentId,
+    pageNumber: opts.pageNumber,
+    annotationType: "count",
+    label: opts.label,
+    color: opts.color,
+    points: opts.matches.map(({ rect }) => ({ x: rect.x + (rect.width ?? 0) / 2, y: rect.y + (rect.height ?? 0) / 2 })),
+    measurement: { value: opts.matches.length, unit: "count" },
+    metadata: {
+      createdBy: "agent",
+      source: "auto-count",
+      coordinateSpace: "pdf-render-pixels",
+      canvasWidth, canvasHeight, pdfPageWidth, pdfPageHeight,
+      matches: opts.matches,
+      templateImage: opts.templateImage || undefined,
+    },
+    createdBy: "agent",
+  });
+  return { savedCount: 1, pickupIds: [pickup.id], errors: [] as string[] };
 }
 
 export function registerVisionTools(server: McpServer) {
@@ -629,7 +637,7 @@ INPUTS:
 - pageNumber: Page to search (1-based)
 - boundingBox: Tight bounding box around ONE example of the symbol — coordinates in renderDrawingPage's image coordinate space
 - threshold: Match confidence (0.3-0.95). Default 0.65 works well. Lower = more matches but more false positives. Higher = fewer but more confident matches
-- autoSave: If true, automatically saves all matches as Pickup records in the project takeoff. Default false — set to true when you want to persist count results for the user
+- autoSave: Deprecated; counting is read-only. Use saveCountAsAnnotations to save results.
 - crossScale: If true, matches at multiple scales (0.75x-1.25x) to find the same symbol even when rendered at different sizes. ESSENTIAL for cross-document searches where different CAD sources produce different-sized symbols. ~6x slower but finds symbols that single-scale misses. Default false for same-page, set to true for cross-document.
 
 OUTPUT: totalCount (number of matches), matches array with rect/confidence/text/method for each match, duration_ms, and any errors.
@@ -639,7 +647,7 @@ WORKFLOW:
 2. If the symbol is small, call zoomDrawingRegion to inspect it closely
 3. Identify ONE clean, unobstructed example of the symbol
 4. Call countSymbols with a tight bounding box around that example
-5. If autoSave=true, matches are automatically saved as takeoff annotations
+5. Call saveCountAsAnnotations to save the returned matches.
 6. To count across ALL pages of a document, use countSymbolsAllPages instead
 7. To count across ALL documents in the project, call countSymbolsAllPages for each document with crossScale=true
 
@@ -662,7 +670,7 @@ COMMON PITFALLS:
       boundingBox: z.object(boundingBoxSchema).describe("Bounding box around ONE example of the symbol to find — in renderDrawingPage coordinate space"),
       threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match confidence threshold. 0.75 is optimal (proven across 5 packages). Lower = more matches, higher = stricter"),
       crossScale: z.boolean().default(false).describe("Enable cross-scale matching (0.75x-1.25x). ESSENTIAL for cross-document searches. ~6x slower but catches different-sized renderings of the same symbol"),
-      autoSave: z.boolean().default(false).describe("If true, automatically persist all matches as Pickup records"),
+      autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
     },
     async ({ documentId, pageNumber, boundingBox, threshold, crossScale, autoSave }) => {
       const result = await apiPost("/api/vision/count-symbols", {
@@ -686,19 +694,6 @@ COMMON PITFALLS:
         method: m.detection_method,
       }));
 
-      // Auto-save as annotations if requested
-      let saveResult: { savedCount: number; errors: string[] } | undefined;
-      if (autoSave && matches.length > 0) {
-        const totalCount = result.totalCount ?? matches.length;
-        saveResult = await saveMatchesAsAnnotations({
-          documentId,
-          pageNumber,
-          matches,
-          label: `Auto Count: ${totalCount} symbols`,
-          color: "#22c55e",
-        });
-      }
-
       return {
         content: [{
           type: "text" as const,
@@ -710,11 +705,11 @@ COMMON PITFALLS:
             duration_ms: result.duration_ms,
             matches,
             errors: result.errors?.length ? result.errors : undefined,
-            ...(saveResult ? {
-              autoSaved: true,
-              savedCount: saveResult.savedCount,
-              saveErrors: saveResult.errors.length ? saveResult.errors : undefined,
-            } : {}),
+            imageWidth: result.imageWidth,
+            imageHeight: result.imageHeight,
+            coordinateSpace: "pdf-render-pixels",
+            autoSaved: false,
+            ...(autoSave ? { note: "Counting is read-only. Call saveCountAsAnnotations with these matches to save them." } : {}),
           }, null, 2),
         }],
       };
@@ -734,7 +729,7 @@ WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use
       label: z.string().default("Counted symbol").describe("Label to use for returned/saved detections"),
       threshold: z.coerce.number().min(0.3).max(0.95).default(0.75).describe("Match threshold"),
       crossScale: z.boolean().default(false).describe("Enable multi-scale matching"),
-      autoSave: z.boolean().default(false).describe("Persist detections immediately as takeoff marks after counting"),
+      autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
     },
     async ({ documentId, pageNumber, boundingBox, label, threshold, crossScale, autoSave }) => {
       const result = await apiPost("/api/vision/count-symbols", {
@@ -772,20 +767,6 @@ WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use
         };
       });
 
-      let saveResult: any = null;
-      if (autoSave && detections.length > 0) {
-        saveResult = await apiPost("/api/vision/save-detections-as-annotations", {
-          projectId: getProjectId(),
-          documentId,
-          pageNumber,
-          imageWidth: boundingBox.imageWidth,
-          imageHeight: boundingBox.imageHeight,
-          groupName: label,
-          color: "#22c55e",
-          detections,
-        });
-      }
-
       return {
         content: [{
           type: "text" as const,
@@ -796,8 +777,9 @@ WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use
             totalCount: result.totalCount ?? detections.length,
             threshold,
             crossScale,
-            imageWidth: boundingBox.imageWidth,
-            imageHeight: boundingBox.imageHeight,
+            imageWidth: result.imageWidth,
+            imageHeight: result.imageHeight,
+            coordinateSpace: "pdf-render-pixels",
             detections,
             rawMatches: matches.map((match) => ({
               rect: match.rect,
@@ -805,10 +787,8 @@ WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use
               method: match.detection_method ?? match.method,
               text: match.text || undefined,
             })),
-            autoSaved: autoSave ? {
-              savedCount: saveResult?.savedCount ?? 0,
-              errors: saveResult?.errors?.length ? saveResult.errors : undefined,
-            } : undefined,
+            autoSaved: false,
+            ...(autoSave ? { note: "Counting is read-only. Call saveDetectionsAsTakeoffMarks with these detections to save them." } : {}),
           }, null, 2),
         }],
       };
@@ -818,24 +798,7 @@ WHEN TO USE: This is the agent-facing version of the UI Auto Count workflow. Use
   // ── saveCountAsAnnotations ─────────────────────────────────
   server.tool(
     "saveCountAsAnnotations",
-    `Save symbol count results as takeoff annotations in the project. Creates a Pickup record for each match location, preserving the detection metadata.
-
-WHEN TO USE: After running countSymbols (with autoSave=false), call this to persist the results if the user confirms they look correct. This is the manual alternative to countSymbols' autoSave parameter — useful when you want to review results before saving.
-
-INPUTS:
-- documentId: The document the matches were found in
-- pageNumber: The page number the matches were found on
-- matches: Array of match objects (copy from countSymbols output) — each needs at least rect.x, rect.y, and confidence
-- label: Human-readable label for the annotations (e.g. "Fire Sprinkler Heads", "46 valve tags")
-- color: Hex color for the annotation markers (default green #22c55e). Use colors that contrast with the drawing
-
-OUTPUT: Number of successfully saved annotations and any errors.
-
-COMMON PITFALLS:
-- Make sure to pass the matches array from a countSymbols result — don't fabricate match data
-- Each match becomes a separate annotation point on the takeoff
-- The label should be descriptive — it shows up in the takeoff annotation list for the user
-- Annotations are marked with metadata.createdBy = "agent" so users can distinguish them from manual annotations`,
+    `Save count results as one grouped Pickup with N points and quantity N. Matches are in the unrotated detector image's pixel frame (imageWidth/imageHeight from countSymbols). Per-point detection metadata is preserved. Returns the saved pickup id for linking.`,
     {
       documentId: z.string().describe("Document ID where matches were found"),
       pageNumber: z.coerce.number().min(1).describe("Page number where matches were found"),
@@ -853,8 +816,12 @@ COMMON PITFALLS:
       label: z.string().describe("Human-readable label for the annotations (e.g. 'Fire Sprinkler Heads')"),
       color: z.string().default("#22c55e").describe("Hex color for annotation markers (default green)"),
       templateImage: z.string().optional().describe("Optional base64 template image used for matching"),
+      imageWidth: z.number().positive().optional().describe("Detector image width in pixels"),
+      imageHeight: z.number().positive().optional().describe("Detector image height in pixels"),
+      pdfPageWidth: z.number().positive().optional().describe("PDF page width in points"),
+      pdfPageHeight: z.number().positive().optional().describe("PDF page height in points"),
     },
-    async ({ documentId, pageNumber, matches, label, color, templateImage }) => {
+    async ({ documentId, pageNumber, matches, label, color, templateImage, ...dimensions }) => {
       if (matches.length === 0) {
         return {
           content: [{ type: "text" as const, text: JSON.stringify({ savedCount: 0, message: "No matches to save" }, null, 2) }],
@@ -868,6 +835,7 @@ COMMON PITFALLS:
         label,
         color,
         templateImage,
+        ...dimensions,
       });
 
       return {
@@ -875,6 +843,7 @@ COMMON PITFALLS:
           type: "text" as const,
           text: JSON.stringify({
             savedCount: result.savedCount,
+            pickupIds: result.pickupIds,
             totalMatches: matches.length,
             label,
             color,
@@ -1980,7 +1949,7 @@ INPUTS:
 - documentId: Document ID from listDrawingPages
 - pageNumber: 1-based page to scan, OR omit and set scope="document" to scan every page in the document
 - scope: "page" (default) or "document"
-- autoSave: If true, persist each match as a Pickup (green count marks). Default false — set to true when the user confirms results look right.
+- autoSave: Deprecated; counting is read-only. Use saveCountAsAnnotations to save results.
 - templateIds: Optional array; restrict the run to specific saved templates. Omit to run every enabled template.
 
 OUTPUT (scope=page):
@@ -1998,7 +1967,7 @@ TIPS:
       documentId: z.string().describe("Document ID of the target PDF drawing"),
       pageNumber: z.coerce.number().int().min(1).optional().describe("1-based page number. Required when scope='page'."),
       scope: z.enum(["page", "document"]).default("page").describe("'page' = one page, 'document' = every page in the document"),
-      autoSave: z.boolean().default(false).describe("Persist each match as a Pickup"),
+      autoSave: z.boolean().default(false).describe("Deprecated; counting is read-only. Use an explicit save tool."),
       templateIds: z.array(z.string()).optional().describe("Restrict to specific saved template ids. Default: all enabled templates."),
     },
     async ({ documentId, pageNumber, scope, autoSave, templateIds }) => {
@@ -2006,7 +1975,7 @@ TIPS:
       if (scope === "document") {
         const result = await apiPost(`/api/takeoff/${projectId}/symbol-templates/run-on-document`, {
           documentId,
-          autoSave,
+          autoSave: false,
           templateIds,
         });
         if ((result as any)?.message) {
@@ -2022,7 +1991,7 @@ TIPS:
             symbol: tr.symbol,
             label: tr.label,
             totalCount: tr.totalCount,
-            savedAnnotationIds: tr.savedAnnotationIds ?? undefined,
+            matches: (tr.matches ?? []).map((m: any) => ({ rect: { x: m.x, y: m.y, width: m.w, height: m.h }, confidence: m.confidence })),
             error: tr.error,
           })),
           errors: p.errors?.length ? p.errors : undefined,
@@ -2034,6 +2003,8 @@ TIPS:
               documentId,
               pageCount: (result as any)?.pageCount ?? pages.length,
               grandTotal: (result as any)?.grandTotal ?? 0,
+              autoSaved: false,
+              ...(autoSave ? { note: "Counting is read-only. Call saveCountAsAnnotations for each page/template with its matches and image dimensions." } : {}),
               duration_ms: (result as any)?.duration_ms,
               pages,
             }, null, 2),
@@ -2047,7 +2018,7 @@ TIPS:
       const result = await apiPost(`/api/takeoff/${projectId}/symbol-templates/run-on-page`, {
         documentId,
         pageNumber,
-        autoSave,
+        autoSave: false,
         templateIds,
       });
       if ((result as any)?.message) {
@@ -2058,13 +2029,11 @@ TIPS:
         symbol: tr.symbol,
         label: tr.label,
         totalCount: tr.totalCount,
-        // Trim match payloads for the agent — the agent rarely needs every
-        // rect, just the totals + saved annotation ids when autoSave was on.
-        sampleMatches: (tr.matches ?? []).slice(0, 3).map((m: any) => ({
+        matches: (tr.matches ?? []).map((m: any) => ({
           rect: { x: m.x, y: m.y, width: m.w, height: m.h },
           confidence: m.confidence,
         })),
-        savedAnnotationIds: tr.savedAnnotationIds,
+
         error: tr.error,
       }));
       return {
@@ -2078,6 +2047,8 @@ TIPS:
             dpi: (result as any)?.dpi,
             duration_ms: (result as any)?.duration_ms,
             templateResults: summary,
+            autoSaved: false,
+            ...(autoSave ? { note: "Counting is read-only. Call saveCountAsAnnotations with each template’s matches and image dimensions." } : {}),
             errors: (result as any)?.errors?.length ? (result as any).errors : undefined,
           }, null, 2),
         }],

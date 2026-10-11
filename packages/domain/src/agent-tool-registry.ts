@@ -164,6 +164,27 @@ export const AGENT_TOOL_REGISTRY = {
   describeIntegration: { id: "describeIntegration", displayName: "Describe integration", category: "integration" },
   invokeIntegrationAction: { id: "invokeIntegrationAction", displayName: "Use integration action", category: "integration", mutates: true },
 
+  createProjectFile: { id: "createProjectFile", displayName: "Create project file", category: "documents", mutates: true },
+  getFileIngestCapabilities: { id: "getFileIngestCapabilities", displayName: "Get file ingest capabilities", category: "documents", mutates: false },
+  inspectFileIngest: { id: "inspectFileIngest", displayName: "Inspect file ingest", category: "documents", mutates: true },
+  listScheduleImportCandidates: { id: "listScheduleImportCandidates", displayName: "List schedule import candidates", category: "documents", mutates: false },
+  importProjectScheduleFile: { id: "importProjectScheduleFile", displayName: "Import project schedule file", category: "documents", mutates: true },
+  getModelIngestCapabilities: { id: "getModelIngestCapabilities", displayName: "Get model ingest capabilities", category: "model", mutates: false },
+  getModelElementDetails: { id: "getModelElementDetails", displayName: "Get model element details", category: "model", mutates: false },
+  queryModelTakeoffGroups: { id: "queryModelTakeoffGroups", displayName: "Query model takeoff groups", category: "model", mutates: false },
+  addModelTakeoffGroupToWorksheet: { id: "addModelTakeoffGroupToWorksheet", displayName: "Add model takeoff group to worksheet", category: "model", mutates: true },
+  readDrawingPage: { id: "readDrawingPage", displayName: "Read drawing page", category: "vision", mutates: false },
+  readDrawingTile: { id: "readDrawingTile", displayName: "Read drawing tile", category: "vision", mutates: false },
+  countDrawingSymbol: { id: "countDrawingSymbol", displayName: "Count drawing symbol", category: "vision", mutates: false },
+  findDrawingSymbolCandidates: { id: "findDrawingSymbolCandidates", displayName: "Find drawing symbol candidates", category: "vision", mutates: false },
+  analyzeDrawingGeometry: { id: "analyzeDrawingGeometry", displayName: "Analyze drawing geometry", category: "vision", mutates: true },
+  traceDrawingSystems: { id: "traceDrawingSystems", displayName: "Trace drawing systems", category: "vision", mutates: true },
+  saveDetectionsAsTakeoffMarks: { id: "saveDetectionsAsTakeoffMarks", displayName: "Save detections as takeoff marks", category: "vision", mutates: true },
+  classifyDrawingLayers: { id: "classifyDrawingLayers", displayName: "Classify drawing layers", category: "vision", mutates: true },
+  inspectDetectionRegion: { id: "inspectDetectionRegion", displayName: "Inspect detection region", category: "vision", mutates: false },
+  listDrawingAnalyses: { id: "listDrawingAnalyses", displayName: "List drawing analyses", category: "vision", mutates: false },
+  compareAnalysisToTakeoff: { id: "compareAnalysisToTakeoff", displayName: "Compare analysis to takeoff", category: "vision", mutates: false },
+
   command_execution: { id: "command_execution", displayName: "Run command", category: "runtime", mutates: true },
 } satisfies Record<string, AgentToolDefinition>;
 
@@ -177,7 +198,14 @@ export function normalizeAgentToolId(toolId: string) {
 
 export function getAgentToolDefinition(toolId: string): AgentToolDefinition | null {
   const normalized = normalizeAgentToolId(toolId);
-  return (AGENT_TOOL_REGISTRY as Record<string, AgentToolDefinition>)[normalized] ?? null;
+  const definition = (AGENT_TOOL_REGISTRY as Record<string, AgentToolDefinition>)[normalized];
+  if (definition) return definition;
+  // Integration action manifests are loaded at runtime. The whole namespace is
+  // conservatively mutating: external actions can have effects beyond Bidwright.
+  if (normalized.startsWith("integration_")) {
+    return { id: normalized, displayName: formatFallbackToolDisplayName(normalized), category: "integration", mutates: true };
+  }
+  return null;
 }
 
 export function formatFallbackToolDisplayName(toolId: string) {
@@ -198,7 +226,5 @@ export function isAgentToolMutating(toolId: string) {
   const definition = getAgentToolDefinition(toolId);
   if (definition) return definition.mutates === true;
 
-  const normalized = normalizeAgentToolId(toolId);
-  return /^(create|update|delete|move|import|recalculate|apply|save|finalize|write|link|generate)/.test(normalized)
-    || /(^|\.)(create|update|delete|add|remove|ingest|index|logActivity)/.test(toolId);
+  return true;
 }

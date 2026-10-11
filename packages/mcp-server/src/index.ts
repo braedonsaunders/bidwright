@@ -13,6 +13,7 @@
  *   BIDWRIGHT_QUOTE_ID     - Current quote ID
  */
 
+import { pathToFileURL } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { isToolAllowed } from "./tool-access.js";
@@ -30,43 +31,45 @@ import { registerResourceTools } from "./tools/resource-tools.js";
 import { registerCalculatorTools } from "./tools/calculator-tools.js";
 import { registerWebTools } from "./tools/web-tools.js";
 
-const server = new McpServer({
-  name: "bidwright",
-  version: "0.1.0",
-});
+export async function registerTools(server: McpServer, options: { mode?: string; reviewOnly?: boolean } = {}) {
+  const { mode, reviewOnly = false } = options;
+  const readOnlyMode = mode === "qa" || reviewOnly;
+  if (readOnlyMode) {
+    const rawTool = (server as any).tool.bind(server);
+    (server as any).tool = (name: string, ...args: unknown[]) => {
+      if (!isToolAllowed(name, mode, reviewOnly)) return undefined;
+      return rawTool(name, ...args);
+    };
+    const rawRegisterTool = (server as any).registerTool.bind(server);
+    (server as any).registerTool = (name: string, ...args: unknown[]) => {
+      if (!isToolAllowed(name, mode, reviewOnly)) return undefined;
+      return rawRegisterTool(name, ...args);
+    };
+  }
+  // Register all tool groups
+  registerQuoteTools(server);
+  registerKnowledgeTools(server);
+  registerSystemTools(server);
+  registerVisionTools(server);
+  registerDrawingEvidenceTools(server);
+  registerModelTools(server);
+  registerFileIngestTools(server);
+  registerReviewTools(server);
+  registerEstimateTools(server);
+  registerResourceTools(server);
+  registerCalculatorTools(server);
+  registerWebTools(server);
+  if (!readOnlyMode) {
+    await registerIntegrationTools(server);
+  }
 
-const reviewOnly = process.env.BIDWRIGHT_REVIEW_ONLY === "true";
-const readOnlyMode = process.env.BIDWRIGHT_AGENT_MODE === "qa" || reviewOnly;
-if (readOnlyMode) {
-  const rawTool = (server as any).tool.bind(server);
-  (server as any).tool = (name: string, ...args: unknown[]) => {
-    if (!isToolAllowed(name, process.env.BIDWRIGHT_AGENT_MODE, reviewOnly)) return undefined;
-    return rawTool(name, ...args);
-  };
-  const rawRegisterTool = (server as any).registerTool.bind(server);
-  (server as any).registerTool = (name: string, ...args: unknown[]) => {
-    if (!isToolAllowed(name, process.env.BIDWRIGHT_AGENT_MODE, reviewOnly)) return undefined;
-    return rawRegisterTool(name, ...args);
-  };
 }
 
-// Register all tool groups
-registerQuoteTools(server);
-registerKnowledgeTools(server);
-registerSystemTools(server);
-registerVisionTools(server);
-registerDrawingEvidenceTools(server);
-registerModelTools(server);
-registerFileIngestTools(server);
-registerReviewTools(server);
-registerEstimateTools(server);
-registerResourceTools(server);
-registerCalculatorTools(server);
-registerWebTools(server);
-if (!readOnlyMode) {
-  await registerIntegrationTools(server);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const server = new McpServer({ name: "bidwright", version: "0.1.0" });
+  await registerTools(server, {
+    mode: process.env.BIDWRIGHT_AGENT_MODE,
+    reviewOnly: process.env.BIDWRIGHT_REVIEW_ONLY === "true",
+  });
+  await server.connect(new StdioServerTransport());
 }
-
-// Start stdio transport (Claude Code / Codex communicate via stdin/stdout)
-const transport = new StdioServerTransport();
-await server.connect(transport);

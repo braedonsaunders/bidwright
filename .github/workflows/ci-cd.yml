@@ -136,6 +136,7 @@ jobs:
           apps/api/src/services/claude-md-generator.test.ts
           packages/mcp-server/src/quote-description.test.ts
           packages/mcp-server/src/tool-access.test.ts
+          packages/mcp-server/src/takeoff-count.test.ts
           scripts/cad-editor/tools-workspace.test.ts
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
