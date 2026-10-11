@@ -29,3 +29,8 @@ export async function resolveProjectSource(store: {
     fileNodeId: node.id as string,
   };
 }
+
+/** Only formats that can become one extracted source; archives/models use their own explicit adapters. */
+export function canPromoteSourceFile(name: string): boolean {
+  return /\.(pdf|txt|md|csv|tsv|xlsx|xls|docx|doc|rtf|html?|png|jpe?g|tiff?|bmp|webp)$/i.test(name);
+}

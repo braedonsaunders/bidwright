@@ -1994,6 +1994,7 @@ export async function createModelTakeoffLink(projectId: string, input: {
   const quantity = input.modelQuantityId
     ? await prisma.modelQuantity.findFirst({ where: { id: input.modelQuantityId, modelId: input.modelId } })
     : null;
+  if (quantity && !quantity.unit?.trim()) throw new Error("Model quantity units are unknown; a physical worksheet link cannot be derived from this quantity.");
   const multiplier = typeof input.multiplier === "number" && Number.isFinite(input.multiplier)
     ? input.multiplier
     : 1;
@@ -2056,12 +2057,13 @@ export async function createModelTakeoffLinks(projectId: string, input: {
   const [validElements, validQuantities] = await Promise.all([
     prisma.modelElement.findMany({ where: { modelId: input.modelId, id: { in: elementIds } }, select: { id: true, name: true, elementClass: true } }),
     quantityIds.length > 0
-      ? prisma.modelQuantity.findMany({ where: { modelId: input.modelId, id: { in: quantityIds } }, select: { id: true } })
+      ? prisma.modelQuantity.findMany({ where: { modelId: input.modelId, id: { in: quantityIds } }, select: { id: true, unit: true } })
       : Promise.resolve([]),
   ]);
   if (validElements.length !== elementIds.length || validQuantities.length !== quantityIds.length) {
     throw new Error("One or more BIM pickup links do not belong to this model");
   }
+  if (validQuantities.some(quantity => !quantity.unit?.trim())) throw new Error("Model quantity units are unknown; physical worksheet links cannot be derived from these quantities.");
   const elementById = new Map(validElements.map((e) => [e.id, e]));
 
   // One pickup per (element, quantity) source; create the missing ones in

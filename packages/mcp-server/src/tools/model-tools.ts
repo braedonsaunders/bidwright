@@ -188,9 +188,9 @@ export function registerModelTools(server: McpServer) {
   const modelInput = { modelId: z.string() };
   server.tool("getModelSolidMetrics", "Read persisted per-solid surface area, closure-checked volume, bounds and assembly BOM with units.", modelInput,
     async ({ modelId }) => jsonResult(await apiGet(`/api/models/${getProjectId()}/assets/${modelId}/solid-metrics`)));
-  server.tool("aggregateModelElements", "Aggregate persisted elements and quantities by class, type, level, system, material or property; separate units, methods and gross/net bases. Container/duplicate APS nodes are excluded. For new pipe feet by size, use elementClass=Pipe, groupBy=property, property=AutoCAD.Size and propertyFilters with AutoCAD.Status=New.", {
+  server.tool("aggregateModelElements", "Aggregate persisted elements and quantities by class, type, level, system, material or property; separate units, methods and gross/net bases. Container/duplicate APS nodes are excluded; excludedElementCount and excludedElementIds report those exclusions, including explicitly selected IDs. For new pipe feet by size, use elementClass=Pipe, groupBy=property, property=AutoCAD.Size and propertyFilters with AutoCAD.Status=New.", {
     ...modelInput, groupBy: z.enum(["class", "type", "level", "system", "material", "property"]), property: z.string().optional().describe("Exact flat key (AutoCAD.Size) or nested path (psets.Pset_WallCommon.FireRating)"),
-    elementClass: z.string().optional(), propertyFilters: z.record(z.string(), z.string()).optional(),
+    elementClass: z.string().optional(), propertyFilters: z.record(z.string(), z.string()).optional().describe("Exact matches using the same flat keys or nested paths as property."),
     elementIds: z.array(z.string()).max(10000).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
   }, async ({ modelId, ...input }) => jsonResult(await apiPost(`/api/models/${getProjectId()}/assets/${modelId}/aggregate`, input)));
   server.tool("rebuildModelTopology", "Rebuild the model topology used by Takeoff Studio from persisted elements and recipes.", modelInput,
@@ -610,6 +610,9 @@ This is the agent equivalent of Takeoff Studio's explicit Add group action. It u
         };
       }
 
+      if (!String(group.unit ?? "").trim() && normalizedKey(group.measurementType) !== "count") {
+        return { content: [{ type: "text" as const, text: "This model group has unknown physical units; no worksheet row or link was created." }], isError: true };
+      }
       const multiplier = input.quantityMultiplier;
       const groupQuantity = Number(group.quantity) || (normalizedKey(group.measurementType) === "count" ? elements.length : 0);
       const quantity = groupQuantity * multiplier;

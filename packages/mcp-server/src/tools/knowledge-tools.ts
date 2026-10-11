@@ -1,4 +1,4 @@
-import { resolveSourceDocumentId } from "../source-document.js";
+import { promoteSourceDocumentId, resolveSourceDocumentId } from "../source-document.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, projectPath, getProjectId } from "../api-client.js";
@@ -143,6 +143,10 @@ function resolveQuery(input: { query?: string; q?: string }) {
 }
 
 export function registerKnowledgeTools(server: McpServer) {
+
+  server.tool("promoteSourceDocument", "Explicitly ingest a supported FileNode as a SourceDocument. This write copies bytes and can run paid extraction. Existing linked documents are reused. Archives and model formats are not supported here.", {
+    fileNodeId: z.string().describe("Literal FileNode id or Files UI file-<nodeId> key"),
+  }, async ({ fileNodeId }) => ({ content: [{ type: "text" as const, text: JSON.stringify({ documentId: await promoteSourceDocumentId(fileNodeId) }) }] }));
 
   server.tool(
     "searchEstimatingKnowledge",

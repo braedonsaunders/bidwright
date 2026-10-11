@@ -1,4 +1,4 @@
-import { resolveProjectFileNode } from "./services/project-source-resolver.js";
+import { canPromoteSourceFile, resolveProjectFileNode } from "./services/project-source-resolver.js";
 import compress from "@fastify/compress";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
@@ -3094,10 +3094,26 @@ export function buildServer() {
     return result;
   });
 
+  app.get("/projects/:projectId/documents/resolve-source", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
+    const { sourceId } = request.query as { sourceId?: unknown };
+    if (typeof sourceId !== "string" || !sourceId.trim()) return reply.code(400).send({ message: "sourceId is required" });
+    const direct = await request.store!.getDocument(projectId, sourceId);
+    if (direct) return { id: direct.id };
+    const node = await resolveProjectFileNode(projectId, sourceId, (id) => prisma.fileNode.findFirst({ where: { id, projectId } }));
+    if (!node) return reply.code(404).send({ message: "File not found in this project" });
+    const metadata = node.metadata as Record<string, unknown> | null;
+    const linkedId = node.documentId || metadata?.sourceDocumentId;
+    const linked = typeof linkedId === "string" ? await request.store!.getDocument(projectId, linkedId) : null;
+    return linked ? { id: linked.id } : { id: null, message: "This FileNode has no extracted SourceDocument. promoteSourceDocument explicitly ingests supported text, spreadsheet, image or PDF sources; archives and models use their dedicated tools." };
+  });
+
   // Promote a file already in the Files area (FileNode) to a source document.
   // Idempotent per file: the promoted document id is remembered on the node.
   app.post("/projects/:projectId/documents/from-file-node", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
     const body = (request.body ?? {}) as { fileNodeId?: string; documentType?: string };
     const fileNodeId = typeof body.fileNodeId === "string" ? body.fileNodeId.trim() : "";
     if (!fileNodeId) {
@@ -3107,6 +3123,7 @@ export function buildServer() {
     if (!node || node.type !== "file" || !node.storagePath) {
       return reply.code(404).send({ message: "File not found in this project" });
     }
+    if (!canPromoteSourceFile(node.name)) return reply.code(400).send({ message: "Archives, models and unsupported formats cannot be promoted here. Use explicit archive extraction or native model tools." });
     const metadata = (node.metadata && typeof node.metadata === "object" ? node.metadata : {}) as Record<string, unknown>;
     const existingId = node.documentId || (typeof metadata.sourceDocumentId === "string" ? metadata.sourceDocumentId : "");
     if (existingId) {
@@ -3117,7 +3134,7 @@ export function buildServer() {
     const fields: Record<string, string> = {};
     if (body.documentType) fields.documentType = String(body.documentType);
     const document = await ingestDocumentUpload(request, reply, projectId, node.name, fileBuffer, fields) as { id?: string };
-    if (document?.id) {
+    if (typeof document?.id === "string") {
       await prisma.fileNode.update({
         where: { id: node.id },
         data: { metadata: { ...metadata, sourceDocumentId: document.id } as any },

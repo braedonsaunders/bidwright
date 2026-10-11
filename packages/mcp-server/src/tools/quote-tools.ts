@@ -367,7 +367,7 @@ function staleEvidenceViewError(views: EvidenceViewRecord[], ws: any): string | 
       // checksum to compare, so its source version cannot be established.
       // Fail closed rather than treat it as equivalent to document evidence.
       const fileNodeId = String(view.fileNodeId ?? "").trim();
-      return `evidenceBasis.quantity.viewIds includes ${view.id}, rendered from a Files-area file${fileNodeId ? ` (${fileNodeId})` : ""} that is not a registered source document, so its version cannot be verified. Register it first — readDrawingPage / readDrawingTile / promotePdfToDrawingEvidence accept the FileNode id and promote it to a SourceDocument — then re-read the page from the resulting documentId and cite that viewId.`;
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, rendered from a Files-area file${fileNodeId ? ` (${fileNodeId})` : ""} that is not a registered source document, so its version cannot be verified. Register it first — promoteSourceDocument / promotePdfToDrawingEvidence accept the FileNode id and explicitly promote it to a SourceDocument — then re-read the page from the resulting documentId and cite that viewId.`;
     }
     const doc = docs.find((entry) => String(entry.id ?? "") === documentId);
     if (!doc) {

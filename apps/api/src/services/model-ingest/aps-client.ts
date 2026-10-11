@@ -83,6 +83,7 @@ interface ApsMetadataResponse {
       name: string;
       role: string;
       status?: string;
+      units?: string;
     }>;
   };
 }
@@ -406,13 +407,16 @@ export class ApsClient {
       ) || "";
 
       const icon = String(apsPropertyValue(props.Item?.Icon) ?? "");
-      const container = /^(File|Layer|Group|Insert ?Group|Composite ?Object)$/i.test(icon) || Boolean(obj.children?.length);
+      const authoredQuantities = extractQuantities(props, primary.units);
       const guid = firstStringValue(props, "PnPGuid", "GUID");
+      const childSharesIdentity = Boolean(guid && flattenApsTree(obj.children ?? []).some(child => firstStringValue(child.properties ?? {}, "PnPGuid", "GUID") === guid));
+      const containerShape = /^(File|Layer|Group|Insert ?Group|Composite ?Object)$/i.test(icon) || Boolean(obj.children?.length);
+      const container = containerShape && (authoredQuantities.length === 0 || childSharesIdentity);
       const physicalKey = guid ? `${firstStringValue(props, "Source File") ?? ""}:${guid}` : "";
       const duplicate = !container && Boolean(physicalKey && seenPhysicalIds.has(physicalKey));
       if (!container && physicalKey) seenPhysicalIds.add(physicalKey);
       const estimateRelevant = !container && !duplicate;
-      const quantities = estimateRelevant ? extractQuantities(props) : [];
+      const quantities = estimateRelevant ? authoredQuantities : [];
 
       return {
         objectid: obj.objectid,
@@ -464,7 +468,8 @@ function firstStringValue(
 }
 
 function extractQuantities(
-  props: Record<string, Record<string, unknown>>
+  props: Record<string, Record<string, unknown>>,
+  modelUnit?: string,
 ): Array<{ quantityType: string; value: number; unit: string }> {
   const quantities: Array<{ quantityType: string; value: number; unit: string }> = [];
   const quantityHints = new Set([
@@ -476,7 +481,9 @@ function extractQuantities(
   ]);
 
   for (const group of Object.values(props)) {
-    const lengthUnit = firstStringValue({ group }, "LengthUnit", "Length Unit", "Port1_LengthUnit");
+    const drawingUnit = firstStringValue(props, "Drawing Units", "DrawingUnits", "Model Units", "ModelUnits")
+      || firstStringValue(Object.fromEntries(Object.entries(props).filter(([name]) => /^(model|document|drawing|general)$/i.test(name))), "Units", "Linear Units", "Length Unit");
+    const lengthUnit = drawingUnit || modelUnit || firstStringValue({ group }, "LengthUnit", "Length Unit", "Port1_LengthUnit");
     for (const [key, entry] of Object.entries(group)) {
       // Port/nozzle dimensions and minimum cut lengths describe components or
       // fabrication constraints, not additional installed pipe lengths.
@@ -497,14 +504,15 @@ function extractQuantities(
         quantities.push({
           quantityType: key,
           value,
-          unit: apsPropertyUnits(entry) || (lengthUnit && /length|width|height|depth|thickness|radius|diameter|offset|elevation/i.test(lowerKey) ? lengthUnit : ""),
+          unit: apsPropertyUnits(entry) || (lowerKey === "length" && lengthUnit ? lengthUnit : ""),
         });
       }
     }
   }
   const nominal = firstStringValue(props, "NominalDiameter", "Port1_NominalDiameter");
-  const nominalUnit = firstStringValue(props, "LengthUnit", "Port1_LengthUnit");
-  if (nominal && nominalUnit && Number.isFinite(Number(nominal))) {
+  const nominalEntry = Object.values(props).map(group => group.NominalDiameter ?? group.Port1_NominalDiameter).find(value => value != null);
+  const nominalUnit = apsPropertyUnits(nominalEntry) || firstStringValue(props, "NominalDiameterUnit", "Nominal Diameter Unit") || "";
+  if (nominal && Number.isFinite(Number(nominal))) {
     quantities.push({ quantityType: "nominal_diameter", value: Number(nominal), unit: nominalUnit });
   }
   return quantities;

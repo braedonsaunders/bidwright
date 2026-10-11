@@ -170,14 +170,14 @@ test("APS Plant3D quantities retain units and exclude containers and duplicate i
     Port1_NominalDiameter: "3", Port2_NominalDiameter: "3", MinCutLength: "3", Nozzle1_Length: "99",
   } };
   client.getViewProperties = async () => ({ data: { type: "properties", collection: [
-    { objectid: 1, name: "Layer", properties: { Item: { Icon: "Layer" }, AutoCAD: { Length: "999" } } },
-    { objectid: 4, name: "Container", properties: { Item: { Icon: "InsertGroup" }, AutoCAD: { Length: "999" } } },
+    { objectid: 1, name: "Layer", properties: { Item: { Icon: "Layer" }, AutoCAD: {} } },
+    { objectid: 4, name: "Container", properties: { Item: { Icon: "InsertGroup" }, AutoCAD: {} } },
     { objectid: 2, name: "Pipe", properties },
     { objectid: 3, name: "Duplicate", properties },
   ] } });
   const { objects } = await client.extractModelData("urn");
   const pipe = objects.find((o) => o.objectid === 3)!; // Flattened stack order selects this physical occurrence.
-  assert.deepEqual(pipe.quantities, [{ quantityType: "Length", value: 120, unit: "in" }, { quantityType: "nominal_diameter", value: 3, unit: "in" }]);
+  assert.deepEqual(pipe.quantities, [{ quantityType: "Length", value: 120, unit: "in" }, { quantityType: "nominal_diameter", value: 3, unit: "" }]);
   assert.equal(pipe.properties["AutoCAD.Size"], '3"');
   assert.equal(objects.filter((o) => o.estimateRelevant).length, 1);
   assert.equal(objects.filter((o) => !o.estimateRelevant).every((o) => o.quantities.length === 0), true);
@@ -192,4 +192,25 @@ test("APS Plant3D quantities retain units and exclude containers and duplicate i
   assert.equal(result.bomRows.length, 1);
   assert.deepEqual((result.bomRows[0].quantities as any[]).find(q => q.type === "Length"), { type: "Length", value: 10, unit: "ft" });
 
+});
+
+test("Revit composites retain authored quantities; drawing units beat catalog length units", async () => {
+  const client = new ApsClient("client", "secret");
+  client.getMetadataViews = async () => ({ data: { type: "metadata", metadata: [{ guid: "main", role: "3d", name: "Main" }] } });
+  client.getViewProperties = async (): Promise<Awaited<ReturnType<ApsClient["getViewProperties"]>>> => ({ data: { type: "properties", collection: [{
+    objectid: 1, name: "Revit pipe", properties: { Item: { Icon: "Composite Object" }, General: { "Drawing Units": "mm" },
+      AutoCAD: { GUID: "parent", Length: "120", Port1_LengthUnit: "in", Elevation: "20", Offset: "10", Port1_NominalDiameter: "3", LengthUnit: "in" },
+      Dimensions: { Area: { value: 5, units: "m2" } } },
+    children: [{ objectid: 2, name: "Mesh", properties: { Item: { Icon: "Geometry" } } }],
+  }, { objectid: 3, name: "Duplicate parent", properties: { Item: { Icon: "Composite Object" }, Dimensions: { GUID: "same", Length: { value: 10, units: "ft" } } },
+    children: [{ objectid: 4, name: "Physical child", properties: { Dimensions: { GUID: "same", Length: { value: 10, units: "ft" } } } }],
+  }] } });
+  const result = await client.extractModelData("urn");
+  const parent = result.objects.find(o => o.objectid === 1)!;
+  assert.equal(parent.estimateRelevant, true);
+  assert.equal(parent.quantities.find(q => q.quantityType === "Length")?.unit, "mm");
+  assert.equal(parent.quantities.find(q => q.quantityType === "Area")?.unit, "m2");
+  for (const key of ["Elevation", "Offset", "nominal_diameter"]) assert.equal(parent.quantities.find(q => q.quantityType === key)?.unit, "");
+  assert.equal(result.objects.find(o => o.objectid === 3)?.estimateRelevant, false);
+  assert.equal(result.objects.find(o => o.objectid === 4)?.estimateRelevant, true);
 });

@@ -11,3 +11,14 @@ test("pipe totals group flat APS size keys and exclude containers, duplicates an
   assert.equal(result.groups[0].elementCount, 1);
   assert.equal(result.groups[0].quantities[0].value, 10);
 });
+
+test("nested filters match nested grouping and explicit exclusions are reported", () => {
+  const result = aggregatePersistedElements([
+    { id: "kept", properties: { nested: { status: "New", size: "3" } }, quantities: [] },
+    { id: "excluded", properties: { estimateRelevant: false }, quantities: [] },
+    { id: "unselected", properties: { estimateRelevant: false }, quantities: [] },
+  ], { groupBy: "property", property: "nested.size", propertyFilters: { "nested.status": "New" }, elementIds: ["kept", "excluded"] });
+  assert.equal(result.groups[0].key, "3");
+  assert.equal(result.excludedElementCount, 1);
+  assert.deepEqual(result.excludedElementIds, ["excluded"]);
+});

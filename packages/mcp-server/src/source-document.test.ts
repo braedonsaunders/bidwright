@@ -7,13 +7,16 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 
 test("knowledge tools accept FileNode and UI keys through the same source resolver", async t => {
-  const promoted: string[] = [];
+  const resolved: string[] = [];
+  let writes = 0;
   const reads: string[] = [];
   const api = createServer(async (request, response) => {
     response.setHeader("Content-Type", "application/json");
-    if (request.method === "POST" && request.url === "/projects/project-test/documents/from-file-node") {
-      let body = ""; for await (const chunk of request) body += chunk;
-      promoted.push(JSON.parse(body).fileNodeId);
+    if (request.method !== "GET") writes++;
+    if (request.url?.startsWith("/projects/project-test/documents/resolve-source?")) {
+      const id = new URL(request.url, "http://test").searchParams.get("sourceId")!;
+      resolved.push(id);
+      if (id === "fn-unextracted") { response.end(JSON.stringify({ id: null, message: "Not extracted; use promoteSourceDocument" })); return; }
       response.end(JSON.stringify({ id: "doc-resolved" })); return;
     }
     reads.push(request.url!);
@@ -36,7 +39,17 @@ test("knowledge tools accept FileNode and UI keys through the same source resolv
     const result = await client.callTool({ name, arguments: { documentId, ...(name === "queryProjectFile" ? { query: "pipe" } : {}) } });
     assert.notEqual(result.isError, true, JSON.stringify(result));
   }
-  assert.deepEqual(promoted, ["fn-source", "file-fn-source", "file-copy", "file-file-copy"]);
+  assert.deepEqual(resolved, ["fn-source", "file-fn-source", "file-copy", "file-file-copy"]);
   assert.equal(reads.length, 4);
   assert.ok(reads.every(path => path.includes("doc-resolved")));
+  const absent = await client.callTool({ name: "readDocumentText", arguments: { documentId: "fn-unextracted" } });
+  assert.equal(absent.isError, true);
+  assert.match(JSON.stringify(absent), /promoteSourceDocument/);
+  assert.equal(reads.length, 4);
+  assert.equal(writes, 0);
+  const { resolveSourceDocumentId, promoteSourceDocumentId } = await import("./source-document.js");
+  await assert.rejects(resolveSourceDocumentId(undefined as any), /id is required/);
+  await assert.rejects(promoteSourceDocumentId("fn-archive"), /no document id/);
+  assert.equal(writes, 1); // Only the explicit promotion call wrote.
+
 });
