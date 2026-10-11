@@ -26,6 +26,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { prisma } from "@bidwright/db";
+import { normalizeAgentToolId } from "@bidwright/domain";
 
 // Side-effect import: registers all known adapters into the registry.
 import "./cli-adapters/index.js";
@@ -63,6 +64,7 @@ import type {
   ParserState,
   RegisteredCliAdapter,
   SpawnPlan,
+  SSEEventData,
 } from "./cli-adapters/types.js";
 
 // ── Public types ──────────────────────────────────────────────────
@@ -419,7 +421,6 @@ function buildMcpEnv(opts: {
     BIDWRIGHT_SESSION_ID: opts.providerSessionId || "",
     BIDWRIGHT_REVIEW_ONLY: opts.reviewOnly ? "true" : "false",
     BIDWRIGHT_AGENT_IMAGE_MAX_EDGE: process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE || "1568",
-    BIDWRIGHT_AGENT_IMAGE_BUDGET: process.env.BIDWRIGHT_AGENT_IMAGE_BUDGET || "120",
   };
 }
 
@@ -631,6 +632,21 @@ async function spawnChild(
   });
 }
 
+/** Resolve dispatcher calls before emitting or persisting their runtime events. */
+export function unwrapInvokeToolEvent(event: SSEEventData): SSEEventData {
+  if (event.type !== "tool_call" || !event.data || typeof event.data !== "object") return event;
+  const data = event.data as Record<string, unknown>;
+  if (typeof data.toolId !== "string" || normalizeAgentToolId(data.toolId) !== "invokeTool") return event;
+  let input = data.input;
+  if (typeof input === "string") {
+    try { input = JSON.parse(input); } catch { return event; }
+  }
+  if (!input || typeof input !== "object" || Array.isArray(input)) return event;
+  const { name, args = {} } = input as Record<string, unknown>;
+  if (typeof name !== "string" || !name || !args || typeof args !== "object" || Array.isArray(args)) return event;
+  return { ...event, data: { ...data, toolId: name, input: args, invokedVia: data.toolId } };
+}
+
 /**
  * Wire stdout/stderr/exit handlers. Stdout is parsed line-by-line through
  * the adapter; stderr respects per-adapter benign filters and multi-line
@@ -662,7 +678,8 @@ function wireChildProcess(
       try {
         const parsed = JSON.parse(line);
         const sseEvents = adapter.parseEvent(parsed, parserState);
-        for (const evt of sseEvents) {
+        for (const parsedEvent of sseEvents) {
+          const evt = unwrapInvokeToolEvent(parsedEvent);
           observedEvents.push(evt as CliConversationEvent);
           events.emit("event", evt);
         }

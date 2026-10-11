@@ -136,11 +136,13 @@ jobs:
           apps/api/src/services/claude-md-generator.test.ts
           packages/mcp-server/src/quote-description.test.ts
           packages/mcp-server/src/tool-access.test.ts
+          packages/mcp-server/src/tool-dispatch.test.ts
           packages/mcp-server/src/takeoff-count.test.ts
           scripts/cad-editor/tools-workspace.test.ts
           scripts/cad-editor/dwg-export/dxf-compat.test.ts
           scripts/eval/evidence-metrics.test.ts
           apps/web/lib/drawing-tool-evidence.test.ts
+          apps/api/src/services/cli-runtime-tool-events.test.ts
           apps/api/src/services/cli-runtime-recovery.test.ts
           apps/api/src/services/cli-runtime-liveness.test.ts
           apps/api/src/services/cli-run-selection.test.ts

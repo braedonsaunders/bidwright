@@ -241,6 +241,9 @@ export interface RunLibraryOnPageResult {
     symbol: string;
     label: string;
     totalCount: number;
+    imageWidth: number;
+    imageHeight: number;
+    dpi: number;
     matches: Array<{
       x: number;
       y: number;
@@ -344,6 +347,9 @@ export async function runLibraryOnPage(
         symbol: tpl.symbol,
         label: tpl.label,
         totalCount: result.totalCount,
+        imageWidth: run.imageWidth,
+        imageHeight: run.imageHeight,
+        dpi: run.dpi,
         matches: result.matches,
         error: result.error,
       });
@@ -374,8 +380,11 @@ export async function runLibraryOnPage(
               rect: { x: m.x, y: m.y, width: m.w, height: m.h },
               confidence: m.confidence,
               scale: m.scale,
-              imageWidth,
-              imageHeight,
+              imageWidth: tr.imageWidth,
+              imageHeight: tr.imageHeight,
+              canvasWidth: tr.imageWidth,
+              canvasHeight: tr.imageHeight,
+              dpi: tr.dpi,
             },
             createdBy: opts.createdBy ?? "symbol-library",
           });

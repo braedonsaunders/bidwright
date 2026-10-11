@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import test from "node:test";
-import ts from "typescript";
+import { pickupLinkQuantity } from "@bidwright/domain";
 import { z } from "zod";
 
 test("count reads never save; an explicit grouped save links quantity N, not N squared", async (t) => {
@@ -22,11 +21,12 @@ test("count reads never save; an explicit grouped save links quantity N, not N s
     const body = init.body ? JSON.parse(String(init.body)) : {};
     requests.push({ path, body });
     if (path.endsWith("/count-symbols")) return Response.json({ success: true, matches, totalCount: 3, imageWidth: 1200, imageHeight: 900 });
-    if (path.endsWith("/render-page")) return Response.json({ success: true, imageWidth: 1200, imageHeight: 900, pageWidth: 576, pageHeight: 432 });
+    if (path.endsWith("/render-page")) return Response.json({ success: true, width: 1200, height: 900, pageWidth: 576, pageHeight: 432 });
     if (path.endsWith("/run-on-page") || path.endsWith("/run-on-document")) {
       assert.equal(body.autoSave, false);
-      const templateResults = [{ matches: matches.map(({ rect, confidence }) => ({ x: rect.x, y: rect.y, w: rect.width, h: rect.height, confidence })), totalCount: 3 }];
-      return Response.json({ templateResults, pages: [{ pageNumber: 1, templateResults }] });
+      const templateResults = [{ imageWidth: 1200, imageHeight: 900, dpi: 150, matches: [...matches, ...matches, ...matches, ...matches].map(({ rect, confidence }) => ({ x: rect.x, y: rect.y, w: rect.width, h: rect.height, confidence })), totalCount: 12 }];
+      templateResults.push({ ...templateResults[0], imageWidth: 2400, imageHeight: 1800, dpi: 300 });
+      return Response.json({ templateResults, imageWidth: 2400, imageHeight: 1800, pages: [{ pageNumber: 1, imageWidth: 2400, imageHeight: 1800, templateResults }] });
     }
     assert.equal(path, "/api/takeoff/test-project/pickups");
     if (init.method === "GET") return Response.json(pickups);
@@ -40,11 +40,21 @@ test("count reads never save; an explicit grouped save links quantity N, not N s
   const drawingCount = await call("countDrawingSymbol", countInput);
   assert.equal(count.imageWidth, 1200);
   assert.equal(drawingCount.imageWidth, 1200);
+  let libraryMatchSetId = "";
   for (const scope of ["page", "document"]) {
     const result = await call("runProjectSymbolLibrary", { documentId: "drawing", pageNumber: 1, scope, autoSave: true });
     assert.match(result.note, /read-only/);
-    assert.equal((result.templateResults ?? result.pages[0].totalsBySymbol)[0].matches.length, 3);
+    const template = (result.templateResults ?? result.pages[0].totalsBySymbol)[0];
+    assert.equal(template.sampleMatches, undefined);
+    assert.equal(template.imageWidth, undefined);
+    assert.equal(template.matches, undefined);
+    libraryMatchSetId = template.matchSetId;
+    assert.ok(libraryMatchSetId);
   }
+  const detailed = await call("runProjectSymbolLibrary", { documentId: "drawing", pageNumber: 1, responseFormat: "detailed" });
+  assert.equal(detailed.templateResults[0].matches.length, 12);
+  assert.equal(detailed.templateResults[0].imageWidth, 1200);
+  assert.equal(detailed.templateResults[1].imageWidth, 2400);
   assert.equal(pickups.length, 0);
   assert.ok(requests.every(({ path }) => !path.includes("save-detections") && !path.endsWith("/pickups")));
   const saved = await call("saveCountAsAnnotations", { ...count, label: "Counted symbol" });
@@ -59,26 +69,18 @@ test("count reads never save; an explicit grouped save links quantity N, not N s
   const listed = await call("listPickups", {});
   assert.equal(listed.annotations[0].measurement.value, 3);
 
-  // Run the production link method against an in-memory store. No DB connection.
-  const source = readFileSync(new URL("../../../apps/api/src/prisma-store.ts", import.meta.url), "utf8");
-  const start = source.indexOf("  async createPickupLink(");
-  const end = source.indexOf("  async updatePickupLink(", start);
-  assert.ok(start > 0 && end > start);
-  const compiled = ts.transpileModule(`class LinkStore { ${source.slice(start, end)} }`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const LinkStore = new Function("createId", "mapPickupLink", `${compiled}; return LinkStore;`)(() => "link-1", (value: unknown) => value);
-  const store = new LinkStore();
-  const links: any[] = [];
-  Object.assign(store, {
-    requireProject: async () => {}, findCurrentRevision: async () => ({ revision: { id: "revision" } }),
-    assertLinkQuantityCompatible: () => {}, recalcLinkedItemQuantity: async () => {},
-    db: {
-      pickup: { findFirst: async () => pickups[0] },
-      worksheetItem: { findFirst: async () => ({ id: "item", worksheetId: "worksheet", uom: "count" }) },
-      worksheet: { findFirst: async () => ({ revisionId: "revision" }) },
-      pickupLink: { create: async ({ data }: any) => { links.push(data); return data; } },
-    },
-  });
-  for (const pickup of pickups) await store.createPickupLink("test-project", { pickupId: pickup.id, worksheetItemId: "item" });
-  assert.equal(links.reduce((sum, link) => sum + link.derivedQuantity, 0), matches.length);
+  const linkedQuantity = pickups.reduce((sum, pickup) => sum + pickupLinkQuantity(pickup.measurement), 0);
+  assert.equal(linkedQuantity, matches.length);
+  assert.equal(pickupLinkQuantity({ value: 3, area: 12 }, "area", 2), 24);
+  assert.equal(pickupLinkQuantity({ value: 3 }, "value", 0), 0);
+  const referenceSave = await call("saveCountAsAnnotations", { documentId: "drawing", pageNumber: 1, matchSetId: libraryMatchSetId, label: "Library count", imageWidth: 2400, imageHeight: 1800 });
+  assert.equal(referenceSave.savedCount, 1);
+  assert.equal(pickups[1].measurement.value, 12);
+  assert.equal(pickups[1].metadata.canvasWidth, 1200);
+  assert.equal(pickups[1].metadata.canvasHeight, 900);
+  const mismatch = await handlers.get("saveCountAsAnnotations")!({ documentId: "another-drawing", pageNumber: 1, matchSetId: libraryMatchSetId, label: "Count" });
+  assert.equal(mismatch.isError, true);
+  await call("saveCountAsAnnotations", { documentId: "drawing", pageNumber: 1, matches, label: "Legacy dimensions" });
+  assert.equal(pickups[2].metadata.canvasWidth, 1200);
   await assert.rejects(() => call("saveCountAsAnnotations", { documentId: "drawing", pageNumber: 1, matches, label: "Count", imageWidth: -1 }), /greater than 0/);
 });
