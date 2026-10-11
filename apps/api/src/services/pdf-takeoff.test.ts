@@ -1,3 +1,7 @@
+import {
+  mutateWorkspaceStateLocked,
+  patchTakeoffCalibrations,
+} from "./takeoff-calibration-state.js";
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
@@ -105,8 +109,18 @@ test("save and explicit link use UI payloads; comparisons stay unlinked; human e
         ? { id, storagePath: "synthetic.pdf" }
         : null,
     getWorkspaceState: async () => ({ state: workspace }),
-    updateWorkspaceState: async (_: string, patch: any) => {
-      workspace = { ...workspace, ...patch };
+    updateTakeoffCalibrationKeys: async (
+      _: string,
+      documentId: string,
+      changes: any,
+      options: any,
+    ) => {
+      workspace = patchTakeoffCalibrations(
+        workspace,
+        documentId,
+        changes,
+        options,
+      );
     },
     createPickup: async (projectId: string, input: any) => {
       const p = { ...input, projectId, id: `pickup-${pickups.length}` };
@@ -130,7 +144,10 @@ test("save and explicit link use UI payloads; comparisons stay unlinked; human e
       return link;
     },
   };
-  const engine = async () => ({ page: { width: 600, height: 800 } });
+  const engine = async (request: any) => ({
+    page: { width: 600, height: 800 },
+    points: request.points,
+  });
   const service = new PdfTakeoffService(
     store,
     async () => ({ projectId: "other", documentId: "drawing", pageNumber: 1 }),
@@ -201,4 +218,250 @@ test("save and explicit link use UI payloads; comparisons stay unlinked; human e
   });
   assert.equal(edited.pickup.measurement.value, 10);
   assert.equal(edited.pickup.label, "Changed explicitly");
+});
+
+test("FileNode keys preserve UI calibration, pickups and human edits even with a linked document", async () => {
+  const human = { pixelsPerUnit: 10, unit: "ft", measuredBy: "person" };
+  let state: any = { takeoffCalibrations: { "file-node": { "1": human } } };
+  const pickups: any[] = [];
+  let calls = 0;
+  const store: any = {
+    getDocument: async (_: string, id: string) =>
+      id === "linked" ? { id, storagePath: "synthetic.pdf" } : null,
+    getFileNode: async (id: string) =>
+      id === "node"
+        ? { id, projectId: "project", type: "file", documentId: "linked" }
+        : null,
+    getWorkspaceState: async () => ({ state }),
+    updateTakeoffCalibrationKeys: async (
+      _: string,
+      id: string,
+      changes: any,
+      options: any,
+    ) => {
+      state = patchTakeoffCalibrations(state, id, changes, options);
+    },
+    createPickup: async (_: string, input: any) => {
+      const pickup = {
+        ...input,
+        id: "pickup",
+        updatedAt: "2026-10-11T00:00:00.000Z",
+      };
+      pickups.push(pickup);
+      return pickup;
+    },
+    listPickups: async () => pickups,
+    updatePickup: async (_: string, patch: any) =>
+      Object.assign(pickups[0], patch),
+  };
+  const service = new PdfTakeoffService(
+    store,
+    async () => ({
+      projectId: "project",
+      fileNodeId: "node",
+      pageNumber: 1,
+      rotation: 0,
+    }),
+    async (request: any) => {
+      calls++;
+      return { page: { width: 600, height: 800 }, points: request.points };
+    },
+  );
+  const resolved = await service.resolve("project", { viewId: "view" });
+  assert.equal(resolved.documentId, "file-node");
+  assert.equal(resolved.doc.id, "linked");
+  const saved = await service.save("project", {
+    documentId: "file-node",
+    type: "linear",
+    points: [
+      { x: 10, y: 10 },
+      { x: 110, y: 10 },
+    ],
+  });
+  assert.equal(calls, 1, "one Python page parse per measurement");
+  assert.equal(saved.pickup.documentId, "file-node");
+  assert.equal(saved.pickup.measurement.unit, "ft");
+  assert.equal(saved.pickup.measurement.value, 10);
+  await assert.rejects(
+    service.setCalibration("project", {
+      documentId: "file-node",
+      points: [
+        { x: 0, y: 0 },
+        { x: 100, y: 0 },
+      ],
+      knownDistance: 20,
+      unit: "ft",
+      source: "dimension",
+    }),
+    /replaceHuman/,
+  );
+  pickups[0].metadata.lastEditedBy = "person";
+  const edited = await service.update("project", {
+    pickupId: "pickup",
+    editHuman: true,
+    label: "Reviewed",
+  });
+  assert.equal(edited.pickup.measurement.unit, "ft");
+  assert.equal(edited.pickup.measurement.value, 10);
+});
+
+test("pixel-only and conflicting-scale measurements save without estimate links", async () => {
+  let cache: any = {};
+  let links = 0;
+  const store: any = {
+    getDocument: async () => ({ id: "drawing", storagePath: "synthetic.pdf" }),
+    getWorkspaceState: async () => ({
+      state: { takeoffCalibrations: { drawing: cache } },
+    }),
+    createPickup: async (_: string, input: any) => ({ ...input, id: "pickup" }),
+    createPickupLink: async () => {
+      links++;
+    },
+  };
+  const service = new PdfTakeoffService(
+    store,
+    async () => null,
+    async (request: any) => ({
+      page: { width: 600, height: 800 },
+      points: request.points,
+    }),
+  );
+  const input = {
+    documentId: "drawing",
+    type: "linear" as const,
+    points: [
+      { x: 10, y: 10 },
+      { x: 50, y: 10 },
+    ],
+    linkToItemId: "row",
+  };
+  assert.match(
+    (await service.save("project", input)).linkError!,
+    /Pixel measurements/,
+  );
+  const region = { x: 0, y: 0, width: 100, height: 100 };
+  cache = {
+    "region:1:a": { region, pageNumber: 1, pixelsPerUnit: 10, unit: "ft" },
+    "region:1:b": { region, pageNumber: 1, pixelsPerUnit: 20, unit: "ft" },
+  };
+  const conflicting = await service.save("project", input);
+  assert.equal(conflicting.pickup.measurement.unit, "px");
+  assert.equal(conflicting.link, null);
+  assert.equal(links, 0);
+});
+
+test("human edits made during geometry computation are protected by the original version", async () => {
+  const pickup: any = {
+    id: "pickup",
+    documentId: "drawing",
+    pageNumber: 1,
+    annotationType: "linear",
+    points: [
+      { x: 0, y: 0 },
+      { x: 100, y: 0 },
+    ],
+    metadata: { measuredBy: "agent" },
+    updatedAt: "2026-10-11T00:00:00.000Z",
+  };
+  const store: any = {
+    listPickups: async () => [pickup],
+    getDocument: async () => ({ id: "drawing", storagePath: "synthetic.pdf" }),
+    getWorkspaceState: async () => ({ state: {} }),
+    updatePickup: async (_: string, patch: any, expected: string) => {
+      assert.equal(expected, "2026-10-11T00:00:00.000Z");
+      if (expected !== pickup.updatedAt)
+        throw new Error("Pickup changed while measuring");
+      Object.assign(pickup, patch);
+    },
+  };
+  const service = new PdfTakeoffService(
+    store,
+    async () => null,
+    async (request: any) => {
+      pickup.updatedAt = "2026-10-11T00:00:01.000Z";
+      pickup.label = "Human edit";
+      return { page: { width: 600, height: 800 }, points: request.points };
+    },
+  );
+  await assert.rejects(
+    service.update("project", { pickupId: "pickup", label: "Agent edit" }),
+    /changed while measuring/,
+  );
+  assert.equal(pickup.label, "Human edit");
+});
+
+test("per-key calibration patches preserve concurrent keys and reject stale UI undo", async () => {
+  const first = { pixelsPerUnit: 10, unit: "ft", measuredBy: "agent" };
+  const second = { pixelsPerUnit: 20, unit: "ft", measuredBy: "agent" };
+  let state: any = { selectedDocumentId: "drawing" };
+  let row: any = null;
+  let lock = Promise.resolve();
+  let lockCount = 0;
+  const db: any = {
+    $transaction: async (fn: any) => {
+      let release!: () => void;
+      let locked = false;
+      const tx = {
+        $queryRaw: async (sql: TemplateStringsArray) => {
+          assert.match(sql.join("?"), /FOR UPDATE/);
+          lockCount++;
+          const prior = lock;
+          lock = new Promise<void>((resolve) => {
+            release = resolve;
+          });
+          await prior;
+          locked = true;
+        },
+        workspaceState: {
+          findUnique: async () => {
+            assert.ok(locked);
+            await Promise.resolve();
+            return row ? structuredClone(row) : null;
+          },
+          create: async ({ data }: any) => {
+            assert.equal(row, null);
+            row = { id: "workspace", ...data };
+            return row;
+          },
+          update: async ({ data }: any) => {
+            row = { ...row, ...data };
+            return row;
+          },
+        },
+      };
+      try {
+        return await fn(tx);
+      } finally {
+        if (release) release();
+      }
+    },
+  };
+  const transaction = (key: string, calibration: any) =>
+    mutateWorkspaceStateLocked(
+      db,
+      "project",
+      (current) =>
+        patchTakeoffCalibrations(current, "drawing", [{ key, calibration }], {
+          agent: true,
+        }),
+      async () => state,
+    );
+  await Promise.all([transaction("1", first), transaction("2", second)]);
+  assert.equal(lockCount, 2);
+  state = row.state;
+  assert.deepEqual(state.takeoffCalibrations.drawing, {
+    "1": first,
+    "2": second,
+  });
+  state = patchTakeoffCalibrations(state, "drawing", [
+    { key: "1", calibration: second, expected: first },
+  ]);
+  assert.throws(
+    () =>
+      patchTakeoffCalibrations(state, "drawing", [
+        { key: "1", calibration: null, expected: first },
+      ]),
+    /changed since/,
+  );
+  assert.equal(state.takeoffCalibrations.drawing["2"], second);
 });

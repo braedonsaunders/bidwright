@@ -2,9 +2,7 @@ import type { PrismaApiStore } from "../prisma-store.js";
 import { runPdfTakeoff } from "@bidwright/vision";
 import { resolveApiPath } from "../paths.js";
 import {
-  canvasToPdf,
   measureGeometry,
-  replaceCalibration,
   selectCalibration,
   viewToPdf,
   type Box,
@@ -23,13 +21,14 @@ export type MeasureInput = PdfSource & {
   points: Point[];
   snap?: boolean;
   tolerance?: number;
+  canvas?: { width: number; height: number };
 };
 type Store = Pick<
   PrismaApiStore,
   | "getDocument"
   | "getFileNode"
   | "getWorkspaceState"
-  | "updateWorkspaceState"
+  | "updateTakeoffCalibrationKeys"
   | "createPickup"
   | "updatePickup"
   | "listPickups"
@@ -49,37 +48,36 @@ export class PdfTakeoffService {
     readonly engine = runPdfTakeoff,
   ) {}
 
-  async context(projectId: string, input: PdfSource) {
+  async resolve(projectId: string, input: PdfSource) {
     const view = input.viewId
       ? await this.getView(projectId, input.viewId)
       : null;
     if (input.viewId && (!view || view.projectId !== projectId))
       throw new Error("View not found in project");
-    if (
-      view &&
-      input.documentId &&
-      input.documentId.replace(/^file-/, "") !==
-        (view.documentId ?? view.fileNodeId)
-    )
-      throw new Error("View belongs to a different document");
     if (view && input.pageNumber && input.pageNumber !== view.pageNumber)
       throw new Error("View belongs to a different page");
-    let documentId = view?.documentId ?? view?.fileNodeId ?? input.documentId;
+    let documentId =
+      input.documentId ??
+      (view?.fileNodeId ? `file-${view.fileNodeId}` : view?.documentId);
     const pageNumber = view?.pageNumber ?? input.pageNumber ?? 1;
-    if (!documentId)
-      throw new Error("documentId or a document viewId is required");
+    if (!documentId) throw new Error("documentId or viewId is required");
     let doc: {
       id: string;
       storagePath?: string | null;
       checksum?: string;
       source?: string;
       fileName?: string;
-    } | null = await this.store.getDocument(projectId, documentId);
+    } | null = documentId.startsWith("file-")
+      ? null
+      : await this.store.getDocument(projectId, documentId);
+    let nodeId: string | undefined;
     if (!doc && this.store.getFileNode) {
       const node = await this.store.getFileNode(
-        String(documentId).replace(/^file-/, ""),
+        documentId.replace(/^file-/, ""),
       );
       if (node?.projectId === projectId && node.type !== "directory") {
+        nodeId = node.id;
+        documentId = `file-${node.id}`;
         const linked = node.documentId
           ? await this.store.getDocument(projectId, node.documentId)
           : null;
@@ -89,25 +87,47 @@ export class PdfTakeoffService {
           fileName: node.name,
           source: "file_node",
         };
-        documentId = doc.id;
       }
     }
+    if (
+      view &&
+      (view.fileNodeId
+        ? view.fileNodeId !== nodeId
+        : view.documentId !== doc?.id)
+    )
+      throw new Error("View belongs to a different document");
     if (!doc?.storagePath)
       throw new Error("Document not found in project or has no PDF");
     const pdfPath = resolveApiPath(doc.storagePath);
-    const { page, facts = [] } = await this.engine({
-      pdfPath,
-      pageNumber,
-      operation: "info",
-    });
     return {
       doc,
       documentId: String(documentId),
       pageNumber: Number(pageNumber),
       pdfPath,
-      page: page as { width: number; height: number },
       view,
-      facts,
+    };
+  }
+
+  async context(
+    projectId: string,
+    input: PdfSource,
+    operation: Record<string, unknown> = { operation: "info" },
+  ) {
+    const source = await this.resolve(projectId, input);
+    const result = await this.engine({
+      ...operation,
+      pdfPath: source.pdfPath,
+      pageNumber: source.pageNumber,
+      view: source.view,
+      coordinateSpace:
+        input.coordinateSpace ??
+        (input.viewId ? "view-normalized" : "pdf-points"),
+    });
+    return {
+      ...source,
+      page: result.page as { width: number; height: number },
+      facts: result.facts ?? [],
+      geometry: result,
     };
   }
 
@@ -232,7 +252,6 @@ export class PdfTakeoffService {
     const key = region
       ? `region:${ctx.pageNumber}:${input.regionId ?? [region.x, region.y, region.width, region.height].map((n) => n.toFixed(3)).join(",")}`
       : String(ctx.pageNumber);
-    const { all, cache } = await this.calibrations(projectId, ctx.documentId);
     const calibration = {
       pixelsPerUnit,
       unit: input.unit,
@@ -245,33 +264,24 @@ export class PdfTakeoffService {
       viewId: input.viewId ?? null,
       updatedAt: new Date().toISOString(),
     };
-    await this.store.updateWorkspaceState(projectId, {
-      takeoffCalibrations: {
-        ...all,
-        [ctx.documentId]: replaceCalibration(
-          cache,
-          key,
-          calibration,
-          input.replaceHuman,
-        ),
-      },
-    });
+    await this.store.updateTakeoffCalibrationKeys(
+      projectId,
+      ctx.documentId,
+      [{ key, calibration }],
+      { agent: true, replaceHuman: input.replaceHuman },
+    );
     return { calibrationKey: key, calibration };
   }
 
   async measure(projectId: string, input: MeasureInput) {
-    const ctx = await this.context(projectId, input);
-    let points = this.points(input, ctx, input.points);
-    const snapped = input.snap
-      ? await this.engine({
-          pdfPath: ctx.pdfPath,
-          pageNumber: ctx.pageNumber,
-          operation: "snap",
-          points,
-          tolerance: input.tolerance ?? 3,
-        })
-      : null;
-    if (snapped) points = snapped.points;
+    const ctx = await this.context(projectId, input, {
+      operation: input.snap ? "snap" : "info",
+      points: input.points,
+      canvas: input.canvas,
+      tolerance: input.tolerance ?? 3,
+    });
+    const points = ctx.geometry.points as Point[];
+    const snapped = input.snap ? ctx.geometry : null;
     const { cache } = await this.calibrations(projectId, ctx.documentId);
     const selected = selectCalibration(cache, ctx.pageNumber, points);
     return {
@@ -320,6 +330,7 @@ export class PdfTakeoffService {
         coordinateSpace: "pdf-points",
         viewId: result.viewId,
         sourceChecksum: result.sourceChecksum,
+        calibrationKey: result.calibrationKey,
         comparisonGroup: input.comparisonGroup,
         canvasWidth: result.page.width,
         canvasHeight: result.page.height,
@@ -330,6 +341,18 @@ export class PdfTakeoffService {
     // Link validation and derived quantity use the same service as Takeoff Studio.
     // Return a saved pickup even if the explicit link fails, so retries need not duplicate it.
     if (input.linkToItemId) {
+      if (
+        result.measurement.unit === "px" ||
+        result.measurement.unit === "px²"
+      ) {
+        return {
+          pickup,
+          link: null,
+          linkError:
+            "Pixel measurements have no physical-unit conversion; pickup saved without a worksheet link",
+          facts: result.facts,
+        };
+      }
       try {
         const link = await this.store.createPickupLink(projectId, {
           pickupId: pickup.id,
@@ -368,6 +391,7 @@ export class PdfTakeoffService {
       (p) => p.id === input.pickupId,
     );
     if (!pickup) throw new Error("Pickup not found in project");
+    const expectedUpdatedAt = pickup.updatedAt;
     const metadata = pickup.metadata as Record<string, unknown>;
     if (
       (metadata.measuredBy !== "agent" || metadata.lastEditedBy === "person") &&
@@ -381,17 +405,7 @@ export class PdfTakeoffService {
       throw new Error(
         "Pickup annotation type is not supported by PDF measurement",
       );
-    const ctx = await this.context(projectId, {
-      documentId: pickup.documentId,
-      pageNumber: pickup.pageNumber,
-    });
-    const canvas = {
-      width: Number(metadata.canvasWidth) || ctx.page.width,
-      height: Number(metadata.canvasHeight) || ctx.page.height,
-    };
-    const points =
-      input.points ??
-      pickup.points.map((p) => canvasToPdf(p, ctx.page, canvas));
+    const points = input.points ?? pickup.points;
     const result = await this.measure(projectId, {
       documentId: pickup.documentId,
       pageNumber: pickup.pageNumber,
@@ -401,23 +415,38 @@ export class PdfTakeoffService {
       coordinateSpace: input.points ? input.coordinateSpace : "pdf-points",
       snap: input.snap,
       tolerance: input.tolerance,
+      canvas:
+        !input.points &&
+        Number(metadata.canvasWidth) > 0 &&
+        Number(metadata.canvasHeight) > 0
+          ? {
+              width: Number(metadata.canvasWidth),
+              height: Number(metadata.canvasHeight),
+            }
+          : undefined,
     });
-    const updated = await this.store.updatePickup(pickup.id, {
-      points: result.points,
-      measurement: result.measurement,
-      calibration: result.calibration,
-      ...(input.label !== undefined ? { label: input.label } : {}),
-      ...(input.color !== undefined ? { color: input.color } : {}),
-      metadata: {
-        ...metadata,
-        lastEditedBy: "agent",
-        viewId: result.viewId,
-        canvasWidth: ctx.page.width,
-        canvasHeight: ctx.page.height,
-        pdfPageWidth: ctx.page.width,
-        pdfPageHeight: ctx.page.height,
+    const updated = await this.store.updatePickup(
+      pickup.id,
+      {
+        points: result.points,
+        measurement: result.measurement,
+        calibration: result.calibration,
+        ...(input.label !== undefined ? { label: input.label } : {}),
+        ...(input.color !== undefined ? { color: input.color } : {}),
+        metadata: {
+          ...metadata,
+          lastEditedBy: "agent",
+          calibrationKey: result.calibrationKey,
+          sourceChecksum: result.sourceChecksum,
+          viewId: result.viewId,
+          canvasWidth: result.page.width,
+          canvasHeight: result.page.height,
+          pdfPageWidth: result.page.width,
+          pdfPageHeight: result.page.height,
+        },
       },
-    });
+      expectedUpdatedAt,
+    );
     return { pickup: updated, facts: result.facts };
   }
 
@@ -429,16 +458,13 @@ export class PdfTakeoffService {
       maxSegments?: number;
     },
   ) {
-    const ctx = await this.context(projectId, input);
-    const [seed] = this.points(input, ctx, [input.seed]);
-    const result = await this.engine({
-      pdfPath: ctx.pdfPath,
-      pageNumber: ctx.pageNumber,
+    const ctx = await this.context(projectId, input, {
       operation: "trace",
-      seed,
+      seed: input.seed,
       tolerance: input.tolerance ?? 3,
       maxSegments: input.maxSegments ?? 1000,
     });
+    const result = ctx.geometry;
     const { cache } = await this.calibrations(projectId, ctx.documentId);
     const paths = (result.paths as Point[][]).map((points) => {
       const selected = selectCalibration(cache, ctx.pageNumber, points);

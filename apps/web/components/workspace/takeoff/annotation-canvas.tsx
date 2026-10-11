@@ -31,6 +31,7 @@ export interface Pickup {
     height?: number;
     spacing?: number;
   };
+  calibration?: (Calibration & { region?: { x: number; y: number; width: number; height: number } }) | null;
   measurement?: { value: number; unit: string; area?: number; volume?: number; raw?: number; rawUnit?: string };
   /** Per-annotation extras (source provenance, AI metadata, bbox thumbnail
    *  data URIs, match counts, etc). The DB column already exists; this

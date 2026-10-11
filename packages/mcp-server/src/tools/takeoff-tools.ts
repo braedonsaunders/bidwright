@@ -35,7 +35,15 @@ export function registerTakeoffTools(server: McpServer) {
   const call = async (operation: string, input: unknown) => {
     const result = await apiPost<Record<string, unknown>>(
       `/api/takeoff/${getProjectId()}/pdf/${operation}`,
-      input,
+      operation === "overlay"
+        ? {
+            ...(input as object),
+            recordView: {
+              runId: process.env.BIDWRIGHT_RUN_ID,
+              sessionId: process.env.BIDWRIGHT_SESSION_ID,
+            },
+          }
+        : input,
     );
     const content: Array<
       | { type: "text"; text: string }

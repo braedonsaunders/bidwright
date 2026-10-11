@@ -2,7 +2,6 @@ import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 import { prisma } from "@bidwright/db";
 import { PdfTakeoffService } from "../services/pdf-takeoff-service.js";
-import { canvasToPdf, type Box } from "../services/pdf-takeoff-geometry.js";
 import {
   detectTitleBlockScale,
   parseScalesFromText,
@@ -77,6 +76,42 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
     );
     const body = request.body ?? {};
     try {
+      if (operation === "patch-calibration-keys") {
+        const value = z
+          .object({
+            documentId: z.string().min(1),
+            changes: z
+              .array(
+                z.object({
+                  key: z.string().min(1),
+                  calibration: z
+                    .object({
+                      pixelsPerUnit: z.number().positive(),
+                      unit: z.string().min(1),
+                    })
+                    .passthrough()
+                    .nullable(),
+                  expected: z.record(z.unknown()).nullable().optional(),
+                }),
+              )
+              .max(1000),
+          })
+          .parse(body);
+        if (value.documentId.startsWith("kb-")) {
+          const book = await request.store!.getKnowledgeBook(
+            value.documentId.slice(3),
+          );
+          if (!book || book.projectId !== projectId)
+            throw new Error("Knowledge book not found in project");
+        } else {
+          await service.resolve(projectId, { documentId: value.documentId });
+        }
+        return await request.store!.updateTakeoffCalibrationKeys(
+          projectId,
+          value.documentId,
+          value.changes as any,
+        );
+      }
       if (operation === "get-calibration")
         return await service.getCalibration(projectId, source.parse(body));
       if (operation === "set-calibration")
@@ -100,7 +135,9 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
         );
       if (operation === "detect-scale" || operation === "extract-legend") {
         const input = source.parse(body),
-          ctx = await service.context(projectId, input);
+          ctx = await service.context(projectId, input, {
+            operation: operation === "detect-scale" ? "scale" : "info",
+          });
         const integrations = ((await request.store!.getSettings())
           .integrations ?? {}) as {
           azureDiEndpoint?: string;
@@ -117,11 +154,7 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
             ctx.pageNumber,
             azure,
           );
-        const native = await service.engine({
-          pdfPath: ctx.pdfPath,
-          pageNumber: ctx.pageNumber,
-          operation: "scale",
-        });
+        const native = ctx.geometry;
         const ocr = await detectTitleBlockScale(
           projectId,
           ctx.documentId,
@@ -239,9 +272,15 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
           .extend({
             region: box.optional(),
             pickupIds: z.array(z.string()).optional(),
+            recordView: z
+              .object({
+                runId: z.string().optional(),
+                sessionId: z.string().optional(),
+              })
+              .optional(),
           })
           .parse(body);
-        const ctx = await service.context(projectId, input);
+        const ctx = await service.resolve(projectId, input);
         const all = await request.store!.listPickups(
           projectId,
           ctx.documentId,
@@ -254,20 +293,6 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
             p.sourceKind === "annotation" &&
             (!input.pickupIds || input.pickupIds.includes(p.id)),
         );
-        let region: Box | undefined;
-        if (input.region) {
-          const b = input.region,
-            corners = service.points(input, ctx, [
-              { x: b.x, y: b.y },
-              { x: b.x + b.width, y: b.y + b.height },
-            ]);
-          region = {
-            x: Math.min(corners[0].x, corners[1].x),
-            y: Math.min(corners[0].y, corners[1].y),
-            width: Math.abs(corners[1].x - corners[0].x),
-            height: Math.abs(corners[1].y - corners[0].y),
-          };
-        }
         const maxEdge = Math.min(
           4096,
           Math.max(
@@ -279,35 +304,21 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
           pdfPath: ctx.pdfPath,
           pageNumber: ctx.pageNumber,
           operation: "overlay",
-          region,
+          region: input.region,
+          coordinateSpace:
+            input.coordinateSpace ??
+            (input.viewId ? "view-normalized" : "pdf-points"),
+          view: ctx.view,
           maxEdge,
-          pickups: pickups.map((p) => {
-            const m = p.metadata as Record<string, unknown>;
-            return {
-              ...p,
-              points: p.points.map((q) =>
-                canvasToPdf(q, ctx.page, {
-                  width: Number(m.canvasWidth) || ctx.page.width,
-                  height: Number(m.canvasHeight) || ctx.page.height,
-                }),
-              ),
-            };
-          }),
+          pickups,
         });
-        const bbox = region
-          ? {
-              x: region.x / ctx.page.width,
-              y: region.y / ctx.page.height,
-              width: region.width / ctx.page.width,
-              height: region.height / ctx.page.height,
-            }
-          : null;
+        const bbox = input.region ? rendered.bbox : null;
         const record = async (image: string, tool: string) =>
           recordEvidenceView({
             projectId,
             doc: ctx.doc,
             documentId: ctx.documentId,
-            recordView: { tool },
+            recordView: { ...input.recordView, tool },
             defaultTool: tool,
             image,
             pageNumber: ctx.pageNumber,
@@ -342,11 +353,9 @@ export async function pdfTakeoffRoutes(app: FastifyInstance) {
       }
       return reply.code(404).send({ message: "Unknown PDF takeoff operation" });
     } catch (error) {
-      return reply
-        .code(400)
-        .send({
-          message: error instanceof Error ? error.message : String(error),
-        });
+      return reply.code(400).send({
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
   });
 }
