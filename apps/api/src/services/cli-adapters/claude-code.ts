@@ -1,6 +1,6 @@
 /** Claude Agent SDK adapter with the legacy runtime id retained for compatibility. */
 
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { join } from "node:path";
@@ -101,7 +101,9 @@ async function writeClaudeSettings(ctx: PrepareWorkspaceCtx, freshen: boolean) {
   const claudeSettingsDir = join(ctx.projectDir, ".claude");
   if (freshen) {
     try {
-      await rm(claudeSettingsDir, { recursive: true, force: true });
+      for (const entry of await readdir(claudeSettingsDir)) {
+        if (entry !== "skills") await rm(join(claudeSettingsDir, entry), { recursive: true, force: true });
+      }
     } catch {
       // ignore — directory may not exist
     }
@@ -376,9 +378,9 @@ export const claudeCodeAdapter: CliAdapter = {
   },
 
   async prepareWorkspace(ctx) {
-    // Freshen `.claude/` only on initial spawn. On resume we just ensure the
-    // settings.json is in place without wiping CLI state the running process
-    // might still depend on.
+    // Preserve launch-installed skills while freshening initial CLI state.
+    // On resume just ensure settings.json is in place without wiping CLI state
+    // the running process might still depend on.
     await writeClaudeSettings(ctx, !ctx.isResume);
     if (ctx.agentHomeDir) {
       // Clean server runtime state is separate from any legacy OAuth cache.

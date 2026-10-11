@@ -433,12 +433,7 @@ function buildMcpEnv(opts: {
     BIDWRIGHT_RUN_ID: opts.aiRunId || "",
     BIDWRIGHT_SESSION_ID: opts.providerSessionId || "",
     BIDWRIGHT_REVIEW_ONLY: opts.reviewOnly ? "true" : "false",
-<<<<<<< HEAD
-    BIDWRIGHT_AGENT_IMAGE_MAX_EDGE: process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE || "1568",
-=======
     BIDWRIGHT_AGENT_IMAGE_MAX_EDGE: agentImageMaxEdge(opts.runtime),
-    BIDWRIGHT_AGENT_IMAGE_BUDGET: process.env.BIDWRIGHT_AGENT_IMAGE_BUDGET || "120",
->>>>>>> origin/takeoff/evals
   };
 }
 

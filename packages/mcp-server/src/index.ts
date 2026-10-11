@@ -33,6 +33,7 @@ import { registerIntegrationTools } from "./tools/integration-tools.js";
 import { registerResourceTools } from "./tools/resource-tools.js";
 import { registerCalculatorTools } from "./tools/calculator-tools.js";
 import { registerWebTools } from "./tools/web-tools.js";
+import { registerSourceTools } from "./tools/source-tools.js";
 
 export async function registerTools(server: McpServer, options: { mode?: string; reviewOnly?: boolean } = {}) {
   const { mode, reviewOnly = false } = options;
@@ -92,6 +93,8 @@ export async function registerTools(server: McpServer, options: { mode?: string;
   registerResourceTools(server);
   registerCalculatorTools(server);
   registerWebTools(server);
+  registerSourceTools(server);
+
   await registerIntegrationTools(server);
 
   server.tool(

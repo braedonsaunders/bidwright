@@ -24,6 +24,7 @@ import {
 } from "../services/cli-login-pty.js";
 import { getAdapter, isRegisteredRuntime, listAdapters, tryGetAdapter } from "../services/cli-adapters/registry.js";
 import { generateInstructionFiles, generateQaInstructionFiles, symlinkKnowledgeBooks, writeKnowledgeDocumentSnapshots } from "../services/claude-md-generator.js";
+import { getSourceOverview } from "../services/source-overview-service.js";
 import { writeAgentLibrarySnapshot } from "../services/agent-library-snapshot.js";
 import { stripBlankCredentialEnv } from "../services/agent-host/env-sanitize.js";
 import { getAgentRuntimeHost } from "../services/agent-host/index.js";
@@ -1104,6 +1105,7 @@ async function prepareCliAgentWorkspace(input: {
   const persona = await resolveEstimatorPersonaForPrompt(store, input.personaId);
 
   const instructionParams = {
+    sourceOverview: await getSourceOverview(projectId),
     projectDir,
     projectName: project.name || "Untitled Project",
     clientName: project.clientName || "",
@@ -1380,6 +1382,7 @@ export function registerCliRoutes(app: FastifyInstance) {
 
     // Generate per-runtime instruction files (CLAUDE.md / AGENTS.md / GEMINI.md)
     const params = {
+      sourceOverview: await getSourceOverview(projectId),
       projectDir,
       projectName: project.name || "Untitled Project",
       clientName: project.clientName || "",

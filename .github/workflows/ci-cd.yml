@@ -134,6 +134,8 @@ jobs:
           apps/api/src/services/session-continuity.test.ts
           apps/api/src/services/instruction-restore.test.ts
           apps/api/src/services/claude-md-generator.test.ts
+          apps/api/src/services/source-overview-service.test.ts
+          apps/api/src/services/bw-client.test.mjs
           packages/mcp-server/src/quote-description.test.ts
           packages/mcp-server/src/tool-access.test.ts
           packages/mcp-server/src/tool-dispatch.test.ts
