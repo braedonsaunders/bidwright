@@ -1,3 +1,4 @@
+import { resolveProjectFileNode } from "./project-source-resolver.js";
 // Auto-detect drawing scale from a page's title block.
 //
 // Construction drawings spell their scale out in plain text — usually in the
@@ -204,7 +205,7 @@ export async function detectTitleBlockScale(
   }
 
   if (!storagePath) {
-    const node = await prisma.fileNode.findFirst({ where: { id: documentId.replace(/^file-/, ""), projectId } });
+    const node = await resolveProjectFileNode(projectId, documentId, (id) => prisma.fileNode.findFirst({ where: { id, projectId } }));
     if (node?.storagePath && node.type !== "directory") {
       storagePath = node.storagePath;
       fileName = node.name;

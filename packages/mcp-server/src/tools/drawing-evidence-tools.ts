@@ -1,3 +1,4 @@
+import { promoteSourceDocumentId } from "../source-document.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -1194,11 +1195,10 @@ async function findWorkspaceDocument(documentId: string) {
  * source document first, so it gets pages, extraction and atlas eligibility.
  */
 export async function resolveSourceDocumentId(id: string): Promise<string> {
+  if (typeof id !== "string") return "";
   const trimmed = id.trim();
   if (await findWorkspaceDocument(trimmed)) return trimmed;
-  if (!trimmed.startsWith("fn-")) return trimmed;
-  const promoted = await apiPost<JsonRecord>(`/projects/${getProjectId()}/documents/from-file-node`, { fileNodeId: trimmed }).catch(() => null);
-  return typeof promoted?.id === "string" ? promoted.id : trimmed;
+  return promoteSourceDocumentId(trimmed).catch(() => trimmed);
 }
 
 async function getStrategy() {

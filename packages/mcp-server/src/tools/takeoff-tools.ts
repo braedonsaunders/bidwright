@@ -8,7 +8,7 @@ const box = point.extend({
   height: z.number().positive(),
 });
 const source = {
-  documentId: z.string().optional(),
+  documentId: z.string().optional().describe("SourceDocument ID or FileNode ID (fn-…, file-… or Files UI key file-<nodeId>)"),
   pageNumber: z.number().int().positive().optional(),
   viewId: z.string().optional(),
   coordinateSpace: z
@@ -32,8 +32,8 @@ const geometry = {
 };
 
 export function registerTakeoffTools(server: McpServer) {
-  server.tool("saveSourceQuantityTakeoff", "Save an authored BOM, schedule or document-table quantity as a visible pickup with source references; optionally link it to a worksheet item. Returns the saved pickup and any linkError.", {
-    documentId: z.string().describe("Source document id, or file-<nodeId> for a FileNode"),
+  server.tool("saveSourceQuantityTakeoff", "Save an authored BOM, schedule or document-table quantity as a visible pickup with source references; optionally link it to a worksheet item. Returns the saved pickup and any linkError. Batch example (one call per line): save {\"documentId\":\"doc-bom\",\"quantity\":317,\"unit\":\"LF\",\"label\":\"3-inch pipe\",\"sourceRefs\":[{\"sheet\":\"BOM\",\"row\":6}]}, then {\"documentId\":\"doc-bom\",\"quantity\":43,\"unit\":\"EA\",\"label\":\"Valves\",\"sourceRefs\":[{\"sheet\":\"BOM\",\"row\":7}]}. Once the matching worksheet rows exist, repeat each identical call with linkToItemId set to that row ID, quantityField: value and multiplier: 1. The existing pickup is reused and linked once. For unlike units, supply the explicit conversion multiplier; a linkError means the pickup exists but is not linked.", {
+    documentId: z.string().describe("Source document id, literal FileNode id (fn-… or file-…), or UI key file-<nodeId>"),
     quantity: z.number().nonnegative(), unit: z.string(), label: z.string(), description: z.string().optional(),
     sourceRefs: z.array(z.object({ sheet: z.string().optional(), row: z.number().int().positive().optional(), page: z.number().int().positive().optional(), cell: z.string().optional(), text: z.string().optional() })).min(1),
     linkToItemId: z.string().optional(), quantityField: z.enum(["value", "area", "volume", "count"]).default("value"), multiplier: z.number().positive().optional(),

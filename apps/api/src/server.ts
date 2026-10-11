@@ -1,3 +1,4 @@
+import { canPromoteSourceFile, resolveProjectFileNode } from "./services/project-source-resolver.js";
 import compress from "@fastify/compress";
 import cors from "@fastify/cors";
 import multipart from "@fastify/multipart";
@@ -3093,21 +3094,38 @@ export function buildServer() {
     return result;
   });
 
+  app.get("/projects/:projectId/documents/resolve-source", async (request, reply) => {
+    const { projectId } = request.params as { projectId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
+    const { sourceId } = request.query as { sourceId?: unknown };
+    if (typeof sourceId !== "string" || !sourceId.trim()) return reply.code(400).send({ message: "sourceId is required" });
+    const direct = await request.store!.getDocument(projectId, sourceId);
+    if (direct) return { id: direct.id };
+    const node = await resolveProjectFileNode(projectId, sourceId, (id) => prisma.fileNode.findFirst({ where: { id, projectId } }));
+    if (!node) return reply.code(404).send({ message: "File not found in this project" });
+    const metadata = node.metadata as Record<string, unknown> | null;
+    const linkedId = node.documentId || metadata?.sourceDocumentId;
+    const linked = typeof linkedId === "string" ? await request.store!.getDocument(projectId, linkedId) : null;
+    return linked ? { id: linked.id } : { id: null, message: "This FileNode has no extracted SourceDocument. promoteSourceDocument explicitly ingests supported text, spreadsheet, image or PDF sources; archives and models use their dedicated tools." };
+  });
+
   // Promote a file already in the Files area (FileNode) to a source document.
   // Idempotent per file: the promoted document id is remembered on the node.
   app.post("/projects/:projectId/documents/from-file-node", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
     const body = (request.body ?? {}) as { fileNodeId?: string; documentType?: string };
     const fileNodeId = typeof body.fileNodeId === "string" ? body.fileNodeId.trim() : "";
     if (!fileNodeId) {
       return reply.code(400).send({ message: "fileNodeId is required" });
     }
-    const node = await prisma.fileNode.findFirst({ where: { id: fileNodeId, projectId } });
+    const node = await resolveProjectFileNode(projectId, fileNodeId, (id) => prisma.fileNode.findFirst({ where: { id, projectId } }));
     if (!node || node.type !== "file" || !node.storagePath) {
       return reply.code(404).send({ message: "File not found in this project" });
     }
+    if (!canPromoteSourceFile(node.name)) return reply.code(400).send({ message: "Archives, models and unsupported formats cannot be promoted here. Use explicit archive extraction or native model tools." });
     const metadata = (node.metadata && typeof node.metadata === "object" ? node.metadata : {}) as Record<string, unknown>;
-    const existingId = typeof metadata.sourceDocumentId === "string" ? metadata.sourceDocumentId : "";
+    const existingId = node.documentId || (typeof metadata.sourceDocumentId === "string" ? metadata.sourceDocumentId : "");
     if (existingId) {
       const existing = await prisma.sourceDocument.findFirst({ where: { id: existingId, projectId } });
       if (existing) return existing;
@@ -3116,7 +3134,7 @@ export function buildServer() {
     const fields: Record<string, string> = {};
     if (body.documentType) fields.documentType = String(body.documentType);
     const document = await ingestDocumentUpload(request, reply, projectId, node.name, fileBuffer, fields) as { id?: string };
-    if (document?.id) {
+    if (typeof document?.id === "string") {
       await prisma.fileNode.update({
         where: { id: node.id },
         data: { metadata: { ...metadata, sourceDocumentId: document.id } as any },
@@ -6638,8 +6656,8 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   // this to find which documents/pages/tables mention a phrase before
   // drilling in with readDocumentText / getDocumentStructured.
   app.get("/knowledge/project-corpus/search", async (request, reply) => {
-    const { q, projectId, limit, kinds, documentType } = (request.query ?? {}) as {
-      q?: string; projectId?: string; limit?: string; kinds?: string; documentType?: string;
+    const { q, projectId, limit, kinds, documentType, documentId } = (request.query ?? {}) as {
+      q?: string; projectId?: string; limit?: string; kinds?: string; documentType?: string; documentId?: string;
     };
     if (!projectId) return reply.code(400).send({ message: "projectId is required" });
     if (!q || !q.trim()) return reply.code(400).send({ message: "q is required" });
@@ -6651,13 +6669,14 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
       limit: parsedLimit,
       kinds: parsedKinds,
       documentType: documentType?.trim() || undefined,
+      documentId,
     });
 
     // Hybrid lane: project documents are indexed as project-scoped knowledge
     // books at ingest, so when an embedder is configured we fuse semantic
     // chunk hits (with page numbers) into the lexical page hits by reciprocal
     // rank. Without an embedder this is a no-op and the response is unchanged.
-    if (!(await resolveEmbeddingConfig(request.store!)) || (parsedKinds && !parsedKinds.includes("text"))) return lexical;
+    if (documentId || !(await resolveEmbeddingConfig(request.store!)) || (parsedKinds && !parsedKinds.includes("text"))) return lexical;
     try {
       const semantic = await knowledgeService.search(q, {
         scope: "project",

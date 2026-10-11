@@ -6506,6 +6506,7 @@ export class PrismaApiStore {
     limit?: number;
     kinds?: Array<"text" | "table" | "kv">;
     documentType?: string;
+    documentId?: string;
   } = {}) {
     await this.requireProject(projectId);
     const profile = buildEstimatorSearchProfile(query);
@@ -6517,6 +6518,7 @@ export class PrismaApiStore {
     const docs = await this.db.sourceDocument.findMany({
       where: {
         projectId,
+        ...(opts.documentId ? { id: opts.documentId } : {}),
         ...(opts.documentType ? { documentType: opts.documentType } : {}),
       },
       select: {

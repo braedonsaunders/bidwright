@@ -333,7 +333,8 @@ export async function modelRoutes(app: FastifyInstance) {
     const { projectId, modelId } = request.params as { projectId: string; modelId: string };
     if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
     const parsed = z.object({ groupBy: z.enum(["class", "type", "level", "system", "material", "property"]), property: z.string().optional(),
-      elementIds: z.array(z.string()).max(10000).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
+      elementClass: z.string().optional(), propertyFilters: z.record(z.string(), z.string()).optional(),
+    elementIds: z.array(z.string()).max(10000).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
     }).refine((v) => v.groupBy !== "property" || Boolean(v.property), "property path is required").safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
     try { return await aggregateModelElements(projectId, modelId, parsed.data); } catch (error) { return routeError(reply, error); }

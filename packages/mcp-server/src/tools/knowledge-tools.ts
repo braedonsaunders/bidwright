@@ -1,3 +1,4 @@
+import { promoteSourceDocumentId, resolveSourceDocumentId } from "../source-document.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, projectPath, getProjectId } from "../api-client.js";
@@ -143,6 +144,10 @@ function resolveQuery(input: { query?: string; q?: string }) {
 
 export function registerKnowledgeTools(server: McpServer) {
 
+  server.tool("promoteSourceDocument", "Explicitly ingest a supported FileNode as a SourceDocument. This write copies bytes and can run paid extraction. Existing linked documents are reused. Archives and model formats are not supported here.", {
+    fileNodeId: z.string().describe("Literal FileNode id or Files UI file-<nodeId> key"),
+  }, async ({ fileNodeId }) => ({ content: [{ type: "text" as const, text: JSON.stringify({ documentId: await promoteSourceDocumentId(fileNodeId) }) }] }));
+
   server.tool(
     "searchEstimatingKnowledge",
     "Search labour productivity units, PDF reference-book passages and structured datasets together. Use an operation + material + size/condition. Returns independent ranked shortlists with IDs, units and source context; book prose and dataset samples are not interchangeable rates. Drill into getLaborUnit, readKnowledgePassage, or queryKnowledgeDataset with exact filters.",
@@ -273,6 +278,7 @@ export function registerKnowledgeTools(server: McpServer) {
       q: z.string().optional().describe("Alias for query."),
       limit: z.coerce.number().int().positive().max(40).default(12).describe("Max hits to return."),
       kinds: z.array(z.enum(["text", "table", "kv"])).optional().describe("Restrict to text, table, or key-value matches. Defaults to all three."),
+      documentId: z.string().optional().describe("Optional SourceDocument or FileNode ID to search within."),
       documentType: z.string().optional().describe("Optional filter on documentType (e.g. 'rfq', 'spec', 'drawing')."),
     },
     async (input) => {
@@ -286,6 +292,7 @@ export function registerKnowledgeTools(server: McpServer) {
       const params = new URLSearchParams({ q: query, projectId: getProjectId(), limit: String(input.limit) });
       if (input.kinds && input.kinds.length > 0) params.set("kinds", input.kinds.join(","));
       if (input.documentType) params.set("documentType", input.documentType);
+      if (input.documentId) params.set("documentId", await resolveSourceDocumentId(input.documentId));
       const data = await apiGet(`/knowledge/project-corpus/search?${params}`);
       return {
         content: [{
@@ -631,12 +638,13 @@ export function registerKnowledgeTools(server: McpServer) {
     "readDocumentText",
     "Read extracted text for a project document, knowledge book, or manually-authored knowledge page library by ID. Use IDs from the project manifest, listKnowledgeBooks, or listKnowledgeDocuments. For spreadsheets, use readSpreadsheet instead. For table-heavy PDFs, pair this with getDocumentStructured.",
     {
-      documentId: z.string().describe("SourceDocument ID, KnowledgeBook ID, or KnowledgeDocument ID"),
+      documentId: z.string().describe("SourceDocument ID, FileNode ID (fn-…, file-… or file-fn-…), KnowledgeBook ID, or KnowledgeDocument ID"),
       pages: z.string().optional().describe("Optional page range like '1-5' or single page like '12'"),
       offset: z.coerce.number().int().min(0).default(0).describe("Character offset for chunking long extracted text."),
-      maxChars: z.coerce.number().int().positive().max(30000).default(12000).describe("Maximum characters to return. Default keeps tool output below context limits."),
+      maxChars: z.coerce.number().int().positive().max(30000).default(12000).describe("Maximum characters to return (1–30000). Use offset for the next chunk."),
     },
     async ({ documentId, pages, offset, maxChars }) => {
+      documentId = await resolveSourceDocumentId(documentId);
       const params = pages ? `?pages=${encodeURIComponent(pages)}` : "";
       const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}${params}`);
       const doc = data.document || data;
@@ -671,11 +679,12 @@ export function registerKnowledgeTools(server: McpServer) {
     "getDocumentStructured",
     "Get the Azure Document Intelligence structured extraction for a project source document: tables (as markdown), key-value pairs, section headings, and page-by-page text. For knowledge books, use readDocumentText and getBookPage instead.",
     {
-      documentId: z.string().describe("SourceDocument ID"),
+      documentId: z.string().describe("SourceDocument or FileNode ID"),
       maxTables: z.coerce.number().int().positive().max(20).default(5),
       maxTableChars: z.coerce.number().int().positive().max(12000).default(3000),
     },
     async ({ documentId, maxTables, maxTableChars }) => {
+      documentId = await resolveSourceDocumentId(documentId);
       const data = await apiGet(`/api/knowledge/documents/${getProjectId()}/${documentId}`);
       // Return structured data if available
       const doc = data.document || data;
@@ -717,12 +726,13 @@ export function registerKnowledgeTools(server: McpServer) {
     "readSpreadsheet",
     "Read an xlsx/xls/csv spreadsheet and return its contents as markdown tables. Use this for ANY spreadsheet document — Claude Code cannot natively parse binary xlsx files. Returns all sheets (or a specific sheet) as readable markdown tables with headers.",
     {
-      documentId: z.string().describe("SourceDocument ID of the spreadsheet file (from the document manifest in CLAUDE.md)"),
+      documentId: z.string().describe("SourceDocument or FileNode ID of the spreadsheet file (from the document manifest in CLAUDE.md)"),
       sheet: z.string().optional().describe("Optional sheet name to read. If omitted, returns all sheets."),
       offset: z.coerce.number().int().min(0).default(0).describe("Character offset for chunking large workbook output."),
-      maxChars: z.coerce.number().int().positive().max(30000).default(16000).describe("Maximum output characters. Use sheet to narrow large workbooks."),
+      maxChars: z.coerce.number().int().positive().max(30000).default(16000).describe("Maximum output characters (1–30000). Use sheet or offset to narrow large workbooks."),
     },
     async ({ documentId, sheet, offset, maxChars }) => {
+      documentId = await resolveSourceDocumentId(documentId);
       try {
         const params = sheet ? `?sheet=${encodeURIComponent(sheet)}` : "";
         const data = await apiGet(`/api/knowledge/read-spreadsheet/${documentId}${params}`);

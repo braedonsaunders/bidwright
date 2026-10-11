@@ -199,9 +199,9 @@ const LINE_EVIDENCE_BASIS_TYPES = [
 /** Zod shape for a per-line derivation (see LineDerivation in @bidwright/domain). */
 const derivationSchema = z.object({
   target: z.enum(["quantity", "tierUnits", "cost", "price"]).default("quantity").describe("Which row value the formula reproduces. Default quantity; use tierUnits for rate-schedule hours."),
-  formula: z.string().describe("Arithmetic over input names, e.g. 'basePlates * anchorsPerPlate' or 'ceil(anchors / anchorsPerCartridge)'. Supports + - * / ^ ( ) ceil floor round min max sqrt."),
+  formula: z.string().describe("Arithmetic over input names, e.g. 'basePlates * anchorsPerPlate' or 'ceil(anchors / anchorsPerCartridge)'. Supports + - * / ^ ( ) ceil floor round min max sqrt. Example: formula 'pipeFeet * hoursPerFoot', inputs named pipeFeet=100 and hoursPerFoot=0.5, result.value=50; target tierUnits matches a 50-hour row."),
   inputs: z.array(z.object({
-    name: z.string().describe("Identifier used in the formula."),
+    name: z.string().describe("Identifier used in the formula, e.g. pipeFeet or hoursPerFoot (letters, digits and underscores; no spaces)."),
     value: z.coerce.number(),
     unit: z.string().nullable().optional(),
     perInstance: z.boolean().optional().describe("true when this is a per-instance factor (per plate, per column, per valve). These are checked against explicit callouts in the cited text."),
@@ -367,7 +367,7 @@ function staleEvidenceViewError(views: EvidenceViewRecord[], ws: any): string | 
       // checksum to compare, so its source version cannot be established.
       // Fail closed rather than treat it as equivalent to document evidence.
       const fileNodeId = String(view.fileNodeId ?? "").trim();
-      return `evidenceBasis.quantity.viewIds includes ${view.id}, rendered from a Files-area file${fileNodeId ? ` (${fileNodeId})` : ""} that is not a registered source document, so its version cannot be verified. Register it first — readDrawingPage / readDrawingTile / promotePdfToDrawingEvidence accept the FileNode id and promote it to a SourceDocument — then re-read the page from the resulting documentId and cite that viewId.`;
+      return `evidenceBasis.quantity.viewIds includes ${view.id}, rendered from a Files-area file${fileNodeId ? ` (${fileNodeId})` : ""} that is not a registered source document, so its version cannot be verified. Register it first — promoteSourceDocument / promotePdfToDrawingEvidence accept the FileNode id and explicitly promote it to a SourceDocument — then re-read the page from the resulting documentId and cite that viewId.`;
     }
     const doc = docs.find((entry) => String(entry.id ?? "") === documentId);
     if (!doc) {
@@ -1104,7 +1104,7 @@ function worksheetTreeSummary(ws: any) {
         additionalLineItems: (ws.additionalLineItems || []).map((a: any) => ({
           id: a.id, name: a.name, type: a.type, amount: a.amount, description: a.description,
         })),
-        conditions: (ws.conditions || []).map((c: any) => ({ id: c.id, type: c.type, text: c.text })),
+        conditions: (ws.conditions || []).map((c: any) => ({ id: c.id, type: c.type, text: c.value ?? c.text })),
         reportSections: (ws.reportSections || []).map((s: any) => ({
           id: s.id, sectionType: s.sectionType, title: s.title, order: s.order,
         })),
@@ -1772,7 +1772,6 @@ function worksheetTreeSummary(ws: any) {
     {
       projectName: z.string().optional(),
       clientName: z.string().optional(),
-      clientEmail: z.string().optional(),
       projectAddress: z.string().optional(),
       notes: z.string().optional().describe("Customer-facing estimate notes that may appear in quote/PDF output. Do not put internal reasoning, TODOs, or private estimator scratch work here."),
       description: z.string().optional().describe("Customer-facing quote introduction / scope narrative saved to revision.description, shown in Setup → General and the quote PDF. Explain included work, deliverables, responsibilities and material qualifications in paragraphs proportional to project complexity; not a one-line title, TBA, or unassigned-client placeholder. Plain text is auto-converted to HTML, or supply <p> paragraphs directly."),
@@ -1787,8 +1786,7 @@ function worksheetTreeSummary(ws: any) {
       const projectFields: Record<string, unknown> = {};
       if (input.projectName) projectFields.projectName = input.projectName;
       if (input.clientName) projectFields.clientName = input.clientName;
-      if (input.clientEmail) projectFields.clientEmail = input.clientEmail;
-      if (input.projectAddress) projectFields.projectAddress = input.projectAddress;
+      if (input.projectAddress) projectFields.location = input.projectAddress;
 
       // Narrative fields belong only to this revision. The legacy project route
       // chooses the first project quote, which may be a different quote.
@@ -1833,9 +1831,28 @@ function worksheetTreeSummary(ws: any) {
     },
     async ({ type, text }) => {
       await apiPost(projectPath("/conditions"), { type, value: text, sortOrder: 0 });
+      invalidateWs();
       return { content: [{ type: "text" as const, text: `Added ${type}: ${text.substring(0, 60)}...` }] };
     }
   );
+
+  server.tool("getConditions", "Read the saved quote conditions with IDs and text.", {}, async () => {
+    const ws = await getWs();
+    return { content: [{ type: "text" as const, text: JSON.stringify((ws.conditions ?? []).map((condition: any) => ({ ...condition, text: condition.value ?? condition.text }))) }] };
+  });
+  server.tool("updateCondition", "Update an existing quote condition by its getConditions ID.", {
+    conditionId: z.string(), text: z.string().optional(),
+    type: z.enum(["inclusion", "exclusion", "clarification", "assumption", "term"]).optional(),
+  }, async ({ conditionId, text, type }) => {
+    await apiPatch(projectPath(`/conditions/${encodeURIComponent(conditionId)}`), { ...(text !== undefined ? { value: text } : {}), ...(type ? { type } : {}) });
+    invalidateWs();
+    return { content: [{ type: "text" as const, text: "Condition updated" }] };
+  });
+  server.tool("deleteCondition", "Delete an existing quote condition by its getConditions ID.", { conditionId: z.string() }, async ({ conditionId }) => {
+    await apiDelete(projectPath(`/conditions/${encodeURIComponent(conditionId)}`));
+    invalidateWs();
+    return { content: [{ type: "text" as const, text: "Condition deleted" }] };
+  });
 
   // ── createPhase ───────────────────────────────────────────
   server.tool(
@@ -1925,7 +1942,7 @@ function worksheetTreeSummary(ws: any) {
       q: z.string().optional().describe("Search schedule name, description, category, or a small sample of item names."),
       category: z.string().optional().describe("Filter by schedule category/entity type, e.g. Labour or Equipment."),
       scope: z.string().default("global").describe("Rate schedule scope. Usually global for importable org schedules."),
-      limit: z.coerce.number().int().positive().max(25).default(12),
+      limit: z.coerce.number().int().positive().max(25).default(12).describe("Maximum 25 schedules per call; default 12. Use offset for further pages."),
       offset: z.coerce.number().int().min(0).default(0),
       includeSampleItems: z.boolean().default(false).describe("Include up to 3 item names per schedule for orientation (only applied when q or category narrows the list)."),
       includeTiers: z.boolean().default(false).describe("Include tier ids/names per schedule. Default returns tier names only; ids come with the imported schedule via listRateScheduleItems."),
