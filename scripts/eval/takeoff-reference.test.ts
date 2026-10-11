@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { imageProbePattern } from "./image-probe-pattern.js";
 import { scoreSavedOutcome } from "./outcome-score.js";
-import { blindCopiedRevision, BLIND_REVISION_PATCH } from "./blind-copy.js";
+import { blindCopiedRevision, BLIND_REVISION_PATCH, excludeCopiedAnswerFiles, writeAnswerFileExclusionAudit } from "./blind-copy.js";
 import { referenceEvalOutputDir } from "./eval-output.js";
 import { normalizedUnit, pickupSnapshot, scoreTakeoff, summarizeScores, type TakeoffReference, type TakeoffResult } from "./takeoff-reference.js";
 
@@ -233,6 +233,24 @@ test("shared blinding clears copied revision narrative and refuses the source pr
   await assert.rejects(blindCopiedRevision("source", "source", "rev", async () => assert.fail("Source mutation")), /isolated/);
 });
 
+test("answer-file exclusions remove only explicitly named files on the copy", async () => {
+  const files = [
+    { id: "answer", projectId: "copy", name: "estimate-summary.md", type: "file" },
+    { id: "bom", projectId: "copy", name: "BOM.xlsx", type: "file" },
+  ];
+  const removed: string[] = [];
+  assert.deepEqual(await excludeCopiedAnswerFiles("source", "copy", ["estimate-summary.md"], files,
+    async (path) => removed.push(path)), [{ id: "answer", name: "estimate-summary.md" }]);
+  assert.deepEqual(removed, ["/projects/copy/files/answer"]);
+  const neverRemove = async () => assert.fail("Unsafe deletion");
+  await assert.rejects(excludeCopiedAnswerFiles("source", "source", [], files, neverRemove), /isolated/);
+  await assert.rejects(excludeCopiedAnswerFiles("source", "copy", ["missing.md"], files, neverRemove), /not found/);
+  for (const change of [{ projectId: "source" }, { type: "directory" }, { documentId: "source-doc" }, { metadata: { sourceDocumentId: "metadata-doc" } }]) {
+    await assert.rejects(excludeCopiedAnswerFiles("source", "copy", ["estimate-summary.md"],
+      [{ ...files[0], ...change }], neverRemove), /unlinked files/);
+  }
+});
+
 test("reference output defaults outside the checkout, including matrix child destinations", async () => {
   const { relative, isAbsolute, resolve } = await import("node:path");
   const { execFile } = await import("node:child_process");
@@ -244,4 +262,18 @@ test("reference output defaults outside the checkout, including matrix child des
     "--project-id", "synthetic", "--reference-file", "/tmp/synthetic-reference.json"]);
   const matrix = JSON.parse(stdout);
   assert.ok(matrix.output.startsWith(referenceEvalOutputDir("matrix-")));
+});
+
+test("answer-file audit is outside the agent workspace", async t => {
+  const { mkdtemp, readFile, access, rm } = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const { join, relative } = await import("node:path");
+  const root = await mkdtemp(join(tmpdir(), "blind-audit-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const files = [{ id: "answer", name: "private-answer.md" }];
+  const audit = await writeAnswerFileExclusionAudit(root, "project-copy", files);
+  assert.equal(relative(root, audit), "audit/project-copy/excluded-answer-files.json");
+  assert.ok(relative(join(root, "project-copy"), audit).startsWith(".."));
+  assert.deepEqual(JSON.parse(await readFile(audit, "utf8")), files);
+  await assert.rejects(access(join(root, "project-copy", "excluded-answer-files.json")));
 });
