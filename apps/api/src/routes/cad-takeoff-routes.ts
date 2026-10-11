@@ -8,7 +8,7 @@ import { recordEvidenceView } from "./vision-routes.js";
 const source = z.object({ sourceId: z.string().min(1), sourceKind: z.enum(["source_document", "file_node"]).default("source_document") });
 const box = z.object({ x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).refine((b) => b.x + b.width <= 1 && b.y + b.height <= 1, "Box exceeds view");
 const querySchema = source.extend({ layers: z.array(z.string()).optional(), blockName: z.string().optional(), entityTypes: z.array(z.string()).optional(), layout: z.string().default("Model"),
-  viewId: z.string().optional(), bbox: box.optional(), groupBy: z.enum(["layer", "block", "type", "attributes"]).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
+  viewId: z.string().optional(), bbox: box.optional(), groupBy: z.enum(["layer", "block", "type", "attributes"]).optional(), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0), groupOffset: z.number().int().min(0).default(0), groupLimit: z.number().int().min(1).max(500).default(100),
   recordView: z.object({ runId: z.string().optional(), sessionId: z.string().optional() }).optional() });
 const saveSchema = source.extend({ handles: z.array(z.string()).min(1).max(500), measurement: z.enum(["count", "length", "area"]), worksheetItemId: z.string().optional(), multiplier: z.number().finite().positive().optional() });
 
@@ -31,6 +31,7 @@ export async function cadTakeoffRoutes(app: FastifyInstance) {
   for (const action of ["query", "render"] as const) {
     app.post(`/api/models/:projectId/cad/${action}`, async (request, reply) => {
       const { projectId } = request.params as { projectId: string };
+      if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
       const parsed = querySchema.safeParse(request.body);
       if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
       try {
@@ -52,14 +53,18 @@ export async function cadTakeoffRoutes(app: FastifyInstance) {
   }
   app.post("/api/models/:projectId/cad/takeoff", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
+    if (!await request.store!.getProject(projectId)) return reply.code(404).send({ message: "Project not found" });
     const parsed = saveSchema.safeParse(request.body);
     if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
     try {
       const input = parsed.data;
       const drawing = await getDwgProcessingResult(projectId, input.sourceId, { sourceKind: input.sourceKind, persist: false });
       const entities = prepareCadEntityTakeoff(drawing, input);
-      return { ...await request.store!.saveCadEntityPickups(projectId, { documentId: input.sourceId, entities, worksheetItemId: input.worksheetItemId, multiplier: input.multiplier }),
-        duplicateHandles: input.handles.length - entities.length };
+      const result = await request.store!.saveCadEntityPickups(projectId, {
+        documentId: input.sourceKind === "file_node" ? `file-${input.sourceId}` : input.sourceId,
+        entities, worksheetItemId: input.worksheetItemId, multiplier: input.multiplier,
+      });
+      return reply.code(result.saved ? 200 : 409).send({ ...result, duplicateHandles: input.handles.length - entities.length });
     } catch (error) { return reply.code(400).send({ message: error instanceof Error ? error.message : String(error) }); }
   });
 }

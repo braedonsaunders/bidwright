@@ -7,7 +7,7 @@ import { cadPolylineLength, cadSignedPolylineArea } from "@bidwright/domain";
 import type { DwgEntityMetadata, ParsedDrawing } from "./dwg-processing-service.js";
 
 export type CadBounds = { minX: number; minY: number; maxX: number; maxY: number };
-export type CadQuery = { layers?: string[]; blockName?: string; entityTypes?: string[]; layout?: string; bounds?: CadBounds; groupBy?: "layer" | "block" | "type" | "attributes"; offset?: number; limit?: number };
+export type CadQuery = { layers?: string[]; blockName?: string; entityTypes?: string[]; layout?: string; bounds?: CadBounds; groupBy?: "layer" | "block" | "type" | "attributes"; offset?: number; limit?: number; groupOffset?: number; groupLimit?: number };
 
 export function cadEntityMetrics(entity: DwgEntityMetadata) {
   let length: number | null = null, area: number | null = null;
@@ -62,10 +62,12 @@ export function queryCadDrawing(drawing: ParsedDrawing, query: CadQuery) {
     groups.set(key, group);
   }
   const offset = query.offset ?? 0, limit = query.limit ?? 100;
+  const groupOffset = query.groupOffset ?? 0, groupLimit = query.groupLimit ?? 100;
   return { coordinateSpace: "native drawing units, x right, y up", units: drawing.originalUnits, areaUnits: `${drawing.originalUnits}^2`,
     unitFacts: { insunits: drawing.originalUnits, canonicalUnits: drawing.units, canonicalUnitsPerDrawingUnit: factor },
     total: rows.length, offset, limit, hasMore: offset + limit < rows.length, entities: rows.slice(offset, offset + limit),
-    groupCount: groups.size, groups: [...groups.values()].slice(offset, offset + limit),
+    groupCount: groups.size, groupOffset, groupLimit, groupsHasMore: groupOffset + groupLimit < groups.size,
+    groups: [...groups.values()].slice(groupOffset, groupOffset + groupLimit),
     facts: drawing.originalUnits === "unitless" ? ["Drawing units unknown ($INSUNITS missing or unitless)"] : [] };
 }
 

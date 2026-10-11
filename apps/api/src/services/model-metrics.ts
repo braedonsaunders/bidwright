@@ -37,7 +37,7 @@ export function persistedSolidMetrics(elements: Element[]) {
       instanceCount: element.properties?.assemblyInstances?.length || 1, assemblyInstances: element.properties?.assemblyInstances ?? [],
       metrics: element.quantities.filter((q) => /^(surface_area|volume)$/.test(q.quantityType) && (q.quantityType !== "volume" || closed === true))
         .map((q) => ({ quantityId: q.id, type: q.quantityType, value: q.value, unit: q.unit, method: q.method })),
-      facts: closed === true ? [] : [closed === false ? "not closed" : "Closure was not checked by the persisted ingest; volume unavailable"] };
+      facts: [...(element.properties?.facts ?? []), ...(closed === true ? [] : [closed === false ? "not closed" : "Closure was not checked by the persisted ingest; volume unavailable"])] };
   });
   const bom = new Map<string, { partName: string; instanceCount: number; instances: typeof solids }>();
   for (const solid of solids) {

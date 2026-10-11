@@ -2371,7 +2371,8 @@ export async function removeFederationMember(
 export async function aggregateModelElements(projectId: string, modelId: string, input: Parameters<typeof aggregatePersistedElements>[1]) {
   const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId }, include: { elements: { include: { quantities: true } } } });
   if (!model) throw new Error(`Model ${modelId} not found`);
-  if (input.elementIds?.some((id) => !model.elements.some((e) => e.id === id))) throw new Error("Selected element not found in model");
+  const elementIds = new Set(model.elements.map((element) => element.id));
+  if (input.elementIds?.some((id) => !elementIds.has(id))) throw new Error("Selected element not found in model");
   return { modelId, ...aggregatePersistedElements(model.elements, input) };
 }
 
@@ -2379,6 +2380,8 @@ export async function getModelSolidMetrics(projectId: string, modelId: string) {
   const model = await prisma.modelAsset.findFirst({ where: { id: modelId, projectId }, include: { elements: { include: { quantities: true } } } });
   if (!model) throw new Error(`Model ${modelId} not found`);
   const result = persistedSolidMetrics(model.elements);
+  const storedFacts = (model.manifest as { facts?: unknown } | null)?.facts;
+  if (Array.isArray(storedFacts)) result.facts.push(...storedFacts.filter((fact): fact is string => typeof fact === "string"));
   if (!model.units || ["model", "unitless", "unknown"].includes(model.units)) result.facts.push("Physical model units are unknown; model-unit quantities are not converted.");
   return { modelId, format: model.format, units: model.units, checksum: model.checksum, ...result };
 }

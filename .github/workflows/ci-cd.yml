@@ -235,6 +235,7 @@ jobs:
           pnpm exec tsx --test
           apps/api/src/services/cad-model-takeoff.test.ts
           apps/api/src/services/cad-pickup-save.test.ts
+          apps/api/src/routes/cad-takeoff-routes.test.ts
           apps/api/src/services/model-ingest/adapters/occt-metrics.test.ts
 
       - name: Install pinned CAD runtime and sandbox

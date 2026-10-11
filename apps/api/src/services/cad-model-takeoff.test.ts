@@ -6,7 +6,7 @@ import { prisma } from "@bidwright/db";
 import assert from "node:assert/strict";
 import { getDwgProcessingResult, parseDxfDrawing } from "./dwg-processing-service.js";
 import { queryCadDrawing, cadDrawingSvg, renderCadPng, prepareCadEntityTakeoff } from "./cad-takeoff-service.js";
-import { computeTriangulatedMeshMetrics } from "./model-ingest/utils.js";
+import { computeTriangulatedMeshMetrics, MAX_METRIC_VERTICES, MAX_MESH_METRIC_BYTES } from "./model-ingest/utils.js";
 import { aggregatePersistedElements, persistedSolidMetrics } from "./model-metrics.js";
 
 function drawing() {
@@ -99,4 +99,52 @@ test("CAD read mode scopes FileNodes and never persists analysis", async () => {
     assert.equal(result.entities[0].id, "A"); assert.equal(result.units, "unitless");
     assert.equal(updates, 0);
   } finally { prisma.fileNode.findFirst = originalLookup; prisma.fileNode.update = originalUpdate; await rm(dir, { recursive: true, force: true }); }
+});
+
+test("CAD entity pagination does not advance aggregate groups", () => {
+  const dxf = drawing();
+  const first = queryCadDrawing(dxf, { limit: 1, groupLimit: 1 });
+  const second = queryCadDrawing(dxf, { limit: 1, offset: 1, groupLimit: 1 });
+  assert.deepEqual(second.groups, first.groups);
+  const nextGroup = queryCadDrawing(dxf, { groupOffset: 1, groupLimit: 1 });
+  assert.notEqual(nextGroup.groups[0].key, first.groups[0].key);
+  assert.equal(nextGroup.groupOffset, 1);
+});
+
+test("mesh budgets return facts before reading oversized geometry", async () => {
+  const positions = new Proxy({ length: (MAX_METRIC_VERTICES + 1) * 3 }, { get(target, key) {
+    if (key === "length") return target.length;
+    throw new Error("Oversized geometry was read");
+  } });
+  const metrics = computeTriangulatedMeshMetrics(positions as ArrayLike<number>);
+  assert.equal(metrics.skipped, true); assert.match(metrics.facts[0], /limit/);
+  const { meshAdapter } = await import("./model-ingest/adapters/mesh-adapter.js");
+  for (const format of ["stl", "obj"]) {
+    const result = await meshAdapter.ingest({ id: "s", source: "file_node", projectId: "p", fileName: `synthetic.${format}` },
+      { absPath: "/no-file-read", checksum: "test", size: MAX_MESH_METRIC_BYTES + 1, format });
+    assert.equal(result.status, "partial"); assert.equal(result.quantities.length, 0);
+    assert.match(result.issues[0].message, /budget/);
+  }
+});
+
+test("bounded STL and OBJ parsers retain closed-cube volume and area", async () => {
+  const { meshAdapter } = await import("./model-ingest/adapters/mesh-adapter.js");
+  const dir = await mkdtemp(join(tmpdir(), "mesh-buffers-"));
+  const obj = `${Array.from({ length: 8 }, (_, i) => `v ${cube.slice(i * 3, i * 3 + 3).join(" ")}`).join("\n")}\ng Cube\n${Array.from({ length: 12 }, (_, i) => `f ${faces.slice(i * 3, i * 3 + 3).map((n) => n + 1).join(" ")}`).join("\n")}\n`;
+  const ascii = `solid cube\n${faces.map((i) => `vertex ${cube.slice(i * 3, i * 3 + 3).join(" ")}`).join("\n")}\nendsolid cube`;
+  const binary = Buffer.alloc(84 + 12 * 50);
+  binary.writeUInt32LE(12, 80);
+  for (let t = 0; t < 12; t++) for (let v = 0; v < 3; v++) for (let axis = 0; axis < 3; axis++) {
+    binary.writeFloatLE(cube[faces[t * 3 + v] * 3 + axis], 84 + t * 50 + 12 + v * 12 + axis * 4);
+  }
+  try {
+    for (const [name, data] of [["cube.obj", Buffer.from(obj)], ["ascii.stl", Buffer.from(ascii)], ["binary.stl", binary]] as const) {
+      const absPath = join(dir, name); await writeFile(absPath, data);
+      const result = await meshAdapter.ingest({ id: "s", source: "file_node", projectId: "p", fileName: name },
+        { absPath, checksum: "test", size: data.length, format: name.split(".")[1] });
+      assert.equal(result.status, "indexed");
+      assert.equal(result.quantities.find((q) => q.elementId && q.quantityType === "volume")?.value, 1, name);
+      assert.equal(result.quantities.find((q) => q.elementId && q.quantityType === "surface_area")?.value, 6, name);
+    }
+  } finally { await rm(dir, { recursive: true, force: true }); }
 });

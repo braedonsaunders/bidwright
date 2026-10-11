@@ -9,6 +9,10 @@ import {
   makeCanonicalManifest,
   makeProvenance,
   MAX_GEOMETRY_BYTES,
+  MAX_METRIC_TRIANGLES,
+  MAX_METRIC_VERTICES,
+  MAX_MESH_METRIC_BYTES,
+  meshMetricsUnavailable,
   readTextIfReasonable,
   computeTriangulatedMeshMetrics,
   triangleArea,
@@ -38,10 +42,28 @@ function capability(status: ModelIngestCapability["status"] = "available", messa
   };
 }
 
+class MeshPositions {
+  private buffer = new Float64Array(9);
+  private length = 0;
+  push(...values: number[]) {
+    if (this.length + values.length > this.buffer.length) {
+      const next = new Float64Array(Math.min(MAX_METRIC_VERTICES * 3, Math.max(this.buffer.length * 2, this.length + values.length)));
+      next.set(this.buffer); this.buffer = next;
+    }
+    this.buffer.set(values, this.length); this.length += values.length;
+  }
+  values() { return this.buffer.subarray(0, this.length); }
+}
+
 function parseObj(text: string, source: ModelIngestSource, context: ModelIngestContext): Omit<ModelAdapterIngestResult, "canonicalManifest" | "artifacts"> {
-  const vertices: number[][] = [];
+  let capacity = 0;
+  for (const _match of text.matchAll(/^\s*v\s+/gm)) {
+    if (++capacity > MAX_METRIC_VERTICES) return meshMetricsUnavailable("OBJ metrics not computed: vertex budget exceeded");
+  }
+  const vertices = new Float64Array(capacity * 3);
+  let vertexCount = 0, triangleCount = 0;
   const groups = new Map<string, number>();
-  const groupPositions = new Map<string, number[]>();
+  const groupPositions = new Map<string, MeshPositions>();
   const materials = new Map<string, number>();
   const bbox = emptyBbox();
   let currentGroup = "default";
@@ -49,14 +71,15 @@ function parseObj(text: string, source: ModelIngestSource, context: ModelIngestC
   let faceCount = 0;
   let surfaceArea = 0;
 
-  for (const line of text.split(/\r?\n/)) {
+  for (const [line] of text.matchAll(/[^\r\n]+/g)) {
+    if (line.length > 65536) return meshMetricsUnavailable("OBJ metrics not computed: record exceeds parse budget");
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith("#")) continue;
     const [kind, ...parts] = trimmed.split(/\s+/);
     if (kind === "v" && parts.length >= 3) {
       const point = parts.slice(0, 3).map(Number);
       if (point.every(Number.isFinite)) {
-        vertices.push(point);
+        vertices.set(point, vertexCount++ * 3);
         updateBbox(bbox, point);
       }
     } else if (kind === "o" || kind === "g") {
@@ -68,10 +91,13 @@ function parseObj(text: string, source: ModelIngestSource, context: ModelIngestC
       groups.set(currentGroup, (groups.get(currentGroup) ?? 0) + 1);
       if (currentMaterial) materials.set(currentMaterial, (materials.get(currentMaterial) ?? 0) + 1);
       const indices = parts.map((part) => Number(part.split("/")[0])).filter(Number.isFinite);
-      const points = indices.map((index) => vertices[index > 0 ? index - 1 : vertices.length + index]).filter(Boolean);
+      const points = indices.map((index) => index > 0 ? index - 1 : vertexCount + index)
+        .filter((index) => Number.isInteger(index) && index >= 0 && index < vertexCount)
+        .map((index) => [vertices[index * 3], vertices[index * 3 + 1], vertices[index * 3 + 2]]);
       for (let i = 1; i < points.length - 1; i++) {
+        if (++triangleCount > MAX_METRIC_TRIANGLES) return meshMetricsUnavailable("OBJ metrics not computed: triangle budget exceeded");
         surfaceArea += triangleArea(points[0], points[i], points[i + 1]);
-        const positions = groupPositions.get(currentGroup) ?? [];
+        const positions = groupPositions.get(currentGroup) ?? new MeshPositions();
         positions.push(...points[0], ...points[i], ...points[i + 1]);
         groupPositions.set(currentGroup, positions);
       }
@@ -79,7 +105,7 @@ function parseObj(text: string, source: ModelIngestSource, context: ModelIngestC
   }
 
   const elements = [...groups].map(([name, count]) => {
-    const metrics = computeTriangulatedMeshMetrics(groupPositions.get(name));
+    const metrics = computeTriangulatedMeshMetrics(groupPositions.get(name)?.values());
     return {
       id: createId("me"), externalId: name, name, elementClass: "OBJ_GROUP", elementType: "OBJ",
       bbox: metrics.bbox ?? undefined, geometryRef: name, estimateRelevant: true,
@@ -108,14 +134,14 @@ function parseObj(text: string, source: ModelIngestSource, context: ModelIngestC
     units: "model",
     manifest: {
       parser: "obj-index",
-      vertexCount: vertices.length,
+      vertexCount,
       faceCount,
       groupCount: groups.size,
       materialCount: materials.size,
       bbox: finalizeBbox(bbox),
       sourceFileName: source.fileName,
     },
-    elementStats: { vertexCount: vertices.length, faceCount, groups: topCounts(groups), materials: topCounts(materials) },
+    elementStats: { vertexCount, faceCount, groups: topCounts(groups), materials: topCounts(materials) },
     elements,
     quantities,
     bomRows,
@@ -124,44 +150,32 @@ function parseObj(text: string, source: ModelIngestSource, context: ModelIngestC
 }
 
 function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalManifest" | "artifacts"> {
-  const bbox = emptyBbox();
-  let triangleCount = 0;
-  let surfaceArea = 0;
-  const positions: number[] = [];
-
+  if (buffer.length > MAX_MESH_METRIC_BYTES) return meshMetricsUnavailable("STL metrics not computed: input byte budget exceeded");
   const binaryTriangleCount = buffer.length >= 84 ? buffer.readUInt32LE(80) : 0;
-  const expectedBinarySize = 84 + binaryTriangleCount * 50;
-  const looksBinary = binaryTriangleCount > 0 && expectedBinarySize === buffer.length;
-
+  const looksBinary = binaryTriangleCount > 0 && 84 + binaryTriangleCount * 50 === buffer.length;
+  let positions: Float64Array;
   if (looksBinary) {
-    triangleCount = binaryTriangleCount;
-    for (let offset = 84; offset + 50 <= buffer.length; offset += 50) {
-      const a = [buffer.readFloatLE(offset + 12), buffer.readFloatLE(offset + 16), buffer.readFloatLE(offset + 20)];
-      const b = [buffer.readFloatLE(offset + 24), buffer.readFloatLE(offset + 28), buffer.readFloatLE(offset + 32)];
-      const c = [buffer.readFloatLE(offset + 36), buffer.readFloatLE(offset + 40), buffer.readFloatLE(offset + 44)];
-      [a, b, c].forEach((point) => updateBbox(bbox, point));
-      surfaceArea += triangleArea(a, b, c);
-      positions.push(...a, ...b, ...c);
+    if (binaryTriangleCount > MAX_METRIC_TRIANGLES) return meshMetricsUnavailable("STL metrics not computed: triangle budget exceeded");
+    positions = new Float64Array(binaryTriangleCount * 9);
+    for (let triangle = 0; triangle < binaryTriangleCount; triangle++) {
+      for (let axis = 0; axis < 9; axis++) positions[triangle * 9 + axis] = buffer.readFloatLE(84 + triangle * 50 + 12 + axis * 4);
     }
   } else {
     const text = buffer.toString("utf8");
-    const vertices: number[][] = [];
-    for (const match of text.matchAll(/vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g)) {
-      const point = [Number(match[1]), Number(match[2]), Number(match[3])];
-      if (point.every(Number.isFinite)) {
-        vertices.push(point);
-        updateBbox(bbox, point);
-      }
+    const pattern = /vertex\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)/g;
+    let count = 0;
+    for (const _match of text.matchAll(pattern)) {
+      if (++count > MAX_METRIC_VERTICES) return meshMetricsUnavailable("STL metrics not computed: vertex budget exceeded");
     }
-    triangleCount = Math.floor(vertices.length / 3);
-    for (let i = 0; i + 2 < vertices.length; i += 3) {
-      surfaceArea += triangleArea(vertices[i], vertices[i + 1], vertices[i + 2]);
-      positions.push(...vertices[i], ...vertices[i + 1], ...vertices[i + 2]);
+    positions = new Float64Array(count * 3);
+    let offset = 0;
+    for (const match of text.matchAll(pattern)) {
+      positions[offset++] = Number(match[1]); positions[offset++] = Number(match[2]); positions[offset++] = Number(match[3]);
     }
   }
-
   const metrics = computeTriangulatedMeshMetrics(positions);
-  const volume = metrics.volume;
+  if (metrics.skipped) return meshMetricsUnavailable(metrics.facts.join("; "));
+  const { volume, surfaceArea, triangleCount } = metrics;
   const elementId = createId("me");
   return {
     status: "indexed",
@@ -171,7 +185,7 @@ function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalMani
       triangleCount,
       surfaceArea,
       volume: Math.abs(volume),
-      bbox: finalizeBbox(bbox),
+      bbox: metrics.bbox,
     },
     elementStats: { triangleCount, surfaceArea, volume: Math.abs(volume) },
     elements: [{
@@ -180,7 +194,7 @@ function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalMani
       name: "STL mesh",
       elementClass: "STL_MESH",
       elementType: "STL",
-      bbox: finalizeBbox(bbox) ?? undefined,
+      bbox: metrics.bbox ?? undefined,
       geometryRef: "STL_MESH",
       estimateRelevant: true,
       properties: { triangleCount, closed: metrics.closed, volumeStatus: metrics.volumeStatus },
@@ -266,13 +280,14 @@ export const meshAdapter: ModelIngestAdapter = {
   },
   async ingest(source: ModelIngestSource, context: ModelIngestContext): Promise<ModelAdapterIngestResult> {
     let result: Omit<ModelAdapterIngestResult, "canonicalManifest" | "artifacts">;
-    if (context.format === "stl") {
+    if (["stl", "obj"].includes(context.format) && context.size > MAX_MESH_METRIC_BYTES) {
+      result = meshMetricsUnavailable(`${context.format.toUpperCase()} metrics not computed: ${MAX_MESH_METRIC_BYTES} byte input budget exceeded`);
+    } else if (context.format === "stl") {
       if (context.size > MAX_GEOMETRY_BYTES) throw new Error(`STL is too large for synchronous geometry indexing (${context.size} bytes).`);
       result = parseStl(await readFile(context.absPath));
     } else if (context.format === "obj") {
       const text = await readTextIfReasonable(context.absPath, context.size);
-      if (!text) throw new Error("OBJ is too large for synchronous text indexing.");
-      result = parseObj(text, source, context);
+      result = text ? parseObj(text, source, context) : meshMetricsUnavailable("OBJ metrics not computed: text input budget exceeded");
     } else if (context.format === "gltf") {
       const text = await readTextIfReasonable(context.absPath, context.size);
       if (!text) throw new Error("glTF is too large for synchronous JSON indexing.");

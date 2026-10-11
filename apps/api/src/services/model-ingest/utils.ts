@@ -101,18 +101,58 @@ export function signedTetraVolume(a: number[], b: number[], c: number[]) {
   ) / 6;
 }
 
+export const MAX_METRIC_TRIANGLES = 200_000;
+export const MAX_METRIC_VERTICES = MAX_METRIC_TRIANGLES * 3;
+export const MAX_MESH_METRIC_BYTES = 32 * 1024 * 1024;
+
+export function meshMetricsUnavailable(message: string) {
+  return { status: "partial" as const, units: "model", manifest: { parser: "mesh-metrics", facts: [message] },
+    elementStats: {}, elements: [], quantities: [], bomRows: [],
+    issues: [{ severity: "info", code: "mesh_metrics_resource_limit", message }] };
+}
+
 export function computeTriangulatedMeshMetrics(position?: ArrayLike<number>, index?: ArrayLike<number>) {
-  const bbox = emptyBbox();
   const vertexCount = position ? Math.floor(position.length / 3) : 0;
+  const count = index?.length ?? vertexCount;
+  if (vertexCount > MAX_METRIC_VERTICES || count > MAX_METRIC_TRIANGLES * 3) {
+    return { surfaceArea: 0, volume: 0, closed: false, invalidTriangles: 0, triangleCount: 0, vertexCount,
+      bbox: null, volumeStatus: "not computed", skipped: true,
+      facts: [`Mesh metrics not computed: limit ${MAX_METRIC_VERTICES} vertices / ${MAX_METRIC_TRIANGLES} triangles exceeded`] };
+  }
+  const bbox = emptyBbox();
   const point = (i: number) => [Number(position?.[i * 3]), Number(position?.[i * 3 + 1]), Number(position?.[i * 3 + 2])];
   for (let i = 0; i < vertexCount; i++) updateBbox(bbox, point(i));
   const bounds = finalizeBbox(bbox);
+  if (vertexCount && !bounds) return { surfaceArea: 0, volume: 0, closed: false, invalidTriangles: 1, triangleCount: 0, vertexCount,
+    bbox: null, volumeStatus: "not computed", skipped: true, facts: ["Mesh metrics not computed: invalid vertex coordinates"] };
   const origin = bounds ? bounds.min.map((v, i) => v + (bounds.max[i] - v) / 2) : [0, 0, 0];
-  const edges = new Map<string, { count: number; orientation: number }>();
+  const span = bounds ? Math.max(...bounds.max.map((v, i) => v - bounds.min[i])) : 0;
+  const magnitude = bounds ? Math.max(...bounds.min.map(Math.abs), ...bounds.max.map(Math.abs)) : 0;
+  const tolerance = Math.max(span * 1e-9, magnitude * Number.EPSILON * 2, Number.MIN_VALUE);
+  // Open-addressed integer vertex table; edge keys remain exact safe integers.
+  let capacity = 1;
+  while (capacity < vertexCount * 2) capacity *= 2;
+  const slots = new Int32Array(capacity);
+  const quantized = new Int32Array(vertexCount * 3);
+  const welded = new Int32Array(vertexCount);
+  let uniqueCount = 0;
+  for (let i = 0; i < vertexCount; i++) {
+    const p = point(i);
+    const q = p.map((v, axis) => Math.round((v - origin[axis]) / tolerance));
+    let slot = (Math.imul(q[0], 73856093) ^ Math.imul(q[1], 19349663) ^ Math.imul(q[2], 83492791)) & (capacity - 1);
+    while (slots[slot]) {
+      const id = slots[slot] - 1;
+      if (quantized[id * 3] === q[0] && quantized[id * 3 + 1] === q[1] && quantized[id * 3 + 2] === q[2]) break;
+      slot = (slot + 1) & (capacity - 1);
+    }
+    if (!slots[slot]) {
+      slots[slot] = ++uniqueCount;
+      quantized.set(q, (uniqueCount - 1) * 3);
+    }
+    welded[i] = slots[slot] - 1;
+  }
+  const edges = new Map<number, number>();
   let surfaceArea = 0, signedVolume = 0, triangleCount = 0, invalidTriangles = 0;
-  // Weld coincident face vertices, including OCCT's duplicated face seams.
-  const key = (p: number[]) => p.map((v) => Object.is(v, -0) ? 0 : v).join(",");
-  const count = index?.length ?? vertexCount;
   for (let offset = 0; offset + 2 < count; offset += 3) {
     const ids = [0, 1, 2].map((j) => Number(index ? index[offset + j] : offset + j));
     const points = ids.map(point);
@@ -121,24 +161,23 @@ export function computeTriangulatedMeshMetrics(position?: ArrayLike<number>, ind
     }
     const [a, b, c] = points;
     const area = triangleArea(a, b, c);
-    if (area === 0) { invalidTriangles++; continue; }
+    const keys = ids.map((id) => welded[id]);
+    if (area === 0 || (keys[0] === keys[1] || keys[1] === keys[2] || keys[0] === keys[2])) { invalidTriangles++; continue; }
     surfaceArea += area;
     signedVolume += signedTetraVolume(vectorSub(a, origin), vectorSub(b, origin), vectorSub(c, origin));
     triangleCount++;
-    const keys = points.map(key);
     for (let j = 0; j < 3; j++) {
       const from = keys[j], to = keys[(j + 1) % 3];
-      const forward = from < to;
-      const edgeKey = forward ? `${from}|${to}` : `${to}|${from}`;
-      const edge = edges.get(edgeKey) ?? { count: 0, orientation: 0 };
-      edge.count++; edge.orientation += forward ? 1 : -1;
-      edges.set(edgeKey, edge);
+      const edgeKey = Math.min(from, to) * uniqueCount + Math.max(from, to);
+      // Two opposite incidences sum to 2 * stride; any additional incidence differs.
+      const stride = MAX_METRIC_TRIANGLES + 1;
+      edges.set(edgeKey, (edges.get(edgeKey) ?? 0) + stride + (from < to ? 1 : -1));
     }
   }
-  const closed = triangleCount > 0 && invalidTriangles === 0 && count % 3 === 0
-    && [...edges.values()].every((edge) => edge.count === 2 && edge.orientation === 0);
+  let closed = bounds !== null && triangleCount > 0 && invalidTriangles === 0 && count % 3 === 0;
+  for (const value of edges.values()) if (value !== 2 * (MAX_METRIC_TRIANGLES + 1)) { closed = false; break; }
   return { surfaceArea, volume: closed ? Math.abs(signedVolume) : 0, closed, invalidTriangles,
-    triangleCount, vertexCount, bbox: bounds, volumeStatus: closed ? "closed" : "not closed" };
+    triangleCount, vertexCount, bbox: bounds, volumeStatus: closed ? "closed" : "not closed", skipped: false, facts: [], weldTolerance: tolerance };
 }
 
 export function colorToHex(color?: number[]) {

@@ -9,7 +9,8 @@ import {
   createId,
   makeCanonicalManifest,
   makeProvenance,
-  MAX_GEOMETRY_BYTES,
+  MAX_MESH_METRIC_BYTES,
+  meshMetricsUnavailable,
 } from "../utils.js";
 
 const require = createRequire(import.meta.url);
@@ -103,8 +104,11 @@ export const occtAdapter: ModelIngestAdapter = {
     if (activeCapability.status !== "available") {
       throw new Error(activeCapability.message ?? "OpenCascade adapter is unavailable.");
     }
-    if (context.size > MAX_GEOMETRY_BYTES) {
-      throw new Error(`${context.format.toUpperCase()} is too large for synchronous OpenCascade extraction (${context.size} bytes).`);
+    if (context.size > MAX_MESH_METRIC_BYTES) {
+      const result = meshMetricsUnavailable(`OpenCascade metrics not computed: ${MAX_MESH_METRIC_BYTES} byte input budget exceeded`);
+      const provenance = makeProvenance({ source, ...context, capability: activeCapability, method: "occt-resource-limit", confidence: 0 });
+      return { ...result, artifacts: [], canonicalManifest: makeCanonicalManifest({ status: "partial", units: "model",
+        capability: activeCapability, provenance, summary: result.manifest, elementStats: {}, estimateLens: [], issues: result.issues, geometryArtifacts: [] }) };
     }
 
     const buffer = await readFile(context.absPath);
@@ -136,6 +140,7 @@ export const occtAdapter: ModelIngestAdapter = {
     let totalVolume = 0;
     let totalTriangles = 0;
     let totalVertices = 0;
+    const metricFacts: string[] = [];
 
     const instances = new Map<number, string[]>();
     const visit = (node: OcctNode | undefined, parent: string) => {
@@ -168,7 +173,8 @@ export const occtAdapter: ModelIngestAdapter = {
         properties: {
           meshIndex: index,
           assemblyInstances: instances.get(index) ?? [],
-          closed: metrics.closed,
+          closed: metrics.skipped ? null : metrics.closed,
+          facts: metrics.facts,
           volumeStatus: metrics.volumeStatus,
           triangleCount: metrics.triangleCount,
           vertexCount: metrics.vertexCount,
@@ -177,6 +183,7 @@ export const occtAdapter: ModelIngestAdapter = {
         },
       });
 
+      if (metrics.skipped) { metricFacts.push(`${meshName}: ${metrics.facts.join("; ")}`); continue; }
       quantities.push(
         {
           id: createId("mq"),
@@ -270,7 +277,7 @@ export const occtAdapter: ModelIngestAdapter = {
       });
     }
 
-    const issues = [];
+    const issues = metricFacts.map((message) => ({ severity: "info", code: "mesh_metrics_resource_limit", message }));
     if (elements.length === 0) {
       issues.push({
         severity: "warning",
@@ -288,6 +295,7 @@ export const occtAdapter: ModelIngestAdapter = {
 
     const summary = {
       parser: `occt-${context.format}`,
+      facts: metricFacts,
       sourceKernel: "OpenCascade",
       linearUnit: quantityUnits.length,
       areaUnit: quantityUnits.area,
@@ -322,7 +330,7 @@ export const occtAdapter: ModelIngestAdapter = {
       confidence: elements.length > 0 ? 0.9 : 0.5,
     });
     const canonicalManifest = makeCanonicalManifest({
-      status: elements.length > 0 ? "indexed" : "partial",
+      status: elements.length > 0 && !metricFacts.length ? "indexed" : "partial",
       units: quantityUnits.length,
       capability: activeCapability,
       provenance,
@@ -340,7 +348,7 @@ export const occtAdapter: ModelIngestAdapter = {
     });
 
     return {
-      status: elements.length > 0 ? "indexed" : "partial",
+      status: elements.length > 0 && !metricFacts.length ? "indexed" : "partial",
       units: quantityUnits.length,
       manifest: summary,
       elementStats,

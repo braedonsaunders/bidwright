@@ -1036,7 +1036,7 @@ export async function getDwgProcessingResult(
   }
 
   const cached = (structuredData as { dwgTakeoff?: DwgProcessingResult } | null)?.dwgTakeoff;
-  if (options.persist !== false && !options.refresh && cached?.schemaVersion === 1 && cached.processorVersion === PROCESSOR_VERSION) {
+  if (!options.refresh && cached?.schemaVersion === 1 && cached.processorVersion === PROCESSOR_VERSION) {
     return cached;
   }
 

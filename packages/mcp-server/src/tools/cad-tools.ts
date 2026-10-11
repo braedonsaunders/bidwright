@@ -19,7 +19,7 @@ const json = (data: unknown) => ({ content: [{ type: "text" as const, text: JSON
 export function registerCadTools(server: McpServer) {
   server.tool("queryCadEntities", "Query CAD handles, block INSERTs, text and geometry; aggregate complete selection in native drawing units.", {
     ...selection, blockName: z.string().optional(), entityTypes: z.array(z.string()).optional(),
-    groupBy: z.enum(["layer", "block", "type", "attributes"]).default("layer"), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0),
+    groupBy: z.enum(["layer", "block", "type", "attributes"]).default("layer"), limit: z.number().int().min(1).max(500).default(100), offset: z.number().int().min(0).default(0), groupOffset: z.number().int().min(0).default(0), groupLimit: z.number().int().min(1).max(500).default(100),
   }, async (input) => json(await apiPost(`/api/models/${getProjectId()}/cad/query`, input)));
 
   server.tool("renderCadDrawing", "Render CAD lines, arcs, polylines and text as a PNG with a viewId and drawing-coordinate transform.", selection, async (input) => {
