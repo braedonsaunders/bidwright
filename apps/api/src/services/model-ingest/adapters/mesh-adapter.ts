@@ -10,14 +10,14 @@ import {
   makeProvenance,
   MAX_GEOMETRY_BYTES,
   readTextIfReasonable,
-  signedTetraVolume,
+  computeTriangulatedMeshMetrics,
   triangleArea,
   updateBbox,
   topCounts,
 } from "../utils.js";
 
 const ADAPTER_ID = "embedded-open.mesh";
-const ADAPTER_VERSION = "1.0.0";
+const ADAPTER_VERSION = "1.1.0";
 const FORMATS = new Set(["stl", "obj", "gltf", "glb", "dae", "fbx", "3ds"]);
 
 function capability(status: ModelIngestCapability["status"] = "available", message?: string): ModelIngestCapability {
@@ -41,6 +41,7 @@ function capability(status: ModelIngestCapability["status"] = "available", messa
 function parseObj(text: string, source: ModelIngestSource, context: ModelIngestContext): Omit<ModelAdapterIngestResult, "canonicalManifest" | "artifacts"> {
   const vertices: number[][] = [];
   const groups = new Map<string, number>();
+  const groupPositions = new Map<string, number[]>();
   const materials = new Map<string, number>();
   const bbox = emptyBbox();
   let currentGroup = "default";
@@ -70,22 +71,27 @@ function parseObj(text: string, source: ModelIngestSource, context: ModelIngestC
       const points = indices.map((index) => vertices[index > 0 ? index - 1 : vertices.length + index]).filter(Boolean);
       for (let i = 1; i < points.length - 1; i++) {
         surfaceArea += triangleArea(points[0], points[i], points[i + 1]);
+        const positions = groupPositions.get(currentGroup) ?? [];
+        positions.push(...points[0], ...points[i], ...points[i + 1]);
+        groupPositions.set(currentGroup, positions);
       }
     }
   }
 
-  const elements = topCounts(groups, 500).map((group) => ({
-    id: createId("me"),
-    externalId: group.name,
-    name: group.name,
-    elementClass: "OBJ_GROUP",
-    elementType: "OBJ",
-    bbox: finalizeBbox(bbox) ?? undefined,
-    geometryRef: group.name,
-    estimateRelevant: true,
-    properties: { faceCount: group.count, sourceChecksum: context.checksum },
-  }));
+  const elements = [...groups].map(([name, count]) => {
+    const metrics = computeTriangulatedMeshMetrics(groupPositions.get(name));
+    return {
+      id: createId("me"), externalId: name, name, elementClass: "OBJ_GROUP", elementType: "OBJ",
+      bbox: metrics.bbox ?? undefined, geometryRef: name, estimateRelevant: true,
+      properties: { faceCount: count, sourceChecksum: context.checksum, closed: metrics.closed, volumeStatus: metrics.volumeStatus,
+        surfaceArea: metrics.surfaceArea, volume: metrics.volume },
+    };
+  });
   const quantities = [
+    ...elements.flatMap((element) => [
+      { id: createId("mq"), elementId: element.id, quantityType: "surface_area", value: element.properties.surfaceArea, unit: "model^2", method: "obj_mesh_surface_area", confidence: 0.72 },
+      ...(element.properties.closed ? [{ id: createId("mq"), elementId: element.id, quantityType: "volume", value: element.properties.volume, unit: "model^3", method: "obj_closed_mesh_volume", confidence: 0.7 }] : []),
+    ]),
     { id: createId("mq"), quantityType: "face_count", value: faceCount, unit: "faces", method: "obj_parser", confidence: 1 },
     { id: createId("mq"), quantityType: "surface_area", value: surfaceArea, unit: "model^2", method: "obj_parser", confidence: 0.72 },
   ];
@@ -121,7 +127,7 @@ function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalMani
   const bbox = emptyBbox();
   let triangleCount = 0;
   let surfaceArea = 0;
-  let volume = 0;
+  const positions: number[] = [];
 
   const binaryTriangleCount = buffer.length >= 84 ? buffer.readUInt32LE(80) : 0;
   const expectedBinarySize = 84 + binaryTriangleCount * 50;
@@ -135,7 +141,7 @@ function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalMani
       const c = [buffer.readFloatLE(offset + 36), buffer.readFloatLE(offset + 40), buffer.readFloatLE(offset + 44)];
       [a, b, c].forEach((point) => updateBbox(bbox, point));
       surfaceArea += triangleArea(a, b, c);
-      volume += signedTetraVolume(a, b, c);
+      positions.push(...a, ...b, ...c);
     }
   } else {
     const text = buffer.toString("utf8");
@@ -150,10 +156,12 @@ function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalMani
     triangleCount = Math.floor(vertices.length / 3);
     for (let i = 0; i + 2 < vertices.length; i += 3) {
       surfaceArea += triangleArea(vertices[i], vertices[i + 1], vertices[i + 2]);
-      volume += signedTetraVolume(vertices[i], vertices[i + 1], vertices[i + 2]);
+      positions.push(...vertices[i], ...vertices[i + 1], ...vertices[i + 2]);
     }
   }
 
+  const metrics = computeTriangulatedMeshMetrics(positions);
+  const volume = metrics.volume;
   const elementId = createId("me");
   return {
     status: "indexed",
@@ -175,12 +183,12 @@ function parseStl(buffer: Buffer): Omit<ModelAdapterIngestResult, "canonicalMani
       bbox: finalizeBbox(bbox) ?? undefined,
       geometryRef: "STL_MESH",
       estimateRelevant: true,
-      properties: { triangleCount },
+      properties: { triangleCount, closed: metrics.closed, volumeStatus: metrics.volumeStatus },
     }],
     quantities: [
       { id: createId("mq"), elementId, quantityType: "triangle_count", value: triangleCount, unit: "triangles", method: "stl_parser", confidence: 1 },
       { id: createId("mq"), elementId, quantityType: "surface_area", value: surfaceArea, unit: "model^2", method: "stl_parser", confidence: 0.78 },
-      { id: createId("mq"), elementId, quantityType: "volume", value: Math.abs(volume), unit: "model^3", method: "stl_parser", confidence: 0.7 },
+      ...(metrics.closed ? [{ id: createId("mq"), elementId, quantityType: "volume", value: volume, unit: "model^3", method: "stl_closed_mesh_volume", confidence: 0.7 }] : []),
     ],
     bomRows: [{
       group: "STL_MESH",

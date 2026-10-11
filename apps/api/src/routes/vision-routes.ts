@@ -156,7 +156,7 @@ function asRecord(value: unknown): Record<string, any> {
  * Persist one image delivered to an agent tool call as an EvidenceView, with
  * the exact PNG bytes kept outside the agent's working directory.
  */
-async function recordEvidenceView(input: {
+export async function recordEvidenceView(input: {
   projectId: string;
   doc: any;
   documentId: string;

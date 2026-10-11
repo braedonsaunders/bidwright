@@ -15507,6 +15507,9 @@ export class PrismaApiStore {
       entityType?: string;
       layer?: string;
       quantity: number;
+      unit?: string;
+      measurementType?: string;
+      preserveExisting?: boolean;
       selection?: Record<string, unknown>;
     },
   ) {
@@ -15515,9 +15518,11 @@ export class PrismaApiStore {
       where: { projectId, sourceKind: "cad-entity", documentId: input.documentId, cadEntityId: input.entityId },
     });
     if (!existing) {
-      const pickup = await this.db.pickup.create({
-        data: {
-          id: createId("takeoff"),
+      const id = `cad-${createHash("sha256").update(JSON.stringify([projectId, input.documentId, input.entityId])).digest("hex")}`;
+      const pickup = await this.db.pickup.upsert({
+        where: { id }, update: {},
+        create: {
+          id,
           projectId,
           documentId: input.documentId,
           pageNumber: 0,
@@ -15525,7 +15530,7 @@ export class PrismaApiStore {
           label: `${input.entityType || "entity"} ${input.entityId}`.trim(),
           color: "#3b82f6",
           points: [] as any,
-          measurement: { value: quantity } as any,
+          measurement: { value: quantity, ...(input.unit ? { unit: input.unit } : {}), ...(input.measurementType ? { type: input.measurementType } : {}) } as any,
           metadata: { source: "cad", method: "cad-entity-link", measuredBy: "agent" } as any,
           sourceKind: "cad-entity",
           cadEntityId: input.entityId,
@@ -15539,6 +15544,7 @@ export class PrismaApiStore {
       return { pickup, measurementChanged: false };
     }
 
+    if (input.preserveExisting) return { pickup: existing, measurementChanged: false };
     const measurement = (existing.measurement as Record<string, unknown>) ?? {};
     const measurementChanged = Number(measurement.value ?? 0) !== quantity;
     const pickup = await this.db.pickup.update({
@@ -15552,6 +15558,46 @@ export class PrismaApiStore {
       },
     });
     return { pickup, measurementChanged };
+  }
+
+  async saveCadEntityPickups(projectId: string, input: {
+    documentId: string;
+    entities: Array<{ entityId: string; entityType: string; layer: string; quantity: number; unit: string; measurementType: string; selection: Record<string, unknown> }>;
+    worksheetItemId?: string;
+    multiplier?: number;
+  }) {
+    await this.requireProject(projectId);
+    let item: any = null;
+    if (input.worksheetItemId) {
+      item = await this.db.worksheetItem.findFirst({ where: { id: input.worksheetItemId } });
+      const { revision } = await this.findCurrentRevision(projectId);
+      const worksheet = item ? await this.db.worksheet.findFirst({ where: { id: item.worksheetId } }) : null;
+      if (!revision || !worksheet || worksheet.revisionId !== revision.id) throw new Error("Worksheet item not found in project revision");
+    }
+    const pickups = [];
+    for (const entity of input.entities) {
+      const existing = await this.db.pickup.findFirst({ where: { projectId, documentId: input.documentId, cadEntityId: entity.entityId, sourceKind: "cad-entity" } });
+      const measurement = existing ? existing.measurement as Record<string, unknown> : { unit: entity.unit, type: entity.measurementType };
+      if (item) {
+        const unit = String(measurement.unit ?? "").trim().toLowerCase();
+        const targetUnit = String(item.uom ?? "").trim().toLowerCase();
+        const sameCount = ["ea", "each", "count"].includes(unit) && ["ea", "each", "count"].includes(targetUnit);
+        if (!sameCount && unit !== targetUnit && input.multiplier === undefined) throw new Error(`Explicit multiplier required to convert ${unit || "unknown units"} to ${targetUnit || "unknown units"}`);
+        const quantityDimension = measurement.type === "count" ? "count" : measurement.type === "area" ? "area" : measurement.type === "length" ? "length" : null;
+        const itemDimension = this.uomDimension(item.uom ?? "");
+        if (quantityDimension && itemDimension && quantityDimension !== itemDimension) throw new Error("CAD measurement and worksheet item dimensions differ");
+      }
+      const { pickup } = await this.upsertCadEntityPickup(projectId, { ...entity, documentId: input.documentId, preserveExisting: true });
+      let link = input.worksheetItemId ? await this.db.pickupLink.findUnique({
+        where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } },
+      }) : null;
+      if (input.worksheetItemId && !link) {
+        await this.createPickupLink(projectId, { pickupId: pickup.id, worksheetItemId: input.worksheetItemId, multiplier: input.multiplier ?? 1 });
+        link = await this.db.pickupLink.findUnique({ where: { pickupId_worksheetItemId: { pickupId: pickup.id, worksheetItemId: input.worksheetItemId } } });
+      }
+      pickups.push({ pickup: mapPickup(pickup), link });
+    }
+    return { pickups };
   }
 
   async listDwgEntityLinks(

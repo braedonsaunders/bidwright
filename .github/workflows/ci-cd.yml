@@ -228,6 +228,15 @@ jobs:
           "${RUNNER_TEMP}/vision-venv/bin/pip" install --disable-pip-version-check PyMuPDF numpy opencv-python-headless
           cd packages/vision/python && "${RUNNER_TEMP}/vision-venv/bin/python" -m unittest tools.test_page_reader
 
+      - name: Verify CAD takeoff queries, rendering and solid metrics
+        env:
+          PYTHON_PATH: ${{ runner.temp }}/vision-venv/bin/python
+        run: >
+          pnpm exec tsx --test
+          apps/api/src/services/cad-model-takeoff.test.ts
+          apps/api/src/services/cad-pickup-save.test.ts
+          apps/api/src/services/model-ingest/adapters/occt-metrics.test.ts
+
       - name: Install pinned CAD runtime and sandbox
         run: |
           sudo apt-get update -qq

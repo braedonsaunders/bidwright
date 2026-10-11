@@ -22,6 +22,15 @@ export interface AgentToolDefinition {
 }
 
 export const AGENT_TOOL_REGISTRY = {
+  queryCadEntities: { id: "queryCadEntities", displayName: "queryCadEntities", category: "model", mutates: false },
+  renderCadDrawing: { id: "renderCadDrawing", displayName: "renderCadDrawing", category: "model", mutates: false },
+  saveCadEntityTakeoff: { id: "saveCadEntityTakeoff", displayName: "saveCadEntityTakeoff", category: "model", mutates: true },
+  getModelSolidMetrics: { id: "getModelSolidMetrics", displayName: "getModelSolidMetrics", category: "model", mutates: false },
+  aggregateModelElements: { id: "aggregateModelElements", displayName: "aggregateModelElements", category: "model", mutates: false },
+  rebuildModelTopology: { id: "rebuildModelTopology", displayName: "rebuildModelTopology", category: "model", mutates: true },
+  listModelTakeoffRecipes: { id: "listModelTakeoffRecipes", displayName: "listModelTakeoffRecipes", category: "model", mutates: false },
+  applyModelTakeoffRecipe: { id: "applyModelTakeoffRecipe", displayName: "applyModelTakeoffRecipe", category: "model", mutates: true },
+  getModelRevisionDiff: { id: "getModelRevisionDiff", displayName: "getModelRevisionDiff", category: "model", mutates: false },
   getWorkspace: { id: "getWorkspace", displayName: "Read workspace", category: "workspace" },
   getWorksheetTree: { id: "getWorksheetTree", displayName: "Read worksheet tree", category: "worksheet" },
   getItemConfig: { id: "getItemConfig", displayName: "Read line item config", category: "worksheet" },

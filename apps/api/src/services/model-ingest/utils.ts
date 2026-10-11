@@ -103,55 +103,42 @@ export function signedTetraVolume(a: number[], b: number[], c: number[]) {
 
 export function computeTriangulatedMeshMetrics(position?: ArrayLike<number>, index?: ArrayLike<number>) {
   const bbox = emptyBbox();
-  let surfaceArea = 0;
-  let volume = 0;
-  let triangleCount = 0;
   const vertexCount = position ? Math.floor(position.length / 3) : 0;
-  if (!position || vertexCount === 0) {
-    return { surfaceArea, volume, triangleCount, vertexCount, bbox: null };
-  }
-
-  for (let offset = 0; offset + 2 < vertexCount; offset++) {
-    updateBbox(bbox, [
-      Number(position[offset * 3] ?? 0),
-      Number(position[offset * 3 + 1] ?? 0),
-      Number(position[offset * 3 + 2] ?? 0),
-    ]);
-  }
-
-  const readPoint = (vertexIndex: number) => [
-    Number(position[vertexIndex * 3] ?? 0),
-    Number(position[vertexIndex * 3 + 1] ?? 0),
-    Number(position[vertexIndex * 3 + 2] ?? 0),
-  ];
-
-  if (index && index.length >= 3) {
-    for (let offset = 0; offset + 2 < index.length; offset += 3) {
-      const a = readPoint(Number(index[offset]));
-      const b = readPoint(Number(index[offset + 1]));
-      const c = readPoint(Number(index[offset + 2]));
-      surfaceArea += triangleArea(a, b, c);
-      volume += signedTetraVolume(a, b, c);
-      triangleCount++;
+  const point = (i: number) => [Number(position?.[i * 3]), Number(position?.[i * 3 + 1]), Number(position?.[i * 3 + 2])];
+  for (let i = 0; i < vertexCount; i++) updateBbox(bbox, point(i));
+  const bounds = finalizeBbox(bbox);
+  const origin = bounds ? bounds.min.map((v, i) => v + (bounds.max[i] - v) / 2) : [0, 0, 0];
+  const edges = new Map<string, { count: number; orientation: number }>();
+  let surfaceArea = 0, signedVolume = 0, triangleCount = 0, invalidTriangles = 0;
+  // Weld coincident face vertices, including OCCT's duplicated face seams.
+  const key = (p: number[]) => p.map((v) => Object.is(v, -0) ? 0 : v).join(",");
+  const count = index?.length ?? vertexCount;
+  for (let offset = 0; offset + 2 < count; offset += 3) {
+    const ids = [0, 1, 2].map((j) => Number(index ? index[offset + j] : offset + j));
+    const points = ids.map(point);
+    if (ids.some((id) => !Number.isInteger(id) || id < 0 || id >= vertexCount) || points.some((p) => !p.every(Number.isFinite))) {
+      invalidTriangles++; continue;
     }
-  } else {
-    for (let offset = 0; offset + 2 < vertexCount; offset += 3) {
-      const a = readPoint(offset);
-      const b = readPoint(offset + 1);
-      const c = readPoint(offset + 2);
-      surfaceArea += triangleArea(a, b, c);
-      volume += signedTetraVolume(a, b, c);
-      triangleCount++;
+    const [a, b, c] = points;
+    const area = triangleArea(a, b, c);
+    if (area === 0) { invalidTriangles++; continue; }
+    surfaceArea += area;
+    signedVolume += signedTetraVolume(vectorSub(a, origin), vectorSub(b, origin), vectorSub(c, origin));
+    triangleCount++;
+    const keys = points.map(key);
+    for (let j = 0; j < 3; j++) {
+      const from = keys[j], to = keys[(j + 1) % 3];
+      const forward = from < to;
+      const edgeKey = forward ? `${from}|${to}` : `${to}|${from}`;
+      const edge = edges.get(edgeKey) ?? { count: 0, orientation: 0 };
+      edge.count++; edge.orientation += forward ? 1 : -1;
+      edges.set(edgeKey, edge);
     }
   }
-
-  return {
-    surfaceArea,
-    volume: Math.abs(volume),
-    triangleCount,
-    vertexCount,
-    bbox: finalizeBbox(bbox),
-  };
+  const closed = triangleCount > 0 && invalidTriangles === 0 && count % 3 === 0
+    && [...edges.values()].every((edge) => edge.count === 2 && edge.orientation === 0);
+  return { surfaceArea, volume: closed ? Math.abs(signedVolume) : 0, closed, invalidTriangles,
+    triangleCount, vertexCount, bbox: bounds, volumeStatus: closed ? "closed" : "not closed" };
 }
 
 export function colorToHex(color?: number[]) {

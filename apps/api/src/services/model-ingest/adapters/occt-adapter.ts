@@ -14,7 +14,7 @@ import {
 
 const require = createRequire(import.meta.url);
 const ADAPTER_ID = "embedded-open.occt";
-const ADAPTER_VERSION = "1.0.0";
+const ADAPTER_VERSION = "1.1.0";
 const FORMATS = new Set(["step", "stp", "iges", "igs", "brep"]);
 const OCCT_LINEAR_UNIT = "foot";
 
@@ -137,6 +137,14 @@ export const occtAdapter: ModelIngestAdapter = {
     let totalTriangles = 0;
     let totalVertices = 0;
 
+    const instances = new Map<number, string[]>();
+    const visit = (node: OcctNode | undefined, parent: string) => {
+      if (!node) return;
+      const path = `${parent}/${node.name ?? "assembly"}`;
+      for (const index of node.meshes ?? []) instances.set(index, [...(instances.get(index) ?? []), path]);
+      for (const child of node.children ?? []) visit(child, path);
+    };
+    visit(result.root, "");
     for (const [index, mesh] of (result.meshes ?? []).entries()) {
       const metrics = computeTriangulatedMeshMetrics(mesh.attributes?.position?.array, mesh.index?.array);
       const elementId = createId("me");
@@ -159,6 +167,9 @@ export const occtAdapter: ModelIngestAdapter = {
         estimateRelevant: true,
         properties: {
           meshIndex: index,
+          assemblyInstances: instances.get(index) ?? [],
+          closed: metrics.closed,
+          volumeStatus: metrics.volumeStatus,
           triangleCount: metrics.triangleCount,
           vertexCount: metrics.vertexCount,
           brepFaceCount: mesh.brep_faces?.length ?? 0,
