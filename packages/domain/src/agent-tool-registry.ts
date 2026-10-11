@@ -185,6 +185,9 @@ export const AGENT_TOOL_REGISTRY = {
   listDrawingAnalyses: { id: "listDrawingAnalyses", displayName: "List drawing analyses", category: "vision", mutates: false },
   compareAnalysisToTakeoff: { id: "compareAnalysisToTakeoff", displayName: "Compare analysis to takeoff", category: "vision", mutates: false },
 
+  describeTools: { id: "describeTools", displayName: "Describe tools", category: "system", mutates: false },
+  invokeTool: { id: "invokeTool", displayName: "Invoke tool", category: "system", mutates: false },
+
   command_execution: { id: "command_execution", displayName: "Run command", category: "runtime", mutates: true },
 } satisfies Record<string, AgentToolDefinition>;
 
@@ -192,13 +195,17 @@ export type AgentToolId = keyof typeof AGENT_TOOL_REGISTRY;
 
 export function normalizeAgentToolId(toolId: string) {
   if (!toolId) return "";
+  const unprefixed = toolId.replace(/^mcp__bidwright__/, "");
+  if (unprefixed.startsWith("integration_")) return unprefixed;
   const lastSegment = toolId.includes(".") ? toolId.split(".").pop() || toolId : toolId;
   return lastSegment.replace(/^mcp__bidwright__/, "");
 }
 
 export function getAgentToolDefinition(toolId: string): AgentToolDefinition | null {
   const normalized = normalizeAgentToolId(toolId);
-  const definition = (AGENT_TOOL_REGISTRY as Record<string, AgentToolDefinition>)[normalized];
+  const definition = Object.prototype.hasOwnProperty.call(AGENT_TOOL_REGISTRY, normalized)
+    ? (AGENT_TOOL_REGISTRY as Record<string, AgentToolDefinition>)[normalized]
+    : undefined;
   if (definition) return definition;
   // Integration action manifests are loaded at runtime. The whole namespace is
   // conservatively mutating: external actions can have effects beyond Bidwright.

@@ -1053,6 +1053,7 @@ export function registerResourceTools(server: McpServer) {
     "listPickups",
     "List saved PDF/DWG takeoff annotations so an estimate row can cite or link drawing quantity evidence.",
     {
+      responseFormat: z.enum(["concise", "detailed"]).default("concise"),
       q: z.string().optional().describe("Optional scope/symbol/label search to filter annotations."),
       documentId: z.string().optional().describe("Optional drawing/document id."),
       page: z.coerce.number().int().positive().optional().describe("Optional 1-based page number."),
@@ -1093,13 +1094,14 @@ export function registerResourceTools(server: McpServer) {
             },
           };
           return {
+            ...(input.responseFormat === "detailed" ? annotation : {}),
             id: annotation.id,
             documentId: annotation.documentId,
             pageNumber: annotation.pageNumber,
             annotationType: annotation.annotationType,
             label,
             groupName: annotation.groupName,
-            measurement,
+            measurement: input.responseFormat === "detailed" ? annotation.measurement : measurement,
             basis,
           };
         });

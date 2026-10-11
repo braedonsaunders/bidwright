@@ -8,6 +8,7 @@ import path from "node:path";
 
 import {
   calculateTotals,
+  pickupLinkQuantity,
   buildProjectWorkspace,
   buildQuoteRevisionComparison,
   buildSummaryBuilderConfig,
@@ -15390,8 +15391,7 @@ export class PrismaApiStore {
       annotationType: annotation.annotationType ?? "",
       itemUom: (item as any).uom ?? "",
     });
-    const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
-    const derivedQuantity = rawValue * multiplier;
+    const derivedQuantity = pickupLinkQuantity(measurement, quantityField, multiplier);
 
     const link = await this.db.pickupLink.create({
       data: {
@@ -15432,8 +15432,7 @@ export class PrismaApiStore {
         itemUom: (item as any)?.uom ?? "",
       });
     }
-    const rawValue = Number(measurement[quantityField] ?? measurement.value ?? 0) || 0;
-    const derivedQuantity = rawValue * multiplier;
+    const derivedQuantity = pickupLinkQuantity(measurement, quantityField, multiplier);
 
     const updated = await this.db.pickupLink.update({
       where: { id: linkId },

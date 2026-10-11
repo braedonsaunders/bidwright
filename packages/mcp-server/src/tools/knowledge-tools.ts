@@ -146,26 +146,26 @@ export function registerKnowledgeTools(server: McpServer) {
   server.tool(
     "searchEstimatingKnowledge",
     "Search labour productivity units, PDF reference-book passages and structured datasets together. Use an operation + material + size/condition. Returns independent ranked shortlists with IDs, units and source context; book prose and dataset samples are not interchangeable rates. Drill into getLaborUnit, readKnowledgePassage, or queryKnowledgeDataset with exact filters.",
-    { query: z.string().min(1), sources: z.array(z.enum(["labor", "books", "datasets"])).default(["labor", "books", "datasets"]),
+    { responseFormat: z.enum(["concise", "detailed"]).default("concise"), query: z.string().min(1), sources: z.array(z.enum(["labor", "books", "datasets"])).default(["labor", "books", "datasets"]),
       limit: z.coerce.number().int().positive().max(12).default(6) },
-    async ({ query, sources, limit }) => {
+    async ({ query, sources, limit, responseFormat }) => {
       const results = await Promise.all(sources.map(async (source) => {
         const params = new URLSearchParams({ q: query, limit: String(limit) });
         try {
           if (source === "books") {
             params.set("scope", "global");
             const data = await apiGet(`/knowledge/search?${params}`);
-            return { source, hits: (Array.isArray(data) ? data : data.results ?? []).map(compactKnowledgeHit) };
+            return { source, hits: (Array.isArray(data) ? data : data.results ?? []).map((hit: any) => responseFormat === "detailed" ? hit : compactKnowledgeHit(hit)) };
           }
           if (source === "labor") {
             const data = await apiGet(`/api/labor-units/units?${params}`);
-            return { source, total: data.total, hits: (data.units ?? []).map((unit: any) => ({ id: unit.id, libraryId: unit.libraryId,
+            return { source, total: data.total, hits: (data.units ?? []).map((unit: any) => responseFormat === "detailed" ? unit : ({ id: unit.id, libraryId: unit.libraryId,
               name: unit.name, description: compactValue(unit.description, 260),
               path: [unit.category, unit.className, unit.subClassName].filter(Boolean).join(" › "),
               hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
           }
           const data = await apiGet(`/datasets/search/global?${params}`);
-          return { source, hits: (data.results ?? []).map((d: any) => ({ datasetId: d.datasetId, name: d.datasetName,
+          return { source, hits: (data.results ?? []).map((d: any) => responseFormat === "detailed" ? d : ({ datasetId: d.datasetId, name: d.datasetName,
             description: compactValue(d.description, 240), sourceBookId: d.sourceBookId, sourcePages: d.sourcePages,
             columns: d.columns, sampleRows: d.sampleRows?.slice(0, 3).map((row: any) => compactRow(row)), samplesAreMatches: d.samplesAreMatches })) };
         } catch (error) { return { source, error: error instanceof Error ? error.message : String(error) }; }
@@ -313,6 +313,7 @@ export function registerKnowledgeTools(server: McpServer) {
     "queryKnowledgeDataset",
     "Search structured knowledge datasets for precise values — man hours, material weights, labour rates, equipment specs, productivity-by-condition tables. Discover with query, then use datasetId plus typed filters for exact numeric/keyed rows. Returns matching datasets with context (description, tags, notes) and rows. Use for concrete tabular numbers. For prose / handbook chapters use queryKnowledgeBook; for project documents use queryProjectFile; for catalogs/cost-intel/labor-units/rates/assemblies use queryLibrary.",
     {
+      responseFormat: z.enum(["concise", "detailed"]).default("concise"),
       query: z.string().optional().describe("Search query — e.g. 'weld neck flange 6 inch 150 lb man hours'"),
       q: z.string().optional().describe("Alias for query; accepted for consistency with other search tools."),
       datasetId: z.string().optional().describe("A dataset ID from discovery. Alone, reads its rows in order (use offset/rowLimit to page); with query or filters, searches within it."),
@@ -328,7 +329,7 @@ export function registerKnowledgeTools(server: McpServer) {
     },
     async (input) => {
       const query = resolveQuery(input);
-      const { datasetId, filters, limit, offset, rowLimit, sampleRowLimit } = input;
+      const { datasetId, filters, limit, offset, rowLimit, sampleRowLimit, responseFormat } = input;
       if (!query && !datasetId) {
         return {
           content: [{ type: "text" as const, text: "ERROR: pass query for discovery/fuzzy search, or pass datasetId to read or filter a dataset's rows." }],
@@ -347,14 +348,14 @@ export function registerKnowledgeTools(server: McpServer) {
             : await apiGet(`/datasets/${datasetId}/rows?${new URLSearchParams({ limit: String(rowLimit), offset: String(offset) })}`);
         const dataset = await apiGet(`/datasets/${datasetId}`);
         const rawRows = Array.isArray(data) ? data : (Array.isArray(data.rows) ? data.rows : []);
-        const page = paginate(rawRows.map((row: any) => compactRow(row)), { limit: rowLimit, offset: browsing ? 0 : offset }, 50, 200);
+        const page = paginate(rawRows.map((row: any) => responseFormat === "detailed" ? (row.data ?? row) : compactRow(row)), { limit: rowLimit, offset: browsing ? 0 : offset }, 50, 200);
         page.offset = offset;
         if (browsing && typeof data?.total === "number") {
           page.total = data.total;
           page.hasMore = offset + page.rows.length < data.total;
         }
         return { content: [{ type: "text" as const, text: JSON.stringify({
-          dataset: {
+          dataset: responseFormat === "detailed" ? dataset : {
             id: dataset.id,
             name: dataset.name,
             description: compactValue(dataset.description, 240),
@@ -386,15 +387,16 @@ export function registerKnowledgeTools(server: McpServer) {
       const params = new URLSearchParams({ q: query, limit: String(limit || 5) });
       const data = await apiGet(`/datasets/search/global?${params}`);
       const results = (data.results || []).map((r: any) => ({
+        ...(responseFormat === "detailed" ? r : {}),
         datasetId: r.datasetId,
         name: r.datasetName,
         sourceBookId: r.sourceBookId, sourcePages: r.sourcePages, samplesAreMatches: r.samplesAreMatches,
-        description: compactValue(r.description, 240),
-        tags: Array.isArray(r.tags) ? r.tags.slice(0, 8) : r.tags,
-        columns: r.columns?.slice(0, 20).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
+        description: responseFormat === "detailed" ? r.description : compactValue(r.description, 240),
+        tags: responseFormat === "detailed" ? r.tags : Array.isArray(r.tags) ? r.tags.slice(0, 8) : r.tags,
+        columns: responseFormat === "detailed" ? r.columns : r.columns?.slice(0, 20).map((c: any) => ({ key: c.key, name: c.name || c.label, type: c.type })),
         columnCount: r.columns?.length ?? 0,
         rowCount: r.rowCount,
-        sampleRows: Array.isArray(r.sampleRows) ? r.sampleRows.slice(0, sampleRowLimit).map((row: any) => compactRow(row)) : [],
+        sampleRows: Array.isArray(r.sampleRows) ? r.sampleRows.slice(0, sampleRowLimit).map((row: any) => responseFormat === "detailed" ? (row.data ?? row) : compactRow(row)) : [],
         note: "Drill in with datasetId + filters for exact keyed/numeric rows; use datasetId + query only when no exact key is available.",
       }));
       return { content: [{ type: "text" as const, text: JSON.stringify({
