@@ -1,3 +1,6 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+
 // Revision narrative is copied even when copyQuote resets the estimate.
 // Keep every blind evaluation entry point on the same API patch.
 export const BLIND_REVISION_PATCH = {
@@ -30,7 +33,7 @@ export async function excludeCopiedAnswerFiles(
   sourceProjectId: string,
   projectId: string,
   names: string[],
-  files: { id: string; projectId: string; name: string; type: string; documentId?: string }[],
+  files: { id: string; projectId: string; name: string; type: string; documentId?: string; metadata?: { sourceDocumentId?: unknown } | null }[],
   remove: (path: string) => Promise<unknown>,
 ) {
   if (!sourceProjectId || !projectId || sourceProjectId === projectId) {
@@ -40,11 +43,20 @@ export async function excludeCopiedAnswerFiles(
   for (const name of names) {
     if (!selected.some((file) => file.name === name)) throw new Error(`Answer file not found: ${name}`);
   }
-  if (selected.some((file) => file.projectId !== projectId || file.type !== "file" || file.documentId)) {
+  if (selected.some((file) => file.projectId !== projectId || file.type !== "file" || file.documentId || file.metadata?.sourceDocumentId)) {
     throw new Error("Answer-file exclusions require unlinked files belonging to the copied project");
   }
   for (const file of selected) {
     await remove(`/projects/${encodeURIComponent(projectId)}/files/${encodeURIComponent(file.id)}`);
   }
   return selected.map(({ id, name }) => ({ id, name }));
+}
+
+/** Reviewer audit sits beside run workspaces, never inside the agent's cwd. */
+export async function writeAnswerFileExclusionAudit(outputRoot: string, projectId: string, files: { id: string; name: string }[]) {
+  const directory = join(resolve(outputRoot), "audit", encodeURIComponent(projectId));
+  await mkdir(directory, { recursive: true });
+  const path = join(directory, "excluded-answer-files.json");
+  await writeFile(path, JSON.stringify(files, null, 2), { mode: 0o600 });
+  return path;
 }

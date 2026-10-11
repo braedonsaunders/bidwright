@@ -27,7 +27,7 @@
  */
 import { resolveEstimatorPersonaForPrompt } from "../../apps/api/src/services/estimator-persona-prompt.js";
 import { selectEvalPersona } from "./eval-persona.js";
-import { blindCopiedRevision, excludeCopiedAnswerFiles } from "./blind-copy.js";
+import { blindCopiedRevision, excludeCopiedAnswerFiles, writeAnswerFileExclusionAudit } from "./blind-copy.js";
 import { spawnSync } from "node:child_process";
 import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -160,7 +160,7 @@ async function prepare() {
   const dir = resolve(out, projectId);
   await mkdir(join(dir, "documents"), { recursive: true });
   await writeFile(join(dir, "persona.json"), JSON.stringify({ id: selectedPersona?.id ?? null, persona }, null, 2));
-  await writeFile(join(dir, "excluded-answer-files.json"), JSON.stringify(excludedAnswerFiles, null, 2));
+  await writeAnswerFileExclusionAudit(out, projectId, excludedAnswerFiles);
   await mkdir(join(dir, ".bidwright"), { recursive: true });
   const documents = (workspace?.sourceDocuments ?? []).map((d: any) => ({
     id: d.id,
