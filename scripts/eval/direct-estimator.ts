@@ -11,7 +11,7 @@
  *
  *   BIDWRIGHT_AUTH_TOKEN_FILE=<file> \
  *   npx tsx scripts/eval/direct-estimator.ts prepare --source <projectId> \
- *     --out <dir> --ledger <file> [--scope-file <file>] [--label <name>] [--not-blind]
+ *     --out <dir> --ledger <file> [--scope-file <file>] [--label <name>] [--not-blind] [--runtime claude-code|codex]
  *   npx tsx scripts/eval/direct-estimator.ts cleanup --project <projectId>
  *
  * `prepare` copies the source project (estimate reset), records the copy in
@@ -82,7 +82,7 @@ function initialPrompt(benchmarkingEnabled: boolean, scope: string, userPrompt: 
   const scopeDirective = scope
     ? `\n\nUSER SCOPE / COMMERCIAL INSTRUCTIONS (AUTHORITATIVE):\n${scope}\nTreat these instructions as binding commercial direction. If the user says an activity is subcontracted, already priced, owner-supplied, or otherwise commercially decided, do not re-estimate that package as self-performed labour unless the user explicitly asks for a validation breakdown.`
     : "";
-  return `Read CLAUDE.md now and follow its estimating workflow. Inspect original drawing pixels yourself using readDrawingPage/readDrawingTile and relevant project images with listProjectImages/inspectProjectImage. Restore current workspace and saved derivations before continuing existing work. Use authoritative Bidwright tools, respect source evidence and commercial scope, and complete final reconciliation before declaring the estimate ready. ${benchmarkingEnabled ? "Use comparable-job benchmarks when available; no-comparable results do not justify invented adjustments." : "Organization benchmarking is disabled."}${scopeDirective}
+  return `Read CLAUDE.md now and follow its estimating workflow. The source capabilities section describes what the project sources can provide. Never claim to have viewed an image that you have not inspected. Restore current workspace and saved derivations before continuing existing work. Use authoritative Bidwright tools, respect source evidence and commercial scope, and complete final reconciliation before declaring the estimate ready. ${benchmarkingEnabled ? "Use comparable-job benchmarks when available; no-comparable results do not justify invented adjustments." : "Organization benchmarking is disabled."}${scopeDirective}
 
 ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the current source package."}`;
 }
@@ -95,6 +95,8 @@ async function buildDomain() {
 }
 
 async function prepare() {
+  const runtime = option("--runtime", "claude-code");
+  if (runtime !== "claude-code" && runtime !== "codex") throw new Error("--runtime must be claude-code or codex");
   await buildDomain();
   const source = option("--source");
   const out = option("--out");
@@ -173,12 +175,12 @@ async function prepare() {
     estimateDefaults: settings?.defaults ?? {},
     maxConcurrentSubAgents: settings?.integrations?.maxConcurrentSubAgents ?? 2,
     persona: null,
-    runtime: "claude-code",
+    runtime,
     sourceOverview,
   } as any);
   // Same launch assets as production: overview snapshot, skills and the bw client.
   await writeFile(join(dir, ".bidwright", "source-overview.json"), JSON.stringify(sourceOverview));
-  await writeAgentWorkspaceAssets(dir, "claude-code");
+  await writeAgentWorkspaceAssets(dir, runtime);
   // Blind runs cannot call the history tools, so do not tell the agent to.
   await writeFile(join(dir, "CLAUDE.md"), blind
     ? instructions
@@ -187,10 +189,11 @@ async function prepare() {
     : instructions);
 
   const benchmarkingEnabled = !blind && settings?.defaults?.benchmarkingEnabled !== false;
+  if (runtime === "codex") await writeFile(join(dir, "AGENTS.md"), await readFile(join(dir, "CLAUDE.md"), "utf8"));
   // askUser waits on the in-app run, which a direct run does not have.
-  await writeFile(join(dir, "prompt.txt"), `${initialPrompt(benchmarkingEnabled, scope, userPrompt)}
+  await writeFile(join(dir, "prompt.txt"), `${initialPrompt(benchmarkingEnabled, scope, userPrompt).replace("Read CLAUDE.md", runtime === "codex" ? "Read AGENTS.md" : "Read CLAUDE.md")}
 
-No user is available during this run. Where you would ask, choose the most defensible option, save it as an assumption, and continue.`);
+No user is available during this run. Do not call askUser, including through invokeTool. Where you would ask, choose the most defensible option, save it as an assumption, and continue.${blind ? " Do not access benchmarks or calibration lessons, including through invokeTool or the API." : ""}`);
 
   // The MCP wrapper reads the token at start so no secret is written to disk.
   const tsx = join(repoRoot, "node_modules/.bin/tsx");
@@ -234,6 +237,41 @@ claude -p "$(cat prompt.txt)" \\
   --disallowedTools mcp__bidwright__askUser \\
   --output-format stream-json --verbose > transcript.jsonl 2> stderr.log
 `);
+  if (runtime === "codex") {
+    // Pass the MCP configuration as CLI overrides so an untrusted project-local
+    // config cannot silently prevent the server from loading. Tokens stay in env.
+    const config: Record<string, unknown> = {
+      "mcp_servers.bidwright.command": join(dir, "bidwright-mcp.sh"),
+      "mcp_servers.bidwright.env": {
+        BIDWRIGHT_API_URL: apiUrl, BIDWRIGHT_PROJECT_ID: projectId,
+        BIDWRIGHT_REVISION_ID: revision.id ?? "", BIDWRIGHT_QUOTE_ID: quote.id ?? "",
+        BIDWRIGHT_AGENT_MODE: "build_estimate",
+      },
+      "mcp_servers.bidwright.disabled_tools": ["askUser", ...(blind ? ["recomputeEstimateBenchmarks", "listCalibrationLessons"] : [])],
+      "mcp_servers.bidwright.default_tools_approval_mode": "approve",
+      "mcp_servers.bidwright.startup_timeout_sec": 60,
+      "mcp_servers.bidwright.tool_timeout_sec": 180,
+      "model_reasoning_effort": "medium",
+      "approval_policy": "never",
+      "sandbox_workspace_write.network_access": true,
+    };
+    if (process.env.CODEX_OPENAI_BASE_URL && process.env.CODEX_POOL_AUTH_TOKEN) {
+      config["model_provider"] = "bidwright_eval_pool";
+      config["model_providers.bidwright_eval_pool"] = {
+        name: "BB Account Pooler", base_url: process.env.CODEX_OPENAI_BASE_URL,
+        env_key: "CODEX_POOL_AUTH_TOKEN", wire_api: "responses",
+      };
+    }
+    // JSON strings are valid TOML strings; inline tables need TOML '=' separators.
+    const toml = (value: unknown): string => value && typeof value === "object" && !Array.isArray(value)
+      ? `{ ${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)} = ${toml(item)}`).join(", ")} }`
+      : JSON.stringify(value);
+    const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
+    const overrides = Object.entries(config).map(([key, value]) => `${key}=${toml(value)}`);
+    await writeFile(join(dir, "codex-config.toml"), overrides.join("\n") + "\n");
+    const environment = (await readFile(join(dir, "run.sh"), "utf8")).split("claude -p")[0];
+    await writeFile(join(dir, "run.sh"), `${environment}# Uses the installed/pooled default model; no model override.\nexec codex exec --json --skip-git-repo-check --sandbox workspace-write ${overrides.map(value => `-c ${shellQuote(value)}`).join(" ")} - < prompt.txt > transcript.jsonl 2> stderr.log\n`);
+  }
   await chmod(join(dir, "run.sh"), 0o700);
   console.log(JSON.stringify({ projectId, dir, documents: documents.length, scopeChars: scope.length }, null, 2));
 }

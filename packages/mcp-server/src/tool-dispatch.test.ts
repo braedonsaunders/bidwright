@@ -28,6 +28,11 @@ test("direct and indirect calls share schemas, project scope, images, logging an
     await server.connect(serverTransport);
     await client.connect(clientTransport);
     try {
+      const listed = await client.listTools();
+      for (const name of ["getSourceOverview", "describeTools", "invokeTool", "listModels", "listPickups"]) {
+        assert.equal(listed.tools.find(tool => tool.name === name)?._meta?.["anthropic/alwaysLoad"], true);
+      }
+      assert.equal(listed.tools.find(tool => tool.name === "readDrawingPage")?._meta?.["anthropic/alwaysLoad"], undefined);
       const direct = await client.callTool({ name: "listPickups", arguments: { projectId: "foreign" } });
       const indirect = await client.callTool({ name: "invokeTool", arguments: { name: "listPickups", args: { projectId: "foreign" } } });
       assert.deepEqual(indirect, direct);

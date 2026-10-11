@@ -12404,15 +12404,30 @@ export class PrismaApiStore {
         }
       }
 
-      // Copy source documents
+      // Copy sources with local IDs so model discovery can ingest the copy independently.
       const oldDocs = await tx.sourceDocument.findMany({ where: { projectId } });
+      const documentIdMap = new Map(oldDocs.map(doc => [doc.id, createId("doc")]));
       for (const doc of oldDocs) {
         await tx.sourceDocument.create({
           data: {
-            id: createId("doc"), projectId: newProjectId, fileName: doc.fileName, fileType: doc.fileType,
+            id: documentIdMap.get(doc.id)!, projectId: newProjectId, fileName: doc.fileName, fileType: doc.fileType,
             documentType: doc.documentType, pageCount: doc.pageCount, checksum: doc.checksum,
             storagePath: doc.storagePath, extractedText: doc.extractedText,
             structuredData: toPrismaJson((doc as any).structuredData ?? null),
+            createdAt: timestamp, updatedAt: timestamp,
+          },
+        });
+      }
+      const oldFiles = await tx.fileNode.findMany({ where: { projectId, scope: "project" } });
+      const fileIdMap = new Map(oldFiles.map(file => [file.id, createId("file")]));
+      for (const file of oldFiles) {
+        await tx.fileNode.create({
+          data: {
+            ...file,
+            id: fileIdMap.get(file.id)!, projectId: newProjectId,
+            parentId: file.parentId ? fileIdMap.get(file.parentId) ?? null : null,
+            documentId: file.documentId ? documentIdMap.get(file.documentId) ?? null : null,
+            metadata: toPrismaJson(file.metadata),
             createdAt: timestamp, updatedAt: timestamp,
           },
         });

@@ -32,11 +32,18 @@ test("overview joins Documents and Files without inventing scan, unit or human p
   assert.equal(overview.sources[1].models[0].units, "unknown");
   assert.equal(overview.sources[1].models[0].qtoCoveragePercent, 40);
   assert.equal(overview.sources[2].kind, "step");
+  assert.equal(overview.sources[2].modelStatus, "not_ingested");
+  assert.equal(overview.sources[2].modelIngestTool, "listModels");
+  assert.equal(overview.sources[1].modelStatus, null);
   assert.deepEqual(overview.sources[0].calibrations, { doc: { "1": { scale: 50 } }, "file-alias": { "1": { scale: 20 } } });
   assert.deepEqual(overview.sources[3].calibrations, { "file-file-only": { "2": { scale: 100 } } });
   assert.equal(overview.sources[3].pickups, 1);
   assert.equal(overview.sources[3].facts.positionedTextAvailable, null);
   const brief = buildCompactClaudeMdContent({ projectDir: "/tmp/not-created", dataRoot: "/tmp", projectName: "Synthetic",
     clientName: "", location: "", scope: "", quoteNumber: "", documents: [], sourceOverview: overview });
-  assert.match(brief, /pickups: 10 total \(2 person, 1 agent, 7 unrecorded\)/);
+  assert.match(brief, /STEP\/IGES model, not yet ingested \(listModels starts ingestion/);
+  assert.match(brief, /IFC4, model partial, 10 elements, quantities on 40%/);
+  assert.doesNotMatch(brief, /"models":|"positionedTextAvailable":|pdf, pdf/);
+  for (const tool of ["aggregateModelElements", "queryCadEntities", "measureTakeoff", "getPipingMto"]) assert.ok(brief.includes(tool));
+  assert.match(brief, /10 takeoff marks \(2 person, 1 agent, 7 unrecorded\)/);
 });
