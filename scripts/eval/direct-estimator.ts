@@ -29,6 +29,7 @@ import { appendFile, chmod, mkdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { buildCompactClaudeMdContent } from "../../apps/api/src/services/claude-md-generator.js";
+import { writeAgentWorkspaceAssets } from "../../apps/api/src/services/agent-workspace-assets.js";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const [command, ...rest] = process.argv.slice(2);
@@ -132,6 +133,7 @@ async function prepare() {
   const revision = workspace?.currentRevision ?? {};
   const settings = await api<any>("/settings").catch(() => ({}));
   const scope = scopeFile ? (await readFile(scopeFile, "utf8")).trim() : String(project.scope ?? "").trim();
+  const sourceOverview = await api<any>(`/api/projects/${projectId}/source-overview`);
 
   const dir = resolve(out, projectId);
   await mkdir(join(dir, "documents"), { recursive: true });
@@ -171,7 +173,12 @@ async function prepare() {
     estimateDefaults: settings?.defaults ?? {},
     maxConcurrentSubAgents: settings?.integrations?.maxConcurrentSubAgents ?? 2,
     persona: null,
+    runtime: "claude-code",
+    sourceOverview,
   } as any);
+  // Same launch assets as production: overview snapshot, skills and the bw client.
+  await writeFile(join(dir, ".bidwright", "source-overview.json"), JSON.stringify(sourceOverview));
+  await writeAgentWorkspaceAssets(dir, "claude-code");
   // Blind runs cannot call the history tools, so do not tell the agent to.
   await writeFile(join(dir, "CLAUDE.md"), blind
     ? instructions
@@ -215,6 +222,9 @@ exec '${tsx}' '${mcpEntry}'
   await writeFile(join(dir, "run.sh"), `#!/bin/sh
 # Usage: ./run.sh [model] [effort]   (transcript -> transcript.jsonl)
 cd "$(dirname "$0")"
+# The bw client reads the same API env a production sandbox gets.
+BIDWRIGHT_AUTH_TOKEN="$(sed 's/^.*=//; s/^"//; s/"$//' '${tokenFile}' | tr -d '\\n')"
+export BIDWRIGHT_AUTH_TOKEN BIDWRIGHT_API_URL='${apiUrl}' BIDWRIGHT_PROJECT_ID='${projectId}'
 claude -p "$(cat prompt.txt)" \\
   --model "\${1:-claude-opus-5-5}" --effort "\${2:-medium}" \\
   --mcp-config mcp.json --strict-mcp-config --settings settings.json \\
