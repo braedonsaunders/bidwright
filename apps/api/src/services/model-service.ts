@@ -1731,7 +1731,7 @@ export async function listProjectModelAssets(projectId: string, options: { disco
   // Clients still read `_count.takeoffLinks`; keep the response name stable.
   return assets.map((asset) => ({
     ...asset,
-    progress: recordValue(asset.manifest).translationProgress ?? (asset.status === "processing" ? "processing" : asset.status),
+    progress: recordValue(recordValue(recordValue(asset.manifest).modelIngest).summary).translationProgress ?? recordValue(asset.manifest).translationProgress ?? (asset.status === "processing" ? "processing" : asset.status),
     terminalErrors: asset.status === "failed"
       ? (asset.issues.length ? asset.issues.map(issue => ({ code: issue.code, message: issue.message })) : [{ code: "model_ingest_failed", message: assetErrorMessage(asset) }])
       : [],

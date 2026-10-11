@@ -34,7 +34,7 @@ export function sourceQuantityPickup(input: z.infer<typeof sourceQuantitySchema>
 }
 
 export async function saveSourceQuantityTakeoff(
-  store: Pick<PrismaApiStore, "createPickup" | "createPickupLink">,
+  store: Pick<PrismaApiStore, "ensureSourceQuantityPickup" | "ensurePickupLink">,
   projectId: string,
   input: z.infer<typeof sourceQuantitySchema>,
 ) {
@@ -43,7 +43,7 @@ export async function saveSourceQuantityTakeoff(
     ? await prisma.fileNode.findFirst({ where: { id: fileNodeId, projectId, type: "file" } })
     : await prisma.sourceDocument.findFirst({ where: { id: input.documentId, projectId } });
   if (!source) throw new Error("Source not found in project");
-  const pickup = await store.createPickup(projectId, sourceQuantityPickup(input));
+  const pickup = await store.ensureSourceQuantityPickup(projectId, sourceQuantityPickup(input));
   if (!input.linkToItemId) return { pickup, link: null };
   // As with PDF takeoff, a failed optional link leaves a visible, saved pickup.
   try {
@@ -54,7 +54,7 @@ export async function saveSourceQuantityTakeoff(
     if (normalize(row.uom) !== normalize(input.unit) && input.multiplier === undefined) {
       throw new Error(`Explicit multiplier required to convert ${input.unit} to ${row.uom}`);
     }
-    const link = await store.createPickupLink(projectId, {
+    const link = await store.ensurePickupLink(projectId, {
       pickupId: pickup.id, worksheetItemId: input.linkToItemId,
       quantityField: input.quantityField, multiplier: input.multiplier ?? 1,
     });

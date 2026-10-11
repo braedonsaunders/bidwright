@@ -33,8 +33,10 @@ test("a failed source ends the scan with an error and polling retains asset diag
   assert.equal(scan.status, "failed");
   assert.match(scan.error!, /missing.nwd/);
   assert.deepEqual(scan.syncedIds, ["asset"]);
+  asset.manifest = { ...asset.manifest, translationProgress: "old value", modelIngest: { summary: { translationProgress: "complete" } } };
   const assets = await listProjectModelAssets("scan-test", { discover: false });
   assert.equal(assets[0].status, "failed");
+  assert.equal(assets[0].progress, "complete");
   assert.equal(assets[0].terminalErrors.length, 1);
   assert.match(assets[0].terminalErrors[0].code, /missing|source/);
 });

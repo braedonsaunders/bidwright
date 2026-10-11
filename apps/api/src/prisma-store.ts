@@ -186,6 +186,7 @@ import {
   relativeWorkspacePath,
   resolveApiPath,
   relativeProjectFilePath,
+  isRemoteStoragePath,
   resolveRelativePath,
   sanitizeFileName,
 } from "./paths.js";
@@ -12413,10 +12414,10 @@ export class PrismaApiStore {
       const oldDocs = await tx.sourceDocument.findMany({ where: { projectId } });
       const documentIdMap = new Map(oldDocs.map(doc => [doc.id, createId("doc")]));
       for (const doc of oldDocs) {
-        const storagePath = doc.storagePath
-          ? relativeProjectFilePath(newProjectId, documentIdMap.get(doc.id)!, doc.fileName)
+        const storagePath = doc.storagePath && !isRemoteStoragePath(doc.storagePath)
+          ? path.join("projects", newProjectId, "documents", documentIdMap.get(doc.id)!, sanitizeFileName(doc.fileName))
           : doc.storagePath;
-        if (doc.storagePath && storagePath) fileCopies.push({ source: doc.storagePath, destination: storagePath });
+        if (doc.storagePath && storagePath && !isRemoteStoragePath(doc.storagePath)) fileCopies.push({ source: doc.storagePath, destination: storagePath });
         await tx.sourceDocument.create({
           data: {
             id: documentIdMap.get(doc.id)!, projectId: newProjectId, fileName: doc.fileName, fileType: doc.fileType,
@@ -12430,10 +12431,12 @@ export class PrismaApiStore {
       const oldFiles = await tx.fileNode.findMany({ where: { projectId, scope: "project" } });
       const fileIdMap = new Map(oldFiles.map(file => [file.id, createId("file")]));
       for (const file of oldFiles) {
-        const storagePath = file.storagePath && file.type === "file"
-          ? relativeProjectFilePath(newProjectId, fileIdMap.get(file.id)!, file.name)
-          : null;
-        if (file.storagePath && storagePath) fileCopies.push({ source: file.storagePath, destination: storagePath });
+        const storagePath = file.storagePath && isRemoteStoragePath(file.storagePath)
+          ? file.storagePath
+          : file.storagePath && file.type === "file"
+            ? relativeProjectFilePath(newProjectId, fileIdMap.get(file.id)!, file.name)
+            : null;
+        if (file.storagePath && storagePath && !isRemoteStoragePath(file.storagePath)) fileCopies.push({ source: file.storagePath, destination: storagePath });
         await tx.fileNode.create({
           data: {
             ...file,
@@ -12475,16 +12478,21 @@ export class PrismaApiStore {
         revision: mapRevision(newRevision!),
       };
     });
-    // Every row already points at copy-owned storage. Never fall back to the source
+    // Every local path already points at copy-owned storage. Never fall back to the source
     // path on failure: a later save must remain isolated even when bytes are missing.
     for (const file of fileCopies) {
+      // Stage outside files/ so even an interrupted copy cannot be adopted as an artifact.
+      const temporaryPath = resolveApiPath("projects", result.project.id, `.copy-${randomUUID()}.tmp`);
       try {
         await mkdir(path.dirname(resolveApiPath(file.destination)), { recursive: true });
-        await copyFile(resolveApiPath(file.source), resolveApiPath(file.destination));
+        await copyFile(resolveApiPath(file.source), temporaryPath);
+        await rename(temporaryPath, resolveApiPath(file.destination));
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         copyWarnings.push({ ...file, message });
         console.warn("Project copy could not copy source bytes", { projectId: result.project.id, ...file, message });
+      } finally {
+        await rm(temporaryPath, { force: true }).catch(() => undefined);
       }
     }
     return { ...result, copyWarnings };
@@ -14902,12 +14910,14 @@ export class PrismaApiStore {
       const entries = await readdir(filesRoot, { withFileTypes: true }).catch(() => []);
       if (entries.length === 0) return;
 
-      const known = await this.db.fileNode.findMany({
-        where: { projectId },
-        select: { storagePath: true },
-      });
+      const [knownFiles, knownDocuments] = await Promise.all([
+        this.db.fileNode.findMany({ where: { projectId }, select: { storagePath: true } }),
+        this.db.sourceDocument.findMany({ where: { projectId }, select: { storagePath: true } }),
+      ]);
       const knownPaths = new Set(
-        known.map((row) => row.storagePath).filter((value): value is string => !!value),
+        [...knownFiles, ...knownDocuments].map(row => row.storagePath)
+          .filter((value): value is string => !!value && !isRemoteStoragePath(value))
+          .map(value => resolveApiPath(value)),
       );
 
       const adopted: Array<{ dir: string; file: string; size: number }> = [];
@@ -14917,7 +14927,7 @@ export class PrismaApiStore {
         for (const file of inner) {
           if (!file.isFile()) continue;
           const relPath = `projects/${projectId}/files/${entry.name}/${file.name}`;
-          if (knownPaths.has(relPath)) continue;
+          if (knownPaths.has(resolveApiPath(relPath))) continue;
           const info = await stat(join(filesRoot, entry.name, file.name)).catch(() => null);
           if (!info) continue;
           adopted.push({ dir: entry.name, file: file.name, size: info.size });
@@ -15114,6 +15124,40 @@ export class PrismaApiStore {
       metadata.measuredBy = isAgentSource ? "agent" : "unrecorded";
     }
     return metadata;
+  }
+
+  async ensureSourceQuantityPickup(projectId: string, input: CreatePickupInput) {
+    return this.db.$transaction(async (tx) => {
+      const store = new PrismaApiStore(tx as unknown as PrismaClient, this.organizationId);
+      await store.requireProject(projectId);
+      // Serialize overlapping HTTP retries across API processes, without a schema change.
+      const lockKey = `source-quantity:${projectId}:${input.documentId}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const measurement = input.measurement ?? {};
+      const existing = await tx.pickup.findFirst({ where: {
+        projectId, documentId: input.documentId, label: input.label,
+        AND: [
+          { metadata: { path: ["source"], equals: "source-quantity" } },
+          { metadata: { path: ["sourceRefs"], equals: input.metadata!.sourceRefs as Prisma.InputJsonValue } },
+          { measurement: { path: ["value"], equals: measurement.value as number } },
+          { measurement: { path: ["unit"], equals: measurement.unit as string } },
+        ],
+      } });
+      return existing ? mapPickup(existing) : store.createPickup(projectId, input);
+    }, { timeout: 30_000 });
+  }
+
+  async ensurePickupLink(projectId: string, input: CreatePickupLinkInput) {
+    return this.db.$transaction(async (tx) => {
+      const store = new PrismaApiStore(tx as unknown as PrismaClient, this.organizationId);
+      await store.requireProject(projectId);
+      const lockKey = `source-quantity-link:${projectId}:${input.worksheetItemId}`;
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await tx.pickupLink.findUnique({ where: {
+        pickupId_worksheetItemId: { pickupId: input.pickupId, worksheetItemId: input.worksheetItemId },
+      } });
+      return existing ? mapPickupLink(existing) : store.createPickupLink(projectId, input);
+    }, { timeout: 30_000 });
   }
 
   async createPickup(projectId: string, input: CreatePickupInput) {

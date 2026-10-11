@@ -15,6 +15,15 @@ function resolveDataRoot() {
 
 export const apiDataRoot = resolveDataRoot();
 
+export function isRemoteStoragePath(storagePath: string) {
+  try {
+    const url = new URL(storagePath);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 export function resolveApiPath(...segments: string[]) {
   return path.resolve(apiDataRoot, ...segments);
 }
