@@ -129,6 +129,8 @@ function summarizeModelAsset(asset: any) {
 
   return {
     status: asset.status,
+    progress: asset.progress ?? asset.status,
+    terminalErrors: asset.terminalErrors ?? asset.issues ?? [],
     format: asset.format,
     units: asset.units ?? manifest.units ?? null,
     parser: manifest.parser ?? manifest.parserName ?? manifest.generator ?? null,
@@ -164,6 +166,8 @@ function normalizedAsset(asset: any) {
     fileName: asset.fileName,
     format: asset.format,
     status: asset.status,
+    progress: asset.progress ?? asset.status,
+    terminalErrors: asset.terminalErrors ?? asset.issues ?? [],
     units: asset.units,
     checksum: asset.checksum,
     ingestCapabilityStatus: asRecord(asRecord(manifest.modelIngest).adapter).status ?? manifest.adapterStatus ?? null,
@@ -235,10 +239,10 @@ Use this before relying on RVT, DWG, IFC, DXF, STEP, mesh, or Autodesk APS extra
     `Scan and list model/CAD/BIM assets in the current project.
 
 Use this before model takeoff, model QA, model/BOM inspection, or when choosing a 3D file to open in BidWright's model editor.`,
-    {},
-    async () => {
+    { refresh: z.boolean().default(true).describe("Start discovery/ingest when true; false polls existing assets and scan status without starting another refresh.") },
+    async ({ refresh }) => {
       const projectId = getProjectId();
-      const result = await apiGet<any>(`/api/models/${projectId}/assets?refresh=1`);
+      const result = await apiGet<any>(`/api/models/${projectId}/assets?refresh=${refresh ? "1" : "0"}`);
       const assets = result.assets ?? [];
       return {
         content: [
@@ -247,8 +251,9 @@ Use this before model takeoff, model QA, model/BOM inspection, or when choosing 
             text: JSON.stringify(
               {
                 count: assets.length,
-                syncedIds: result.syncedIds ?? [],
-                sourceCount: result.sourceCount ?? assets.length,
+                scan: result.scan ?? null,
+                syncedIds: result.scan?.syncedIds ?? result.syncedIds ?? [],
+                sourceCount: result.scan?.sourceCount ?? result.sourceCount ?? assets.length,
                 models: assets.map(normalizedAsset),
               },
               null,

@@ -32,6 +32,12 @@ const geometry = {
 };
 
 export function registerTakeoffTools(server: McpServer) {
+  server.tool("saveSourceQuantityTakeoff", "Save an authored BOM, schedule or document-table quantity as a visible pickup with source references; optionally link it to a worksheet item. Returns the saved pickup and any linkError.", {
+    documentId: z.string().describe("Source document id, or file-<nodeId> for a FileNode"),
+    quantity: z.number().nonnegative(), unit: z.string(), label: z.string(), description: z.string().optional(),
+    sourceRefs: z.array(z.object({ sheet: z.string().optional(), row: z.number().int().positive().optional(), page: z.number().int().positive().optional(), cell: z.string().optional(), text: z.string().optional() })).min(1),
+    linkToItemId: z.string().optional(), quantityField: z.enum(["value", "area", "volume", "count"]).default("value"), multiplier: z.number().positive().optional(),
+  }, async input => ({ content: [{ type: "text" as const, text: JSON.stringify(await apiPost(`/api/takeoff/${getProjectId()}/source-quantities`, input)) }] }));
   const call = async (operation: string, input: unknown) => {
     const result = await apiPost<Record<string, unknown>>(
       `/api/takeoff/${getProjectId()}/pdf/${operation}`,

@@ -69,6 +69,9 @@ export async function registerTools(server: McpServer, options: { mode?: string;
     catalog.set(name, { description, schema, outputSchema, handler: wrapped });
     return wrapped;
   };
+  // Supported by Claude Agent SDK 0.3.220; other MCP clients ignore this metadata.
+  // Keep discovery available without eagerly loading the full estimating catalog.
+  const alwaysLoad = new Set(["getSourceOverview", "describeTools", "invokeTool", "listModels", "listPickups"]);
   const rawTool = (server as any).tool.bind(server);
   (server as any).tool = (name: string, ...args: any[]) => {
     if (!isToolAllowed(name, mode, reviewOnly)) return undefined;
@@ -76,7 +79,9 @@ export async function registerTools(server: McpServer, options: { mode?: string;
     const callback = args.pop();
     const shape = args[0] ?? {};
     const wrapped = capture(name, description, shape, callback);
-    return rawTool(name, description, ...args, wrapped);
+    const registered = rawTool(name, description, ...args, wrapped);
+    if (alwaysLoad.has(name)) registered?.update({ _meta: { "anthropic/alwaysLoad": true } });
+    return registered;
   };
   const rawRegisterTool = (server as any).registerTool.bind(server);
   (server as any).registerTool = (name: string, config: any, handler: any) => {

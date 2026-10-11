@@ -1485,7 +1485,7 @@ export function registerCliRoutes(app: FastifyInstance) {
       : "";
 
     const userPrompt = typeof prompt === "string" && prompt.trim() ? prompt.trim() : "";
-    const initialPrompt = `Read ${instructionFile} now and follow its estimating workflow. Inspect original drawing pixels yourself using readDrawingPage/readDrawingTile and relevant project images with listProjectImages/inspectProjectImage. Restore current workspace and saved derivations before continuing existing work. Use authoritative Bidwright tools, respect source evidence and commercial scope, and complete final reconciliation before declaring the estimate ready. ${benchmarkingEnabled ? "Use comparable-job benchmarks when available; no-comparable results do not justify invented adjustments." : "Organization benchmarking is disabled."}${scopeDirective}
+    const initialPrompt = `Read ${instructionFile} now and follow its estimating workflow. The source capabilities section describes what the project sources can provide. Never claim to have viewed an image that you have not inspected. Restore current workspace and saved derivations before continuing existing work. Use authoritative Bidwright tools, respect source evidence and commercial scope, and complete final reconciliation before declaring the estimate ready. ${benchmarkingEnabled ? "Use comparable-job benchmarks when available; no-comparable results do not justify invented adjustments." : "Organization benchmarking is disabled."}${scopeDirective}
 
 ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the current source package."}`;
 

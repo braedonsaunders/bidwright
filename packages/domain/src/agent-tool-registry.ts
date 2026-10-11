@@ -26,6 +26,7 @@ export const AGENT_TOOL_REGISTRY = {
   getTakeoffCalibration: { id: "getTakeoffCalibration", displayName: "getTakeoffCalibration", category: "vision", mutates: false },
   setTakeoffCalibration: { id: "setTakeoffCalibration", displayName: "setTakeoffCalibration", category: "vision", mutates: true },
   measureTakeoff: { id: "measureTakeoff", displayName: "measureTakeoff", category: "vision", mutates: false },
+  saveSourceQuantityTakeoff: { id: "saveSourceQuantityTakeoff", displayName: "Save source quantity takeoff", category: "vision", mutates: true },
   saveTakeoffMeasurement: { id: "saveTakeoffMeasurement", displayName: "saveTakeoffMeasurement", category: "vision", mutates: true },
   updateTakeoffMeasurement: { id: "updateTakeoffMeasurement", displayName: "updateTakeoffMeasurement", category: "vision", mutates: true },
   traceDrawingRun: { id: "traceDrawingRun", displayName: "traceDrawingRun", category: "vision", mutates: false },

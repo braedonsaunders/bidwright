@@ -164,13 +164,14 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 
 | Source | Tool families | Useful quantity basis |
 |---|---|---|
-| PDF | readDrawingPage/readDrawingTile; calibrated measure/snap/trace/overlay | Source dimensions, page/detail calibration and native vector lengths where available |
-| DWG/DXF | CAD entity query/render/save | Native entity lengths, layers and block instances |
-| BIM/IFC/RVT/NWD | Model element/group queries, aggregation, topology, recipes, revision diffs | Element identity and authored Qto; check gross/net, units and revision |
-| STEP/mesh | Model solid metrics and assembly BOM | Available solid area/volume and part instances; mesh units/manifold quality can be unknown |
-| PCF/.piping | Piping MTO/read/save | Authored pipe/component quantities and explicit joint semantics |
-| Symbols/legends | Symbol count and legend templates | Repeated symbols in a defined region; counting reads, explicit saves write |
-| Existing human takeoff | listPickups/linkPickupToWorksheetItem | Reuse selected measured quantities while preserving human edits |
+| PDF | readDrawingPage/readDrawingTile, detectDrawingScale, measureTakeoff, saveTakeoffMeasurement, traceDrawingRun, renderTakeoffOverlay | Source dimensions, calibration and native vector lengths where available; optional how-to: pdf-takeoff |
+| DWG/DXF | queryCadEntities, renderCadDrawing, saveCadEntityTakeoff | Native lengths, layers and blocks; optional how-to: cad-takeoff |
+| BIM/IFC/RVT/NWD | listModels, queryModelElements, aggregateModelElements, extractModelBom, getModelSolidMetrics | Authored elements and quantities after ingestion; check units, gross/net and revision; optional how-to: bim-takeoff |
+| STEP/mesh/point cloud | listModels, getModelSolidMetrics, extractModelBom, segmentPointCloud | Solid metrics, part instances or scan segments where supported; optional how-to: model-3d-takeoff |
+| PCF/.piping | getPipingMto, savePipingTakeoff | Authored pipe/component quantities and joint semantics; optional how-to: piping-mto |
+| Schedules/BOM spreadsheets | readSpreadsheet, readDocumentText, saveSourceQuantityTakeoff | Authored quantities, sizes and specifications; optional how-to: code-aggregation |
+| Symbols/legends | extractDrawingLegend, createSymbolTemplateFromRegion | Repeated symbols in a defined region; optional how-to: pdf-takeoff |
+| Existing takeoff | listPickups, linkPickupToWorksheetItem | Saved measurements and provenance, including human edits |
 
 getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. \`describeTools\` describes a family; \`invokeTool\` calls a tool not directly loaded with its documented arguments. These capabilities support estimating judgment without prescribing a workflow.
 
@@ -237,17 +238,51 @@ Key files:
 - \`${rootDir}/cost-intelligence/effective-costs.jsonl\`${warnings}`;
 }
 
+function sourceSummary(source: SourceOverview["sources"][number]): string {
+  const labels: Record<string, string> = {
+    pdf: "PDF drawing", dwg: "DWG CAD drawing", dxf: "DXF CAD drawing",
+    ifc: "IFC model", rvt: "Revit 3D model", nwd: "Navisworks 3D model",
+    step: "STEP/IGES model", mesh: "3D mesh", pointcloud: "Point cloud",
+    piping: "Piping source", spreadsheet: "Spreadsheet/BOM", image: "Image", archive: "Archive",
+  };
+  const facts = source.facts;
+  const parts = [labels[source.kind] ?? source.fileType];
+  if (typeof facts.pages === "number" && facts.pages > 0) parts.push(`${facts.pages} pages`);
+  // Extracted/OCR text alone does not prove a native PDF text layer.
+  if (facts.extractedTextAvailable === true) parts.push("extracted text available");
+  if (typeof facts.entities === "number") parts.push(`${facts.entities.toLocaleString("en-US")} CAD entities`);
+  if (typeof facts.layers === "number") parts.push(`${facts.layers} layers`);
+  if (facts.cadUnits) parts.push(`units: ${facts.cadUnits}`);
+  if (facts.cadStatus) parts.push(`CAD ${facts.cadStatus}`);
+  const modelKind = ["ifc", "rvt", "nwd", "step", "mesh", "pointcloud"].includes(source.kind);
+  // Older overview endpoints omit modelStatus; absence of an asset still means not ingested.
+  if (source.modelStatus === "not_ingested" || (modelKind && !source.models.length)) {
+    parts.push("not yet ingested (listModels starts ingestion; model tools then query available elements, quantities and BOM)");
+  }
+  for (const model of source.models) {
+    const modelFacts = model as Record<string, unknown>;
+    if (modelFacts.schema) parts.push(String(modelFacts.schema));
+    parts.push(`model ${model.status}`);
+    if (typeof modelFacts.elementCount === "number") parts.push(`${modelFacts.elementCount.toLocaleString("en-US")} elements`);
+    if (typeof model.qtoCoveragePercent === "number") parts.push(`quantities on ${Math.round(model.qtoCoveragePercent)}%`);
+    if (model.units !== "unknown") parts.push(`units: ${model.units}`);
+  }
+  const takeoff = source.pickups === 0 ? "no takeoff marks"
+    : `${source.pickups} takeoff marks (${source.pickupCounts.person} person, ${source.pickupCounts.agent} agent, ${source.pickupCounts.unrecorded} unrecorded)`;
+  return `${parts.join(", ")}; ${takeoff}`;
+}
+
 function buildDocumentManifestRows(documents: ClaudeDocument[], overview?: SourceOverview) {
   if (overview) {
     const rows = overview.sources.slice(0, MAX_INSTRUCTION_DOC_ROWS).map((source, i) =>
-      `  ${i + 1}. \`${source.name}\` — ${source.fileType}, ${source.kind}; pickups: ${source.pickups} total (${source.pickupCounts.person} person, ${source.pickupCounts.agent} agent, ${source.pickupCounts.unrecorded} unrecorded); ${instructionJson({ status: source.extractionStatus, ...source.facts, models: source.models }, 700)} [docId: ${source.documentId ?? "none"}; fileIds: ${source.fileNodeIds.join(", ") || "none"}]`
+      `  ${i + 1}. \`${source.name}\` — ${sourceSummary(source)} [docId: ${source.documentId ?? "none"}; fileIds: ${source.fileNodeIds.join(", ") || "none"}]`
     );
     if (overview.sources.length > MAX_INSTRUCTION_DOC_ROWS) rows.push(`  ... ${overview.sources.length - MAX_INSTRUCTION_DOC_ROWS} more sources in .bidwright/source-overview.json or getSourceOverview.`);
     return rows.join("\n") || "  (No project sources currently attached.)";
   }
   if (documents.length === 0) return "  (Documents are being processed — check the documents/ folder and .bidwright/document-manifest.jsonl)";
   const rows = documents.slice(0, MAX_INSTRUCTION_DOC_ROWS).map((d, i) =>
-    `  ${i + 1}. \`${d.fileName}\` — ${d.fileType || "unknown type"}, ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
+    `  ${i + 1}. \`${d.fileName}\` — ${d.fileType || d.documentType || "unknown type"}${d.pageCount > 0 ? `, ${d.pageCount} pages` : ""} [docId: ${d.id}]`
   );
   if (documents.length > MAX_INSTRUCTION_DOC_ROWS) {
     rows.push(`  ... ${documents.length - MAX_INSTRUCTION_DOC_ROWS} more document(s). Search \`.bidwright/document-manifest.jsonl\` for the full manifest.`);

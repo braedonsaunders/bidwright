@@ -101,7 +101,10 @@ export function buildSourceOverview(input: {
       extension: source.name.includes(".") ? source.name.split(".").pop()!.toLowerCase() : null,
       kind, documentId, fileNodeIds: fileIds, takeoffDocumentIds,
       extractionStatus: facts.extractionStatus ?? "unknown",
-      facts, models, toolFamilies: toolFamilies(kind),
+      facts, models,
+      modelStatus: ["ifc", "rvt", "nwd", "step", "mesh", "pointcloud", "dwg", "dxf"].includes(kind) && models.length === 0 ? "not_ingested" : null,
+      modelIngestTool: ["ifc", "rvt", "nwd", "step", "mesh", "pointcloud", "dwg", "dxf"].includes(kind) ? "listModels" : null,
+      toolFamilies: toolFamilies(kind),
       pickups: pickups.reduce((sum, p) => sum + p.count, 0),
       pickupCounts, calibrations,
     };

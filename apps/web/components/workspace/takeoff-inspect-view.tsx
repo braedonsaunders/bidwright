@@ -1138,7 +1138,7 @@ function ManualAnnotationsGroup({
   const filteredRows = matchesQuery ? rows.filter(matchesQuery) : rows;
   return (
     <DetectionGroup
-      title="Manual"
+      title={manual.every(ann => ann.metadata?.source === "source-quantity") ? "Source quantities" : "Manual"}
       accentColor="#94a3b8"
       count={manual.length}
       rows={filteredRows}
@@ -4189,7 +4189,9 @@ function SpreadsheetInspect({
             Open a spreadsheet to list its rows here.
           </p>
         )}
-      />
+      >
+        <ManualAnnotationsGroup snapshot={snapshot} actions={actions} />
+      </EntitiesPanel>
     );
   }
 
@@ -4311,6 +4313,7 @@ function SpreadsheetInspect({
           }}
         />
       )}
+      <ManualAnnotationsGroup snapshot={snapshot} actions={actions} />
     </EntitiesPanel>
   );
 }

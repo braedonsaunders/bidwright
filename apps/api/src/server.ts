@@ -4620,12 +4620,17 @@ export function buildServer() {
       });
     }
     const result = await request.store!.copyQuote(projectId, { resetEstimate: parsed.data.resetEstimate === true });
+    // Run after the copy transaction commits. The bounded scan queue records failures
+    // on the copy and avoids sharing model element IDs or worksheet links with the source.
+    const { startProjectModelScan } = await import("./services/model-service.js");
+    const settings = await request.store!.getSettings();
+    startProjectModelScan(result.project.id, { integrations: settings.integrations });
     const payload = await buildWorkspaceResponse(request.store!, result.project.id);
     if (!payload) {
       return reply.code(404).send({ message: "Project workspace not found" });
     }
     reply.code(201);
-    return payload;
+    return { ...payload, copyWarnings: result.copyWarnings };
   });
 
   // ── Quote-level patch ──────────────────────────────────────────────
