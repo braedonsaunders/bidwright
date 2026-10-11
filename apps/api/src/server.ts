@@ -124,6 +124,7 @@ import { takeoffRoutes } from "./routes/takeoff-routes.js";
 import { visionRoutes } from "./routes/vision-routes.js";
 import { toolsAccessPlugin, toolsRoutes } from "./routes/tools-routes.js";
 import { modelRoutes } from "./routes/model-routes.js";
+import { sourceOverviewRoutes } from "./routes/source-overview-routes.js";
 import { fileIngestRoutes } from "./routes/file-ingest-routes.js";
 import { chunkedUploadRoutes } from "./routes/chunked-upload-routes.js";
 import { scheduleImportRoutes } from "./routes/schedule-import-routes.js";
@@ -6938,6 +6939,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(takeoffRoutes);
   app.register(visionRoutes);
   app.register(modelRoutes);
+  app.register(sourceOverviewRoutes);
   app.register(toolsRoutes);
   app.register(fileIngestRoutes);
   app.register(chunkedUploadRoutes);

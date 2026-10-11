@@ -22,6 +22,7 @@ export interface AgentToolDefinition {
 }
 
 export const AGENT_TOOL_REGISTRY = {
+  getSourceOverview: { id: "getSourceOverview", displayName: "Read source overview", category: "documents", mutates: false },
   getWorkspace: { id: "getWorkspace", displayName: "Read workspace", category: "workspace" },
   getWorksheetTree: { id: "getWorksheetTree", displayName: "Read worksheet tree", category: "worksheet" },
   getItemConfig: { id: "getItemConfig", displayName: "Read line item config", category: "worksheet" },

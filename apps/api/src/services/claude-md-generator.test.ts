@@ -1,7 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildCompactClaudeMdContent, buildReviewClaudeMdContent } from "./claude-md-generator.js";
+import { buildCompactClaudeMdContent, buildReviewClaudeMdContent, generateInstructionFiles } from "./claude-md-generator.js";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 const params = { projectDir: "/tmp/not-created", dataRoot: "/tmp", projectName: "Installation", clientName: "Client", location: "Site", scope: "Install only, exclude fabrication", quoteNumber: "Test", documents: [] };
+test("launch writes the overview, client and discoverable portable skills for each runtime", async () => {
+  const projectDir = await mkdtemp(join(tmpdir(), "bidwright-instructions-"));
+  try {
+    const sourceOverview = { generatedAt: "2026-10-11T00:00:00Z", sources: [], modelScan: null, takeoff: { byDocumentPage: [], calibrations: {} } };
+    for (const runtime of ["claude-code", "codex", "openrouter"]) {
+      await generateInstructionFiles(runtime, { ...params, projectDir, sourceOverview });
+      assert.deepEqual(JSON.parse(await readFile(join(projectDir, ".bidwright/source-overview.json"), "utf8")), sourceOverview);
+      const instructions = await readFile(join(projectDir, "AGENTS.md"), "utf8");
+      assert.equal(instructions.includes("WebFetch"), runtime === "claude-code");
+      const root = runtime === "claude-code" ? ".claude" : ".bidwright";
+      assert.ok(instructions.includes(`${root}/skills/pdf-takeoff/SKILL.md`));
+      assert.match(await readFile(join(projectDir, root, "skills/pdf-takeoff/SKILL.md"), "utf8"), /name: pdf-takeoff/);
+      assert.match(await readFile(join(projectDir, ".bidwright/bin/bw.mjs"), "utf8"), /BIDWRIGHT_AUTH_TOKEN/);
+    }
+  } finally {
+    await rm(projectDir, { recursive: true, force: true });
+  }
+});
 test("estimate instructions expose the project scope and estimating toolkit", () => {
   const text = buildCompactClaudeMdContent(params);
   for (const required of ["readDrawingPage", "readDrawingTile", "viewIds", "getLineDerivation", "batchEditWorksheetItems", "saveEstimateStrategyStages", "listCalibrationLessons", "person-hours", "procurement pack", "Install only, exclude fabrication"]) assert.ok(text.includes(required), required);

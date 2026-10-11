@@ -29,6 +29,7 @@ import { registerIntegrationTools } from "./tools/integration-tools.js";
 import { registerResourceTools } from "./tools/resource-tools.js";
 import { registerCalculatorTools } from "./tools/calculator-tools.js";
 import { registerWebTools } from "./tools/web-tools.js";
+import { registerSourceTools } from "./tools/source-tools.js";
 
 const server = new McpServer({
   name: "bidwright",
@@ -63,6 +64,7 @@ registerEstimateTools(server);
 registerResourceTools(server);
 registerCalculatorTools(server);
 registerWebTools(server);
+registerSourceTools(server);
 if (!readOnlyMode) {
   await registerIntegrationTools(server);
 }

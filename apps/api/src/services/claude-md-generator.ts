@@ -7,6 +7,8 @@
 import { writeFile, mkdir, symlink, copyFile, readdir, stat } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, relative } from "node:path";
+import type { SourceOverview } from "./source-overview-service.js";
+import { agentSkillIndex, writeAgentWorkspaceAssets } from "./agent-workspace-assets.js";
 
 export interface LibrarySnapshotFile {
   path: string;
@@ -25,6 +27,8 @@ export interface LibrarySnapshotInfo {
 }
 
 export interface ClaudeMdParams {
+  runtime?: string;
+  sourceOverview?: SourceOverview;
   projectDir: string;
   projectName: string;
   clientName: string;
@@ -156,9 +160,21 @@ ${roleRows}
 }
 
 function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimate" | "review" = "estimate"): string {
-  return `## Reading drawings
+  return `## Source capabilities
 
-Read the original pages yourself. Use \`readDrawingPage(documentId, pageNumber)\` for an overview and \`readDrawingTile\` for a detail, dimension, note or repeated component. Positioned text, search hits and layout help you navigate; they do not replace looking at the pixels. Schedules, BOMs, specifications and drawing revisions can corroborate or qualify what you see.
+| Source | Tool families | Useful quantity basis |
+|---|---|---|
+| PDF | readDrawingPage/readDrawingTile; calibrated measure/snap/trace/overlay | Source dimensions, page/detail calibration and native vector lengths where available |
+| DWG/DXF | CAD entity query/render/save | Native entity lengths, layers and block instances |
+| BIM/IFC/RVT/NWD | Model element/group queries, aggregation, topology, recipes, revision diffs | Element identity and authored Qto; check gross/net, units and revision |
+| STEP/mesh | Model solid metrics and assembly BOM | Available solid area/volume and part instances; mesh units/manifold quality can be unknown |
+| PCF/.piping | Piping MTO/read/save | Authored pipe/component quantities and explicit joint semantics |
+| Symbols/legends | Symbol count and legend templates | Repeated symbols in a defined region; counting reads, explicit saves write |
+| Existing human takeoff | listPickups/linkPickupToWorksheetItem | Reuse selected measured quantities while preserving human edits |
+
+getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. \`describeTools\` describes a family; \`invokeTool\` calls a tool not directly loaded with its documented arguments. These capabilities support estimating judgment without prescribing a workflow.
+
+For PDF inspection, use \`readDrawingPage(documentId, pageNumber)\` for an overview and \`readDrawingTile\` for a detail, dimension, note or repeated component. Positioned text, search hits and layout help navigation. Schedules, BOMs, specifications and drawing revisions can corroborate or qualify quantities.
 
 If an overview times out or fails during layout analysis, try \`readDrawingTile\` on the same page with an explicit \`bbox: { x: 0, y: 0, width: 1, height: 1 }\`; this bypasses optional overview analysis. Zoom into the needed portions after that succeeds. A failed request is not a viewed source, and one overview timeout does not establish that the PDF itself is unreadable. If visual reads still fail, state the actual failure and affected source/page, identify the missing evidence, and qualify dependent quantities rather than claiming complete inspection.
 
@@ -219,10 +235,17 @@ Key files:
 - \`${rootDir}/cost-intelligence/effective-costs.jsonl\`${warnings}`;
 }
 
-function buildDocumentManifestRows(documents: ClaudeDocument[]) {
+function buildDocumentManifestRows(documents: ClaudeDocument[], overview?: SourceOverview) {
+  if (overview) {
+    const rows = overview.sources.slice(0, MAX_INSTRUCTION_DOC_ROWS).map((source, i) =>
+      `  ${i + 1}. \`${source.name}\` — ${source.fileType}, ${source.kind}; ${instructionJson({ status: source.extractionStatus, ...source.facts, models: source.models, humanPickups: source.humanPickups }, 700)} [docId: ${source.documentId ?? "none"}; fileIds: ${source.fileNodeIds.join(", ") || "none"}]`
+    );
+    if (overview.sources.length > MAX_INSTRUCTION_DOC_ROWS) rows.push(`  ... ${overview.sources.length - MAX_INSTRUCTION_DOC_ROWS} more sources in .bidwright/source-overview.json or getSourceOverview.`);
+    return rows.join("\n") || "  (No project sources currently attached.)";
+  }
   if (documents.length === 0) return "  (Documents are being processed — check the documents/ folder and .bidwright/document-manifest.jsonl)";
   const rows = documents.slice(0, MAX_INSTRUCTION_DOC_ROWS).map((d, i) =>
-    `  ${i + 1}. \`${d.fileName}\` — ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
+    `  ${i + 1}. \`${d.fileName}\` — ${d.fileType || "unknown type"}, ${d.documentType}, ${d.pageCount} pages [docId: ${d.id}]`
   );
   if (documents.length > MAX_INSTRUCTION_DOC_ROWS) {
     rows.push(`  ... ${documents.length - MAX_INSTRUCTION_DOC_ROWS} more document(s). Search \`.bidwright/document-manifest.jsonl\` for the full manifest.`);
@@ -267,7 +290,9 @@ Read the existing description in \`getWorkspace\` first. Preserve substantive hu
 
 ## Project documents
 
-${buildDocumentManifestRows(params.documents)}
+${buildDocumentManifestRows(params.documents, params.sourceOverview)}
+
+${agentSkillIndex(params.runtime)}
 
 Use \`queryProjectFile\` for targeted project search, \`readDocumentText\` for text or page ranges, \`readSpreadsheet\` for spreadsheets, and \`getDocumentStructured\` for tables. Inspect schedules and BOMs in context rather than assuming either they or drawings are always authoritative. The complete document manifest is at \`.bidwright/document-manifest.jsonl\`.
 
@@ -277,7 +302,7 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 
 ## Additional tools
 
-- \`webSearch\` and \`webFetch\`: manufacturer specifications, current supplier information, product yields and external pricing. Record the applicable specification, currency and price basis.
+- ${params.runtime === "claude-code" ? "`webSearch` and the runtime WebFetch tool" : "`webSearch`"}: manufacturer specifications, current supplier information, product yields and external pricing. Record the applicable specification, currency and price basis.
 - \`listCalibrationLessons\`: reviewed experience from previous work; apply it only when the conditions fit this job.
 - \`getItemConfig\`, \`listRateSchedules\`, \`listRateScheduleItems\`, \`importRateSchedule\`: the organization's categories and commercial rates. Use the configured rate item and tier units for rate-driven rows; Bidwright calculates their cost and price.
 - \`createWorksheet\`, \`createWorksheetItem\`, \`createRateScheduleWorksheetItem\`, \`updateWorksheetItem\`, \`batchEditWorksheetItems\`: save the estimate as you work. Batch operations are atomic; use their documented shapes and real returned IDs.
@@ -314,12 +339,15 @@ async function prepareInstructionWorkspace(params: ClaudeMdParams): Promise<void
     "utf-8",
   );
   await symlinkProjectDocuments(projectDir, params.dataRoot, params.documents);
+  if (params.sourceOverview) await writeFile(join(projectDir, ".bidwright", "source-overview.json"), JSON.stringify(params.sourceOverview), "utf-8");
+  await writeAgentWorkspaceAssets(projectDir, params.runtime);
 }
 
 /**
  * Generate CLAUDE.md and related config files in the project directory
  */
 export async function generateClaudeMd(params: ClaudeMdParams): Promise<void> {
+  params = { ...params, runtime: "claude-code" };
   const { projectDir } = params;
   await prepareInstructionWorkspace(params);
 
@@ -394,6 +422,7 @@ async function symlinkProjectDocuments(
  * Generate codex.md for Codex CLI runtime
  */
 export async function generateCodexMd(params: ClaudeMdParams): Promise<void> {
+  params = { ...params, runtime: "codex" };
   await prepareInstructionWorkspace(params);
   const content = buildCompactClaudeMdContent(params);
   // Codex recognizes AGENTS.md, but we also write the other common instruction
@@ -418,14 +447,13 @@ const ALL_INSTRUCTION_FILENAMES = [
 /**
  * Adapter-aware dispatcher. Generates the instruction content once and
  * writes it under every well-known filename so future runtime swaps
- * don't strand the project. The `runtime` arg is accepted for symmetry
- * with the route layer but the on-disk output is identical across
- * runtimes — adapters opt into different filenames via `instructionFiles`.
+ * don't strand the project. Skills and native tool references follow the runtime.
  */
 export async function generateInstructionFiles(
-  _runtime: string,
+  runtime: string,
   params: ClaudeMdParams,
 ): Promise<void> {
+  params = { ...params, runtime };
   await prepareInstructionWorkspace(params);
   const content = buildCompactClaudeMdContent(params);
   for (const filename of ALL_INSTRUCTION_FILENAMES) {
@@ -434,17 +462,20 @@ export async function generateInstructionFiles(
 }
 
 export async function generateQaInstructionFiles(
-  _runtime: string,
+  runtime: string,
   params: ClaudeMdParams,
 ): Promise<void> {
+  params = { ...params, runtime };
   await prepareInstructionWorkspace(params);
-  const documentList = params.documents.length > 0
-    ? params.documents.map((document) => `- ${document.fileName} (${document.pageCount || "unknown"} pages, id: ${document.id})`).join("\n")
-    : "- No project documents are currently attached.";
+  const documentList = buildDocumentManifestRows(params.documents, params.sourceOverview);
   const persona = params.persona
     ? `\nEstimator perspective: ${params.persona.name} / ${params.persona.trade}\n${truncateInstructionText(params.persona.systemPrompt, 1800)}`
     : "";
   const content = `# Bidwright Project Q&A
+
+${agentSkillIndex(params.runtime)}
+
+getSourceOverview refreshes source capabilities and existing takeoff facts; the launch snapshot is .bidwright/source-overview.json. describeTools and invokeTool expose tools not directly loaded.
 
 You are in read-only project Q&A mode. Answer the user's question directly from the current quote, project documents, drawings, and approved organization knowledge. For casual market questions the project sources cannot answer — current material/component prices, vendor availability, product specs, codes — use the webSearch tool and cite the source URLs.
 
@@ -495,13 +526,7 @@ getWorkspace, getEstimateStrategy, queryProjectFile, listDocuments, readDocument
  */
 export async function generateReviewClaudeMd(params: ClaudeMdParams): Promise<void> {
   const { projectDir } = params;
-
-  // Ensure directories exist
-  await mkdir(join(projectDir, "documents"), { recursive: true });
-  await mkdir(join(projectDir, ".bidwright"), { recursive: true });
-
-  // Symlink source documents
-  await symlinkProjectDocuments(projectDir, params.dataRoot, params.documents);
+  await prepareInstructionWorkspace(params);
 
   // Build review-specific instruction content
   const content = buildReviewClaudeMdContent(params);
@@ -512,13 +537,13 @@ export async function generateReviewClaudeMd(params: ClaudeMdParams): Promise<vo
 
 /**
  * Adapter-aware review dispatcher — same structure as `generateInstructionFiles`
- * but uses the review prompt body. The `runtime` arg is accepted for symmetry.
+ * but uses the review prompt body.
  */
 export async function generateReviewInstructionFiles(
-  _runtime: string,
+  runtime: string,
   params: ClaudeMdParams,
 ): Promise<void> {
-  return generateReviewClaudeMd(params);
+  return generateReviewClaudeMd({ ...params, runtime });
 }
 
 export function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
@@ -533,7 +558,9 @@ This is a review session. Keep the estimate unchanged; use the saveReview tools 
 
 ## Project documents
 
-${buildDocumentManifestRows(params.documents)}
+${buildDocumentManifestRows(params.documents, params.sourceOverview)}
+
+${agentSkillIndex(params.runtime)}
 
 ${buildDrawingAnalysisSection(params.documents, "review")}
 
@@ -543,7 +570,7 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 
 Use \`getWorkspace\` and \`searchItems\` for the saved rows, totals, conditions and labour units. \`getLineDerivation\` explains the recorded calculations. Quoted hours are available as resolved tier units (units.total / units.tiers) and worksheet labourHours; a row's quantity may instead be a multiplier. Read the quoted values before comparing them with your independent estimate.
 
-Follow the evidence for the issues that matter. \`queryProjectFile\`, \`readDocumentText\`, \`readSpreadsheet\` and the native drawing tools expose project sources. \`queryKnowledgeBook\`, \`queryKnowledgeDataset\`, \`listLaborUnits\` / \`getLaborUnit\`, \`queryLibrary\`, \`recommendCostSource\`, \`searchCatalogs\` and \`listRateScheduleItems\` support technical and pricing comparisons. \`webSearch\` / \`webFetch\` can check manufacturer specifications and current external information.
+Follow the evidence for the issues that matter. \`queryProjectFile\`, \`readDocumentText\`, \`readSpreadsheet\` and the native drawing tools expose project sources. \`queryKnowledgeBook\`, \`queryKnowledgeDataset\`, \`listLaborUnits\` / \`getLaborUnit\`, \`queryLibrary\`, \`recommendCostSource\`, \`searchCatalogs\` and \`listRateScheduleItems\` support technical and pricing comparisons. ${params.runtime === "claude-code" ? "`webSearch` and the runtime WebFetch tool" : "`webSearch`"} can check manufacturer specifications and current external information.
 
 Distinguish an actual contradiction from an assumption, missing information or a different reasonable installation method. A zero-price owner-supplied line or a user-directed allowance is not automatically an error. An expensive or labour-intensive item is not wrong merely because it differs from another project. Explain the evidence, likely effect and proposed change.
 
