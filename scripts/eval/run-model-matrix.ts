@@ -41,6 +41,7 @@ if (!args.includes("--execute")) {
     const cmd = ["--import", createRequire(import.meta.url).resolve("tsx"), resolve("scripts/agent-evals/run-agent-evals.ts"),
       "--api-url", api, "--project-id", sourceProject, "--runtime", candidate.runtime, "--model", candidate.model,
       "--out", destination, "--scope", scope, "--repeat", String(plan.repeat), "--reingest-archives", "--no-auto-answer-questions", "--stop-on-question"];
+    if (referenceFile) cmd.push("--reference-file", resolve(referenceFile));
     const tokenFile = value("--token-file");
     if (tokenFile) cmd.push("--token-file", tokenFile);
     const log = await open(`${destination}.log`, "w", 0o600);
