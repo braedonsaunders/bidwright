@@ -2,6 +2,7 @@ export type DocumentKind =
   | 'spec'
   | 'rfq'
   | 'drawing'
+  | 'piping'
   | 'addendum'
   | 'schedule'
   | 'estimate_book'

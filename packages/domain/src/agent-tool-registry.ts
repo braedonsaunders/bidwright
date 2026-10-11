@@ -22,6 +22,11 @@ export interface AgentToolDefinition {
 }
 
 export const AGENT_TOOL_REGISTRY = {
+  getPipingMto: { id: "getPipingMto", displayName: "Read piping MTO", category: "model", mutates: false },
+  savePipingTakeoff: { id: "savePipingTakeoff", displayName: "Save piping takeoff", category: "model", mutates: true },
+  runPhotoBom: { id: "runPhotoBom", displayName: "Read photo BOM", category: "vision", mutates: false },
+  segmentPointCloud: { id: "segmentPointCloud", displayName: "Segment or identify scan", category: "model", mutates: true },
+  getRevisionImpact: { id: "getRevisionImpact", displayName: "Read revision impact", category: "documents", mutates: false },
   getWorkspace: { id: "getWorkspace", displayName: "Read workspace", category: "workspace" },
   getWorksheetTree: { id: "getWorksheetTree", displayName: "Read worksheet tree", category: "worksheet" },
   getItemConfig: { id: "getItemConfig", displayName: "Read line item config", category: "worksheet" },
