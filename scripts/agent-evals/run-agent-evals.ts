@@ -4,6 +4,10 @@ import { execFile } from "node:child_process";
 import { appendFile, mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { blindCopiedRevision } from "../eval/blind-copy.js";
+import { referenceEvalOutputDir } from "../eval/eval-output.js";
+import { scoreTakeoff, validateReference, type TakeoffReference } from "../eval/takeoff-reference.js";
+import { scoreSavedOutcome } from "../eval/outcome-score.js";
 import { evidenceMetrics } from "../eval/evidence-metrics.js";
 import { findPendingQuestionEvent } from "../../apps/api/src/services/cli-question-history.js";
 
@@ -60,14 +64,11 @@ interface Args {
   reviewCadenceSeconds: number;
   help: boolean;
   humanQuotePaths: string[];
+  referenceFile?: string;
 }
 
 interface EvalThresholds {
-  minToolCalls?: number;
-  minThinkingChars?: number;
-  minDocumentReadCoverage?: number;
   minWorksheetItems?: number;
-  minSourceNoteCoverage?: number;
   maxToolFailures?: number;
 }
 
@@ -80,8 +81,6 @@ interface CaseExpectations {
   mode?: RunMode;
   question?: string;
   followUpQuestions?: string[];
-  requiredTools?: string[];
-  expectedTools?: string[];
   expectedDocumentNames?: string[];
   expectedKeywords?: string[];
   expectedEstimateKeywords?: string[];
@@ -231,8 +230,6 @@ interface ToolMetrics {
     failures: number;
     avgDurationMs: number | null;
   }>;
-  requiredMissing: string[];
-  expectedMissing: string[];
 }
 
 interface ReasoningMetrics {
@@ -266,36 +263,8 @@ interface EstimateMetrics {
   costEvidenceCoverage: number;
   logicCoverage: number;
   expectedKeywordMissing: string[];
-  visualAudit: VisualAuditMetrics;
+  sourceContradictions: Json[];
   visualProbes: VisualProbeMetrics;
-}
-
-interface VisualAuditIssue {
-  packageId?: string;
-  packageName?: string;
-  documentId?: string;
-  pageNumber?: number;
-  reason: string;
-}
-
-interface VisualAuditMetrics {
-  drawingDrivenPackages: number;
-  actualRenderedPages: number;
-  actualZoomRegions: number;
-  atlasStatus: string | null;
-  atlasRegions: number;
-  atlasDocumentRequests: number;
-  promotedDocuments: number;
-  providerRegions: number;
-  cadNativeRegions: number;
-  modelNativeRegions: number;
-  evidenceClaims: number;
-  verifierStatus: string | null;
-  unresolvedContradictions: number;
-  packagesMissingLedgerClaims: VisualAuditIssue[];
-  packagesMissingActualRender: VisualAuditIssue[];
-  packagesMissingActualZoom: VisualAuditIssue[];
-  fullPageZoomEvidence: VisualAuditIssue[];
 }
 
 interface VisualProbeResult {
@@ -318,7 +287,6 @@ interface VisualProbeMetrics {
 
 interface StageMetrics {
   savedStages: string[];
-  missingCriticalStages: string[];
 }
 
 interface EstimatorJourneyEvent {
@@ -352,7 +320,6 @@ interface EstimatorJourneyMetrics {
   datasetSignals: number;
   pricingSignals: number;
   reconcileSignals: number;
-  missingHumanBehaviors: string[];
 }
 
 interface QualityScore {
@@ -404,6 +371,7 @@ interface CaseReport {
   estimateMetrics: EstimateMetrics;
   humanQuoteMetrics?: HumanQuoteMetrics;
   evidenceMetrics?: ReturnType<typeof evidenceMetrics>;
+  takeoffReferenceScore?: ReturnType<typeof scoreTakeoff>;
   providerUsage?: { usage: unknown; costUsd: number | null; note: string };
   quality: QualityScore;
   findings: string[];
@@ -429,42 +397,6 @@ interface LiveMonitor {
   lastEventCountByRun: Record<string, number>;
   lastIngestionSignature?: string;
 }
-
-const DEFAULT_REQUIRED_TOOLS = [
-  "getWorkspace",
-  "getEstimateStrategy",
-  "saveEstimateScopeGraph",
-  "saveEstimateExecutionPlan",
-  "saveEstimateAssumptions",
-  "saveEstimatePackagePlan",
-  "saveEstimateReconcile",
-  "finalizeEstimateStrategy",
-];
-
-const DEFAULT_EXPECTED_TOOLS = [
-  "readDrawingPage",
-  "readDrawingTile",
-  "readDocumentText",
-  "readSpreadsheet",
-  "getDocumentStructured",
-  "buildDrawingAtlas",
-  "searchDrawingRegions",
-  "inspectDrawingRegion",
-  "saveDrawingEvidenceClaim",
-  "verifyDrawingEvidenceLedger",
-  "listDrawingPages",
-  "renderDrawingPage",
-  "zoomDrawingRegion",
-  "queryKnowledgeBook",
-  "queryLibrary",
-  "recommendEstimateBasis",
-  "recomputeEstimateBenchmarks",
-  "updateQuote",
-  "getItemConfig",
-  "createWorksheet",
-  "createWorksheetItem",
-  "applySummaryPreset",
-];
 
 const DOCUMENT_READ_TOOLS = new Set([
   "readDrawingPage",
@@ -585,7 +517,7 @@ Options:
   --token-file <path>              Read a bearer token from a mode-0600 file
   --project-id <id>                Reuse an already-ingested project instead of uploading zips
   --cases <dir>                    Directory of .zip cases
-  --out <dir>                      Output directory. Default: ./.bidwright/evals/<timestamp>
+  --out <dir>                      Default: ./.bidwright/evals/<timestamp>; with --reference-file: ~/.bidwright/evals/<timestamp>
   --runtime <runtime>              claude-code | codex | gemini | opencode | openrouter. Default: claude-code
   --model <model>                  Runtime model override
   --reasoning-effort <effort>      Isolated run override: auto|low|medium|high|extra_high|max
@@ -600,6 +532,7 @@ Options:
   --poll-seconds <n>               Poll interval. Default: 5
   --stall-minutes <n>              Stop a running agent after no new events for this many minutes. Default: 8
   --review-cadence-seconds <n>     Live observer brief cadence. Default: 60
+  --reference-file <json>          Reviewed frozen takeoff reference; used only after the run
   --human-quote <pdf>              Awarded human quote PDF for calibration. Repeatable.
   --max-cases <n>                  Limit cases for a smoke run
   --repeat <n>                     Run each case repeatedly. Default: 1
@@ -794,6 +727,9 @@ function parseArgs(argv: string[]): Args {
       case "--review-cadence-seconds":
         args.reviewCadenceSeconds = Number(next());
         break;
+      case "--reference-file":
+        args.referenceFile = next();
+        break;
       case "--human-quote":
         args.humanQuotePaths.push(next());
         break;
@@ -804,7 +740,9 @@ function parseArgs(argv: string[]): Args {
   }
 
   if (!args.outDir) {
-    args.outDir = path.resolve(".bidwright", "evals", timestampSlug(new Date()));
+    args.outDir = args.referenceFile
+      ? referenceEvalOutputDir(timestampSlug(new Date()))
+      : path.resolve(".bidwright", "evals", timestampSlug(new Date()));
   } else {
     args.outDir = path.resolve(args.outDir);
   }
@@ -986,6 +924,11 @@ async function main() {
     return;
   }
 
+  if (args.referenceFile) {
+    validateReference(JSON.parse(await readFile(args.referenceFile, "utf8")));
+    if (!args.copyProjectPerRun) throw new Error("Harness reference scoring is independent mode on a reset copy; use takeoff-reference-cli.ts for reuse scoring");
+  }
+
   if (!args.token && args.tokenFile) {
     args.token = (await readFile(path.resolve(args.tokenFile), "utf8")).trim();
     if (!args.token) throw new Error("Bearer token file is empty.");
@@ -1156,6 +1099,8 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
       if (!projectId || projectId === args.projectId) throw new Error("Project copy did not return an isolated project; refusing to run.");
       if (process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER) await appendFile(process.env.BIDWRIGHT_EVAL_PROJECT_LEDGER,
         `${projectId} C matrix-${String(args.model || args.runtime).replace(/[^a-z0-9._-]/gi, "_")} ${new Date().toISOString()}\n`);
+      await blindCopiedRevision(args.projectId, projectId, getString(revision.id),
+        (path, body) => client.requestJson(path, { method: "PATCH", body }));
       if (args.reingestArchives) {
         const documents = Array.isArray(copiedWorkspace.sourceDocuments) ? copiedWorkspace.sourceDocuments as Json[] : [];
         for (const document of documents) {
@@ -1262,7 +1207,22 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
   const documentMetrics = analyzeDocuments(ingestion.final, workspace, finalStatus?.data.events || [], expectations);
   const estimateMetrics = analyzeEstimate(workspaceResponse.data, expectations);
   const humanQuoteMetrics = await analyzeHumanQuoteReferences(expectations, args, workspaceResponse.data);
+  let takeoffReferenceScore: ReturnType<typeof scoreTakeoff> | undefined;
+  if (args.referenceFile) {
+    const reference: TakeoffReference = JSON.parse(await readFile(args.referenceFile, "utf8"));
+    const [pickups, links] = await Promise.all([
+      client.requestJson<Json[]>(`/api/takeoff/${projectId}/pickups`),
+      client.requestJson<Json[]>(`/api/takeoff/${projectId}/links`),
+    ]);
+    takeoffReferenceScore = scoreTakeoff(reference, {
+      projectId, documents: Array.isArray(workspace.sourceDocuments) ? workspace.sourceDocuments as Json[] : [],
+      pickups: pickups.data, links: links.data,
+      rows: (Array.isArray(workspace.worksheets) ? workspace.worksheets as Json[] : []).flatMap((sheet) => Array.isArray(sheet.items) ? sheet.items as Json[] : []),
+      total: estimateMetrics.totalValue ?? undefined,
+    }, { mode: "independent" });
+  }
   const findings = [
+    ...(takeoffReferenceScore && takeoffReferenceScore.accuracy < 1 ? ["Saved takeoff differs from reviewed reference; inspect takeoffReferenceScore."] : []),
     ...buildCaseFindings(ingestion.final, documentMetrics, estimateMetrics, runs, expectations),
     ...buildHumanQuoteFindings(humanQuoteMetrics),
   ];
@@ -1273,6 +1233,7 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
     estimateMetrics,
     findings,
     thresholds: expectations.thresholds,
+    referenceAccuracy: takeoffReferenceScore?.metrics.quantityAccuracy ?? (humanQuoteMetrics?.totalRatio == null ? undefined : Math.max(0, 1 - Math.abs(1 - humanQuoteMetrics.totalRatio))),
   });
   const completedAt = new Date();
 
@@ -1288,6 +1249,7 @@ async function runCase(client: ApiClient, args: Args, evalCase: EvalCase): Promi
   const report: CaseReport = {
     caseId: evalCase.id,
     evidenceMetrics: measuredEvidence,
+    takeoffReferenceScore,
     providerUsage: (() => {
       const usage = [...(finalStatus?.data.events || [])].reverse().find((event) => (event.data as any)?.usage)?.data as any;
       return { usage: usage?.usage ?? null, costUsd: typeof usage?.costUsd === "number" ? usage.costUsd : null,
@@ -1481,7 +1443,7 @@ async function waitForAgentRun(
     }
 
     if (Date.now() - lastLog > 20_000 || runEvents.length !== lastEventCount) {
-      const tools = analyzeTools(runEvents, []);
+      const tools = analyzeTools(runEvents);
       const journey = analyzeEstimatorJourney(runEvents, tools.calls, label === "full intake" ? "intake" : "question");
       const journeyTail = journey.phaseOrder.slice(-5).join(" -> ") || "no journey yet";
       log(`${label}: ${status}, events=${runEvents.length}, tools=${tools.totalCalls}, failures=${tools.failedResults}, journey=${journeyTail}`);
@@ -1569,11 +1531,11 @@ function findUnansweredAskUserEvent(events: CliEvent[]): Json | null {
 
 function buildRunReport(label: string, kind: "intake" | "question", sessionId: string | undefined, status: CliStatus): RunReport {
   const events = status.events || [];
-  const toolMetrics = analyzeTools(events, kind === "intake" ? DEFAULT_REQUIRED_TOOLS : ["getWorkspace", "getEstimateStrategy"]);
+  const toolMetrics = analyzeTools(events);
   const reasoningMetrics = analyzeReasoning(events);
   const stageMetrics = analyzeStages(toolMetrics.calls);
   const journeyMetrics = analyzeEstimatorJourney(events, toolMetrics.calls, kind);
-  const findings = buildRunFindings(kind, status, toolMetrics, reasoningMetrics, stageMetrics, journeyMetrics);
+  const findings = buildRunFindings(status, toolMetrics);
   const timestamps = events.map((event) => event.timestamp).filter((value): value is string => !!value);
   const startedAt = timestamps[0] || status.startedAt || new Date().toISOString();
   const completedAt = timestamps[timestamps.length - 1] || new Date().toISOString();
@@ -1628,11 +1590,7 @@ async function initLiveMonitor(args: Args, evalCase: EvalCase, caseName: string)
     "",
     "- Is the agent grounding claims in actual document reads rather than package metadata or memory?",
     "- Are tool errors changing the agent's plan, or is it continuing as if everything worked?",
-    "- Is it using the staged estimate strategy as a thinking scaffold before pricing?",
     "- Are quantities, labour hours, rates, and allowances traceable to documents, libraries, benchmarks, or explicit assumptions?",
-    "- Did the agent build/search/inspect the drawing atlas before making drawing-driven claims?",
-    "- Does every drawing-driven quantity have a saved evidence-ledger claim with crop coordinates/hash or BOM/table text?",
-    "- Did the independent verifier try to falsify high-risk drawing claims before pricing?",
     "- Are drawing/image tools returning useful structured facts, or dumping noisy payloads that poison context?",
     "",
   ].join("\n"), "utf8");
@@ -1746,7 +1704,6 @@ async function appendLiveReviewBrief(
       `- Documents: ${report.documentMetrics.extracted}/${report.documentMetrics.total} extracted, ${report.documentMetrics.readToolCalls} read calls`,
       `- Estimate: ${report.estimateMetrics.worksheets} worksheets, ${report.estimateMetrics.items} items, total ${report.estimateMetrics.totalValue ?? "unknown"}`,
       `- Pricing logic coverage telemetry: ${Math.round(report.estimateMetrics.logicCoverage * 100)}%`,
-      `- Drawing evidence: atlas=${report.estimateMetrics.visualAudit.atlasStatus || "missing"}, claims=${report.estimateMetrics.visualAudit.evidenceClaims}, verifier=${report.estimateMetrics.visualAudit.verifierStatus || "missing"}, contradictions=${report.estimateMetrics.visualAudit.unresolvedContradictions}`,
       `- Visual probes: ${report.estimateMetrics.visualProbes.evidenced}/${report.estimateMetrics.visualProbes.probeCount} evidenced`,
       "",
       "Codex Decision Slot:",
@@ -1778,36 +1735,6 @@ function buildMonitorWatchItems(run: RunReport, report?: CaseReport) {
   }
   if (run.toolMetrics.byTool.scanDrawingSignals?.calls) {
     items.push("Inspect scanDrawingSignals outputs for noisy base64 or low-value payloads; if noisy, patch the tool contract before rerunning.");
-  }
-  if (run.kind === "intake" && !run.toolMetrics.byTool.buildDrawingAtlas && !run.toolMetrics.byTool.readDrawingPage && (run.journeyMetrics.renderedDrawingPages > 0 || run.journeyMetrics.zoomedDrawingRegions > 0)) {
-    items.push("The run used lower-level drawing tools without the Drawing Evidence Engine atlas; inspect whether crops were guessed instead of retrieved.");
-  }
-  if (run.kind === "intake" && run.toolMetrics.byTool.inspectDrawingRegion?.calls && !run.toolMetrics.byTool.saveDrawingEvidenceClaim?.calls) {
-    items.push("The run inspected drawing regions but has not saved evidence-ledger claims; quantities may not be traceable.");
-  }
-  if (run.kind === "intake" && run.toolMetrics.byTool.saveDrawingEvidenceClaim?.calls && !run.toolMetrics.byTool.verifyDrawingEvidenceLedger?.calls) {
-    items.push("The drawing evidence ledger has claims but no independent verifier pass yet.");
-  }
-  if (run.kind === "intake" && run.stageMetrics.savedStages.length < 4) {
-    items.push("Watch whether the agent is genuinely using the staged strategy scaffold before creating line items.");
-  }
-  if (run.kind === "intake" && run.journeyMetrics.renderedDrawingPages > 0 && run.journeyMetrics.zoomedDrawingRegions === 0) {
-    items.push("Drawing pass is still only page-level rendering; require a targeted zoom before accepting drawing-driven quantities.");
-  }
-  if (run.kind === "intake" && run.journeyMetrics.symbolScans > 0 && run.journeyMetrics.zoomedDrawingRegions === 0) {
-    items.push("scanDrawingSymbols appeared before targeted zoom evidence; treat it as possible page-overview/checklist misuse, not proof of visual takeoff depth.");
-  }
-  if (run.kind === "intake" && run.journeyMetrics.missingHumanBehaviors.length > 0) {
-    items.push(`Human-estimator journey gaps to inspect: ${run.journeyMetrics.missingHumanBehaviors.join(" ")}`);
-  }
-  if (run.kind === "intake" && run.journeyMetrics.returnsToDocuments === 0 && run.journeyMetrics.pricingSignals > 0) {
-    items.push("The workflow has not shown a return from pricing/reference work back into documents/drawings; inspect for linear speedrun behavior.");
-  }
-  if (run.kind === "intake" && !run.toolMetrics.byTool.readDocumentText && !run.toolMetrics.byTool.getDocumentStructured && !run.toolMetrics.byTool.readSpreadsheet) {
-    items.push("The agent has not visibly read source documents yet; check whether it is relying on package metadata only.");
-  }
-  if (run.reasoningMetrics.thinkingChars === 0) {
-    items.push("No thinking events are visible from this runtime; judge depth from tool sequencing, intermediate saves, and assistant messages instead.");
   }
   if (report && report.estimateMetrics.items > 0 && report.estimateMetrics.logicCoverage < 0.65) {
     items.push("Sample line items manually: verify quantity/rate/hour logic is traceable, not just populated.");
@@ -1885,7 +1812,7 @@ async function writeLiveState(monitor: LiveMonitor, state: Json) {
   }, null, 2), "utf8");
 }
 
-function analyzeTools(events: CliEvent[], requiredTools: string[], expectedTools: string[] = DEFAULT_EXPECTED_TOOLS): ToolMetrics {
+function analyzeTools(events: CliEvent[]): ToolMetrics {
   const calls: ToolCall[] = [];
   const results: ToolResult[] = [];
   const callsByUseId = new Map<string, ToolCall>();
@@ -1947,9 +1874,6 @@ function analyzeTools(events: CliEvent[], requiredTools: string[], expectedTools
 
   const resultIds = new Set(results.map((result) => result.toolUseId).filter(Boolean));
   const unmatchedCalls = calls.filter((call) => call.toolUseId && !resultIds.has(call.toolUseId)).length;
-  const calledToolSet = new Set(calls.flatMap((call) => [call.toolId, ...stageToolsForCall(call)]));
-  const requiredMissing = requiredTools.filter((tool) => !calledToolSet.has(tool));
-  const expectedMissing = expectedTools.filter((tool) => !calledToolSet.has(tool));
   const failedResults = results.filter((result) => !result.success).length;
   const totalResults = results.length;
 
@@ -1963,8 +1887,6 @@ function analyzeTools(events: CliEvent[], requiredTools: string[], expectedTools
     unmatchedCalls,
     successRate: totalResults > 0 ? round((totalResults - failedResults) / totalResults, 3) : 0,
     byTool,
-    requiredMissing,
-    expectedMissing,
   };
 }
 
@@ -2009,13 +1931,7 @@ function stageToolsForCall(call: ToolCall): string[] {
 
 function analyzeStages(calls: ToolCall[]): StageMetrics {
   const savedStages = calls.flatMap(stageToolsForCall);
-  const missingCriticalStages = DEFAULT_REQUIRED_TOOLS
-    .filter((tool) => STRATEGY_STAGE_TOOLS.has(tool))
-    .filter((tool) => !savedStages.includes(tool));
-  return {
-    savedStages: [...new Set(savedStages)],
-    missingCriticalStages,
-  };
+  return { savedStages: [...new Set(savedStages)] };
 }
 
 function analyzeEstimatorJourney(events: CliEvent[], calls: ToolCall[], kind: "intake" | "question"): EstimatorJourneyMetrics {
@@ -2061,33 +1977,6 @@ function analyzeEstimatorJourney(events: CliEvent[], calls: ToolCall[], kind: "i
   const symbolImageScans = countSymbolImageScans(calls);
   const symbolCounts = countToolCalls(calls, "countSymbols") + countToolCalls(calls, "countSymbolsAllPages");
   const actualVisualDrawingSignals = countActualVisualDrawingSignals(calls);
-  const missingHumanBehaviors: string[] = [];
-  const hit = (phase: string) => (phases[phase]?.hits ?? 0) > 0;
-
-  if (kind === "intake") {
-    if (!hit("orientation")) missingHumanBehaviors.push("No visible orientation pass through workspace/strategy.");
-    if (!hit("spec_reading") && !hit("document_inventory")) missingHumanBehaviors.push("No visible source document/spec reading before estimating.");
-    if (actualVisualDrawingSignals === 0) missingHumanBehaviors.push("No visible native visual inspection of a rendered drawing image.");
-    if (renderedDrawingPages > 0 && zoomedDrawingRegions === 0) {
-      missingHumanBehaviors.push("Rendered drawing pages but did not zoom into any targeted drawing region.");
-    }
-    if (symbolScans > 0 && zoomedDrawingRegions === 0) {
-      missingHumanBehaviors.push("scanDrawingSymbols was used without targeted zoom evidence; likely page-overview/checklist behavior.");
-    }
-    if (!hit("drawing_deep_read")) missingHumanBehaviors.push("No visible drawing deep-read, zoom, symbol scan, or drawing-page inspection.");
-    if (!hit("takeoff")) missingHumanBehaviors.push("No visible takeoff or drawing-quantity loop.");
-    if (!hit("reference_books")) missingHumanBehaviors.push("No visible estimator book/knowledge lookup.");
-    if (!hit("labor_units")) missingHumanBehaviors.push("No visible labour productivity lookup.");
-    if (!hit("pricing_basis")) missingHumanBehaviors.push("No visible cost/catalog/rate/assembly basis lookup before pricing.");
-    if (!hit("worksheet_build")) missingHumanBehaviors.push("No visible worksheet-building phase.");
-    if (!hit("reconcile")) missingHumanBehaviors.push("No visible benchmark/reconcile/final review phase.");
-    if (returnsToDocuments === 0 && hit("worksheet_build")) {
-      missingHumanBehaviors.push("No visible back-and-forth from pricing/building back to documents or drawings.");
-    }
-  } else {
-    if (!hit("orientation")) missingHumanBehaviors.push("Question run did not visibly orient on workspace/strategy.");
-    if (hit("worksheet_build")) missingHumanBehaviors.push("Question run used mutating worksheet/quote tools; check drawer guardrails.");
-  }
 
   return {
     phases,
@@ -2108,7 +1997,6 @@ function analyzeEstimatorJourney(events: CliEvent[], calls: ToolCall[], kind: "i
     datasetSignals: phases.datasets?.hits ?? 0,
     pricingSignals: phases.pricing_basis?.hits ?? 0,
     reconcileSignals: phases.reconcile?.hits ?? 0,
-    missingHumanBehaviors,
   };
 }
 
@@ -2171,7 +2059,7 @@ function analyzeDocuments(status: IngestionStatus | undefined, workspace: Json, 
     if (id && name) docIdToName.set(id, name);
   }
 
-  const toolMetrics = analyzeTools(events, []);
+  const toolMetrics = analyzeTools(events);
   const readCalls = toolMetrics.calls.filter((call) => DOCUMENT_READ_TOOLS.has(call.toolId));
   const readDocumentIds = new Set<string>();
   const readDocumentNames = new Set<string>();
@@ -2225,231 +2113,25 @@ function isIgnorableProjectDocumentName(nameValue: unknown) {
   );
 }
 
-function evidenceDocumentIdsMatch(leftValue: unknown, rightValue: unknown) {
-  const left = String(leftValue ?? "").trim();
-  const right = String(rightValue ?? "").trim();
-  if (!left || !right) return false;
-  if (left === right) return true;
-  const compactLeft = left.replace(/\.\.\.|…/g, "");
-  const compactRight = right.replace(/\.\.\.|…/g, "");
-  if (compactLeft.length >= 12 && right.startsWith(compactLeft)) return true;
-  if (compactRight.length >= 12 && left.startsWith(compactRight)) return true;
-  return false;
-}
-
-function regionNumber(region: Json, key: string) {
-  const value = getNumber(region[key]);
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
-function isTargetedZoomRegion(regionValue: unknown) {
-  const region = getObject(regionValue);
-  const width = regionNumber(region, "width");
-  const height = regionNumber(region, "height");
-  const imageWidth = regionNumber(region, "imageWidth");
-  const imageHeight = regionNumber(region, "imageHeight");
-  if (!width || !height || width <= 0 || height <= 0) return false;
-  if (!imageWidth || !imageHeight || imageWidth <= 0 || imageHeight <= 0) return true;
-  const areaRatio = (width * height) / (imageWidth * imageHeight);
-  return areaRatio < 0.75 && width < imageWidth * 0.95 && height < imageHeight * 0.95;
-}
-
-function regionsApproximatelyMatch(leftValue: unknown, rightValue: unknown) {
-  const left = getObject(leftValue);
-  const right = getObject(rightValue);
-  return ["x", "y", "width", "height"].every((key) => {
-    const leftNumber = regionNumber(left, key);
-    const rightNumber = regionNumber(right, key);
-    if (leftNumber === null || rightNumber === null) return false;
-    const tolerance = Math.max(8, Math.abs(rightNumber) * 0.03);
-    return Math.abs(leftNumber - rightNumber) <= tolerance;
-  });
-}
-
-function collectActualVisualCalls(workspace: Json) {
-  const renderedPages: Array<{ documentId: string; pageNumber: number }> = [];
-  const zoomRegions: Array<{ documentId: string; pageNumber: number; region: Json }> = [];
-  const aiRuns = Array.isArray(workspace.aiRuns) ? workspace.aiRuns as Json[] : [];
-  const engine = drawingEngine(workspace);
-  const atlas = getObject(engine.atlas);
-  const atlasPages = Array.isArray(atlas.pages) ? atlas.pages as Json[] : [];
-  const claims = Array.isArray(engine.claims) ? engine.claims as Json[] : [];
-
-  for (const pageValue of atlasPages) {
-    const page = getObject(pageValue);
-    const documentId = getString(page.documentId);
-    const pageNumber = getNumber(page.pageNumber);
-    if (documentId && typeof pageNumber === "number") {
-      renderedPages.push({ documentId, pageNumber });
-    }
-  }
-
-  for (const claim of claims) {
-    const evidence = Array.isArray(claim.evidence) ? claim.evidence as Json[] : [];
-    for (const entryValue of evidence) {
-      const entry = getObject(entryValue);
-      const documentId = getString(entry.documentId);
-      const pageNumber = getNumber(entry.pageNumber);
-      const region = getObject(entry.region ?? entry.bbox);
-      if (documentId && typeof pageNumber === "number" && Object.keys(region).length > 0) {
-        zoomRegions.push({ documentId, pageNumber, region });
-      }
-    }
-  }
-
-  for (const run of aiRuns) {
-    const output = getObject(run.output);
-    const events = Array.isArray(output.events) ? output.events as Json[] : [];
-    for (const event of events) {
-      const type = getString(event.type);
-      if (type !== "tool_call" && type !== "tool") continue;
-      const data = getObject(event.data);
-      const toolId = normalizeToolId(getString(data.toolId) || getString(event.toolId) || "");
-      const input = getObject(data.input ?? event.input);
-      const documentId = getString(input.documentId);
-      const pageNumber = getNumber(input.pageNumber);
-      if (!documentId || typeof pageNumber !== "number") continue;
-      if (toolId === "renderDrawingPage") {
-        renderedPages.push({ documentId, pageNumber });
-      }
-      if (toolId === "zoomDrawingRegion") {
-        const region = getObject(input.region);
-        if (Object.keys(region).length > 0) {
-          zoomRegions.push({ documentId, pageNumber, region });
-        }
-      }
-    }
-  }
-
-  return { renderedPages, zoomRegions };
-}
-
-function visualPageMatchesActual(evidence: unknown, actualPages: Array<{ documentId: string; pageNumber: number }>) {
-  const entry = getObject(evidence);
-  const pageNumber = getNumber(entry.pageNumber);
-  if (typeof pageNumber !== "number") return false;
-  return actualPages.some((page) =>
-    page.pageNumber === pageNumber &&
-    evidenceDocumentIdsMatch(entry.documentId, page.documentId)
-  );
-}
-
-function visualZoomMatchesActual(evidence: unknown, actualZooms: Array<{ documentId: string; pageNumber: number; region: Json }>) {
-  const entry = getObject(evidence);
-  const pageNumber = getNumber(entry.pageNumber);
-  if (typeof pageNumber !== "number" || !isTargetedZoomRegion(entry.region)) return false;
-  return actualZooms.some((zoom) =>
-    zoom.pageNumber === pageNumber &&
-    evidenceDocumentIdsMatch(entry.documentId, zoom.documentId) &&
-    isTargetedZoomRegion(zoom.region) &&
-    regionsApproximatelyMatch(entry.region, zoom.region)
-  );
-}
-
-function packageIdentity(entry: Json, reason: string, evidence?: Json): VisualAuditIssue {
-  return {
-    packageId: getString(entry.packageId) || undefined,
-    packageName: getString(entry.packageName) || undefined,
-    documentId: evidence ? getString(evidence.documentId) || undefined : undefined,
-    pageNumber: evidence ? getNumber(evidence.pageNumber) : undefined,
-    reason,
-  };
-}
-
 function drawingEngine(workspace: Json) {
-  const strategy = getObject(workspace.estimateStrategy);
-  const summary = getObject(strategy.summary);
-  return getObject(summary.drawingEvidenceEngine);
+  return getObject(getObject(getObject(workspace.estimateStrategy).summary).drawingEvidenceEngine);
 }
 
-function claimPackageMatches(entry: Json, claim: Json) {
-  const packageId = getString(entry.packageId).toLowerCase();
-  const packageName = getString(entry.packageName).toLowerCase();
-  const claimPackageId = getString(claim.packageId).toLowerCase();
-  const claimPackageName = getString(claim.packageName).toLowerCase();
-  if (packageId && claimPackageId && packageId === claimPackageId) return true;
-  if (packageName && claimPackageName && packageName === claimPackageName) return true;
-  if (packageId && claimPackageName && claimPackageName.includes(packageId)) return true;
-  if (packageName && claimPackageId && packageName.includes(claimPackageId)) return true;
-  return false;
-}
-
-function claimHasUsableEvidence(claim: Json) {
-  const method = getString(claim.method).toLowerCase();
-  const evidence = Array.isArray(claim.evidence) ? claim.evidence as Json[] : [];
-  if (!getString(claim.quantityName) && !getString(claim.claim)) return false;
-  if (claim.value === undefined || claim.value === null || claim.value === "") return false;
-  if (method === "assumption") return stringifyForSearch(claim.assumption ?? claim.rationale).length >= 20;
-  if (evidence.length === 0) return false;
-  if (method === "visual_count" || method === "takeoff") {
-    return evidence.some((entry) => (getString(entry.regionId) || Object.keys(getObject(entry.bbox)).length > 0) && getString(entry.imageHash).length >= 16);
-  }
-  if (method === "bom_table" || method === "ocr_text") {
-    return evidence.some((entry) => getString(entry.regionId) || getString(entry.sourceText).length >= 20);
-  }
-  return evidence.length > 0 || stringifyForSearch(claim.rationale).length >= 20;
-}
-
-function analyzeVisualAudit(workspace: Json): VisualAuditMetrics {
-  const strategy = getObject(workspace.estimateStrategy);
-  const scopeGraph = getObject(strategy.scopeGraph);
-  const audit = getObject(scopeGraph.visualTakeoffAudit);
-  const packages = Array.isArray(audit.drawingDrivenPackages) ? audit.drawingDrivenPackages as Json[] : [];
-  const actual = collectActualVisualCalls(workspace);
+// Carry actual disagreements to the reviewer; absence of legacy audit artifacts
+// says nothing about the quality of a saved takeoff.
+function sourceContradictions(workspace: Json): Json[] {
   const engine = drawingEngine(workspace);
-  const atlas = getObject(engine.atlas);
-  const atlasRegions = Array.isArray(atlas.regions) ? atlas.regions as Json[] : [];
-  const atlasRegionTypes = atlasRegions.map((region) => getString(getObject(region).regionType));
   const claims = Array.isArray(engine.claims) ? engine.claims as Json[] : [];
-  const atlasDocumentRequests = Array.isArray(engine.atlasDocumentRequests) ? engine.atlasDocumentRequests as Json[] : [];
-  const promotedDocuments = Array.isArray(engine.promotedDocuments) ? engine.promotedDocuments as Json[] : [];
-  const verifications = Array.isArray(engine.verifications) ? engine.verifications as Json[] : [];
-  const latestVerification = getObject(verifications[0]);
-  const contradictions = Array.isArray(engine.contradictions)
-    ? (engine.contradictions as Json[]).filter((entry) => !["resolved", "carried_assumption"].includes(getString(getObject(entry).status).toLowerCase()))
-    : [];
-  const packagesMissingActualRender: VisualAuditIssue[] = [];
-  const packagesMissingActualZoom: VisualAuditIssue[] = [];
-  const fullPageZoomEvidence: VisualAuditIssue[] = [];
-  const packagesMissingLedgerClaims: VisualAuditIssue[] = [];
-
-  for (const entry of packages) {
-    const renderedPages = Array.isArray(entry.renderedPages) ? entry.renderedPages as Json[] : [];
-    const zoomEvidence = Array.isArray(entry.zoomEvidence) ? entry.zoomEvidence as Json[] : [];
-    if (renderedPages.length > 0 && !renderedPages.some((page) => visualPageMatchesActual(page, actual.renderedPages))) {
-      packagesMissingActualRender.push(packageIdentity(entry, "renderedPages did not match an actual atlas/render record"));
-    }
-    const fullPageEntries = zoomEvidence.filter((zoom) => !isTargetedZoomRegion(getObject(zoom).region));
-    for (const zoom of fullPageEntries) {
-      fullPageZoomEvidence.push(packageIdentity(entry, "zoomEvidence region is effectively full-page or missing dimensions", zoom));
-    }
-    if (zoomEvidence.length > 0 && !zoomEvidence.some((zoom) => visualZoomMatchesActual(zoom, actual.zoomRegions))) {
-      packagesMissingActualZoom.push(packageIdentity(entry, "zoomEvidence did not match an actual targeted inspected/zoomed region"));
-    }
-    if (!claims.some((claim) => claimPackageMatches(entry, claim) && claimHasUsableEvidence(claim))) {
-      packagesMissingLedgerClaims.push(packageIdentity(entry, "no usable Drawing Evidence Engine ledger claim for package"));
-    }
-  }
-
-  return {
-    drawingDrivenPackages: packages.length,
-    actualRenderedPages: actual.renderedPages.length,
-    actualZoomRegions: actual.zoomRegions.length,
-    atlasStatus: getString(atlas.status) || null,
-    atlasRegions: getNumber(atlas.regionCount) ?? 0,
-    atlasDocumentRequests: atlasDocumentRequests.length,
-    promotedDocuments: promotedDocuments.length,
-    providerRegions: atlasRegionTypes.filter((type) => type.startsWith("provider_")).length,
-    cadNativeRegions: atlasRegionTypes.filter((type) => type.startsWith("cad_")).length,
-    modelNativeRegions: atlasRegionTypes.filter((type) => type.startsWith("model_")).length,
-    evidenceClaims: claims.length,
-    verifierStatus: getString(latestVerification.status) || null,
-    unresolvedContradictions: contradictions.length,
-    packagesMissingLedgerClaims,
-    packagesMissingActualRender,
-    packagesMissingActualZoom,
-    fullPageZoomEvidence,
-  };
+  const contradictions = Array.isArray(engine.contradictions) ? engine.contradictions as Json[] : [];
+  return contradictions.filter((entry) => {
+    if (["resolved", "carried_assumption"].includes(getString(entry.status).toLowerCase())) return false;
+    const ids = Array.isArray(entry.claimIds) ? entry.claimIds : [];
+    const compared = claims.filter((claim) => ids.includes(claim.id));
+    return compared.some((left) => compared.some((right) =>
+      left !== right && typeof left.value === "number" && typeof right.value === "number" &&
+      Number.isFinite(left.value) && Number.isFinite(right.value) && left.value !== right.value &&
+      left.unit === right.unit && left.quantityName === right.quantityName));
+  });
 }
 
 function defaultVisualProbes(_workspace: Json, expectations: CaseExpectations): VisualProbeExpectation[] {
@@ -2567,10 +2249,11 @@ function visualProbeAuthorityFailureReason(
   mismatchedValues: Array<string | number | boolean>,
 ) {
   if (probe.expectedAnswer === undefined || mismatchedValues.length === 0) return null;
+  const expectedAnswer = probe.expectedAnswer;
   const claimsText = normalizeVisualProbeText(stringifyForSearch({ probe, relatedClaims }));
   const hasHighAuthorityConflict = (
     ["bom", "bill material", "parts list", "spec sheet", "vendor", "manufacturer", "schedule"].some((term) => claimsText.includes(term)) &&
-    mismatchedValues.some((value) => !visualProbeValuesMatch(probe.expectedAnswer, value))
+    mismatchedValues.some((value) => !visualProbeValuesMatch(expectedAnswer, value))
   );
   if (!hasHighAuthorityConflict) return null;
   if (!hasProbeFieldSelectingValue(decisionContext, probe, probe.expectedAnswer)) return null;
@@ -2824,7 +2507,7 @@ function analyzeEstimate(workspaceResponse: Json, expectations: CaseExpectations
     costEvidenceCoverage: items.length > 0 ? round(evidence / items.length, 3) : 0,
     logicCoverage: items.length > 0 ? round(logic / items.length, 3) : 0,
     expectedKeywordMissing: missingNeedles(searchable, expectations.expectedEstimateKeywords || expectations.expectedKeywords || []),
-    visualAudit: analyzeVisualAudit(workspace),
+    sourceContradictions: sourceContradictions(workspace),
     visualProbes: analyzeVisualProbes(workspace, expectations),
   };
 }
@@ -3166,31 +2849,11 @@ function buildHumanQuoteFindings(metrics?: HumanQuoteMetrics) {
   return findings;
 }
 
-function buildRunFindings(
-  kind: "intake" | "question",
-  status: CliStatus,
-  toolMetrics: ToolMetrics,
-  reasoningMetrics: ReasoningMetrics,
-  stageMetrics: StageMetrics,
-  journeyMetrics: EstimatorJourneyMetrics,
-) {
+function buildRunFindings(status: CliStatus, toolMetrics: ToolMetrics) {
   const findings: string[] = [];
   if (status.status !== "completed") findings.push(`Agent run ended with status ${status.status || "unknown"}.`);
   if (toolMetrics.failedResults > 0) findings.push(`${toolMetrics.failedResults} tool result(s) failed.`);
   if (toolMetrics.unmatchedCalls > 0) findings.push(`${toolMetrics.unmatchedCalls} tool call(s) did not have a matched result event.`);
-  if (toolMetrics.requiredMissing.length > 0) findings.push(`Missing required tool(s): ${toolMetrics.requiredMissing.join(", ")}.`);
-  if (kind === "intake" && stageMetrics.missingCriticalStages.length > 0) {
-    findings.push(`Missing staged estimate save(s): ${stageMetrics.missingCriticalStages.join(", ")}.`);
-  }
-  if (toolMetrics.totalCalls < (kind === "intake" ? 20 : 2)) {
-    findings.push(`Tool usage looks shallow: only ${toolMetrics.totalCalls} call(s).`);
-  }
-  if (kind === "intake" && reasoningMetrics.thinkingChars < 300) {
-    findings.push(`Reasoning telemetry looks thin: ${reasoningMetrics.thinkingChars} thinking character(s).`);
-  }
-  for (const behavior of journeyMetrics.missingHumanBehaviors) {
-    findings.push(`Estimator journey gap: ${behavior}`);
-  }
   return findings;
 }
 
@@ -3209,14 +2872,6 @@ function buildCaseFindings(
   if (documentMetrics.pending > 0) findings.push(`${documentMetrics.pending} document(s) still pending after ingestion wait.`);
   if (documentMetrics.total > 0 && documentMetrics.extracted === 0) findings.push("No extracted documents were available to the agent.");
   const hasIntakeRun = runs.some((run) => run.kind === "intake");
-  const hasDocumentInventory = runs.some((run) => (run.journeyMetrics.phases.document_inventory?.hits ?? 0) > 0);
-  if (documentMetrics.readToolCalls === 0 && hasIntakeRun) findings.push("Agent did not call any document read tool.");
-  if (!hasIntakeRun && documentMetrics.readToolCalls === 0 && !hasDocumentInventory) {
-    findings.push("Question run did not call a document reader or document inventory tool.");
-  }
-  if (hasIntakeRun && documentMetrics.readCoverage !== null && documentMetrics.readCoverage < (expectations.thresholds?.minDocumentReadCoverage ?? 0.35)) {
-    findings.push(`Document read coverage is low: ${Math.round(documentMetrics.readCoverage * 100)}%.`);
-  }
   if (documentMetrics.expectedMissing.length > 0) {
     findings.push(`Expected document name signal(s) missing: ${documentMetrics.expectedMissing.join(", ")}.`);
   }
@@ -3231,17 +2886,8 @@ function buildCaseFindings(
     if (estimateMetrics.expectedKeywordMissing.length > 0) {
       findings.push(`Expected estimate keyword(s) missing: ${estimateMetrics.expectedKeywordMissing.join(", ")}.`);
     }
-    if (!estimateMetrics.visualAudit.atlasStatus && estimateMetrics.visualAudit.drawingDrivenPackages > 0) {
-      findings.push("Drawing-driven packages exist but the Drawing Evidence Engine atlas is missing.");
-    }
-    if (estimateMetrics.visualAudit.packagesMissingLedgerClaims.length > 0) {
-      findings.push(`Drawing evidence ledger claims are missing for: ${estimateMetrics.visualAudit.packagesMissingLedgerClaims.map((item) => item.packageName || item.packageId || "unnamed package").join(", ")}.`);
-    }
-    if (estimateMetrics.visualAudit.unresolvedContradictions > 0) {
-      findings.push(`Drawing evidence ledger has ${estimateMetrics.visualAudit.unresolvedContradictions} unresolved contradiction(s).`);
-    }
-    if (estimateMetrics.visualAudit.evidenceClaims > 0 && estimateMetrics.visualAudit.verifierStatus !== "passed" && estimateMetrics.visualAudit.verifierStatus !== "warning") {
-      findings.push(`Drawing evidence verifier status is ${estimateMetrics.visualAudit.verifierStatus || "missing"}.`);
+    if (estimateMetrics.sourceContradictions.length > 0) {
+      findings.push(`${estimateMetrics.sourceContradictions.length} unresolved source quantity disagreement(s).`);
     }
     const mismatchedProbeResults = estimateMetrics.visualProbes.results.filter((probe) => probe.status === "mismatch");
     if (mismatchedProbeResults.length > 0) {
@@ -3251,15 +2897,7 @@ function buildCaseFindings(
     if (estimateMetrics.visualProbes.probeCount > 0 && missingProbeResults.length > 0) {
       findings.push(`Visual QA probe signal(s) not evidenced: ${missingProbeResults.map((probe) => probe.id).join(", ")}.`);
     }
-    if (estimateMetrics.visualAudit.packagesMissingActualRender.length > 0) {
-      findings.push(`Visual audit page evidence does not match recorded atlas/render evidence for: ${estimateMetrics.visualAudit.packagesMissingActualRender.map((item) => item.packageName || item.packageId || "unnamed package").join(", ")}.`);
-    }
-    if (estimateMetrics.visualAudit.fullPageZoomEvidence.length > 0) {
-      findings.push(`Visual audit includes full-page or missing-region zoom evidence for: ${estimateMetrics.visualAudit.fullPageZoomEvidence.map((item) => item.packageName || item.packageId || "unnamed package").join(", ")}.`);
-    }
-    if (estimateMetrics.visualAudit.packagesMissingActualZoom.length > 0) {
-      findings.push(`Visual audit crop evidence does not match recorded inspected/zoomed regions for: ${estimateMetrics.visualAudit.packagesMissingActualZoom.map((item) => item.packageName || item.packageId || "unnamed package").join(", ")}.`);
-    }
+
   }
 
   for (const run of runs) findings.push(...run.findings.map((finding) => `${run.label}: ${finding}`));
@@ -3273,74 +2911,23 @@ function scoreCase(input: {
   estimateMetrics: EstimateMetrics;
   findings: string[];
   thresholds?: EvalThresholds;
+  referenceAccuracy?: number;
 }): QualityScore {
-  const thresholds = {
-    minToolCalls: 25,
-    minThinkingChars: 300,
-    minDocumentReadCoverage: 0.35,
-    minWorksheetItems: 1,
-    minSourceNoteCoverage: 0.5,
-    maxToolFailures: 0,
-    ...input.thresholds,
-  };
-  const intake = input.runs.find((run) => run.kind === "intake") || input.runs[0];
-  const allFailedToolResults = input.runs.reduce((sum, run) => sum + run.toolMetrics.failedResults, 0);
-  const allToolCalls = input.runs.reduce((sum, run) => sum + run.toolMetrics.totalCalls, 0);
-  const allThinkingChars = input.runs.reduce((sum, run) => sum + run.reasoningMetrics.thinkingChars, 0);
-  const hasIntakeRun = input.runs.some((run) => run.kind === "intake");
-  const hasDocumentInventory = input.runs.some((run) => (run.journeyMetrics.phases.document_inventory?.hits ?? 0) > 0);
-
-  const ingestionReady = input.documentMetrics.pending === 0 && input.documentMetrics.failed === 0 && input.documentMetrics.extracted > 0;
-  const runCompleted = input.runs.every((run) => run.status === "completed");
-  const toolHealth = allFailedToolResults <= thresholds.maxToolFailures
-    ? 1
-    : Math.max(0, 1 - allFailedToolResults / Math.max(1, allFailedToolResults + 3));
-  const toolDepthTarget = hasIntakeRun ? thresholds.minToolCalls : Math.min(thresholds.minToolCalls, 3);
-  const toolDepth = Math.min(1, allToolCalls / Math.max(1, toolDepthTarget));
-  const reasoningDepth = hasIntakeRun
-    ? Math.min(1, allThinkingChars / Math.max(1, thresholds.minThinkingChars))
-    : 1;
-  const stageCoverage = !hasIntakeRun ? 1 : (
-    intake?.stageMetrics
-      ? 1 - (intake.stageMetrics.missingCriticalStages.length / 6)
-      : 0
-  );
-  const documentCoverage = !hasIntakeRun && hasDocumentInventory
-    ? 1
-    : input.documentMetrics.readCoverage === null
-    ? 0
-    : Math.min(1, input.documentMetrics.readCoverage / Math.max(0.01, thresholds.minDocumentReadCoverage));
-  const estimateCompleteness = hasIntakeRun
-    ? Math.min(1, input.estimateMetrics.items / Math.max(1, thresholds.minWorksheetItems))
-    : 1;
-  const evidenceQuality = hasIntakeRun
-    ? Math.min(1, input.estimateMetrics.logicCoverage / Math.max(0.01, thresholds.minSourceNoteCoverage))
-    : 1;
-
-  const bands = {
-    ingestion: ingestionReady ? 10 : 0,
-    completion: runCompleted ? 15 : 0,
-    toolHealth: round(toolHealth * 15, 1),
-    toolDepth: round(toolDepth * 10, 1),
-    reasoning: round(reasoningDepth * 10, 1),
-    stagedWorkflow: round(Math.max(0, stageCoverage) * 15, 1),
-    documentCoverage: round(documentCoverage * 10, 1),
-    estimateCompleteness: round(estimateCompleteness * 10, 1),
-    evidenceQuality: round(evidenceQuality * 5, 1),
-  };
-
-  const score = Math.max(0, Math.min(100, round(Object.values(bands).reduce((sum, value) => sum + value, 0), 1)));
-  const hardFail =
-    !runCompleted ||
-    allFailedToolResults > thresholds.maxToolFailures ||
-    input.estimateMetrics.visualAudit.packagesMissingLedgerClaims.length > 0 ||
-    input.estimateMetrics.visualAudit.unresolvedContradictions > 0 ||
-    input.estimateMetrics.visualAudit.verifierStatus === "failed" ||
-    input.estimateMetrics.visualAudit.packagesMissingActualZoom.length > 0 ||
-    input.estimateMetrics.visualAudit.fullPageZoomEvidence.length > 0 ||
-    input.findings.some((finding) => /No worksheet items|No extracted documents|Ingestion failed/i.test(finding));
-  const grade: QualityScore["grade"] = hardFail || score < 60 ? "fail" : score < 85 || input.findings.length > 0 ? "needs_review" : "pass";
-  return { score, grade, bands };
+  return scoreSavedOutcome({
+    runCompleted: input.runs.length > 0 && input.runs.every((run) => run.status === "completed"),
+    failedTools: input.runs.reduce((sum, run) => sum + run.toolMetrics.failedResults, 0),
+    maxToolFailures: input.thresholds?.maxToolFailures ?? 0,
+    sourceReady: input.documentMetrics.pending === 0 && input.documentMetrics.failed === 0 && input.documentMetrics.extracted > 0,
+    extractedSources: input.documentMetrics.extracted,
+    estimating: input.runs.some((run) => run.kind === "intake"),
+    items: input.estimateMetrics.items,
+    minItems: input.thresholds?.minWorksheetItems ?? 1,
+    pricedItems: input.estimateMetrics.pricedItems,
+    total: input.estimateMetrics.totalValue,
+    referenceAccuracy: input.referenceAccuracy,
+    defects: input.estimateMetrics.sourceContradictions.length + input.estimateMetrics.visualProbes.results.filter((probe) => probe.status === "mismatch").length,
+    findings: input.findings.length,
+  });
 }
 
 async function persistCaseReport(report: CaseReport, outDir: string, workspace?: Json) {
@@ -3415,14 +3002,10 @@ function renderSummaryMarkdown(reports: CaseReport[]) {
     lines.push("");
     lines.push(`- Total calls: ${intake?.toolMetrics.totalCalls ?? 0}`);
     lines.push(`- Failed results: ${intake?.toolMetrics.failedResults ?? 0}`);
-    lines.push(`- Missing required: ${intake?.toolMetrics.requiredMissing.join(", ") || "None"}`);
-    lines.push(`- Missing expected: ${intake?.toolMetrics.expectedMissing.join(", ") || "None"}`);
     lines.push(`- Estimator journey: ${intake?.journeyMetrics.phaseOrder.join(" -> ") || "None"}`);
     lines.push(`- Native visual drawing image inspections: ${intake?.journeyMetrics.actualVisualDrawingSignals ?? 0}`);
     lines.push(`- Drawing visual breakdown: renders=${intake?.journeyMetrics.renderedDrawingPages ?? 0}, zooms=${intake?.journeyMetrics.zoomedDrawingRegions ?? 0}, symbolScans=${intake?.journeyMetrics.symbolScans ?? 0}, symbolCounts=${intake?.journeyMetrics.symbolCounts ?? 0}`);
-    lines.push(`- Drawing Evidence Engine: atlas=${report.estimateMetrics.visualAudit.atlasStatus || "missing"}, regions=${report.estimateMetrics.visualAudit.atlasRegions}, atlasRequests=${report.estimateMetrics.visualAudit.atlasDocumentRequests}, promotedDocs=${report.estimateMetrics.visualAudit.promotedDocuments}, Provider=${report.estimateMetrics.visualAudit.providerRegions}, CAD=${report.estimateMetrics.visualAudit.cadNativeRegions}, models=${report.estimateMetrics.visualAudit.modelNativeRegions}, claims=${report.estimateMetrics.visualAudit.evidenceClaims}, verifier=${report.estimateMetrics.visualAudit.verifierStatus || "missing"}`);
     lines.push(`- Visual probes: ${report.estimateMetrics.visualProbes.evidenced}/${report.estimateMetrics.visualProbes.probeCount} evidenced`);
-    lines.push(`- Journey gaps: ${intake?.journeyMetrics.missingHumanBehaviors.join(" ") || "None"}`);
     lines.push("");
   }
   return `${lines.join("\n")}\n`;
@@ -3440,7 +3023,7 @@ function renderRelentlessLoopMarkdown(reports: CaseReport[]) {
     "",
     `Generated: ${new Date().toISOString()}`,
     "",
-    "This file is a reviewer notebook for repeated local runs. It highlights stability, repeated journey gaps, and places where Codex should inspect observer.md before changing orchestration.",
+    "This file is a reviewer notebook for repeated local runs. It highlights stability, outcome differences, and places where Codex should inspect observer.md before changing orchestration.",
     "",
   ];
 
@@ -3459,7 +3042,6 @@ function renderRelentlessLoopMarkdown(reports: CaseReport[]) {
       const intake = report.runs.find((run) => run.kind === "intake") || report.runs[0];
       return intake?.journeyMetrics.phaseOrder.join(" -> ") || "no journey";
     }));
-    const journeyGaps = countStrings(groupReports.flatMap((report) => report.runs.flatMap((run) => run.journeyMetrics.missingHumanBehaviors)));
 
     lines.push(`## ${first.name}`);
     lines.push("");
@@ -3478,11 +3060,6 @@ function renderRelentlessLoopMarkdown(reports: CaseReport[]) {
       lines.push(`- ${count}x ${shape}`);
     }
     lines.push("");
-    lines.push("### Recurring Journey Gaps");
-    lines.push("");
-    const gapEntries = Object.entries(journeyGaps).sort((a, b) => b[1] - a[1]);
-    lines.push(...(gapEntries.length ? gapEntries.map(([gap, count]) => `- ${count}x ${gap}`) : ["- None"]));
-    lines.push("");
     lines.push("### Recurring Findings");
     lines.push("");
     const findingEntries = Object.entries(findings).sort((a, b) => b[1] - a[1]);
@@ -3498,9 +3075,9 @@ function renderRelentlessLoopMarkdown(reports: CaseReport[]) {
     lines.push("### Codex Review Prompt");
     lines.push("");
     lines.push("- Compare the highest- and lowest-quality observer traces side by side.");
-    lines.push("- Identify the first point where the agent stopped behaving like an estimator.");
+    lines.push("- Inspect incorrect quantities, duplicate pickups, broken links, and unsupported prices.");
     lines.push("- Patch prompts/tool contracts/orchestration only after the failure pattern repeats or is severe.");
-    lines.push("- Rerun this same group until the journey shape stabilizes around deep document/drawing/reference/takeoff/reconcile loops.");
+    lines.push("- Compare repeated runs against the same reviewed reference and source revision.");
     lines.push("");
   }
 
@@ -3593,11 +3170,6 @@ function renderCaseMarkdown(report: CaseReport) {
     `- Total: ${report.estimateMetrics.totalValue ?? "unknown"}`,
     `- Pricing logic coverage: ${Math.round(report.estimateMetrics.logicCoverage * 100)}%`,
     `- Source note coverage: ${Math.round(report.estimateMetrics.sourceNoteCoverage * 100)}%`,
-    `- Visual audit packages: ${report.estimateMetrics.visualAudit.drawingDrivenPackages}`,
-    `- Actual visual calls: renders=${report.estimateMetrics.visualAudit.actualRenderedPages}, zooms=${report.estimateMetrics.visualAudit.actualZoomRegions}`,
-    `- Drawing Evidence Engine: atlas=${report.estimateMetrics.visualAudit.atlasStatus || "missing"}, regions=${report.estimateMetrics.visualAudit.atlasRegions}, atlasRequests=${report.estimateMetrics.visualAudit.atlasDocumentRequests}, promotedDocs=${report.estimateMetrics.visualAudit.promotedDocuments}, Provider=${report.estimateMetrics.visualAudit.providerRegions}, CAD=${report.estimateMetrics.visualAudit.cadNativeRegions}, models=${report.estimateMetrics.visualAudit.modelNativeRegions}, claims=${report.estimateMetrics.visualAudit.evidenceClaims}, verifier=${report.estimateMetrics.visualAudit.verifierStatus || "missing"}, contradictions=${report.estimateMetrics.visualAudit.unresolvedContradictions}`,
-    `- Ledger claim gaps: ${report.estimateMetrics.visualAudit.packagesMissingLedgerClaims.length}`,
-    `- Visual audit mismatches: render=${report.estimateMetrics.visualAudit.packagesMissingActualRender.length}, fullPageZoom=${report.estimateMetrics.visualAudit.fullPageZoomEvidence.length}, unmatchedZoom=${report.estimateMetrics.visualAudit.packagesMissingActualZoom.length}`,
     `- Visual QA probes: ${report.estimateMetrics.visualProbes.evidenced}/${report.estimateMetrics.visualProbes.probeCount} evidenced`,
     "",
     ...renderHumanQuoteCalibration(report.humanQuoteMetrics),
@@ -3622,9 +3194,7 @@ function renderCaseMarkdown(report: CaseReport) {
     lines.push(`- Tool success: ${Math.round(run.toolMetrics.successRate * 100)}%`);
     lines.push(`- Thinking chars: ${run.reasoningMetrics.thinkingChars}`);
     lines.push(`- Stages saved: ${run.stageMetrics.savedStages.join(", ") || "None"}`);
-    lines.push(`- Missing required tools: ${run.toolMetrics.requiredMissing.join(", ") || "None"}`);
     lines.push(`- Estimator journey: ${run.journeyMetrics.phaseOrder.join(" -> ") || "None"}`);
-    lines.push(`- Journey gaps: ${run.journeyMetrics.missingHumanBehaviors.join(" ") || "None"}`);
     lines.push(`- Native visual drawing image inspections: ${run.journeyMetrics.actualVisualDrawingSignals}`);
     lines.push(`- Drawing visual breakdown: renders=${run.journeyMetrics.renderedDrawingPages}, zooms=${run.journeyMetrics.zoomedDrawingRegions}, symbolScans=${run.journeyMetrics.symbolScans}, symbolCounts=${run.journeyMetrics.symbolCounts}`);
     lines.push(`- Returns to docs/drawings after pricing/reference: ${run.journeyMetrics.returnsToDocuments}`);
@@ -3689,25 +3259,7 @@ async function buildFailedCaseReport(args: Args, evalCase: EvalCase, error: unkn
       costEvidenceCoverage: 0,
       logicCoverage: 0,
       expectedKeywordMissing: [],
-      visualAudit: {
-        drawingDrivenPackages: 0,
-        actualRenderedPages: 0,
-        actualZoomRegions: 0,
-        atlasStatus: null,
-        atlasRegions: 0,
-        atlasDocumentRequests: 0,
-        promotedDocuments: 0,
-        providerRegions: 0,
-        cadNativeRegions: 0,
-        modelNativeRegions: 0,
-        evidenceClaims: 0,
-        verifierStatus: null,
-        unresolvedContradictions: 0,
-        packagesMissingLedgerClaims: [],
-        packagesMissingActualRender: [],
-        packagesMissingActualZoom: [],
-        fullPageZoomEvidence: [],
-      },
+      sourceContradictions: [],
       visualProbes: {
         probeCount: 0,
         evidenced: 0,
@@ -3867,7 +3419,7 @@ function defaultEvalQuestionAnswer(question: string) {
   if (/commercial|subcontract|self[- ]?perform|owner/i.test(prompt)) {
     return "For this eval, use your best estimator judgment from the documents. Treat clearly vendor/fabricator/specialty work as subcontract or allowance where appropriate, treat ordinary field/support work as self-performed when reasonable, and record the commercial treatment and confidence in assumptions/package plan.";
   }
-  return "For this eval, continue using best estimator judgment from the documents. Make reasonable explicit assumptions, record open clarifications, and proceed through the full staged estimate workflow without waiting for more user input.";
+  return "For this eval, continue using best estimator judgment from the documents. Make reasonable explicit assumptions, record open clarifications, and continue building the estimate without waiting for more user input.";
 }
 
 function parseJson(text: string): unknown {

@@ -399,7 +399,20 @@ export function resolveMcpRunner(): McpRunnerInfo {
   return { mcpRunner, mcpArgs, isWin };
 }
 
+// Increase these only after a runtime/model image-transport measurement.
+export const AGENT_IMAGE_MAX_EDGE_BY_RUNTIME: Record<AgentRuntime, number> = {
+  "claude-code": 1568, codex: 1568, gemini: 1568, opencode: 1568, openrouter: 1568,
+};
+
+export function agentImageMaxEdge(runtime: AgentRuntime): string {
+  const key = `BIDWRIGHT_AGENT_IMAGE_MAX_EDGE_${runtime.replace(/-/g, "_").toUpperCase()}`;
+  const configured = process.env[key] || process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE;
+  const edge = Number(configured);
+  return String(Number.isInteger(edge) && edge > 0 ? edge : AGENT_IMAGE_MAX_EDGE_BY_RUNTIME[runtime] ?? 1568);
+}
+
 function buildMcpEnv(opts: {
+  runtime: AgentRuntime;
   apiBaseUrl?: string;
   authToken?: string;
   projectId: string;
@@ -420,7 +433,12 @@ function buildMcpEnv(opts: {
     BIDWRIGHT_RUN_ID: opts.aiRunId || "",
     BIDWRIGHT_SESSION_ID: opts.providerSessionId || "",
     BIDWRIGHT_REVIEW_ONLY: opts.reviewOnly ? "true" : "false",
+<<<<<<< HEAD
     BIDWRIGHT_AGENT_IMAGE_MAX_EDGE: process.env.BIDWRIGHT_AGENT_IMAGE_MAX_EDGE || "1568",
+=======
+    BIDWRIGHT_AGENT_IMAGE_MAX_EDGE: agentImageMaxEdge(opts.runtime),
+    BIDWRIGHT_AGENT_IMAGE_BUDGET: process.env.BIDWRIGHT_AGENT_IMAGE_BUDGET || "120",
+>>>>>>> origin/takeoff/evals
   };
 }
 
