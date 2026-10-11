@@ -1,4 +1,6 @@
 import { cadTakeoffRoutes } from "./cad-takeoff-routes.js";
+import { readProjectImages } from "../services/piping/piping-service.js";
+import { projectSourceSchema } from "./piping-routes.js";
 import type { FastifyInstance } from "fastify";
 import { createReadStream } from "node:fs";
 import { stat } from "node:fs/promises";
@@ -675,6 +677,7 @@ export async function modelRoutes(app: FastifyInstance) {
   /** Run RANSAC segmentation and persist detections as ModelElements. */
   app.post("/api/models/:projectId/assets/:modelId/segment", async (request, reply) => {
     const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
     const body = (request.body ?? {}) as { voxel?: number };
     try {
       const result = await runScanSegmentation(projectId, modelId, {
@@ -688,6 +691,7 @@ export async function modelRoutes(app: FastifyInstance) {
 
   app.get("/api/models/:projectId/assets/:modelId/segments", async (request, reply) => {
     const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
     try {
       return await readScanSegments(projectId, modelId);
     } catch (error) {
@@ -699,12 +703,14 @@ export async function modelRoutes(app: FastifyInstance) {
    *  photos via the tenant's vision LLM. */
   app.post("/api/models/:projectId/assets/:modelId/segments/identify", async (request, reply) => {
     const { projectId, modelId } = request.params as { projectId: string; modelId: string };
+    if (!(await request.store!.getProject(projectId))) return reply.code(404).send({ message: "Project not found" });
     const bodySchema = z.object({
       images: z.array(z.object({
         data: z.string().min(8),
         mimeType: z.string().min(3),
         caption: z.string().max(500).optional(),
-      })).min(1).max(8),
+      })).min(1).max(8).optional(),
+      sources: z.array(projectSourceSchema).min(1).max(8).optional(),
       segmentIds: z.array(z.string()).max(500).optional(),
       focusPrompt: z.string().max(2000).optional(),
     });
@@ -712,7 +718,10 @@ export async function modelRoutes(app: FastifyInstance) {
     if (!parsed.success) return reply.code(400).send({ message: parsed.error.message });
     try {
       const aiConfig = await requireRequestAiConfig(request);
-      const images = parsed.data.images.map((image) => ({
+      const sourceImages = parsed.data.sources ? await readProjectImages(projectId, parsed.data.sources) : [];
+      const inputs = [...(parsed.data.images ?? []), ...sourceImages];
+      if (!inputs.length || inputs.length > 8) return reply.code(400).send({ message: "Provide 1–8 images or project image sources" });
+      const images = inputs.map((image) => ({
         ...image,
         // Accept data-URL or raw base64; adapters want the raw payload.
         data: image.data.includes(",") && image.data.startsWith("data:") ? image.data.split(",")[1] : image.data,

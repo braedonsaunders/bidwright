@@ -961,7 +961,7 @@ const textMarkdownHandler: FileHandler = {
   canHandle(mimeType: string, filename: string): boolean {
     if (TEXT_MIMES.has(mimeType)) return true;
     const ext = extOf(filename);
-    return ['txt', 'md', 'markdown', 'json', 'xml', 'yaml', 'yml', 'log', 'cfg', 'ini', 'toml', 'conf'].includes(ext);
+    return ['pcf', 'piping', 'txt', 'md', 'markdown', 'json', 'xml', 'yaml', 'yml', 'log', 'cfg', 'ini', 'toml', 'conf'].includes(ext);
   },
 
   async parse(input: Buffer, filename: string): Promise<ParsedDocument> {

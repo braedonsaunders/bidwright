@@ -100,7 +100,15 @@ function inferFromText(text: string | undefined): DocumentKind | null {
   return null;
 }
 
+export function pipingCapability(fileName: string, fileType?: string | null) {
+  const extension = (fileName.includes('.') ? fileName.split('.').pop() : fileType ?? '')?.toLowerCase();
+  return extension === 'piping' || extension === 'pcf'
+    ? { kind: 'piping' as const, format: extension, mto: true }
+    : null;
+}
+
 export function classifyDocument(entry: ArchiveEntry, extractedText?: string): DocumentKind {
+  if (pipingCapability(entry.name, entry.extension)) return 'piping';
   return inferFromText(extractedText) ?? inferFromFileName(entry) ?? 'unknown';
 }
 

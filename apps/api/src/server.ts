@@ -120,6 +120,7 @@ import {
 } from "./paths.js";
 import { knowledgeRoutes } from "./routes/knowledge-routes.js";
 import { datasetRoutes } from "./routes/dataset-routes.js";
+import { pipingRoutes } from "./routes/piping-routes.js";
 import { takeoffRoutes } from "./routes/takeoff-routes.js";
 import { visionRoutes } from "./routes/vision-routes.js";
 import { toolsAccessPlugin, toolsRoutes } from "./routes/tools-routes.js";
@@ -6937,6 +6938,7 @@ Return ONLY valid JSON — the complete plugin object. No markdown, no explanati
   app.register(knowledgeRoutes);
   app.register(datasetRoutes);
   app.register(takeoffRoutes);
+  app.register(pipingRoutes);
   app.register(visionRoutes);
   app.register(modelRoutes);
   app.register(sourceOverviewRoutes);
