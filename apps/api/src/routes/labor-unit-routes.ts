@@ -41,6 +41,12 @@ function statusForError(message: string) {
 }
 
 export async function laborUnitRoutes(app: FastifyInstance): Promise<void> {
+  app.post("/api/labor-units/index", async (request, reply) => {
+    const parsed = z.object({ cursor: z.string().optional(), limit: z.number().int().min(1).max(100).optional(), dryRun: z.boolean().default(true) }).safeParse(request.body ?? {});
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    return request.store!.indexLaborUnits(parsed.data);
+  });
+
   app.post("/api/labor-units/match", async (request, reply) => {
     const parsed = z.object({
       context: z.string().max(2000).optional(),

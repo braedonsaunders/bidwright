@@ -59,3 +59,9 @@ Shop and field work can have separate person-hour calculations: 20 joints × 2 s
 FileNode text/spreadsheet reads resolve existing SourceDocument links without ingesting. An unextracted file is reported as such; `promoteSourceDocument` is the explicit write that ingests a supported source and can incur extraction costs. Archives and model files use their dedicated tools.
 
 Saved pickups can drive a priced row through `createWorksheetItem` or `updateWorksheetItem`: `takeoff: [{pickupId: "<saved mark id>"}]`; quantities are summed, conversions use an explicit `multiplier`, and updates replace the link set (omitting `takeoff` preserves it).
+
+## Breaking assemblies into library operations
+
+A library can price a plate or connection in EA, a weld in FT, and unloading in TONNE even when a drawing describes the whole assembly in TON. `matchLaborUnits` returns table operation/unit examples alongside weak matches and unit mismatches. Those examples show which quantities a more detailed breakdown could use.
+
+For a fabricated frame, a breakdown can separate plate cuts, drilled holes, connections, weld lengths, handling and erection. Drawing dimensions and connection schedules provide the operation quantities; an assembly's mass alone does not provide its weld length. Passing those operations as separate `matchLaborUnits` lines gives separate candidates and conversions. Any operations the library does not cover can retain explicit assumed hours and their calculation.

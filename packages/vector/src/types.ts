@@ -21,6 +21,7 @@ export interface VectorSearchOptions {
   projectId?: string;
   scope?: "project" | "library" | "all";
   documentKinds?: string[];
+  excludeSourceTypes?: string[];
   limit?: number;
   minScore?: number;
   hybridWeight?: number; // 0 = pure vector, 1 = pure keyword
