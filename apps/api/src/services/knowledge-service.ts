@@ -18,7 +18,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const queryEmbeddings = new Map<string, { until: number; promise: Promise<number[]> }>();
-export async function cachedQueryEmbedding(key: string, create: () => Promise<number[]>) {
+async function cachedQueryEmbedding(key: string, create: () => Promise<number[]>) {
   const cached = queryEmbeddings.get(key);
   if (cached && cached.until > Date.now()) return cached.promise;
   if (queryEmbeddings.size >= 256) queryEmbeddings.delete(queryEmbeddings.keys().next().value!);
@@ -1112,7 +1112,6 @@ export class KnowledgeService {
           all: "all",
         };
         const hits = await vectorStore.search({
-          excludeSourceTypes: ["labor_unit"],
           query,
           queryVector,
           projectId: options.projectId,

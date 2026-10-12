@@ -66,3 +66,37 @@ test("fractional nominal sizes do not penalize equal fractions or confuse them w
   assert.equal(rank("butt weld 1/2 inch", candidates)[0].item.id, "half");
   assert.equal(rank("butt weld 0.5 inch", candidates)[0].item.id, "half");
 });
+
+test("strong lexical matches beat semantic additions; weak vectors and inflated counts are excluded", async () => {
+  const { PrismaApiStore } = await import("../prisma-store.js");
+  const candidates = [
+    { id: "lexical", name: "weld", outputUom: "FT", libraryId: "manual", library: { name: "Manual" }, category: "Steel", hoursNormal: 1 },
+    { id: "semantic", name: "join metals", outputUom: "FT", libraryId: "manual", library: { name: "Manual" }, category: "Steel", hoursNormal: 2, _semanticOnly: true, _semanticScore: .9 },
+    { id: "weak", name: "paint", libraryId: "manual", _semanticOnly: true, _semanticScore: .4 },
+  ];
+  const store: any = { organizationId: "org", findLaborUnitSearchCandidates: async () => candidates.map(item => ({ ...item, createdAt: new Date(0), updatedAt: new Date(0) })), hydrateLaborSearchEntries: async (entries: any[]) => entries };
+  const result = await PrismaApiStore.prototype.listLaborUnits.call(store, { q: "weld" });
+  assert.deepEqual(result.units.map(unit => unit.id), ["lexical", "semantic"]);
+  assert.equal(result.total, 1);
+  const tree = await PrismaApiStore.prototype.listLaborUnitTree.call(store, { q: "weld" });
+  assert.equal(tree.nodes.length, 1); assert.equal(tree.nodes[0].unitCount, 1);
+  assert.equal(tree.nodes[0].normalHoursTotal, 1);
+});
+
+test("NECA and Page operations retain their correct top three despite stronger-looking partial names", () => {
+  for (const [query, library, expected] of [
+    ["THHN copper wire", "NECA", /THHN/],
+    ["duplex receptacle 20 amp", "NECA", /Duplex Receptacle - Straight Blade/],
+    ["threading pipe schedule 40", "Estimators Piping Man Hour Manual", /Field Threading Pipe/],
+    ["manual butt weld scheduled pipe", "Estimators Piping Man Hour Manual", /Manual Butt Welds - Scheduled Pipe/],
+  ] as const) {
+    const top = rank(query, rows.filter((row: any) => row.libraryId === library)).slice(0, 3);
+    assert.equal(top.length, 3);
+    for (const entry of top) assert.match(`${entry.item.category} ${entry.item.className}`, expected, query);
+  }
+});
+
+test("retrieval fixture has no local paths or production identifiers", () => {
+  const text = JSON.stringify(rows);
+  assert.doesNotMatch(text, /\/Users\/|\/home\/|sourceFiles|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i);
+});

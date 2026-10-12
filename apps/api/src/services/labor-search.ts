@@ -10,7 +10,7 @@ export function laborSearchText(unit: any) {
   // "(erected)" describes the surface being painted, not an erection operation.
   const task = [name.replace(/\((?:not )?(?:erected|shop|field)[^)]*\)/gi, ""), ...identity,
     ref.row?.task, ref.valueColumnName, ref.columnName, unit.outputUom].filter(Boolean).join(" ").replace(/\((?:not )?(?:erected|shop|field)[^)]*\)/gi, "");
-  const context = [name, unit.category, unit.className, unit.subClassName, ref.datasetName, unit.description].filter(Boolean).join(" ");
+  const context = [name, unit.category, unit.className, unit.subClassName, ref.datasetName, unit.description].filter(Boolean).join(" ").replace(/\((?:not )?(?:erected|shop|field)[^)]*\)/gi, "");
   return { task, context };
 }
 
@@ -40,7 +40,8 @@ export function rankLaborCandidates<T>(units: T[], profile: SearchProfile) {
     const contextOnly = matchedTerms.filter(term => !ownTerms.has(term));
     const coverage = all?.coverage ?? 0;
     // Source-row matches dominate a matching book/category header. SQL FTS is candidate retrieval only.
-    let score = (own?.coverage ?? 0) * 100 + coverage * 25 + (own?.score ?? 0) * 2 - contextOnly.length * 3;
+    // Near-complete intent still matters for terse numeric/NECA names whose operation is in the table title.
+    let score = (own?.coverage ?? 0) * 100 + coverage * 25 + Math.pow(coverage, 6) * 200 + (own?.score ?? 0) * 2 - contextOnly.length * 3;
     // Exact task words outrank stem-only matches (e.g. structural vs an electrical "structure connector").
     const words = new Set(normalizeEstimatorSearchText(task).split(/\s+/));
     score += profile.terms.filter(term => words.has(term.token)).length * 18;
@@ -65,10 +66,11 @@ export function rankLaborCandidates<T>(units: T[], profile: SearchProfile) {
     if (requestedSchedule && itemSchedule && requestedSchedule !== itemSchedule) score -= 35;
     // Semantic candidates can enter without literal overlap, but a weak context-only hit cannot dominate row identity.
     const semantic = Number(item._semanticScore ?? 0);
-    score += semantic * 15;
+    score += semantic * (item._semanticOnly ? 150 : 15);
     return { item: item as T, score, coverage, matchedTerms, matchedPhrases: all?.matchedPhrases ?? [], anchorMatches: own?.anchorMatches ?? 0,
       taskMatchedTerms: [...ownTerms], contextOnlyTerms: contextOnly, semanticScore: semantic };
-  }).filter(entry => entry.matchedTerms.length || entry.semanticScore > 0).sort((a, b) => b.score - a.score);
+  }).filter(entry => (entry.item as any)._semanticOnly ? entry.semanticScore >= .65 : entry.matchedTerms.length > 0)
+    .sort((a, b) => b.score - a.score);
 }
 
 export function laborGranularityFacts(units: any[]) {

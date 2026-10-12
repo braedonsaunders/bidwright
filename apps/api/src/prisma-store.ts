@@ -1,4 +1,4 @@
-import { indexLaborUnitPage, searchLaborVectors } from "./services/labor-vector-index.js";
+import { indexLaborUnitPage, searchLaborVectors, prepareLaborSemanticBatch, type LaborSemanticBatch } from "./services/labor-vector-index.js";
 import { laborSearchProfile, rankLaborCandidates, laborGranularityFacts } from "./services/labor-search.js";
 import { summarizeLaborBasis, laborUnitPresentation } from "@bidwright/domain";
 import { assertLaborUnitHours, buildLaborUnitDerivation } from "./services/labor-unit-derivation.js";
@@ -13528,7 +13528,7 @@ export class PrismaApiStore {
   private async findLaborUnitSearchCandidates(
     baseWhere: Record<string, unknown>,
     searchProfile: SearchProfile,
-    options: { perTermLimit?: number; filters?: { libraryId?: string; provider?: string; category?: string | null; className?: string | null; subClassName?: string | null } } = {},
+    options: { perTermLimit?: number; includeEmptyHierarchy?: boolean; semanticBatch?: LaborSemanticBatch | null; filters?: { libraryId?: string; provider?: string; category?: string | null; className?: string | null; subClassName?: string | null } } = {},
   ) {
     const terms = searchProfile.terms.map(term => term.token);
     const webQuery = searchProfile.terms.flatMap(term => term.variants).map(term => `"${term}"`).join(" OR ");
@@ -13549,7 +13549,6 @@ export class PrismaApiStore {
         conditions.push(`${column} = ${position}`);
       }
     }
-    const semanticPromise = searchLaborVectors(this.db, this, searchProfile.raw);
     const matches = await this.db.$queryRawUnsafe<Array<{ id: string; score: number; coverage: number; matchedTerms: string[] }>>(
       `WITH term_queries AS MATERIALIZED (SELECT term, plainto_tsquery('english', term) AS query FROM unnest($2::text[]) AS term), matches AS MATERIALIZED (
          SELECT u.id, ${vector} AS tokens FROM "LaborUnit" u JOIN "LaborUnitLibrary" l ON l.id = u."libraryId"
@@ -13558,14 +13557,14 @@ export class PrismaApiStore {
         (SELECT avg((tokens @@ query)::int) FROM term_queries) AS coverage,
         ARRAY(SELECT term FROM term_queries WHERE tokens @@ query) AS "matchedTerms"
        FROM matches ORDER BY coverage DESC, score DESC, id LIMIT $4`, ...params);
-    const semantic = new Map((await semanticPromise).map(hit => [hit.id, hit.score]));
+    const semantic = new Map((await searchLaborVectors(this.db, this, searchProfile.raw, { filters: { ...filters, includeEmptyHierarchy: options.includeEmptyHierarchy, excludeIds: matches.map(match => match.id) }, batch: options.semanticBatch })).map(hit => [hit.id, hit.score]));
     if (!matches.length && !semantic.size) return [];
     const rank = new Map(matches.map((match) => [match.id, match]));
     const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: [...new Set([...matches.map((match) => match.id), ...semantic.keys()])] } },
       select: { id: true, libraryId: true, name: true, code: true, description: true, discipline: true, category: true,
         className: true, subClassName: true, sourceRef: true, tags: true, outputUom: true, hoursNormal: true, entityCategoryType: true,
         library: { select: { id: true, name: true, provider: true } } } });
-    return rows.map((row) => ({ ...row, _semanticScore: semantic.get(row.id) ?? 0, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
+    return rows.map((row) => ({ ...row, _semanticOnly: !rank.has(row.id), _semanticScore: semantic.get(row.id) ?? 0, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
   }
 
   private async hydrateLaborSearchEntries(entries: RankedSearchEntry<any>[]) {
@@ -13581,7 +13580,8 @@ export class PrismaApiStore {
   }
 
   async matchLaborUnits(lines: LaborWorkLine[], context?: string) {
-    return matchLaborBreakdown(lines, context, (q) => this.listLaborUnits({ q, limit: 12 }), async (units) => {
+    const semanticBatch = await prepareLaborSemanticBatch(this.db, this, lines.map(line => [line.operation, line.material, line.size].filter(Boolean).join(" ")));
+    return matchLaborBreakdown(lines, context, (q) => this.listLaborUnits({ q, limit: 12 }, semanticBatch), async (units) => {
       const groups = [...new Map(units.slice(0, 3).map(unit => [`${unit.libraryId}:${unit.category}:${unit.className}`, unit])).values()];
       const examples = (await Promise.all(groups.map(unit => this.db.laborUnit.findMany({ where: {
         libraryId: unit.libraryId, category: unit.category, className: unit.className,
@@ -13600,7 +13600,7 @@ export class PrismaApiStore {
     subClassName?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<{ units: LaborUnit[]; total: number; diagnostics?: SearchDiagnostics }> {
+  } = {}, semanticBatch?: LaborSemanticBatch | null): Promise<{ units: LaborUnit[]; total: number; diagnostics?: SearchDiagnostics }> {
     const accessibleLibrary =
       input.libraryId
         ? {
@@ -13644,7 +13644,7 @@ export class PrismaApiStore {
 
     if (searchProfile && searchProfile.terms.length > 0) {
       const candidateRowLimit = 2000;
-      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input, semanticBatch });
       const searchText = laborUnitSearchText;
       const weightedProfile = searchProfile;
       const ranked = rankLaborCandidates<any>(candidateRows, weightedProfile);
@@ -13664,7 +13664,7 @@ export class PrismaApiStore {
             },
           },
         })),
-        total: ranked.length,
+        total: ranked.filter(entry => !entry.item._semanticOnly).length,
         diagnostics: { ...buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText), scoring: "labor_task_context_hybrid" },
       };
     }
@@ -13716,7 +13716,7 @@ export class PrismaApiStore {
 
     if (searchProfile && searchProfile.terms.length > 0) {
       const candidateRowLimit = 2000;
-      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input, includeEmptyHierarchy: true });
       const searchText = laborUnitSearchText;
       const weightedProfile = searchProfile;
       const ranked = rankLaborCandidates<any>(candidateRows, weightedProfile);
@@ -13741,7 +13741,7 @@ export class PrismaApiStore {
         return {
           nodes: [],
           units: (await this.hydrateLaborSearchEntries(ranked.slice(offset, offset + limit))).map(unitWithSearch),
-          total: ranked.length,
+          total: ranked.filter(entry => !entry.item._semanticOnly).length,
           diagnostics,
         };
       }
@@ -13759,7 +13759,7 @@ export class PrismaApiStore {
         representativeUnits: NonNullable<LaborUnitTreeGroup["search"]>["representativeUnits"];
       }>();
 
-      for (const entry of ranked) {
+      for (const entry of ranked.filter(entry => !entry.item._semanticOnly)) {
         const unit = entry.item;
         const libraryId = unit.libraryId ?? input.libraryId ?? null;
         const category = nextLevel === "catalog" ? "" : nextLevel === "category" ? unit.category ?? "" : input.category ?? unit.category ?? "";

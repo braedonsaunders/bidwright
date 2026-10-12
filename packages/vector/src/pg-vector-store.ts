@@ -134,11 +134,6 @@ export class PgVectorStore implements VectorStore {
       paramIdx++;
     }
 
-    if (options.excludeSourceTypes?.length) {
-      conditions.push(`COALESCE(metadata->>'sourceType', '') <> ALL($${paramIdx++}::text[])`);
-      params.push(options.excludeSourceTypes);
-    }
-
     const whereClause = `WHERE ${conditions.join(" AND ")}`;
 
     const rows = await this.queryFn<{

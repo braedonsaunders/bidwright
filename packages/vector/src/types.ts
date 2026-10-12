@@ -21,7 +21,6 @@ export interface VectorSearchOptions {
   projectId?: string;
   scope?: "project" | "library" | "all";
   documentKinds?: string[];
-  excludeSourceTypes?: string[];
   limit?: number;
   minScore?: number;
   hybridWeight?: number; // 0 = pure vector, 1 = pure keyword
@@ -68,7 +67,7 @@ export interface EmbeddingProvider {
   /** Unique provider identifier (e.g. "openai", "cohere"). */
   id: string;
   /** Embed a batch of texts, returning one vector per text. */
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], purpose?: "document" | "query"): Promise<number[][]>;
   /** Embed a single query string. */
   embedQuery(query: string): Promise<number[]>;
   /** Output dimensionality of the embedding model. */

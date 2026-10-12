@@ -192,7 +192,7 @@ function createCohereProvider(config: EmbeddingConfig): EmbeddingProvider {
     maxTokens: defaults.maxTokens,
     supportsMultimodal: model === "embed-v4",
 
-    async embed(texts: string[]): Promise<number[][]> {
+    async embed(texts: string[], purpose: "document" | "query" = "document"): Promise<number[][]> {
       const allVectors: number[][] = [];
       for (let i = 0; i < texts.length; i += defaults.maxBatchSize) {
         const batch = texts.slice(i, i + defaults.maxBatchSize);
@@ -204,7 +204,7 @@ function createCohereProvider(config: EmbeddingConfig): EmbeddingProvider {
             body: JSON.stringify({
               model,
               texts: batch,
-              input_type: "search_document",
+              input_type: purpose === "query" ? "search_query" : "search_document",
               embedding_types: ["float"],
               truncate: "END",
             }),
