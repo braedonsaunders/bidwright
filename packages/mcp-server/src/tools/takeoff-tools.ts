@@ -1,3 +1,4 @@
+import { savedPickupFacts } from "../takeoff-hints.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiPost, getProjectId } from "../api-client.js";
@@ -37,7 +38,7 @@ export function registerTakeoffTools(server: McpServer) {
     quantity: z.number().nonnegative(), unit: z.string(), label: z.string(), description: z.string().optional(),
     sourceRefs: z.array(z.object({ sheet: z.string().optional(), row: z.number().int().positive().optional(), page: z.number().int().positive().optional(), cell: z.string().optional(), text: z.string().optional() })).min(1),
     linkToItemId: z.string().optional(), quantityField: z.enum(["value", "area", "volume", "count"]).default("value"), multiplier: z.number().positive().optional(),
-  }, async input => ({ content: [{ type: "text" as const, text: JSON.stringify(await apiPost(`/api/takeoff/${getProjectId()}/source-quantities`, input)) }] }));
+  }, async input => ({ content: [{ type: "text" as const, text: JSON.stringify(savedPickupFacts(await apiPost(`/api/takeoff/${getProjectId()}/source-quantities`, input))) }] }));
   const call = async (operation: string, input: unknown) => {
     const result = await apiPost<Record<string, unknown>>(
       `/api/takeoff/${getProjectId()}/pdf/${operation}`,
@@ -76,7 +77,7 @@ export function registerTakeoffTools(server: McpServer) {
         delete result[key];
       }
     }
-    content.push({ type: "text", text: JSON.stringify(result) });
+    content.push({ type: "text", text: JSON.stringify(["save", "update"].includes(operation) ? savedPickupFacts(result) : result) });
     return { content };
   };
   server.tool(

@@ -1,3 +1,4 @@
+import { savedPickupFacts } from "../takeoff-hints.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiGet, apiPost, getProjectId } from "../api-client.js";
@@ -13,7 +14,7 @@ export function registerPipingTools(server: McpServer) {
   });
   server.tool("savePipingTakeoff", "Save selected piping MTO lines as Pickups, optionally linking worksheet rows. Reads current source quantities; optional checksum detects changed sources. Unit conversion is explicit.", {
     ...source, sourceChecksum: z.string().optional(), lines: z.array(z.object({ lineId: z.string(), worksheetItemId: z.string().optional(), unit: z.enum(["m", "mm", "ft", "in", "EA"]).optional() })).min(1),
-  }, async input => result(await apiPost(takeoffPath("piping/pickups"), input)));
+  }, async input => result(savedPickupFacts(await apiPost(takeoffPath("piping/pickups"), input))));
   server.tool("runPhotoBom", "Read a proposed bill of materials from project image files or source documents. Does not save pickups or worksheet rows.", {
     sources, focusPrompt: z.string().max(2000).optional(),
   }, async input => result(await apiPost(takeoffPath("photo-bom"), input)));

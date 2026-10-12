@@ -3,6 +3,8 @@ name: code-aggregation
 description: Aggregate scoped API data in code with the workspace bw client.
 ---
 
+The brief records the vision Python interpreter and its bundled libraries, the separate `BIDWRIGHT_CAD_PYTHON` for build123d, and network-install availability. `python` and `python3` use the vision venv in server/eval shells.
+
 Run `.bidwright/bin/bw` (or `node .bidwright/bin/bw.mjs`) for JSON reads and explicit API writes.
 It uses BIDWRIGHT_API_URL, BIDWRIGHT_AUTH_TOKEN and BIDWRIGHT_PROJECT_ID from the runtime environment, like MCP. No credentials belong in scripts or outputs.
 Examples:
@@ -55,3 +57,5 @@ A quantity record can describe installed work (for example 317 LF of pipe), whil
 Shop and field work can have separate person-hour calculations: 20 joints × 2 shop person-hours/joint, plus 5 closures × 3 field person-hours/joint. Crew size describes staffing; multiplying an already person-hour rate by crew size would count effort twice. An unquoted allowance can carry its amount, covered scope and uncertainty separately from measured quantities and vendor prices. Source facts and any alternate or provisional quantities can remain visible side by side.
 
 FileNode text/spreadsheet reads resolve existing SourceDocument links without ingesting. An unextracted file is reported as such; `promoteSourceDocument` is the explicit write that ingests a supported source and can incur extraction costs. Archives and model files use their dedicated tools.
+
+Saved pickups can drive a priced row through `createWorksheetItem` or `updateWorksheetItem`: `takeoff: [{pickupId: "<saved mark id>"}]`; quantities are summed, conversions use an explicit `multiplier`, and updates replace the link set (omitting `takeoff` preserves it).

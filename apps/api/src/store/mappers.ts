@@ -380,9 +380,16 @@ function normalizeRateResolution(raw: unknown): WorksheetItem["rateResolution"] 
   };
 }
 
+/** Row reads stay bounded even when a BIM row has thousands of links. */
+export function rowTakeoffSummary(links: Array<{ pickupId: string; derivedQuantity: number }>, unit: string) {
+  return { count: links.length, sum: links.reduce((sum, link) => sum + Number(link.derivedQuantity ?? 0), 0),
+    unit, pickupIds: links.slice(0, 5).map(link => link.pickupId) };
+}
+
 export function mapWorksheetItem(i: any): WorksheetItem {
   const categoryRef = i.entityCategory ?? i.categoryRef ?? null;
   return {
+    ...(i.pickupLinks ? { takeoff: rowTakeoffSummary(i.pickupLinks, i.uom) } : {}),
     id: i.id,
     worksheetId: i.worksheetId,
     phaseId: i.phaseId ?? null,

@@ -4933,6 +4933,8 @@ export async function processDwgTakeoffMetadata(projectId: string, documentId: s
 // ── Takeoff Links (Annotation ↔ Line Item) ──────────────────────────────
 
 export interface PickupLinkRecord {
+  pickup?: { modelElementId?: string | null; cadEntityId?: string | null };
+  row?: { id: string; label: string; unit: string };
   id: string;
   projectId: string;
   pickupId: string;

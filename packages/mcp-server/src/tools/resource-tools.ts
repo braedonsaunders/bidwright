@@ -1101,6 +1101,7 @@ export function registerResourceTools(server: McpServer) {
             annotationType: annotation.annotationType,
             label,
             groupName: annotation.groupName,
+            linkedRows: annotation.linkedRows ?? [],
             measurement: input.responseFormat === "detailed" ? annotation.measurement : measurement,
             basis,
           };

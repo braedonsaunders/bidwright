@@ -1,3 +1,4 @@
+import { savedPickupFacts } from "../takeoff-hints.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiPost, getProjectId } from "../api-client.js";
@@ -31,5 +32,5 @@ export function registerCadTools(server: McpServer) {
   server.tool("saveCadEntityTakeoff", "Save selected CAD handles as pickups; reuse existing pickups unchanged and optionally link them to a worksheet item.", {
     ...source, handles: z.array(z.string()).min(1).max(500), measurement: z.enum(["count", "length", "area"]),
     worksheetItemId: z.string().optional(), multiplier: z.number().finite().positive().optional().describe("Explicit quantity multiplier for a new worksheet link"),
-  }, async (input) => json(await apiPost(`/api/models/${getProjectId()}/cad/takeoff`, input)));
+  }, async (input) => json(savedPickupFacts(await apiPost(`/api/models/${getProjectId()}/cad/takeoff`, input))));
 }
