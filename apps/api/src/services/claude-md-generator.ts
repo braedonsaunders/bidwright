@@ -1,3 +1,4 @@
+import { agentPythonFacts } from "./agent-host/python-environment.js";
 /**
  * CLAUDE.md Generator
  *
@@ -27,6 +28,7 @@ export interface LibrarySnapshotInfo {
 }
 
 export interface ClaudeMdParams {
+  pythonEnvironment?: Record<string, string>;
   runtime?: string;
   sourceOverview?: SourceOverview;
   projectDir: string;
@@ -171,7 +173,7 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 | PCF/.piping | getPipingMto, savePipingTakeoff | Authored pipe/component quantities and joint semantics; optional how-to: piping-mto |
 | Schedules/BOM spreadsheets | readSpreadsheet, readDocumentText, saveSourceQuantityTakeoff | Authored quantities, sizes and specifications; optional how-to: code-aggregation |
 | Symbols/legends | extractDrawingLegend, createSymbolTemplateFromRegion | Repeated symbols in a defined region; optional how-to: pdf-takeoff |
-| Existing takeoff | listPickups, linkPickupToWorksheetItem | Saved measurements and provenance, including human edits |
+| Existing takeoff | listPickups, createWorksheetItem, updateWorksheetItem, linkPickupToWorksheetItem | Saved marks drive row quantities via takeoff: [{pickupId}]; updates replace the link set, omission preserves it |
 
 getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. \`describeTools\` describes a family; \`invokeTool\` calls a tool not directly loaded with its documented arguments. These capabilities support estimating judgment without prescribing a workflow.
 
@@ -330,6 +332,8 @@ Read the existing description in \`getWorkspace\` first. Preserve substantive hu
 ${buildDocumentManifestRows(params.documents, params.sourceOverview)}
 
 ${agentSkillIndex(params.runtime)}
+
+${agentPythonFacts(params.pythonEnvironment)}
 
 Use \`queryProjectFile\` for targeted project search, \`readDocumentText\` for text or page ranges, \`readSpreadsheet\` for spreadsheets, and \`getDocumentStructured\` for tables. Inspect schedules and BOMs in context rather than assuming either they or drawings are always authoritative. The complete document manifest is at \`.bidwright/document-manifest.jsonl\`.
 
@@ -512,6 +516,8 @@ export async function generateQaInstructionFiles(
 
 ${agentSkillIndex(params.runtime)}
 
+${agentPythonFacts(params.pythonEnvironment)}
+
 getSourceOverview refreshes source capabilities and existing takeoff facts; the launch snapshot is .bidwright/source-overview.json. describeTools and invokeTool expose tools not directly loaded.
 
 You are in read-only project Q&A mode. Answer the user's question directly from the current quote, project documents, drawings, and approved organization knowledge. For casual market questions the project sources cannot answer — current material/component prices, vendor availability, product specs, codes — use the webSearch tool and cite the source URLs.
@@ -598,6 +604,8 @@ This is a review session. Keep the estimate unchanged; use the saveReview tools 
 ${buildDocumentManifestRows(params.documents, params.sourceOverview)}
 
 ${agentSkillIndex(params.runtime)}
+
+${agentPythonFacts(params.pythonEnvironment)}
 
 ${buildDrawingAnalysisSection(params.documents, "review")}
 

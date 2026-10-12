@@ -380,9 +380,16 @@ function normalizeRateResolution(raw: unknown): WorksheetItem["rateResolution"] 
   };
 }
 
+export function rowTakeoffSummary(link: any) {
+  const measurement = link.pickup?.measurement ?? {};
+  return { pickupId: link.pickupId, label: link.pickup?.label ?? "", quantity: measurement[link.quantityField] ?? measurement.value ?? 0,
+    unit: measurement.unit ?? "", derivedQuantity: link.derivedQuantity, quantityField: link.quantityField, multiplier: link.multiplier };
+}
+
 export function mapWorksheetItem(i: any): WorksheetItem {
   const categoryRef = i.entityCategory ?? i.categoryRef ?? null;
   return {
+    ...(i.pickupLinks ? { takeoff: i.pickupLinks.map(rowTakeoffSummary) } : {}),
     id: i.id,
     worksheetId: i.worksheetId,
     phaseId: i.phaseId ?? null,

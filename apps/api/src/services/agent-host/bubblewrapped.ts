@@ -40,6 +40,7 @@ import { prisma } from "@bidwright/db";
 import { resolveApiPath, resolveKnowledgeDir } from "../../paths.js";
 import { getRunningEgressProxy } from "../egress-proxy-bootstrap.js";
 import { authorizedKnowledgeMounts } from "./knowledge-mounts.js";
+import { agentPythonEnvironment } from "./python-environment.js";
 import { stripBlankCredentialEnv } from "./env-sanitize.js";
 import { getProcessSandboxLauncherIdentity } from "./launcher-identity.js";
 import type { AgentRuntimeHost, SpawnProcessOpts } from "./types.js";
@@ -191,11 +192,11 @@ export const bubblewrappedHost: AgentRuntimeHost = {
       bubblewrapPath: process.env.BIDWRIGHT_BWRAP_PATH,
       launcherIdentity,
       syntheticSelfExecutable: plan.sandboxSelfExecutable,
-      environment: stripBlankCredentialEnv({
+      environment: stripBlankCredentialEnv(agentPythonEnvironment({
         ...safeHostEnvironment(),
         ...cliEnv,
         ...proxyEnv,
-      }),
+      })),
       stdio: ["ignore", "pipe", "pipe"],
     });
 

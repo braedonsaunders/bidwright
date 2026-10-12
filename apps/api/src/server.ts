@@ -241,7 +241,12 @@ const quotePatchSchema = z.object({
   departmentId: z.string().nullable().optional(),
   userId: z.string().nullable().optional()
 });
+const worksheetTakeoffSchema = z.array(z.object({
+  pickupId: z.string().min(1), quantityField: z.enum(["value", "area", "volume", "count"]).optional(),
+  multiplier: z.number().finite().positive().optional(),
+})).max(1000).optional();
 const worksheetItemPatchSchema = z.object({
+  takeoff: worksheetTakeoffSchema,
   worksheetId: z.string().min(1).optional(),
   phaseId: z.string().nullable().optional(),
   categoryId: z.string().nullable().optional(),
@@ -269,7 +274,11 @@ const worksheetItemPatchSchema = z.object({
   sourceEvidence: z.record(z.unknown()).optional(),
   derivation: z.record(z.unknown()).nullable().optional(),
 });
-const createWorksheetItemSchema = z.object({
+const createWorksheetItemSchema = z.preprocess((value) => {
+  const input = value as Record<string, unknown> | null;
+  return input && input.quantity === undefined && Array.isArray(input.takeoff) ? { ...input, quantity: 0 } : value;
+}, z.object({
+  takeoff: worksheetTakeoffSchema,
   phaseId: z.string().nullable().optional(),
   categoryId: z.string().nullable().optional(),
   category: z.string().min(1),
@@ -295,7 +304,7 @@ const createWorksheetItemSchema = z.object({
   resourceComposition: z.record(z.unknown()).optional(),
   sourceEvidence: z.record(z.unknown()).optional(),
   derivation: z.record(z.unknown()).nullable().optional(),
-});
+}));
 
 const createWorksheetSchema = z.object({
   name: z.string().min(1),
@@ -3275,12 +3284,7 @@ export function buildServer() {
     if (createRejection) return reply.code(400).send(createRejection);
 
     const mutationContext = worksheetMutationContext(request);
-    const createResult = deltaResponse
-      ? await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput, mutationContext)
-      : null;
-    if (!deltaResponse) {
-      await request.store!.createWorksheetItem(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput, mutationContext);
-    }
+    const createResult = await request.store!.createWorksheetItemWithSnapshot(projectId, worksheetId, parsed.data satisfies CreateWorksheetItemInput, mutationContext);
     await captureHumanEstimateFeedback(request, projectId, {
       action: "create_item",
       worksheetId,
@@ -3300,7 +3304,7 @@ export function buildServer() {
       });
     }
     reply.code(201);
-    return payload;
+    return { ...payload, item: createResult.item };
   });
 
   app.post("/projects/:projectId/worksheet-folders", async (request, reply) => {
@@ -3431,12 +3435,7 @@ export function buildServer() {
     // The store records human line corrections itself (with before/after
     // values and the AI derivation they override), so no route-level capture.
     const mutationContext = worksheetMutationContext(request);
-    const updateResult = deltaResponse
-      ? await request.store!.updateWorksheetItemWithSnapshot(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput, mutationContext)
-      : null;
-    if (!deltaResponse) {
-      await request.store!.updateWorksheetItem(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput, mutationContext);
-    }
+    const updateResult = await request.store!.updateWorksheetItemWithSnapshot(projectId, itemId, parsed.data satisfies WorksheetItemPatchInput, mutationContext);
 
     if (deltaResponse) {
       return buildWorksheetItemMutationResponse("update", updateResult!);
@@ -3448,7 +3447,7 @@ export function buildServer() {
         message: "Project workspace not found"
       });
     }
-    return payload;
+    return { ...payload, item: updateResult.item };
   });
 
   // ── Transactional batch edits ───────────────────────────────────────────

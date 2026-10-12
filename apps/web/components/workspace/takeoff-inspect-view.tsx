@@ -2882,6 +2882,9 @@ function DetectionGroup({
           {rows.length === 0 ? (
             <p className="rounded-md border border-line bg-bg/25 px-2 py-2 text-center text-[10px] text-fg/35">None found</p>
           ) : rows.map((row) => {
+            const linkedRows = snapshot.pickupLinks.filter(link => link.pickupId === row.id
+              || (row.kind === "model" && link.pickup?.modelElementId === row.id)
+              || (row.kind === "cad-entity" && link.pickup?.cadEntityId === row.id));
             const expanded = expandedRowIds.has(row.id);
             const composeRequest = requestForRow(row);
             const staged = composeRequest ? compose.basketIds.has(composeRequest.id) : false;
@@ -2960,6 +2963,11 @@ function DetectionGroup({
                 </button>
               )}
               <div className="min-w-0 flex-1">
+                {linkedRows.map(link => (
+                  <p key={link.id} className="truncate text-[10px] text-success" title={link.row?.label ?? link.worksheetItemId}>
+                    {link.row?.label ?? link.worksheetItemId}: {link.derivedQuantity.toLocaleString()} {link.row?.unit ?? ""}
+                  </p>
+                ))}
                 <div className="flex min-w-0 items-center gap-1">
                   <p className="min-w-0 shrink truncate text-[11px] font-medium text-fg/80" title={row.title}>{row.title}</p>
                   {row.subtitle && (

@@ -247,6 +247,8 @@ export interface WorksheetItemSourceEvidence {
 }
 
 export interface WorksheetItem {
+  takeoff?: Array<{ pickupId: string; label: string; quantity: number; unit: string; derivedQuantity: number; quantityField: string; multiplier: number }>;
+  takeoffFact?: string;
   id: string;
   worksheetId: string;
   phaseId?: string | null;

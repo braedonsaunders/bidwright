@@ -25,6 +25,7 @@
  * lessons, which include the source quote itself. askUser is always disabled
  * because no in-app run exists to carry the answer.
  */
+import { agentPythonEnvironment } from "../../apps/api/src/services/agent-host/python-environment.js";
 import { resolveEstimatorPersonaForPrompt } from "../../apps/api/src/services/estimator-persona-prompt.js";
 import { selectEvalPersona } from "./eval-persona.js";
 import { blindCopiedRevision, excludeCopiedAnswerFiles, writeAnswerFileExclusionAudit } from "./blind-copy.js";
@@ -35,6 +36,7 @@ import { fileURLToPath } from "node:url";
 import { buildCompactClaudeMdContent } from "../../apps/api/src/services/claude-md-generator.js";
 import { writeAgentWorkspaceAssets } from "../../apps/api/src/services/agent-workspace-assets.js";
 
+const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const [command, ...rest] = process.argv.slice(2);
 const option = (name: string, fallback?: string) => {
@@ -183,7 +185,12 @@ async function prepare() {
   await writeFile(join(dir, ".bidwright", "document-manifest.jsonl"),
     documents.map((d: any) => JSON.stringify(d)).join("\n") + (documents.length ? "\n" : ""));
 
+  const pythonEnvironment = agentPythonEnvironment({ PATH: process.env.PATH ?? "" }, {
+    visionVenv: process.env.BIDWRIGHT_VISION_VENV,
+    cadPython: process.env.BIDWRIGHT_CAD_PYTHON,
+  });
   const instructions = buildCompactClaudeMdContent({
+    pythonEnvironment,
     projectDir: dir,
     projectName: project.name || "Untitled Project",
     clientName: project.clientName || "",
@@ -247,6 +254,8 @@ exec '${tsx}' '${mcpEntry}'
   await writeFile(join(dir, "run.sh"), `#!/bin/sh
 # Usage: ./run.sh [model] [effort]   (transcript -> transcript.jsonl)
 cd "$(dirname "$0")"
+# Same Python environments and API client as a production sandbox.
+${Object.entries(pythonEnvironment).map(([key, value]) => `export ${key}=${shellQuote(value)}`).join("\n")}
 # The bw client reads the same API env a production sandbox gets.
 BIDWRIGHT_AUTH_TOKEN="$(sed 's/^.*=//; s/^"//; s/"$//' '${tokenFile}' | tr -d '\\n')"
 export BIDWRIGHT_AUTH_TOKEN BIDWRIGHT_API_URL='${apiUrl}' BIDWRIGHT_PROJECT_ID='${projectId}'
@@ -274,6 +283,7 @@ claude -p "$(cat prompt.txt)" \\
       "mcp_servers.bidwright.startup_timeout_sec": 60,
       "mcp_servers.bidwright.tool_timeout_sec": 180,
       "model_reasoning_effort": "medium",
+      "shell_environment_policy.set": pythonEnvironment,
       "approval_policy": "never",
       "sandbox_workspace_write.network_access": true,
     };
@@ -288,7 +298,6 @@ claude -p "$(cat prompt.txt)" \\
     const toml = (value: unknown): string => value && typeof value === "object" && !Array.isArray(value)
       ? `{ ${Object.entries(value).map(([key, item]) => `${JSON.stringify(key)} = ${toml(item)}`).join(", ")} }`
       : JSON.stringify(value);
-    const shellQuote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
     const overrides = Object.entries(config).map(([key, value]) => `${key}=${toml(value)}`);
     await writeFile(join(dir, "codex-config.toml"), overrides.join("\n") + "\n");
     const environment = (await readFile(join(dir, "run.sh"), "utf8")).split("claude -p")[0];

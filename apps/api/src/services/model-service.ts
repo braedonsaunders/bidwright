@@ -1876,8 +1876,11 @@ async function findOrCreateModelPickup(args: {
       modelQuantityId: args.modelQuantityId,
     },
   });
+  const quantity = args.modelQuantityId
+    ? await prisma.modelQuantity.findFirst({ where: { id: args.modelQuantityId } })
+    : null;
   if (existing) {
-    const measurement = { ...((existing.measurement as Record<string, unknown>) ?? {}), ...args.measurementPatch };
+    const measurement = { ...((existing.measurement as Record<string, unknown>) ?? {}), ...args.measurementPatch, unit: quantity?.unit ?? (args.selection as any)?.unit ?? (existing.measurement as any)?.unit ?? "" };
     return prisma.pickup.update({
       where: { id: existing.id },
       data: {
@@ -1891,9 +1894,6 @@ async function findOrCreateModelPickup(args: {
   const element = args.modelElementId
     ? await prisma.modelElement.findFirst({ where: { id: args.modelElementId } })
     : null;
-  const quantity = args.modelQuantityId
-    ? await prisma.modelQuantity.findFirst({ where: { id: args.modelQuantityId } })
-    : null;
   const label =
     element?.name || element?.elementClass || (quantity ? `${quantity.quantityType} quantity` : "Model element");
   return prisma.pickup.create({
@@ -1906,7 +1906,7 @@ async function findOrCreateModelPickup(args: {
       label,
       color: "#8b5cf6",
       points: [] as any,
-      measurement: args.measurementPatch as any,
+      measurement: { ...args.measurementPatch, unit: quantity?.unit ?? (args.selection as any)?.unit ?? "" } as any,
       metadata: { source: "bim", method: "model-takeoff-link", measuredBy: "agent" } as any,
       sourceKind: args.sourceKind ?? "model",
       modelId: args.modelId,
@@ -1919,7 +1919,7 @@ async function findOrCreateModelPickup(args: {
 
 /** Compose a legacy ModelTakeoffLink row from a PickupLink + its pickup. */
 function composeModelLinkRow(link: any, pickup: any, extras?: { modelElement?: any; modelQuantity?: any; worksheetItem?: any }) {
-  return mapModelTakeoffLink({
+  return { pickupId: pickup?.id ?? link.pickupId, ...mapModelTakeoffLink({
     id: link.id,
     projectId: link.projectId,
     modelId: pickup?.modelId ?? "",
@@ -1935,7 +1935,7 @@ function composeModelLinkRow(link: any, pickup: any, extras?: { modelElement?: a
     modelElement: extras?.modelElement ?? null,
     modelQuantity: extras?.modelQuantity ?? null,
     worksheetItem: extras?.worksheetItem ?? null,
-  });
+  }) };
 }
 
 export async function listModelTakeoffLinks(projectId: string, modelId: string) {
@@ -2074,6 +2074,7 @@ export async function createModelTakeoffLinks(projectId: string, input: {
   }
   if (validQuantities.some(quantity => !quantity.unit?.trim())) throw new Error("Model quantity units are unknown; physical worksheet links cannot be derived from these quantities.");
   const elementById = new Map(validElements.map((e) => [e.id, e]));
+  const quantityById = new Map(validQuantities.map(q => [q.id, q]));
 
   // One pickup per (element, quantity) source; create the missing ones in
   // bulk, then attach links. skipDuplicates keeps re-sends idempotent (the
@@ -2105,7 +2106,7 @@ export async function createModelTakeoffLinks(projectId: string, input: {
       label: element?.name || element?.elementClass || "Model element",
       color: "#8b5cf6",
       points: [] as any,
-      measurement: { [link.quantityField ?? "quantity"]: rawValue, value: rawValue } as any,
+      measurement: { [link.quantityField ?? "quantity"]: rawValue, value: rawValue, unit: quantityById.get(link.modelQuantityId ?? "")?.unit ?? (link.selection as any)?.unit ?? "" } as any,
       metadata: { source: "bim", method: "model-takeoff-link", measuredBy: "agent" } as any,
       sourceKind: "model",
       modelId: input.modelId,
@@ -2132,7 +2133,7 @@ export async function createModelTakeoffLinks(projectId: string, input: {
     }),
     skipDuplicates: true,
   });
-  return { count: result.count };
+  return { count: result.count, pickupIds: [...new Set(input.links.map(link => pickupByKey.get(sourceKey(link.modelElementId, link.modelQuantityId ?? null))!.id))] };
 }
 
 export async function deleteModelTakeoffLink(projectId: string, modelId: string, linkId: string) {

@@ -1,3 +1,4 @@
+import { pickupRowLinkFacts } from "../takeoff-hints.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -800,7 +801,7 @@ COMMON PITFALLS:
       if (!matches) return { isError: true, content: [{ type: "text" as const, text: "Pass matches or matchSetId." }] };
       if (matches.length === 0) {
         return {
-          content: [{ type: "text" as const, text: JSON.stringify({ savedCount: 0, message: "No matches to save" }, null, 2) }],
+          content: [{ type: "text" as const, text: JSON.stringify({ ...pickupRowLinkFacts([]), savedCount: 0, message: "No matches to save" }, null, 2) }],
         };
       }
 
@@ -820,7 +821,7 @@ COMMON PITFALLS:
           type: "text" as const,
           text: JSON.stringify({
             savedCount: result.savedCount,
-            pickupIds: result.pickupIds,
+            ...pickupRowLinkFacts(result.pickupIds),
             totalMatches: matches.length,
             label,
             color,
@@ -1273,6 +1274,7 @@ COMMON PITFALLS: Do not save every raw detection automatically. Save accepted de
         content: [{
           type: "text" as const,
           text: JSON.stringify({
+            ...pickupRowLinkFacts((result.annotations ?? []).map((pickup: any) => pickup.id)),
             savedCount: result.savedCount ?? 0,
             requestedCount: detections.length,
             groupName,

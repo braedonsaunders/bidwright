@@ -1,3 +1,4 @@
+import { assertTakeoffUnits, takeoffError, takeoffRowId, takeoffUnitKey, type WorksheetTakeoffInput } from "./services/worksheet-takeoff.js";
 import { mutateWorkspaceStateLocked, patchTakeoffCalibrations, type CalibrationChange } from "./services/takeoff-calibration-state.js";
 import { randomUUID, createHash } from "node:crypto";
 import { hashPassword } from "./services/auth-service.js";
@@ -269,6 +270,7 @@ import {
   mapSummaryRow,
   mapPickup,
   mapPickupLink,
+  rowTakeoffSummary,
   mapSymbolTemplate,
   mapUser,
   mapWorksheet,
@@ -770,6 +772,8 @@ export interface QuotePatchInput {
 }
 
 export interface WorksheetItemPatchInput {
+  /** Replaces the row link set; omitted preserves it. Linked quantities win. */
+  takeoff?: WorksheetTakeoffInput[];
   worksheetId?: string;
   phaseId?: string | null;
   categoryId?: string | null;
@@ -806,6 +810,8 @@ export interface WorksheetItemMutationContext {
 }
 
 export interface CreateWorksheetItemInput {
+  /** Replaces the row link set; omitted preserves it. Linked quantities win. */
+  takeoff?: WorksheetTakeoffInput[];
   phaseId?: string | null;
   categoryId?: string | null;
   category: string;
@@ -3424,7 +3430,13 @@ export class PrismaApiStore {
     const jobs = await this.db.job.findMany({ where: { projectId } });
     const fileNodes = await this.db.fileNode.findMany({ where: { projectId } });
     const pluginExecutions = await this.db.pluginExecution.findMany({ where: { projectId } });
-    const pickupLinks = await this.db.pickupLink.findMany({ where: { projectId } });
+    const pickupLinks = await this.db.pickupLink.findMany({ where: { projectId }, include: { pickup: { select: { label: true, measurement: true } } } });
+    const linksByItem = new Map<string, typeof pickupLinks>();
+    for (const link of pickupLinks) {
+      const links = linksByItem.get(link.worksheetItemId) ?? [];
+      links.push(link);
+      linksByItem.set(link.worksheetItemId, links);
+    }
     const scheduleTasks = await this.db.scheduleTask.findMany({ where: { projectId } });
     const scheduleTaskIds = scheduleTasks.map((t) => t.id);
     const scheduleDependencies = scheduleTaskIds.length > 0
@@ -3470,7 +3482,7 @@ export class PrismaApiStore {
       revisions: revisions.map(mapRevision),
       worksheetFolders: worksheetFolders.map(mapWorksheetFolder),
       worksheets: worksheets.map(mapWorksheet),
-      worksheetItems: worksheetItems.map(mapWorksheetItem),
+      worksheetItems: worksheetItems.map(item => mapWorksheetItem({ ...item, pickupLinks: linksByItem.get(item.id) ?? [] })),
       phases: phases.map(mapPhase),
       estimateFactors: estimateFactors.map(mapEstimateFactor),
       adjustments: mappedAdjustments,
@@ -7448,6 +7460,93 @@ export class PrismaApiStore {
     return true;
   }
 
+  /** Row writes and their replacement link set commit or roll back together. */
+  private async writeWorksheetItemWithTakeoff(
+    projectId: string,
+    operation: { worksheetId: string; input: CreateWorksheetItemInput } | { itemId: string; patch: WorksheetItemPatchInput },
+    context: WorksheetItemMutationContext,
+  ): Promise<WorksheetItemMutationResult> {
+    const write = async (store: PrismaApiStore): Promise<WorksheetItemMutationResult> => {
+      await store.requireProject(projectId);
+      const input = "input" in operation ? operation.input : operation.patch;
+      const itemId = "input" in operation ? takeoffRowId(projectId, operation.worksheetId, input) : operation.itemId;
+      const lockKey = `worksheet-takeoff:${projectId}:${itemId}`;
+      await store.db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`;
+      const existing = await store.db.worksheetItem.findFirst({ where: { id: itemId }, include: { entityCategory: true } });
+      if ("input" in operation && existing) {
+        const resolved = await store.resolveCurrentRevisionTotals(projectId);
+        if (!resolved) throw takeoffError("Current revision not found.");
+        return { item: await store.withRowTakeoff(projectId, mapWorksheetItem(existing), input.quantity), snapshot: { currentRevision: resolved.mappedRevision, estimateTotals: resolved.totals } };
+      }
+      let takeoff = input.takeoff;
+      if (takeoff === undefined && "patch" in operation) {
+        const links = await store.db.pickupLink.findMany({ where: { projectId, worksheetItemId: itemId } });
+        if (!links.length) return store.updateWorksheetItemWithSnapshot(projectId, itemId, operation.patch, context, true);
+        if (input.uom !== undefined && takeoffUnitKey(input.uom) !== takeoffUnitKey(existing?.uom ?? "")) {
+          throw takeoffError("Changing a linked row's unit requires takeoff with explicit conversion multipliers.");
+        }
+        takeoff = links.map(link => ({ pickupId: link.pickupId, quantityField: link.quantityField as WorksheetTakeoffInput["quantityField"], multiplier: link.multiplier }));
+      }
+      takeoff ??= [];
+      if (new Set(takeoff.map(link => link.pickupId)).size !== takeoff.length) throw takeoffError("Each pickup can occur only once in a row's takeoff array.");
+      const uom = input.uom ?? existing?.uom ?? "";
+      let quantity = 0;
+      for (const link of takeoff) {
+        const pickup = await store.db.pickup.findFirst({ where: { id: link.pickupId, projectId } });
+        if (!pickup) throw takeoffError(`Takeoff annotation ${link.pickupId} not found in project.`);
+        const measurement = (pickup.measurement ?? {}) as Record<string, unknown>;
+        const quantityField = link.quantityField ?? "value";
+        assertTakeoffUnits(measurement, uom, link.multiplier);
+        try {
+          store.assertLinkQuantityCompatible({ quantityField, explicitField: true, measurement, annotationType: pickup.annotationType, itemUom: uom });
+        } catch (error) { throw takeoffError((error as Error).message); }
+        quantity += pickupLinkQuantity(measurement, quantityField, link.multiplier ?? 1);
+        if (!Number.isFinite(quantity)) throw takeoffError("Derived takeoff quantity must be finite.");
+      }
+      const { takeoff: _takeoff, ...fields } = input;
+      const result = "input" in operation
+        ? await store.createWorksheetItemWithSnapshot(projectId, operation.worksheetId, { ...fields, quantity } as CreateWorksheetItemInput, context, itemId)
+        : await store.updateWorksheetItemWithSnapshot(projectId, itemId, { ...fields, quantity }, context, true);
+      // Replacement semantics make updates (including HTTP retries) idempotent.
+      await store.db.pickupLink.deleteMany({ where: { projectId, worksheetItemId: itemId, pickupId: { notIn: takeoff.map(link => link.pickupId) } } });
+      for (const link of takeoff) {
+        const pickup = await store.db.pickup.findFirst({ where: { id: link.pickupId, projectId } });
+        const measurement = (pickup!.measurement ?? {}) as Record<string, unknown>;
+        assertTakeoffUnits(measurement, result.item.uom, link.multiplier);
+        store.assertLinkQuantityCompatible({ quantityField: link.quantityField ?? "value", explicitField: true, measurement, annotationType: pickup!.annotationType, itemUom: result.item.uom });
+        const quantityField = link.quantityField ?? "value";
+        const multiplier = link.multiplier ?? 1;
+        const data = { quantityField, multiplier, derivedQuantity: pickupLinkQuantity(measurement, quantityField, multiplier) };
+        await store.db.pickupLink.upsert({
+          where: { pickupId_worksheetItemId: { pickupId: link.pickupId, worksheetItemId: itemId } },
+          create: { id: createId("tlink"), projectId, pickupId: link.pickupId, worksheetItemId: itemId, ...data }, update: data,
+        });
+      }
+      await store.recalcLinkedItemQuantity(itemId, projectId);
+      const saved = await store.db.worksheetItem.findFirst({ where: { id: itemId }, include: { entityCategory: true } });
+      const resolved = await store.resolveCurrentRevisionTotals(projectId);
+      return { item: await store.withRowTakeoff(projectId, mapWorksheetItem(saved), input.quantity), snapshot: { currentRevision: resolved!.mappedRevision, estimateTotals: resolved!.totals } };
+    };
+    // Prisma's interactive transaction client has no $transaction method.
+    if (typeof this.db.$transaction !== "function") return write(this);
+    return this.db.$transaction(async tx => {
+      const store = new PrismaApiStore(tx as unknown as PrismaClient, this.organizationId);
+      store._userId = this._userId;
+      store._activityActor = this._activityActor;
+      return write(store);
+    }, { timeout: 120_000, maxWait: 15_000 });
+  }
+
+  private async withRowTakeoff(projectId: string, item: WorksheetItem, requestedQuantity?: number): Promise<WorksheetItem> {
+    const links = await this.db.pickupLink.findMany({ where: { projectId, worksheetItemId: item.id }, include: { pickup: { select: { label: true, measurement: true } } } });
+    return {
+      ...item, takeoff: links.map(rowTakeoffSummary),
+      takeoffFact: requestedQuantity !== undefined && requestedQuantity !== item.quantity
+        ? `Linked takeoff quantity ${item.quantity} ${item.uom} replaces supplied quantity ${requestedQuantity}.`
+        : `Row quantity ${item.quantity} ${item.uom} is derived from ${links.length} takeoff marks.`,
+    };
+  }
+
   async createWorksheetItem(projectId: string, worksheetId: string, input: CreateWorksheetItemInput, context: WorksheetItemMutationContext = {}) {
     return (await this.createWorksheetItemWithSnapshot(projectId, worksheetId, input, context)).item;
   }
@@ -7476,7 +7575,9 @@ export class PrismaApiStore {
     worksheetId: string,
     input: CreateWorksheetItemInput,
     context: WorksheetItemMutationContext = {},
+    takeoffItemId?: string,
   ): Promise<WorksheetItemMutationResult> {
+    if (input.takeoff !== undefined) return this.writeWorksheetItemWithTakeoff(projectId, { worksheetId, input }, context);
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     let worksheet = await this.db.worksheet.findFirst({ where: { id: worksheetId } });
@@ -7527,7 +7628,7 @@ export class PrismaApiStore {
     const costCode = stringValue(normalizedInput.costCode) ?? costCodeFromClassification(classification);
 
     const item: WorksheetItem = {
-      id: createId("li"),
+      id: takeoffItemId ?? createId("li"),
 	      worksheetId,
 	      phaseId: normalizedInput.phaseId ?? null,
 	      categoryId: catDef.id,
@@ -7904,7 +8005,11 @@ export class PrismaApiStore {
     itemId: string,
     patch: WorksheetItemPatchInput,
     context: WorksheetItemMutationContext = {},
+    takeoffResolved = false,
   ): Promise<WorksheetItemMutationResult> {
+    if (!takeoffResolved && (patch.takeoff !== undefined || patch.quantity !== undefined || patch.uom !== undefined)) {
+      return this.writeWorksheetItemWithTakeoff(projectId, { itemId, patch }, context);
+    }
     await this.requireProject(projectId);
     const { revision } = await this.findCurrentRevision(projectId);
     const item = await this.db.worksheetItem.findFirst({
@@ -8634,7 +8739,7 @@ export class PrismaApiStore {
     const { revision } = await this.findCurrentRevision(projectId);
     const item = await this.db.worksheetItem.findFirst({
       where: { id: itemId },
-      include: { entityCategory: true, worksheet: { select: { id: true, name: true, revisionId: true } } },
+      include: { entityCategory: true, pickupLinks: { include: { pickup: true } }, worksheet: { select: { id: true, name: true, revisionId: true } } },
     });
     if (!item || !revision || item.worksheet.revisionId !== revision.id) {
       throw new Error(`Worksheet item ${itemId} not found for project ${projectId}`);
@@ -8651,6 +8756,7 @@ export class PrismaApiStore {
       entityName: mapped.entityName,
       category: mapped.category,
       quantity: mapped.quantity,
+      takeoff: mapped.takeoff ?? [],
       uom: mapped.uom,
       tierUnits: mapped.tierUnits ?? {},
       cost: mapped.cost,
@@ -15104,8 +15210,11 @@ export class PrismaApiStore {
     const where: any = { projectId };
     if (documentId) where.documentId = documentId;
     if (pageNumber !== undefined) where.pageNumber = pageNumber;
-    const rows = await this.db.pickup.findMany({ where, orderBy: { createdAt: "asc" } });
-    return rows.map(mapPickup);
+    const rows = await this.db.pickup.findMany({ where, include: { pickupLinks: { include: { worksheetItem: true } } }, orderBy: { createdAt: "asc" } });
+    return rows.map(row => ({ ...mapPickup(row), linkedRows: row.pickupLinks.map(link => ({
+      itemId: link.worksheetItemId, label: link.worksheetItem.entityName, derivedQuantity: link.derivedQuantity,
+      unit: link.worksheetItem.uom, quantityField: link.quantityField, multiplier: link.multiplier,
+    })) }));
   }
 
   /** Fill measurement provenance when the caller didn't state it. An
@@ -15369,7 +15478,7 @@ export class PrismaApiStore {
 
   /** Dimension implied by a worksheet item's UoM, or "" when ambiguous. */
   private uomDimension(uom: string): string {
-    const u = uom.trim().toUpperCase().replace(/[.\s]/g, "");
+    const u = takeoffUnitKey(uom).toUpperCase();
     if (["EA", "EACH", "PC", "PCS", "CT", "COUNT", "UN", "UNIT", "UNITS"].includes(u)) return "count";
     if (["LF", "LM", "FT", "M", "MM", "CM", "IN", "YD", "FT'", "'"].includes(u)) return "length";
     if (["SF", "SM", "SY", "FT2", "FT²", "M2", "M²", "SQFT", "SQM"].includes(u)) return "area";
@@ -15402,7 +15511,7 @@ export class PrismaApiStore {
         }`,
       );
     }
-    const linkDim = this.linkQuantityDimension(args.quantityField, args.annotationType);
+    const linkDim = this.linkQuantityDimension(args.quantityField, args.annotationType) || this.uomDimension(String(args.measurement.unit ?? ""));
     const itemDim = this.uomDimension(args.itemUom);
     if (linkDim && itemDim && linkDim !== itemDim) {
       throw new Error(
@@ -15418,12 +15527,13 @@ export class PrismaApiStore {
     if (worksheetItemId) where.worksheetItemId = worksheetItemId;
     const rows = await this.db.pickupLink.findMany({
       where,
-      include: { pickup: true },
+      include: { pickup: true, worksheetItem: true },
       orderBy: { createdAt: "asc" },
     });
     return rows.map((r: any) => ({
       ...mapPickupLink(r),
       pickup: r.pickup ? mapPickup(r.pickup) : undefined,
+      row: r.worksheetItem ? { id: r.worksheetItem.id, label: r.worksheetItem.entityName, unit: r.worksheetItem.uom } : undefined,
     }));
   }
 

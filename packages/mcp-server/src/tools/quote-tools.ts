@@ -552,8 +552,14 @@ function compactRateScheduleItem(item: any, schedule: any, options: { includeRat
   return compactRateItem(item, schedule, { includeRates: options.includeRates !== false });
 }
 
+const worksheetTakeoff = z.array(z.object({
+  pickupId: z.string(), quantityField: z.enum(["value", "area", "volume", "count"]).optional(),
+  multiplier: z.number().finite().positive().optional(),
+})).max(1000).optional().describe("Saved marks driving the row quantity. Example: takeoff:[{pickupId:'takeoff-1'},{pickupId:'takeoff-2'}]. Sum of linked quantities overrides quantity. Units must match or have an explicit conversion multiplier; pixels cannot price a row. On update this replaces all links; [] clears links and sets quantity to 0; omitted preserves links. Exact create retries reuse the row.");
+
 /** Parameter shape of createWorksheetItem; shared with batchEditWorksheetItems. */
 const createWorksheetItemShape = {
+  takeoff: worksheetTakeoff,
   worksheetId: z.string().describe("ID of the worksheet"),
   entityName: z.string().describe("Item name — for rate_schedule items, use ONLY the rate item name (e.g. 'Trade Labour'). Put task details in description."),
   categoryId: z.string().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this over category name so renames cannot affect the row."),
@@ -608,6 +614,7 @@ const createWorksheetItemShape = {
 
 /** Parameter shape of updateWorksheetItem; shared with batchEditWorksheetItems. */
 const updateWorksheetItemShape = {
+  takeoff: worksheetTakeoff,
   itemId: z.string().describe("Line item ID"),
   entityName: z.string().optional(),
   categoryId: z.string().nullable().optional().describe("Stable EntityCategory ID from getItemConfig. Prefer this when changing category."),
@@ -812,7 +819,7 @@ function worksheetTreeSummary(ws: any) {
     cost: input.cost ?? null,
     price: input.price ?? null,
     uom: input.uom ?? null,
-    quantity: input.quantity ?? null,
+    quantity: input.takeoff !== undefined ? null : input.quantity ?? null,
   });
   if (integrityError) return { error: integrityError };
 
@@ -1008,7 +1015,7 @@ function worksheetTreeSummary(ws: any) {
       cost: Number.isFinite(merged.cost) ? Number(merged.cost) : null,
       price: Number.isFinite(merged.price) ? Number(merged.price) : null,
       uom: merged.uom ?? null,
-      quantity: Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
+      quantity: patch.takeoff !== undefined ? null : Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
     });
     if (integrityError) return { error: integrityError };
   }
@@ -1050,6 +1057,7 @@ function worksheetTreeSummary(ws: any) {
           folderId: w.folderId ?? null,
           path: [folderPath(ws, w.folderId), w.name].filter(Boolean).join(" / "),
           itemCount: (w.items || []).length,
+          linkedRows: (w.items || []).filter((item: any) => item.takeoff?.length).map((item: any) => ({ id: item.id, label: item.entityName, quantity: item.quantity, unit: item.uom, takeoff: item.takeoff })),
           labourHours: worksheetLabourHours(ws, w),
           structuredSourceCount: (w.items || []).filter((item: any) =>
             item.rateScheduleItemId ||
@@ -1467,7 +1475,7 @@ function worksheetTreeSummary(ws: any) {
       if ("error" in prepared) return { content: [{ type: "text" as const, text: prepared.error }], isError: true };
       const { worksheetId, body, rest, cat, autoWarnings } = prepared;
       try {
-        const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items`), body);
+        const data = await apiPost(projectPath(`/worksheets/${worksheetId}/items?response=delta`), body);
         invalidateWs();
         const createdItem = findCreatedWorksheetItem(data, worksheetId, rest);
         const itemId = String(createdItem.id ?? (data as any)?.id ?? (data as any)?.item?.id ?? "");
@@ -1478,8 +1486,10 @@ function worksheetTreeSummary(ws: any) {
           entityName: rest.entityName,
           category: cat,
           categoryId: body.categoryId ?? null,
-          quantity: rest.quantity,
-          uom: rest.uom,
+          quantity: createdItem.quantity ?? rest.quantity,
+          takeoff: createdItem.takeoff,
+          takeoffFact: createdItem.takeoffFact,
+          uom: createdItem.uom ?? rest.uom,
           calculation: "system_calculated",
           sourceNotes: rest.sourceNotes ?? "",
           warnings: autoWarnings,
@@ -1495,6 +1505,7 @@ function worksheetTreeSummary(ws: any) {
     "createRateScheduleWorksheetItem",
     "Create a system-calculated rate-schedule worksheet row with a smaller safer payload. Use this for Labour, Equipment, Rental Equipment, and General Conditions rate-card rows instead of the broad createWorksheetItem tool. Provide a concrete rateScheduleItemId and positive tierUnits; Bidwright derives the category/name from the imported rate schedule and calculates cost/sell. Do not pass cost, price, or markup.",
     {
+      takeoff: worksheetTakeoff,
       worksheetId: z.string().describe("ID of the worksheet"),
       rateScheduleItemId: z.string().describe("Concrete imported revision rate schedule item ID from listRateScheduleItems/getItemConfig"),
       tierUnits: z.record(z.coerce.number()).describe("Units per rate tier. Keys are tier IDs from getItemConfig/listRateScheduleItems, values are positive units per quantity."),
@@ -1587,7 +1598,7 @@ function worksheetTreeSummary(ws: any) {
         derivation: input.derivation ?? null,
         tierUnits: positiveTierUnits,
         uom: input.uom ?? null,
-        quantity: input.quantity ?? null,
+        quantity: input.takeoff !== undefined ? null : input.quantity ?? null,
       });
       if (integrityError) return { content: [{ type: "text" as const, text: integrityError }], isError: true };
 
@@ -1597,6 +1608,7 @@ function worksheetTreeSummary(ws: any) {
         category: String(categoryMatch.name ?? scheduleCategory),
         entityType: String(categoryMatch.entityType ?? scheduleCategory),
         description: stripLeakedToolParameterMarkup(input.description),
+        takeoff: input.takeoff,
         quantity: input.quantity,
         uom: input.uom || String(categoryMatch.defaultUom ?? "HR"),
         tierUnits: positiveTierUnits,
@@ -1615,7 +1627,7 @@ function worksheetTreeSummary(ws: any) {
       };
 
       try {
-        const data = await apiPost(projectPath(`/worksheets/${input.worksheetId}/items`), body);
+        const data = await apiPost(projectPath(`/worksheets/${input.worksheetId}/items?response=delta`), body);
         invalidateWs();
         const createdItem = findCreatedWorksheetItem(data, input.worksheetId, body);
         const itemId = String(createdItem.id ?? (data as any)?.id ?? (data as any)?.item?.id ?? "");
@@ -1626,8 +1638,10 @@ function worksheetTreeSummary(ws: any) {
           entityName: body.entityName,
           category: body.category,
           categoryId: body.categoryId,
-          quantity: body.quantity,
-          uom: body.uom,
+          quantity: createdItem.quantity ?? body.quantity,
+          takeoff: createdItem.takeoff,
+          takeoffFact: createdItem.takeoffFact,
+          uom: createdItem.uom ?? body.uom,
           calculation: "system_calculated",
           sourceNotes: body.sourceNotes ?? "",
           warnings: [],
@@ -1648,7 +1662,7 @@ function worksheetTreeSummary(ws: any) {
       const prepared = await prepareUpdateWorksheetItem(itemId, catalogItemId, patch);
       if ("error" in prepared) return { content: [{ type: "text" as const, text: prepared.error }], isError: true };
       patch = prepared.patch as any;
-      const data = await apiPatch(projectPath(`/worksheet-items/${itemId}`), patch);
+      const data = await apiPatch(projectPath(`/worksheet-items/${itemId}?response=delta`), patch);
       invalidateWs();
       const updated = (data as any)?.item || (data as any)?.worksheetItem || data || {};
       return { content: [{ type: "text" as const, text: toolUiText(`Updated item ${itemId}`, {
@@ -1661,6 +1675,8 @@ function worksheetTreeSummary(ws: any) {
         uom: updated.uom ?? (patch as any).uom ?? null,
         unitCost: updated.cost ?? (patch as any).cost ?? null,
         unitPrice: updated.price ?? (patch as any).price ?? null,
+        takeoff: updated.takeoff,
+        takeoffFact: updated.takeoffFact,
         fields: Object.keys(patch),
         patch,
       }) }] };
@@ -1755,7 +1771,7 @@ function worksheetTreeSummary(ws: any) {
         return { content: [{ type: "text" as const, text: toolUiText(`Applied ${results.length} worksheet operations atomically.`, {
           kind: "worksheet_items.batch_applied",
           applied: results.length,
-          results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId })),
+          results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId, quantity: entry.item?.quantity, uom: entry.item?.uom, takeoff: entry.item?.takeoff, takeoffFact: entry.item?.takeoffFact })),
           estimateTotals: data?.estimateTotals ?? null,
         }) }] };
       } catch (error) {
@@ -2112,6 +2128,7 @@ function worksheetTreeSummary(ws: any) {
           entityName: compactText(item.entityName, 90),
           description: compactText(item.description, 140),
           quantity: item.quantity,
+          takeoff: item.takeoff ?? [],
           uom: item.uom,
           cost: item.cost,
           markup: item.markup,

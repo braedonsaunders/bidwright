@@ -1,4 +1,4 @@
-import { modelQuantityTakeoffHint } from "../takeoff-hints.js";
+import { modelQuantityTakeoffHint, pickupRowLinkFacts } from "../takeoff-hints.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { apiDelete, apiGet, apiPost, getProjectId, projectPath } from "../api-client.js";
@@ -695,12 +695,14 @@ This is the agent equivalent of Takeoff Studio's explicit Add group action. It u
           },
         };
       });
+      const pickupIds: string[] = [];
       try {
         for (let offset = 0; offset < links.length; offset += 500) {
-          await apiPost(`/api/models/${projectId}/assets/${input.modelId}/takeoff-links/bulk`, {
+          const linked = await apiPost<any>(`/api/models/${projectId}/assets/${input.modelId}/takeoff-links/bulk`, {
             worksheetItemId: createdItem.id,
             links: links.slice(offset, offset + 500),
           });
+          pickupIds.push(...(linked.pickupIds ?? []));
         }
       } catch (error) {
         await apiDelete(projectPath(`/worksheet-items/${createdItem.id}`)).catch(() => undefined);
@@ -724,6 +726,7 @@ This is the agent equivalent of Takeoff Studio's explicit Add group action. It u
               unit: group.unit,
               memberCount: elements.length,
             },
+            ...pickupRowLinkFacts(pickupIds),
             linksCreated: links.length,
             worksheetItem: createdItem,
           }, null, 2),
@@ -759,6 +762,7 @@ Call createWorksheetItem first when a new estimate row is needed, then call this
                 created: true,
                 modelId,
                 link: result.link ?? result,
+                ...pickupRowLinkFacts([result.link?.pickupId ?? result.pickupId].filter(Boolean)),
               },
               null,
               2,
