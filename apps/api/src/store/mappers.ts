@@ -380,16 +380,16 @@ function normalizeRateResolution(raw: unknown): WorksheetItem["rateResolution"] 
   };
 }
 
-export function rowTakeoffSummary(link: any) {
-  const measurement = link.pickup?.measurement ?? {};
-  return { pickupId: link.pickupId, label: link.pickup?.label ?? "", quantity: measurement[link.quantityField] ?? measurement.value ?? 0,
-    unit: measurement.unit ?? "", derivedQuantity: link.derivedQuantity, quantityField: link.quantityField, multiplier: link.multiplier };
+/** Row reads stay bounded even when a BIM row has thousands of links. */
+export function rowTakeoffSummary(links: Array<{ pickupId: string; derivedQuantity: number }>, unit: string) {
+  return { count: links.length, sum: links.reduce((sum, link) => sum + Number(link.derivedQuantity ?? 0), 0),
+    unit, pickupIds: links.slice(0, 5).map(link => link.pickupId) };
 }
 
 export function mapWorksheetItem(i: any): WorksheetItem {
   const categoryRef = i.entityCategory ?? i.categoryRef ?? null;
   return {
-    ...(i.pickupLinks ? { takeoff: i.pickupLinks.map(rowTakeoffSummary) } : {}),
+    ...(i.pickupLinks ? { takeoff: rowTakeoffSummary(i.pickupLinks, i.uom) } : {}),
     id: i.id,
     worksheetId: i.worksheetId,
     phaseId: i.phaseId ?? null,

@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PROCESS_PATH } from "@braedonsaunders/appkit-process-sandbox";
 
@@ -19,7 +20,7 @@ export function agentPythonEnvironment(
     BIDWRIGHT_CAD_PYTHON: options.cadPython ?? CAD_PYTHON,
     // Noninteractive Bash also reads this after login profiles. Reactivating
     // prevents a CLI's login shell from replacing the venv PATH with /usr/bin.
-    BASH_ENV: join(venv, "bin/activate"),
+    ...(existsSync(join(venv, "bin/activate")) ? { BASH_ENV: join(venv, "bin/activate") } : {}),
   };
 }
 

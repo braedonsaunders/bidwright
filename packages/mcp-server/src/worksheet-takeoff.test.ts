@@ -11,7 +11,7 @@ test("row tools and batch schemas retain takeoff and return the server's derived
     handlers.set(name, (args) => handler(z.object(shape).parse(args)));
   } } as any);
   const takeoff = [{ pickupId: "a" }, { pickupId: "b", multiplier: 2 }];
-  const saved = { id: "row", worksheetId: "worksheet", entityName: "Pipe", category: "Material", quantity: 20, uom: "ft", takeoff, takeoffFact: "Linked quantity 20 replaces supplied quantity 99." };
+  const saved = { id: "row", worksheetId: "worksheet", entityName: "Pipe", category: "Material", quantity: 20, uom: "ft", takeoff: { count: 2, sum: 20, unit: "ft", pickupIds: ["a", "b"] }, removedLinks: [], changedLinks: [], takeoffFact: "Linked quantity 20 replaces supplied quantity 99." };
   const workspace = {
     currentRevision: { id: "rev" }, project: { name: "test" },
     worksheets: [{ id: "worksheet", items: [saved] }],
@@ -26,17 +26,19 @@ test("row tools and batch schemas retain takeoff and return the server's derived
     if (target.pathname.endsWith("/batch")) return Response.json({ results: [{ index: 0, op: "create", itemId: "row", item: saved }] });
     return Response.json({ item: saved });
   });
+  const derivation = { version: 1, target: "quantity", formula: "length", inputs: [{ name: "length", value: 20, unit: "ft", source: { kind: "assumption", ref: "fixture" } }], result: { value: 20, unit: "ft" }, status: "draft" };
   for (const [name, input] of [
     ["createWorksheetItem", { worksheetId: "worksheet", entityName: "Pipe", categoryId: "cat", quantity: 99, uom: "ft", cost: 5, takeoff }],
     ["updateWorksheetItem", { itemId: "row", quantity: 99, takeoff }],
     ["createRateScheduleWorksheetItem", { worksheetId: "worksheet", rateScheduleItemId: "rate", evidenceBasis: {}, tierUnits: { tier: 1 }, quantity: 99, uom: "ft", takeoff }],
   ] as const) {
-    const response = await handlers.get(name)!(input);
+    const response = await handlers.get(name)!({ ...input, derivation });
     assert.ok(!response.isError, response.content[0].text);
     assert.deepEqual(writes.at(-1).body.takeoff, takeoff, name);
     assert.equal(writes.at(-1).query, "?response=delta");
     assert.match(response.content[0].text, /"quantity":\s*20/);
     assert.match(response.content[0].text, /takeoffFact/);
+    assert.match(response.content[0].text, /removedLinks/);
   }
   const batch = await handlers.get("batchEditWorksheetItems")!({ operations: [{ op: "create", worksheetId: "worksheet", item: { entityName: "Pipe", categoryId: "cat", uom: "ft", takeoff } }] });
   assert.ok(!batch.isError, batch.content[0].text);
@@ -44,6 +46,7 @@ test("row tools and batch schemas retain takeoff and return the server's derived
   assert.match(batch.content[0].text, /takeoffFact/);
   const read = await handlers.get("getWorkspace")!({});
   assert.match(read.content[0].text, /linkedRows/);
+  assert.match(read.content[0].text, /"count":\s*2/);
 });
 
 test("pickup hints report pickup IDs from each saved-tool shape, never link IDs", () => {

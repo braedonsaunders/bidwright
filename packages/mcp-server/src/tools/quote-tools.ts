@@ -423,6 +423,7 @@ export async function rowWriteIntegrityProblem(ws: any, input: {
   evidenceBasis?: Record<string, any> | null;
   derivation?: Record<string, any> | null;
   quantity?: number | null;
+  linkedQuantityPending?: boolean;
   uom?: string | null;
   tierUnits?: Record<string, number> | null;
   cost?: number | null;
@@ -469,7 +470,8 @@ export async function rowWriteIntegrityProblem(ws: any, input: {
     const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
     const tierUnitTotal = Object.values(input.tierUnits ?? {}).reduce((sum, value) => sum + (Number.isFinite(Number(value)) ? Number(value) : 0), 0);
     const target = derivation.target ?? "quantity";
-    const expectedValue = target === "tierUnits" ? tierUnitTotal * (quantity || 1)
+    // The server compares quantity-target derivations once the takeoff sum is known.
+    const expectedValue = input.linkedQuantityPending && target === "quantity" ? null : target === "tierUnits" ? tierUnitTotal * (quantity || 1)
       : target === "cost" ? (Number.isFinite(input.cost) ? Number(input.cost) : null)
       : target === "price" ? (Number.isFinite(input.price) ? Number(input.price) : null)
       : quantity;
@@ -555,7 +557,7 @@ function compactRateScheduleItem(item: any, schedule: any, options: { includeRat
 const worksheetTakeoff = z.array(z.object({
   pickupId: z.string(), quantityField: z.enum(["value", "area", "volume", "count"]).optional(),
   multiplier: z.number().finite().positive().optional(),
-})).max(1000).optional().describe("Saved marks driving the row quantity. Example: takeoff:[{pickupId:'takeoff-1'},{pickupId:'takeoff-2'}]. Sum of linked quantities overrides quantity. Units must match or have an explicit conversion multiplier; pixels cannot price a row. On update this replaces all links; [] clears links and sets quantity to 0; omitted preserves links. Exact create retries reuse the row.");
+})).max(1000).optional().describe("Saved marks driving the row quantity. Example: takeoff:[{pickupId:'takeoff-1'},{pickupId:'takeoff-2'}]. Sum of linked quantities overrides quantity. Units must match or have an explicit conversion multiplier; pixels cannot price a row. On update this replaces all links; [] clears links and sets quantity to 0; omitted preserves links and ordinary quantity/unit editing. Retained links preserve omitted multiplier/quantityField. Replacements return removedLinks/changedLinks with pickup authorship and record activity. Row reads summarize links; listPickups provides full detail. Identical create payloads reuse the same row, including intentional identical creates; use distinct description or sourceNotes for distinct rows.");
 
 /** Parameter shape of createWorksheetItem; shared with batchEditWorksheetItems. */
 const createWorksheetItemShape = {
@@ -788,12 +790,14 @@ function worksheetTreeSummary(ws: any) {
     price?: number | null;
     uom?: string | null;
     quantity?: number | null;
+    linkedQuantityPending?: boolean;
   }): Promise<string | null> {
     const ws = await getWs();
     return rowWriteIntegrityProblem(ws, {
       evidenceBasis: row.evidenceBasis ?? null,
       derivation: row.derivation ?? null,
       quantity: row.quantity ?? null,
+      linkedQuantityPending: row.linkedQuantityPending,
       uom: row.uom ?? null,
       tierUnits: row.tierUnits ?? null,
       cost: row.cost ?? null,
@@ -819,7 +823,8 @@ function worksheetTreeSummary(ws: any) {
     cost: input.cost ?? null,
     price: input.price ?? null,
     uom: input.uom ?? null,
-    quantity: input.takeoff !== undefined ? null : input.quantity ?? null,
+    quantity: input.quantity ?? null,
+    linkedQuantityPending: input.takeoff !== undefined,
   });
   if (integrityError) return { error: integrityError };
 
@@ -1015,7 +1020,8 @@ function worksheetTreeSummary(ws: any) {
       cost: Number.isFinite(merged.cost) ? Number(merged.cost) : null,
       price: Number.isFinite(merged.price) ? Number(merged.price) : null,
       uom: merged.uom ?? null,
-      quantity: patch.takeoff !== undefined ? null : Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
+      quantity: Number.isFinite(merged.quantity) ? Number(merged.quantity) : null,
+      linkedQuantityPending: patch.takeoff !== undefined,
     });
     if (integrityError) return { error: integrityError };
   }
@@ -1057,7 +1063,7 @@ function worksheetTreeSummary(ws: any) {
           folderId: w.folderId ?? null,
           path: [folderPath(ws, w.folderId), w.name].filter(Boolean).join(" / "),
           itemCount: (w.items || []).length,
-          linkedRows: (w.items || []).filter((item: any) => item.takeoff?.length).map((item: any) => ({ id: item.id, label: item.entityName, quantity: item.quantity, unit: item.uom, takeoff: item.takeoff })),
+          linkedRows: (w.items || []).filter((item: any) => item.takeoff?.count).map((item: any) => ({ id: item.id, label: item.entityName, quantity: item.quantity, unit: item.uom, takeoff: item.takeoff })),
           labourHours: worksheetLabourHours(ws, w),
           structuredSourceCount: (w.items || []).filter((item: any) =>
             item.rateScheduleItemId ||
@@ -1489,6 +1495,7 @@ function worksheetTreeSummary(ws: any) {
           quantity: createdItem.quantity ?? rest.quantity,
           takeoff: createdItem.takeoff,
           takeoffFact: createdItem.takeoffFact,
+          removedLinks: createdItem.removedLinks, changedLinks: createdItem.changedLinks,
           uom: createdItem.uom ?? rest.uom,
           calculation: "system_calculated",
           sourceNotes: rest.sourceNotes ?? "",
@@ -1598,7 +1605,8 @@ function worksheetTreeSummary(ws: any) {
         derivation: input.derivation ?? null,
         tierUnits: positiveTierUnits,
         uom: input.uom ?? null,
-        quantity: input.takeoff !== undefined ? null : input.quantity ?? null,
+        quantity: input.quantity ?? null,
+        linkedQuantityPending: input.takeoff !== undefined,
       });
       if (integrityError) return { content: [{ type: "text" as const, text: integrityError }], isError: true };
 
@@ -1641,6 +1649,7 @@ function worksheetTreeSummary(ws: any) {
           quantity: createdItem.quantity ?? body.quantity,
           takeoff: createdItem.takeoff,
           takeoffFact: createdItem.takeoffFact,
+          removedLinks: createdItem.removedLinks, changedLinks: createdItem.changedLinks,
           uom: createdItem.uom ?? body.uom,
           calculation: "system_calculated",
           sourceNotes: body.sourceNotes ?? "",
@@ -1677,6 +1686,7 @@ function worksheetTreeSummary(ws: any) {
         unitPrice: updated.price ?? (patch as any).price ?? null,
         takeoff: updated.takeoff,
         takeoffFact: updated.takeoffFact,
+        removedLinks: updated.removedLinks, changedLinks: updated.changedLinks,
         fields: Object.keys(patch),
         patch,
       }) }] };
@@ -1771,7 +1781,7 @@ function worksheetTreeSummary(ws: any) {
         return { content: [{ type: "text" as const, text: toolUiText(`Applied ${results.length} worksheet operations atomically.`, {
           kind: "worksheet_items.batch_applied",
           applied: results.length,
-          results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId, quantity: entry.item?.quantity, uom: entry.item?.uom, takeoff: entry.item?.takeoff, takeoffFact: entry.item?.takeoffFact })),
+          results: results.map((entry) => ({ index: entry.index, ref: entry.ref ?? null, op: entry.op, itemId: entry.itemId, quantity: entry.item?.quantity, uom: entry.item?.uom, takeoff: entry.item?.takeoff, takeoffFact: entry.item?.takeoffFact, removedLinks: entry.item?.removedLinks, changedLinks: entry.item?.changedLinks })),
           estimateTotals: data?.estimateTotals ?? null,
         }) }] };
       } catch (error) {
@@ -2128,7 +2138,7 @@ function worksheetTreeSummary(ws: any) {
           entityName: compactText(item.entityName, 90),
           description: compactText(item.description, 140),
           quantity: item.quantity,
-          takeoff: item.takeoff ?? [],
+          takeoff: item.takeoff,
           uom: item.uom,
           cost: item.cost,
           markup: item.markup,

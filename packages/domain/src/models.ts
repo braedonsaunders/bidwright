@@ -247,7 +247,10 @@ export interface WorksheetItemSourceEvidence {
 }
 
 export interface WorksheetItem {
-  takeoff?: Array<{ pickupId: string; label: string; quantity: number; unit: string; derivedQuantity: number; quantityField: string; multiplier: number }>;
+  takeoff?: { count: number; sum: number; unit: string; pickupIds: string[] };
+  removedLinks?: Array<{ pickupId: string; quantityField: string; multiplier: number; derivedQuantity: number; measuredBy: string; editedBy: string | null }>;
+  changedLinks?: Array<{ pickupId: string; quantityField: string; multiplier: number; derivedQuantity: number; measuredBy: string; editedBy: string | null;
+    after: { quantityField: string; multiplier: number; derivedQuantity: number } }>;
   takeoffFact?: string;
   id: string;
   worksheetId: string;

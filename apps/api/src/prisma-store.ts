@@ -48,6 +48,7 @@ import {
   evaluateProcurementLink,
   markDerivationStale,
   normalizeLineDerivation,
+  validateLineDerivation,
   stageAfterSavingSections,
   normalizeCalibrationLessons,
   scoreCalibrationLesson,
@@ -3430,7 +3431,7 @@ export class PrismaApiStore {
     const jobs = await this.db.job.findMany({ where: { projectId } });
     const fileNodes = await this.db.fileNode.findMany({ where: { projectId } });
     const pluginExecutions = await this.db.pluginExecution.findMany({ where: { projectId } });
-    const pickupLinks = await this.db.pickupLink.findMany({ where: { projectId }, include: { pickup: { select: { label: true, measurement: true } } } });
+    const pickupLinks = await this.db.pickupLink.findMany({ where: { projectId } });
     const linksByItem = new Map<string, typeof pickupLinks>();
     for (const link of pickupLinks) {
       const links = linksByItem.get(link.worksheetItemId) ?? [];
@@ -7478,17 +7479,25 @@ export class PrismaApiStore {
         if (!resolved) throw takeoffError("Current revision not found.");
         return { item: await store.withRowTakeoff(projectId, mapWorksheetItem(existing), input.quantity), snapshot: { currentRevision: resolved.mappedRevision, estimateTotals: resolved.totals } };
       }
-      let takeoff = input.takeoff;
-      if (takeoff === undefined && "patch" in operation) {
-        const links = await store.db.pickupLink.findMany({ where: { projectId, worksheetItemId: itemId } });
-        if (!links.length) return store.updateWorksheetItemWithSnapshot(projectId, itemId, operation.patch, context, true);
-        if (input.uom !== undefined && takeoffUnitKey(input.uom) !== takeoffUnitKey(existing?.uom ?? "")) {
-          throw takeoffError("Changing a linked row's unit requires takeoff with explicit conversion multipliers.");
-        }
-        takeoff = links.map(link => ({ pickupId: link.pickupId, quantityField: link.quantityField as WorksheetTakeoffInput["quantityField"], multiplier: link.multiplier }));
-      }
-      takeoff ??= [];
-      if (new Set(takeoff.map(link => link.pickupId)).size !== takeoff.length) throw takeoffError("Each pickup can occur only once in a row's takeoff array.");
+      const previousLinks = await store.db.pickupLink.findMany({
+        where: { projectId, worksheetItemId: itemId }, include: { pickup: { select: { metadata: true } } },
+      });
+      const previousByPickup = new Map(previousLinks.map(link => [link.pickupId, link]));
+      const takeoff = (input.takeoff ?? []).map(link => {
+        const previous = previousByPickup.get(link.pickupId);
+        return { ...link, quantityField: link.quantityField ?? previous?.quantityField ?? "value",
+          multiplier: link.multiplier ?? previous?.multiplier };
+      });
+      const linkFact = (link: typeof previousLinks[number]) => {
+        const metadata = (link.pickup.metadata ?? {}) as Record<string, unknown>;
+        return { pickupId: link.pickupId, quantityField: link.quantityField, multiplier: link.multiplier,
+          derivedQuantity: link.derivedQuantity, measuredBy: String(metadata.measuredBy ?? "unrecorded"),
+          editedBy: typeof metadata.editedBy === "string" ? metadata.editedBy : null };
+      };
+      const nextPickupIds = new Set(takeoff.map(link => link.pickupId));
+      const removedLinks = previousLinks.filter(link => !nextPickupIds.has(link.pickupId)).map(linkFact);
+      const changedLinks: NonNullable<WorksheetItem["changedLinks"]> = [];
+      if (nextPickupIds.size !== takeoff.length) throw takeoffError("Each pickup can occur only once in a row's takeoff array.");
       const uom = input.uom ?? existing?.uom ?? "";
       let quantity = 0;
       for (const link of takeoff) {
@@ -7500,8 +7509,18 @@ export class PrismaApiStore {
         try {
           store.assertLinkQuantityCompatible({ quantityField, explicitField: true, measurement, annotationType: pickup.annotationType, itemUom: uom });
         } catch (error) { throw takeoffError((error as Error).message); }
-        quantity += pickupLinkQuantity(measurement, quantityField, link.multiplier ?? 1);
+        const derivedQuantity = pickupLinkQuantity(measurement, quantityField, link.multiplier ?? 1);
+        const previous = previousByPickup.get(link.pickupId);
+        if (previous && (previous.quantityField !== quantityField || previous.multiplier !== (link.multiplier ?? 1) || previous.derivedQuantity !== derivedQuantity)) {
+          changedLinks.push({ ...linkFact(previous), after: { quantityField, multiplier: link.multiplier ?? 1, derivedQuantity } });
+        }
+        quantity += derivedQuantity;
         if (!Number.isFinite(quantity)) throw takeoffError("Derived takeoff quantity must be finite.");
+      }
+      const derivation = normalizeLineDerivation(input.derivation);
+      if (derivation && (derivation.target ?? "quantity") === "quantity") {
+        const errors = validateLineDerivation(derivation, { expectedValue: quantity }).filter(issue => issue.severity === "error");
+        if (errors.length) throw takeoffError(`Derivation is not valid for linked quantity: ${errors.map(issue => issue.message).join(" ")}`);
       }
       const { takeoff: _takeoff, ...fields } = input;
       const result = "input" in operation
@@ -7525,7 +7544,13 @@ export class PrismaApiStore {
       await store.recalcLinkedItemQuantity(itemId, projectId);
       const saved = await store.db.worksheetItem.findFirst({ where: { id: itemId }, include: { entityCategory: true } });
       const resolved = await store.resolveCurrentRevisionTotals(projectId);
-      return { item: await store.withRowTakeoff(projectId, mapWorksheetItem(saved), input.quantity), snapshot: { currentRevision: resolved!.mappedRevision, estimateTotals: resolved!.totals } };
+      const addedPickupIds = takeoff.filter(link => !previousByPickup.has(link.pickupId)).map(link => link.pickupId);
+      if (removedLinks.length || changedLinks.length || addedPickupIds.length) {
+        await store.pushActivity(projectId, resolved!.mappedRevision.id, "item_takeoff_links_updated", {
+          itemId, removedLinks, changedLinks, addedPickupIds,
+        });
+      }
+      return { item: { ...await store.withRowTakeoff(projectId, mapWorksheetItem(saved), input.quantity), removedLinks, changedLinks }, snapshot: { currentRevision: resolved!.mappedRevision, estimateTotals: resolved!.totals } };
     };
     // Prisma's interactive transaction client has no $transaction method.
     if (typeof this.db.$transaction !== "function") return write(this);
@@ -7538,9 +7563,9 @@ export class PrismaApiStore {
   }
 
   private async withRowTakeoff(projectId: string, item: WorksheetItem, requestedQuantity?: number): Promise<WorksheetItem> {
-    const links = await this.db.pickupLink.findMany({ where: { projectId, worksheetItemId: item.id }, include: { pickup: { select: { label: true, measurement: true } } } });
+    const links = await this.db.pickupLink.findMany({ where: { projectId, worksheetItemId: item.id } });
     return {
-      ...item, takeoff: links.map(rowTakeoffSummary),
+      ...item, takeoff: rowTakeoffSummary(links, item.uom),
       takeoffFact: requestedQuantity !== undefined && requestedQuantity !== item.quantity
         ? `Linked takeoff quantity ${item.quantity} ${item.uom} replaces supplied quantity ${requestedQuantity}.`
         : `Row quantity ${item.quantity} ${item.uom} is derived from ${links.length} takeoff marks.`,
@@ -8007,7 +8032,7 @@ export class PrismaApiStore {
     context: WorksheetItemMutationContext = {},
     takeoffResolved = false,
   ): Promise<WorksheetItemMutationResult> {
-    if (!takeoffResolved && (patch.takeoff !== undefined || patch.quantity !== undefined || patch.uom !== undefined)) {
+    if (!takeoffResolved && patch.takeoff !== undefined) {
       return this.writeWorksheetItemWithTakeoff(projectId, { itemId, patch }, context);
     }
     await this.requireProject(projectId);
@@ -8756,7 +8781,7 @@ export class PrismaApiStore {
       entityName: mapped.entityName,
       category: mapped.category,
       quantity: mapped.quantity,
-      takeoff: mapped.takeoff ?? [],
+      takeoff: mapped.takeoff,
       uom: mapped.uom,
       tierUnits: mapped.tierUnits ?? {},
       cost: mapped.cost,
@@ -15481,8 +15506,8 @@ export class PrismaApiStore {
     const u = takeoffUnitKey(uom).toUpperCase();
     if (["EA", "EACH", "PC", "PCS", "CT", "COUNT", "UN", "UNIT", "UNITS"].includes(u)) return "count";
     if (["LF", "LM", "FT", "M", "MM", "CM", "IN", "YD", "FT'", "'"].includes(u)) return "length";
-    if (["SF", "SM", "SY", "FT2", "FT²", "M2", "M²", "SQFT", "SQM"].includes(u)) return "area";
-    if (["CF", "CY", "FT3", "FT³", "M3", "M³", "CUFT", "CUM"].includes(u)) return "volume";
+    if (["SF", "SM", "SY", "YD2", "FT2", "FT²", "M2", "M²", "SQFT", "SQM"].includes(u)) return "area";
+    if (["CF", "CY", "YD3", "FT3", "FT³", "M3", "M³", "CUFT", "CUM"].includes(u)) return "volume";
     return "";
   }
 

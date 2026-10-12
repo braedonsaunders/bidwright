@@ -42,7 +42,8 @@ function canonical(value: unknown): unknown {
   return value;
 }
 
-/** Exact retries of a takeoff-backed create address the same row. */
+/** Identical create payloads share a row indefinitely. Intentional distinct
+ *  rows need distinct description/sourceNotes (also documented in the tools). */
 export function takeoffRowId(projectId: string, worksheetId: string, input: object) {
   return `li-${createHash("sha256").update(JSON.stringify(canonical({ projectId, worksheetId, input }))).digest("hex").slice(0, 32)}`;
 }
