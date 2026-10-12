@@ -1,3 +1,4 @@
+import { buildEstimatorSearchProfile, scoreEstimatorSearchText } from "./estimator-search.js";
 import type { LaborUnit } from "@bidwright/domain";
 
 export interface LaborWorkLine {
@@ -39,16 +40,18 @@ export async function matchLaborBreakdown(
       const index = next++;
       if (index >= lines.length) return;
       const line = lines[index];
-      const query = [line.operation, line.material, line.size, line.condition].filter(Boolean).join(" ");
+      const query = [line.operation, line.material, line.size].filter(Boolean).join(" ");
       let pending = cache.get(query);
       if (!pending) { pending = search(query); cache.set(query, pending); }
       const { units: found } = await pending;
       const candidates = found.slice(0, 3).map((unit) => {
         const meta = unit.metadata as any;
         const match = meta?.searchMatch ?? {};
-        return { id: unit.id, name: unit.name, hoursNormal: unit.hoursNormal, outputUom: unit.outputUom,
+        const coverage = scoreEstimatorSearchText(buildEstimatorSearchProfile([line.operation, line.material].filter(Boolean).join(" ")),
+          [unit.displayName, unit.name, unit.description, unit.category, unit.className, unit.subClassName, ...(match.matchedTerms ?? [])].filter(Boolean).join(" "))?.coverage ?? 0;
+        return { id: unit.id, name: unit.displayName ?? unit.name, hoursNormal: unit.hoursNormal, outputUom: unit.outputUom,
           path: meta?.path ?? unit.name, sourceBook: meta?.sourceBook ?? null, sourcePage: meta?.sourcePage ?? null,
-          sourceRef: unit.sourceRef, score: match.score ?? 0, coverage: match.coverage ?? 0,
+          sourceRef: unit.sourceRef, score: match.score ?? 0, coverage,
           conversion: laborUnitConversion(line.uom, unit.outputUom) };
       });
       results[index] = { index, line, query, status: candidates[0]?.coverage >= .8 ? "candidates" : "no good match", candidates };

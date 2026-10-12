@@ -17,6 +17,7 @@ test("direct and indirect calls share schemas, project scope, images, logging an
     if (path.endsWith("/assets")) return Response.json({ scan: { status: "failed", error: "model.nwd: extractor -777" }, assets: [{ id: "model", status: "failed", progress: "complete", terminalErrors: [{ code: "aps_translation_failed", message: "extractor -777" }] }] });
     if (path.endsWith("/workspace")) return Response.json({ workspace: { worksheets: [], entityCategories: [{ id: "labor", name: "Labour", entityType: "Labour", defaultUom: "HR", validUoms: ["HR"], calculationType: "tiered_rate", itemSource: "rate_schedule" }], rateSchedules: [{ id: "schedule", category: "Labour", items: [{ id: "rate", name: "Welder" }], tiers: [{ id: "regular", name: "Regular", uom: "HR" }] }] } });
     if (path === "/api/labor-units/units/lu") return Response.json({ id: "lu", hoursNormal: .2, outputUom: "FT" });
+    if (path === "/api/labor-units/units") return Response.json({ total: 1, units: [{ id: "lu", name: "1", displayName: "Fillet weld aluminum › 1/4in", hoursNormal: .2, outputUom: "FT" }] });
     if (path === "/api/labor-units/match") return Response.json({ lines: body.lines });
     if (path === "/integrations") return Response.json({ integrations: [] });
     if (path.endsWith("/bom")) return Response.json({ model: { id: "model" }, rows: [{ id: "row", quantity: 3, unit: "ft" }] });
@@ -50,6 +51,24 @@ test("direct and indirect calls share schemas, project scope, images, logging an
         assert.equal(write?.body.uom, "FT");
         assert.equal(write?.body.laborUnitId, "lu");
         assert.equal(write?.body.quantity, 10);
+        const crew: any = await client.callTool({ name: "createRateScheduleWorksheetItem", arguments: { worksheetId: "sheet", rateScheduleItemId: "rate", laborUnitId: "lu", quantity: 4, tierUnits: { regular: 200 }, evidenceBasis: {} } });
+        assert.notEqual(crew.isError, true, JSON.stringify(crew));
+        assert.equal(requests.at(-1)!.body.uom, "HR");
+        assert.deepEqual(requests.at(-1)!.body.tierUnits, { regular: 200 });
+        for (const uom of [undefined, "FT"]) {
+          const general: any = await client.callTool({ name: "createWorksheetItem", arguments: { worksheetId: "sheet", category: "Labour", entityName: "Welder", rateScheduleItemId: "rate", laborUnitId: "lu", quantity: 4, tierUnits: { regular: 200 }, evidenceBasis: {}, ...(uom ? { uom } : {}) } });
+          assert.notEqual(general.isError, true, JSON.stringify(general));
+          assert.equal(requests.at(-1)!.body.uom, uom ?? "HR");
+        }
+
+      }
+      for (const query of ["supply and install", "fillet weld aluminum; cut steel plate"]) {
+        const search: any = await client.callTool({ name: "searchEstimatingKnowledge", arguments: { query, sources: ["labor"] } });
+        const labor = JSON.parse(search.content[0].text).results[0];
+        assert.equal(labor.total, 1);
+        assert.equal(labor.hits.length, 1);
+        assert.match(labor.hits[0].name, /Fillet weld aluminum/);
+        assert.equal(labor.shortlists, undefined);
       }
       const polled: any = await client.callTool({ name: "listModels", arguments: { refresh: false } });
       assert.equal(requests.at(-1)!.body.query, "?refresh=0");

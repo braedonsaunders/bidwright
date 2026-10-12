@@ -14,3 +14,10 @@ export function selectReviewSession<T extends { status: string; _spawnOpts?: { r
   if (advisory?.status === "running") return advisory;
   return project?._spawnOpts?.reviewOnly ? project : advisory;
 }
+
+export function reviewRunIsLive(run: { id: string; status: string } | null, session: { status: string; _spawnOpts?: { aiRunId?: string } } | undefined) {
+  return !!run && run.status === "running" && session?.status === "running" && session._spawnOpts?.aiRunId === run.id;
+}
+export function advisoryReviewLimit(count: number) {
+  return count >= 2 ? { status: "limit_reached", fact: "Two advisory reviews have already been requested for this estimating run; no additional review was launched." } : null;
+}

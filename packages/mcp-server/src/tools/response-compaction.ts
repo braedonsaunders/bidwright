@@ -239,7 +239,7 @@ export function compactLaborUnitRow(
   return {
     id: unit.id ? String(unit.id) : undefined,
     code: clipText(unit.code, 32),
-    name: clipText(unit.name, 80),
+    name: clipText(unit.displayName ?? unit.name, 80),
     path: unit.metadata?.path || path || undefined,
     outputUom: unit.outputUom ? String(unit.outputUom) : undefined,
     hoursNormal,

@@ -16,3 +16,12 @@ export function buildLaborUnitDerivation(item: { quantity: number; uom: string; 
       { name: "factor", value: factor, source: { kind: "manual", ref: "authored-tier-units", excerpt: "Adjustment implied by the authored tier hours; includes the estimator's conditions and allowances." } },
     ], result: { value: hours * item.quantity, unit: "h" }, notes: "Extended hours = row quantity × hours per output unit × conversion × authored adjustment. Estimate factors apply separately." };
 }
+
+/** A linked productivity source cannot silently produce a zero-hour priced row. */
+export function assertLaborUnitHours(item: { laborUnitId?: string | null; rateScheduleItemId?: string | null; tierUnits?: Record<string, number> }, schedules: any[]) {
+  if (!item.laborUnitId) return;
+  const hourlyTierIds = new Set(schedules.filter(schedule => schedule.items?.some((row: any) => row.id === item.rateScheduleItemId)).flatMap(schedule => schedule.tiers ?? []).filter((tier: any) => /^(h|hr|hrs|hour|hours)$/i.test(tier.uom ?? "HR")).map((tier: any) => tier.id));
+  if (!Object.entries(item.tierUnits ?? {}).some(([id, hours]) => hourlyTierIds.has(id) && Number.isFinite(hours) && hours > 0)) {
+    throw Object.assign(new Error("A labour-unit row has no positive tier hours. Its quantity/UOM must convert to the source output UOM and its rate schedule must have an hourly tier, or provide positive hourly tierUnits explicitly."), { statusCode: 400 });
+  }
+}

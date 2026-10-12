@@ -1,5 +1,5 @@
 import { summarizeLaborBasis, laborUnitPresentation } from "@bidwright/domain";
-import { buildLaborUnitDerivation } from "./services/labor-unit-derivation.js";
+import { assertLaborUnitHours, buildLaborUnitDerivation } from "./services/labor-unit-derivation.js";
 import { matchLaborBreakdown, laborUnitConversion, type LaborWorkLine } from "./services/labor-unit-matching.js";
 import { assertTakeoffUnits, takeoffError, takeoffRowId, takeoffUnitKey, type WorksheetTakeoffInput } from "./services/worksheet-takeoff.js";
 import { mutateWorkspaceStateLocked, patchTakeoffCalibrations, type CalibrationChange } from "./services/takeoff-calibration-state.js";
@@ -3102,7 +3102,7 @@ export class PrismaApiStore {
 
     const laborIds = rows.filter((row) => row.sourceType === "labor_unit").map((row) => row.sourceId);
     const laborIdentities = laborIds.length ? await this.db.laborUnit.findMany({ where: { id: { in: laborIds }, library: { OR: [{ organizationId: this.organizationId }, { organizationId: null }] } }, include: { library: true } }) : [];
-    const laborNames = new Map(laborIdentities.map((unit) => [unit.id, laborUnitPresentation(unit).name]));
+    const laborNames = new Map(laborIdentities.map((unit) => [unit.id, laborUnitPresentation(unit).displayName]));
     const mapped = rows.map((row) => ({
       id: row.id,
       sourceType: row.sourceType,
@@ -3111,14 +3111,14 @@ export class PrismaApiStore {
       projectId: row.projectId ?? null,
       category: row.category ?? "",
       entityType: row.entityType ?? "",
-      title: laborNames.get(row.sourceId) ?? row.title,
+      title: row.title,
       subtitle: row.subtitle ?? "",
       code: row.code ?? "",
       vendor: row.vendor ?? "",
       uom: row.uom || "EA",
       unitCost: row.unitCost ?? null,
       unitPrice: row.unitPrice ?? null,
-      payload: parseSearchDocumentPayload(row.payload),
+      payload: { ...parseSearchDocumentPayload(row.payload), ...(laborNames.has(row.sourceId) ? { displayName: laborNames.get(row.sourceId) } : {}) },
       score: Number(row.score ?? 0),
     }));
 
@@ -7750,6 +7750,8 @@ export class PrismaApiStore {
       item.derivation = buildLaborUnitDerivation(item, unit);
     }
 
+    assertLaborUnitHours(item, revisionScheduleRows);
+
     // ── Auto-resolve EffectiveCost for cost-resource-linked rows ─────
     // When the caller specifies costResourceId without an effectiveCostId,
     // pick the highest-confidence, most recent matching cost basis. This
@@ -8341,6 +8343,7 @@ export class PrismaApiStore {
       domainItem.price = 0;
     }
 
+    assertLaborUnitHours(domainItem, revisionScheduleRows);
     const calculated = calculateLineItem(domainItem, mapRevision(revision), updateCalcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
 
@@ -13762,7 +13765,8 @@ export class PrismaApiStore {
         const representative = {
           id: unit.id,
           code: unit.code ?? "",
-          name: laborUnitPresentation(unit).name,
+          name: unit.name,
+          displayName: laborUnitPresentation(unit).displayName,
           category: unit.category ?? "",
           className: unit.className ?? "",
           subClassName: unit.subClassName ?? "",
@@ -14497,7 +14501,8 @@ export class PrismaApiStore {
         {
           id: unit.id,
           code: unit.code,
-          name: laborUnitPresentation(unit).name,
+          name: unit.name,
+          displayName: laborUnitPresentation(unit).displayName,
           description: unit.description,
           category: unit.category,
           className: unit.className,

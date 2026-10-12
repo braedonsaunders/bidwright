@@ -1,4 +1,4 @@
-import { coalesceReviewLaunch, reviewSessionKey, selectReviewSession } from "../services/review-launch.js";
+import { advisoryReviewLimit, coalesceReviewLaunch, reviewRunIsLive, reviewSessionKey, selectReviewSession } from "../services/review-launch.js";
 import { summarizeLaborBasis } from "@bidwright/domain";
 import { join } from "node:path";
 /**
@@ -74,22 +74,25 @@ function extractReviewMeta(summary: unknown, fallbackSnapshot: string | null): {
   state: ReviewLifecycleState;
   quoteSnapshotUpdatedAt: string | null;
   resolvedAt: string | null;
+  advisory: boolean;
 } {
   const meta = isRecord(summary) && isRecord(summary[REVIEW_META_KEY]) ? summary[REVIEW_META_KEY] : {};
   return {
     state: pickEnum<ReviewLifecycleState>(meta.state, REVIEW_STATES, "open"),
     quoteSnapshotUpdatedAt: asOptionalString(meta.quoteSnapshotUpdatedAt) ?? fallbackSnapshot,
     resolvedAt: asOptionalString(meta.resolvedAt) ?? null,
+    advisory: meta.advisory === true,
   };
 }
 
-function attachReviewMeta(summary: unknown, meta: { state: ReviewLifecycleState; quoteSnapshotUpdatedAt: string | null; resolvedAt: string | null }) {
+function attachReviewMeta(summary: unknown, meta: { state: ReviewLifecycleState; quoteSnapshotUpdatedAt: string | null; resolvedAt: string | null; advisory?: boolean }) {
   return {
     ...stripReviewMeta(summary),
     [REVIEW_META_KEY]: {
       state: meta.state,
       quoteSnapshotUpdatedAt: meta.quoteSnapshotUpdatedAt,
       resolvedAt: meta.resolvedAt,
+      advisory: meta.advisory === true,
     },
   };
 }
@@ -287,6 +290,7 @@ function serializeReview(review: any, context: { currentRevisionId: string | nul
     competitiveness: normalizeCompetitiveness(review.competitiveness),
     recommendations: normalizeRecommendations(review.recommendations),
     reviewState: meta.state,
+    advisory: meta.advisory,
     reviewedQuoteUpdatedAt,
     quoteUpdatedAt: context.quoteUpdatedAt,
     currentRevisionId: context.currentRevisionId,
@@ -325,11 +329,24 @@ async function requireProjectAccess(request: FastifyRequest, reply: FastifyReply
 export function registerReviewRoutes(app: FastifyInstance) {
   const savedReviewSections = new Map<string, Set<string>>();
 
+  async function fullReviewFilter(projectId: string) {
+    const advisoryRuns = await prisma.aiRun.findMany({ where: { projectId, kind: "cli-advisory-review" }, select: { id: true } });
+    return { projectId, OR: [{ aiRunId: null }, { aiRunId: { notIn: advisoryRuns.map(run => run.id) } }] };
+  }
+
+  async function reconcileReviewLiveness(review: any) {
+    if (review.status !== "running") return review;
+    const run = review.aiRunId ? await prisma.aiRun.findUnique({ where: { id: review.aiRunId } }) : null;
+    const session = getSession(run?.kind === "cli-advisory-review" ? reviewSessionKey(review.projectId) : review.projectId);
+    if (reviewRunIsLive(run, session)) return review;
+    return prisma.quoteReview.update({ where: { id: review.id }, data: { status: run?.status === "completed" ? "completed" : "failed" } });
+  }
+
   // ── Start Review Session ──────────────────────────────────
   app.post("/api/review/:projectId/start", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!(await requireProjectAccess(request, reply, projectId))) return;
-    return coalesceReviewLaunch(`${request.user?.organizationId}:${projectId}`, () => startReview(request, reply));
+    return coalesceReviewLaunch(`${request.user?.organizationId}:${projectId}:${(request.body as any)?.advisory === true ? "advisory" : "full"}`, () => startReview(request, reply));
   });
 
   async function startReview(request: FastifyRequest, reply: FastifyReply) {
@@ -340,6 +357,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
       advisory?: boolean;
     };
 
+    body.advisory = body.advisory === true;
     const store = request.store!;
 
     // User-overlaid integrations: org admin's defaults + this estimator's
@@ -362,8 +380,22 @@ export function registerReviewRoutes(app: FastifyInstance) {
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) return reply.code(404).send({ error: "Project not found" });
 
-    const runningReview = await prisma.quoteReview.findFirst({ where: { projectId, status: "running" }, orderBy: { createdAt: "desc" } });
-    if (runningReview) return { reviewId: runningReview.id, sessionId: runningReview.aiRunId, projectId, status: "running", fact: "An existing review is running; this request did not launch another." };
+    let estimatingRunId: string | null = null;
+    if (body.advisory === true) {
+      const headerRunId = asOptionalString(request.headers["x-bidwright-run-id"]);
+      const parentRun = await prisma.aiRun.findFirst({ where: { projectId, kind: { notIn: ["cli-review", "cli-advisory-review"] },
+        ...(headerRunId ? { id: headerRunId } : { status: "running" }) }, orderBy: { createdAt: "desc" }, select: { id: true } });
+      // Direct harness runs have no AiRun record; their budget is scoped to the copied revision.
+      estimatingRunId = parentRun?.id ?? `revision:${workspace.currentRevision?.id}`;
+      const priorRuns = await prisma.aiRun.findMany({ where: { projectId, kind: "cli-advisory-review",
+        input: { path: ["estimatingRunId"], equals: estimatingRunId } }, select: { id: true } });
+      const runningReview = await prisma.quoteReview.findFirst({ where: { projectId, status: "running", aiRunId: { in: priorRuns.map(run => run.id) } }, orderBy: { createdAt: "desc" } });
+      if (runningReview && (await reconcileReviewLiveness(runningReview)).status === "running") {
+        return { reviewId: runningReview.id, sessionId: runningReview.aiRunId, projectId, status: "running", fact: "This estimating run already has a live advisory review; no additional review was launched." };
+      }
+      const limit = advisoryReviewLimit(priorRuns.length);
+      if (limit) return { ...limit, estimatingRunId, fact: parentRun ? limit.fact : "Two advisory reviews have already been requested for this revision (no tracked estimating run); no additional review was launched." };
+    }
 
     const project = workspace.project || {} as any;
     const quote = workspace.quote || {} as any;
@@ -447,6 +479,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
         status: "running",
         summary: attachReviewMeta({}, {
           state: "open",
+          advisory: body.advisory === true,
           quoteSnapshotUpdatedAt: reviewContext.quoteUpdatedAt,
           resolvedAt: null,
         }),
@@ -464,10 +497,10 @@ export function registerReviewRoutes(app: FastifyInstance) {
         id: sessionId,
         projectId,
         revisionId: revision.id || "",
-        kind: "cli-review",
+        kind: body.advisory === true ? "cli-advisory-review" : "cli-review",
         status: "running",
         model: model || "",
-        input: { runtime, reviewId, documentCount: documents.length } as any,
+        input: { runtime, reviewId, estimatingRunId, documentCount: documents.length } as any,
         output: { events: [] } as any,
       },
     });
@@ -605,23 +638,13 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
   app.get("/api/review/:projectId/latest", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!(await requireProjectAccess(request, reply, projectId))) return;
+    const reviewId = asOptionalString((request.query as any)?.reviewId);
     let review = await prisma.quoteReview.findFirst({
-      where: { projectId },
+      where: reviewId ? { projectId, id: reviewId } : await fullReviewFilter(projectId),
       orderBy: { createdAt: "desc" },
     });
     if (!review) return { review: null };
-    if (review.status === "running" && review.aiRunId) {
-      const run = await prisma.aiRun.findUnique({
-        where: { id: review.aiRunId },
-        select: { status: true },
-      });
-      if (!run || run.status !== "running") {
-        review = await prisma.quoteReview.update({
-          where: { id: review.id },
-          data: { status: run?.status === "completed" ? "completed" : "failed" },
-        });
-      }
-    }
+    review = await reconcileReviewLiveness(review);
     const context = await getQuoteReviewContext(projectId);
     return { review: serializeReview(review, context) };
   });
@@ -630,7 +653,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
   app.get("/api/review/:projectId/stream", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!(await requireProjectAccess(request, reply, projectId))) return;
-    const session = selectReviewSession(getSession(reviewSessionKey(projectId)), getSession(projectId));
+    const session = selectReviewSession(undefined, getSession(projectId));
 
     if (!session) {
       return reply.code(404).send({ error: "No active session for this project" });
@@ -684,9 +707,10 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
       return reply.code(400).send({ error: "section and data required" });
     }
 
-    // Find the most recent running review for this project
+    // Review tools identify their own run, so concurrent full/advisory saves stay separate.
+    const submittingRunId = asOptionalString(request.headers["x-bidwright-run-id"]);
     const review = await prisma.quoteReview.findFirst({
-      where: { projectId, status: "running" },
+      where: { ...(submittingRunId ? { projectId, aiRunId: submittingRunId } : await fullReviewFilter(projectId)), status: "running" },
       orderBy: { createdAt: "desc" },
     });
 
@@ -740,7 +764,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
     };
 
     const review = await prisma.quoteReview.findFirst({
-      where: { projectId },
+      where: await fullReviewFilter(projectId),
       orderBy: { createdAt: "desc" },
     });
 
@@ -795,7 +819,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
     const store = request.store!;
 
     const review = await prisma.quoteReview.findFirst({
-      where: { projectId },
+      where: await fullReviewFilter(projectId),
       orderBy: { createdAt: "desc" },
     });
 
@@ -887,7 +911,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
     if (!(await requireProjectAccess(request, reply, projectId))) return;
 
     const review = await prisma.quoteReview.findFirst({
-      where: { projectId },
+      where: await fullReviewFilter(projectId),
       orderBy: { createdAt: "desc" },
     });
 
@@ -910,12 +934,12 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
   app.post("/api/review/:projectId/stop", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!(await requireProjectAccess(request, reply, projectId))) return;
-    const session = selectReviewSession(getSession(reviewSessionKey(projectId)), getSession(projectId));
+    const session = selectReviewSession(undefined, getSession(projectId));
     const stopped = session ? stopSession(typeof session._spawnOpts?.sessionKey === "string" ? session._spawnOpts.sessionKey : projectId) : false;
 
     // Mark review as completed
     const review = await prisma.quoteReview.findFirst({
-      where: { projectId, status: "running" },
+      where: { ...await fullReviewFilter(projectId), status: "running" },
       orderBy: { createdAt: "desc" },
     });
     if (review) {
@@ -932,7 +956,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
   app.get("/api/review/:projectId/status", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
     if (!(await requireProjectAccess(request, reply, projectId))) return;
-    const session = selectReviewSession(getSession(reviewSessionKey(projectId)), getSession(projectId));
+    const session = selectReviewSession(undefined, getSession(projectId));
 
     const runs = await prisma.aiRun.findMany({
       where: { projectId, kind: "cli-review" },

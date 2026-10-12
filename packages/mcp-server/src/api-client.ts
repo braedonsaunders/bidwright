@@ -18,6 +18,7 @@ function headers(): Record<string, string> {
   const h: Record<string, string> = { "Content-Type": "application/json" };
   if (AUTH_TOKEN) h["Authorization"] = `Bearer ${AUTH_TOKEN}`;
   h["X-Bidwright-Actor"] = "mcp-agent";
+  if (process.env.BIDWRIGHT_RUN_ID) h["X-Bidwright-Run-Id"] = process.env.BIDWRIGHT_RUN_ID;
   return h;
 }
 

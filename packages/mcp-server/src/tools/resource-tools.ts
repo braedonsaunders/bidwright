@@ -327,7 +327,7 @@ function tokenizeSearch(value: unknown): string[] {
 function candidateHaystack(candidate: SearchCandidate) {
   const payload = asObject(candidate.payload);
   return [
-    candidate.title,
+    candidate.payload?.displayName ?? candidate.title,
     candidate.subtitle,
     candidate.code,
     candidate.vendor,
@@ -479,7 +479,7 @@ function compactCandidateForTool(candidate: EnrichedSearchCandidate, limitDescri
     id: candidate.id ?? null,
     sourceType: candidate.sourceType ?? null,
     sourceId: candidate.sourceId ?? null,
-    title: truncate(candidate.title, 200),
+    title: truncate(candidate.payload?.displayName ?? candidate.title, 200),
     subtitle: truncate(candidate.subtitle, limitDescription),
     code: candidate.code || undefined,
     vendor: candidate.vendor || undefined,
@@ -673,7 +673,7 @@ function unitsFromPayload(payload: unknown): Record<string, unknown>[] {
 
 function laborUnitBasis(unit: Record<string, unknown>, q?: string): SourceBasis {
   const haystack = [
-    unit.name,
+    unit.displayName ?? unit.name,
     unit.code,
     unit.description,
     unit.category,
@@ -722,7 +722,7 @@ function compactLaborUnit(unit: Record<string, unknown>, q?: string): CompactLab
   return {
     id: stringValue(unit.id),
     code: stringValue(unit.code),
-    name: compactText(unit.name, 120),
+    name: compactText(unit.displayName ?? unit.name, 120),
     path: stringValue(asObject(unit.metadata).path),
     discipline: stringValue(unit.discipline),
     category: stringValue(unit.category),

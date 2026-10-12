@@ -810,6 +810,7 @@ export interface LaborUnit {
   catalogItemId: string | null;
   code: string;
   name: string;
+  displayName?: string;
   description: string;
   discipline: string;
   category: string;

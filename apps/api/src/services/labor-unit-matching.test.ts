@@ -19,7 +19,7 @@ test("retrieval probe keeps four operation queries and a compound breakdown sepa
   for (const [query, id] of [["fabricate structural steel", "fabricate"], ["fillet weld aluminum", "weld"], ["erect structural steel per ton", "erect"], ["cut steel plate", "cut"]]) {
     assert.equal(rank(query)[0].item.id, id);
   }
-  const phrases = laborOperationQueries("structural steel plate fabrication welding aluminum ramp");
+  const phrases = laborOperationQueries("structural steel plate fabrication; welding aluminum ramp");
   assert.deepEqual(phrases, ["structural steel plate fabrication", "welding aluminum ramp"]);
   assert.deepEqual(phrases.map(query => rank(query)[0].item.id), ["fabricate", "weld"]);
 });
@@ -29,7 +29,7 @@ test("pivoted numeric row labels expose dimensions, value column, library and bo
     datasetName: "Drilling Holes in Welded Attachments", rowDimensions: [{ key: "plate", label: "plate (in)", value: "1" }],
     valueColumnName: "hole ≤3/4in", sourceBookName: "Piping Manual", sourcePages: "115",
   } });
-  assert.match(display.name, /Drilling Holes.*plate \(in\) 1.*hole ≤3\/4in/);
+  assert.match(display.displayName, /Drilling Holes.*plate \(in\) 1.*hole ≤3\/4in/);
   assert.match(display.path, /^Manual ›/);
   assert.equal(display.sourceBook, "Piping Manual"); assert.equal(display.sourcePage, "115");
 });
@@ -60,8 +60,19 @@ test("matched row derivation records extended hours and separates rate pricing f
   const ws: any = { worksheets: [{ items: [item, { ...item, id: "assumed", laborUnitId: null }] }],
     entityCategories: [{ id: "labor", name: "Labour", entityType: "Labour", analyticsBucket: "labour", calculationType: "rate_schedule" }],
     rateSchedules: [{ items: [{ id: "rate" }], tiers: [{ id: "regular", name: "Regular", uom: "HR" }] }] };
-  assert.equal(summarizeLaborBasis(ws).sourcedHours, 3);
+  assert.equal(summarizeLaborBasis(ws).sourcedHours, 0);
+  assert.equal(summarizeLaborBasis(ws).adjustedHours, 3);
+  assert.ok(Math.abs(summarizeLaborBasis(ws).topAdjustedRows[0].factor - 1.5) < 1e-10);
   assert.equal(summarizeLaborBasis(ws).assumedHours, 3);
+  item.tierUnits.regular = .2;
+  item.derivation = buildLaborUnitDerivation(item, unit);
+  assert.equal(summarizeLaborBasis(ws).sourcedHours, 2);
+  assert.equal(summarizeLaborBasis(ws).adjustedHours, 0);
+  item.tierUnits.regular = 200;
+  item.derivation = buildLaborUnitDerivation(item, unit);
+  assert.equal(summarizeLaborBasis(ws).topAdjustedRows[0].factor, 1000);
+  item.tierUnits.regular = .3;
+  item.derivation = buildLaborUnitDerivation(item, unit);
   item.derivation.status = "stale";
   assert.equal(summarizeLaborBasis(ws).sourcedHours, 0);
   assert.equal(summarizeLaborBasis(ws).assumedHours, 6);
@@ -89,8 +100,39 @@ test("ordinary row creation persists matched productivity and a derivation witho
   t.mock.method(proto, "syncProjectEstimateForWorksheetItemMutation", async () => ({}));
   const store = new PrismaApiStore(db, "org");
   await store.createWorksheetItemWithSnapshot("project", "sheet", { category: "Labour", entityType: "Labour", entityName: "Welder", description: "Weld", laborUnitId: "unit", rateScheduleItemId: "rate", quantity: 10, uom: "FT" });
+  await assert.rejects(store.createWorksheetItemWithSnapshot("project", "sheet", { category: "Labour", entityType: "Labour", entityName: "Welder", description: "Weld", laborUnitId: "unit", rateScheduleItemId: "rate", quantity: 10, uom: "EA" }), /no positive tier hours/);
+  schedule.tiers[0].uom = "DAY";
+  await assert.rejects(store.createWorksheetItemWithSnapshot("project", "sheet", { category: "Labour", entityType: "Labour", entityName: "Welder", description: "Weld", laborUnitId: "unit", rateScheduleItemId: "rate", quantity: 10, uom: "FT" }), /no positive tier hours/);
+  assert.equal(saved.length, 1);
   assert.equal(saved[0].laborUnitId, "unit");
   assert.deepEqual(saved[0].tierUnits, { regular: .2 });
   assert.equal(saved[0].derivation.result.value, 2);
   assert.equal(saved[0].derivation.inputs.find((input: any) => input.name === "hoursNormal").source.ref, "unit");
+});
+
+
+test("readable labels never change an editor's stored name on repeated saves", async () => {
+  const { mapLaborUnit } = await import("../store/mappers.js");
+  const row: any = { id: "unit", name: "1", category: "Weld", sourceRef: { datasetName: "Fillet weld aluminum", dimensions: { size: "1/4in" } }, createdAt: new Date(), updatedAt: new Date() };
+  const first = mapLaborUnit(row);
+  const second = mapLaborUnit({ ...row, name: first.name, metadata: first.metadata });
+  assert.equal(first.name, "1"); assert.equal(second.name, "1");
+  assert.match(first.displayName!, /Fillet weld aluminum/);
+  assert.equal(first.displayName, second.displayName);
+});
+
+test("operation phrases split only on explicit separators", () => {
+  for (const q of ["install insulation on 4in pipe", "supply and install", "nuts and bolts", "structural steel plate fabrication welding aluminum ramp"]) assert.deepEqual(laborOperationQueries(q), [q]);
+  assert.deepEqual(laborOperationQueries("supply and install; nuts and bolts\ncut steel plate"), ["supply and install", "nuts and bolts", "cut steel plate"]);
+});
+
+test("long job conditions and size do not dilute operation/material coverage", async () => {
+  let query = "";
+  const result = await matchLaborBreakdown([{ operation: "fillet weld", material: "aluminum", size: "1/4in", condition: "Field access, existing attachments and very long detailed job conditions ".repeat(4), quantity: 4, uom: "FT" }], undefined, async q => {
+    query = q;
+    return { units: [{ ...rows[1], metadata: { searchMatch: { score: 90, coverage: .3 } } }] as any };
+  });
+  assert.equal(query, "fillet weld aluminum 1/4in");
+  assert.equal(result.lines[0].status, "candidates");
+  assert.equal(result.lines[0].candidates[0].coverage, 1);
 });

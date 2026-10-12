@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { coalesceReviewLaunch, reviewSessionKey, selectReviewSession } from "./review-launch.js";
+import { advisoryReviewLimit, reviewRunIsLive, coalesceReviewLaunch, reviewSessionKey, selectReviewSession } from "./review-launch.js";
 import { buildReviewClaudeMdContent } from "./claude-md-generator.js";
 
 test("simultaneous review requests share preparation and leave the estimator slot distinct", async () => {
@@ -26,4 +26,23 @@ test("review stream/stop controls never select a parent estimating session", () 
   assert.equal(selectReviewSession(undefined, parent), undefined);
   assert.equal(selectReviewSession(advisory, parent), advisory);
   assert.equal(selectReviewSession(undefined, { ...advisory, status: "running" })?.status, "running");
+});
+
+
+test("advisory reuse requires the matching live session, and two attempts exhaust its budget", () => {
+  const run = { id: "review-run", status: "running" };
+  assert.equal(reviewRunIsLive(run, undefined), false);
+  assert.equal(reviewRunIsLive(run, { status: "running", _spawnOpts: { aiRunId: "estimator" } }), false);
+  assert.equal(reviewRunIsLive(run, { status: "completed", _spawnOpts: { aiRunId: run.id } }), false);
+  assert.equal(reviewRunIsLive(run, { status: "running", _spawnOpts: { aiRunId: run.id } }), true);
+  assert.equal(advisoryReviewLimit(1), null);
+  assert.equal(advisoryReviewLimit(2)?.status, "limit_reached");
+});
+
+test("a full review cannot coalesce with an advisory launch", async () => {
+  const [full, advisory] = await Promise.all([
+    coalesceReviewLaunch("org:project:full", async () => "full"),
+    coalesceReviewLaunch("org:project:advisory", async () => "advisory"),
+  ]);
+  assert.equal(full, "full"); assert.equal(advisory, "advisory");
 });

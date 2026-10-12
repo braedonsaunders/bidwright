@@ -169,13 +169,14 @@ export function registerKnowledgeTools(server: McpServer) {
             if (phrases.length > 1) {
               const shortlists = await Promise.all(phrases.map(async (phrase) => {
                 const data = await apiGet(`/api/labor-units/units?${new URLSearchParams({ q: phrase, limit: String(Math.min(limit, 3)) })}`);
-                return { query: phrase, hits: (data.units ?? []).map((unit: any) => ({ id: unit.id, name: unit.name, path: unit.metadata?.path, hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
+                return { query: phrase, hits: (data.units ?? []).map((unit: any) => ({ id: unit.id, name: unit.displayName ?? unit.name, path: unit.metadata?.path, hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
               }));
-              return { source, shortlists };
+              const hits = [...new Map(shortlists.flatMap(list => list.hits).map(hit => [hit.id, hit])).values()];
+              return { source, total: hits.length, hits, queries: phrases };
             }
             const data = await apiGet(`/api/labor-units/units?${params}`);
             return { source, total: data.total, hits: (data.units ?? []).map((unit: any) => responseFormat === "detailed" ? unit : ({ id: unit.id, libraryId: unit.libraryId,
-              name: unit.name, description: compactValue(unit.description, 260),
+              name: unit.displayName ?? unit.name, description: compactValue(unit.description, 260),
               path: [unit.category, unit.className, unit.subClassName].filter(Boolean).join(" › "),
               hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
           }
