@@ -1,3 +1,5 @@
+import { indexLaborUnitPage, searchLaborVectors, prepareLaborSemanticBatch, type LaborSemanticBatch } from "./services/labor-vector-index.js";
+import { laborSearchProfile, rankLaborCandidates, laborGranularityFacts } from "./services/labor-search.js";
 import { summarizeLaborBasis, laborUnitPresentation } from "@bidwright/domain";
 import { assertLaborUnitHours, buildLaborUnitDerivation } from "./services/labor-unit-derivation.js";
 import { matchLaborBreakdown, laborUnitConversion, type LaborWorkLine } from "./services/labor-unit-matching.js";
@@ -1764,7 +1766,7 @@ function lineItemFullTextQuery(value: string) {
 
 interface SearchDiagnostics {
   query: string;
-  scoring: "generic_idf_weighted";
+  scoring: "generic_idf_weighted" | "labor_task_context_hybrid";
   scoredRows: number;
   scoredRowsCapped: boolean;
   terms: Array<{
@@ -1877,10 +1879,6 @@ function laborUnitSearchText(unit: any) {
     unit.outputUom,
     unit.tags,
   ]);
-}
-
-function laborUnitHeadingText(unit: any) {
-  return searchTextFromParts([unit.name, unit.code, unit.category, unit.className, unit.subClassName]);
 }
 
 function blendLineItemSearchResults(
@@ -13530,9 +13528,10 @@ export class PrismaApiStore {
   private async findLaborUnitSearchCandidates(
     baseWhere: Record<string, unknown>,
     searchProfile: SearchProfile,
-    options: { perTermLimit?: number; filters?: { libraryId?: string; provider?: string; category?: string | null; className?: string | null; subClassName?: string | null } } = {},
+    options: { perTermLimit?: number; includeEmptyHierarchy?: boolean; semanticBatch?: LaborSemanticBatch | null; filters?: { libraryId?: string; provider?: string; category?: string | null; className?: string | null; subClassName?: string | null } } = {},
   ) {
-    const { webQuery, terms } = indexedSearchQuery(searchProfile.raw);
+    const terms = searchProfile.terms.map(term => term.token);
+    const webQuery = searchProfile.terms.flatMap(term => term.variants).map(term => `"${term}"`).join(" OR ");
     if (!terms.length) return [];
     const params: unknown[] = [webQuery, terms, this.organizationId, 2000];
     const vector = LABOR_SEARCH_VECTOR.replace(/"(\w+)"/g, 'u."$1"');
@@ -13558,13 +13557,14 @@ export class PrismaApiStore {
         (SELECT avg((tokens @@ query)::int) FROM term_queries) AS coverage,
         ARRAY(SELECT term FROM term_queries WHERE tokens @@ query) AS "matchedTerms"
        FROM matches ORDER BY coverage DESC, score DESC, id LIMIT $4`, ...params);
-    if (!matches.length) return [];
+    const semantic = new Map((await searchLaborVectors(this.db, this, searchProfile.raw, { filters: { ...filters, includeEmptyHierarchy: options.includeEmptyHierarchy, excludeIds: matches.map(match => match.id) }, batch: options.semanticBatch })).map(hit => [hit.id, hit.score]));
+    if (!matches.length && !semantic.size) return [];
     const rank = new Map(matches.map((match) => [match.id, match]));
-    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: matches.map((match) => match.id) } },
+    const rows = await this.db.laborUnit.findMany({ where: { ...baseWhere, id: { in: [...new Set([...matches.map((match) => match.id), ...semantic.keys()])] } },
       select: { id: true, libraryId: true, name: true, code: true, description: true, discipline: true, category: true,
-        className: true, subClassName: true, tags: true, outputUom: true, hoursNormal: true, entityCategoryType: true,
+        className: true, subClassName: true, sourceRef: true, tags: true, outputUom: true, hoursNormal: true, entityCategoryType: true,
         library: { select: { id: true, name: true, provider: true } } } });
-    return rows.map((row) => ({ ...row, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
+    return rows.map((row) => ({ ...row, _semanticOnly: !rank.has(row.id), _semanticScore: semantic.get(row.id) ?? 0, _indexedScore: Number(rank.get(row.id)?.score ?? 0), _indexedCoverage: Number(rank.get(row.id)?.coverage ?? 0), _indexedMatchedTerms: rank.get(row.id)?.matchedTerms ?? [] }));
   }
 
   private async hydrateLaborSearchEntries(entries: RankedSearchEntry<any>[]) {
@@ -13575,8 +13575,20 @@ export class PrismaApiStore {
     return entries.flatMap((entry) => { const item = byId.get(entry.item.id); return item ? [{ ...entry, item }] : []; });
   }
 
+  async indexLaborUnits(input: { cursor?: string; limit?: number; dryRun?: boolean }) {
+    return indexLaborUnitPage(this.db, this, input);
+  }
+
   async matchLaborUnits(lines: LaborWorkLine[], context?: string) {
-    return matchLaborBreakdown(lines, context, (q) => this.listLaborUnits({ q, limit: 3 }));
+    const semanticBatch = await prepareLaborSemanticBatch(this.db, this, lines.map(line => [line.operation, line.material, line.size].filter(Boolean).join(" ")));
+    return matchLaborBreakdown(lines, context, (q) => this.listLaborUnits({ q, limit: 12 }, semanticBatch), async (units) => {
+      const groups = [...new Map(units.slice(0, 3).map(unit => [`${unit.libraryId}:${unit.category}:${unit.className}`, unit])).values()];
+      const examples = (await Promise.all(groups.map(unit => this.db.laborUnit.findMany({ where: {
+        libraryId: unit.libraryId, category: unit.category, className: unit.className,
+        library: { OR: [{ organizationId: this.organizationId }, { organizationId: null }] },
+      }, include: { library: true }, orderBy: [{ outputUom: "asc" }, { sortOrder: "asc" }], take: 100 })))).flat();
+      return laborGranularityFacts(examples);
+    });
   }
 
   async listLaborUnits(input: {
@@ -13588,7 +13600,7 @@ export class PrismaApiStore {
     subClassName?: string;
     limit?: number;
     offset?: number;
-  } = {}): Promise<{ units: LaborUnit[]; total: number; diagnostics?: SearchDiagnostics }> {
+  } = {}, semanticBatch?: LaborSemanticBatch | null): Promise<{ units: LaborUnit[]; total: number; diagnostics?: SearchDiagnostics }> {
     const accessibleLibrary =
       input.libraryId
         ? {
@@ -13627,15 +13639,15 @@ export class PrismaApiStore {
     if (input.className?.trim()) andFilters.push({ className: input.className.trim() });
     if (input.subClassName?.trim()) andFilters.push({ subClassName: input.subClassName.trim() });
 
-    const searchProfile = input.q?.trim() ? buildEstimatorSearchProfile(input.q) : null;
+    const searchProfile = input.q?.trim() ? laborSearchProfile(input.q) : null;
     if (andFilters.length > 0) where.AND = andFilters;
 
     if (searchProfile && searchProfile.terms.length > 0) {
       const candidateRowLimit = 2000;
-      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input, semanticBatch });
       const searchText = laborUnitSearchText;
-      const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
-      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText, (unit) => `${unit.name} ${unit.subClassName ?? ""}`);
+      const weightedProfile = searchProfile;
+      const ranked = rankLaborCandidates<any>(candidateRows, weightedProfile);
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(1000, Math.max(1, input.limit ?? 250));
       return {
@@ -13652,8 +13664,8 @@ export class PrismaApiStore {
             },
           },
         })),
-        total: ranked.length,
-        diagnostics: buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText),
+        total: ranked.filter(entry => !entry.item._semanticOnly).length,
+        diagnostics: { ...buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText), scoring: "labor_task_context_hybrid" },
       };
     }
 
@@ -13694,7 +13706,7 @@ export class PrismaApiStore {
     if (input.category != null) where.category = input.category;
     if (input.className != null) where.className = input.className;
     if (input.subClassName != null) where.subClassName = input.subClassName;
-    const searchProfile = input.q?.trim() ? buildEstimatorSearchProfile(input.q) : null;
+    const searchProfile = input.q?.trim() ? laborSearchProfile(input.q) : null;
 
     const countOf = (row: any) => row._count?._all ?? 0;
     const hoursOf = (row: any) => Number(row._sum?.hoursNormal ?? 0);
@@ -13704,11 +13716,11 @@ export class PrismaApiStore {
 
     if (searchProfile && searchProfile.terms.length > 0) {
       const candidateRowLimit = 2000;
-      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input });
+      const candidateRows = await this.findLaborUnitSearchCandidates(where, searchProfile, { perTermLimit: 2000, filters: input, includeEmptyHierarchy: true });
       const searchText = laborUnitSearchText;
-      const weightedProfile = reweightSearchProfileForCorpus(searchProfile, candidateRows, searchText);
-      const ranked = rankIndexedCandidates<any>(candidateRows, weightedProfile, searchText, laborUnitHeadingText, (unit) => `${unit.name} ${unit.subClassName ?? ""}`);
-      const diagnostics = buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText);
+      const weightedProfile = searchProfile;
+      const ranked = rankLaborCandidates<any>(candidateRows, weightedProfile);
+      const diagnostics: SearchDiagnostics = { ...buildSearchDiagnostics(input.q ?? "", weightedProfile, candidateRows, candidateRowLimit, searchText), scoring: "labor_task_context_hybrid" };
       const offset = Math.max(0, input.offset ?? 0);
       const limit = Math.min(parentType === "subclass" ? 1000 : 200, Math.max(1, input.limit ?? (parentType === "subclass" ? 250 : 50)));
       const unitWithSearch = (entry: RankedSearchEntry<any>) => mapLaborUnit({
@@ -13729,7 +13741,7 @@ export class PrismaApiStore {
         return {
           nodes: [],
           units: (await this.hydrateLaborSearchEntries(ranked.slice(offset, offset + limit))).map(unitWithSearch),
-          total: ranked.length,
+          total: ranked.filter(entry => !entry.item._semanticOnly).length,
           diagnostics,
         };
       }
@@ -13747,7 +13759,7 @@ export class PrismaApiStore {
         representativeUnits: NonNullable<LaborUnitTreeGroup["search"]>["representativeUnits"];
       }>();
 
-      for (const entry of ranked) {
+      for (const entry of ranked.filter(entry => !entry.item._semanticOnly)) {
         const unit = entry.item;
         const libraryId = unit.libraryId ?? input.libraryId ?? null;
         const category = nextLevel === "catalog" ? "" : nextLevel === "category" ? unit.category ?? "" : input.category ?? unit.category ?? "";

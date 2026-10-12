@@ -67,7 +67,7 @@ export interface EmbeddingProvider {
   /** Unique provider identifier (e.g. "openai", "cohere"). */
   id: string;
   /** Embed a batch of texts, returning one vector per text. */
-  embed(texts: string[]): Promise<number[][]>;
+  embed(texts: string[], purpose?: "document" | "query"): Promise<number[][]>;
   /** Embed a single query string. */
   embedQuery(query: string): Promise<number[]>;
   /** Output dimensionality of the embedding model. */

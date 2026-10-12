@@ -30,6 +30,7 @@ export function laborUnitConversion(from: string, to: string) {
 export async function matchLaborBreakdown(
   lines: LaborWorkLine[], context: string | undefined,
   search: (query: string) => Promise<{ units: LaborUnit[] }>,
+  granularity?: (units: LaborUnit[]) => Promise<{ fact: string; pricedOperations: unknown[] }>,
 ) {
   const cache = new Map<string, Promise<{ units: LaborUnit[] }>>();
   const results: any[] = new Array(lines.length);
@@ -54,7 +55,10 @@ export async function matchLaborBreakdown(
           sourceRef: unit.sourceRef, score: match.score ?? 0, coverage,
           conversion: laborUnitConversion(line.uom, unit.outputUom) };
       });
-      results[index] = { index, line, query, status: candidates[0]?.coverage >= .8 ? "candidates" : "no good match", candidates };
+      const status = candidates[0]?.coverage >= .8 ? "candidates" : "no good match";
+      const unitMismatch = candidates.length > 0 && candidates.every(candidate => candidate.outputUom.toLowerCase() !== line.uom.toLowerCase());
+      const operations = granularity && (status === "no good match" || unitMismatch) ? await granularity(found) : undefined;
+      results[index] = { index, line, query, status, candidates, ...(operations ? { granularity: operations } : {}) };
     }
   }));
   return { context: context ?? null, lines: results, fact: "Scores measure text relevance, not applicability. hoursNormal is hours per outputUom; conversions and job conditions remain explicit." };
