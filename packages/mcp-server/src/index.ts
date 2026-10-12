@@ -20,6 +20,7 @@ import { z } from "zod";
 import { toJsonSchemaCompat } from "@modelcontextprotocol/sdk/server/zod-json-schema-compat.js";
 import { getAgentToolDefinition, isAgentToolMutating } from "@bidwright/domain";
 import { isToolAllowed } from "./tool-access.js";
+import { closestToolNames } from "./tool-suggestions.js";
 import { registerQuoteTools } from "./tools/quote-tools.js";
 import { registerKnowledgeTools } from "./tools/knowledge-tools.js";
 import { registerSystemTools } from "./tools/system-tools.js";
@@ -108,13 +109,18 @@ export async function registerTools(server: McpServer, options: { mode?: string;
   registerPipingTools(server);
   await registerIntegrationTools(server);
 
+  const unavailableTool = (name: string) => {
+    const suggestions = closestToolNames(name, [...catalog.keys()].filter(id => isToolAllowed(id, mode, reviewOnly)));
+    return { isError: true, content: [{ type: "text" as const, text: `Unknown or unavailable tool: ${name}.${suggestions.length ? ` Closest registered tools: ${suggestions.join(", ")}. describeTools returns their schemas.` : ""}` }] };
+  };
+
   server.tool(
     "describeTools",
     "List tools by family, or return the full input schema for a named tool.",
     { family: z.string().optional(), name: z.string().optional() },
     async ({ family, name }) => {
       const entries = [...catalog.entries()].filter(([id]) => (!name || id === name) && (!family || getAgentToolDefinition(id)?.category === family));
-      if (name && !entries.length) return { isError: true, content: [{ type: "text" as const, text: `Unknown or unavailable tool: ${name}` }] };
+      if (name && !entries.length) return unavailableTool(name);
       return { content: [{ type: "text" as const, text: JSON.stringify(entries.map(([id, tool]) => ({
         name: id,
         description: tool.description.split("\n")[0],
@@ -131,7 +137,7 @@ export async function registerTools(server: McpServer, options: { mode?: string;
     async ({ name, args }, extra) => {
       const tool = catalog.get(name);
       if (!tool || name === "invokeTool" || !isToolAllowed(name, mode, reviewOnly)) {
-        return { isError: true, content: [{ type: "text" as const, text: `Unknown or unavailable tool: ${name}` }] };
+        return unavailableTool(name);
       }
       try {
         // Direct MCP calls are parsed by the SDK. Indirect calls use the same

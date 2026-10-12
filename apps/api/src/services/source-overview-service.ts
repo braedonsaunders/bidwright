@@ -1,4 +1,5 @@
 import { prisma, prismaSql, type Prisma } from "@bidwright/db";
+import { buildModelQuantityCoverage, modelQuantityFacts } from "./model-quantity-coverage.js";
 
 type Facts = Record<string, unknown>;
 export interface OverviewSourceInput {
@@ -93,8 +94,7 @@ export function buildSourceOverview(input: {
       id: m.id, status: m.status,
       units: m.units && m.units !== "model" ? m.units : "unknown",
       ...m.facts,
-      qtoCoveragePercent: Number(m.facts.elementCount) > 0 && typeof m.facts.qtoElementCount === "number"
-        ? 100 * m.facts.qtoElementCount / Number(m.facts.elementCount) : null,
+      ...buildModelQuantityCoverage(m.facts, kind, m.status),
     }));
     return {
       id: source.id, name: source.name, fileType: source.fileType || "unknown",
@@ -142,11 +142,9 @@ export async function getSourceOverview(projectId: string): Promise<SourceOvervi
       FROM "FileNode" WHERE "projectId" = ${projectId} AND type = 'file' AND scope = 'project' ORDER BY "createdAt", id`),
     prisma.$queryRaw<OverviewModelInput[]>(prismaSql`
       SELECT m.id, m."sourceDocumentId", m."fileNodeId", m.status, m.units,
-        jsonb_build_object('schema', m.manifest->'schema', 'parts', m.manifest->'meshCount',
+        ${modelQuantityFacts(prismaSql`m.id`)} || jsonb_build_object('schema', m.manifest->'schema', 'parts', m.manifest->'meshCount',
           'pointCount', m.manifest->'pointCount',
           'issueCount', CASE WHEN jsonb_typeof(m.manifest->'modelIngest'->'issues') = 'array' THEN jsonb_array_length(m.manifest->'modelIngest'->'issues') END,
-          'elementCount', (SELECT count(*)::int FROM "ModelElement" e WHERE e."modelId" = m.id),
-          'qtoElementCount', (SELECT count(DISTINCT q."elementId")::int FROM "ModelQuantity" q WHERE q."modelId" = m.id AND q.method = 'ifc_declared_quantity'),
           'ingestStatus', m.manifest->'modelIngest'->'runStatus') AS facts
       FROM "ModelAsset" m WHERE m."projectId" = ${projectId} ORDER BY m."createdAt", m.id`),
     prisma.$queryRaw<PickupSummary[]>(prismaSql`

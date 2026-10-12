@@ -3,7 +3,8 @@ import { getDwgConverterStatus } from "./dwg-processing-service.js";
 import { createHash, randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { prisma } from "@bidwright/db";
+import { prisma, prismaSql } from "@bidwright/db";
+import { buildModelQuantityCoverage, modelQuantityFacts } from "./model-quantity-coverage.js";
 import {
   buildModelTopology,
   DEFAULT_MODEL_TOPOLOGY_ESTIMATE_AXES,
@@ -1740,7 +1741,7 @@ export async function listProjectModelAssets(projectId: string, options: { disco
 }
 
 export async function getProjectModelAsset(projectId: string, modelId: string) {
-  return prisma.modelAsset.findFirst({
+  const asset = await prisma.modelAsset.findFirst({
     where: { id: modelId, projectId },
     include: {
       elements: { take: 250, orderBy: { elementClass: "asc" } },
@@ -1749,6 +1750,14 @@ export async function getProjectModelAsset(projectId: string, modelId: string) {
       issues: { take: 250, orderBy: [{ severity: "desc" }, { createdAt: "desc" }] },
     },
   });
+  if (!asset) return null;
+  // The returned element/quantity arrays are paginated, so coverage comes from
+  // all persisted rows rather than from their previews or IFC-only Qto metadata.
+  const [row] = await prisma.$queryRaw<Array<{ facts: Record<string, unknown> }>>(prismaSql`
+    SELECT ${modelQuantityFacts(prismaSql`m.id`)} AS facts FROM "ModelAsset" m
+    WHERE m.id = ${modelId} AND m."projectId" = ${projectId}`);
+  const quantityCoverage = buildModelQuantityCoverage(row?.facts ?? {}, asset.format, asset.status);
+  return { ...asset, manifest: { ...recordValue(asset.manifest), quantityCoverage } };
 }
 
 export async function queryModelElements(projectId: string, modelId: string, filters: Record<string, unknown>) {

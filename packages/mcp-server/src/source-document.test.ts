@@ -38,6 +38,14 @@ test("knowledge tools accept FileNode and UI keys through the same source resolv
   for (const [name, documentId] of [["readDocumentText", "fn-source"], ["getDocumentStructured", "file-fn-source"], ["readSpreadsheet", "file-copy"], ["queryProjectFile", "file-file-copy"]]) {
     const result = await client.callTool({ name, arguments: { documentId, ...(name === "queryProjectFile" ? { query: "pipe" } : {}) } });
     assert.notEqual(result.isError, true, JSON.stringify(result));
+    if (name !== "queryProjectFile") {
+      const output = (result.content as { text: string }[])[0].text;
+      const hint = name === "getDocumentStructured" ? JSON.parse(output).takeoff : output.split("\n").at(-1);
+      assert.match(hint, /Quantities from this project source can be saved/);
+      const example = JSON.parse(hint.split("example: ")[1].slice(0, -1));
+      assert.equal(example.documentId, "doc-resolved");
+      assert.equal(example.sourceRefs.length, 1);
+    }
   }
   assert.deepEqual(resolved, ["fn-source", "file-fn-source", "file-copy", "file-file-copy"]);
   assert.equal(reads.length, 4);

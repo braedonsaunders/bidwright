@@ -264,7 +264,7 @@ function sourceSummary(source: SourceOverview["sources"][number]): string {
     if (modelFacts.schema) parts.push(String(modelFacts.schema));
     parts.push(`model ${model.status}`);
     if (typeof modelFacts.elementCount === "number") parts.push(`${modelFacts.elementCount.toLocaleString("en-US")} elements`);
-    if (typeof model.qtoCoveragePercent === "number") parts.push(`quantities on ${Math.round(model.qtoCoveragePercent)}%`);
+    parts.push(typeof model.summary === "string" ? model.summary : "quantity coverage unknown");
     if (model.units !== "unknown") parts.push(`units: ${model.units}`);
   }
   const takeoff = source.pickups === 0 ? "no takeoff marks"
