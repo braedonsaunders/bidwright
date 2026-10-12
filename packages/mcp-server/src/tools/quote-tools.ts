@@ -1,3 +1,4 @@
+import { summarizeLaborBasis } from "@bidwright/domain";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sourceRefArray } from "./source-refs.js";
@@ -885,7 +886,7 @@ function worksheetTreeSummary(ws: any) {
 
       // Validate UOM against category's validUoms
       const validUoms: string[] = catConfig.validUoms || [];
-      if (validUoms.length > 0) {
+      if (validUoms.length > 0 && !rest.laborUnitId) {
         if (!rest.uom || rest.uom === "EA") {
           // Auto-correct to category default if UOM was omitted or left as generic default
           if (!validUoms.includes(rest.uom || "EA")) {
@@ -1051,6 +1052,7 @@ function worksheetTreeSummary(ws: any) {
       const ws = data.workspace || data;
       const rev = ws.currentRevision || ws.revisions?.[0] || {};
       const summary = {
+        laborBasis: ws.laborBasis ?? summarizeLaborBasis(ws),
         quote: { name: (ws.project || ws.projects?.[0])?.name, client: (ws.project || ws.projects?.[0])?.clientName },
         revision: {
           id: rev.id, title: rev.title, status: rev.status, type: rev.type,
@@ -1495,6 +1497,7 @@ function worksheetTreeSummary(ws: any) {
           quantity: createdItem.quantity ?? rest.quantity,
           takeoff: createdItem.takeoff,
           takeoffFact: createdItem.takeoffFact,
+          laborBasisFact: createdItem.laborUnitId ? (createdItem.derivation ? "Labour-unit derivation saved; getLineDerivation exposes quantity, normal hours and adjustments." : "Labour unit cited without a reproducible hours derivation; check the output unit and tier hours.") : undefined,
           removedLinks: createdItem.removedLinks, changedLinks: createdItem.changedLinks,
           uom: createdItem.uom ?? rest.uom,
           calculation: "system_calculated",
@@ -1515,13 +1518,13 @@ function worksheetTreeSummary(ws: any) {
       takeoff: worksheetTakeoff,
       worksheetId: z.string().describe("ID of the worksheet"),
       rateScheduleItemId: z.string().describe("Concrete imported revision rate schedule item ID from listRateScheduleItems/getItemConfig"),
-      tierUnits: z.record(z.coerce.number()).describe("Units per rate tier. Keys are tier IDs from getItemConfig/listRateScheduleItems, values are positive units per quantity."),
-      quantity: z.coerce.number().default(1).describe("Quantity multiplier. Usually 1 for total hours on a row."),
-      uom: z.string().optional().describe("Optional UOM. Defaults to the category default or HR."),
+      tierUnits: z.record(z.coerce.number()).default({}).describe("Hours per quantity by rate tier. When omitted with laborUnitId, the server uses hoursNormal in the normal hourly tier."),
+      quantity: z.coerce.number().default(1).describe("With laborUnitId: installed quantity in the source output UOM. Otherwise: row multiplier (1 for a total-hours row)."),
+      uom: z.string().optional().describe("Defaults to the selected labour unit outputUom, otherwise the category default or HR."),
       phaseId: z.string().optional(),
       description: z.string().default("").describe("Task/scope description; do not put task details in entityName."),
       sourceNotes: z.string().default("").describe("Source basis, productivity logic, assumptions, and document/library refs."),
-      laborUnitId: z.string().nullable().optional().describe("Labor unit ID when a labour manual/unit informed the tierUnits."),
+      laborUnitId: z.string().nullable().optional().describe("Matched labour unit ID. With quantity in its output UOM and tierUnits hours per quantity, the server records quantity × hoursNormal × adjustment as a derivation."),
       resourceComposition: z.record(z.unknown()).optional(),
       sourceEvidence: z.record(z.unknown()).optional(),
       evidenceBasis: z.object({
@@ -1588,12 +1591,14 @@ function worksheetTreeSummary(ws: any) {
         };
       }
 
+      const laborUnit = input.laborUnitId && !input.uom ? await apiGet(`/api/labor-units/units/${encodeURIComponent(input.laborUnitId)}`) : null;
+      const outputUom = input.uom || laborUnit?.outputUom || String(categoryMatch.defaultUom ?? "HR");
       const positiveTierUnits = Object.fromEntries(
         Object.entries(input.tierUnits || {})
           .map(([key, value]) => [key, Number(value)] as const)
           .filter(([, value]) => Number.isFinite(value) && value > 0)
       );
-      if (Object.keys(positiveTierUnits).length === 0) {
+      if (Object.keys(positiveTierUnits).length === 0 && !input.laborUnitId) {
         return {
           content: [{ type: "text" as const, text: "ERROR: positive tierUnits are required. Provide tier IDs from the imported rate schedule, for example {\"rst-...\": 120}." }],
           isError: true,
@@ -1604,7 +1609,7 @@ function worksheetTreeSummary(ws: any) {
         evidenceBasis: input.evidenceBasis,
         derivation: input.derivation ?? null,
         tierUnits: positiveTierUnits,
-        uom: input.uom ?? null,
+        uom: outputUom,
         quantity: input.quantity ?? null,
         linkedQuantityPending: input.takeoff !== undefined,
       });
@@ -1618,7 +1623,7 @@ function worksheetTreeSummary(ws: any) {
         description: stripLeakedToolParameterMarkup(input.description),
         takeoff: input.takeoff,
         quantity: input.quantity,
-        uom: input.uom || String(categoryMatch.defaultUom ?? "HR"),
+        uom: outputUom,
         tierUnits: positiveTierUnits,
         rateScheduleItemId: input.rateScheduleItemId,
         laborUnitId: input.laborUnitId,
@@ -1649,6 +1654,7 @@ function worksheetTreeSummary(ws: any) {
           quantity: createdItem.quantity ?? body.quantity,
           takeoff: createdItem.takeoff,
           takeoffFact: createdItem.takeoffFact,
+          laborBasisFact: createdItem.laborUnitId ? (createdItem.derivation ? "Labour-unit derivation saved; getLineDerivation exposes quantity, normal hours and adjustments." : "Labour unit cited without a reproducible hours derivation; check the output unit and tier hours.") : undefined,
           removedLinks: createdItem.removedLinks, changedLinks: createdItem.changedLinks,
           uom: createdItem.uom ?? body.uom,
           calculation: "system_calculated",

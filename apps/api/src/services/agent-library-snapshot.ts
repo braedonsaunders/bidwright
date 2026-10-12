@@ -968,6 +968,7 @@ export async function writeAgentLibrarySnapshot({
     generatedAt: new Date().toISOString(),
     files: [],
     counts,
+    laborLibraryNames: laborLibraries.map((library) => String(library.name)).slice(0, 20),
     warnings,
   };
 

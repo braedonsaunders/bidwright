@@ -116,7 +116,7 @@ export async function registerTools(server: McpServer, options: { mode?: string;
 
   server.tool(
     "describeTools",
-    "List tools by family, or return the full input schema for a named tool.",
+    "Return full input schemas for a tool family or named tool. With no filters, return a compact catalog of families and names.",
     { family: z.string().optional(), name: z.string().optional() },
     async ({ family, name }) => {
       const entries = [...catalog.entries()].filter(([id]) => (!name || id === name) && (!family || getAgentToolDefinition(id)?.category === family));
@@ -126,7 +126,7 @@ export async function registerTools(server: McpServer, options: { mode?: string;
         description: tool.description.split("\n")[0],
         family: getAgentToolDefinition(id)?.category ?? "system",
         mutates: isAgentToolMutating(id),
-        ...(name ? { inputSchema: toJsonSchemaCompat(tool.schema as any) } : {}),
+        ...((name || family) ? { inputSchema: toJsonSchemaCompat(tool.schema as any) } : {}),
       }))) }] };
     },
   );

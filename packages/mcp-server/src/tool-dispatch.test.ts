@@ -15,6 +15,9 @@ test("direct and indirect calls share schemas, project scope, images, logging an
     const body = init.body ? JSON.parse(String(init.body)) : {};
     requests.push({ path, body: { ...body, query: new URL(url).search } });
     if (path.endsWith("/assets")) return Response.json({ scan: { status: "failed", error: "model.nwd: extractor -777" }, assets: [{ id: "model", status: "failed", progress: "complete", terminalErrors: [{ code: "aps_translation_failed", message: "extractor -777" }] }] });
+    if (path.endsWith("/workspace")) return Response.json({ workspace: { worksheets: [], entityCategories: [{ id: "labor", name: "Labour", entityType: "Labour", defaultUom: "HR", validUoms: ["HR"], calculationType: "tiered_rate", itemSource: "rate_schedule" }], rateSchedules: [{ id: "schedule", category: "Labour", items: [{ id: "rate", name: "Welder" }], tiers: [{ id: "regular", name: "Regular", uom: "HR" }] }] } });
+    if (path === "/api/labor-units/units/lu") return Response.json({ id: "lu", hoursNormal: .2, outputUom: "FT" });
+    if (path === "/api/labor-units/match") return Response.json({ lines: body.lines });
     if (path === "/integrations") return Response.json({ integrations: [] });
     if (path.endsWith("/bom")) return Response.json({ model: { id: "model" }, rows: [{ id: "row", quantity: 3, unit: "ft" }] });
     if (path.endsWith("/aggregate")) return Response.json({ groups: [{ key: "Pipe", count: 3 }], excludedElementCount: 1 });
@@ -36,6 +39,18 @@ test("direct and indirect calls share schemas, project scope, images, logging an
         assert.equal(listed.tools.find(tool => tool.name === name)?._meta?.["anthropic/alwaysLoad"], true);
       }
       assert.equal(listed.tools.find(tool => tool.name === "readDrawingPage")?._meta?.["anthropic/alwaysLoad"], undefined);
+      const matches: any = await client.callTool({ name: "matchLaborUnits", arguments: { lines: [{ operation: "Weld", quantity: 10, uom: "FT" }] } });
+      assert.equal(matches.isError, undefined);
+      assert.equal(requests.at(-1)!.path, "/api/labor-units/match");
+      assert.equal(listed.tools.some(tool => tool.name === "requestEstimateReview"), mode !== "qa");
+      if (mode !== "qa") {
+        const created: any = await client.callTool({ name: "createRateScheduleWorksheetItem", arguments: { worksheetId: "sheet", rateScheduleItemId: "rate", laborUnitId: "lu", quantity: 10, evidenceBasis: {} } });
+        assert.notEqual(created.isError, true, JSON.stringify(created));
+        const write = requests.find(request => request.path.endsWith("/worksheets/sheet/items"));
+        assert.equal(write?.body.uom, "FT");
+        assert.equal(write?.body.laborUnitId, "lu");
+        assert.equal(write?.body.quantity, 10);
+      }
       const polled: any = await client.callTool({ name: "listModels", arguments: { refresh: false } });
       assert.equal(requests.at(-1)!.body.query, "?refresh=0");
       const modelStatus = JSON.parse(polled.content[0].text);
@@ -114,6 +129,7 @@ test("direct and indirect calls share schemas, project scope, images, logging an
       }
       const catalog: any = await client.callTool({ name: "describeTools", arguments: { family: "vision" } });
       const names = JSON.parse(catalog.content[0].text).map((tool: any) => tool.name);
+      assert.ok(JSON.parse(catalog.content[0].text).every((tool: any) => tool.inputSchema?.type === "object"), "family discovery includes every full schema");
       assert.ok(names.includes("listPickups"));
       assert.equal(names.includes("saveCountAsAnnotations"), mode !== "qa");
       const beforeWrite = requests.length;

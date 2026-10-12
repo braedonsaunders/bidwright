@@ -148,3 +148,13 @@ test("resume proceeds when the recorded agent is gone", async () => {
     },
   );
 });
+
+
+test("reaping an advisory review frees only its separate session slot", () => {
+  const parent = { projectId: "project", _spawnOpts: {} };
+  const review = { projectId: "project", _spawnOpts: { sessionKey: "review:project" } };
+  const registry = new Map([["project", parent], ["review:project", review]]);
+  assert.equal(reapSession(registry, review), true);
+  assert.equal(registry.get("project"), parent);
+  assert.equal(registry.has("review:project"), false);
+});

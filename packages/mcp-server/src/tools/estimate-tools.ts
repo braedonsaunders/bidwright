@@ -639,7 +639,7 @@ export function registerEstimateTools(server: McpServer) {
     },
     async (data) => {
       await apiPost(`/api/estimate/${getProjectId()}/strategy/section`, { section: "reconcileReport", data });
-      return { content: [{ type: "text" as const, text: `Saved final reconcile report with ${data.outliers.length} outliers` }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ message: `Saved final reconcile report with ${data.outliers.length} outliers`, laborBasis: (await apiGet(`/projects/${getProjectId()}/workspace`)).workspace?.laborBasis }) }] };
     },
   );
 
@@ -650,8 +650,8 @@ export function registerEstimateTools(server: McpServer) {
       summary: z.record(z.unknown()),
     },
     async ({ summary }) => {
-      await apiPost(`/api/estimate/${getProjectId()}/finalize`, summary);
-      return { content: [{ type: "text" as const, text: "Estimate strategy finalized" }] };
+      const finalized = await apiPost(`/api/estimate/${getProjectId()}/finalize`, summary);
+      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis }) }] };
     },
   );
 }

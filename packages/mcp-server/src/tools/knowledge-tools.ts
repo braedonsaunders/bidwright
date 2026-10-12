@@ -1,3 +1,4 @@
+import { laborOperationQueries } from "@bidwright/domain";
 import { sourceQuantityTakeoffHint } from "../takeoff-hints.js";
 import { promoteSourceDocumentId, resolveSourceDocumentId } from "../source-document.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
@@ -164,6 +165,14 @@ export function registerKnowledgeTools(server: McpServer) {
             return { source, hits: (Array.isArray(data) ? data : data.results ?? []).map((hit: any) => responseFormat === "detailed" ? hit : compactKnowledgeHit(hit)) };
           }
           if (source === "labor") {
+            const phrases = laborOperationQueries(query);
+            if (phrases.length > 1) {
+              const shortlists = await Promise.all(phrases.map(async (phrase) => {
+                const data = await apiGet(`/api/labor-units/units?${new URLSearchParams({ q: phrase, limit: String(Math.min(limit, 3)) })}`);
+                return { query: phrase, hits: (data.units ?? []).map((unit: any) => ({ id: unit.id, name: unit.name, path: unit.metadata?.path, hoursNormal: unit.hoursNormal, outputUom: unit.outputUom, sourceRef: unit.sourceRef, ...searchMatchMetadata(unit) })) };
+              }));
+              return { source, shortlists };
+            }
             const data = await apiGet(`/api/labor-units/units?${params}`);
             return { source, total: data.total, hits: (data.units ?? []).map((unit: any) => responseFormat === "detailed" ? unit : ({ id: unit.id, libraryId: unit.libraryId,
               name: unit.name, description: compactValue(unit.description, 260),

@@ -1,3 +1,4 @@
+import { laborUnitPresentation } from "@bidwright/domain";
 import { createHash } from "node:crypto";
 
 import type {
@@ -768,12 +769,13 @@ export function mapLaborUnitLibrary(row: any): LaborUnitLibrary {
 }
 
 export function mapLaborUnit(row: any): LaborUnit {
+  const presentation = laborUnitPresentation(row);
   return {
     id: row.id,
     libraryId: row.libraryId,
     catalogItemId: row.catalogItemId ?? null,
     code: row.code ?? "",
-    name: row.name,
+    name: presentation.name,
     description: row.description ?? "",
     discipline: row.discipline ?? "",
     category: row.category ?? "",
@@ -784,7 +786,7 @@ export function mapLaborUnit(row: any): LaborUnit {
     entityCategoryType: row.entityCategoryType ?? "Labour",
     tags: Array.isArray(row.tags) ? row.tags : [],
     sourceRef: (row.sourceRef as Record<string, unknown>) ?? {},
-    metadata: (row.metadata as Record<string, unknown>) ?? {},
+    metadata: { ...((row.metadata as Record<string, unknown>) ?? {}), ...presentation, rawName: row.name },
     sortOrder: row.sortOrder ?? 0,
     createdAt: toISO(row.createdAt),
     updatedAt: toISO(row.updatedAt),

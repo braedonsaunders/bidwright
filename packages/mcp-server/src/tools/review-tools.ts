@@ -1,8 +1,18 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { apiPost, getProjectId } from "../api-client.js";
+import { apiGet, apiPost, getProjectId } from "../api-client.js";
 
 export function registerReviewTools(server: McpServer) {
+  server.tool("requestEstimateReview", "Optional fresh-context advisory review of the current draft: quantity spot-checks, document scope coverage, traceability, labour basis, pricing integrity and commercial clarity. Starts a separate review (up to ten minutes), leaving estimate rows unchanged. Returns a reviewId; poll with that id to read findings without launching another review. The estimator can revise after reading the findings; completion never depends on this review.", {
+    reviewId: z.string().optional().describe("Poll the returned review id; omit only to request a new review."),
+  }, async ({ reviewId }) => {
+    if (!reviewId) return { content: [{ type: "text" as const, text: JSON.stringify(await apiPost(`/api/review/${getProjectId()}/start`, { advisory: true })) }] };
+    const { review } = await apiGet(`/api/review/${getProjectId()}/latest`);
+    return { content: [{ type: "text" as const, text: JSON.stringify(review?.id === reviewId
+      ? { reviewId, status: review.status, findings: review.findings, coverage: review.coverage, summary: review.summary, recommendations: review.recommendations }
+      : { reviewId, status: "unavailable", fact: "This is no longer the latest project review." }) }] };
+  });
+
 
   // ── saveReviewCoverage ────────────────────────────────────
   server.tool(

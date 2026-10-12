@@ -1,3 +1,6 @@
+import { summarizeLaborBasis, laborUnitPresentation } from "@bidwright/domain";
+import { buildLaborUnitDerivation } from "./services/labor-unit-derivation.js";
+import { matchLaborBreakdown, laborUnitConversion, type LaborWorkLine } from "./services/labor-unit-matching.js";
 import { assertTakeoffUnits, takeoffError, takeoffRowId, takeoffUnitKey, type WorksheetTakeoffInput } from "./services/worksheet-takeoff.js";
 import { mutateWorkspaceStateLocked, patchTakeoffCalibrations, type CalibrationChange } from "./services/takeoff-calibration-state.js";
 import { randomUUID, createHash } from "node:crypto";
@@ -3097,6 +3100,9 @@ export class PrismaApiStore {
       currentRevisionScheduleIds,
     );
 
+    const laborIds = rows.filter((row) => row.sourceType === "labor_unit").map((row) => row.sourceId);
+    const laborIdentities = laborIds.length ? await this.db.laborUnit.findMany({ where: { id: { in: laborIds }, library: { OR: [{ organizationId: this.organizationId }, { organizationId: null }] } }, include: { library: true } }) : [];
+    const laborNames = new Map(laborIdentities.map((unit) => [unit.id, laborUnitPresentation(unit).name]));
     const mapped = rows.map((row) => ({
       id: row.id,
       sourceType: row.sourceType,
@@ -3105,7 +3111,7 @@ export class PrismaApiStore {
       projectId: row.projectId ?? null,
       category: row.category ?? "",
       entityType: row.entityType ?? "",
-      title: row.title,
+      title: laborNames.get(row.sourceId) ?? row.title,
       subtitle: row.subtitle ?? "",
       code: row.code ?? "",
       vendor: row.vendor ?? "",
@@ -4427,6 +4433,7 @@ export class PrismaApiStore {
     };
 
     return {
+      laborBasis: summarizeLaborBasis(workspace),
       totalHours,
       subtotal,
       worksheetCount,
@@ -5438,7 +5445,8 @@ export class PrismaApiStore {
   async getWorkspace(projectId: string) {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
-    return buildProjectWorkspace(store, projectId);
+    const workspace = buildProjectWorkspace(store, projectId);
+    return workspace ? { ...workspace, laborBasis: summarizeLaborBasis(workspace) } : workspace;
   }
 
   /**
@@ -7728,6 +7736,18 @@ export class PrismaApiStore {
     // Handles: exact IDs, tier names (e.g. "Regular"), and truncated ID prefixes
     if (item.tierUnits && Object.keys(item.tierUnits).length > 0) {
       item.tierUnits = resolveTierUnitKeys(item.tierUnits, revisionScheduleRows);
+    }
+
+    if (item.laborUnitId && !item.derivation) {
+      const unit = await this.requireLaborUnit(item.laborUnitId);
+      const conversion = laborUnitConversion(item.uom, unit.outputUom);
+      if (!Object.values(item.tierUnits ?? {}).some((value) => value > 0) && conversion.multiplier !== null) {
+        const schedule = revisionScheduleRows.find((entry) => entry.items.some((row) => row.id === item.rateScheduleItemId));
+        const normalTier = schedule?.tiers.filter((tier) => /^(h|hr|hrs|hour|hours)$/i.test(tier.uom ?? "HR"))
+          .sort((a, b) => Number(a.multiplier !== 1) - Number(b.multiplier !== 1) || a.sortOrder - b.sortOrder)[0];
+        if (normalTier) item.tierUnits = { [normalTier.id]: unit.hoursNormal * conversion.multiplier };
+      }
+      item.derivation = buildLaborUnitDerivation(item, unit);
     }
 
     // ── Auto-resolve EffectiveCost for cost-resource-linked rows ─────
@@ -13552,6 +13572,10 @@ export class PrismaApiStore {
     return entries.flatMap((entry) => { const item = byId.get(entry.item.id); return item ? [{ ...entry, item }] : []; });
   }
 
+  async matchLaborUnits(lines: LaborWorkLine[], context?: string) {
+    return matchLaborBreakdown(lines, context, (q) => this.listLaborUnits({ q, limit: 3 }));
+  }
+
   async listLaborUnits(input: {
     libraryId?: string;
     q?: string;
@@ -13738,7 +13762,7 @@ export class PrismaApiStore {
         const representative = {
           id: unit.id,
           code: unit.code ?? "",
-          name: unit.name ?? "",
+          name: laborUnitPresentation(unit).name,
           category: unit.category ?? "",
           className: unit.className ?? "",
           subClassName: unit.subClassName ?? "",
@@ -14473,7 +14497,7 @@ export class PrismaApiStore {
         {
           id: unit.id,
           code: unit.code,
-          name: unit.name,
+          name: laborUnitPresentation(unit).name,
           description: unit.description,
           category: unit.category,
           className: unit.className,

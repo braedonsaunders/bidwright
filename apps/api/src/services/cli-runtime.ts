@@ -134,12 +134,13 @@ function cliRunId(prefix = "cli") {
  *
  * Returns whether anything was removed.
  */
-export function reapSession<T extends { projectId: string }>(
+export function reapSession<T extends { projectId: string; _spawnOpts?: Record<string, unknown> }>(
   registry: Map<string, T>,
   finished: T,
 ): boolean {
-  if (registry.get(finished.projectId) !== finished) return false;
-  registry.delete(finished.projectId);
+  const key = typeof finished._spawnOpts?.sessionKey === "string" ? finished._spawnOpts.sessionKey : finished.projectId;
+  if (registry.get(key) !== finished) return false;
+  registry.delete(key);
   return true;
 }
 
@@ -564,6 +565,8 @@ export async function listCliModels(
 // ── Spawn / Resume / Stop ─────────────────────────────────────────
 
 export interface SpawnSessionOpts {
+  /** Independent advisory reviews share project access, not the estimator process slot. */
+  sessionKey?: string;
   projectId: string;
   projectDir: string;
   prompt: string;
@@ -834,7 +837,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   const adapter = getAdapter(opts.runtime);
   const reasoningEffort = normalizeAgentReasoningEffort(opts.reasoningEffort);
 
-  const existing = sessions.get(opts.projectId);
+  const existing = sessions.get(opts.sessionKey ?? opts.projectId);
   if (existing && existing.status === "running") {
     throw new Error(`Session already running for project ${opts.projectId}`);
   }
@@ -946,7 +949,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   };
   session._spawnOpts = { ...opts, reasoningEffort };
   session._recoveryCount = 0;
-  sessions.set(opts.projectId, session);
+  sessions.set(opts.sessionKey ?? opts.projectId, session);
 
   // Snapshot the project workspace to remote storage when the session
   // exits (multi-host hosted SaaS so the user's files follow them across
@@ -969,7 +972,7 @@ export async function spawnSession(opts: SpawnSessionOpts): Promise<CliSession> 
   // ── Inactivity watchdog ─────────────────────────────────────
   const INACTIVITY_TIMEOUT_MINUTES = 15;
   const INACTIVITY_TIMEOUT_MS = INACTIVITY_TIMEOUT_MINUTES * 60 * 1000;
-  const MAX_RECOVERIES = 2;
+  const MAX_RECOVERIES = opts.sessionKey ? 0 : 2;
   let inactivityTimer: ReturnType<typeof setTimeout> | null = null;
 
   const resetInactivityTimer = () => {
@@ -1080,7 +1083,7 @@ export function buildWatchdogRecoveryOptions(
  * if no in-memory session is known.
  */
 export async function resumeSession(opts: ResumeSessionOpts): Promise<CliSession> {
-  const session = sessions.get(opts.projectId);
+  const session = sessions.get(opts.sessionKey ?? opts.projectId);
 
   // spawnSession refuses to start on top of a live session; resume must too.
   // Without this we resumed a thread whose writer was still working, and the
@@ -1248,7 +1251,7 @@ async function spawnResumedSession(
   };
   session._spawnOpts = { ...opts, reasoningEffort };
 
-  sessions.set(opts.projectId, session);
+  sessions.set(opts.sessionKey ?? opts.projectId, session);
   wireChildProcess(child, session, adapter, events, {
     completionMessage: opts.completionMessage,
     stoppedMessage: opts.stoppedMessage,
