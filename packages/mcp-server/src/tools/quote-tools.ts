@@ -1,3 +1,4 @@
+import { summarizeLaborBasis } from "@bidwright/domain";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { sourceRefArray } from "./source-refs.js";
@@ -569,11 +570,11 @@ const createWorksheetItemShape = {
   entityType: z.string().optional().describe("Legacy entity type/category type. The server canonicalizes this from categoryId when provided."),
   description: z.string().default("").describe("Description with document reference and assumptions"),
   quantity: z.coerce.number().default(1).describe("Quantity multiplier. For rate_schedule categories this is a multiplier on the unit values (e.g. crew size). Total = Σ(units × rate) × quantity. Check the category config from getItemConfig to understand what quantity means for each category."),
-  uom: z.string().default("EA").describe("Unit of measure — MUST be from the category's validUoms (see getItemConfig). Server rejects invalid UOMs and auto-corrects to the category default."),
+  uom: z.string().optional().describe("Unit of measure. Defaults to the category default; with laborUnitId, an explicit source output UOM is retained."),
   cost: z.coerce.number().optional().describe("Editable unit cost for freeform/unit-cost categories only. Do not pass for tiered/rate categories; Bidwright calculates those from rateScheduleItemId and tierUnits."),
   markup: z.coerce.number().optional().describe("Markup percentage for markup-eligible categories only. Do not pass for tiered/rate categories."),
   price: z.coerce.number().optional().describe("Optional unit price override. If omitted, server uses cost plus markup."),
-  tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. REQUIRED for rate_schedule categories."),
+  tierUnits: z.record(z.coerce.number()).optional().describe("Units per rate tier. Keys are tier IDs from getItemConfig, values are units PER quantity. The calc engine multiplies these by the tier rate, then by quantity. When omitted with laborUnitId and a compatible UOM, the server supplies the normal hourly tier."),
   rateScheduleItemId: z.string().optional().describe("Rate schedule item ID for rate_schedule-backed categories"),
   itemId: z.string().optional().describe("Catalog item ID for catalog-backed categories"),
   costResourceId: z.string().nullable().optional().describe("Cost intelligence resource ID from queryLibrary/recommendCostSource."),
@@ -885,7 +886,7 @@ function worksheetTreeSummary(ws: any) {
 
       // Validate UOM against category's validUoms
       const validUoms: string[] = catConfig.validUoms || [];
-      if (validUoms.length > 0) {
+      if (validUoms.length > 0 && !(rest.laborUnitId && input.uom !== undefined)) {
         if (!rest.uom || rest.uom === "EA") {
           // Auto-correct to category default if UOM was omitted or left as generic default
           if (!validUoms.includes(rest.uom || "EA")) {
@@ -935,7 +936,7 @@ function worksheetTreeSummary(ws: any) {
 
       // Validate calculationType requirements
       const hasTierUnits = !!rest.tierUnits && Object.values(rest.tierUnits).some((value) => Number(value) !== 0);
-      if (requiresRateSchedule && !hasTierUnits) {
+      if (requiresRateSchedule && !hasTierUnits && !rest.laborUnitId) {
         return { error: `ERROR: Category "${catConfig.name}" uses ${calcType} calculation with rate-schedule pricing, so positive tierUnits are required. Provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price.` };
       }
       if (requiresRateSchedule) {
@@ -970,7 +971,7 @@ function worksheetTreeSummary(ws: any) {
   if (!cat) {
     return { error: "ERROR: categoryId could not be resolved from the current workspace. Call getItemConfig and retry with a valid categoryId or category name." };
   }
-  const body = { ...rest, category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat };
+  const body = { ...rest, uom: rest.uom ?? resolvedCategory?.defaultUom ?? "EA", category: cat, categoryId: resolvedCategory?.id ?? rest.categoryId, entityType: resolvedCategory?.entityType ?? rest.entityType ?? cat };
     return { worksheetId, body, rest, cat, autoWarnings };
   }
 
@@ -1051,6 +1052,7 @@ function worksheetTreeSummary(ws: any) {
       const ws = data.workspace || data;
       const rev = ws.currentRevision || ws.revisions?.[0] || {};
       const summary = {
+        laborBasis: ws.laborBasis ?? summarizeLaborBasis(ws),
         quote: { name: (ws.project || ws.projects?.[0])?.name, client: (ws.project || ws.projects?.[0])?.clientName },
         revision: {
           id: rev.id, title: rev.title, status: rev.status, type: rev.type,
@@ -1474,7 +1476,7 @@ function worksheetTreeSummary(ws: any) {
   // ── createWorksheetItem ───────────────────────────────────
   server.tool(
     "createWorksheetItem",
-    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For tiered/rate categories, provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price. Use the rate item name as entityName and put task details in the description field, NOT in entityName. For freeform categories, provide quantity plus the editable unit cost/price basis. UOM must be from the category's validUoms list. evidenceBasis is optional and records the basis for review. Two-axis form: evidenceBasis.quantity declares where the quantity/hours/duration came from, and evidenceBasis.pricing declares where the unit cost/rate/productivity came from. Drawing/takeoff quantities use drawing_quantity/visual_takeoff/drawing_table/drawing_note under evidenceBasis.quantity and can cite saved claim IDs and viewIds; pricing can separately be material_quote, rate_schedule, knowledge_labor, vendor_quote, equipment_rental, subcontract, allowance, indirect, assumption, document_quantity, or mixed.`,
+    `Create a line item in a worksheet. IMPORTANT: categoryId is preferred; category name is accepted for backward compatibility and must resolve to an EntityCategory from getItemConfig. For tiered/rate categories, provide rateScheduleItemId, quantity, and tierUnits only; Bidwright calculates cost and price. Use the rate item name as entityName and put task details in the description field, NOT in entityName. For freeform categories, provide quantity plus the editable unit cost/price basis. UOM defaults to the category default; with laborUnitId, an explicitly supplied source output UOM is retained. evidenceBasis is optional and records the basis for review. Two-axis form: evidenceBasis.quantity declares where the quantity/hours/duration came from, and evidenceBasis.pricing declares where the unit cost/rate/productivity came from. Drawing/takeoff quantities use drawing_quantity/visual_takeoff/drawing_table/drawing_note under evidenceBasis.quantity and can cite saved claim IDs and viewIds; pricing can separately be material_quote, rate_schedule, knowledge_labor, vendor_quote, equipment_rental, subcontract, allowance, indirect, assumption, document_quantity, or mixed.`,
     createWorksheetItemShape,
     async (input) => {
       const prepared = await prepareCreateWorksheetItem(input);
@@ -1495,6 +1497,8 @@ function worksheetTreeSummary(ws: any) {
           quantity: createdItem.quantity ?? rest.quantity,
           takeoff: createdItem.takeoff,
           takeoffFact: createdItem.takeoffFact,
+          laborAdjustmentFactor: createdItem.derivation?.inputs?.find((entry: any) => entry.name === "factor")?.value,
+          laborBasisFact: createdItem.laborUnitId ? (createdItem.derivation ? "Labour-unit derivation saved; getLineDerivation exposes quantity, normal hours and adjustments." : "Labour unit cited without a reproducible hours derivation; check the output unit and tier hours.") : undefined,
           removedLinks: createdItem.removedLinks, changedLinks: createdItem.changedLinks,
           uom: createdItem.uom ?? rest.uom,
           calculation: "system_calculated",
@@ -1515,13 +1519,13 @@ function worksheetTreeSummary(ws: any) {
       takeoff: worksheetTakeoff,
       worksheetId: z.string().describe("ID of the worksheet"),
       rateScheduleItemId: z.string().describe("Concrete imported revision rate schedule item ID from listRateScheduleItems/getItemConfig"),
-      tierUnits: z.record(z.coerce.number()).describe("Units per rate tier. Keys are tier IDs from getItemConfig/listRateScheduleItems, values are positive units per quantity."),
-      quantity: z.coerce.number().default(1).describe("Quantity multiplier. Usually 1 for total hours on a row."),
-      uom: z.string().optional().describe("Optional UOM. Defaults to the category default or HR."),
+      tierUnits: z.record(z.coerce.number()).optional().describe("Hours per quantity by rate tier. When omitted with laborUnitId, the server uses hoursNormal in the normal hourly tier."),
+      quantity: z.coerce.number().default(1).describe("With laborUnitId and omitted tierUnits: installed quantity in the source output UOM. Otherwise: row multiplier (1 for a total-hours row)."),
+      uom: z.string().optional().describe("When tierUnits are omitted, defaults to the selected labour unit outputUom; otherwise the category default or HR."),
       phaseId: z.string().optional(),
       description: z.string().default("").describe("Task/scope description; do not put task details in entityName."),
       sourceNotes: z.string().default("").describe("Source basis, productivity logic, assumptions, and document/library refs."),
-      laborUnitId: z.string().nullable().optional().describe("Labor unit ID when a labour manual/unit informed the tierUnits."),
+      laborUnitId: z.string().nullable().optional().describe("Matched labour unit ID. With quantity in its output UOM and tierUnits hours per quantity, the server records quantity × hoursNormal × adjustment as a derivation."),
       resourceComposition: z.record(z.unknown()).optional(),
       sourceEvidence: z.record(z.unknown()).optional(),
       evidenceBasis: z.object({
@@ -1588,12 +1592,14 @@ function worksheetTreeSummary(ws: any) {
         };
       }
 
+      const laborUnit = input.laborUnitId && input.tierUnits === undefined && !input.uom ? await apiGet(`/api/labor-units/units/${encodeURIComponent(input.laborUnitId)}`) : null;
+      const outputUom = input.uom || laborUnit?.outputUom || String(categoryMatch.defaultUom ?? "HR");
       const positiveTierUnits = Object.fromEntries(
         Object.entries(input.tierUnits || {})
           .map(([key, value]) => [key, Number(value)] as const)
           .filter(([, value]) => Number.isFinite(value) && value > 0)
       );
-      if (Object.keys(positiveTierUnits).length === 0) {
+      if (Object.keys(positiveTierUnits).length === 0 && !input.laborUnitId) {
         return {
           content: [{ type: "text" as const, text: "ERROR: positive tierUnits are required. Provide tier IDs from the imported rate schedule, for example {\"rst-...\": 120}." }],
           isError: true,
@@ -1604,7 +1610,7 @@ function worksheetTreeSummary(ws: any) {
         evidenceBasis: input.evidenceBasis,
         derivation: input.derivation ?? null,
         tierUnits: positiveTierUnits,
-        uom: input.uom ?? null,
+        uom: outputUom,
         quantity: input.quantity ?? null,
         linkedQuantityPending: input.takeoff !== undefined,
       });
@@ -1618,7 +1624,7 @@ function worksheetTreeSummary(ws: any) {
         description: stripLeakedToolParameterMarkup(input.description),
         takeoff: input.takeoff,
         quantity: input.quantity,
-        uom: input.uom || String(categoryMatch.defaultUom ?? "HR"),
+        uom: outputUom,
         tierUnits: positiveTierUnits,
         rateScheduleItemId: input.rateScheduleItemId,
         laborUnitId: input.laborUnitId,
@@ -1649,6 +1655,8 @@ function worksheetTreeSummary(ws: any) {
           quantity: createdItem.quantity ?? body.quantity,
           takeoff: createdItem.takeoff,
           takeoffFact: createdItem.takeoffFact,
+          laborAdjustmentFactor: createdItem.derivation?.inputs?.find((entry: any) => entry.name === "factor")?.value,
+          laborBasisFact: createdItem.laborUnitId ? (createdItem.derivation ? "Labour-unit derivation saved; getLineDerivation exposes quantity, normal hours and adjustments." : "Labour unit cited without a reproducible hours derivation; check the output unit and tier hours.") : undefined,
           removedLinks: createdItem.removedLinks, changedLinks: createdItem.changedLinks,
           uom: createdItem.uom ?? body.uom,
           calculation: "system_calculated",

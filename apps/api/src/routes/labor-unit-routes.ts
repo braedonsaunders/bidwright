@@ -41,6 +41,17 @@ function statusForError(message: string) {
 }
 
 export async function laborUnitRoutes(app: FastifyInstance): Promise<void> {
+  app.post("/api/labor-units/match", async (request, reply) => {
+    const parsed = z.object({
+      context: z.string().max(2000).optional(),
+      lines: z.array(z.object({ operation: z.string().trim().min(1).max(300), material: z.string().max(200).optional(),
+        size: z.string().max(200).optional(), condition: z.string().max(300).optional(),
+        quantity: z.number().finite().nonnegative(), uom: z.string().trim().min(1).max(80) })).min(1).max(60),
+    }).safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+    return request.store!.matchLaborUnits(parsed.data.lines, parsed.data.context);
+  });
+
   app.get("/api/labor-units/libraries", async (request, reply) => {
     const query = request.query as { scope?: "organization" | "all" };
     try {

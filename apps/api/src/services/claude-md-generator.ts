@@ -25,9 +25,12 @@ export interface LibrarySnapshotInfo {
   files: LibrarySnapshotFile[];
   counts: Record<string, number>;
   warnings: string[];
+  laborLibraryNames?: string[];
 }
 
 export interface ClaudeMdParams {
+  laborBasis?: unknown;
+  advisoryReview?: boolean;
   pythonEnvironment?: Record<string, string>;
   runtime?: string;
   sourceOverview?: SourceOverview;
@@ -206,6 +209,8 @@ function buildLibrarySnapshotSection(snapshot: LibrarySnapshotInfo | null | unde
 
   return `## Libraries and search
 
+\`describeTools({family:"resources"})\` returns all schemas in that family in one call; other families include \`worksheet\`, \`strategy\`, \`vision\` and \`review\`.
+
 Bidwright materializes searchable text snapshots in \`${rootDir}/\`. These are discovery indexes only; MCP tools remain authoritative.
 
 Choose the search tool that matches the information you need:
@@ -219,7 +224,7 @@ Choose the search tool that matches the information you need:
 For reference research, \`searchEstimatingKnowledge\` searches books, labour units and datasets together; \`readKnowledgePassage\` expands a book hit with neighboring table context. When a historical hit lacks a page number, use \`searchBookPages\` to locate the original PDF page, then \`getBookPage\` to view the table directly. Search the actual operation and material, then use dataset filters for exact sizes and conditions. For cost candidates use \`queryLibrary\` / \`recommendCostSource\`; for labour-unit lookups use \`listLaborUnitTree\` / \`listLaborUnits\` / \`getLaborUnit\`; for catalog SKUs use \`searchCatalogs\`; for rate-schedule items use \`listRateScheduleItems\`. Drill into a hit with \`readDocumentText\` (any document) or \`getDocumentStructured\` (project docs only). Use \`getBookPage\` and the runtime image-reading tool to inspect a knowledge-book page visually.
 
 The \`${rootDir}/\` folder still contains compact text dumps you can \`rg\` for raw cross-cutting greps, but the canonical MCP tools above are the agent's primary search surface.
-Search results are candidates. Judge their relevance and conditions, and explain the source or estimator basis actually used in \`sourceNotes\`. Use the relevant resources; a search through every library is not a prerequisite to pricing.
+The labour library has ${snapshot?.counts?.laborUnits === undefined ? "an unreported number of" : Number(snapshot.counts.laborUnits).toLocaleString()} units${snapshot?.laborLibraryNames?.length ? ` across ${snapshot.laborLibraryNames.join("; ")}` : "; listLaborUnitLibraries lists the accessible tables"}. \`matchLaborUnits\` matches a whole work breakdown in one call. Hours are reported as sourced (within ±10% of the unit baseline), adjusted (with the factor), or assumed (no current reproducible baseline) by \`getWorkspace\` and reconciliation.
 
 Snapshot counts:
 ${countRows}
@@ -313,7 +318,9 @@ Respect the user's commercial decisions: owner-supplied equipment, fabrication b
 
 Start from the current \`getWorkspace\` so you preserve existing work and human edits. Understand the RFQ, relevant drawings, schedules, vendor scope and site constraints. Create worksheets and price useful portions as you establish their basis; continue researching the unresolved portions alongside the saved estimate.
 
-Think through how the work will be performed: supply versus installation, sequence, crew, access, rigging, shutdowns, temporary works, testing and turnover. Use applicable labour units and manual tables with their conditions and adjustments. When no suitable source is available, use and describe estimator judgment. Do not spend repeated searches on adjacent topics once they stop changing the estimate.
+\`requestEstimateReview\` optionally starts an independent, fresh-context advisory draft review; the returned reviewId polls its findings for a subsequent revision. The specialist-subagents skill describes a runtime-native alternative.
+
+Think through how the work will be performed: supply versus installation, sequence, crew, access, rigging, shutdowns, temporary works, testing and turnover. Use applicable labour units and manual tables with their conditions and adjustments. When no suitable source is available, use and describe estimator judgment. The labour-library match, output unit, quantity and adjustments can be recorded in the row derivation.
 
 Choose tools and timing to suit the work. Strategy, package plans, benchmarks, drawing claims and reconciliation tools can help you organize or check the job. If you use \`saveEstimateStrategyStages\`, each supplied section replaces that section: preserve the accumulated entries and add your changes. \`readMemory\` / \`writeMemory\` can checkpoint decisions and source locations for continuity.
 
@@ -590,6 +597,14 @@ export async function generateReviewInstructionFiles(
 }
 
 export function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
+  if (params.advisoryReview) return `# Advisory draft review
+Review **${params.projectName}**, quote **${params.quoteNumber}**, independently in a fresh context. Scope: ${params.scope || "See project documents"}.
+Rubric: quantity accuracy spot-checks, document scope coverage, traceability, labour basis share, pricing integrity and commercial clarity.
+Use getWorkspace/searchItems/getLineDerivation and original project sources for a small set of consequential checks. This is a spot-check, not a full re-estimate. Keep estimate rows unchanged. Historical benchmarks and calibration lessons are outside this review.
+Labour basis at launch: ${JSON.stringify(params.laborBasis ?? null)}
+${buildDocumentManifestRows(params.documents, params.sourceOverview)}
+Save supported findings with saveReviewFindings and saveReviewSummary; name the evidence, likely effect, proposed change and unresolved uncertainty. The report is advisory and does not approve or finalize the estimate.
+${buildLibrarySnapshotSection(params.librarySnapshot)}`;
   return `# Bidwright Quote Review Agent
 
 Review the estimate for **${params.projectName}**, quote **${params.quoteNumber}**.
@@ -612,6 +627,8 @@ ${buildDrawingAnalysisSection(params.documents, "review")}
 ${buildLibrarySnapshotSection(params.librarySnapshot)}
 
 ## Reviewing the estimate
+
+Labour basis at launch: ${JSON.stringify(params.laborBasis ?? null)}
 
 Use \`getWorkspace\` and \`searchItems\` for the saved rows, totals, conditions and labour units. \`getLineDerivation\` explains the recorded calculations. Quoted hours are available as resolved tier units (units.total / units.tiers) and worksheet labourHours; a row's quantity may instead be a multiplier. Read the quoted values before comparing them with your independent estimate.
 

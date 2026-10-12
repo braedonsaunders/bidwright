@@ -108,6 +108,7 @@ export const AGENT_TOOL_REGISTRY = {
   recommendCostSource: { id: "recommendCostSource", displayName: "Recommend cost source", category: "resources" },
   recommendEstimateBasis: { id: "recommendEstimateBasis", displayName: "Recommend estimate basis", category: "resources" },
   createWorksheetItemFromCandidate: { id: "createWorksheetItemFromCandidate", displayName: "Add priced line", category: "worksheet", mutates: true },
+  matchLaborUnits: { id: "matchLaborUnits", displayName: "Match labour breakdown", category: "resources", mutates: false },
   listLaborUnits: { id: "listLaborUnits", displayName: "List labor units", category: "resources" },
   getLaborUnit: { id: "getLaborUnit", displayName: "Get labor unit", category: "resources" },
   listLaborUnitTree: { id: "listLaborUnitTree", displayName: "Browse labor units", category: "resources" },
@@ -156,6 +157,7 @@ export const AGENT_TOOL_REGISTRY = {
   saveReviewFindings: { id: "saveReviewFindings", displayName: "Save review findings", category: "review", mutates: true },
   saveReviewCompetitiveness: { id: "saveReviewCompetitiveness", displayName: "Save competitiveness review", category: "review", mutates: true },
   saveReviewRecommendation: { id: "saveReviewRecommendation", displayName: "Save recommendation", category: "review", mutates: true },
+  requestEstimateReview: { id: "requestEstimateReview", displayName: "Request advisory estimate review", category: "review", mutates: true },
   saveReviewSummary: { id: "saveReviewSummary", displayName: "Save review summary", category: "review", mutates: true },
 
   listProjectImages: { id: "listProjectImages", displayName: "List project images", category: "vision" },

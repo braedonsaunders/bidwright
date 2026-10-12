@@ -1,3 +1,4 @@
+import { assertReasoningEffortOverride, resolveRunReasoningEffort } from "../../apps/api/src/services/cli-reasoning-effort.js";
 /**
  * Run a Bidwright quote with a local Claude Code estimator instead of the
  * in-app runtime, so prompt/tool/estimating behaviour can be iterated on
@@ -12,7 +13,7 @@
  *   BIDWRIGHT_AUTH_TOKEN_FILE=<file> \
  *   npx tsx scripts/eval/direct-estimator.ts prepare --source <projectId> \
  *     --out <dir> --ledger <file> [--scope-file <file>] [--label <name>] [--not-blind] [--runtime claude-code|codex]
- *     [--persona <id|none>] (defaults to the organization's enabled default)
+ *     [--reasoning auto|low|medium|high|extra_high|max] [--persona <id|none>] (defaults to the organization's enabled default)
  *     [--exclude-answer-file <exact name>] (repeat for known saved estimate artifacts)
  *   npx tsx scripts/eval/direct-estimator.ts cleanup --project <projectId>
  *
@@ -101,6 +102,7 @@ async function buildDomain() {
 }
 
 async function prepare() {
+  assertReasoningEffortOverride(option("--reasoning"));
   const runtime = option("--runtime", "claude-code");
   if (runtime !== "claude-code" && runtime !== "codex") throw new Error("--runtime must be claude-code or codex");
   await buildDomain();
@@ -155,12 +157,15 @@ async function prepare() {
   const project = workspace?.project ?? {};
   const quote = workspace?.quote ?? {};
   const revision = workspace?.currentRevision ?? {};
-  const settings = await api<any>("/settings").catch(() => ({}));
+  const settings = await api<any>("/settings");
+  const reasoning = resolveRunReasoningEffort(option("--reasoning"), settings?.integrations?.agentReasoningEffort);
+  const runtimeEffort = reasoning === "extra_high" ? "xhigh" : reasoning === "auto" ? null : reasoning;
   const scope = scopeFile ? (await readFile(scopeFile, "utf8")).trim() : String(project.scope ?? "").trim();
   const sourceOverview = await api<any>(`/api/projects/${projectId}/source-overview`);
 
   const dir = resolve(out, projectId);
   await mkdir(join(dir, "documents"), { recursive: true });
+  await writeFile(join(dir, "reasoning.json"), JSON.stringify({ reasoning, runtimeEffort, source: option("--reasoning") ? "override" : "tenant configuration" }, null, 2));
   await writeFile(join(dir, "persona.json"), JSON.stringify({ id: selectedPersona?.id ?? null, persona }, null, 2));
   await writeAnswerFileExclusionAudit(out, projectId, excludedAnswerFiles);
   await mkdir(join(dir, ".bidwright"), { recursive: true });
@@ -189,7 +194,9 @@ async function prepare() {
     visionVenv: process.env.BIDWRIGHT_VISION_VENV,
     cadPython: process.env.BIDWRIGHT_CAD_PYTHON,
   });
+  const laborLibraries = await api<any[]>("/api/labor-units/libraries?scope=all");
   const instructions = buildCompactClaudeMdContent({
+    librarySnapshot: { rootDir: "library-snapshots", generatedAt: new Date().toISOString(), files: [], warnings: ["Eval uses API library tools; local library snapshots are not generated."], counts: { laborUnits: laborLibraries.reduce((sum, library) => sum + Number(library.unitCount ?? 0), 0) }, laborLibraryNames: laborLibraries.map((library) => library.name).slice(0, 20) },
     pythonEnvironment,
     projectDir: dir,
     projectName: project.name || "Untitled Project",
@@ -260,7 +267,7 @@ ${Object.entries(pythonEnvironment).map(([key, value]) => `export ${key}=${shell
 BIDWRIGHT_AUTH_TOKEN="$(sed 's/^.*=//; s/^"//; s/"$//' '${tokenFile}' | tr -d '\\n')"
 export BIDWRIGHT_AUTH_TOKEN BIDWRIGHT_API_URL='${apiUrl}' BIDWRIGHT_PROJECT_ID='${projectId}'
 claude -p "$(cat prompt.txt)" \\
-  --model "\${1:-claude-opus-5-5}" --effort "\${2:-medium}" \\
+  --model "\${1:-claude-opus-5-5}" ${runtimeEffort ? `--effort "\${2:-${runtimeEffort}}"` : ""} \\
   --mcp-config mcp.json --strict-mcp-config --settings settings.json \\
   --permission-mode acceptEdits \\
   --allowedTools mcp__bidwright Bash Read Grep Glob Write Edit WebSearch WebFetch Task \\${blind ? `
@@ -282,7 +289,7 @@ claude -p "$(cat prompt.txt)" \\
       "mcp_servers.bidwright.default_tools_approval_mode": "approve",
       "mcp_servers.bidwright.startup_timeout_sec": 60,
       "mcp_servers.bidwright.tool_timeout_sec": 180,
-      "model_reasoning_effort": "medium",
+      ...(runtimeEffort ? { "model_reasoning_effort": runtimeEffort } : {}),
       "shell_environment_policy.set": pythonEnvironment,
       "approval_policy": "never",
       "sandbox_workspace_write.network_access": true,

@@ -95,6 +95,7 @@ type EnrichedLaborUnit = Record<string, unknown> & {
 };
 
 type CompactLaborUnit = {
+  path?: string;
   id?: string;
   libraryId?: string;
   catalogItemId?: string;
@@ -326,7 +327,7 @@ function tokenizeSearch(value: unknown): string[] {
 function candidateHaystack(candidate: SearchCandidate) {
   const payload = asObject(candidate.payload);
   return [
-    candidate.title,
+    candidate.payload?.displayName ?? candidate.title,
     candidate.subtitle,
     candidate.code,
     candidate.vendor,
@@ -478,7 +479,7 @@ function compactCandidateForTool(candidate: EnrichedSearchCandidate, limitDescri
     id: candidate.id ?? null,
     sourceType: candidate.sourceType ?? null,
     sourceId: candidate.sourceId ?? null,
-    title: truncate(candidate.title, 200),
+    title: truncate(candidate.payload?.displayName ?? candidate.title, 200),
     subtitle: truncate(candidate.subtitle, limitDescription),
     code: candidate.code || undefined,
     vendor: candidate.vendor || undefined,
@@ -672,7 +673,7 @@ function unitsFromPayload(payload: unknown): Record<string, unknown>[] {
 
 function laborUnitBasis(unit: Record<string, unknown>, q?: string): SourceBasis {
   const haystack = [
-    unit.name,
+    unit.displayName ?? unit.name,
     unit.code,
     unit.description,
     unit.category,
@@ -721,7 +722,8 @@ function compactLaborUnit(unit: Record<string, unknown>, q?: string): CompactLab
   return {
     id: stringValue(unit.id),
     code: stringValue(unit.code),
-    name: compactText(unit.name, 120),
+    name: compactText(unit.displayName ?? unit.name, 120),
+    path: stringValue(asObject(unit.metadata).path),
     discipline: stringValue(unit.discipline),
     category: stringValue(unit.category),
     className: stringValue(unit.className),
@@ -857,6 +859,11 @@ function groupedCandidates(candidates: EnrichedSearchCandidate[]) {
 }
 
 export function registerResourceTools(server: McpServer) {
+  server.tool("matchLaborUnits", "Match a whole work breakdown against the accessible labour libraries in one call (up to 60 lines). Returns three candidates per operation, readable library/table paths, source book/page, hours per output unit, relevance scores and explicit conversion facts. Weak results say no good match. A selected laborUnitId on a row records its labour basis.", {
+    lines: z.array(z.object({ operation: z.string().min(1), material: z.string().optional(), size: z.string().optional(), condition: z.string().optional(), quantity: z.number().nonnegative(), uom: z.string().min(1) })).min(1).max(60),
+    context: z.string().optional(),
+  }, async (input) => ({ content: [{ type: "text" as const, text: JSON.stringify(await apiPost("/api/labor-units/match", input)) }] }));
+
   server.tool(
     "queryLibrary",
     "Single ranked search across the org library: catalog items (priced SKUs), imported rate-schedule items, cost-intelligence effective costs + cost resources (prior-job pricing), labor units (productivity), assemblies, and provider actions. Backed by the same `LineItemSearchDocument` index the worksheet line-item dropdown uses, so improvements here improve the UI too. Returns compact candidates with structural IDs (catalogId/itemId, rateScheduleItemId, costResourceId/effectiveCostId, laborUnitId, assemblyId) ready to plumb into createWorksheetItem. **Pass `category` (e.g. 'Labour', 'Material', 'Equipment', 'Subcontractor') whenever you know what kind of row you're pricing — it gives a +4 score boost to matching source-types and dramatically improves ranking.** For prose handbook chapters use queryKnowledgeBook; for tabular productivity tables use queryKnowledgeDataset; for project documents use queryProjectFile.",
