@@ -427,6 +427,7 @@ export function mapWorksheetItem(i: any): WorksheetItem {
     costResourceId: i.costResourceId ?? null,
     effectiveCostId: i.effectiveCostId ?? null,
     laborUnitId: i.laborUnitId ?? null,
+    ...(i.laborUnit !== undefined ? { laborUnitBasis: i.laborUnit ? { id: i.laborUnit.id, hoursNormal: Number(i.laborUnit.hoursNormal), outputUom: i.laborUnit.outputUom } : null } : {}),
     resourceComposition: (i.resourceComposition as Record<string, unknown>) ?? {},
     sourceEvidence: (i.sourceEvidence as Record<string, unknown>) ?? {},
     sourceAssemblyId: i.sourceAssemblyId ?? null,

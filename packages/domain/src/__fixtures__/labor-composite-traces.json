@@ -1,0 +1,321 @@
+[
+  {
+    "id": "row-1",
+    "entityName": "Operation 1",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-1",
+    "laborUnitBasis": {"id": "unit-1", "hoursNormal": 0.993529, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 76.967044},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "thin * (weld * thinFactor + cut + rootFit) + thick * (weld + cut + bevel + rootFit)",
+      "result": {"value": 76.967044, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "thin", "value": 20, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "thick", "value": 20, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-2"}},
+        {"name": "weld", "value": 0.993529, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-1"}},
+        {"name": "thinFactor", "value": 0.8, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-4"}},
+        {"name": "cut", "value": 0.22, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-1"}},
+        {"name": "bevel", "value": 0.34, "unit": "ph/end", "source": {"kind": "laborUnit", "ref": "unit-1"}},
+        {"name": "rootFit", "value": 0.64, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-2"}}
+      ]
+    }
+  },
+  {
+    "id": "row-2",
+    "entityName": "Operation 2",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-3",
+    "laborUnitBasis": {"id": "unit-3", "hoursNormal": 0.547161, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 16.760254},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld + cut + fit)",
+      "result": {"value": 16.760254, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 14, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 0.547161, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-3"}},
+        {"name": "cut", "value": 0.2, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-3"}},
+        {"name": "fit", "value": 0.45, "unit": "ph/joint", "source": {"kind": "laborUnit", "ref": "unit-3"}}
+      ]
+    }
+  },
+  {
+    "id": "row-3",
+    "entityName": "Operation 3",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-4",
+    "laborUnitBasis": {"id": "unit-4", "hoursNormal": 1, "outputUom": "EA"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 154},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld + cut + bevel + fit)",
+      "result": {"value": 154, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 70, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 1, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-4"}},
+        {"name": "cut", "value": 0.22, "unit": "ph/cut", "source": {"kind": "dataset", "ref": "basis-3"}},
+        {"name": "bevel", "value": 0.34, "unit": "ph/end", "source": {"kind": "dataset", "ref": "basis-4"}},
+        {"name": "fit", "value": 0.64, "unit": "ph/joint", "source": {"kind": "dataset", "ref": "basis-5"}}
+      ]
+    }
+  },
+  {
+    "id": "row-4",
+    "entityName": "Operation 4",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-5",
+    "laborUnitBasis": {"id": "unit-5", "hoursNormal": 1.099557, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 19.996456},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld + cut + bevel + fit)",
+      "result": {"value": 19.996456, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 8, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 1.099557, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "cut", "value": 0.29, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "bevel", "value": 0.36, "unit": "ph/end", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "fit", "value": 0.75, "unit": "ph/joint", "source": {"kind": "laborUnit", "ref": "unit-5"}}
+      ]
+    }
+  },
+  {
+    "id": "row-5",
+    "entityName": "Operation 5",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-6",
+    "laborUnitBasis": {"id": "unit-6", "hoursNormal": 1.560979, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 24.125874},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld + cut + bevel + fit)",
+      "result": {"value": 24.125874, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 6, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 1.560979, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "cut", "value": 0.64, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "bevel", "value": 0.46, "unit": "ph/end", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "fit", "value": 1.36, "unit": "ph/joint", "source": {"kind": "laborUnit", "ref": "unit-6"}}
+      ]
+    }
+  },
+  {
+    "id": "row-6",
+    "entityName": "Operation 6",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-7",
+    "laborUnitBasis": {"id": "unit-7", "hoursNormal": 1.2, "outputUom": "EA"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 44.1},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (fieldWeld * stainless + rootFit + cut + bevel) * access",
+      "result": {"value": 44.1, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 14, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "fieldWeld", "value": 1.2, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-7"}},
+        {"name": "stainless", "value": 1.1, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-3"}},
+        {"name": "rootFit", "value": 0.64, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-2"}},
+        {"name": "cut", "value": 0.22, "unit": "ph/cut", "source": {"kind": "dataset", "ref": "basis-5"}},
+        {"name": "bevel", "value": 0.34, "unit": "ph/end", "source": {"kind": "dataset", "ref": "basis-6"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-7"}}
+      ]
+    }
+  },
+  {
+    "id": "row-7",
+    "entityName": "Operation 7",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-3",
+    "laborUnitBasis": {"id": "unit-3", "hoursNormal": 0.547161, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 10.004634375},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (shopWeld * fieldRatio + cut + fit) * access",
+      "result": {"value": 10.004634375, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 6, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "shopWeld", "value": 0.547161, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-3"}},
+        {"name": "fieldRatio", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-3"}},
+        {"name": "cut", "value": 0.2, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-3"}},
+        {"name": "fit", "value": 0.45, "unit": "ph/joint", "source": {"kind": "laborUnit", "ref": "unit-3"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-6"}}
+      ]
+    }
+  },
+  {
+    "id": "row-8",
+    "entityName": "Operation 8",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-7",
+    "laborUnitBasis": {"id": "unit-7", "hoursNormal": 1.2, "outputUom": "EA"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 69},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld + cut + bevel + fit) * access",
+      "result": {"value": 69, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 23, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 1.2, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-7"}},
+        {"name": "cut", "value": 0.22, "unit": "ph/cut", "source": {"kind": "dataset", "ref": "basis-3"}},
+        {"name": "bevel", "value": 0.34, "unit": "ph/end", "source": {"kind": "dataset", "ref": "basis-4"}},
+        {"name": "fit", "value": 0.64, "unit": "ph/joint", "source": {"kind": "dataset", "ref": "basis-5"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-6"}}
+      ]
+    }
+  },
+  {
+    "id": "row-9",
+    "entityName": "Operation 9",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-5",
+    "laborUnitBasis": {"id": "unit-5", "hoursNormal": 1.099557, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 6.798671},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld * fieldRatio + cut + bevel + fit) * access",
+      "result": {"value": 6.798671, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 2, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 1.099557, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "fieldRatio", "value": 1.2, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-3"}},
+        {"name": "cut", "value": 0.29, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "bevel", "value": 0.36, "unit": "ph/end", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "fit", "value": 0.75, "unit": "ph/joint", "source": {"kind": "laborUnit", "ref": "unit-5"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-7"}}
+      ]
+    }
+  },
+  {
+    "id": "row-10",
+    "entityName": "Operation 10",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-6",
+    "laborUnitBasis": {"id": "unit-6", "hoursNormal": 1.560979, "outputUom": "WELD"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 10.832937},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "joints * (weld * fieldRatio + cut + bevel + fit) * access",
+      "result": {"value": 10.832937, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "joints", "value": 2, "unit": "EA", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "weld", "value": 1.560979, "unit": "person-hours/joint", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "fieldRatio", "value": 1.2, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-3"}},
+        {"name": "cut", "value": 0.64, "unit": "ph/cut", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "bevel", "value": 0.46, "unit": "ph/end", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "fit", "value": 1.36, "unit": "ph/joint", "source": {"kind": "laborUnit", "ref": "unit-6"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-7"}}
+      ]
+    }
+  },
+  {
+    "id": "row-11",
+    "entityName": "Operation 11",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-8",
+    "laborUnitBasis": {"id": "unit-8", "hoursNormal": 0.36, "outputUom": "FT"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 119.5866141732283},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "metres / metresPerFoot * handling * access",
+      "result": {"value": 119.5866141732283, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "metres", "value": 81, "unit": "m", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "metresPerFoot", "value": 0.3048, "unit": "m/ft", "source": {"kind": "manual", "ref": "basis-2"}},
+        {"name": "handling", "value": 0.36, "unit": "person-hours/ft", "source": {"kind": "laborUnit", "ref": "unit-8"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-4"}}
+      ]
+    }
+  },
+  {
+    "id": "row-12",
+    "entityName": "Operation 12",
+    "entityType": "Labour",
+    "categoryId": "cat",
+    "rateScheduleItemId": "rate",
+    "laborUnitId": "unit-8",
+    "laborUnitBasis": {"id": "unit-8", "hoursNormal": 0.36, "outputUom": "FT"},
+    "quantity": 1,
+    "uom": "HR",
+    "tierUnits": {"regular": 132.8740157480315},
+    "derivation": {
+      "version": 1,
+      "target": "tierUnits",
+      "formula": "metres / metresPerFoot * handling * access",
+      "result": {"value": 132.8740157480315, "unit": "person-hours"},
+      "status": "draft",
+      "inputs": [
+        {"name": "metres", "value": 90, "unit": "m", "source": {"kind": "assumption", "ref": "basis-1"}},
+        {"name": "metresPerFoot", "value": 0.3048, "unit": "m/ft", "source": {"kind": "manual", "ref": "basis-2"}},
+        {"name": "handling", "value": 0.36, "unit": "person-hours/ft", "source": {"kind": "laborUnit", "ref": "unit-8"}},
+        {"name": "access", "value": 1.25, "unit": "factor", "source": {"kind": "assumption", "ref": "basis-4"}}
+      ]
+    }
+  }
+]

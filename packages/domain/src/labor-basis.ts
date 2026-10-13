@@ -1,5 +1,5 @@
 import { rollupWorksheetUnits } from "./worksheet-hours";
-import { normalizeLineDerivation, validateLineDerivation, lineDerivationExpectedValue, formulaIdentifiers, uomsEquivalent } from "./line-derivation";
+import { normalizeLineDerivation, validateLineDerivation, lineDerivationExpectedValue, formulaIdentifiers, evaluateDerivationFormula } from "./line-derivation";
 
 /** A rate-card price is not a productivity source; only a current, reproducible unit derivation qualifies. */
 export function summarizeLaborBasis(workspace: any) {
@@ -15,21 +15,9 @@ export function summarizeLaborBasis(workspace: any) {
       && ["tierUnits", "quantity"].includes(derivation.target)
       && derivation.inputs.some((input) => input.source.kind === "laborUnit" && input.source.ref === item.laborUnitId)
       && !validateLineDerivation(derivation, { expectedValue: expected }).some((issue) => issue.severity === "error");
-    // Compare actual hours with the source baseline, rather than accepting an arbitrary authored factor.
-    const used = new Set(formulaIdentifiers(derivation?.formula ?? ""));
-    const sources = derivation?.inputs.filter(input => used.has(input.name) && input.source.kind === "laborUnit" && input.source.ref === item.laborUnitId && input.value > 0) ?? [];
-    // Source identity and units matter, not the agent's variable name (baseline, hoursNormal, ...).
-    const source = sources.length === 1 ? sources[0] : undefined;
-    const outputUom = source?.unit?.match(/^(?:h|hr|hrs|hours?)\s*\/\s*(.+)$/i)?.[1];
-    const conversion = derivation?.inputs.find(input => used.has(input.name) && input.name === "conversion")?.value ?? 1;
-    const counts = outputUom ? derivation?.inputs.filter(input => used.has(input.name) && input !== source && input.unit && uomsEquivalent(input.unit, outputUom)) ?? [] : [];
-    // Total-hours rows can carry the installed count inside the formula: joints × baseline × factor.
-    // Otherwise a per-unit trace uses the priced row's installed quantity (and explicit conversion).
-    const count = counts.length === 1 ? counts[0].value * (derivation?.target === "tierUnits" ? Number(item.quantity ?? 1) : 1)
-      : derivation?.target === "tierUnits" && (conversion !== 1 || (outputUom && item.uom && uomsEquivalent(item.uom, outputUom))) ? Number(item.quantity ?? 1) * conversion : NaN;
-    const baseline = count * Number(source?.value);
+    const baseline = derivation ? laborSourceBaseline(item, derivation) : null;
     const authoredHours = Number(lineDerivationExpectedValue("tierUnits", item)) * Number(item.quantity ?? 1);
-    const factor = baseline > 0 ? authoredHours / baseline : NaN;
+    const factor = baseline && baseline > 0 ? authoredHours / baseline : NaN;
     if (reproducible && Number.isFinite(factor) && factor > 0 && Math.abs(factor - 1) <= .100000001) sourcedHours += hours;
     else if (reproducible && Number.isFinite(factor) && factor > 0) {
       adjustedHours += hours;
@@ -48,5 +36,41 @@ export function summarizeLaborBasis(workspace: any) {
     adjustedPercent: totalHours ? round(100 * adjustedHours / totalHours) : null,
     adjustedRowCount: adjusted.length, topAdjustedRows: adjusted.sort((a, b) => b.hours - a.hours).slice(0, 5),
     topUnsourcedRows: unsourced.sort((a, b) => b.hours - a.hours).slice(0, 5),
-    fact: "Row labour hours before estimate factors. Sourced: current reproducible unit basis within ±10% of its normal hours. Adjusted: reproducible basis with a factor outside that range (reported per row). Assumed: no current reproducible source baseline." };
+    fact: "Row labour hours before estimate factors. Sourced: current reproducible unit basis within ±10% of its normal hours. Adjusted: reproducible basis with a factor outside that range (reported per row, including additional operations above the linked normal-hours contribution). Assumed: no current reproducible source baseline." };
+}
+
+/** Evaluate the linked normal-hours contribution through the authored expression, retaining counts
+ * and conversions. Other time inputs are zeroed; explicit dimensionless adjustments are neutral.
+ * This handles sums, grouped operations and inverse conversions without naming count variables.
+ * An unavailable/ambiguous baseline stays assumed; this fact never prevents a row write.
+ */
+function laborSourceBaseline(item: any, derivation: NonNullable<ReturnType<typeof normalizeLineDerivation>>): number | null {
+  const used = new Set(formulaIdentifiers(derivation.formula));
+  const inputs = derivation.inputs.filter(input => used.has(input.name));
+  const hourRate = (unit?: string | null) => /^(?:(?:person|man)[ -]?)?(?:h|hr|hrs|hour|hours)\s*\/|^ph\s*\//i.test(unit ?? "");
+  const linked = inputs.filter(input => input.source.kind === "laborUnit" && input.source.ref === item.laborUnitId && input.value > 0 && hourRate(input.unit));
+  const current = item.laborUnitBasis;
+  if (current === null) return null;
+  // Older/offline snapshots can still establish one unambiguous cited baseline. Live workspaces
+  // include the current unit, so changed or incorrectly attributed rates are not accepted.
+  const primary = current
+    ? linked.filter(input => current.id === item.laborUnitId && Math.abs(input.value - current.hoursNormal) <= Math.max(1e-8, Math.abs(current.hoursNormal) * 1e-6))
+    : new Set(linked.map(input => input.value)).size === 1 ? linked : [];
+  if (!primary.length) return null;
+  const primaryNames = new Set(primary.map(input => input.name));
+  const values: Record<string, number> = {};
+  for (const input of inputs) {
+    const adjustment = /^(factor|multiplier|ratio|dimensionless)$/i.test(input.unit ?? "")
+      || (!input.unit && (input.source.ref === "authored-tier-units" || input.name === "factor"));
+    values[input.name] = primaryNames.has(input.name) ? input.value
+      : hourRate(input.unit) ? 0 : adjustment ? 1 : input.value;
+  }
+  try {
+    const withSource = evaluateDerivationFormula(derivation.formula, values);
+    const withoutSource = evaluateDerivationFormula(derivation.formula, { ...values, ...Object.fromEntries(primary.map(input => [input.name, 0])) });
+    // tierUnits is per priced unit; a quantity-target trace is extended by its tier hours.
+    const extension = derivation.target === "tierUnits" ? Number(item.quantity ?? 1) : Number(lineDerivationExpectedValue("tierUnits", item));
+    const baseline = (withSource - withoutSource) * extension;
+    return Number.isFinite(baseline) && baseline > 0 ? baseline : null;
+  } catch { return null; }
 }

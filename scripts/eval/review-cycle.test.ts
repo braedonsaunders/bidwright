@@ -39,6 +39,10 @@ for (const reviewWorks of [true, false]) test(`harness cycle ${reviewWorks ? "re
   assert.equal(state.status, reviewWorks ? "complete" : "review_unavailable");
   assert.equal(state.phases.length, reviewWorks ? 3 : 2);
   assert.equal(state.phases[0].exitCode, 0);
+  for (const phase of state.phases) {
+    assert.equal(phase.timeoutSeconds, 180 * 60);
+    assert.ok(phase.finishedAt);
+  }
   if (reviewWorks) {
     assert.equal(state.findingsCount, 1);
     assert.match(await readFile(join(dir, "revision-prompt.txt"), "utf8"), /record why you disagree/);
@@ -55,4 +59,20 @@ test("all harness phases retain the configured reasoning effort", () => {
     const phases = reviewPhaseScripts(command, runtime, "/tmp/eval");
     for (const script of Object.values(phases)) assert.match(script, /xhigh/);
   }
+});
+
+test("phase timeout records its outcome and does not start review after an incomplete build", async t => {
+  const dir = await mkdtemp(join(tmpdir(), "bidwright-timeout-test-"));
+  const priorExitCode = process.exitCode;
+  t.after(async () => { process.exitCode = priorExitCode; await rm(dir, { recursive: true, force: true }); });
+  await writeFile(join(dir, "token"), "test-token");
+  await writeFile(join(dir, "review-cycle.json"), JSON.stringify({ tokenFile: join(dir, "token"), phaseTimeoutSeconds: .05 }));
+  await writeFile(join(dir, "run-build.sh"), 'exec node -e "setInterval(() => {}, 1000)"\n');
+  await runReviewCycle(dir);
+  const state = JSON.parse(await readFile(join(dir, "review-cycle-state.json"), "utf8"));
+  assert.equal(state.status, "build_failed");
+  assert.equal(state.phases.length, 1);
+  assert.equal(state.phases[0].exitCode, 124);
+  assert.equal(state.phases[0].timeout, true);
+  assert.ok(state.phases[0].finishedAt);
 });

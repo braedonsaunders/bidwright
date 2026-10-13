@@ -288,6 +288,8 @@ export interface WorksheetItem {
   costResourceId?: string | null;
   effectiveCostId?: string | null;
   laborUnitId?: string | null;
+  /** Read-time linked productivity baseline; not an editable rate snapshot. */
+  laborUnitBasis?: { id: string; hoursNormal: number; outputUom: string } | null;
   resourceComposition?: Record<string, unknown>;
   sourceEvidence?: WorksheetItemSourceEvidence;
   sourceAssemblyId?: string | null;

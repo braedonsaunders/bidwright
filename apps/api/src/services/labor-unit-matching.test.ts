@@ -93,6 +93,7 @@ test("ordinary row creation persists matched productivity and a derivation witho
     rateSchedule: { findMany: async () => [schedule] },
     worksheetItem: { aggregate: async () => ({ _max: { lineOrder: 0 } }), create: async ({ data }: any) => { saved.push(data); return { ...data, entityCategory: category }; } },
   };
+  t.mock.method(proto, "getOrganizationDefaults", async () => ({ currency: null }));
   t.mock.method(proto, "findCurrentRevision", async () => ({ revision }));
   t.mock.method(proto, "validateWorksheetItemProvenanceRefs", async () => {});
   t.mock.method(proto, "requireLaborUnit", async () => ({ id: "unit", name: "Weld", outputUom: "FT", hoursNormal: .2 }));
@@ -151,4 +152,18 @@ test("long job conditions and size do not dilute operation/material coverage", a
   assert.equal(query, "fillet weld aluminum 1/4in");
   assert.equal(result.lines[0].status, "candidates");
   assert.equal(result.lines[0].candidates[0].coverage, 1);
+});
+
+test("workspace mapper supplies the current linked baseline without altering the saved trace", async () => {
+  const { mapWorksheetItem } = await import("../store/mappers.js");
+  const [fixture] = JSON.parse(readFileSync(new URL("../../../../packages/domain/src/__fixtures__/labor-composite-traces.json", import.meta.url), "utf8"));
+  const row = mapWorksheetItem({ ...fixture, laborUnit: fixture.laborUnitBasis });
+  assert.deepEqual(row.laborUnitBasis, fixture.laborUnitBasis);
+  assert.deepEqual(row.derivation, normalizeLineDerivation(fixture.derivation));
+  assert.equal(row.laborUnitId, fixture.laborUnitId);
+  const ws: any = { worksheets: [{ items: [row] }], entityCategories: [],
+    rateSchedules: [{ items: [{ id: "rate" }], tiers: [{ id: "regular", uom: "HR" }] }] };
+  assert.equal(summarizeLaborBasis(ws).adjustedRowCount, 1);
+  row.laborUnitBasis = { ...fixture.laborUnitBasis, hoursNormal: 3 };
+  assert.equal(summarizeLaborBasis(ws).adjustedRowCount, 0);
 });

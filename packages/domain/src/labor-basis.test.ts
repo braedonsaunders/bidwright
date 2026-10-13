@@ -49,3 +49,54 @@ test("tier target sums tiers per unit and never accepts the extended amount as t
   item.derivation.formula = "baseline * factor * 72";
   assert.ok(validateLineDerivation(normalizeLineDerivation(item.derivation), { expectedValue: lineDerivationExpectedValue("tierUnits", item) }).some(issue => issue.code === "result_target_mismatch"));
 });
+
+const compositeRows = JSON.parse(readFileSync(new URL("./__fixtures__/labor-composite-traces.json", import.meta.url), "utf8"));
+test("twelve saved composite traces retain linked units and classify as adjusted", () => {
+  const basis = summarizeLaborBasis(workspace(compositeRows));
+  assert.equal(basis.assumedHours, 0);
+  assert.equal(basis.sourcedHours, 0);
+  assert.equal(basis.adjustedRowCount, 12);
+  for (const item of compositeRows) {
+    const row = summarizeLaborBasis(workspace([item]));
+    assert.equal(row.adjustedRowCount, 1, item.id);
+    assert.equal(row.assumedHours, 0, item.id);
+    assert.ok(row.topAdjustedRows[0].factor > 1.1, item.id);
+  }
+  assert.ok(Math.abs(summarizeLaborBasis(workspace([compositeRows[10]])).topAdjustedRows[0].factor - 1.25) < 1e-10);
+});
+
+test("electrical device groups and finishes runs reconcile with arbitrary variable names", () => {
+  const item = structuredClone(compositeRows[0]);
+  item.laborUnitBasis.hoursNormal = .5; item.laborUnitBasis.outputUom = "EA";
+  item.derivation.inputs = [
+    { name: "small", value: 10, unit: "EA", source: { kind: "manual", ref: "schedule" } },
+    { name: "large", value: 6, unit: "EA", source: { kind: "manual", ref: "schedule" } },
+    { name: "install", value: .5, unit: "person-hours/device", source: { kind: "laborUnit", ref: item.laborUnitId } },
+    { name: "access", value: 1.25, unit: "factor", source: { kind: "assumption", ref: "access" } },
+  ];
+  item.derivation.formula = "(small + large) * install * access";
+  item.tierUnits.regular = item.derivation.result.value = 10;
+  assert.equal(summarizeLaborBasis(workspace([item])).topAdjustedRows[0].factor, 1.25);
+  item.derivation.inputs[3].value = 1;
+  item.tierUnits.regular = item.derivation.result.value = 8;
+  assert.equal(summarizeLaborBasis(workspace([item])).sourcedHours, 8);
+  const finish = structuredClone(compositeRows[10]);
+  finish.entityName = "Baseboard installation";
+  finish.quantity = 3;
+  assert.ok(Math.abs(summarizeLaborBasis(workspace([finish])).topAdjustedRows[0].factor - 1.25) < 1e-10);
+});
+
+test("wrong arithmetic, changed baselines, canceled references and stale traces remain assumed", () => {
+  for (const mutate of [
+    (i: any) => i.tierUnits.regular += 10,
+    (i: any) => i.derivation.result.value += 10,
+    (i: any) => i.laborUnitBasis.hoursNormal *= 2,
+    (i: any) => i.derivation.status = "stale",
+    (i: any) => { i.derivation.formula = "handling - handling + 10"; i.tierUnits.regular = i.derivation.result.value = 10; },
+  ]) {
+    const item = structuredClone(compositeRows[10]); mutate(item);
+    const basis = summarizeLaborBasis(workspace([item]));
+    assert.equal(basis.adjustedHours + basis.sourcedHours, 0);
+    assert.ok(basis.assumedHours > 0);
+  }
+});
