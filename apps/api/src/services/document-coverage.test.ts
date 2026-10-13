@@ -11,7 +11,7 @@ test("coverage resolves FileNode evidence aliases without duplicating linked doc
   };
   const coverage = await getDocumentCoverage("project-fixture", db);
   assert.equal(coverage.sources.length, 2);
-  assert.deepEqual(coverage.sources[0].viewedPages, [2]);
-  assert.deepEqual(coverage.sources[0].unreadPages, [1], "obsolete text reads do not cover a changed source");
-  assert.equal(coverage.sources[1].status, "unread");
+  assert.deepEqual(coverage.sources.find(s => s.documentId === "doc-electrical")!.viewedPages, [2]);
+  assert.deepEqual(coverage.sources.find(s => s.documentId === "doc-electrical")!.unreadPages, [1], "obsolete text reads do not cover a changed source");
+  assert.equal(coverage.sources.find(s => s.documentId === "fn-doors")!.status, "unread");
 });

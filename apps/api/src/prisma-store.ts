@@ -1,4 +1,5 @@
-import { getDocumentCoverage } from "./services/document-coverage.js";
+import { sameRateResolution } from "./store/mappers.js";
+import { resolveRateCurrency, hasAuthoredCostRates } from "@bidwright/domain";
 import { indexLaborUnitPage, searchLaborVectors, prepareLaborSemanticBatch, type LaborSemanticBatch } from "./services/labor-vector-index.js";
 import { laborSearchProfile, rankLaborCandidates, laborGranularityFacts } from "./services/labor-search.js";
 import { summarizeLaborBasis, summarizePricingIntegrity, summarizeUnlinkedMeasurements, laborUnitPresentation } from "@bidwright/domain";
@@ -578,7 +579,7 @@ function buildSnapshotForItem(item: WorksheetItem): PersistedCostSnapshot {
   const snapshotAt = new Date().toISOString();
   const originalUnitCost = Number(item.cost) || 0;
   if (item.rateScheduleItemId) {
-    return { source: "rate_schedule", sourceId: item.rateScheduleItemId, snapshotAt, originalUnitCost, currency: item.rateResolution?.currency ?? "unknown" };
+    return { source: "rate_schedule", sourceId: item.rateScheduleItemId, snapshotAt, originalUnitCost, currency: item.rateResolution?.currency };
   }
   if (item.effectiveCostId) {
     return { source: "effective_cost", sourceId: item.effectiveCostId, snapshotAt, originalUnitCost };
@@ -1656,6 +1657,7 @@ const rateScheduleCalcInclude = {
 function toRateScheduleCalcContext(schedules: Array<{
   id?: string;
   name?: string;
+  scope?: string;
   category?: string;
   defaultMarkup?: number;
   metadata?: unknown;
@@ -1676,9 +1678,11 @@ function toRateScheduleCalcContext(schedules: Array<{
     perDiem?: number;
     metadata?: unknown;
   }>;
-}>) {
+}>, organizationCurrency?: string | null) {
   return schedules.map((schedule) => ({
     id: schedule.id ?? "",
+    scope: schedule.scope as "global" | "revision" | undefined,
+    sourceCurrency: resolveRateCurrency((schedule.metadata as any)?.currency, organizationCurrency),
     name: schedule.name ?? "",
     category: schedule.category ?? "",
     defaultMarkup: Number(schedule.defaultMarkup) || 0,
@@ -3402,6 +3406,7 @@ export class PrismaApiStore {
   // ── Build BidwrightStore snapshot for domain functions ──────────────────
 
   private async buildStoreSnapshot(projectId: string): Promise<BidwrightStore> {
+    const organizationCurrency = (await this.getOrganizationDefaults()).currency;
     const project = await this.db.project.findFirst({
       where: { id: projectId, organizationId: this.organizationId },
     });
@@ -3432,7 +3437,7 @@ export class PrismaApiStore {
     const estimateStrategies = await this.db.estimateStrategy.findMany({ where: { projectId } });
     const estimateCalibrationFeedback = await this.db.estimateCalibrationFeedback.findMany({ where: { projectId } });
     const citations = await this.db.citation.findMany({ where: { projectId } });
-    const activities = await this.db.activity.findMany({ where: { projectId } });
+    const activities = await this.db.activity.findMany({ where: { projectId, type: { not: "source_read" } } });
     const jobs = await this.db.job.findMany({ where: { projectId } });
     const fileNodes = await this.db.fileNode.findMany({ where: { projectId } });
     const pluginExecutions = await this.db.pluginExecution.findMany({ where: { projectId } });
@@ -3526,7 +3531,7 @@ export class PrismaApiStore {
       scheduleBaselineTasks: scheduleBaselineTasks.map(mapScheduleBaselineTask),
       scheduleResources: scheduleResources.map(mapScheduleResource),
       scheduleTaskAssignments: scheduleTaskAssignments.map(mapScheduleTaskAssignment),
-      rateSchedules: rateSchedules.map(mapRateSchedule),
+      rateSchedules: rateSchedules.map(s => ({ ...mapRateSchedule(s), sourceCurrency: resolveRateCurrency((s.metadata as any)?.currency, organizationCurrency) })),
       rateScheduleTiers: rateSchedules.flatMap((s) => (s.tiers ?? []).map(mapRateScheduleTier)),
       rateScheduleItems: rateSchedules.flatMap((s) => (s.items ?? []).map(mapRateScheduleItem)),
       pickupLinks: pickupLinks.map(mapPickupLink),
@@ -5446,11 +5451,11 @@ export class PrismaApiStore {
     const store = await this.buildStoreSnapshot(projectId);
     const built = buildProjectWorkspace(store, projectId);
     if (!built) return built;
-    const workspace = { ...built, quoteCurrency: (await this.getOrganizationDefaults()).currency ?? "unknown" };
+    const workspace = { ...built, quoteCurrency: resolveRateCurrency((await this.getOrganizationDefaults()).currency) };
     const pickups = await this.db.pickup.findMany({ where: { projectId }, select: {
       id: true, label: true, documentId: true, annotationType: true, measurement: true, _count: { select: { pickupLinks: true } },
     }, orderBy: { createdAt: "asc" } });
-    return { ...workspace, documentCoverage: await getDocumentCoverage(projectId, this.db), laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, pickups) };
+    return { ...workspace, laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, pickups) };
   }
 
   /**
@@ -7709,7 +7714,7 @@ export class PrismaApiStore {
       });
       mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
     }
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows, (await this.getOrganizationDefaults()).currency);
 
     if (item.rateScheduleItemId) {
       const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
@@ -8161,7 +8166,7 @@ export class PrismaApiStore {
       });
       mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
     }
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows, (await this.getOrganizationDefaults()).currency);
 
     if (domainItem.rateScheduleItemId) {
       const allRsItems = revisionScheduleRows.flatMap((s) => s.items ?? []);
@@ -8531,7 +8536,7 @@ export class PrismaApiStore {
       include: rateScheduleCalcInclude,
     });
     const mappedRevisionSchedules = revisionScheduleRows.map(mapRateScheduleWithChildren);
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows);
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionScheduleRows, (await this.getOrganizationDefaults()).currency);
     const calcType = (item.entityCategory?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
     const calculated = calculateLineItem(domainItem, mapRevision(revision), calcType, rateScheduleCtx);
     Object.assign(domainItem, calculated);
@@ -8613,7 +8618,7 @@ export class PrismaApiStore {
       where: { revisionId: revision.id },
       include: rateScheduleCalcInclude,
     });
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules, (await this.getOrganizationDefaults()).currency);
     const mappedRev = mapRevision(revision);
     const importEntityCats = await this.db.entityCategory.findMany({ where: { organizationId: this.organizationId } });
 
@@ -11254,7 +11259,8 @@ export class PrismaApiStore {
       include: rateScheduleWithChildrenInclude,
       orderBy: { name: "asc" },
     });
-    return schedules.map(mapRateScheduleWithChildren);
+    const organizationCurrency = (await this.getOrganizationDefaults()).currency;
+    return schedules.map(s => ({ ...mapRateScheduleWithChildren(s), sourceCurrency: resolveRateCurrency((s.metadata as any)?.currency, organizationCurrency) }));
   }
 
   async getRateSchedule(id: string): Promise<RateScheduleWithChildren> {
@@ -11263,7 +11269,7 @@ export class PrismaApiStore {
       include: rateScheduleWithChildrenInclude,
     });
     if (!schedule) throw new Error(`Rate schedule ${id} not found`);
-    return mapRateScheduleWithChildren(schedule);
+    return { ...mapRateScheduleWithChildren(schedule), sourceCurrency: resolveRateCurrency((schedule.metadata as any)?.currency, (await this.getOrganizationDefaults()).currency) };
   }
 
   private async resolveRateScheduleEntityCategory(category: string | null | undefined) {
@@ -11446,7 +11452,7 @@ export class PrismaApiStore {
       }),
     ]);
 
-    const rateScheduleCtx = toRateScheduleCalcContext(scheduleRows);
+    const rateScheduleCtx = toRateScheduleCalcContext(scheduleRows, (await this.getOrganizationDefaults()).currency);
     const mappedRev = mapRevision(revision);
     let repriced = 0;
 
@@ -11475,7 +11481,7 @@ export class PrismaApiStore {
         roundMoney(nextCost) === roundMoney(domainItem.cost) &&
         roundMoney(nextPrice) === roundMoney(domainItem.price) &&
         nextRateScheduleItemId === (domainItem.rateScheduleItemId ?? null);
-      if (unchanged && JSON.stringify({ ...calculated.rateResolution, resolvedAt: undefined }) === JSON.stringify({ ...domainItem.rateResolution, resolvedAt: undefined })) continue;
+      if (unchanged && sameRateResolution(calculated.rateResolution, domainItem.rateResolution)) continue;
 
       domainItem.cost = nextCost;
       domainItem.price = nextPrice;
@@ -11575,6 +11581,7 @@ export class PrismaApiStore {
     }
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
+    if (input.costRates !== undefined && schedule.scope !== "revision") throw badRequestError("Explicit cost rates are only supported on quote-scoped rate items; library costs come from the catalog.");
     const resource = input.resourceId ? await this.requireRateBookResource(input.resourceId) : null;
     const catalogItemId = input.catalogItemId ?? resource?.catalogItemId ?? null;
     const catalogItem = catalogItemId ? await this.requireCatalogItem(catalogItemId) : null;
@@ -11610,7 +11617,7 @@ export class PrismaApiStore {
         rates: (input.rates ?? seedByTier(basePrice)) as any,
         costRates: input.costRates ?? {},
         burden: 0, perDiem: 0,
-        metadata: (input.metadata ?? {}) as any,
+        metadata: { ...input.metadata, ...(input.costRates !== undefined ? { costRatesAuthored: true } : {}) } as any,
         sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
       },
     });
@@ -11629,6 +11636,7 @@ export class PrismaApiStore {
     if (!item) throw new Error(`Rate schedule item ${itemId} not found`);
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
+    if (patch.costRates !== undefined && schedule.scope !== "revision") throw badRequestError("Explicit cost rates are only supported on quote-scoped rate items; library costs come from the catalog.");
 
     this.assertRateBookItemCostFieldsAreClean(patch);
     const data: any = {};
@@ -11636,7 +11644,7 @@ export class PrismaApiStore {
     if (patch.costRates !== undefined) data.costRates = patch.costRates;
     if (patch.burden !== undefined) data.burden = 0;
     if (patch.perDiem !== undefined) data.perDiem = 0;
-    if (patch.metadata !== undefined) data.metadata = patch.metadata;
+    if (patch.metadata !== undefined || patch.costRates !== undefined) data.metadata = { ...(item.metadata as Record<string, unknown> ?? {}), ...patch.metadata, ...(patch.costRates !== undefined ? { costRatesAuthored: true } : {}) };
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     await this.db.rateScheduleItem.update({ where: { id: itemId }, data });
     if (schedule.projectId) await this.pushActivity(schedule.projectId, schedule.revisionId, "rate_item_rates_updated", { itemId, before: { rates: item.rates, costRates: item.costRates }, after: data });
@@ -11713,7 +11721,7 @@ export class PrismaApiStore {
             id: createId("rsi"), scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
             resourceId: (item as any).resourceId ?? null,
             code: item.code, name: item.name, unit: item.unit,
-            rates: remappedRates, costRates: Object.fromEntries(Object.entries((item.costRates as Record<string, number>) ?? {}).map(([id, value]) => [tierIdMap.get(id) ?? id, value])),
+            rates: remappedRates, costRates: {},
             burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
           },
         });
@@ -11744,7 +11752,8 @@ export class PrismaApiStore {
       include: rateScheduleWithChildrenInclude,
       orderBy: { name: "asc" },
     });
-    return schedules.map(mapRateScheduleWithChildren);
+    const organizationCurrency = (await this.getOrganizationDefaults()).currency;
+    return schedules.map(s => ({ ...mapRateScheduleWithChildren(s), sourceCurrency: resolveRateCurrency((s.metadata as any)?.currency, organizationCurrency) }));
   }
 
   async listRateBookAssignments(filters: {
@@ -12035,7 +12044,7 @@ export class PrismaApiStore {
               id: newItemId, scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
               resourceId: (item as any).resourceId ?? null,
               code: item.code, name: item.name, unit: item.unit,
-              rates: remappedRates, costRates: Object.fromEntries(Object.entries((item.costRates as Record<string, number>) ?? {}).map(([id, value]) => [tierIdMap.get(id) ?? id, value])),
+              rates: remappedRates, costRates: Object.fromEntries(Object.entries(hasAuthoredCostRates({ metadata: item.metadata as Record<string, unknown> }) ? (item.costRates as Record<string, number>) ?? {} : {}).map(([id, value]) => [tierIdMap.get(id) ?? id, value])),
               burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
             },
           });
@@ -12991,7 +13000,7 @@ export class PrismaApiStore {
   async listActivities(projectId: string) {
     await this.requireProject(projectId);
     const activities = await this.db.activity.findMany({
-      where: { projectId },
+      where: { projectId, type: { not: "source_read" } },
       orderBy: { createdAt: "desc" },
       include: { user: { select: { name: true } } },
     });
@@ -16072,7 +16081,7 @@ export class PrismaApiStore {
       where: { revisionId: revision.id },
       include: rateScheduleCalcInclude,
     });
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules, (await this.getOrganizationDefaults()).currency);
 
     const calcType = (catDef?.calculationType ?? "manual") as import("@bidwright/domain").CalculationType;
 
@@ -16318,7 +16327,7 @@ export class PrismaApiStore {
       where: { revisionId: revision.id },
       include: rateScheduleCalcInclude,
     });
-    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules);
+    const rateScheduleCtx = toRateScheduleCalcContext(revisionSchedules, (await this.getOrganizationDefaults()).currency);
     const entityCategories = await this.db.entityCategory.findMany({
       where: { organizationId: this.organizationId },
     });

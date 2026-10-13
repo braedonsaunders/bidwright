@@ -671,7 +671,7 @@ export function registerKnowledgeTools(server: McpServer) {
         doc.pageCount ? `Pages: ${doc.pageCount}` : null,
         pages ? `Requested pages: ${pages}` : null,
       ].filter(Boolean).join("\n");
-      const content = typeof doc.content === "string" ? doc.content.trim() : "";
+      const content = typeof doc.content === "string" ? doc.content : "";
       const chunk = truncateText(content, maxChars, offset);
 
       let output = `${header}\n\n`;
@@ -684,7 +684,7 @@ export function registerKnowledgeTools(server: McpServer) {
       }
 
       if (!doc.bookName && !doc.documentTitle && doc.sourceType !== "knowledge_document") {
-        output += await recordSourceRead({ documentId, tool: "readDocumentText", pages: doc.textPages ?? selectedPages(pages), offset: chunk.offset, returnedChars: chunk.text.length, totalChars: chunk.totalChars, truncated: chunk.hasMore, checksum: doc.checksum });
+        output += await recordSourceRead({ documentId, tool: "readDocumentText", pageRanges: doc.pageRanges?.filter((r: any) => r.start < chunk.offset + chunk.text.length && r.end > chunk.offset), pages: doc.textPages ?? selectedPages(pages), offset: chunk.offset, returnedChars: chunk.text.length, totalChars: chunk.totalChars, truncated: chunk.hasMore, checksum: doc.checksum });
         output += `\n\n${sourceQuantityTakeoffHint(documentId)}`;
       }
       return { content: [{ type: "text" as const, text: output }] };
@@ -776,7 +776,7 @@ export function registerKnowledgeTools(server: McpServer) {
         const suffix = chunk.hasMore
           ? `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readSpreadsheet again with offset=${chunk.offset + chunk.text.length} and the same sheet/maxChars to continue, or use sheet to narrow.]`
           : "";
-        const coverage = await recordSourceRead({ documentId, tool: "readSpreadsheet", section: sheet ?? "all sheets", offset: chunk.offset, returnedChars: chunk.text.length, totalChars: chunk.totalChars, truncated: chunk.hasMore, checksum: result.checksum });
+        const coverage = await recordSourceRead({ documentId, tool: "readSpreadsheet", sheetNames: result.allSheetNames, section: sheet ? result.sheets[0]?.name ?? sheet : "all sheets", offset: chunk.offset, returnedChars: chunk.text.length, totalChars: chunk.totalChars, truncated: chunk.hasMore, checksum: result.checksum });
         return { content: [{ type: "text" as const, text: chunk.text + suffix + coverage + `\n\n${sourceQuantityTakeoffHint(documentId, [{ sheet: sheet ?? result.sheets[0]?.name ?? "<sheet>", row: 1 }])}` }] };
       } catch (err: any) {
         return {

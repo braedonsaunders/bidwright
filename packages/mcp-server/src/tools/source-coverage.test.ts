@@ -33,3 +33,18 @@ test("read tools record only delivered slices and provide working continuation p
   assert.equal(census.entries.find((e: any) => e.type === "R").count, 2);
   assert.equal(records[3].returnedChars, 0, "a census does not claim to deliver full source text");
 });
+
+test("census retains extracted counts and later page scans when one scan fails", async t => {
+  let handler: any;
+  registerComponentTools({ tool: (_name: string, _description: string, shape: any, run: any) => { handler = (args: any) => run(z.object(shape).parse(args)); } } as any);
+  t.mock.method(globalThis, "fetch", async (url: any, init: any) => {
+    if (init.method === "GET") return Response.json({ content: "Devices", structuredData: { tables: [{ pageNumber: 1, markdown: "| Type | Qty |\n|---|---|\n| Receptacle | 4 |" }] } });
+    if (String(url).includes("scan-drawing")) return JSON.parse(init.body).pageNumber === 1 ? new Response("image unavailable", {status:400}) : Response.json({ success: true, clusters: [] });
+    return Response.json({ recorded: true });
+  });
+  const result = JSON.parse((await handler({ documentId: "doc-device", symbolPages: [1,2] })).content[0].text);
+  assert.equal(result.entries[0].count, 4);
+  assert.equal(result.symbolMatches[0].success, false);
+  assert.match(result.symbolMatches[0].error, /image unavailable/);
+  assert.equal(result.symbolMatches[1].success, true);
+});

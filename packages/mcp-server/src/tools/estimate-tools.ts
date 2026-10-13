@@ -661,5 +661,5 @@ export function registerEstimateTools(server: McpServer) {
 
 async function estimateReviewFacts() {
   const { workspace } = await apiGet(`/projects/${getProjectId()}/workspace`);
-  return { laborBasis: workspace?.laborBasis, pricingIntegrity: workspace?.pricingIntegrity, documentCoverage: workspace?.documentCoverage, unlinkedMeasurements: workspace?.unlinkedMeasurements };
+  return { laborBasis: workspace?.laborBasis, pricingIntegrity: workspace?.pricingIntegrity, unlinkedMeasurements: workspace?.unlinkedMeasurements };
 }

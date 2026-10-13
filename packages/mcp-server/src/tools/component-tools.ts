@@ -22,8 +22,12 @@ export function registerComponentTools(server: McpServer) {
     const census = componentCensus(tables, textPages, tagPrefixes);
     const symbolMatches = [];
     for (const pageNumber of symbolPages) {
+      try {
       const scan = await apiPost("/api/vision/scan-drawing", { projectId: getProjectId(), documentId, pageNumber });
       symbolMatches.push({ pageNumber, method: "symbol cluster matches", success: scan.success, error: scan.error, clusters: (scan.clusters ?? []).slice(0, 100).map((c: any) => ({ type: c.id, count: c.matchCount, confidence: c.avgConfidence, representativeBox: c.representativeBox })), imageWidth: scan.imageWidth, imageHeight: scan.imageHeight, fact: "Unclassified visual candidates; interpret against the legend and inspect pixels before treating as installed components." });
+      } catch (error) {
+        symbolMatches.push({ pageNumber, method: "symbol cluster matches", success: false, error: error instanceof Error ? error.message : String(error) });
+      }
     }
     const telemetry = await recordSourceRead({ documentId, tool: "countComponents", pages: requested, offset: 0, returnedChars: 0, totalChars: (doc.content ?? "").length, truncated: false, checksum: doc.checksum });
     return { content: [{ type: "text" as const, text: JSON.stringify({ ...census, entries: census.entries.slice(0, 100).map(entry => ({ ...entry, sourceRefCount: entry.sourceRefs.length, sourceRefs: entry.sourceRefs.slice(0, 10).map(ref => ({ ...ref, text: ref.text.slice(0, 600) })) })), totalTypes: new Set(census.entries.map(e => e.type)).size, totalEntries: census.entries.length, truncated: census.entries.length > 100, symbolMatches, telemetry,

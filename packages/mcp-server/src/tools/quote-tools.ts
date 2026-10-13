@@ -1052,7 +1052,6 @@ function worksheetTreeSummary(ws: any) {
         laborBasis: ws.laborBasis ?? summarizeLaborBasis(ws),
         pricingIntegrity: ws.pricingIntegrity,
         unlinkedMeasurements: ws.unlinkedMeasurements,
-        documentCoverage: ws.documentCoverage,
         quoteCurrency: ws.quoteCurrency,
         quote: { name: (ws.project || ws.projects?.[0])?.name, client: (ws.project || ws.projects?.[0])?.clientName },
         revision: {

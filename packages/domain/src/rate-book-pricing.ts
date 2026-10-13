@@ -52,6 +52,16 @@ export interface RateBookComponentRule {
   metadata?: Record<string, unknown>;
 }
 
+/** Explicit configuration only; absent/invalid currencies are not guessed. */
+export function resolveRateCurrency(source: unknown, organizationCurrency?: unknown): string | null {
+  const normalize = (value: unknown) => typeof value === "string" && /^[A-Z]{3}$/i.test(value.trim()) ? value.trim().toUpperCase() : null;
+  return normalize(source) ?? normalize(organizationCurrency);
+}
+
+export function hasAuthoredCostRates(item: { metadata?: Record<string, unknown> | null }): boolean {
+  return item.metadata?.costRatesAuthored === true;
+}
+
 export interface RateBookPricingContext {
   projectId?: string | null;
   revisionId?: string | null;
@@ -288,7 +298,8 @@ export function resolveRateBookLine(
     const priceKey = resolveTierId(rawTierId, validRateKeys);
     const fallbackKey = defaultTier?.id ?? "";
     const unitPrice = numberValue(rates[priceKey] ?? rates[fallbackKey], Number.NaN);
-    const costRates = rateBookItem.costRates ?? {};
+    // Legacy costRates often mirror sell rates. Only an explicit quote override is authoritative.
+    const costRates = rateBook.scope === "revision" && hasAuthoredCostRates(rateBookItem) ? rateBookItem.costRates ?? {} : {};
     const costKey = resolveTierId(rawTierId, Object.keys(costRates));
     const explicitCost = costRates[costKey] ?? costRates[fallbackKey];
     const unitCost = explicitCost !== undefined ? numberValue(explicitCost, Number.NaN) : Number.isFinite(catalogUnitCost) ? money(catalogUnitCost * tierMultiplier(tier)) : Number.NaN;
@@ -447,7 +458,7 @@ export function resolveRateBookLine(
       rateBookItemName: rateBookItem.name ?? item.entityName,
       resourceId: rateBookItem.resourceId ?? item.costResourceId ?? null,
       catalogItemId: rateBookItem.catalogItemId ?? item.itemId ?? null,
-      currency: typeof rateBook.metadata?.currency === "string" && /^[A-Z]{3}$/i.test(rateBook.metadata.currency) ? rateBook.metadata.currency.toUpperCase() : "unknown",
+      currency: resolveRateCurrency(rateBook.metadata?.currency, rateBook.sourceCurrency) ?? undefined,
       region: context.region ?? (typeof rateBook.metadata?.region === "string" ? rateBook.metadata.region : undefined),
       quantity,
       uom: item.uom,

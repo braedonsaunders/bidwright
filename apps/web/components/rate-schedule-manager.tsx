@@ -168,11 +168,11 @@ function compactMetadataSummary(schedule: Pick<RateSchedule, "metadata">) {
   ].filter(Boolean).join(" · ");
 }
 
-function normalizeCurrency(value: string | null | undefined, fallback = "unknown") {
+function normalizeCurrency(value: string | null | undefined, fallback = "USD") {
   const normalized = (value ?? "").trim().toUpperCase();
   if (normalized.length === 3) return normalized;
   const fallbackNormalized = fallback.trim().toUpperCase();
-  return fallbackNormalized.length === 3 ? fallbackNormalized : "unknown";
+  return fallbackNormalized.length === 3 ? fallbackNormalized : "USD";
 }
 
 /* ─── Types ─── */
@@ -423,11 +423,12 @@ function costComponentAppliesToTier(component: RatebookComponentRule, tier: Tier
   return true;
 }
 
-function loadedCostForTierUnit(item: Item, tier: Tier, components: RatebookComponentRule[]) {
+function loadedCostForTierUnit(item: Item, tier: Tier, components: RatebookComponentRule[], scope?: string) {
+  const authoredCost = scope === "revision" && item.metadata?.costRatesAuthored === true ? item.costRates?.[tier.id] : undefined;
   const unitCost = catalogBaseCost(item);
-  if (unitCost === null) return null;
+  if (authoredCost === undefined && unitCost === null) return null;
 
-  const baseCost = roundMoney(unitCost * (finiteNumber(tier.multiplier) ?? 1));
+  const baseCost = authoredCost !== undefined ? Number(authoredCost) : roundMoney(unitCost! * (finiteNumber(tier.multiplier) ?? 1));
   const basePrice = finiteNumber(item.rates?.[tier.id]) ?? 0;
   return components
     .filter((component) => component.target === "cost" || component.target === "both")
@@ -623,7 +624,7 @@ export function RateScheduleManager({
   // Create-new mode (uses the same drawer as edit)
   const [isCreating, setIsCreating] = useState(false);
   const [creatingSaving, setCreatingSaving] = useState(false);
-  const [organizationCurrency, setOrganizationCurrency] = useState("unknown");
+  const [organizationCurrency, setOrganizationCurrency] = useState("USD");
 
   useEffect(() => {
     getSettings()
@@ -2035,9 +2036,9 @@ export function RateScheduleManager({
                                       <div className="flex flex-col items-end">
                                         <span
                                           className="block w-16 rounded px-0.5 py-0.5 text-right text-[11px] text-fg/65"
-                                          title="Read-only: catalog item cost with tier multiplier plus ratebook cost components."
+                                          title="Read-only: authored quote cost override or catalog cost × tier multiplier, plus ratebook cost components."
                                         >
-                                          {fmt(loadedCostForTierUnit(item, tier, ratebookComponents) ?? undefined)}
+                                          {fmt(loadedCostForTierUnit(item, tier, ratebookComponents, detail.scope) ?? undefined)}
                                         </span>
                                       </div>
                                     </TableCell>,

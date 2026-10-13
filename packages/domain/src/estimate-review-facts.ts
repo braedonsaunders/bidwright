@@ -1,3 +1,4 @@
+import { resolveRateCurrency } from "./rate-book-pricing";
 import { getWorksheetUnitKind, rollupWorksheetUnits } from "./worksheet-hours";
 
 const round = (n: number) => Math.round(n * 100) / 100;
@@ -89,13 +90,17 @@ export function summarizePricingIntegrity(workspace: any) {
     }
   }
   durationChecks.push(...summarizeDurationCoverage(workspace));
-  const quoteCurrency = workspace.quoteCurrency ?? workspace.revision?.currency ?? workspace.currentRevision?.currency ?? workspace.quote?.currency ?? null;
-  const currencyRows = (workspace.worksheets ?? []).flatMap((sheet: any) => (sheet.items ?? []).filter((row: any) => row.rateScheduleItemId || row.rateResolution || row.costSnapshot?.currency).map((row: any) => {
-    const sourceCurrency = row.rateResolution?.currency ?? row.costSnapshot?.currency ?? "unknown";
-    return { rowId: row.id, label: label(row), sourceCurrency, quoteCurrency: quoteCurrency ?? "unknown", status: sourceCurrency === "unknown" || !quoteCurrency || quoteCurrency === "unknown" ? "currency unknown" : sourceCurrency !== quoteCurrency ? "currency differs" : "same currency" };
-  })).filter((row: any) => row.status !== "same currency");
+  const quoteCurrency = resolveRateCurrency(workspace.quoteCurrency ?? workspace.revision?.currency ?? workspace.currentRevision?.currency ?? workspace.quote?.currency);
+  const rateCurrencies = (workspace.worksheets ?? []).flatMap((sheet: any) => (sheet.items ?? []).filter((row: any) => row.rateScheduleItemId || row.rateResolution || row.costSnapshot?.currency).map((row: any) => {
+    const book = (workspace.rateSchedules ?? []).find((s: any) => s.id === row.rateResolution?.rateBookId || s.items?.some((i: any) => i.id === row.rateScheduleItemId));
+    const sourceCurrency = book ? resolveRateCurrency(book.metadata?.currency, book.sourceCurrency ?? quoteCurrency)
+      : resolveRateCurrency(row.rateResolution?.currency ?? row.costSnapshot?.currency, quoteCurrency);
+    return { rowId: row.id, label: label(row), sourceCurrency, quoteCurrency, status: "currency differs" };
+  }));
+  const currencyRows = rateCurrencies.filter((row: any) => row.sourceCurrency && quoteCurrency && row.sourceCurrency !== quoteCurrency);
+  const unknownCount = rateCurrencies.filter((row: any) => !row.sourceCurrency).length;
   const exposedSell = costUnknown.reduce((n, row) => n + row.sell, 0);
-  return { currency: { quoteCurrency: quoteCurrency ?? "unknown", count: currencyRows.length, rows: currencyRows.slice(0, 20), fact: "Quote currency follows organization settings. Source currencies are not converted. Different or unknown source/quote currencies need an explicit pricing basis." }, costUnknown: { count: costUnknown.length, sell: round(exposedSell), rows: costUnknown.slice(0, 10), marginFact: `Profit is sensitive to missing costs on ${round(exposedSell)} of row sell. Each added cost dollar reduces profit by one dollar; current markup is unchanged.` },
+  return { currency: { quoteCurrency: quoteCurrency ?? "unknown", count: currencyRows.length, unknownCount, unknownSummary: unknownCount ? `Rate currency unknown for ${unknownCount} rows; set the org or rate-book currency.` : null, rows: currencyRows.slice(0, 20), fact: "Quote currency follows organization settings. Source currencies are not converted. Different or unknown source/quote currencies need an explicit pricing basis." }, costUnknown: { count: costUnknown.length, sell: round(exposedSell), rows: costUnknown.slice(0, 10), marginFact: `Profit is sensitive to missing costs on ${round(exposedSell)} of row sell. Each added cost dollar reduces profit by one dollar; current markup is unchanged.` },
     staleEvidence: { count: staleEvidence.length, rows: staleEvidence.sort((a, b) => Number(b.differences.some((d: any) => d.field !== "derivation")) - Number(a.differences.some((d: any) => d.field !== "derivation"))).slice(0, 10) }, durationChecks: durationChecks.slice(0, 10),
     fact: "Advisory facts before estimate factors. No quote values were changed. Unstructured prose beyond explicit numeric drivers may need an independent review." };
 }
