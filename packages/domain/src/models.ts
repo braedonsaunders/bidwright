@@ -1887,6 +1887,7 @@ export interface AppSettings {
     autodeskApsAutocadActivityId?: string;
     agentRuntime?: string;
     agentModel?: string;
+    autoReview?: boolean;
     agentReasoningEffort?: string;
     maxConcurrentSubAgents?: number;
     /** Optional CLI binary path overrides for each registered runtime adapter. */

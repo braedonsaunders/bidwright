@@ -123,6 +123,11 @@ function normalizeFindings(value: unknown) {
       description: asString(entry.description),
       specRef: asOptionalString(entry.specRef),
       estimatedImpact: asOptionalString(entry.estimatedImpact),
+      hoursImpact: entry.hoursImpact == null ? null : asOptionalNumber(entry.hoursImpact),
+      moneyImpact: entry.moneyImpact == null ? null : asOptionalNumber(entry.moneyImpact),
+      rowIds: Array.isArray(entry.rowIds) ? entry.rowIds.filter((id: unknown) => typeof id === "string") : [],
+      dimension: asOptionalString(entry.dimension),
+      suggestedFix: asOptionalString(entry.suggestedFix),
       status: pickEnum<ReviewItemState>(entry.status, REVIEW_ITEM_STATES, "open"),
       resolutionNote: asOptionalString(entry.resolutionNote),
     };
@@ -355,6 +360,7 @@ export function registerReviewRoutes(app: FastifyInstance) {
       runtime?: AgentRuntime;
       model?: string;
       advisory?: boolean;
+      expectedRevisionId?: string;
     };
 
     body.advisory = body.advisory === true;
@@ -379,6 +385,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
     // Get project context
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) return reply.code(404).send({ error: "Project not found" });
+
+    if (body.expectedRevisionId && body.expectedRevisionId !== workspace.currentRevision?.id) return reply.code(409).send({ error: "Revision changed before automatic review" });
 
     let estimatingRunId: string | null = null;
     if (body.advisory === true) {
@@ -459,6 +467,8 @@ export function registerReviewRoutes(app: FastifyInstance) {
       location: project.location || "",
       scope: project.scope ?? "",
       laborBasis: summarizeLaborBasis(workspace),
+      pricingIntegrity: workspace.pricingIntegrity,
+      unlinkedMeasurements: workspace.unlinkedMeasurements,
       advisoryReview: body.advisory === true,
       quoteNumber: quote.quoteNumber || "",
       dataRoot: apiDataRoot,

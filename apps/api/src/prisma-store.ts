@@ -1,6 +1,6 @@
 import { indexLaborUnitPage, searchLaborVectors, prepareLaborSemanticBatch, type LaborSemanticBatch } from "./services/labor-vector-index.js";
 import { laborSearchProfile, rankLaborCandidates, laborGranularityFacts } from "./services/labor-search.js";
-import { summarizeLaborBasis, laborUnitPresentation } from "@bidwright/domain";
+import { summarizeLaborBasis, summarizePricingIntegrity, summarizeUnlinkedMeasurements, laborUnitPresentation } from "@bidwright/domain";
 import { assertLaborUnitHours, buildLaborUnitDerivation } from "./services/labor-unit-derivation.js";
 import { matchLaborBreakdown, laborUnitConversion, type LaborWorkLine } from "./services/labor-unit-matching.js";
 import { assertTakeoffUnits, takeoffError, takeoffRowId, takeoffUnitKey, type WorksheetTakeoffInput } from "./services/worksheet-takeoff.js";
@@ -5444,7 +5444,7 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
     const workspace = buildProjectWorkspace(store, projectId);
-    return workspace ? { ...workspace, laborBasis: summarizeLaborBasis(workspace) } : workspace;
+    return workspace ? { ...workspace, laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, await this.listPickups(projectId)) } : workspace;
   }
 
   /**

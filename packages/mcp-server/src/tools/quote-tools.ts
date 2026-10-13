@@ -1053,6 +1053,8 @@ function worksheetTreeSummary(ws: any) {
       const rev = ws.currentRevision || ws.revisions?.[0] || {};
       const summary = {
         laborBasis: ws.laborBasis ?? summarizeLaborBasis(ws),
+        pricingIntegrity: ws.pricingIntegrity,
+        unlinkedMeasurements: ws.unlinkedMeasurements,
         quote: { name: (ws.project || ws.projects?.[0])?.name, client: (ws.project || ws.projects?.[0])?.clientName },
         revision: {
           id: rev.id, title: rev.title, status: rev.status, type: rev.type,

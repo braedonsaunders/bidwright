@@ -1,3 +1,4 @@
+import { documentPageText, parseDocumentPages } from "../services/document-page-text.js";
 import type { FastifyInstance } from "fastify";
 import { knowledgeService } from "../services/knowledge-service.js";
 import {
@@ -310,6 +311,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
     try {
       const { projectId, documentId } = request.params as { projectId: string; documentId: string };
       const { pages } = (request.query ?? {}) as { pages?: string };
+      if (pages) parseDocumentPages(pages);
 
       const readKnowledgeBook = async () => {
         const book = await request.store!.getKnowledgeBook(documentId);
@@ -405,16 +407,12 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       const doc = docs.find((d: any) => d.id === documentId);
 
       if (doc) {
-        let content = doc.extractedText ?? "";
-
-        // If pages specified, try to extract page range
-        if (pages && content) {
-          const pageSegments = content.split(/\f|---\s*Page\s+\d+\s*---/i);
-          const [startStr, endStr] = pages.split("-");
-          const start = Math.max(1, parseInt(startStr, 10) || 1);
-          const end = endStr ? Math.min(pageSegments.length, parseInt(endStr, 10)) : start;
-          content = pageSegments.slice(start - 1, end).join("\n\n");
-        }
+        const pageText = pages ? await documentPageText(doc, pages,
+          /\.pdf$/i.test(doc.fileName) && doc.storagePath && !/^https?:/i.test(doc.storagePath)
+            ? resolveApiPath(doc.storagePath) : undefined).catch((error) => {
+              if (error.statusCode === 400) throw error;
+              return { content: "", pageTextStatus: "unavailable", fact: "Page text extraction is unavailable; readDrawingPage can inspect the requested physical pages. Unpaged text may still be available." };
+            }) : { content: doc.extractedText ?? "" };
 
         return {
           id: doc.id,
@@ -422,7 +420,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           fileType: doc.fileType,
           documentType: doc.documentType,
           pageCount: doc.pageCount,
-          content,
+          ...pageText,
           structuredData: doc.structuredData ?? null,
         };
       }
@@ -436,7 +434,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
       return reply.code(404).send({ message: "Document not found" });
     } catch (err) {
       request.log.error(err, "Read document failed");
-      return reply.code(500).send({
+      return reply.code((err as any)?.statusCode === 400 ? 400 : 500).send({
         message: "Failed to read document",
         error: err instanceof Error ? err.message : String(err),
       });

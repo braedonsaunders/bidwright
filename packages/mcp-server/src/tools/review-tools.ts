@@ -44,7 +44,12 @@ export function registerReviewTools(server: McpServer) {
         title: z.string().describe("Short finding title"),
         description: z.string().describe("Detailed finding description with analysis"),
         specRef: z.string().optional().describe("Reference to spec section or document"),
-        estimatedImpact: z.string().optional().describe("Estimated financial impact (e.g. '$5K-$10K')"),
+        rowIds: z.array(z.string()).optional().describe("Affected worksheet row ids; keep labels in prose"),
+        dimension: z.string().optional(),
+        suggestedFix: z.string().optional(),
+        estimatedImpact: z.string().optional().describe("Financial/hour sensitivity and uncertainty"),
+        hoursImpact: z.number().nullable().optional(),
+        moneyImpact: z.number().nullable().optional(),
       })),
     },
     async ({ findings }) => {

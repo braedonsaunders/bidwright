@@ -73,6 +73,7 @@ export interface AppSettingsRecord {
     agentRuntime?: string;
     agentModel?: string;
     agentReasoningEffort?: string;
+    autoReview?: boolean;
     maxConcurrentSubAgents?: number;
   };
   brand: BrandProfile;

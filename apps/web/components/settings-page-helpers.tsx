@@ -746,6 +746,14 @@ export function AgentRuntimeSettings({
           </p>
         </div>
 
+        <label className="flex items-start gap-2 text-sm">
+          <input type="checkbox" checked={settings.integrations.autoReview !== false}
+            onChange={(event) => void persistRuntimeSettings({ autoReview: event.target.checked })} />
+          <span>Independent estimate review
+            <span className="block text-xs text-fg/50">One review and revision after a build. If review fails, the saved estimate stands.</span>
+          </span>
+        </label>
+
         <div>
           <Label>Reasoning Effort</Label>
           <Select

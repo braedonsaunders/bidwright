@@ -1,3 +1,5 @@
+import { reviewSessionKey } from "./review-launch.js";
+import { automaticEstimateReview, recordAutomaticRevisionFailure } from "./automatic-estimate-review.js";
 import { preserveCurrentInstructions } from "./instruction-restore.js";
 import { compatibleSession } from "./session-continuity.js";
 /**
@@ -97,6 +99,8 @@ export interface CliSession {
   _suppressNextExitMessage?: boolean;
   /** The watchdog is replacing this process; its intentional exit is not the end of the logical run. */
   _recovering?: boolean;
+  /** The builder process has exited, but its independent review still owns this logical run. */
+  _automaticReview?: AbortController;
 }
 
 // ── Module state ──────────────────────────────────────────────────
@@ -194,7 +198,7 @@ export async function probeLiveAgent(
   const session = sessions.get(projectId);
   if (session) {
     return {
-      live: session.status === "running" && isPidAlive(session.pid || session.process?.pid),
+      live: session.status === "running" && (!!session._automaticReview || isPidAlive(session.pid || session.process?.pid)),
       source: "memory",
       sessionId: session.sessionId,
       runtime: session.runtime,
@@ -591,6 +595,7 @@ export interface SpawnSessionOpts {
   requireFinalAssistantMessage?: boolean;
   /** Internal guard preventing an endless final-answer recovery loop. */
   completionRecoveryAttempt?: number;
+  autoReview?: boolean;
   agentMode?: AgentChatMode;
   aiRunId?: string;
   providerSessionId?: string;
@@ -796,6 +801,24 @@ function wireChildProcess(
       }
     }
 
+    if (processSucceeded && !missingFinalAnswer && session.sessionId && session._spawnOpts) {
+      session._automaticReview = new AbortController();
+      try {
+        const followup = await automaticEstimateReview(session._spawnOpts as unknown as SpawnSessionOpts, event => events.emit("event", event), undefined, session._automaticReview.signal);
+        if (followup && session.status === "running") {
+          await spawnResumedSession({ ...(session._spawnOpts as unknown as SpawnSessionOpts), prompt: followup }, session.sessionId, events);
+          return;
+        }
+      } catch (error) {
+        await recordAutomaticRevisionFailure(session._spawnOpts as unknown as SpawnSessionOpts, String(error)).catch(() => {});
+        events.emit("event", { type: "progress", data: { phase: "reviewing", detail: `Automatic review/revision could not continue: ${error instanceof Error ? error.message : String(error)}. The saved build stands.` } });
+      } finally { session._automaticReview = undefined; }
+      if (session.status === "stopped") return;
+    }
+
+    if ((!processSucceeded || missingFinalAnswer) && session._spawnOpts) {
+      await recordAutomaticRevisionFailure(session._spawnOpts as unknown as SpawnSessionOpts, `Revision ended with code ${code}, signal ${signal ?? "none"}`).catch(() => {});
+    }
     session.status = missingFinalAnswer
       ? "failed"
       : signal === "SIGINT" ? "stopped" : code === 0 ? "completed" : "failed";
@@ -1161,7 +1184,8 @@ async function spawnResumedSession(
   // user landed on a host that doesn't have the local copy (stateless
   // pool) we pull the snapshot down before the adapter scaffolds.
   const resumeWorkspaceStorage = getWorkspaceStorage();
-  if (!opts.reviewOnly && resumeWorkspaceStorage.ready()) {
+  // A same-process continuation already has the latest workspace; do not restore an older exit snapshot.
+  if (!sharedEvents && !opts.reviewOnly && resumeWorkspaceStorage.ready()) {
     const wsKey = workspaceStorageKey({
       organizationId: opts.organizationId,
       projectId: opts.projectId,
@@ -1288,6 +1312,16 @@ export function stopSession(projectId: string, options?: { suppressCompletionMes
   const session = sessions.get(projectId);
   if (!session || session.status !== "running") return false;
 
+  if (session._automaticReview) {
+    session.status = "stopped";
+    session._automaticReview.abort();
+    stopSession(reviewSessionKey(session.projectId));
+    persistSessionState(session).catch(() => {});
+    session.events.emit("event", { type: "status", data: { status: "stopped" } });
+    session.events.emit("done", "stopped");
+    scheduleSessionReap(session);
+    return true;
+  }
   console.log(`[cli:stop:${projectId}] Killing process pid=${session.process.pid}`);
   if (options?.suppressCompletionMessage) session._suppressNextExitMessage = true;
   killProcess(session.process, "SIGINT");
@@ -1326,6 +1360,7 @@ export function emitSessionEvent(projectId: string, event: { type: string; data:
 export async function interruptAndResumeSession(projectId: string, prompt: string, reason = "Background evidence update"): Promise<{ interrupted: boolean; resumed: boolean; runId?: string; reason?: string }> {
   let session = sessions.get(projectId);
   if (!session || session.status !== "running") return { interrupted: false, resumed: false, reason: "no_running_session" };
+  if (session._automaticReview) return { interrupted: false, resumed: false, reason: "independent_review_in_progress" };
   if (!session.sessionId) return { interrupted: false, resumed: false, reason: "missing_cli_session_id" };
   if (interruptingProjects.has(projectId)) return { interrupted: false, resumed: false, reason: "interrupt_already_in_progress" };
   const lastInterruptAt = lastBackgroundInterruptAtByProject.get(projectId) ?? 0;

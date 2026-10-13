@@ -1,3 +1,4 @@
+import { reviewPhaseScripts } from "./review-phase-scripts.js";
 import { assertReasoningEffortOverride, resolveRunReasoningEffort } from "../../apps/api/src/services/cli-reasoning-effort.js";
 /**
  * Run a Bidwright quote with a local Claude Code estimator instead of the
@@ -310,6 +311,20 @@ claude -p "$(cat prompt.txt)" \\
     const environment = (await readFile(join(dir, "run.sh"), "utf8")).split("claude -p")[0];
     await writeFile(join(dir, "run.sh"), `${environment}# Uses the installed/pooled default model; no model override.\nexec codex exec --json --skip-git-repo-check --sandbox workspace-write ${overrides.map(value => `-c ${shellQuote(value)}`).join(" ")} - < prompt.txt > transcript.jsonl 2> stderr.log\n`);
   }
+  const buildScript = await readFile(join(dir, "run.sh"), "utf8");
+  const reviewDir = join(dir, ".bidwright-review");
+  await mkdir(reviewDir, { recursive: true });
+  const reviewMcp = JSON.parse(await readFile(join(dir, "mcp.json"), "utf8"));
+  Object.assign(reviewMcp.mcpServers.bidwright.env, { BIDWRIGHT_AGENT_MODE: "qa", BIDWRIGHT_REVIEW_ONLY: "false" });
+  await writeFile(join(reviewDir, "mcp.json"), JSON.stringify(reviewMcp, null, 2));
+  await writeFile(join(reviewDir, "settings.json"), await readFile(join(dir, "settings.json"), "utf8"));
+  for (const [phase, script] of Object.entries(reviewPhaseScripts(buildScript, runtime, dir))) {
+    await writeFile(join(dir, `run-${phase}.sh`), script);
+  }
+  await writeFile(join(dir, "review-cycle.json"), JSON.stringify({ runtime, tokenFile, apiUrl, projectId, autoReview: settings?.integrations?.autoReview !== false,
+    brief: { projectName: project.name, clientName: project.clientName, location: project.location, scope, quoteNumber: quote.quoteNumber,
+      dataRoot: dir, documents, knowledgeBookFiles: [], knowledgeDocumentFiles: [], sourceOverview, runtime, pythonEnvironment } }, null, 2));
+  await writeFile(join(dir, "run.sh"), `#!/bin/sh\nexec ${shellQuote(tsx)} ${shellQuote(join(repoRoot, "scripts/eval/review-cycle.ts"))} ${shellQuote(dir)}\n`);
   await chmod(join(dir, "run.sh"), 0o700);
   console.log(JSON.stringify({ projectId, dir, documents: documents.length, scopeChars: scope.length }, null, 2));
 }

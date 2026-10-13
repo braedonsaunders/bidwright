@@ -1431,6 +1431,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         customCliPath: resolveCliPathOverride(runtime, integrations),
         userId: request.user?.id ?? null,
         organizationId: request.user?.organizationId ?? null,
+        autoReview: (settings as any)?.integrations?.autoReview !== false,
         agentMode: "build_estimate",
         aiRunId: sessionId,
         ...buildSpawnApiKeys(integrations),
@@ -1578,6 +1579,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
         promptCaching,
+        autoReview: (await request.store!.getSettings() as any)?.integrations?.autoReview !== false,
         agentMode: mode,
         aiRunId,
         emitCompletionMessage: mode !== "qa",
@@ -1802,6 +1804,7 @@ ${conversationContext || "No previous turns."}
         promptCaching,
         emitCompletionMessage: false,
         requireFinalAssistantMessage: mode === "qa",
+        autoReview: (await request.store!.getSettings() as any)?.integrations?.autoReview !== false,
         agentMode: mode,
         aiRunId: sessionId,
       });

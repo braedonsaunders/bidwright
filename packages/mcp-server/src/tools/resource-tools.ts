@@ -1273,7 +1273,7 @@ export function registerResourceTools(server: McpServer) {
     async (input) => {
       const { includeDiagnostics, ...query } = input;
       const data = await apiGet(`/api/labor-units/units${queryString(query)}`);
-      return { content: [{ type: "text" as const, text: JSON.stringify(compactLaborUnitsPayload(data, input.q, { includeDiagnostics }), null, 2) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ ...compactLaborUnitsPayload(data, input.q, { includeDiagnostics }), fact: "matchLaborUnits matches a whole work breakdown in one call: {lines:[{operation: 'install', material: 'steel pipe', quantity: 100, uom: 'FT'}]}." }, null, 2) }] };
     },
   );
 

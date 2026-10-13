@@ -1,3 +1,4 @@
+import { ESTIMATE_REVIEW_RUBRIC } from "@bidwright/domain";
 import { agentPythonFacts } from "./agent-host/python-environment.js";
 /**
  * CLAUDE.md Generator
@@ -29,8 +30,11 @@ export interface LibrarySnapshotInfo {
 }
 
 export interface ClaudeMdParams {
+  pricingIntegrity?: unknown;
+  unlinkedMeasurements?: unknown;
   laborBasis?: unknown;
   advisoryReview?: boolean;
+  reviewOutput?: "tools" | "json";
   pythonEnvironment?: Record<string, string>;
   runtime?: string;
   sourceOverview?: SourceOverview;
@@ -178,7 +182,7 @@ function buildDrawingAnalysisSection(documents: ClaudeDocument[], mode: "estimat
 | Symbols/legends | extractDrawingLegend, createSymbolTemplateFromRegion | Repeated symbols in a defined region; optional how-to: pdf-takeoff |
 | Existing takeoff | listPickups, createWorksheetItem, updateWorksheetItem, linkPickupToWorksheetItem | Saved marks drive row quantities via takeoff: [{pickupId}]; updates replace the link set, omission preserves it |
 
-getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. \`describeTools\` describes a family; \`invokeTool\` calls a tool not directly loaded with its documented arguments. These capabilities support estimating judgment without prescribing a workflow.
+getSourceOverview refreshes Documents and Files facts mid-run. The launch snapshot is in \`.bidwright/source-overview.json\`. Missing metadata means unknown, not unavailable. All allowed tools are registered directly. \`describeTools({family:"sources"})\`, \`{family:"pricing"}\`, \`{family:"estimate"}\`, and \`{family:"reconciliation"}\` each return a whole phase of compact schemas in one call; a named lookup also includes its phase siblings. \`invokeTool\` accepts those same schemas. These capabilities support estimating judgment without prescribing a workflow.
 
 Pickup person/agent/unrecorded counts reflect saved provenance labels. Legacy unrecorded pickups and UI CAD pickups labelled agent can include human work; inspect the existing takeoff rather than treating those labels as proof of who measured it.
 
@@ -318,7 +322,7 @@ Respect the user's commercial decisions: owner-supplied equipment, fabrication b
 
 Start from the current \`getWorkspace\` so you preserve existing work and human edits. Understand the RFQ, relevant drawings, schedules, vendor scope and site constraints. Create worksheets and price useful portions as you establish their basis; continue researching the unresolved portions alongside the saved estimate.
 
-\`requestEstimateReview\` optionally starts an independent, fresh-context advisory draft review; the returned reviewId polls its findings for a subsequent revision. The specialist-subagents skill describes a runtime-native alternative.
+Build estimate normally runs one independent review after the first turn, followed by one revision in the same session. Findings are advisory; review failure leaves the saved build intact. Organizations can turn autoReview off. \`requestEstimateReview\` also provides an optional earlier draft check.
 
 Think through how the work will be performed: supply versus installation, sequence, crew, access, rigging, shutdowns, temporary works, testing and turnover. Use applicable labour units and manual tables with their conditions and adjustments. When no suitable source is available, use and describe estimator judgment. The labour-library match, output unit, quantity and adjustments can be recorded in the row derivation.
 
@@ -525,7 +529,7 @@ ${agentSkillIndex(params.runtime)}
 
 ${agentPythonFacts(params.pythonEnvironment)}
 
-getSourceOverview refreshes source capabilities and existing takeoff facts; the launch snapshot is .bidwright/source-overview.json. describeTools and invokeTool expose tools not directly loaded.
+getSourceOverview refreshes source capabilities and existing takeoff facts; the launch snapshot is .bidwright/source-overview.json. All allowed tools are registered directly. describeTools({family:"sources"}), {family:"pricing"}, {family:"estimate"}, and {family:"reconciliation"} each return a whole phase of compact schemas in one call; a named lookup also includes its phase siblings. invokeTool uses those same schemas.
 
 You are in read-only project Q&A mode. Answer the user's question directly from the current quote, project documents, drawings, and approved organization knowledge. For casual market questions the project sources cannot answer — current material/component prices, vendor availability, product specs, codes — use the webSearch tool and cite the source URLs.
 
@@ -599,11 +603,15 @@ export async function generateReviewInstructionFiles(
 export function buildReviewClaudeMdContent(params: ClaudeMdParams): string {
   if (params.advisoryReview) return `# Advisory draft review
 Review **${params.projectName}**, quote **${params.quoteNumber}**, independently in a fresh context. Scope: ${params.scope || "See project documents"}.
-Rubric: quantity accuracy spot-checks, document scope coverage, traceability, labour basis share, pricing integrity and commercial clarity.
+${ESTIMATE_REVIEW_RUBRIC}
 Use getWorkspace/searchItems/getLineDerivation and original project sources for a small set of consequential checks. This is a spot-check, not a full re-estimate. Keep estimate rows unchanged. Historical benchmarks and calibration lessons are outside this review.
 Labour basis at launch: ${JSON.stringify(params.laborBasis ?? null)}
+Pricing integrity facts: ${JSON.stringify(params.pricingIntegrity ?? null)}
+Unlinked measurements: ${JSON.stringify(params.unlinkedMeasurements ?? null)}
+${agentPythonFacts(params.pythonEnvironment)}
+${buildDrawingAnalysisSection(params.documents, "review")}
 ${buildDocumentManifestRows(params.documents, params.sourceOverview)}
-Save supported findings with saveReviewFindings and saveReviewSummary; name the evidence, likely effect, proposed change and unresolved uncertainty. The report is advisory and does not approve or finalize the estimate.
+${params.reviewOutput === "json" ? 'Return one JSON object {"findings":[{"id":"F1","dimension":"quantity","rowIds":[],"description":"...","suggestedFix":"...","estimatedImpact":"...","hoursImpact":null,"moneyImpact":null}],"summary":"..."}. This local review has read-only MCP tools; findings are captured from the final response.' : "Save supported findings with saveReviewFindings and saveReviewSummary; name the evidence, likely effect, proposed change and unresolved uncertainty."} The report is advisory and does not approve or finalize the estimate.
 ${buildLibrarySnapshotSection(params.librarySnapshot)}`;
   return `# Bidwright Quote Review Agent
 
@@ -629,6 +637,8 @@ ${buildLibrarySnapshotSection(params.librarySnapshot)}
 ## Reviewing the estimate
 
 Labour basis at launch: ${JSON.stringify(params.laborBasis ?? null)}
+Pricing integrity facts: ${JSON.stringify(params.pricingIntegrity ?? null)}
+Unlinked measurements: ${JSON.stringify(params.unlinkedMeasurements ?? null)}
 
 Use \`getWorkspace\` and \`searchItems\` for the saved rows, totals, conditions and labour units. \`getLineDerivation\` explains the recorded calculations. Quoted hours are available as resolved tier units (units.total / units.tiers) and worksheet labourHours; a row's quantity may instead be a multiplier. Read the quoted values before comparing them with your independent estimate.
 
