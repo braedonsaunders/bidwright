@@ -2,18 +2,18 @@ import { estimateRevisionPrompt } from "@bidwright/domain";
 import { prisma } from "@bidwright/db";
 import type { SpawnSessionOpts } from "./cli-runtime.js";
 
-type Cycle = { phase: "reviewing" | "revising" | "complete" | "failed"; startedAt: string; reviewId?: string; fact?: string };
+type Cycle = { phase: "reviewing" | "revising" | "complete" | "failed" | "cancelled"; startedAt: string; reviewId?: string; fact?: string };
 /** The durable claim is written before launching either paid phase. A lost API process never replays a launch. */
-export async function automaticEstimateReview(opts: SpawnSessionOpts, emit: (event: any) => void, db: any = prisma, signal?: AbortSignal): Promise<string | null> {
-  if (opts.agentMode !== "build_estimate" || opts.reviewOnly || opts.autoReview === false || !opts.aiRunId || !opts.authToken) return null;
+export async function automaticEstimateReview(opts: SpawnSessionOpts, emit: (event: any) => void, db: any = prisma, signal?: AbortSignal, stopReview?: () => void): Promise<string | null> {
+  if (opts.autoReviewInitialBuild !== true || opts.agentMode !== "build_estimate" || opts.reviewOnly || opts.autoReview === false || !opts.aiRunId || !opts.authToken) return null;
   const event = (phase: string, detail: string) => emit({ type: "progress", data: { phase, detail } });
   const run = await db.aiRun.findFirst({ where: { id: opts.aiRunId, projectId: opts.projectId } });
   if (!run) return null;
   const input = (run.input ?? {}) as Record<string, any>;
+  if (input.followUp || input.previousAiRunId || input.resumed) return null;
   const prior = input.autoReviewCycle as Cycle | undefined;
   if (prior) {
-    if (prior.phase === "revising") await db.aiRun.update({ where: { id: run.id }, data: { input: { ...input, autoReviewCycle: { ...prior, phase: "complete" } } } });
-    else if (prior.phase === "reviewing") {
+    if (prior.phase === "reviewing") {
       const fact = "An earlier automatic review was interrupted; it was not launched again. The saved estimate stands.";
       await db.aiRun.update({ where: { id: run.id }, data: { input: { ...input, autoReviewCycle: { ...prior, phase: "failed", fact } } } });
       event("reviewing", fact);
@@ -51,17 +51,18 @@ export async function automaticEstimateReview(opts: SpawnSessionOpts, emit: (eve
     }
     throw new Error("Independent review exceeded its time limit; the saved build stands");
   } catch (error) {
-    cycle = { ...cycle, phase: "failed", fact: error instanceof Error ? error.message : String(error) };
+    stopReview?.();
+    cycle = { ...cycle, phase: signal?.aborted ? "cancelled" : "failed", fact: error instanceof Error ? error.message : String(error) };
     await save().catch(() => {});
     event("reviewing", `Automatic review unavailable: ${cycle.fact}. Completion is unaffected.`);
     return null;
   }
 }
 
-export async function recordAutomaticRevisionFailure(opts: SpawnSessionOpts, fact: string, db: any = prisma) {
+export async function finishAutomaticReview(opts: SpawnSessionOpts, phase: "complete" | "failed" | "cancelled", fact?: string, db: any = prisma) {
   if (opts.agentMode !== "build_estimate" || !opts.aiRunId) return;
   const run = await db.aiRun.findFirst({ where: { id: opts.aiRunId, projectId: opts.projectId } });
   const input = run?.input as Record<string, any> | undefined;
-  if (input?.autoReviewCycle?.phase !== "revising") return;
-  await db.aiRun.update({ where: { id: run.id }, data: { input: { ...input, autoReviewCycle: { ...input.autoReviewCycle, phase: "failed", fact } } } });
+  if (!["reviewing", "revising"].includes(input?.autoReviewCycle?.phase)) return;
+  await db.aiRun.update({ where: { id: run.id }, data: { input: { ...input, autoReviewCycle: { ...input!.autoReviewCycle, phase, fact: fact ?? null } } } });
 }

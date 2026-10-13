@@ -20,3 +20,13 @@ test("missing page indexes say unavailable, malformed/out-of-range requests are 
   assert.equal((await documentPageText({ pageCount: 500, extractedText: "flat text" }, "450")).pageTextStatus, "unavailable");
   for (const value of ["0", "3-2", "junk", "2-4"]) assert.throws(() => parseDocumentPages(value, 3), /Invalid physical PDF page range/);
 });
+test("Azure pageText serves remote PDFs without fetching bytes", async () => {
+  const result = await documentPageText({ fileName: "remote.pdf", pageCount: 4, storagePath: "https://example.invalid/file.pdf",
+    structuredData: { pageText: [{ pageNumber: 3, lines: [{ text: "Stored OCR page three" }] }] } }, "3", "https://example.invalid/file.pdf", async () => { throw new Error("Unexpected extraction"); });
+  assert.match(result.content, /Page 3 ---\nStored OCR page three/);
+});
+test("ingestion Page Break markers work for non-PDF text without extraction", async () => {
+  const result = await documentPageText({ fileName: "source.docx", pageCount: 2, extractedText: "First page\n\n--- Page Break ---\n\nSecond page" }, "2", "/local/source.docx", async () => { throw new Error("Unexpected extraction"); });
+  assert.equal(result.content, "--- Page 2 ---\nSecond page");
+  assert.equal((await documentPageText({ fileName: "source.txt", extractedText: "No page boundaries" }, "2", "/local/source.txt")).pageTextStatus, "unavailable");
+});

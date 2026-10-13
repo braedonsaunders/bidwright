@@ -5444,7 +5444,11 @@ export class PrismaApiStore {
     await this.requireProject(projectId);
     const store = await this.buildStoreSnapshot(projectId);
     const workspace = buildProjectWorkspace(store, projectId);
-    return workspace ? { ...workspace, laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, await this.listPickups(projectId)) } : workspace;
+    if (!workspace) return workspace;
+    const pickups = await this.db.pickup.findMany({ where: { projectId }, select: {
+      id: true, label: true, documentId: true, annotationType: true, measurement: true, _count: { select: { pickupLinks: true } },
+    }, orderBy: { createdAt: "asc" } });
+    return { ...workspace, laborBasis: summarizeLaborBasis(workspace), pricingIntegrity: summarizePricingIntegrity(workspace), unlinkedMeasurements: summarizeUnlinkedMeasurements(workspace, pickups) };
   }
 
   /**

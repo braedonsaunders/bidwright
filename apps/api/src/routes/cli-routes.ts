@@ -9,7 +9,7 @@ import { resolveEstimatorPersonaForPrompt } from "../services/estimator-persona-
 import { findPendingQuestionEvent } from "../services/cli-question-history.js";
 import { assertPromptCachingOverride, resolveRunPromptCaching } from "../services/cli-prompt-caching.js";
 import { assertReasoningEffortOverride, normalizeCliReasoningEffort, resolveRunReasoningEffort } from "../services/cli-reasoning-effort.js";
-import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, probeLiveAgent, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
+import { detectCli, checkCliAuth, spawnSession, stopSession, resumeSession, getSession, getSessionForMode, cancelAutomaticReview, probeLiveAgent, listSessions, listCliModels, type AgentChatMode, type AgentRuntime } from "../services/cli-runtime.js";
 import {
   startLoginSession,
   attachLoginSession,
@@ -1005,6 +1005,7 @@ async function prepareCliAgentWorkspace(input: {
   scope?: string;
   personaId?: string;
   mode?: AgentChatMode;
+  projectDir?: string;
 }) {
   const { request, workspace, projectId, runtime } = input;
   const store = request.store!;
@@ -1024,7 +1025,7 @@ async function prepareCliAgentWorkspace(input: {
     storagePath: d.storagePath || "",
   }));
 
-  const projectDir = resolveProjectDir(projectId);
+  const projectDir = input.projectDir ?? resolveProjectDir(projectId);
   const knowledgeBooks = await store.listKnowledgeBooks() || [];
   const globalBooks = knowledgeBooks.filter((b: any) => b.scope === "global" && b.storagePath);
   const linkedBookNames = globalBooks.length > 0
@@ -1285,6 +1286,7 @@ export function registerCliRoutes(app: FastifyInstance) {
     }));
 
 
+    await cancelAutomaticReview(projectId, "A new estimate build takes over; automatic revision cancelled");
     const projectDir = resolveProjectDir(projectId);
 
     // Symlink global knowledge books FIRST so CLAUDE.md can reference them
@@ -1432,6 +1434,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         userId: request.user?.id ?? null,
         organizationId: request.user?.organizationId ?? null,
         autoReview: (settings as any)?.integrations?.autoReview !== false,
+        autoReviewInitialBuild: true,
         agentMode: "build_estimate",
         aiRunId: sessionId,
         ...buildSpawnApiKeys(integrations),
@@ -1449,7 +1452,8 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
   // ── SSE Stream ──────────────────────────────────────────────
   app.get("/api/cli/:projectId/stream", async (request, reply) => {
     const { projectId } = request.params as { projectId: string };
-    const session = getSession(projectId);
+    const mode = (request.query as { mode?: AgentChatMode })?.mode;
+    const session = getSessionForMode(projectId, mode);
 
     if (!session) {
       return reply.code(404).send({ error: "No active session for this project" });
@@ -1506,7 +1510,10 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
   // ── Stop Session ────────────────────────────────────────────
   app.post("/api/cli/:projectId/stop", async (request) => {
     const { projectId } = request.params as { projectId: string };
-    const stopped = stopSession(projectId);
+    const mode = (request.body as { mode?: AgentChatMode } | undefined)?.mode;
+    if (mode !== "qa" && await cancelAutomaticReview(projectId, "Automatic review stopped by the user")) return { stopped: true };
+    const session = getSession(projectId);
+    const stopped = (!mode || session?._spawnOpts?.agentMode === mode) ? stopSession(projectId) : false;
     return { stopped };
   });
 
@@ -1524,7 +1531,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
     assertReasoningEffortOverride(body.reasoningEffort);
     assertPromptCachingOverride(body.promptCaching);
     const { projectId } = request.params as { projectId: string };
-    const projectDir = resolveProjectDir(projectId);
+    let projectDir = resolveProjectDir(projectId);
     const store = request.store!;
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) {
@@ -1549,6 +1556,8 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         : latestRun?.kind === "cli-assist"
           ? "assist_edit"
           : "qa");
+    if (mode === "qa") projectDir = join(projectDir, ".bidwright-qa");
+    else await cancelAutomaticReview(projectId, "A user resumed editing; the user takes over the estimate");
     const runKind = runKindForMode(mode);
     const runtime: AgentRuntime = isCliRuntime(latestRuntime)
       ? latestRuntime
@@ -1558,7 +1567,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
     const model = normalizeCliModel(runtime, body.model ?? latestRun?.model ?? integrations.agentModel);
     const reasoningEffort = resolveRunReasoningEffort(body.reasoningEffort, integrations.agentReasoningEffort, mode, (latestRun?.input as any)?.reasoningEffort);
     const promptCaching = resolveRunPromptCaching(body.promptCaching, (latestRun?.input as any)?.promptCaching, process.env.BIDWRIGHT_OPENROUTER_PROMPT_CACHE === "on");
-    await prepareCliAgentWorkspace({ request, workspace, projectId, runtime, mode });
+    await prepareCliAgentWorkspace({ request, workspace, projectId, projectDir, runtime, mode });
     const resumePrompt = buildResumePrompt(runtime, mode, body.prompt);
     const aiRunId = `cli-${Date.now()}-${Math.random().toString(16).slice(2, 6)}`;
 
@@ -1579,7 +1588,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
         ...buildSpawnApiKeys(integrations),
         reasoningEffort,
         promptCaching,
-        autoReview: (await request.store!.getSettings() as any)?.integrations?.autoReview !== false,
+        autoReview: false,
         agentMode: mode,
         aiRunId,
         emitCompletionMessage: mode !== "qa",
@@ -1679,6 +1688,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
     assertPromptCachingOverride(requestedPromptCaching);
     if (!message) return reply.code(400).send({ error: "Message required" });
 
+    const mode = normalizeAgentChatMode(requestedMode);
     const existing = getSession(projectId);
     if (existing && existing.status === "running") {
       return reply.code(409).send({ error: "Session is already running. Stop it first or wait for it to complete." });
@@ -1686,12 +1696,12 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
 
     // Spawn a new session with the user's message as the prompt.
     // The workspace instruction files and agent-memory.json provide context.
-    const projectDir = resolveProjectDir(projectId);
+    const projectDir = mode === "qa" ? join(resolveProjectDir(projectId), ".bidwright-qa") : resolveProjectDir(projectId);
     const store = request.store!;
     const workspace = await store.getWorkspace(projectId);
     if (!workspace) return reply.code(404).send({ error: "Project not found" });
     const project = workspace.project || {} as any;
-    const mode = normalizeAgentChatMode(requestedMode);
+    if (mode !== "qa") await cancelAutomaticReview(projectId, "A user message takes over the estimate; automatic revision cancelled");
     const runKind = runKindForMode(mode);
     const ingestionBlock = ingestionStartBlock(project);
     if (ingestionBlock) return reply.code(409).send(ingestionBlock);
@@ -1719,6 +1729,7 @@ ${userPrompt ? `User request:\n${userPrompt}` : "Build the estimate from the cur
       request,
       workspace,
       projectId,
+      projectDir,
       runtime,
       scope,
       personaId,
@@ -1804,7 +1815,7 @@ ${conversationContext || "No previous turns."}
         promptCaching,
         emitCompletionMessage: false,
         requireFinalAssistantMessage: mode === "qa",
-        autoReview: (await request.store!.getSettings() as any)?.integrations?.autoReview !== false,
+        autoReview: false,
         agentMode: mode,
         aiRunId: sessionId,
       });
@@ -1913,9 +1924,7 @@ ${conversationContext || "No previous turns."}
     const activeSessionMode = activeSession
       ? normalizeAgentChatMode((activeSession._spawnOpts as any)?.agentMode)
       : undefined;
-    const session = !requestedMode || activeSessionMode === requestedMode
-      ? activeSession
-      : undefined;
+    const session = getSessionForMode(projectId, requestedMode);
 
     // Get the requested mode's persisted history, or all interactive modes
     // for older clients that do not provide the mode query, oldest first.
@@ -2014,7 +2023,7 @@ ${conversationContext || "No previous turns."}
       // user's just-typed question vanish from the transcript (and it stays
       // gone forever when the run errors before producing a reply).
       const hasUserMessage = runEvents.some((event: any) => event?.type === "message" && event?.data?.role === "user");
-      if (runEvents.length < 3 && !hasUserMessage && runs.length > 1) continue;
+      if (runEvents.length < 3 && !hasUserMessage && !(run.input as any)?.automaticReview && runs.length > 1) continue;
 
       // Add a run divider
       mergedEvents.push({
@@ -2059,6 +2068,7 @@ ${conversationContext || "No previous turns."}
 
     return {
       status: currentStatus,
+      automaticReview: currentStatus === "running" && (session ? session._spawnOpts?.automaticRevision === true : (latestRun?.input as any)?.automaticReview === true),
       runtime: (latestRun?.input as any)?.runtime || session?.runtime,
       mode: requestedMode || (latestRun?.input as any)?.mode
         || (latestRun?.kind === "cli-intake" ? "build_estimate" : latestRun?.kind === "cli-assist" ? "assist_edit" : "qa"),

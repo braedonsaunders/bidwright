@@ -5644,13 +5644,14 @@ export async function deletePersona(id: string): Promise<void> {
   await apiRequest(`/personas/${id}`, { method: "DELETE" });
 }
 
-export function connectCliStream(projectId: string): EventSource {
+export function connectCliStream(projectId: string, mode?: "qa" | "assist_edit" | "build_estimate"): EventSource {
   const url = new URL(`/api/cli/${projectId}/stream`, apiBaseUrl);
+  if (mode) url.searchParams.set("mode", mode);
   return new EventSource(url.toString(), { withCredentials: true });
 }
 
-export async function stopCliSession(projectId: string) {
-  return apiRequest<{ stopped: boolean }>(`/api/cli/${projectId}/stop`, { method: "POST" });
+export async function stopCliSession(projectId: string, mode?: "qa" | "assist_edit" | "build_estimate") {
+  return apiRequest<{ stopped: boolean }>(`/api/cli/${projectId}/stop`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ mode }) });
 }
 
 export async function resumeCliSession(
@@ -5709,6 +5710,7 @@ export async function getCliStatus(
     runtime?: string;
     mode?: "qa" | "assist_edit" | "build_estimate";
     activeMode?: "qa" | "assist_edit" | "build_estimate";
+    automaticReview?: boolean;
     sessionId?: string;
     startedAt?: string;
     source?: "live" | "db";

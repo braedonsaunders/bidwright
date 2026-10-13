@@ -2373,6 +2373,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
   const [sessionError, setSessionError] = useState<string | null>(null);
   const [intakeSessionId, setIntakeSessionId] = useState<string | null>(null);
   const [intakeStatus, setIntakeStatus] = useState<IntakeStatusResult | null>(null);
+  const [automaticCycleActive, setAutomaticCycleActive] = useState(false);
   const [intakeLoading, setIntakeLoading] = useState(false);
   const [liveToolCalls, setLiveToolCalls] = useState<ToolCallEntry[]>([]);
   const [ingestionStatus, setIngestionStatus] = useState<string | null>(null);
@@ -2795,6 +2796,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     setCliPendingQuestion(null);
     setIntakeSessionId(null);
     setIntakeStatus(null);
+    setAutomaticCycleActive(false);
     setMessages([]);
     setLiveToolCalls([]);
     setThinkingBlocks([]);
@@ -2808,6 +2810,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
     try {
       const data = await getCliStatus(projectId, mode);
       if (requestId !== historyRequestRef.current) return;
+      setAutomaticCycleActive(data.automaticReview === true);
 
       if (options.followActive && data.activeMode && data.activeMode !== mode) {
         await loadModeHistory(data.activeMode, {
@@ -2891,6 +2894,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         });
         if (result.sessionId) {
           // A new session was started
+          setAutomaticCycleActive(false);
           setIntakeSessionId(result.sessionId);
           setIntakeStatus((prev) => prev ? { ...prev, status: "running" } : {
             sessionId: result.sessionId, projectId, scope: "", status: "running",
@@ -3072,7 +3076,8 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       eventSourceRef.current.close();
     }
 
-    const es = connectCliStream(pid);
+    const historyRequest = historyRequestRef.current;
+    const es = connectCliStream(pid, mode);
     eventSourceRef.current = es;
     setSseConnected(false);
 
@@ -3238,6 +3243,9 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         window.setTimeout(() => {
           void getCliStatus(projectId, mode)
           .then((latest) => {
+            if (historyRequest !== historyRequestRef.current) return;
+            setAutomaticCycleActive(latest.automaticReview === true);
+            if (latest.status === "running") connectToSseStream(pid, mode);
             const events = latest.events || [];
             const tools = events.filter((evt: any) => evt.type === "tool_call");
             const msgs = events.filter((evt: any) => evt.type === "message");
@@ -3356,9 +3364,12 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
       onWorkspaceMutated?.();
     }, 10_000);
 
+    const historyRequest = historyRequestRef.current;
     const poll = async () => {
       try {
         const data = await getCliStatus(projectId, chatMode);
+        if (historyRequest !== historyRequestRef.current) return;
+        setAutomaticCycleActive(data.automaticReview === true);
         pollFailCount.current = 0; // Reset on success
         const events = data.events || [];
         if (events.length > 0) {
@@ -3431,6 +3442,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
         // Poll for pending questions from the askUser MCP tool
         try {
           const q = await getCliPendingQuestion(projectId);
+          if (historyRequest !== historyRequestRef.current) return;
           if (q.pending && q.question) {
             recordCliPrompt({
               id: q.questionId || null,
@@ -3461,6 +3473,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           onWorkspaceMutated?.();
         }
       } catch {
+        if (historyRequest !== historyRequestRef.current) return;
         // API unreachable (server restarting, network blip, etc.)
         // Retry a few times before giving up - the server may come back with the
         // actual final status from the DB after its startup cleanup runs.
@@ -3469,9 +3482,11 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
           // After ~20s of failures, accept it's gone and check DB one last time
           try {
             const recovered = await getCliStatus(projectId, chatMode);
+            if (historyRequest !== historyRequestRef.current) return;
             const finalStatus = recovered.status === "running" ? "stopped" : recovered.status;
             setIntakeStatus((prev) => prev ? { ...prev, status: finalStatus as any, events: recovered.events } : prev);
           } catch {
+            if (historyRequest !== historyRequestRef.current) return;
             setIntakeStatus((prev) => prev ? { ...prev, status: "stopped" } : prev);
           }
           setCliPendingQuestion(null);
@@ -3489,7 +3504,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
 
     const interval = setInterval(poll, 5000);
     return () => { clearInterval(interval); clearInterval(wsRefreshInterval); };
-  }, [intakeSessionId, intakeStatus?.status, cliRuntime, projectId]);
+  }, [intakeSessionId, intakeStatus?.status, cliRuntime, projectId, chatMode]);
 
   // Treat the project as ready for an AI run only after ingestion has reached
   // a "ready" lifecycle status. Starting earlier wedges the agent on a stale
@@ -3747,7 +3762,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                       )}>
                         {isWaitingForUser ? "Waiting for input" :
                          isRunStarting ? "Starting run" :
-                         isIntakeRunning ? "Estimator running" :
+                         isIntakeRunning ? (automaticCycleActive ? "Review / revision running" : "Estimator running") :
                          isIntakeComplete ? "Run complete" :
                          intakeStatus?.status === "stopped" ? "Stopped" :
                          "Run failed"}
@@ -3788,7 +3803,8 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
                 <button
                   onClick={async () => {
                     try {
-                      await stopCliSession(projectId);
+                      await stopCliSession(projectId, chatMode);
+                      setAutomaticCycleActive(false);
                       setIntakeStatus((prev) => prev ? { ...prev, status: "stopped" as any } : prev);
                       if (eventSourceRef.current) { eventSourceRef.current.close(); eventSourceRef.current = null; }
                     } catch {}
@@ -3836,7 +3852,7 @@ export function AgentChat({ projectId, open, onClose, prefill, autoStartIntake, 
               <div className="truncate text-[11px] text-fg/45">{AGENT_CHAT_MODE_DESCRIPTIONS[chatMode]}</div>
             </div>
             <fieldset
-              disabled={isLoading || isRunStarting || isIntakeRunning}
+              disabled={isLoading || isRunStarting || (isIntakeRunning && !automaticCycleActive)}
               className="m-0 min-w-0 border-0 p-0 disabled:cursor-not-allowed disabled:opacity-60 max-sm:w-full"
             >
               <legend className="sr-only">Agent mode</legend>

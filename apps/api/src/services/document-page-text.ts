@@ -1,3 +1,4 @@
+import { derivePagesForIndexing } from "./page-provenance.js";
 import { referenceBookPages } from "./reference-book-pages.js";
 
 export function parseDocumentPages(value: string, pageCount?: number) {
@@ -20,11 +21,11 @@ export async function documentPageText(doc: any, requested: string, pdfPath?: st
     const text = page.text ?? page.content ?? page.lines?.map((line: any) => line.content ?? line.text ?? "").join("\n");
     if (number > 0 && typeof text === "string") indexed.set(number, text);
   }
+  for (const page of derivePagesForIndexing(doc.extractedText, doc.structuredData) ?? []) {
+    if (page.pageNumber !== null) indexed.set(page.pageNumber, page.text);
+  }
   if (![...Array(end - start + 1)].every((_, i) => indexed.has(start + i))) {
-    const flat = String(doc.extractedText ?? "");
-    const pieces = flat.split("\f");
-    if (pieces.length >= (doc.pageCount || end)) pieces.forEach((text, i) => indexed.set(i + 1, text));
-    else if (pdfPath) {
+    if (pdfPath && !/^https?:/i.test(pdfPath) && /\.pdf$/i.test(doc.fileName ?? pdfPath)) {
       const pages = await extract(pdfPath);
       parseDocumentPages(requested, pages.length);
       pages.forEach((text, i) => indexed.set(i + 1, text));

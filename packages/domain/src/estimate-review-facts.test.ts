@@ -42,3 +42,15 @@ test("per-unit hour evidence is extended before comparing; standalone foreman ho
   assert.deepEqual(facts.rows[0].differences[0], { field: "labourHours", savedEvidence: 112, current: 240 });
   assert.deepEqual(facts.rows[1].differences[0], { field: "extended WK", savedEvidence: 10, current: 12 });
 });
+test("duration quantities without tiers and non-measurement annotations are not false alarms", () => {
+  const facts = summarizePricingIntegrity({ worksheets: [{ items: [{ ...row, quantity: 10, tierUnits: {} }] }] });
+  assert.equal(facts.staleEvidence.count, 0);
+  const pickups = [
+    { id: "note", annotationType: "note", measurement: { value: 1, unit: "EA" } },
+    { id: "cal", annotationType: "calibration", measurement: { value: 10, unit: "m" } },
+    { id: "empty", annotationType: "linear", measurement: {} },
+    { id: "linked", annotationType: "linear", measurement: { value: 10, unit: "m" }, _count: { pickupLinks: 1 } },
+    { id: "valid", annotationType: "linear", measurement: { value: 10, unit: "m" }, _count: { pickupLinks: 0 } },
+  ];
+  assert.deepEqual(summarizeUnlinkedMeasurements({}, pickups).pickups.map(p => p.pickupId), ["valid"]);
+});

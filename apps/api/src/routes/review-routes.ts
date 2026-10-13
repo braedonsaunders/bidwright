@@ -571,6 +571,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
         reasoningEffort: body.advisory ? "medium" : reasoningEffort,
         agentMode: "qa",
         reviewOnly: true,
+        reviewEstimatingRunId: estimatingRunId,
         aiRunId: sessionId,
       });
 

@@ -15,16 +15,20 @@ export function quantityDimension(unit: unknown) {
 
 /** Candidates are suggestions, never automatic links or implicit unit conversions. */
 export function summarizeUnlinkedMeasurements(workspace: any, pickups: any[]) {
-  const rows = (workspace.worksheets ?? []).flatMap((sheet: any) => sheet.items ?? []);
+  const rows = (workspace.worksheets ?? []).flatMap((sheet: any) => sheet.items ?? []).map((row: any) => ({
+    row, dimension: quantityDimension(row.uom), terms: words(label(row)),
+    evidence: JSON.stringify([row.sourceEvidence, row.derivation?.inputs?.map((i: any) => i.source)]),
+  }));
   const linked = new Set((workspace.pickupLinks ?? []).map((link: any) => link.pickupId));
-  const unlinked = pickups.filter(p => !linked.has(p.id) && !p.linkedRows?.length);
+  const unlinked = pickups.filter(p => !linked.has(p.id) && !p.linkedRows?.length && !p._count?.pickupLinks
+    && !/note|text|calibrat|highlight|arrow|cloud/i.test(p.annotationType ?? "")
+    && number(p.measurement?.value) !== null && typeof p.measurement?.unit === "string");
   return { count: unlinked.length, shown: Math.min(20, unlinked.length), pickups: unlinked.slice(0, 20).map(p => {
     const dimension = quantityDimension(p.measurement?.unit), terms = words(p.label ?? "");
-    const candidates = rows.flatMap((row: any) => {
-      if (!dimension || dimension !== quantityDimension(row.uom)) return [];
-      const evidence = JSON.stringify([row.sourceEvidence, row.derivation?.inputs?.map((i: any) => i.source)]);
+    const candidates = rows.flatMap(({ row, dimension: rowDimension, terms: rowTerms, evidence }: any) => {
+      if (!dimension || dimension !== rowDimension) return [];
       const sameSource = !!p.documentId && evidence.includes(p.documentId);
-      const matches = [...words(label(row))].filter(term => terms.has(term));
+      const matches = [...rowTerms].filter(term => terms.has(term));
       if (!sameSource && !matches.length) return [];
       return [{ rowId: row.id, label: label(row), quantity: row.quantity, unit: row.uom, sameSource, matchedTerms: matches,
         conversion: String(row.uom).toLowerCase() === String(p.measurement.unit).toLowerCase() ? "same unit" : "explicit multiplier needed for conversion",
@@ -66,7 +70,8 @@ export function summarizePricingIntegrity(workspace: any) {
         const durationUnit = (unit: string) => /^(WK|weeks?)$/i.test(unit) ? "WK" : /^days?$/i.test(unit) ? "DAY" : /^(HR|hours?)$/i.test(unit) ? "HR" : /^(MO|months?)$/i.test(unit) ? "MO" : unit.toUpperCase();
         const unit = durationUnit(driver[3]);
         const saved = Number(driver[1]) * Number(driver[2]);
-        const current = quantity * Object.values(row.tierUnits ?? {}).reduce<number>((n, x) => n + Number(x || 0), 0);
+        const tierTotal = Object.values(row.tierUnits ?? {}).reduce<number>((n, x) => n + Number(x || 0), 0);
+        const current = quantity * (tierTotal || 1);
         if (unit === durationUnit(String(row.uom)) && Math.abs(saved - current) > .01) differences.push({ field: `extended ${unit}`, savedEvidence: saved, current });
       }
       if (row.derivation?.status === "stale") differences.push({ field: "derivation", savedEvidence: "stale", current: row.derivation.invalidatedBy ?? [] });
