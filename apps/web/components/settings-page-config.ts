@@ -112,6 +112,7 @@ export interface IntegrationSettings {
   autodeskApsAutocadActivityId: string;
   agentRuntime?: string | null;
   agentModel?: string | null;
+  autoReview?: boolean;
   agentReasoningEffort?: string | null;
   claudeCodePath?: string | null;
   codexPath?: string | null;

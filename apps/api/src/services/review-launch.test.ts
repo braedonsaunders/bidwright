@@ -14,7 +14,7 @@ test("simultaneous review requests share preparation and leave the estimator slo
 
 test("advisory review brief carries rubric and basis without full-review or benchmark workflow", () => {
   const brief = buildReviewClaudeMdContent({ advisoryReview: true, laborBasis: { assumedHours: 15 }, documents: [], projectName: "Example", scope: "Scope", projectDir: "/tmp/example", dataRoot: "/tmp", quoteNumber: "Q", clientName: "Client", location: "Location" });
-  assert.match(brief, /quantity accuracy spot-checks.*scope coverage.*traceability.*labour basis.*pricing integrity.*commercial clarity/);
+  for (const dimension of [/quantity spot-checks/i, /scope coverage/i, /traceability/i, /labour basis/i, /pricing integrity/i, /commercial clarity/i, /stale saved evidence/i]) assert.match(brief, dimension);
   assert.match(brief, /"assumedHours":15/);
   assert.match(brief, /does not approve or finalize/);
   assert.doesNotMatch(brief, /FULL review workflow/);

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { compactToolSchema, toolDiscoveryPhase } from "./tool-discovery.js";
 /**
  * Bidwright MCP Server
  *
@@ -116,17 +117,22 @@ export async function registerTools(server: McpServer, options: { mode?: string;
 
   server.tool(
     "describeTools",
-    "Return full input schemas for a tool family or named tool. With no filters, return a compact catalog of families and names.",
+    "Return compact input schemas for a whole work phase: sources, pricing, estimate, reconciliation or system. A named-tool request includes its phase siblings, so one call covers related operations. Existing family names also work. With no filters, return the catalog.",
     { family: z.string().optional(), name: z.string().optional() },
     async ({ family, name }) => {
-      const entries = [...catalog.entries()].filter(([id]) => (!name || id === name) && (!family || getAgentToolDefinition(id)?.category === family));
-      if (name && !entries.length) return unavailableTool(name);
+      if (name && !catalog.has(name)) return unavailableTool(name);
+      const phase = name ? toolDiscoveryPhase(getAgentToolDefinition(name)?.category ?? "system") : null;
+      const entries = [...catalog.entries()].filter(([id]) => {
+        const category = getAgentToolDefinition(id)?.category ?? "system";
+        return (!phase || toolDiscoveryPhase(category) === phase) && (!family || category === family || toolDiscoveryPhase(category) === family);
+      }).sort(([a], [b]) => Number(b === name) - Number(a === name));
       return { content: [{ type: "text" as const, text: JSON.stringify(entries.map(([id, tool]) => ({
         name: id,
-        description: tool.description.split("\n")[0],
+        description: tool.description.split("\n")[0].slice(0, 220),
+        phase: toolDiscoveryPhase(getAgentToolDefinition(id)?.category ?? "system"),
         family: getAgentToolDefinition(id)?.category ?? "system",
         mutates: isAgentToolMutating(id),
-        ...((name || family) ? { inputSchema: toJsonSchemaCompat(tool.schema as any) } : {}),
+        ...((name || family) ? { inputSchema: compactToolSchema(toJsonSchemaCompat(tool.schema as any)) } : {}),
       }))) }] };
     },
   );

@@ -186,7 +186,7 @@ export function registerKnowledgeTools(server: McpServer) {
             columns: d.columns, sampleRows: d.sampleRows?.slice(0, 3).map((row: any) => compactRow(row)), samplesAreMatches: d.samplesAreMatches })) };
         } catch (error) { return { source, error: error instanceof Error ? error.message : String(error) }; }
       }));
-      return { content: [{ type: "text" as const, text: JSON.stringify({ query, results }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ query, results, fact: "matchLaborUnits matches a whole work breakdown in one call: {lines:[{operation: 'install', material: 'steel pipe', quantity: 100, uom: 'FT'}]}." }) }] };
     },
   );
 
@@ -677,7 +677,7 @@ export function registerKnowledgeTools(server: McpServer) {
       if (sections.length > 0) {
         output += `Sections: ${sections.join(", ")}\n\n`;
       }
-      output += chunk.text || "(No extracted text available for this document.)";
+      output += chunk.text || doc.fact || (pages ? "(No text returned for the requested pages; document-wide text availability is unknown.)" : "(No extracted text available for this document.)");
       if (chunk.hasMore) {
         output += `\n\n[TRUNCATED: returned ${chunk.text.length} of ${chunk.totalChars} chars from offset ${chunk.offset}. Call readDocumentText again with offset=${chunk.offset + chunk.text.length} and the same pages/maxChars to continue, or request a narrower page range.]`;
       }

@@ -60,6 +60,13 @@ test("review routes isolate advisory results/saves, reconcile dead sessions, and
     assert.equal(saved.json().reviewId, "advisory");
     assert.equal(queries.at(-1).aiRunId, "advisory-run");
     assert.equal(updates.at(-1).data.summary.__reviewMeta.advisory, true);
+    const findings = await app.inject({ method: "POST", url: "/api/review/p/save-section", headers: { "x-bidwright-run-id": "advisory-run" }, payload: {
+      section: "findings", data: [{ id: "F1", title: "Missing basis", description: "Check row", rowIds: ["row"], suggestedFix: "Read drawing", moneyImpact: null, hoursImpact: 64 }],
+    } });
+    assert.equal(findings.statusCode, 200);
+    assert.equal(updates.at(-1).data.findings[0].moneyImpact, null, "unknown impact is not zero");
+    assert.equal(updates.at(-1).data.findings[0].hoursImpact, 64);
+    assert.deepEqual(updates.at(-1).data.findings[0].rowIds, ["row"]);
     const limited = await app.inject({ method: "POST", url: "/api/review/p/start", headers: { "x-bidwright-run-id": "estimator" }, payload: { advisory: true } });
     assert.equal(limited.statusCode, 200, limited.body);
     assert.equal(limited.json().status, "limit_reached");

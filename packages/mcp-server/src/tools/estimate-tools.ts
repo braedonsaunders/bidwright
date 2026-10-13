@@ -605,8 +605,11 @@ export function registerEstimateTools(server: McpServer) {
 
   server.tool(
     "saveEstimateReconcile",
-    "Persist a final self-review: omissions, outliers, duplicate scope, final confidence, and optional coverageChecks listing contractor-responsible packages and where each is covered (coveredBy.packageId / worksheetIds / assumptionId).",
+    "Persist a final self-review: omissions, outliers, duplicate scope, final confidence, optional reviewDispositions for independent findings, and optional coverageChecks listing contractor-responsible packages and where each is covered (coveredBy.packageId / worksheetIds / assumptionId).",
     {
+      reviewDispositions: z.array(z.object({
+        findingId: z.string(), status: z.enum(["addressed", "declined"]), rowIds: z.array(z.string()).default([]), reason: z.string(),
+      })).optional().describe("The estimator's disposition of independent findings; advisory, not an approval requirement."),
       coverageChecks: z.array(z.object({
         name: z.string().describe("Specialty package name as identified in the spec/scope-table (e.g. the heading or scope item)."),
         status: z.enum(["ok", "warning", "missing"]).describe("'ok' once covered; 'warning'/'missing' mark coverage still open."),
@@ -639,7 +642,7 @@ export function registerEstimateTools(server: McpServer) {
     },
     async (data) => {
       await apiPost(`/api/estimate/${getProjectId()}/strategy/section`, { section: "reconcileReport", data });
-      return { content: [{ type: "text" as const, text: JSON.stringify({ message: `Saved final reconcile report with ${data.outliers.length} outliers`, laborBasis: (await apiGet(`/projects/${getProjectId()}/workspace`)).workspace?.laborBasis }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ message: `Saved final reconcile report with ${data.outliers.length} outliers`, ...await estimateReviewFacts() }) }] };
     },
   );
 
@@ -651,7 +654,12 @@ export function registerEstimateTools(server: McpServer) {
     },
     async ({ summary }) => {
       const finalized = await apiPost(`/api/estimate/${getProjectId()}/finalize`, summary);
-      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis, pricingIntegrity: finalized.workspace?.pricingIntegrity, unlinkedMeasurements: finalized.workspace?.unlinkedMeasurements }) }] };
     },
   );
+}
+
+async function estimateReviewFacts() {
+  const { workspace } = await apiGet(`/projects/${getProjectId()}/workspace`);
+  return { laborBasis: workspace?.laborBasis, pricingIntegrity: workspace?.pricingIntegrity, unlinkedMeasurements: workspace?.unlinkedMeasurements };
 }
