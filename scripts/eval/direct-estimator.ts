@@ -20,7 +20,7 @@ import { assertReasoningEffortOverride, resolveRunReasoningEffort } from "../../
  *
  * `prepare` copies the source project (estimate reset), records the copy in
  * the ledger, waits for extraction and writes a ready-to-run workspace plus
- * run.sh. Every copy must be removed with `cleanup` when finished.
+ * run.sh (180-minute timeout for each build/review/revise phase). Every copy must be removed with `cleanup` when finished.
  *
  * Blind mode (the default) is for comparing against the source quote: it
  * blanks the copied revision text and hides benchmarks and calibration
@@ -323,7 +323,7 @@ claude -p "$(cat prompt.txt)" \\
   for (const [phase, script] of Object.entries(reviewPhaseScripts(buildScript, runtime, dir))) {
     await writeFile(join(dir, `run-${phase}.sh`), script);
   }
-  await writeFile(join(dir, "review-cycle.json"), JSON.stringify({ runtime, tokenFile, apiUrl, projectId, autoReview: settings?.integrations?.autoReview !== false,
+  await writeFile(join(dir, "review-cycle.json"), JSON.stringify({ runtime, tokenFile, apiUrl, projectId, phaseTimeoutSeconds: 180 * 60, autoReview: settings?.integrations?.autoReview !== false,
     brief: { projectName: project.name, clientName: project.clientName, location: project.location, scope, quoteNumber: quote.quoteNumber,
       dataRoot: dir, documents, knowledgeBookFiles: [], knowledgeDocumentFiles: [], sourceOverview, runtime, pythonEnvironment } }, null, 2));
   await writeFile(join(dir, "run.sh"), `#!/bin/sh\nexec ${shellQuote(tsx)} ${shellQuote(join(repoRoot, "scripts/eval/review-cycle.ts"))} ${shellQuote(dir)}\n`);

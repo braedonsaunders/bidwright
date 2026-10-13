@@ -3424,7 +3424,7 @@ export class PrismaApiStore {
     const worksheetIds = worksheets.map((w) => w.id);
     const worksheetItems = await this.db.worksheetItem.findMany({
       where: { worksheetId: { in: worksheetIds } },
-      include: { entityCategory: true },
+      include: { entityCategory: true, laborUnit: { select: { id: true, hoursNormal: true, outputUom: true } } },
     });
     const phases = await this.db.phase.findMany({ where: { revisionId: { in: revisionIds } } });
     const estimateFactors = await this.db.estimateFactor.findMany({ where: { revisionId: { in: revisionIds } } });
