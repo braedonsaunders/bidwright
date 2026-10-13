@@ -24,32 +24,21 @@ test("rate import inherits explicit currency and drops legacy global costs for a
   }
 });
 
-test("an imported quote rate item accepts separate authored cost and sell without altering its category", async t => {
-  const proto = PrismaApiStore.prototype as any;
-  t.mock.method(proto, "repriceRevisionRateScheduleLines", async () => 0);
-  t.mock.method(proto, "syncProjectEstimate", async () => ({}));
-  t.mock.method(proto, "getRateSchedule", async () => ({}));
-  t.mock.method(proto, "pushActivity", async () => {});
-  let written: any;
-  const db: any = { rateScheduleItem: { findFirst: async () => ({ id: "resource", scheduleId: "rates" }), update: async ({data}: any) => { written = data; } }, rateSchedule: { findFirst: async () => ({ id: "rates", scope: "revision", projectId: "project", revisionId: "revision", category: "Rental Equipment" }) } };
-  await new PrismaApiStore(db, "org").updateRateScheduleItem("resource", { rates: { day: 130 }, costRates: { day: 100 }, metadata: { costProvenance: { basis: "quoted" }, sellProvenance: { basis: "authored" } } });
-  assert.deepEqual(written.costRates, { day: 100 }); assert.deepEqual(written.rates, { day: 130 });
-  assert.equal(written.category, undefined);
-  assert.equal(written.metadata.costRatesAuthored, true);
+test("REST create and update lock costs on both library and imported rate books", async () => {
+  for (const scope of ["global", "revision"]) {
+    const db: any = { rateSchedule: { findFirst: async () => ({ id: "rates", scope }) },
+      rateScheduleItem: { findFirst: async () => ({ id: "resource", scheduleId: "rates" }), update: async () => assert.fail("cost rates must not be written") } };
+    const store = new PrismaApiStore(db, "org");
+    await assert.rejects(store.createRateScheduleItem("rates", { catalogItemId: "catalog", costRates: { day: 100 } }), /costs come from the catalog/);
+    await assert.rejects(store.updateRateScheduleItem("resource", { costRates: { day: 100 } }), scope === "revision" ? /only modify sell rates/ : /costs come from the catalog/);
+  }
 });
 
 test("rate maps reject invalid math before writes", async t => {
   const db: any = { rateScheduleItem: { findFirst: async () => ({ id: "resource", scheduleId: "rates" }), update: async () => assert.fail("invalid rates must not be written") }, rateSchedule: { findFirst: async () => ({ id: "rates", scope: "revision" }) } };
   for (const value of [-1, Infinity, NaN]) {
-    await assert.rejects(new PrismaApiStore(db, "org").updateRateScheduleItem("resource", { costRates: { day: value } }), /finite, nonnegative/);
+    await assert.rejects(new PrismaApiStore(db, "org").updateRateScheduleItem("resource", { rates: { day: value } }), /finite, nonnegative/);
   }
-});
-
-test("REST create and update refuse library cost rates even when their values are valid", async () => {
-  const db: any = { rateSchedule: { findFirst: async () => ({ id: "rates", scope: "global" }) }, rateScheduleItem: { findFirst: async () => ({ id: "item", scheduleId: "rates" }), update: async () => assert.fail("library cost must not change") } };
-  const store = new PrismaApiStore(db, "org");
-  await assert.rejects(store.createRateScheduleItem("rates", { catalogItemId: "catalog", costRates: { day: 130 } }), /only supported on quote-scoped/);
-  await assert.rejects(store.updateRateScheduleItem("item", { costRates: { day: 130 } }), /only supported on quote-scoped/);
 });
 
 test("reading a legacy book resolves explicit org currency without changing metadata", async t => {

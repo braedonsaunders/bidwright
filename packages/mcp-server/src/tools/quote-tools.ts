@@ -898,7 +898,7 @@ function worksheetTreeSummary(ws: any) {
 
       // Validate itemSource requirements
       if (requiresRateSchedule && !rest.rateScheduleItemId) {
-        return { error: `ERROR: Category "${catConfig.name}" is system-calculated from a rate schedule — rateScheduleItemId is required.\n1. Call listRateScheduleItems with q/category filters\n2. Set rateScheduleItemId to a valid item ID\n3. Provide quantity and positive tierUnits only; Bidwright calculates cost and price.\nsetRateScheduleItemRates can record separate supplier cost and sell rates on the quote rate item with provenance; the category stays unchanged.` };
+        return { error: `ERROR: Category "${catConfig.name}" is system-calculated from a rate schedule — rateScheduleItemId is required.\n1. Call listRateScheduleItems with q/category filters\n2. Set rateScheduleItemId to a valid item ID\n3. Provide quantity and positive tierUnits only; Bidwright calculates cost and price.` };
       }
       if (src === "catalog" && !rest.itemId) {
         return { error: `ERROR: Category "${catConfig.name}" is configured with itemSource=catalog — itemId is required. Call queryLibrary or getItemConfig, then retry with a valid itemId.` };
@@ -1737,21 +1737,6 @@ function worksheetTreeSummary(ws: any) {
       }
     }
   );
-
-  server.tool("setRateScheduleItemRates", "Set separate cost and sell rates on an imported quote rate-book item. Works for any configured rate category, including equipment duration. Leaves the organization library unchanged; linked rows reprice through their existing category calculation. Optional provenance records a supplier quote, allowance or rate-book basis separately for cost and sell.", {
-    scheduleId: z.string(), itemId: z.string(),
-    costRates: z.record(z.number().finite().nonnegative()).optional(),
-    rates: z.record(z.number().finite().nonnegative()).optional(),
-    costProvenance: z.record(z.unknown()).optional(), sellProvenance: z.record(z.unknown()).optional(),
-  }, async ({ scheduleId, itemId, costRates, rates, costProvenance, sellProvenance }) => {
-    const ws = await getWs();
-    const schedule = asArray(ws.rateSchedules).find((s: any) => s.id === scheduleId);
-    const item = asArray(schedule?.items).find((i: any) => i.id === itemId);
-    if (!schedule || !item || schedule.scope !== "revision") return { isError: true, content: [{ type: "text" as const, text: "Rate item must belong to an imported rate book in the current quote." }] };
-    const data = await apiPatch(`/api/rate-schedules/${encodeURIComponent(scheduleId)}/items/${encodeURIComponent(itemId)}`, { costRates, rates, metadata: { ...asRecord(item.metadata), ...(costProvenance ? { costProvenance } : {}), ...(sellProvenance ? { sellProvenance } : {}) } });
-    invalidateWs();
-    return { content: [{ type: "text" as const, text: JSON.stringify({ updated: true, scheduleId: data.id, fact: "Cost and sell remain separate; linked rows were recalculated. No currency conversion was applied." }) }] };
-  });
 
   // ── batchEditWorksheetItems ───────────────────────────────
   server.tool(

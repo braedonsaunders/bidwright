@@ -46,3 +46,13 @@ for (const reviewWorks of [true, false]) test(`harness cycle ${reviewWorks ? "re
   await assert.rejects(runReviewCycle(dir), /already started/);
   assert.equal((await readFile(join(dir, "phases.txt"), "utf8")).trim().split("\n").length, reviewWorks ? 3 : 2);
 });
+
+test("all harness phases retain the configured reasoning effort", () => {
+  for (const [runtime, command] of [
+    ["codex", "codex exec --json -c 'model_reasoning_effort=\"xhigh\"' - < prompt.txt"],
+    ["claude-code", "claude -p --effort xhigh < prompt.txt"],
+  ]) {
+    const phases = reviewPhaseScripts(command, runtime, "/tmp/eval");
+    for (const script of Object.values(phases)) assert.match(script, /xhigh/);
+  }
+});

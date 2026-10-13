@@ -267,15 +267,16 @@ test("rate book cost uses generic tier multipliers and schedule-level components
   );
 });
 
-test("electrical and finishes equipment retain separate cost/sell currency and duration rates", () => {
+test("electrical and finishes rentals remain sell-only with source currency and duration rates", () => {
   for (const name of ["Cable puller", "Finishes access lift"]) {
     const equipment = { ...category, name: "Access", entityType: "Access", calculationType: "duration_rate" as const };
     const item = worksheetItem({ category: "Access", entityType: "Access", entityName: name, rateScheduleItemId: "rental", quantity: 2, uom: "WK", tierUnits: { week: 3 } });
     const book = { id: "book", scope: "revision" as const, category: "Access", metadata: { currency: "USD" }, tiers: [{ id: "week", uom: "WK", multiplier: 1 }], items: [{ id: "rental", name, costRates: { week: 100 }, rates: { week: 130 }, metadata: { costRatesAuthored: true, costProvenance: { basis: "supplier quote" }, sellProvenance: { basis: "authored" } } }] };
     const result = resolveRateBookLine(item, equipment, { currency: "CAD", rateBooks: [book] })!;
     assert.equal(result.snapshot.currency, "USD", "quote currency does not relabel source rates");
-    assert.equal(result.snapshot.totalCost, 600); assert.equal(result.price, 780);
-    assert.deepEqual(result.snapshot.components.find(c => c.target === "cost")?.metadata?.provenance, { basis: "supplier quote" });
+    assert.equal(result.snapshot.totalCost, 0); assert.equal(result.price, 780);
+    assert.equal(result.snapshot.components.some(c => c.target === "cost"), false);
+    assert.deepEqual(result.snapshot.warnings, []);
     const unknown = resolveRateBookLine(item, equipment, { currency: "CAD", rateBooks: [{ ...book, metadata: {} }] })!;
     assert.equal(unknown.snapshot.currency, undefined);
   }
@@ -288,7 +289,7 @@ test("legacy sell-as-cost maps never replace catalog cost, including after revis
     const result = resolveRateBookLine(item, category, { rateBooks: [book] })!;
     assert.equal(result.snapshot.totalCost, 300, "2 × 3 × catalog 25 × tier multiplier 2");
     assert.equal(result.snapshot.totalPrice, 780);
-    assert.equal(result.snapshot.components.find(c => c.target === "cost")?.metadata?.basis, "catalog unit cost");
+    assert.deepEqual(result.snapshot.components.find(c => c.target === "cost")?.metadata, {});
   }
 });
 
@@ -297,15 +298,4 @@ test("rate currency uses read-time org configuration, without adopting the quote
   const item = worksheetItem({ rateScheduleItemId: "rate", tierUnits: { day: 1 } });
   assert.equal(resolveRateBookLine(item, category, { currency: "EUR", rateBooks: [book] })!.snapshot.currency, "CAD");
   assert.equal(resolveRateBookLine(item, category, { rateBooks: [{ ...book, metadata: { currency: "USD" } }] })!.snapshot.currency, "USD");
-});
-
-test("authored tier IDs override names and duration follows the row unit", () => {
-  const book = { ...equipmentRateBooks()[0], scope: "revision" as const };
-  const resource = { ...book.items[0], metadata: { costRatesAuthored: true }, costRates: { day: 60, Daily: 999, Weekly: 250 } };
-  const row = worksheetItem({ rateScheduleItemId: resource.id, quantity: 2, uom: "WK", tierUnits: { day: 3 } });
-  const weekly = resolveRateBookLine(row, durationCategory, { rateBooks: [{ ...book, items: [resource] }] })!;
-  assert.equal(weekly.snapshot.totalCost, 1500, "2 resources × 3 weeks × authored weekly cost; no extra multiplier");
-  assert.equal(weekly.snapshot.totalPrice, 2700);
-  const daily = resolveRateBookLine({ ...row, uom: "DAY" }, durationCategory, { rateBooks: [{ ...book, items: [resource] }] })!;
-  assert.equal(daily.snapshot.totalCost, 360, "ID cost wins over the conflicting name entry");
 });

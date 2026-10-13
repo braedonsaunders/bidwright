@@ -2,57 +2,48 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFile } from "node:fs/promises";
 import { calculateLineItem } from "../calc-utils.js";
-import { PrismaApiStore } from "../prisma-store.js";
+import { summarizePricingIntegrity, validateEstimateWorkspace } from "@bidwright/domain";
 
-// Scrubbed five duration rows and authored rates from the round-9 tool calls.
+// Scrubbed duration rows from round 9. Its cost-authoring attempt was incorrect:
+// these internal rate-book rentals are sell-only, even with obsolete saved cost maps.
 const fixtures = JSON.parse(await readFile(new URL("./fixtures/round9-equipment-rates.json", import.meta.url), "utf8"));
 
-test("authoring quote equipment costs refreshes all five saved rows through the real calculator", async t => {
-  const rows = fixtures.map((f: any, i: number) => ({ id: `row-${i}`, worksheetId: "worksheet", entityName: f.label,
-    entityType: "Equipment", entityCategory: { calculationType: "duration_rate" }, category: "Equipment", quantity: f.quantity,
-    uom: f.uom, tierUnits: f.tierUnits, rateScheduleItemId: `rate-${i}`, cost: 0, price: f.expectedCost, markup: 0,
-    createdAt: new Date(), updatedAt: new Date() }));
-  const schedule: any = { id: "book", scope: "revision", projectId: "project", revisionId: "revision", name: "Equipment", category: "Equipment",
-    tiers: fixtures[0].tiers, metadata: {}, items: fixtures.map((f: any, i: number) => ({ id: `rate-${i}`, scheduleId: "book", name: f.label, code: "",
-      unit: f.uom, catalogItem: { unitCost: 0 }, rates: f.rates, costRates: {}, metadata: {} })) };
-  const writes: any[] = [];
-  const db: any = {
-    quoteRevision: { findFirst: async () => ({ id: "revision", quoteId: "quote", createdAt: new Date(), updatedAt: new Date() }) },
-    quote: { findFirst: async () => ({ projectId: "project" }) },
-    worksheet: { findMany: async () => [{ id: "worksheet" }] },
-    worksheetItem: { findMany: async () => rows, update: async ({ where, data }: any) => {
-      Object.assign(rows.find((r: any) => r.id === where.id)!, data); writes.push({ id: where.id, ...data });
-    } },
-    rateSchedule: { findFirst: async () => schedule, findMany: async () => [schedule] },
-    rateScheduleItem: { findFirst: async ({ where }: any) => schedule.items.find((x: any) => x.id === where.id),
-      update: async ({ where, data }: any) => Object.assign(schedule.items.find((x: any) => x.id === where.id), data) },
-  };
-  const proto = PrismaApiStore.prototype as any;
-  t.mock.method(proto, "getOrganizationDefaults", async () => ({ currency: "CAD" }));
-  t.mock.method(proto, "refreshRateScheduleSearchDocuments", async () => {});
-  t.mock.method(proto, "syncProjectEstimate", async () => ({}));
-  t.mock.method(proto, "pushActivity", async () => {});
-  t.mock.method(proto, "getRateSchedule", async () => schedule);
-  const store = new PrismaApiStore(db, "org");
-  for (let i = 0; i < fixtures.length; i++) {
-    await store.updateRateScheduleItem(`rate-${i}`, { costRates: fixtures[i].costRates, metadata: { costProvenance: { type: "estimator_allowance", currency: "CAD" } } });
-    assert.equal(schedule.items[i].metadata.costRatesAuthored, true);
-    assert.equal(rows[i].cost, fixtures[i].expectedCost);
-    assert.equal(rows[i].price, fixtures[i].expectedCost, "authoring cost does not change sell");
-    const saved = writes.filter(w => w.id === rows[i].id).at(-1);
-    assert.equal(saved.rateResolution.totalCost, fixtures[i].expectedCost);
-    assert.equal(saved.costSnapshot.currency, "CAD", "inherited currency survives the calculation adapter");
-    assert.equal(saved.rateResolution.components.find((c: any) => c.target === "cost").metadata.basis, "authored cost rate");
+test("five internal rentals retain pre-147 sell totals with zero cost and no cost warnings", () => {
+  let totalSell = 0;
+  for (const f of fixtures) {
+    const row: any = { id: "row", entityName: f.label, category: "Equipment", quantity: f.quantity, uom: f.uom, tierUnits: f.tierUnits, rateScheduleItemId: "rate" };
+    const book: any = { id: "book", scope: "revision", sourceCurrency: "CAD", tiers: f.tiers,
+      items: [{ id: "rate", name: f.label, rates: f.rates, costRates: f.costRates, metadata: f.metadata }] };
+    const result = calculateLineItem(row, { id: "revision" } as any, "duration_rate", [book]);
+    assert.equal(result.cost, 0);
+    assert.equal(result.price, f.expectedCost, "the recorded rate is the sell rate");
+    assert.equal(result.rateResolution?.currency, "CAD");
+    assert.deepEqual(result.rateResolution?.warnings, []);
+    const workspace = { quoteCurrency: "CAD", rateSchedules: [book], worksheets: [{ items: [{ ...row, ...result }] }] };
+    assert.equal("costUnknown" in summarizePricingIntegrity(workspace), false);
+    assert.equal(validateEstimateWorkspace(workspace).issues.some(i => i.ruleId === "worksheet.pricing.zero_cost_or_price"), false);
+    assert.ok(result.price !== undefined);
+    totalSell += result.price;
   }
-  assert.equal(rows.reduce((sum: number, r: any) => sum + r.cost * r.quantity, 0), 5130);
+  assert.equal(totalSell, 5130);
 });
 
-test("calculation adapter retains library scope; legacy costs remain catalog-derived", () => {
+test("catalog cost still prices identically to the pre-147 calculation", () => {
   const f = fixtures[0];
-  const item: any = { id: "row", quantity: 1, uom: f.uom, tierUnits: f.tierUnits, rateScheduleItemId: "rate" };
-  const rates: any = { id: "book", scope: "global", sourceCurrency: "EUR", tiers: f.tiers, items: [{ id: "rate", name: "Resource", code: "", catalogUnitCost: 10, rates: f.rates, costRates: f.costRates, metadata: f.metadata }] };
-  const result = calculateLineItem(item, { id: "revision" } as any, "duration_rate", [rates]);
-  assert.notEqual(result.cost, f.expectedCost);
+  const row: any = { id: "row", quantity: 1, uom: "MO", tierUnits: f.tierUnits, rateScheduleItemId: "rate" };
+  const book: any = { id: "book", scope: "revision", sourceCurrency: "EUR", tiers: f.tiers,
+    items: [{ id: "rate", name: "Resource", catalogUnitCost: 10, rates: f.rates, costRates: f.costRates, metadata: f.metadata }] };
+  const result = calculateLineItem(row, { id: "revision" } as any, "duration_rate", [book]);
+  assert.equal(result.cost, 240, "catalog 10 × monthly multiplier 12 × 2 months");
+  assert.equal(result.price, 2280);
   assert.equal(result.rateResolution?.currency, "EUR");
-  assert.equal(result.rateResolution?.components.find(c => c.target === "cost")?.metadata?.basis, "catalog unit cost");
+});
+
+test("saved snapshots omit obsolete rate-book cost warnings without hiding missing sell rates", async () => {
+  const { mapWorksheetItem } = await import("../store/mappers.js");
+  const warnings = ["Missing catalog item cost for Resource.", "Missing explicit rate or catalog item cost for Resource.", "Missing sell rate for Weekly."];
+  const raw = { id: "row", rateResolution: { source: "rate_book", warnings } };
+  assert.deepEqual(mapWorksheetItem(raw).rateResolution?.warnings, ["Missing sell rate for Weekly."]);
+  assert.equal(raw.rateResolution.warnings.length, 3, "reading does not rewrite the stored snapshot");
+  assert.deepEqual(mapWorksheetItem({ ...raw, rateResolution: { source: "manual", warnings } }).rateResolution?.warnings, warnings);
 });

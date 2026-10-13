@@ -385,7 +385,9 @@ function normalizeRateResolution(raw: unknown): WorksheetItem["rateResolution"] 
     unitCost: Number(r.unitCost) || 0,
     totalPrice: Number(r.totalPrice) || 0,
     markup: Number(r.markup) || 0,
-    warnings: Array.isArray(r.warnings) ? r.warnings.filter((value): value is string => typeof value === "string") : [],
+    // Older snapshots saved missing-cost warnings for valid sell-only rate rows.
+    warnings: Array.isArray(r.warnings) ? r.warnings.filter((value): value is string =>
+      typeof value === "string" && !(r.source === "rate_book" && /^Missing (?:explicit rate or )?catalog item cost for /.test(value))) : [],
   };
 }
 

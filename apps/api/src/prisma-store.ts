@@ -1,5 +1,5 @@
 import { sameRateResolution } from "./store/mappers.js";
-import { resolveRateCurrency, hasAuthoredCostRates } from "@bidwright/domain";
+import { resolveRateCurrency } from "@bidwright/domain";
 import { indexLaborUnitPage, searchLaborVectors, prepareLaborSemanticBatch, type LaborSemanticBatch } from "./services/labor-vector-index.js";
 import { laborSearchProfile, rankLaborCandidates, laborGranularityFacts } from "./services/labor-search.js";
 import { summarizeLaborBasis, summarizePricingIntegrity, summarizeUnlinkedMeasurements, laborUnitPresentation } from "@bidwright/domain";
@@ -11321,6 +11321,21 @@ export class PrismaApiStore {
     });
   }
 
+  private assertRevisionRateBookItemPatchIsSellSideOnly(
+    schedule: { scope: string },
+    patch: { costRates?: unknown; burden?: unknown; perDiem?: unknown; metadata?: unknown },
+  ) {
+    if (schedule.scope !== "revision") return;
+    if (
+      patch.costRates !== undefined ||
+      patch.burden !== undefined ||
+      patch.perDiem !== undefined ||
+      this.metadataTouchesRateBookCostSide(patch.metadata)
+    ) {
+      throw badRequestError("Imported quote Ratebooks can only modify sell rates. Cost rates and cost-side components remain locked to the imported cost basis.");
+    }
+  }
+
   private assertRateBookItemCostFieldsAreClean(input: { rates?: Record<string, number>; costRates?: Record<string, number>; burden?: unknown; perDiem?: unknown; metadata?: unknown }) {
     for (const rates of [input.rates, input.costRates]) {
       if (rates && Object.values(rates).some(rate => !Number.isFinite(rate) || rate < 0)) {
@@ -11581,7 +11596,7 @@ export class PrismaApiStore {
     }
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule ${scheduleId} not found`);
-    if (input.costRates !== undefined && schedule.scope !== "revision") throw badRequestError("Explicit cost rates are only supported on quote-scoped rate items; library costs come from the catalog.");
+    if (input.costRates !== undefined && Object.keys(input.costRates).length > 0) throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
     const resource = input.resourceId ? await this.requireRateBookResource(input.resourceId) : null;
     const catalogItemId = input.catalogItemId ?? resource?.catalogItemId ?? null;
     const catalogItem = catalogItemId ? await this.requireCatalogItem(catalogItemId) : null;
@@ -11615,9 +11630,9 @@ export class PrismaApiStore {
         name: resource?.name || catalogItem?.name || "",
         unit: resource?.defaultUom || catalogItem?.unit || "EA",
         rates: (input.rates ?? seedByTier(basePrice)) as any,
-        costRates: input.costRates ?? {},
+        costRates: {},
         burden: 0, perDiem: 0,
-        metadata: { ...input.metadata, ...(input.costRates !== undefined ? { costRatesAuthored: true } : {}) } as any,
+        metadata: (input.metadata ?? {}) as any,
         sortOrder: input.sortOrder ?? ((maxOrder._max.sortOrder ?? -1) + 1),
       },
     });
@@ -11636,15 +11651,15 @@ export class PrismaApiStore {
     if (!item) throw new Error(`Rate schedule item ${itemId} not found`);
     const schedule = await this.db.rateSchedule.findFirst({ where: { id: item.scheduleId, organizationId: this.organizationId } });
     if (!schedule) throw new Error(`Rate schedule not found`);
-    if (patch.costRates !== undefined && schedule.scope !== "revision") throw badRequestError("Explicit cost rates are only supported on quote-scoped rate items; library costs come from the catalog.");
+    this.assertRevisionRateBookItemPatchIsSellSideOnly(schedule, patch);
+    if (patch.costRates !== undefined) throw badRequestError("Ratebook item costs come from the catalog item unit cost. Edit cost on Resources > Catalogue > Item.");
 
     this.assertRateBookItemCostFieldsAreClean(patch);
     const data: any = {};
     if (patch.rates !== undefined) data.rates = patch.rates;
-    if (patch.costRates !== undefined) data.costRates = patch.costRates;
     if (patch.burden !== undefined) data.burden = 0;
     if (patch.perDiem !== undefined) data.perDiem = 0;
-    if (patch.metadata !== undefined || patch.costRates !== undefined) data.metadata = { ...(item.metadata as Record<string, unknown> ?? {}), ...patch.metadata, ...(patch.costRates !== undefined ? { costRatesAuthored: true } : {}) };
+    if (patch.metadata !== undefined) data.metadata = patch.metadata;
     if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
     await this.db.rateScheduleItem.update({ where: { id: itemId }, data });
     if (schedule.projectId) await this.pushActivity(schedule.projectId, schedule.revisionId, "rate_item_rates_updated", { itemId, before: { rates: item.rates, costRates: item.costRates }, after: data });
@@ -12044,7 +12059,7 @@ export class PrismaApiStore {
               id: newItemId, scheduleId: newSchedId, catalogItemId: item.catalogItemId ?? null,
               resourceId: (item as any).resourceId ?? null,
               code: item.code, name: item.name, unit: item.unit,
-              rates: remappedRates, costRates: Object.fromEntries(Object.entries(hasAuthoredCostRates({ metadata: item.metadata as Record<string, unknown> }) ? (item.costRates as Record<string, number>) ?? {} : {}).map(([id, value]) => [tierIdMap.get(id) ?? id, value])),
+              rates: remappedRates, costRates: {},
               burden: item.burden, perDiem: item.perDiem, metadata: item.metadata as any, sortOrder: item.sortOrder,
             },
           });

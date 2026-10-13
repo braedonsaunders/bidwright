@@ -1,3 +1,4 @@
+import { normalizeCliReasoningEffort } from "../services/cli-reasoning-effort.js";
 import { advisoryReviewLimit, coalesceReviewLaunch, reviewRunIsLive, reviewSessionKey, selectReviewSession } from "../services/review-launch.js";
 import { summarizeLaborBasis } from "@bidwright/domain";
 import { join } from "node:path";
@@ -542,9 +543,7 @@ CRITICAL: You are reviewing an EXISTING estimate. Do NOT create, update, or dele
 
 WRITING STYLE: everything you save is read by an estimator in the UI. Name records the way a human would — the worksheet line's entity name, the document filename, the dataset or book title — and never paste raw record ids (li-…, doc-…, ws-…, kb-…, ds-…) into titles, descriptions, analysis or specRef. Disambiguate similar lines by worksheet, size, spec or vendor instead.`;
 
-    const reasoningEffort = typeof integrations.agentReasoningEffort === "string" && integrations.agentReasoningEffort
-      ? integrations.agentReasoningEffort
-      : "extra_high";
+    const reasoningEffort = normalizeCliReasoningEffort(integrations.agentReasoningEffort);
 
     try {
       const session = await spawnSession({
@@ -568,7 +567,7 @@ WRITING STYLE: everything you save is read by an estimator in the UI. Name recor
         openaiApiKey: integrations.openaiKey || undefined,
         googleApiKey: integrations.geminiKey || undefined,
         openrouterApiKey: integrations.openrouterKey || undefined,
-        reasoningEffort: body.advisory ? "medium" : reasoningEffort,
+        reasoningEffort,
         agentMode: "qa",
         reviewOnly: true,
         reviewEstimatingRunId: estimatingRunId,

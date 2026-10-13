@@ -15,5 +15,13 @@ test("invalid request values fail visibly instead of silently running at extra-h
   for (const requested of [null, "medum", "xhigh", 0, {}]) {
     assert.throws(() => resolveRunReasoningEffort(requested, "extra_high"), { statusCode: 400 });
   }
-  assert.equal(resolveRunReasoningEffort(undefined, undefined, "qa"), "medium");
+  assert.equal(resolveRunReasoningEffort(undefined, undefined, "qa"), "extra_high");
+});
+
+test("missing or invalid tenant effort defaults to extra-high in every mode", () => {
+  for (const mode of ["qa", "build_estimate", "review"]) {
+    assert.equal(resolveRunReasoningEffort(undefined, undefined, mode), "extra_high");
+    assert.equal(resolveRunReasoningEffort(undefined, "invalid", mode), "extra_high");
+    assert.equal(resolveRunReasoningEffort(undefined, "high", mode), "high");
+  }
 });

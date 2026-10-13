@@ -53,17 +53,12 @@ export function summarizeUnlinkedMeasurements(workspace: any, pickups: any[]) {
 
 /** Deterministic facts from saved values. Prose comparisons are explicitly labelled for review. */
 export function summarizePricingIntegrity(workspace: any) {
-  const costUnknown: any[] = [], staleEvidence: any[] = [], durationChecks: any[] = [];
+  const staleEvidence: any[] = [], durationChecks: any[] = [];
   const hours = (row: any) => rollupWorksheetUnits([row], workspace.rateSchedules ?? [], workspace.entityCategories ?? []).labourHours.total;
   for (const sheet of workspace.worksheets ?? []) {
     const items = sheet.items ?? [];
     for (const row of items) {
-      const quantity = number(row.quantity) ?? 0, cost = number(row.cost), price = number(row.price);
-      // Worksheet price is already extended by the quote engine.
-      const sell = price ?? 0;
-      if (sell > 0 && (cost === null || cost === 0)) costUnknown.push({ rowId: row.id, label: label(row), status: "cost unknown", sell: round(sell), recordedCost: cost,
-        marginImpact: { recordedProfit: round(sell), profitIfCostEqualsSell: 0, profitReductionIfCostEqualsSell: round(sell) },
-        fact: "Zero or absent cost is not proof of free/owned supply; cost-equals-sell is a sensitivity, not a vendor price." });
+      const quantity = number(row.quantity) ?? 0;
       const evidence = row.sourceEvidence?.evidenceBasis?.quantity ?? {};
       const text = [evidence.rationale, evidence.quantityDriver].filter(Boolean).join("; ");
       const differences: any[] = [];
@@ -99,8 +94,7 @@ export function summarizePricingIntegrity(workspace: any) {
   }));
   const currencyRows = rateCurrencies.filter((row: any) => row.sourceCurrency && quoteCurrency && row.sourceCurrency !== quoteCurrency);
   const unknownCount = rateCurrencies.filter((row: any) => !row.sourceCurrency).length;
-  const exposedSell = costUnknown.reduce((n, row) => n + row.sell, 0);
-  return { currency: { quoteCurrency: quoteCurrency ?? "unknown", count: currencyRows.length, unknownCount, unknownSummary: unknownCount ? `Rate currency unknown for ${unknownCount} rows; set the org or rate-book currency.` : null, rows: currencyRows.slice(0, 20), fact: "Quote currency follows organization settings. Source currencies are not converted. Different or unknown source/quote currencies need an explicit pricing basis." }, costUnknown: { count: costUnknown.length, sell: round(exposedSell), rows: costUnknown.slice(0, 10), marginFact: `Profit is sensitive to missing costs on ${round(exposedSell)} of row sell. Each added cost dollar reduces profit by one dollar; current markup is unchanged.` },
+  return { currency: { quoteCurrency: quoteCurrency ?? "unknown", count: currencyRows.length, unknownCount, unknownSummary: unknownCount ? `Rate currency unknown for ${unknownCount} rows; set the org or rate-book currency.` : null, rows: currencyRows.slice(0, 20), fact: "Quote currency follows organization settings. Source currencies are not converted. Different or unknown source/quote currencies need an explicit pricing basis." },
     staleEvidence: { count: staleEvidence.length, rows: staleEvidence.sort((a, b) => Number(b.differences.some((d: any) => d.field !== "derivation")) - Number(a.differences.some((d: any) => d.field !== "derivation"))).slice(0, 10) }, durationChecks: durationChecks.slice(0, 10),
     fact: "Advisory facts before estimate factors. No quote values were changed. Unstructured prose beyond explicit numeric drivers may need an independent review." };
 }
