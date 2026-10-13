@@ -52,13 +52,22 @@ export function summarizePricingIntegrity(workspace: any) {
       const evidence = row.sourceEvidence?.evidenceBasis?.quantity ?? {};
       const text = [evidence.rationale, evidence.quantityDriver].filter(Boolean).join("; ");
       const differences: any[] = [];
-      const hourMatch = /\b(\d+(?:\.\d+)?)\s*(?:person[- ]?hours|labou?r[- ]?hours|hours)\b/i.exec(text);
-      if (hourMatch && hours(row) > 0 && Math.abs(Number(hourMatch[1]) - hours(row)) > .01) differences.push({ field: "labourHours", savedEvidence: Number(hourMatch[1]), current: hours(row) });
-      const driver = /\b(\d+(?:\.\d+)?)\s*(?:units?|each)\s*[×x*]\s*(\d+(?:\.\d+)?)\s*(WK|DAY|HR|MO)\b/i.exec(evidence.quantityDriver ?? "");
+      // Compare an explicit extended driver, or a standalone total. A rate such
+      // as "0.5 person-hours/output unit" is not itself the row's total hours.
+      const hourDriver = /^\s*(\d+(?:\.\d+)?)\s+[^×*]*[×*]\s*(\d+(?:\.\d+)?)\s*person[- ]?hours\s*\//i.exec(evidence.quantityDriver ?? "");
+      const hourTotal = /^\s*(\d+(?:\.\d+)?)\s+person[- ]?hours\b(?!\s*(?:\/|per\b))/i.exec(evidence.rationale ?? "");
+      const savedHours = hourDriver ? Number(hourDriver[1]) * Number(hourDriver[2]) : hourTotal ? Number(hourTotal[1]) : null;
+      const currentHours = hours(row);
+      if (savedHours !== null && currentHours > 0 && Math.abs(savedHours - currentHours) > Math.max(.1, currentHours * .01)) {
+        differences.push({ field: "labourHours", savedEvidence: round(savedHours), current: currentHours });
+      }
+      const driver = /\b(\d+(?:\.\d+)?)\s*(?:units?|each)\s*[×x*]\s*(\d+(?:\.\d+)?)\s*(WK|weeks?|days?|HR|hours?|MO|months?)\b/i.exec(evidence.quantityDriver ?? "");
       if (driver) {
+        const durationUnit = (unit: string) => /^(WK|weeks?)$/i.test(unit) ? "WK" : /^days?$/i.test(unit) ? "DAY" : /^(HR|hours?)$/i.test(unit) ? "HR" : /^(MO|months?)$/i.test(unit) ? "MO" : unit.toUpperCase();
+        const unit = durationUnit(driver[3]);
         const saved = Number(driver[1]) * Number(driver[2]);
         const current = quantity * Object.values(row.tierUnits ?? {}).reduce<number>((n, x) => n + Number(x || 0), 0);
-        if (driver[3].toUpperCase() === String(row.uom).toUpperCase() && Math.abs(saved - current) > .01) differences.push({ field: `extended ${driver[3].toUpperCase()}`, savedEvidence: saved, current });
+        if (unit === durationUnit(String(row.uom)) && Math.abs(saved - current) > .01) differences.push({ field: `extended ${unit}`, savedEvidence: saved, current });
       }
       if (row.derivation?.status === "stale") differences.push({ field: "derivation", savedEvidence: "stale", current: row.derivation.invalidatedBy ?? [] });
       if (differences.length) staleEvidence.push({ rowId: row.id, label: label(row), status: "stale evidence", differences, evidence: text.slice(0, 350), fact: "Saved evidence numbers differ from current values; review their intended scope." });

@@ -28,3 +28,17 @@ test("crew and rental comparisons use authored calendar inputs only", () => {
   production.derivation.inputs.pop();
   assert.equal(summarizePricingIntegrity(workspace).durationChecks[0].rentals[0].coverageDays, null);
 });
+test("per-unit hour evidence is extended before comparing; standalone foreman hours remain detectable", () => {
+  const basis = (rationale: string, quantityDriver?: string) => ({ evidenceBasis: { quantity: { rationale, quantityDriver } } });
+  const rows = [
+    { id: "rate", category: "Labour", quantity: 80, tierUnits: { reg: .5 }, sourceEvidence: basis("Purge work at .5 person-HR/shop joint", "80 output units × 0.5 person-hours/output unit") },
+    { id: "extended", category: "Labour", quantity: 1, tierUnits: { reg: 96 }, sourceEvidence: basis("48 flange interfaces × 2 person-hours = 96 person-hours", "48 flange interfaces × 2 person-hours/interface") },
+    { id: "foreman", category: "Labour", quantity: 1, tierUnits: { reg: 240 }, sourceEvidence: basis("112 person-hours shared supervision") },
+    { id: "perUnit", category: "Labour", quantity: 2, tierUnits: { reg: 2 }, sourceEvidence: basis("2 person-hours per unit") },
+    { id: "rental", quantity: 2, uom: "WK", tierUnits: { wk: 6 }, sourceEvidence: basis("", "2 units ×5weeks") },
+  ];
+  const facts = summarizePricingIntegrity({ worksheets: [{ items: rows }] }).staleEvidence;
+  assert.deepEqual(facts.rows.map(r => r.rowId), ["foreman", "rental"]);
+  assert.deepEqual(facts.rows[0].differences[0], { field: "labourHours", savedEvidence: 112, current: 240 });
+  assert.deepEqual(facts.rows[1].differences[0], { field: "extended WK", savedEvidence: 10, current: 12 });
+});
