@@ -138,3 +138,11 @@ test("integrity: a purchase in other units needs an explicit conversion", async 
   item.derivation.procurement.packSize = 11.16;
   assert.equal(await check(item), null);
 });
+
+test("round-7 rental duration traces are per equipment unit, not unit-weeks", async () => {
+  for (const duration of [3, 5]) {
+    const derivation = { target: "tierUnits", formula: "duration", inputs: [{ name: "duration", value: duration, unit: "WK", source: { kind: "assumption", ref: "A-DURATION" } }], result: { value: duration, unit: "WK" } };
+    assert.equal(await check({ quantity: 2, uom: "WK", tierUnits: { weekly: duration }, derivation }), null);
+    assert.match(String(await check({ quantity: 2, uom: "WK", tierUnits: { weekly: duration + 1 }, derivation })), /Derivation produces/);
+  }
+});

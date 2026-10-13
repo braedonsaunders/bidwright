@@ -9,6 +9,7 @@ import {
   rollupWorksheetUnits,
   normalizeLineDerivation,
   validateLineDerivation,
+  lineDerivationExpectedValue,
   collectBatchOperationProblems,
   evaluateProcurementLink,
   type LineDerivation,
@@ -199,7 +200,7 @@ const LINE_EVIDENCE_BASIS_TYPES = [
 
 /** Zod shape for a per-line derivation (see LineDerivation in @bidwright/domain). */
 const derivationSchema = z.object({
-  target: z.enum(["quantity", "tierUnits", "cost", "price"]).default("quantity").describe("Which row value the formula reproduces. Default quantity; use tierUnits for rate-schedule hours."),
+  target: z.enum(["quantity", "tierUnits", "cost", "price"]).default("quantity").describe("Which stored row value the formula reproduces. quantity compares row.quantity; tierUnits compares the sum of tier values PER row quantity (hours or duration), before multiplying by quantity; cost/price compare unit values."),
   formula: z.string().describe("Arithmetic over input names, e.g. 'basePlates * anchorsPerPlate' or 'ceil(anchors / anchorsPerCartridge)'. Supports + - * / ^ ( ) ceil floor round min max sqrt. Example: formula 'pipeFeet * hoursPerFoot', inputs named pipeFeet=100 and hoursPerFoot=0.5, result.value=50; target tierUnits matches a 50-hour row."),
   inputs: z.array(z.object({
     name: z.string().describe("Identifier used in the formula, e.g. pipeFeet or hoursPerFoot (letters, digits and underscores; no spaces)."),
@@ -469,13 +470,9 @@ export async function rowWriteIntegrityProblem(ws: any, input: {
 
   if (derivation) {
     const quantity = Number.isFinite(input.quantity) ? Number(input.quantity) : 1;
-    const tierUnitTotal = Object.values(input.tierUnits ?? {}).reduce((sum, value) => sum + (Number.isFinite(Number(value)) ? Number(value) : 0), 0);
     const target = derivation.target ?? "quantity";
     // The server compares quantity-target derivations once the takeoff sum is known.
-    const expectedValue = input.linkedQuantityPending && target === "quantity" ? null : target === "tierUnits" ? tierUnitTotal * (quantity || 1)
-      : target === "cost" ? (Number.isFinite(input.cost) ? Number(input.cost) : null)
-      : target === "price" ? (Number.isFinite(input.price) ? Number(input.price) : null)
-      : quantity;
+    const expectedValue = input.linkedQuantityPending && target === "quantity" ? null : lineDerivationExpectedValue(target, input);
     const issues = validateLineDerivation(derivation, { expectedValue }).filter((issue) => issue.severity === "error");
     if (issues.length > 0) return `Derivation is not valid: ${issues.slice(0, 4).map((issue) => issue.message).join(" ")}`;
     if (derivation.procurement) {
@@ -1527,7 +1524,7 @@ function worksheetTreeSummary(ws: any) {
       phaseId: z.string().optional(),
       description: z.string().default("").describe("Task/scope description; do not put task details in entityName."),
       sourceNotes: z.string().default("").describe("Source basis, productivity logic, assumptions, and document/library refs."),
-      laborUnitId: z.string().nullable().optional().describe("Matched labour unit ID. With quantity in its output UOM and tierUnits hours per quantity, the server records quantity × hoursNormal × adjustment as a derivation."),
+      laborUnitId: z.string().nullable().optional().describe("Matched labour unit ID. With quantity in its output UOM and tierUnits hours per quantity, the server records hoursNormal × conversion × adjustment as a per-unit tierUnits derivation; extended hours are quantity × tierUnits."),
       resourceComposition: z.record(z.unknown()).optional(),
       sourceEvidence: z.record(z.unknown()).optional(),
       evidenceBasis: z.object({

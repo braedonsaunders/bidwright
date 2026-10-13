@@ -311,6 +311,15 @@ function withinTolerance(a: number, b: number, relative: number, absolute: numbe
   return diff <= Math.max(absolute, Math.abs(b) * relative);
 }
 
+/** A target names a stored row field. tierUnits are per quantity, never extended hours. */
+export function lineDerivationExpectedValue(target: LineDerivationTarget, row: {
+  quantity?: number | null; tierUnits?: Record<string, number> | null; cost?: number | null; price?: number | null;
+}): number | null {
+  if (target === "tierUnits") return Object.values(row.tierUnits ?? {}).reduce((sum, value) => sum + (Number.isFinite(Number(value)) ? Number(value) : 0), 0);
+  const value = target === "cost" ? row.cost : target === "price" ? row.price : row.quantity ?? 1;
+  return Number.isFinite(value) ? Number(value) : null;
+}
+
 export function validateLineDerivation(
   derivation: LineDerivation | null | undefined,
   options: ValidateLineDerivationOptions = {},
