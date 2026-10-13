@@ -13,6 +13,8 @@ export function calculateLineItem(
   rateSchedules?: Array<{
     id?: string;
     name?: string;
+    scope?: RateScheduleContext["scope"];
+    sourceCurrency?: string | null;
     category?: string;
     defaultMarkup?: number;
     metadata?: Record<string, unknown>;
@@ -37,6 +39,8 @@ export function calculateLineItem(
     rateSchedules: rateSchedules?.map((s) => ({
       id: s.id ?? "",
       name: s.name,
+      scope: s.scope,
+      sourceCurrency: s.sourceCurrency,
       category: s.category ?? "",
       defaultMarkup: s.defaultMarkup,
       metadata: s.metadata,

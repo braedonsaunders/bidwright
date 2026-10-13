@@ -1,7 +1,7 @@
 /**
  * HTTP client for calling the Bidwright API from the MCP server.
  * All env vars are set by the Bidwright API when spawning this process.
- * Retries on transient errors (429, 502, 503, 504) with exponential backoff.
+ * Retries reads on transient errors with exponential backoff. Writes are not replayed.
  */
 
 const API_URL = process.env.BIDWRIGHT_API_URL || "http://localhost:4001";
@@ -26,9 +26,24 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** Fetch with exponential backoff retry on 429 / transient server errors */
+async function apiRouteUnavailable(response: Response, init: RequestInit): Promise<boolean> {
+  if ((init.method ?? "GET").toUpperCase() !== "GET" || response.status !== 404) return false;
+  // Traefik's missing-route response during a rollout differs from application JSON 404s.
+  if ((await response.clone().text()).trim() !== "404 page not found") return false;
+  try {
+    const health = await fetch(`${API_URL.replace(/\/+$/, "")}/health`, { signal: AbortSignal.timeout(5_000) });
+    const unavailable = [502, 503, 504].includes(health.status)
+      || (health.status === 404 && (await health.clone().text()).trim() === "404 page not found");
+    await health.body?.cancel();
+    return unavailable;
+  } catch {
+    return true;
+  }
+}
+
+/** Only safe reads are automatically replayed; a failed write may already have committed. */
 export async function fetchWithRetry(url: string, init: RequestInit, timeoutMs: number): Promise<Response> {
-  const MAX_RETRIES = 4;
+  const MAX_RETRIES = ["GET", "HEAD"].includes((init.method ?? "GET").toUpperCase()) ? 4 : 0;
   let lastRes: Response | undefined;
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
@@ -49,12 +64,18 @@ export async function fetchWithRetry(url: string, init: RequestInit, timeoutMs: 
       throw error;
     }
 
-    if (lastRes.status === 429 || lastRes.status === 502 || lastRes.status === 503 || lastRes.status === 504) {
+    const restarting = await apiRouteUnavailable(lastRes, init);
+    if (restarting && attempt === MAX_RETRIES) {
+      await lastRes.body?.cancel();
+      throw new Error(`API restarting or temporarily unavailable: GET ${url} returned a proxy 404 and /health is unavailable after ${MAX_RETRIES + 1} attempts.`);
+    }
+    if (restarting || lastRes.status === 429 || lastRes.status === 502 || lastRes.status === 503 || lastRes.status === 504) {
       if (attempt < MAX_RETRIES) {
         const retryAfter = lastRes.headers.get("Retry-After");
         const delayMs = retryAfter
           ? Math.min(parseInt(retryAfter, 10) * 1000, 30_000)
           : Math.min(1000 * Math.pow(2, attempt) + Math.random() * 500, 30_000);
+        await lastRes.body?.cancel();
         await sleep(delayMs);
         continue;
       }

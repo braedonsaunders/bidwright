@@ -1,0 +1,255 @@
+[
+  {
+    "label": "Resource 1",
+    "quantity": 1,
+    "uom": "MO",
+    "tierUnits": {
+      "tier-monthly": 2
+    },
+    "tiers": [
+      {
+        "id": "tier-daily",
+        "name": "Daily",
+        "uom": "DAY",
+        "multiplier": 1,
+        "sortOrder": 0
+      },
+      {
+        "id": "tier-weekly",
+        "name": "Weekly",
+        "uom": "WK",
+        "multiplier": 3,
+        "sortOrder": 1
+      },
+      {
+        "id": "tier-monthly",
+        "name": "Monthly",
+        "uom": "MO",
+        "multiplier": 12,
+        "sortOrder": 2
+      }
+    ],
+    "rates": {
+      "tier-monthly": 1140,
+      "tier-weekly": 285,
+      "tier-daily": 95
+    },
+    "costRates": {
+      "Daily": 95,
+      "Weekly": 285,
+      "Monthly": 1140,
+      "tier-monthly": 1140,
+      "tier-weekly": 285,
+      "tier-daily": 95
+    },
+    "scope": "revision",
+    "metadata": {
+      "costRatesAuthored": true,
+      "costProvenance": {
+        "type": "estimator_allowance",
+        "currency": "CAD"
+      }
+    },
+    "expectedCost": 2280
+  },
+  {
+    "label": "Resource 2",
+    "quantity": 1,
+    "uom": "MO",
+    "tierUnits": {
+      "tier-monthly": 2
+    },
+    "tiers": [
+      {
+        "id": "tier-daily",
+        "name": "Daily",
+        "uom": "DAY",
+        "multiplier": 1,
+        "sortOrder": 0
+      },
+      {
+        "id": "tier-weekly",
+        "name": "Weekly",
+        "uom": "WK",
+        "multiplier": 3,
+        "sortOrder": 1
+      },
+      {
+        "id": "tier-monthly",
+        "name": "Monthly",
+        "uom": "MO",
+        "multiplier": 12,
+        "sortOrder": 2
+      }
+    ],
+    "rates": {
+      "tier-monthly": 420,
+      "tier-weekly": 105,
+      "tier-daily": 35
+    },
+    "costRates": {
+      "Daily": 35,
+      "Weekly": 105,
+      "Monthly": 420
+    },
+    "scope": "revision",
+    "metadata": {
+      "costRatesAuthored": true,
+      "costProvenance": {
+        "type": "estimator_allowance",
+        "currency": "CAD"
+      }
+    },
+    "expectedCost": 840
+  },
+  {
+    "label": "Resource 3",
+    "quantity": 1,
+    "uom": "WK",
+    "tierUnits": {
+      "tier-weekly": 2
+    },
+    "tiers": [
+      {
+        "id": "tier-daily",
+        "name": "Daily",
+        "uom": "DAY",
+        "multiplier": 1,
+        "sortOrder": 0
+      },
+      {
+        "id": "tier-weekly",
+        "name": "Weekly",
+        "uom": "WK",
+        "multiplier": 3,
+        "sortOrder": 1
+      },
+      {
+        "id": "tier-monthly",
+        "name": "Monthly",
+        "uom": "MO",
+        "multiplier": 12,
+        "sortOrder": 2
+      }
+    ],
+    "rates": {
+      "tier-monthly": 2400,
+      "tier-weekly": 600,
+      "tier-daily": 200
+    },
+    "costRates": {
+      "Daily": 200,
+      "Weekly": 600,
+      "Monthly": 2400
+    },
+    "scope": "revision",
+    "metadata": {
+      "costRatesAuthored": true,
+      "costProvenance": {
+        "type": "estimator_allowance",
+        "currency": "CAD"
+      }
+    },
+    "expectedCost": 1200
+  },
+  {
+    "label": "Resource 4",
+    "quantity": 1,
+    "uom": "DAY",
+    "tierUnits": {
+      "tier-daily": 3
+    },
+    "tiers": [
+      {
+        "id": "tier-daily",
+        "name": "Daily",
+        "uom": "DAY",
+        "multiplier": 1,
+        "sortOrder": 0
+      },
+      {
+        "id": "tier-weekly",
+        "name": "Weekly",
+        "uom": "WK",
+        "multiplier": 3,
+        "sortOrder": 1
+      },
+      {
+        "id": "tier-monthly",
+        "name": "Monthly",
+        "uom": "MO",
+        "multiplier": 12,
+        "sortOrder": 2
+      }
+    ],
+    "rates": {
+      "tier-monthly": 1800,
+      "tier-weekly": 450,
+      "tier-daily": 150
+    },
+    "costRates": {
+      "Daily": 150,
+      "Weekly": 450,
+      "Monthly": 1800
+    },
+    "scope": "revision",
+    "metadata": {
+      "costRatesAuthored": true,
+      "costProvenance": {
+        "type": "estimator_allowance",
+        "currency": "CAD"
+      }
+    },
+    "expectedCost": 450
+  },
+  {
+    "label": "Resource 5",
+    "quantity": 1,
+    "uom": "WK",
+    "tierUnits": {
+      "tier-weekly": 4
+    },
+    "tiers": [
+      {
+        "id": "tier-daily",
+        "name": "Daily",
+        "uom": "DAY",
+        "multiplier": 1,
+        "sortOrder": 0
+      },
+      {
+        "id": "tier-weekly",
+        "name": "Weekly",
+        "uom": "WK",
+        "multiplier": 3,
+        "sortOrder": 1
+      },
+      {
+        "id": "tier-monthly",
+        "name": "Monthly",
+        "uom": "MO",
+        "multiplier": 12,
+        "sortOrder": 2
+      }
+    ],
+    "rates": {
+      "tier-monthly": 360,
+      "tier-weekly": 90,
+      "tier-daily": 30
+    },
+    "costRates": {
+      "Daily": 30,
+      "Weekly": 90,
+      "Monthly": 360
+    },
+    "scope": "revision",
+    "metadata": {
+      "costRatesAuthored": true,
+      "costProvenance": {
+        "type": "estimator_allowance",
+        "currency": "CAD"
+      }
+    },
+    "expectedCost": 360
+  }
+]
