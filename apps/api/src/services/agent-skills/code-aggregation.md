@@ -35,9 +35,9 @@ A returned linkError means the pickup was saved but the worksheet link failed; u
 Each call saves one authored line. For example, with actual document and worksheet IDs:
 ```js
 const lines = [
-  { documentId, quantity: 317, unit: "LF", label: "3-inch pipe", sourceRefs: [{ sheet: "BOM", row: 6 }] },
-  { documentId, quantity: 52.58, unit: "LF", label: "2-inch pipe", sourceRefs: [{ sheet: "BOM", row: 7 }] },
-  { documentId, quantity: 43, unit: "EA", label: "Valves", sourceRefs: [{ sheet: "BOM", row: 8 }] },
+  { documentId, quantity: 120, unit: "LF", label: "Conduit run", sourceRefs: [{ sheet: "BOM", row: 6 }] },
+  { documentId, quantity: 240, unit: "SF", label: "Wall finish area", sourceRefs: [{ sheet: "BOM", row: 7 }] },
+  { documentId, quantity: 12, unit: "EA", label: "Door hardware sets", sourceRefs: [{ sheet: "BOM", row: 8 }] },
 ];
 for (const line of lines) await invokeTool({ name: "saveSourceQuantityTakeoff", args: line });
 // After creating the corresponding installed-quantity rows, reuse the same inputs.
@@ -48,11 +48,11 @@ for (let i = 0; i < lines.length; i++) {
   // result contains the existing pickup and link, or a linkError to inspect.
 }
 ```
-The repeated source facts reuse the pickup; this does not double-count it. The multiplier converts source units to the target row's units. A pipe-length pickup can link to an installed LF row; it is not automatically a labour-hour or purchased-pack quantity.
+The repeated source facts reuse the pickup; this does not double-count it. The multiplier converts source units to the target row's units. A measured-run pickup can link to an installed LF row; it is not automatically a labour-hour or purchased-pack quantity.
 
 ## Installed quantities, purchasing and effort
 
-A quantity record can describe installed work (for example 317 LF of pipe), while a procurement row describes stock purchased (for example seventeen 20-ft lengths = 340 LF). The difference can be recorded as cutting waste or surplus, with its calculation. A supplier lot is a priced commercial package, not an installed count.
+A quantity record can describe installed work (for example 120 LF of conduit), while a procurement row describes stock purchased (for example thirteen 10-ft lengths = 130 LF). The difference can be recorded as cutting waste or surplus, with its calculation. A supplier lot is a priced commercial package, not an installed count.
 
 Shop and field work can have separate person-hour calculations: 20 joints × 2 shop person-hours/joint, plus 5 closures × 3 field person-hours/joint. Crew size describes staffing; multiplying an already person-hour rate by crew size would count effort twice. An unquoted allowance can carry its amount, covered scope and uncertainty separately from measured quantities and vendor prices. Source facts and any alternate or provisional quantities can remain visible side by side.
 
@@ -65,3 +65,14 @@ Saved pickups can drive a priced row through `createWorksheetItem` or `updateWor
 A library can price a plate or connection in EA, a weld in FT, and unloading in TONNE even when a drawing describes the whole assembly in TON. `matchLaborUnits` returns table operation/unit examples alongside weak matches and unit mismatches. Those examples show which quantities a more detailed breakdown could use.
 
 For a fabricated frame, a breakdown can separate plate cuts, drilled holes, connections, weld lengths, handling and erection. Drawing dimensions and connection schedules provide the operation quantities; an assembly's mass alone does not provide its weld length. Passing those operations as separate `matchLaborUnits` lines gives separate candidates and conversions. Any operations the library does not cover can retain explicit assumed hours and their calculation.
+
+
+## Component census across trades
+
+`countComponents({documentId,pages:"4",tagPrefixes:["D"]})` reads schedule/legend types and distinct tagged references. Prefixes come from that document, not a built-in trade convention. `symbolPages:[4]` adds the existing visual cluster detector; a cluster is a candidate until interpreted against the legend and original pixels. The output keeps methods separate because a schedule, plan tag and symbol may represent the same installed component. A legend entry alone has no installed count.
+
+Examples include electrical devices and fixtures, structural connections and anchors, finish areas, and doors/hardware. Save an authored schedule count with `saveSourceQuantityTakeoff`, or inspected symbol matches with `saveCountAsAnnotations`; use the returned pickup id in the priced row's `takeoff` field. A connection/joint quantity can be `components * connectionsPerComponent`, with the chosen connection basis and its source recorded as derivation inputs. Bidwright does not supply a connections-per-component rule.
+
+`getSourceOverview` reports delivered/unread pages, partial reads and truncations; these facts are not proof of comprehension. A truncated read supplies the next character offset and the page/sheet selector to keep. `getWorkspace` reports citations or possible quantity snapshots without a live PickupLink; linking a partial measured run directly to a full procurement quantity changes the quantity basis, so a combined formula may still be needed.
+
+Imported rate books keep separate cost and sell rates. `setRateScheduleItemRates({scheduleId,itemId,costRates:{tierId:100},rates:{tierId:130},costProvenance:{basis:"supplier quote"},sellProvenance:{basis:"authored sell"}})` updates the quote's copy, including equipment/rental duration rates. Currency is the source currency; no automatic conversion occurs. `sourceEvidence.durationBasis` can name `supportsWorksheetIds` or `supportsRowIds`, `crewSize`, `shiftHours` and `workdaysPerWeek` when a resource supports work on other worksheets.

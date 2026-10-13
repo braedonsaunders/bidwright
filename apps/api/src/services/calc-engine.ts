@@ -31,6 +31,8 @@ import {
 // ── Types ─────────────────────────────────────────────────────────────────
 
 export interface RateScheduleContext {
+  scope?: "global" | "revision";
+  sourceCurrency?: string | null;
   id: string;
   category: string;
   name?: string;

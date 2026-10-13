@@ -1,4 +1,4 @@
-import { documentPageText, parseDocumentPages } from "../services/document-page-text.js";
+import { fullDocumentText, documentPageText, parseDocumentPages } from "../services/document-page-text.js";
 import type { FastifyInstance } from "fastify";
 import { knowledgeService } from "../services/knowledge-service.js";
 import {
@@ -264,6 +264,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
           id: doc.id,
           fileName: doc.fileName,
           fileType: doc.fileType,
+          checksum: doc.checksum,
           documentType: doc.documentType,
           pageCount: doc.pageCount,
           hasExtractedText: !!doc.extractedText,
@@ -412,7 +413,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
             ? resolveApiPath(doc.storagePath) : undefined).catch((error) => {
               if (error.statusCode === 400) throw error;
               return { content: "", pageTextStatus: "unavailable", fact: "Page text extraction is unavailable; readDrawingPage can inspect the requested physical pages. Unpaged text may still be available." };
-            }) : { content: doc.extractedText ?? "" };
+            }) : fullDocumentText(doc);
 
         return {
           id: doc.id,
@@ -660,6 +661,7 @@ export async function knowledgeRoutes(app: FastifyInstance) {
 
       return {
         fileName,
+        checksum: sourceDoc?.checksum ?? undefined,
         sheetCount: sheetNames.length,
         allSheetNames: sheetNames,
         sheets,

@@ -1,3 +1,4 @@
+import { getDocumentCoverage } from "./document-coverage.js";
 import { prisma, prismaSql, type Prisma } from "@bidwright/db";
 import { buildModelQuantityCoverage, modelQuantityFacts } from "./model-quantity-coverage.js";
 
@@ -116,7 +117,7 @@ export function buildSourceOverview(input: {
   };
 }
 
-export type SourceOverview = ReturnType<typeof buildSourceOverview>;
+export type SourceOverview = ReturnType<typeof buildSourceOverview> & { documentCoverage?: Awaited<ReturnType<typeof getDocumentCoverage>> };
 
 // Project only compact persisted facts: no text bodies, entity arrays, meshes or ingest work.
 function sourceFacts(column: Prisma.Sql) {
@@ -161,7 +162,8 @@ export async function getSourceOverview(projectId: string): Promise<SourceOvervi
   ]);
   const { getProjectModelScanStatus } = await import("./model-service.js");
   const { status, sourceCount, startedAt, finishedAt, error } = getProjectModelScanStatus(projectId);
-  return buildSourceOverview({ sources: [...documents, ...files], models, pickups, calibrations: workspace[0]?.calibrations,
+  const overview = buildSourceOverview({ sources: [...documents, ...files], models, pickups, calibrations: workspace[0]?.calibrations,
     modelScan: { status, sourceCount, startedAt, finishedAt, error },
     documentProgress: Array.isArray(jobs[0]?.documents) ? jobs[0].documents : [] });
+  return { ...overview, documentCoverage: await getDocumentCoverage(projectId) };
 }

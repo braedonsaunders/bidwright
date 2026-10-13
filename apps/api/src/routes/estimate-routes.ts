@@ -1,3 +1,4 @@
+import { getDocumentCoverage } from "../services/document-coverage.js";
 import type { FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -323,7 +324,7 @@ export async function estimateRoutes(app: FastifyInstance): Promise<void> {
     await request.store!.finalizeEstimateStrategy(projectId, parsed.data);
     const payload = await buildWorkspaceResponse(request.store!, projectId);
     if (!payload) return reply.code(404).send({ error: "Project not found" });
-    return payload;
+    return { ...payload, workspace: { ...payload.workspace, documentCoverage: await getDocumentCoverage(projectId) } };
   });
 
   app.post("/api/estimate/:projectId/feedback", async (request, reply) => {

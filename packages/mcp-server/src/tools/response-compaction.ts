@@ -1,3 +1,4 @@
+import { resolveRateCurrency, hasAuthoredCostRates } from "@bidwright/domain";
 /**
  * Response compaction for high-volume list tools.
  *
@@ -113,6 +114,7 @@ export function compactRateMap(map: unknown, tiers: RateTier[]): Record<string, 
 }
 
 export interface CompactRateItem {
+  currency?: string;
   rateScheduleItemId: string;
   scheduleId: string;
   name: string | undefined;
@@ -134,6 +136,7 @@ export interface CompactRateItem {
 export function compactRateItem(item: Record<string, any>, schedule: Record<string, any>, options: { includeRates: boolean }): CompactRateItem {
   const tiers = scheduleTierList(schedule);
   const row: CompactRateItem = {
+    currency: resolveRateCurrency(schedule.metadata?.currency, schedule.sourceCurrency) ?? undefined,
     rateScheduleItemId: String(item.id ?? ""),
     scheduleId: String(schedule.id ?? ""),
     name: clipText(item.name, 80),
@@ -143,7 +146,7 @@ export function compactRateItem(item: Record<string, any>, schedule: Record<stri
   };
   if (options.includeRates) {
     row.rates = compactRateMap(item.rates, tiers);
-    const costRates = compactRateMap(item.costRates, tiers);
+    const costRates = schedule.scope === "revision" && hasAuthoredCostRates(item) ? compactRateMap(item.costRates, tiers) : undefined;
     if (costRates && JSON.stringify(costRates) !== JSON.stringify(row.rates)) row.costRates = costRates;
     if (item.burden && typeof item.burden === "object" && Object.keys(item.burden).length > 0) row.burden = item.burden;
     if (item.perDiem && typeof item.perDiem === "object" && Object.keys(item.perDiem).length > 0) row.perDiem = item.perDiem;
@@ -164,6 +167,7 @@ export function shouldIncludeRates(input: { includeRates?: boolean | null; narro
 }
 
 export interface CompactScheduleSummary {
+  currency?: string;
   id: string;
   name: string | undefined;
   category: string | undefined;
@@ -185,6 +189,7 @@ export function compactScheduleSummary(
   const items = Array.isArray(schedule?.items) ? schedule.items : [];
   const tiers = scheduleTierList(schedule);
   const summary: CompactScheduleSummary = {
+    currency: resolveRateCurrency(schedule.metadata?.currency, schedule.sourceCurrency) ?? undefined,
     id: String(schedule.id ?? ""),
     name: clipText(schedule.name, 80),
     category: schedule.category ? String(schedule.category) : undefined,

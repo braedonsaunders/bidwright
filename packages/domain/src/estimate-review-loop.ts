@@ -1,6 +1,6 @@
 export const ESTIMATE_REVIEW_RUBRIC = `Independent estimate review dimensions:
 1. Quantity spot-checks against original drawing pixels: physical from/to boundaries, dimensions, component/joint counts, installed versus procurement quantities.
-2. Scope coverage versus documents: specification obligations, interfaces, and exclusions whose responsible counterparty is not confirmed.
+2. Scope coverage versus documents: check specification/drawing obligations in documents or pages not yet covered; interfaces, and exclusions whose responsible counterparty is not confirmed.
 3. Takeoff traceability: saved measurements, source citations and links to priced rows; candidate links do not prove the same scope.
 4. Labour basis: sourced, adjusted and assumed hours; productivity provenance is separate from quantity accuracy.
 5. Pricing integrity: cost-unknown and zero-cost sell rows, crew/supervision/rental duration consistency, per-unit versus extended values.

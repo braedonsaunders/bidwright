@@ -33,5 +33,31 @@ export async function documentPageText(doc: any, requested: string, pdfPath?: st
   }
   const missing = Array.from({ length: end - start + 1 }, (_, i) => start + i).filter(page => !indexed.has(page));
   if (missing.length) return { content: "", pageTextStatus: "unavailable", fact: `Page-indexed text is unavailable for pages ${missing.join(", ")}; this does not mean the document has no text. readDrawingPage can inspect these pages.` };
-  return { content: Array.from({ length: end - start + 1 }, (_, i) => `--- Page ${start + i} ---\n${indexed.get(start + i) || "[No text layer on this page; readDrawingPage can inspect it.]"}`).join("\n\n"), pageTextStatus: "available" };
+  let content = "";
+  const pageRanges: Array<{ page: number; start: number; end: number }> = [];
+  for (let page = start; page <= end; page++) {
+    content += `${content ? "\n\n" : ""}--- Page ${page} ---\n`;
+    const offset = content.length;
+    const text = indexed.get(page) ?? "";
+    content += text || "[No text layer on this page; readDrawingPage can inspect it.]";
+    if (text.trim()) pageRanges.push({ page, start: offset, end: content.length });
+  }
+  return { textPages: pageRanges.map(r => r.page), pageRanges, content, pageTextStatus: "available" };
+}
+
+/** Locate known physical page text in the exact full-text response, without guessed boundaries. */
+export function fullDocumentText(doc: any) {
+  const content = String(doc.extractedText ?? "");
+  let cursor = 0;
+  const stored = doc.structuredData?.pages ?? doc.structuredData?.nativePdf?.pages ?? [];
+  const pages = derivePagesForIndexing(content, doc.structuredData) ?? (Array.isArray(stored) ? stored.map((page: any) => ({ pageNumber: Number(page.pageNumber ?? page.page) || null, text: page.text ?? page.content ?? "" })) : []);
+  const pageRanges = pages.flatMap(page => {
+    if (page.pageNumber === null || !page.text) return [];
+    const start = content.indexOf(page.text, cursor);
+    if (start < 0) return [];
+    cursor = start + page.text.length;
+    return [{ page: page.pageNumber, start, end: cursor }];
+  });
+  if (!pageRanges.length && doc.pageCount === 1 && content.trim()) pageRanges.push({ page: 1, start: 0, end: content.length });
+  return { content, pageRanges };
 }

@@ -50,3 +50,6 @@ export * from "./labor-basis";
 export * from "./estimate-review-facts";
 
 export * from "./estimate-review-loop";
+
+export * from "./document-coverage";
+export * from "./component-census";

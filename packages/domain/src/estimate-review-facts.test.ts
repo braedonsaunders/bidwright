@@ -19,14 +19,13 @@ test("candidate pickup links require compatible dimensions and label/source evid
 });
 test("crew and rental comparisons use authored calendar inputs only", () => {
   const production = { id: "prod", description: "Shop pipe fabrication", category: "Labour", quantity: 1, tierUnits: { reg: 2816 }, derivation: { inputs: [{ name: "crewSize", value: 4 }, { name: "shiftHours", value: 8 }, { name: "workdaysPerWeek", value: 5 }] } };
-  const foreman = { id: "foreman", description: "Shop foreman", category: "Labour", quantity: 1, tierUnits: { reg: 352 } };
+  const foreman = { id: "foreman", description: "Shop foreman", category: "Labour", quantity: 1, uom: "HR", tierUnits: { reg: 352 } };
   const rental = { id: "rental", description: "Rental", category: "Equipment", quantity: 2, uom: "WK", tierUnits: { weekly: 9 } };
   const workspace = { worksheets: [{ id: "shop", name: "Shop", items: [production, foreman, rental] }] };
-  const facts = summarizePricingIntegrity(workspace).durationChecks[0];
-  assert.equal(facts.requiredDays, 88);
-  assert.deepEqual(facts.differences, [{ rowId: "foreman", coverageDays: 44, plannedOrDerivedDays: 88 }, { rowId: "rental", coverageDays: 45, plannedOrDerivedDays: 88 }]);
+  const facts = summarizePricingIntegrity(workspace).durationChecks;
+  assert.deepEqual(facts.map(({ rowId, coverageDays, requiredDays, differs }) => ({ rowId, coverageDays, requiredDays, differs })), [{ rowId: "foreman", coverageDays: 44, requiredDays: 88, differs: true }, { rowId: "rental", coverageDays: 45, requiredDays: 88, differs: true }]);
   production.derivation.inputs.pop();
-  assert.equal(summarizePricingIntegrity(workspace).durationChecks[0].rentals[0].coverageDays, null);
+  assert.equal(summarizePricingIntegrity(workspace).durationChecks.find(r => r.rowId === "rental")?.coverageDays, null);
 });
 test("per-unit hour evidence is extended before comparing; standalone foreman hours remain detectable", () => {
   const basis = (rationale: string, quantityDriver?: string) => ({ evidenceBasis: { quantity: { rationale, quantityDriver } } });

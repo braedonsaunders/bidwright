@@ -654,7 +654,7 @@ export function registerEstimateTools(server: McpServer) {
     },
     async ({ summary }) => {
       const finalized = await apiPost(`/api/estimate/${getProjectId()}/finalize`, summary);
-      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis, pricingIntegrity: finalized.workspace?.pricingIntegrity, unlinkedMeasurements: finalized.workspace?.unlinkedMeasurements }) }] };
+      return { content: [{ type: "text" as const, text: JSON.stringify({ message: "Estimate strategy finalized", laborBasis: finalized.workspace?.laborBasis, pricingIntegrity: finalized.workspace?.pricingIntegrity, documentCoverage: finalized.workspace?.documentCoverage, unlinkedMeasurements: finalized.workspace?.unlinkedMeasurements }) }] };
     },
   );
 }

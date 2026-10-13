@@ -14,7 +14,7 @@ const schedule = {
   id: "rs-client",
   name: "Client 2026 (MECH)",
   category: "Labour",
-  scope: "global",
+  scope: "revision",
   description: "Mechanical day-to-day labour rates for the client site, including foreman and trade tiers and the standard overtime multipliers agreed for 2026.",
   tiers: [
     { id: "rst-reg", name: "Regular", multiplier: 1, uom: "HR" },
@@ -28,6 +28,7 @@ const schedule = {
     description: "Journeyman millwright, including small tools and consumables, site-wide, as agreed in the 2026 schedule negotiation.",
     rates: { "rst-reg": 100.5, "rst-ot": 150.75 },
     costRates: { "rst-reg": 62.4321, "rst-ot": 93.65 },
+    metadata: { costRatesAuthored: true },
     burden: {},
     perDiem: null,
   })),

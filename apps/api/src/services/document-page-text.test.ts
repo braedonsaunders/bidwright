@@ -30,3 +30,25 @@ test("ingestion Page Break markers work for non-PDF text without extraction", as
   assert.equal(result.content, "--- Page 2 ---\nSecond page");
   assert.equal((await documentPageText({ fileName: "source.txt", extractedText: "No page boundaries" }, "2", "/local/source.txt")).pageTextStatus, "unavailable");
 });
+
+test("full document reads expose exact page offsets without a pages argument", async () => {
+  const { fullDocumentText } = await import("./document-page-text.js");
+  const content = "Device obligations\n\n--- Page Break ---\n\nDoor obligations";
+  const result = fullDocumentText({ extractedText: content });
+  assert.equal(result.content, content);
+  assert.deepEqual(result.pageRanges.map(r => [r.page, content.slice(r.start, r.end)]), [[1, "Device obligations"], [2, "Door obligations"]]);
+});
+
+
+test("unpaged single-page and native-PDF reads retain their known physical page mapping", async () => {
+  const { fullDocumentText } = await import("./document-page-text.js");
+  assert.deepEqual(fullDocumentText({ extractedText: "Device schedule", pageCount: 1 }).pageRanges, [{ page: 1, start: 0, end: 15 }]);
+  const native = fullDocumentText({ extractedText: "Devices\nDoors", structuredData: { nativePdf: { pages: [{ pageNumber: 1, text: "Devices" }, { pageNumber: 2, text: "Doors" }] } } });
+  assert.deepEqual(native.pageRanges, [{ page: 1, start: 0, end: 7 }, { page: 2, start: 8, end: 13 }]);
+});
+
+
+test("a selected physical page range also exposes offsets for partially delivered chunks", async () => {
+  const result = await documentPageText({ extractedText: "Devices\fDoors", pageCount: 2 }, "1-2");
+  assert.deepEqual(result.pageRanges?.map(r => [r.page, result.content.slice(r.start, r.end)]), [[1, "Devices"], [2, "Doors"]]);
+});

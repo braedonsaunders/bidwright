@@ -1130,6 +1130,8 @@ export interface RateScheduleItem {
 }
 
 export interface RateSchedule {
+  /** Read-time source currency from the book, then explicit org configuration. */
+  sourceCurrency?: string | null;
   id: string;
   organizationId: string;
   name: string;
@@ -1844,7 +1846,7 @@ export interface AppSettings {
     /** Token pattern for new quote numbers, e.g. "{INITIALS}-{YY}{MM}{DD}-{SEQ:4}". */
     quoteNumberPattern?: string;
     timezone: string;
-    currency: string;
+    currency: string | null;
     dateFormat: string;
     fiscalYearStart: number;
     maxAgentIterations?: number;
@@ -2270,6 +2272,8 @@ export interface RevisionTotals {
 }
 
 export interface ProjectWorkspace {
+  /** Quote display currency inherited from the organization; no FX conversion. */
+  quoteCurrency?: string | null;
   project: Project;
   sourceDocuments: SourceDocument[];
   quote: Quote;

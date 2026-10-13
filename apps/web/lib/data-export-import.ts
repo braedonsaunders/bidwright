@@ -761,10 +761,9 @@ export async function importAllDataManagement(
           for (const item of items ?? []) {
             try {
               const mappedRates = remapRates(item.rates ?? {}, tierNameToId);
-              const mappedCostRates = remapRates(item.costRates ?? item.rates ?? {}, tierNameToId);
               const catId = resolveCatalogId(item.name, rs.name);
               if (catId) {
-                await addRateScheduleItem(match.id, { catalogItemId: catId, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
+                await addRateScheduleItem(match.id, { catalogItemId: catId, rates: mappedRates, sortOrder: item.sortOrder });
               }
             } catch (e: any) { errors.push(`Rate Item "${item.name}" in "${rs.name}": ${e.message}`); }
           }
@@ -791,10 +790,9 @@ export async function importAllDataManagement(
           for (const item of items ?? []) {
             try {
               const mappedRates = remapRates(item.rates ?? {}, tierNameToId);
-              const mappedCostRates = remapRates(item.costRates ?? item.rates ?? {}, tierNameToId);
               const catId = resolveCatalogId(item.name, rs.name);
               if (catId) {
-                await addRateScheduleItem(result.id, { catalogItemId: catId, rates: mappedRates, costRates: mappedCostRates, sortOrder: item.sortOrder });
+                await addRateScheduleItem(result.id, { catalogItemId: catId, rates: mappedRates, sortOrder: item.sortOrder });
               }
             } catch (e: any) { errors.push(`Rate Item "${item.name}" in "${rs.name}": ${e.message}`); }
           }

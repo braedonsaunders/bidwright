@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import { laborUnitPresentation } from "@bidwright/domain";
 import { createHash } from "node:crypto";
 
@@ -82,7 +83,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     quoteType: "Firm",
     quoteNumberPattern: DEFAULT_QUOTE_NUMBER_PATTERN,
     timezone: "America/New_York",
-    currency: "USD",
+    currency: null,
     dateFormat: "MM/DD/YYYY",
     fiscalYearStart: 1,
     maxAgentIterations: 200,
@@ -320,6 +321,13 @@ function normalizeCostSnapshot(raw: unknown): WorksheetItem["costSnapshot"] {
     currency: typeof r.currency === "string" ? r.currency : undefined,
     region: typeof r.region === "string" ? r.region : undefined,
   };
+}
+
+export function sameRateResolution(left: unknown, right: unknown): boolean {
+  return isDeepStrictEqual(
+    { ...normalizeRateResolution(left), resolvedAt: undefined },
+    { ...normalizeRateResolution(right), resolvedAt: undefined },
+  );
 }
 
 function normalizeRateResolution(raw: unknown): WorksheetItem["rateResolution"] {
