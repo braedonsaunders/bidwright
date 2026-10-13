@@ -286,6 +286,7 @@ claude -p "$(cat prompt.txt)" \\
         BIDWRIGHT_API_URL: apiUrl, BIDWRIGHT_PROJECT_ID: projectId,
         BIDWRIGHT_REVISION_ID: revision.id ?? "", BIDWRIGHT_QUOTE_ID: quote.id ?? "",
         BIDWRIGHT_AGENT_MODE: "build_estimate",
+        BIDWRIGHT_REVIEW_OWNER: "harness",
       },
       "mcp_servers.bidwright.disabled_tools": ["askUser", ...(blind ? ["recomputeEstimateBenchmarks", "listCalibrationLessons"] : [])],
       "mcp_servers.bidwright.default_tools_approval_mode": "approve",
