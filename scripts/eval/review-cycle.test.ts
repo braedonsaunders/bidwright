@@ -31,7 +31,9 @@ for (const reviewWorks of [true, false]) test(`harness cycle ${reviewWorks ? "re
     fs.writeFileSync('transcript-' + phase + '.jsonl', JSON.stringify({ type: 'thread.started', thread_id: phase === 'review' ? 'review-session' : 'builder-session' }) + '\\n' + JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: result } }) + '\\n');
   `);
   for (const phase of ["build", "review", "revise"]) await writeFile(join(dir, `run-${phase}.sh`), `exec node ./fake-phase.cjs ${phase}\n`);
-  t.mock.method(globalThis, "fetch", async () => Response.json({ workspace: { worksheets: [], laborBasis: {} } }));
+  t.mock.method(globalThis, "fetch", async (url) => Response.json(String(url).endsWith("/source-overview")
+    ? { sources: [], takeoff: { byDocumentPage: [], calibrations: {} } }
+    : { workspace: { worksheets: [], laborBasis: {} } }));
   await runReviewCycle(dir);
   const state = JSON.parse(await readFile(join(dir, "review-cycle-state.json"), "utf8"));
   assert.equal(state.status, reviewWorks ? "complete" : "review_unavailable");
