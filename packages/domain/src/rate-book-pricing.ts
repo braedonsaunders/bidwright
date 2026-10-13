@@ -58,10 +58,6 @@ export function resolveRateCurrency(source: unknown, organizationCurrency?: unkn
   return normalize(source) ?? normalize(organizationCurrency);
 }
 
-export function hasAuthoredCostRates(item: { metadata?: Record<string, unknown> | null }): boolean {
-  return item.metadata?.costRatesAuthored === true;
-}
-
 export interface RateBookPricingContext {
   projectId?: string | null;
   revisionId?: string | null;
@@ -280,6 +276,7 @@ export function resolveRateBookLine(
 
   const quantity = numberValue(item.quantity, 1);
   const rates = rateBookItem.rates ?? {};
+  const validRateKeys = Object.keys(rates);
   const catalogUnitCost = numberValue(rateBookItem.catalogUnitCost, Number.NaN);
   const components: RateResolutionComponent[] = [];
   const warnings: string[] = [];
@@ -294,18 +291,10 @@ export function resolveRateBookLine(
     if (units <= 0) continue;
 
     const tier = findTier(rateBook, rawTierId) ?? (rawTierId === "__unit" ? defaultTier : null);
+    const priceKey = resolveTierId(rawTierId, validRateKeys);
     const fallbackKey = defaultTier?.id ?? "";
-    // Authored maps may use the book's tier names; IDs take precedence when both exist.
-    const tierRate = (values: Record<string, number>) => {
-      const key = resolveTierId(rawTierId, Object.keys(values));
-      const names = tier?.name ? Object.keys(values).filter(k => normalizeKey(k) === normalizeKey(tier.name)) : [];
-      return values[key] ?? values[tier?.id ?? ""] ?? (names.length === 1 ? values[names[0]] : undefined) ?? values[fallbackKey];
-    };
-    const unitPrice = numberValue(tierRate(rates), Number.NaN);
-    // Legacy costRates often mirror sell rates. Only an explicit quote override is authoritative.
-    const costRates = rateBook.scope === "revision" && hasAuthoredCostRates(rateBookItem) ? rateBookItem.costRates ?? {} : {};
-    const explicitCost = tierRate(costRates);
-    const unitCost = explicitCost !== undefined ? numberValue(explicitCost, Number.NaN) : Number.isFinite(catalogUnitCost) ? money(catalogUnitCost * tierMultiplier(tier)) : Number.NaN;
+    const unitPrice = numberValue(rates[priceKey] ?? rates[fallbackKey], Number.NaN);
+    const unitCost = Number.isFinite(catalogUnitCost) ? money(catalogUnitCost * tierMultiplier(tier)) : Number.NaN;
     const extendedUnits = units * quantity;
 
     if (!Number.isFinite(unitPrice)) {
@@ -328,13 +317,11 @@ export function resolveRateBookLine(
         rateBookId: rateBook.id,
         rateBookItemId: rateBookItem.id,
         tierId: tier?.id ?? rawTierId,
-        metadata: { basis: "rate-book sell", provenance: rateBookItem.metadata?.sellProvenance ?? null },
+        metadata: {},
       }));
     }
 
-    if (!Number.isFinite(unitCost)) {
-      warnings.push(`Missing explicit rate or catalog item cost for ${rateBookItem.name ?? item.entityName}.`);
-    } else {
+    if (Number.isFinite(unitCost)) {
       const amount = unitCost * extendedUnits;
       totalCost += amount;
       baseCost += amount;
@@ -352,7 +339,7 @@ export function resolveRateBookLine(
         rateBookId: rateBook.id,
         rateBookItemId: rateBookItem.id,
         tierId: tier?.id ?? rawTierId,
-        metadata: { basis: explicitCost !== undefined ? "authored cost rate" : "catalog unit cost", provenance: rateBookItem.metadata?.costProvenance ?? null },
+        metadata: {},
       }));
     }
 

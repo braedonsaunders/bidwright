@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { summarizePricingIntegrity, summarizeUnlinkedMeasurements } from "./estimate-review-facts";
 const row = { id: "r", description: "Pipe", quantity: 2, uom: "WK", price: 100, cost: 0, tierUnits: { weekly: 6 }, sourceEvidence: { evidenceBasis: { quantity: { quantityDriver: "2 units × 5WK" } } } };
-test("missing rental cost and stale extended duration are facts, not price changes", () => {
+test("sell-only rentals have no cost warning while stale duration remains visible", () => {
   const workspace = { worksheets: [{ id: "w", items: [row] }] };
   const before = JSON.stringify(workspace), facts = summarizePricingIntegrity(workspace);
-  assert.equal(facts.costUnknown.sell, 100, "saved row price is already extended");
+  assert.equal("costUnknown" in facts, false);
   assert.deepEqual(facts.staleEvidence.rows[0].differences, [{ field: "extended WK", savedEvidence: 10, current: 12 }]);
   assert.equal(JSON.stringify(workspace), before);
 });

@@ -11,8 +11,8 @@ export function assertReasoningEffortOverride(value: unknown): void {
   }
 }
 
-export function normalizeCliReasoningEffort(value: unknown, mode = "build_estimate"): CliReasoningEffort {
-  return isCliReasoningEffort(value) ? value : mode === "qa" ? "medium" : "high";
+export function normalizeCliReasoningEffort(value: unknown, _mode = "build_estimate"): CliReasoningEffort {
+  return isCliReasoningEffort(value) ? value : "extra_high";
 }
 
 /** A run override never mutates the tenant setting; continuations retain it. */

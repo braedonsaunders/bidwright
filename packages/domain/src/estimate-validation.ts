@@ -71,6 +71,8 @@ export interface EstimateValidationWorksheetItemLike {
   cost?: number | string | null;
   price?: number | string | null;
   rateScheduleItemId?: string | null;
+  rateResolution?: { source?: string } | null;
+  costSnapshot?: { source?: string } | null;
   itemId?: string | null;
   costResourceId?: string | null;
   effectiveCostId?: string | null;
@@ -429,21 +431,23 @@ export const defaultEstimateValidationRules: EstimateValidationRule[] = [
 
         const cost = toFiniteNumber(row.item.cost);
         const price = toFiniteNumber(row.item.price);
-        if (cost > 0 && price > 0) {
+        const rateBookRow = Boolean(row.item.rateScheduleItemId || row.item.rateResolution?.source === "rate_book" || row.item.costSnapshot?.source === "rate_schedule");
+        const missingCost = !rateBookRow && cost <= 0;
+        if (!missingCost && price > 0) {
           return [];
         }
 
-        const bothZero = cost <= 0 && price <= 0;
+        const bothZero = missingCost && price <= 0;
         return [{
           message: bothZero
             ? `Worksheet item "${displayItemName(row.item)}" has zero cost and zero price.`
-            : `Worksheet item "${displayItemName(row.item)}" has ${cost <= 0 ? "zero cost" : "zero price"}.`,
+            : `Worksheet item "${displayItemName(row.item)}" has ${missingCost ? "zero cost" : "zero price"}.`,
           severity: bothZero ? "error" : "warning",
           element: itemRef(row),
           suggestions: [
             bothZero
               ? "Confirm whether this is a no-charge scope item; otherwise add unit cost and unit price."
-              : "Confirm the commercial intent and fill the missing unit cost or unit price.",
+              : rateBookRow ? "Confirm the commercial intent and fill the missing sell rate." : "Confirm the commercial intent and fill the missing unit cost or unit price.",
           ],
           details: { quantity, cost, price },
         }];

@@ -432,3 +432,14 @@ test("price variance rule flags benchmark outliers and below-cost pricing", () =
   assert.ok(issues.some((issue) => issue.message.includes("Cost")));
   assert.ok(issues.some((issue) => issue.message.includes("Price")));
 });
+
+test("sell-only rate-book rows have no zero-cost warning; zero sell still reports", () => {
+  const workspace = baseWorkspace();
+  const item = workspace.worksheets![0].items![0];
+  item.cost = 0;
+  assert.equal(validateEstimateWorkspace(workspace).issues.some(i => i.ruleId === "worksheet.pricing.zero_cost_or_price"), false);
+  item.price = 0;
+  const issue = validateEstimateWorkspace(workspace).issues.find(i => i.ruleId === "worksheet.pricing.zero_cost_or_price")!;
+  assert.match(issue.message, /zero price/);
+  assert.doesNotMatch(issue.message, /zero cost/);
+});

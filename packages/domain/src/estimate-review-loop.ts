@@ -3,7 +3,7 @@ export const ESTIMATE_REVIEW_RUBRIC = `Independent estimate review dimensions:
 2. Scope coverage versus documents: check specification/drawing obligations in documents or pages not yet covered; interfaces, and exclusions whose responsible counterparty is not confirmed.
 3. Takeoff traceability: saved measurements, source citations and links to priced rows; candidate links do not prove the same scope.
 4. Labour basis: sourced, adjusted and assumed hours; productivity provenance is separate from quantity accuracy.
-5. Pricing integrity: cost-unknown and zero-cost sell rows, crew/supervision/rental duration consistency, per-unit versus extended values.
+5. Pricing integrity: crew/supervision/rental duration consistency, per-unit versus extended values. Rate books price sell; zero cost on rate-book rows is valid.
 6. Commercial clarity: assumptions, qualifications, allowances, responsibility boundaries and unresolved decisions.
 7. Stale saved evidence: rationale, quantity drivers and review records whose numbers disagree with current rows.
 For each supported finding return an id, dimension, rowIds, source/page evidence, description, suggestedFix, and estimatedImpact text plus hoursImpact and moneyImpact (null where not quantifiable). State uncertainty; avoid invented exact impacts. Findings are advisory facts, not approval gates.`;

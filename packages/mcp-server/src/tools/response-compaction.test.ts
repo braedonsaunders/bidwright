@@ -63,10 +63,10 @@ test("a compact rate item keeps the selection essentials and stays small without
   assert.ok(!("scheduleName" in row) && !("tierIds" in row), "schedule-level fields are not repeated per row");
 });
 
-test("rates are re-keyed by tier name at stored precision, and cost rates kept when they differ", () => {
+test("rates are re-keyed by tier name; obsolete authored costs are not advertised", () => {
   const row = compactRateItem(schedule.items[0], schedule, { includeRates: true });
   assert.deepEqual(row.rates, { Regular: 100.5, Overtime: 150.75 });
-  assert.deepEqual(row.costRates, { Regular: 62.4321, Overtime: 93.65 }, "no rounding: 62.4321 is retained exactly");
+  assert.equal(row.costRates, undefined);
   assert.equal(row.burden, undefined, "empty burden is dropped");
   assert.equal(row.perDiem, undefined);
   // an unknown tier id is never dropped

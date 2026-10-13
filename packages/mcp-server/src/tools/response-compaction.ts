@@ -1,4 +1,4 @@
-import { resolveRateCurrency, hasAuthoredCostRates } from "@bidwright/domain";
+import { resolveRateCurrency } from "@bidwright/domain";
 /**
  * Response compaction for high-volume list tools.
  *
@@ -146,8 +146,6 @@ export function compactRateItem(item: Record<string, any>, schedule: Record<stri
   };
   if (options.includeRates) {
     row.rates = compactRateMap(item.rates, tiers);
-    const costRates = schedule.scope === "revision" && hasAuthoredCostRates(item) ? compactRateMap(item.costRates, tiers) : undefined;
-    if (costRates && JSON.stringify(costRates) !== JSON.stringify(row.rates)) row.costRates = costRates;
     if (item.burden && typeof item.burden === "object" && Object.keys(item.burden).length > 0) row.burden = item.burden;
     if (item.perDiem && typeof item.perDiem === "object" && Object.keys(item.perDiem).length > 0) row.perDiem = item.perDiem;
   }
